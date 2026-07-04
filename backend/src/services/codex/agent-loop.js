@@ -503,7 +503,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const webSearch = deps.webSearch || defaultWebSearch;
   const projectId = project?.id || run.projectId;
 
-  const maxSteps = readPosInt(env.CODEX_MAX_STEPS, DEFAULT_MAX_STEPS);
+  const baseMaxSteps = readPosInt(env.CODEX_MAX_STEPS, DEFAULT_MAX_STEPS);
+  let maxSteps = baseMaxSteps;
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
   const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
@@ -512,6 +513,16 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
+  // Skill-aware step budget: multi-module builds (enterprise apps, stores)
+  // physically don't fit the standard budget — the cycle-14 CRM run finished
+  // 'done' having only written the base types. When the prompt matches one of
+  // the BIG playbooks, double the budget (bounded; env CODEX_MAX_STEPS_LARGE).
+  try {
+    const detectedSkill = require('./skills').detectSkillForPrompt(sourcePrompt);
+    if (detectedSkill && ['app-empresarial', 'ecommerce-catalogo'].includes(detectedSkill.name)) {
+      maxSteps = readPosInt(env.CODEX_MAX_STEPS_LARGE, baseMaxSteps * 2);
+    }
+  } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
   const messages = [
