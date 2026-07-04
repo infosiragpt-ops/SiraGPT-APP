@@ -121,10 +121,17 @@ npm run native:readiness:desktop
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:release:plan
 ```
 
 For focused CI/preflight output, use `npm run native:readiness -- --require=android,ios,macos,windows --only-required`.
 For GitHub repository secret-name auditing, use `npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP`.
+For a non-secret management packet with missing GitHub secret names, owner
+account actions, and safe upload commands, use:
+
+```bash
+npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
+```
 
 Android signing secrets:
 
@@ -210,6 +217,7 @@ npm run mobile:sync
 npm run mobile:doctor
 npm run native:readiness
 npm run native:readiness:desktop
+npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check

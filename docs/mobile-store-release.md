@@ -90,6 +90,16 @@ The canonical non-secret submission packet is
 `npm run native:store:readiness` before using it in Google Play Console or
 App Store Connect.
 
+To generate a current, non-secret management checklist for the public GitHub
+repo, run:
+
+```bash
+npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
+```
+
+The generated files stay under ignored `output/` and may list missing secret
+names plus account-owner actions, but they must never contain secret values.
+
 ## Required Confirmations
 
 - Creating the Android upload key creates a long-lived signing credential.

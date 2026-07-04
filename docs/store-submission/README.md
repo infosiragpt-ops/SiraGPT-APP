@@ -96,6 +96,7 @@ npm run native:readiness
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:release:plan
 ```
 
 `native:store:readiness` validates that the metadata packet matches the real
@@ -105,3 +106,6 @@ that signing secret names are present in the execution environment.
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native
 signing groups are configured.
+`native:release:plan` generates a non-secret Markdown/JSON management packet
+for the current repo, including missing GitHub secret names, per-platform
+account actions, and safe `gh secret set` commands.
