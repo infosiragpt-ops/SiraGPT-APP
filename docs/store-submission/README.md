@@ -17,6 +17,7 @@ secrets. They must never be committed.
 - Windows app ID: `com.siragpt.desktop`
 - Runtime URL: `https://siragpt.com`
 - Privacy policy: `https://siragpt.com/privacy-policy`
+- Support email: `infosiragpt@gmail.com`
 - Category: Productivity
 
 The canonical draft metadata lives in

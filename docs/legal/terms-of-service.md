@@ -3,13 +3,13 @@
 @lastUpdated: 2026-05-19
 -->
 
-# siraGPT — Terms of Service
+# Sira GPT — Terms of Service
 
 **Version:** 1.0.0
 **Last updated:** 2026-05-19
 
-These Terms of Service ("Terms") govern your use of siraGPT. By using
-siraGPT you agree to these Terms.
+These Terms of Service ("Terms") govern your use of Sira GPT. By using
+Sira GPT you agree to these Terms.
 
 ## 1. Account
 
@@ -51,4 +51,4 @@ and require re-acceptance via `POST /api/legal/accept`.
 
 ## 8. Contact
 
-legal@siragpt.io
+infosiragpt@gmail.com

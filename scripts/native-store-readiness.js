@@ -51,6 +51,21 @@ function requireHttpsUrl(metadata, key) {
   }
 }
 
+function requireEmail(metadata, key) {
+  const value = metadata.app?.[key]
+  if (!value) {
+    fail(`missing app.${key}`)
+    return
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    fail(`app.${key} is not a valid email address`)
+    return
+  }
+
+  ok(`app.${key} is configured`)
+}
+
 function main() {
   const metadata = readJson(metadataPath)
   const capacitorConfig = readText(capacitorPath)
@@ -110,6 +125,8 @@ function main() {
   for (const key of ["marketingUrl", "supportUrl", "privacyPolicyUrl", "termsUrl", "webRuntimeUrl"]) {
     requireHttpsUrl(metadata, key)
   }
+
+  requireEmail(metadata, "supportEmail")
 
   const shortDescription = metadata.storeCopy?.shortDescription || ""
   if (shortDescription.length === 0 || shortDescription.length > 80) {
