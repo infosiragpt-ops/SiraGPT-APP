@@ -5551,35 +5551,11 @@ router.post(
                 && __toolCallMode !== 'none'
                 && !hasImages
               ) {
-                // ─── Smart-brain escalation ────────────────────────────
-                // Weak tool-callers (prompted mode / free-tier models) get
-                // the loop DRIVEN by a strong native-tools model via
-                // OpenRouter; the billed feature, quotas, persona and UI
-                // stay exactly as the user chose. Plan/env-gated — see
-                // services/agents/smart-brain-router.js.
-                let __brainProvider = actualProvider;
-                let __brainModel = actualModel;
-                let __brainMode = __toolCallMode;
-                try {
-                  const { resolveBrainEscalation } = require('../services/agents/smart-brain-router');
-                  const escalation = resolveBrainEscalation({
-                    provider: actualProvider,
-                    model: actualModel,
-                    toolCallMode: __toolCallMode,
-                    userPlan: req.user?.plan || 'FREE',
-                    isSuperAdmin: !!(req.user?.isSuperAdmin || req.user?.role === 'SUPERADMIN'),
-                  });
-                  if (escalation) {
-                    const escalatedMode = agenticStream.resolveToolCallMode(escalation.provider, escalation.model);
-                    if (escalatedMode === 'native') {
-                      __brainProvider = escalation.provider;
-                      __brainModel = escalation.model;
-                      __brainMode = escalatedMode;
-                      console.log(`[smart-brain] agentic driver escalated: ${actualProvider}/${actualModel} (${__toolCallMode}) → ${escalation.provider}/${escalation.model} (native) reason=${escalation.reason}`);
-                    }
-                  }
-                } catch (_) { /* best-effort — the user's model still works */ }
-                const agenticClient = createProviderClient(__brainProvider);
+                // The agentic loop ALWAYS runs on the model the user picked —
+                // no silent substitution of a stronger model underneath. The
+                // chosen provider/model drives every step (plan → tools →
+                // finalize) in its own tool-call mode.
+                const agenticClient = createProviderClient(actualProvider);
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
@@ -5625,8 +5601,8 @@ router.post(
                 __agenticDidStream = true;
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
-                  model: __brainModel,
-                  provider: __brainProvider,
+                  model: actualModel,
+                  provider: actualProvider,
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
@@ -5643,7 +5619,7 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
-                  toolCallMode: __brainMode,
+                  toolCallMode: __toolCallMode,
                   // A1: per-turn tool selection context — the cognitive decision
                   // (intent/difficulty) lets the agentic loop hand the model a
                   // small, relevant tool subset instead of all ~37-73 tools.
