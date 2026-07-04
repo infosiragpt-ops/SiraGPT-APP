@@ -129,26 +129,61 @@ async function applyAdminConnections() {
       select: { providerKey: true, apiKey: true, updatedAt: true },
     });
 
-    // First (most recent) enabled row per provider wins.
-    const winners = new Map();
+    // All enabled rows per provider, most recent first. The winner is the
+    // FIRST candidate whose key survives the auth probe below — so a bad
+    // paste in the panel (e.g. a Fish Audio key saved as "openai") can never
+    // shadow an older working connection or the .env key. Incidente real:
+    // fish_… aplicado sobre OPENAI_API_KEY dejó todo turno agéntico OpenAI
+    // en 401 → fallback a stream plano, sin herramientas.
+    const candidatesByProvider = new Map();
     for (const r of rows) {
-      if (!winners.has(r.providerKey)) winners.set(r.providerKey, r);
+      if (!candidatesByProvider.has(r.providerKey)) candidatesByProvider.set(r.providerKey, []);
+      candidatesByProvider.get(r.providerKey).push(r);
+    }
+
+    // Auth-gate: 401/403 from the provider rejects the candidate; network
+    // errors / timeouts / 5xx do NOT (fail-open — a transient outage must not
+    // demote a valid key). Kill switch: SIRAGPT_CONN_BRIDGE_PROBE=0.
+    const probeEnabled = String(process.env.SIRAGPT_CONN_BRIDGE_PROBE || '').trim() !== '0';
+    async function keyIsRejected(providerKey, plainKey) {
+      if (!probeEnabled) return false;
+      const spec = PROVIDER_PROBE[providerKey];
+      if (!spec) return false;
+      try {
+        const res = await fetch(spec.url, {
+          method: 'GET',
+          headers: { Accept: 'application/json', ...spec.auth(plainKey) },
+          signal: AbortSignal.timeout(6000),
+        });
+        return res.status === 401 || res.status === 403;
+      } catch {
+        return false; // inconclusive → accept
+      }
     }
 
     const applied = [];
     const restored = [];
-    for (const [providerKey, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
+    const rejected = [];
+    await Promise.all(Object.entries(PROVIDER_ENV_MAP).map(async ([providerKey, envVar]) => {
       const envVars = [envVar, ...(PROVIDER_ENV_ALIASES[providerKey] || [])];
-      const winner = winners.get(providerKey);
-      if (winner) {
-        const plain = unwrap(winner.apiKey);
-        if (plain) {
-          for (const name of envVars) process.env[name] = plain;
-          applied.push(providerKey);
+      let chosen = null;
+      for (const candidate of candidatesByProvider.get(providerKey) || []) {
+        const plain = unwrap(candidate.apiKey);
+        if (!plain) continue;
+        if (await keyIsRejected(providerKey, plain)) {
+          rejected.push(providerKey);
+          console.warn(`[admin-connections-bridge] ${providerKey} connection key rejected by upstream auth (401/403) — trying the next candidate`);
           continue;
         }
+        chosen = plain;
+        break;
       }
-      // No winner — restore original .env value if it changed.
+      if (chosen) {
+        for (const name of envVars) process.env[name] = chosen;
+        applied.push(providerKey);
+        return;
+      }
+      // No usable winner — restore original .env value if it changed.
       let didRestore = false;
       for (const name of envVars) {
         if (process.env[name] !== envSnapshot[name]) {
@@ -157,14 +192,16 @@ async function applyAdminConnections() {
         }
       }
       if (didRestore) restored.push(providerKey);
-    }
+    }));
 
-    if (applied.length || restored.length) {
+    if (applied.length || restored.length || rejected.length) {
       console.log(
         '[admin-connections-bridge] applied:',
         applied.join(',') || 'none',
         '· restored:',
-        restored.join(',') || 'none'
+        restored.join(',') || 'none',
+        '· rejected:',
+        rejected.join(',') || 'none'
       );
     }
 
