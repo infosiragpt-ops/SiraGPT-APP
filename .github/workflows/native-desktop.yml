@@ -44,6 +44,7 @@ jobs:
 
       - name: Validate desktop shell
         run: |
+          npm run native:version:check
           node -c apps/desktop/main.cjs
           sh -n scripts/build-desktop.sh
 
@@ -80,7 +81,9 @@ jobs:
         run: npm ci --prefer-offline --no-audit --no-fund
 
       - name: Validate desktop shell
-        run: node -c apps/desktop/main.cjs
+        run: |
+          npm run native:version:check
+          node -c apps/desktop/main.cjs
 
       - name: Build Windows artifacts
         run: npm run desktop:dist:win

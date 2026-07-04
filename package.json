@@ -38,6 +38,8 @@
     "mobile:dev:android": "CAPACITOR_SERVER_URL=http://10.0.2.2:3000 sh -c 'cap sync android && cap run android'",
     "mobile:dev:ios": "CAPACITOR_SERVER_URL=http://localhost:3000 sh -c 'cap sync ios && cap run ios'",
     "mobile:release:android": "sh scripts/build-android-release.sh",
+    "native:version:sync": "node scripts/sync-native-version.js",
+    "native:version:check": "node scripts/sync-native-version.js --check",
     "native:readiness": "node scripts/native-release-readiness.js",
     "native:readiness:android": "node scripts/native-release-readiness.js --require=android",
     "native:readiness:ios": "node scripts/native-release-readiness.js --require=ios",

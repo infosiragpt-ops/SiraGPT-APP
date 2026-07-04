@@ -39,12 +39,15 @@ npm run mobile:doctor
 npm run mobile:open:ios
 npm run mobile:open:android
 npm run mobile:release:android
+npm run native:version:check
+npm run native:version:sync
 npm run native:readiness:mobile
 ```
 
 Release requirements:
 
 - Android release builds require `android/keystore.properties` and the upload keystore in `android/keystores/`; both are intentionally ignored.
+- Android `versionCode` and iOS `CURRENT_PROJECT_VERSION` are synced from `package.json` by `npm run native:version:sync`.
 - Google Play publishing requires owner verification in Play Console.
 - iOS release builds require full Xcode, Apple Developer signing, a matching provisioning profile, App Store Connect access, and manual review metadata.
 
@@ -185,6 +188,7 @@ Before pushing native release changes:
 node -c apps/desktop/main.cjs
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
+npm run native:version:check
 npm run native:store:readiness
 npm run desktop:pack
 npm run desktop:pack:win

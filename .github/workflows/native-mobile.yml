@@ -55,6 +55,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
+      - name: Validate native version metadata
+        run: npm run native:version:check
+
       - name: Prepare Android release signing
         if: env.HAS_ANDROID_SIGNING == 'true'
         shell: bash
@@ -121,6 +124,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate native version metadata
+        run: npm run native:version:check
 
       - name: Sync Capacitor iOS
         run: npm run mobile:sync -- ios

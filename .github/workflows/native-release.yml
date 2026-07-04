@@ -79,6 +79,7 @@ jobs:
               ;;
           esac
 
+          npm run native:version:check
           echo "Validating signing readiness for: $groups"
           npm run native:readiness -- --require="$groups" --only-required
 
@@ -115,7 +116,9 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: npm run native:readiness:android
+        run: |
+          npm run native:version:check
+          npm run native:readiness:android
 
       - name: Prepare Android upload key
         shell: bash
@@ -182,7 +185,9 @@ jobs:
           IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
           IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-        run: npm run native:readiness:ios
+        run: |
+          npm run native:version:check
+          npm run native:readiness:ios
 
       - name: Install iOS signing assets
         id: ios_signing
@@ -324,7 +329,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: npm run native:readiness -- --require=macos
+        run: |
+          npm run native:version:check
+          npm run native:readiness -- --require=macos
 
       - name: Build signed and notarized macOS artifacts
         env:
@@ -376,7 +383,9 @@ jobs:
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: npm run native:readiness -- --require=windows
+        run: |
+          npm run native:version:check
+          npm run native:readiness -- --require=windows
 
       - name: Build signed Windows artifacts
         env:
