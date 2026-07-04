@@ -1,5 +1,12 @@
 'use strict';
 
+// utils/encryption.js hace process.exit(1) al cargarse sin ENCRYPTION_KEY
+// (node --test no carga dotenv). Fijarla ANTES de cualquier require que
+// pueda alcanzarla — mismo patrón que admin-connections-bridge.test.js.
+if (!process.env.ENCRYPTION_KEY) {
+  process.env.ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+}
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
