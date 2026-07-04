@@ -475,7 +475,12 @@
     "or": "o",
     "processing": "Procesando tus mensajes…",
     "tryAgain": "Intentar de nuevo",
-    "skipToContent": "Saltar al contenido"
+    "skipToContent": "Saltar al contenido",
+    "meta": {
+      "titleDefault": "SiraGPT — Plataforma de IA Multimodal",
+      "titleTemplate": "%s · SiraGPT",
+      "description": "SiraGPT integra OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw en una experiencia de IA profesional."
+    }
   },
   "thinking": {
     "thinking": "Pensando…",
