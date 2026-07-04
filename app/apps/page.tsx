@@ -51,3 +51,6 @@ export function AppsPage() {
     </div>
   )
 }
+// Next.js requires a default export for a route page — the named export
+// alone breaks `next build` (AppPageConfig validator).
+export default AppsPage
