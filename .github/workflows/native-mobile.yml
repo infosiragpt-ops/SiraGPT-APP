@@ -1,0 +1,117 @@
+name: Native mobile builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [production-main]
+    paths:
+      - 'android/**'
+      - 'ios/**'
+      - 'mobile-www/**'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/native-mobile.yml'
+  push:
+    branches: [production-main]
+    paths:
+      - 'android/**'
+      - 'ios/**'
+      - 'mobile-www/**'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/native-mobile.yml'
+
+env:
+  NODE_VERSION: '24'
+  JAVA_VERSION: '21'
+
+jobs:
+  android:
+    name: Android APK + AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Sync Capacitor Android
+        run: npm run mobile:sync -- android
+
+      - name: Validate Android wrapper
+        run: |
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/assets/capacitor.config.json
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon --stacktrace
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-mobile-android
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          retention-days: 14
+          if-no-files-found: error
+
+  ios:
+    name: iOS simulator build
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Sync Capacitor iOS
+        run: npm run mobile:sync -- ios
+
+      - name: Validate iOS wrapper
+        run: |
+          test -f ios/App/App/Info.plist
+          test -f ios/App/App/capacitor.config.json
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload iOS debug app
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-mobile-ios-simulator
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/*.app
+          retention-days: 14
+          if-no-files-found: error

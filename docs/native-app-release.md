@@ -53,7 +53,19 @@ Use `Native desktop builds` in GitHub Actions to produce desktop artifacts on th
 - `siragpt-desktop-macos`: macOS `.dmg` and `.zip`.
 - `siragpt-desktop-windows-x64`: Windows installer/portable `.exe`.
 
-The workflow is unsigned by default. Add signing credentials only through GitHub Actions secrets when distribution signing is ready.
+Use `Native mobile builds` in GitHub Actions to validate the Capacitor wrappers and produce QA artifacts:
+
+- `siragpt-mobile-android`: Android debug `.apk` and release `.aab`.
+- `siragpt-mobile-ios-simulator`: unsigned iOS simulator `.app` for wrapper validation.
+
+These workflows are unsigned by default. Add signing credentials only through GitHub Actions secrets when distribution signing is ready.
+
+Store publication requires account-level work outside Git:
+
+- Apple Developer/App Store Connect access for iPhone distribution.
+- Google Play Console access, owner verification, and a protected upload key for Android.
+- A Developer ID certificate for macOS distribution outside the App Store.
+- A Windows code-signing certificate for trusted Windows installers.
 
 ## Validation Checklist
 
@@ -66,6 +78,7 @@ npm run desktop:pack
 npm run desktop:pack:win
 npm run mobile:sync
 npm run mobile:doctor
+cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check
 ```
