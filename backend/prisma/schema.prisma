@@ -2623,10 +2623,17 @@ model UserMemory {
   accessCount     Int      @default(0) @map("access_count")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
+  // Cross-chat recall (cross-chat-retrieval.js): pgvector embedding written
+  // by raw SQL with ON CONFLICT (user_id, content_hash). Declared here so a
+  // future `prisma db push` doesn't drop the columns the service depends on.
+  contentHash     String?  @map("content_hash")
+  source          String?
+  embedding       Unsupported("vector(1536)")?
 
   user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   embeddings UserMemoryEmbedding[]
 
+  @@unique([userId, contentHash])
   @@index([userId, category])
   @@index([userId, importanceScore(sort: Desc)])
   @@map("user_memories")
