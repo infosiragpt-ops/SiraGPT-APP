@@ -9549,7 +9549,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || chatType === 'thesis'
   );
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
-  const shouldInlineActiveTools = isMediaToolActive;
+  const shouldInlineActiveTools = isMediaToolActive || isWebSearchActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
     isVoiceGenerationActive ||
