@@ -1600,9 +1600,14 @@ model Project {
   // Soft-delete tombstone. The Project list view should filter on
   // `deletedAt: null` via the prisma-soft-delete helper.
   deletedAt DateTime?
+  // Retention deadline shown in the Empresas trash. Projects are code
+  // workspaces, so deletion is reversible for 30 days instead of being
+  // hard-deleted from the main UI.
+  deleteAfter DateTime?
 
   @@index([userId, updatedAt])
   @@index([userId, deletedAt])
+  @@index([userId, deleteAfter])
   @@map("projects")
 }
 

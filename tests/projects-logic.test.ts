@@ -2,6 +2,9 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  daysUntilProjectDelete,
+  getProjectInitials,
+  getProjectVisualIdentity,
   getVisibleProjects,
   removeProjectFromList,
   upsertProjectList,
@@ -77,5 +80,28 @@ describe("project list logic", () => {
     assert.deepEqual(next.map(item => item.id), ["old", "starred", "recent"])
     assert.equal(next[0].name, "Proyecto antiguo actualizado")
     assert.deepEqual(removeProjectFromList(next, "starred").map(item => item.id), ["old", "recent"])
+  })
+
+  it("derives a private visual identity from the project itself", () => {
+    assert.equal(getProjectInitials("Venta de Autos"), "VD")
+    assert.equal(getProjectInitials("CRM"), "CR")
+
+    const identity = getProjectVisualIdentity({
+      name: "Venta de Autos",
+      description: "Landing y panel interno para concesionaria.",
+      type: "webapp",
+    })
+
+    assert.equal(identity.title, "Venta de Autos")
+    assert.equal(identity.eyebrow, "App privada")
+    assert.match(identity.subtitle, /concesionaria/)
+    assert.match(identity.accent, /^#[0-9a-f]{6}$/i)
+  })
+
+  it("computes the remaining trash retention days", () => {
+    const now = Date.parse("2026-07-04T12:00:00.000Z")
+    assert.equal(daysUntilProjectDelete("2026-08-03T12:00:00.000Z", now), 30)
+    assert.equal(daysUntilProjectDelete("2026-07-04T11:00:00.000Z", now), 0)
+    assert.equal(daysUntilProjectDelete(null, now), null)
   })
 })

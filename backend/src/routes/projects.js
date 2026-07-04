@@ -12,7 +12,8 @@
  *   POST   /                    — create a project
  *   GET    /:id                 — project + files + chats
  *   PUT    /:id                 — update name/description/instructions/isStarred
- *   DELETE /:id                 — delete project (cascades chats → SetNull, files → SetNull)
+ *   DELETE /:id                 — move project to 30-day trash
+ *   POST   /:id/restore         — restore project from trash
  *   POST   /:id/chat            — start a new chat within this project
  *   POST   /:id/files/:fileId   — attach a previously-uploaded file
  *   DELETE /:id/files/:fileId   — detach a file (does not delete the file row)
@@ -33,6 +34,12 @@ const { softDeleteWhere } = require('../utils/prisma-soft-delete');
 const crypto = require('crypto');
 
 const router = express.Router();
+const PROJECT_TRASH_RETENTION_DAYS = 30;
+
+function projectDeleteAfter(deletedAt) {
+  const base = deletedAt instanceof Date ? deletedAt : new Date(deletedAt || Date.now());
+  return new Date(base.getTime() + PROJECT_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
 
 // ─── Public share view ───────────────────────────────────────────────────
 //
@@ -47,7 +54,9 @@ router.get('/share/:shareId', param('shareId').isString(), async (req, res) => {
     const project = await prisma.project.findFirst({
       // Soft-deleted (e.g. GDPR-erased) projects must not stay publicly
       // reachable through their share link.
-      where: softDeleteWhere({ shareId: req.params.shareId }),
+      // APPS/Empresas webapp projects are owner-private code workspaces and
+      // never render through the public share route.
+      where: softDeleteWhere({ shareId: req.params.shareId, type: { not: 'webapp' } }),
       select: {
         id: true, name: true, description: true,
         createdAt: true, updatedAt: true,
@@ -77,7 +86,14 @@ function ownProject(userId, id) {
   // hosting, …) would happily act on a project already in the trash.
   return prisma.project.findFirst({
     where: softDeleteWhere({ id, userId }),
-    select: { id: true, userId: true, name: true },
+    select: { id: true, userId: true, name: true, type: true },
+  });
+}
+
+function ownTrashedProject(userId, id) {
+  return prisma.project.findFirst({
+    where: { id, userId, deletedAt: { not: null } },
+    select: { id: true, userId: true, name: true, type: true, deletedAt: true, deleteAfter: true },
   });
 }
 
@@ -98,6 +114,7 @@ router.get(
     query('search').optional().isString(),
     query('sort').optional().isIn(['activity', 'edited', 'created']),
     query('type').optional().isIn(['general', 'webapp']),
+    query('trash').optional().isIn(['true', 'false']),
   ],
   async (req, res) => {
     try {
@@ -105,13 +122,16 @@ router.get(
       const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
       const sort = req.query.sort || 'activity';
       const type = typeof req.query.type === 'string' ? req.query.type : '';
+      const trash = req.query.trash === 'true';
 
       const orderBy =
         sort === 'created' ? { createdAt: 'desc' } :
         sort === 'edited'  ? { updatedAt: 'desc' } :
                              { updatedAt: 'desc' }; // 'activity' — most-recently-touched
 
-      const where = softDeleteWhere({ userId: req.user.id });
+      const where = trash
+        ? { userId: req.user.id, deletedAt: { not: null } }
+        : softDeleteWhere({ userId: req.user.id });
       if (type) where.type = type;
       if (search) {
         where.OR = [
@@ -127,6 +147,7 @@ router.get(
           id: true, name: true, description: true, instructions: true,
           type: true, hostingProvider: true,
           isStarred: true, shareId: true, createdAt: true, updatedAt: true,
+          deletedAt: true, deleteAfter: true,
           // Count only live files/chats — soft-deleted ones must not inflate
           // the per-project badges on the projects list.
           _count: {
@@ -380,7 +401,7 @@ router.put(
   }
 );
 
-// ─── DELETE /:id ─────────────────────────────────────────────────────────
+// ─── DELETE /:id — move to trash for 30 days ─────────────────────────────
 
 router.delete('/:id', param('id').isString(), async (req, res) => {
   try {
@@ -388,16 +409,47 @@ router.delete('/:id', param('id').isString(), async (req, res) => {
     const owned = await ownProject(req.user.id, req.params.id);
     if (!owned) return res.status(404).json({ error: 'Project not found' });
 
-    // Cascading behaviour is schema-defined:
-    //   - chats.projectId → SetNull (chat survives, just loses project context)
-    //   - files.projectId → SetNull (file survives)
-    // So a deleted project doesn't vaporise the user's chats or
-    // documents — they only lose their project association.
-    await prisma.project.delete({ where: { id: req.params.id } });
-    res.json({ deleted: true });
+    const deletedAt = new Date();
+    const deleteAfter = projectDeleteAfter(deletedAt);
+    const project = await prisma.project.update({
+      where: { id: owned.id },
+      data: {
+        deletedAt,
+        deleteAfter,
+        // A project in the trash must not keep a public snapshot alive.
+        shareId: null,
+      },
+      select: { id: true, deletedAt: true, deleteAfter: true },
+    });
+
+    res.json({
+      deleted: true,
+      softDeleted: true,
+      retentionDays: PROJECT_TRASH_RETENTION_DAYS,
+      project,
+    });
   } catch (err) {
     console.error('[projects] delete error:', err);
     res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
+// ─── POST /:id/restore — restore from trash ──────────────────────────────
+
+router.post('/:id/restore', param('id').isString(), async (req, res) => {
+  try {
+    if (validationFail(req, res)) return;
+    const owned = await ownTrashedProject(req.user.id, req.params.id);
+    if (!owned) return res.status(404).json({ error: 'Project not found in trash' });
+
+    const project = await prisma.project.update({
+      where: { id: owned.id },
+      data: { deletedAt: null, deleteAfter: null },
+    });
+    res.json({ restored: true, project });
+  } catch (err) {
+    console.error('[projects] restore error:', err);
+    res.status(500).json({ error: 'Failed to restore project' });
   }
 });
 
@@ -548,6 +600,12 @@ router.post('/:id/share', param('id').isString(), async (req, res) => {
     if (validationFail(req, res)) return;
     const owned = await ownProject(req.user.id, req.params.id);
     if (!owned) return res.status(404).json({ error: 'Project not found' });
+    if (owned.type === 'webapp') {
+      return res.status(403).json({
+        error: 'APPS projects are private to their owner and cannot be shared publicly.',
+        code: 'APPS_PROJECT_PRIVATE',
+      });
+    }
     const shareId = crypto.randomBytes(12).toString('hex');
     const updated = await prisma.project.update({
       where: { id: owned.id },

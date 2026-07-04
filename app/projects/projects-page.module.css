@@ -302,25 +302,16 @@
 }
 
 .card {
-  appearance: none;
   background: #fff;
   border: 1px solid #e5e5e5;
   border-radius: 12px;
   box-shadow: 0 1px 1px rgba(23, 23, 24, 0.02);
-  cursor: pointer;
   display: block;
-  font: inherit;
   overflow: hidden;
-  outline: none;
   padding: 0;
   text-align: left;
   transition: box-shadow 160ms ease, transform 160ms ease;
   width: min(100%, 360px);
-}
-
-.card:disabled {
-  cursor: wait;
-  opacity: 0.82;
 }
 
 .card:hover {
@@ -328,8 +319,30 @@
   transform: translateY(-1px);
 }
 
-.card:focus-visible {
+.card:focus-within {
   box-shadow: 0 0 0 3px rgba(47, 47, 49, 0.14), 0 12px 28px rgba(23, 23, 24, 0.08);
+}
+
+.previewButton {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.previewButton:disabled {
+  cursor: wait;
+  opacity: 0.82;
+}
+
+.previewButton:focus-visible {
+  outline: 3px solid rgba(255, 0, 0, 0.18);
+  outline-offset: -3px;
 }
 
 .cardMeta {
@@ -339,12 +352,51 @@
   padding: 18px 18px 16px;
 }
 
+.cardTitleRow {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
 .cardTitle {
   color: #303033;
+  flex: 1 1 auto;
   font-size: 18px;
   font-weight: 600;
-  line-height: 1;
-  margin-bottom: 10px;
+  line-height: 1.15;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cardMenuButton {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e4e4e4;
+  border-radius: 8px;
+  color: #343436;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 40px;
+  justify-content: center;
+  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  width: 40px;
+}
+
+.cardMenuButton:hover {
+  background: #f7f7f7;
+  border-color: #d8d8d8;
+}
+
+.cardMenuButton:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 0, 0, 0.16);
+  outline: none;
+}
+
+.cardMenuButton svg {
+  height: 16px;
+  width: 16px;
 }
 
 .cardTime {
@@ -373,7 +425,6 @@
   gap: 16px;
   max-width: 960px;
   padding: 12px;
-  text-align: left;
   transition: box-shadow 160ms ease;
   width: 100%;
 }
@@ -382,19 +433,37 @@
   box-shadow: 0 10px 24px rgba(23, 23, 24, 0.08);
 }
 
-.row:focus-visible {
+.row:focus-within {
   box-shadow: 0 0 0 3px rgba(47, 47, 49, 0.14);
   outline: none;
 }
 
 .rowThumb {
+  appearance: none;
   background: #fff;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
+  cursor: pointer;
   flex-shrink: 0;
   height: 96px;
   overflow: hidden;
+  padding: 0;
+  text-align: left;
   width: 160px;
+}
+
+.rowThumb:disabled {
+  cursor: wait;
+  opacity: 0.82;
+}
+
+.rowThumb:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 0, 0, 0.16);
+  outline: none;
+}
+
+.rowActions {
+  margin-left: auto;
 }
 
 .preview {
@@ -410,10 +479,12 @@
 
 .previewLogo {
   align-items: center;
-  background: rgba(238, 238, 235, 0.96);
+  border: 1px solid currentColor;
   border-radius: 9px;
   box-shadow: 0 1px 3px rgba(23, 23, 24, 0.08);
   display: flex;
+  font-size: 12px;
+  font-weight: 800;
   height: 36px;
   justify-content: center;
   left: 10px;
@@ -710,5 +781,19 @@
 
   .cardMeta {
     min-height: 78px;
+  }
+
+  .row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rowThumb {
+    height: 150px;
+    width: 100%;
+  }
+
+  .rowActions {
+    margin-left: 0;
   }
 }

@@ -191,9 +191,13 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
     async (node: WorkspaceTreeNode) => {
       const isCloud = node.kind === "project"
       const message = isCloud
-        ? `¿Eliminar el proyecto "${node.name}"? Se borrarán también sus chats. Esta acción no se puede deshacer.`
+        ? `¿Mover el proyecto "${node.name}" a Papelera? Podrás restaurarlo desde Empresas durante 30 días.`
         : `¿Quitar la carpeta "${node.name}" de tus proyectos? No se borra ningún archivo de tu disco.`
       if (typeof window !== "undefined" && !window.confirm(message)) return
+      if (isCloud && typeof window !== "undefined") {
+        const typed = window.prompt(`Para confirmar, escribe el nombre exacto del proyecto: ${node.name}`)
+        if (typed?.trim() !== node.name) return
+      }
       try {
         if (isCloud) {
           await projectsService.remove(node.chatListId)
@@ -207,7 +211,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
           return next
         })
         await refresh()
-        toast.success(isCloud ? `Proyecto "${node.name}" eliminado.` : `Carpeta "${node.name}" quitada.`)
+        toast.success(isCloud ? `Proyecto "${node.name}" movido a Papelera.` : `Carpeta "${node.name}" quitada.`)
       } catch (err: any) {
         toast.error(err?.message || "No se pudo eliminar el proyecto")
       }

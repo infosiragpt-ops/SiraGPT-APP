@@ -393,9 +393,13 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     async (node: WorkspaceTreeNode) => {
       const isCloud = node.kind === "project"
       const message = isCloud
-        ? `¿Eliminar la empresa "${node.name}"? Se borrarán también sus archivos y chats. Esta acción no se puede deshacer.`
+        ? `¿Mover la empresa "${node.name}" a Papelera? Podrás restaurarla desde Empresas durante 30 días.`
         : `¿Quitar la carpeta "${node.name}" de tus empresas? Se elimina del panel y se borra su contenido en el navegador (no se toca ningún archivo de tu disco).`
       if (typeof window !== "undefined" && !window.confirm(message)) return
+      if (isCloud && typeof window !== "undefined") {
+        const typed = window.prompt(`Para confirmar, escribe el nombre exacto de la empresa: ${node.name}`)
+        if (typed?.trim() !== node.name) return
+      }
       try {
         if (isCloud) {
           await projectsService.remove(node.chatListId)
@@ -424,9 +428,9 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
         }
-        toast.success(isCloud ? `Empresa "${node.name}" eliminada.` : `Carpeta "${node.name}" quitada.`)
+        toast.success(isCloud ? `Empresa "${node.name}" movida a Papelera.` : `Carpeta "${node.name}" quitada.`)
       } catch (err: any) {
-        toast.error(err?.message || "No se pudo eliminar la empresa")
+        toast.error(err?.message || "No se pudo actualizar la empresa")
       }
     },
     [refresh, refreshCodexProjects],

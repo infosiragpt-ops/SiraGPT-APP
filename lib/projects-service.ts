@@ -25,6 +25,8 @@ export interface Project {
   shareId: string | null
   createdAt: string
   updatedAt: string
+  deletedAt?: string | null
+  deleteAfter?: string | null
   fileCount?: number
   chatCount?: number
 }
@@ -121,6 +123,7 @@ export interface ProjectFilters {
   search?: string
   sort?: ProjectSort
   type?: ProjectType
+  trash?: boolean
 }
 
 const baseUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects`
@@ -153,6 +156,7 @@ export const projectsService = {
     if (filters.search) params.set("search", filters.search)
     if (filters.sort) params.set("sort", filters.sort)
     if (filters.type) params.set("type", filters.type)
+    if (filters.trash) params.set("trash", "true")
     const qs = params.toString()
     const res = await fetch(`${baseUrl}${qs ? `?${qs}` : ""}`, {
       credentials: "include",
@@ -222,6 +226,16 @@ export const projectsService = {
       headers: authHeaders(),
     })
     await handle<{ deleted: boolean }>(res)
+  },
+
+  async restore(id: string): Promise<Project> {
+    const res = await fetch(`${baseUrl}/${id}/restore`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    const json = await handle<{ restored: boolean; project: Project }>(res)
+    return json.project
   },
 
   /** Start a new chat inside this project. Returns the created chat. */

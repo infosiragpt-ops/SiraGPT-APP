@@ -40,7 +40,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -80,7 +80,11 @@ export default function ProjectDetailPage() {
   const [composerUploading, setComposerUploading] = React.useState(false)
   const [instructionsOpen, setInstructionsOpen] = React.useState(false)
   const [shareOpen, setShareOpen] = React.useState(false)
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
   const composerFileRef = React.useRef<HTMLInputElement | null>(null)
+  const openDeleteAfterMenuClose = React.useCallback(() => {
+    window.setTimeout(() => setDeleteOpen(true), 0)
+  }, [])
 
   const reload = React.useCallback(async () => {
     setLoading(true)
@@ -145,16 +149,11 @@ export default function ProjectDetailPage() {
     }
   }
 
-  async function handleDelete() {
+  async function handleDeleteConfirmed() {
     if (!project) return
-    if (!confirm(t("deleteConfirm", { name: project.name }))) return
-    try {
-      await projectsService.remove(project.id)
-      toast.success(t("deleted"))
-      router.push("/projects")
-    } catch (err: any) {
-      toast.error(err?.message || t("deleteFailed"))
-    }
+    await projectsService.remove(project.id)
+    toast.success("Proyecto movido a Papelera por 30 días.")
+    router.push("/projects")
   }
 
   async function handleLaunch(e?: React.FormEvent) {
@@ -256,12 +255,19 @@ export default function ProjectDetailPage() {
                       <Pencil className="mr-2 h-4 w-4" />
                       {t("editInstructions")}
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setShareOpen(true)}>
-                      <Share2 className="mr-2 h-4 w-4" />
-                      {t("share")}
-                    </DropdownMenuItem>
+                    {project.type === "webapp" ? (
+                      <DropdownMenuItem disabled>
+                        <Lock className="mr-2 h-4 w-4" />
+                        Privado del propietario
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem onClick={() => setShareOpen(true)}>
+                        <Share2 className="mr-2 h-4 w-4" />
+                        {t("share")}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleDelete} className="text-red-600 focus:text-red-600">
+                    <DropdownMenuItem onSelect={openDeleteAfterMenuClose} className="text-red-600 focus:text-red-600">
                       <Trash2 className="mr-2 h-4 w-4" />
                       {t("deleteProject")}
                     </DropdownMenuItem>
@@ -396,6 +402,13 @@ export default function ProjectDetailPage() {
         onOpenChange={setShareOpen}
         project={project}
         onChange={(shareId) => setProject(prev => prev ? { ...prev, shareId } : prev)}
+      />
+
+      <DeleteProjectDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        project={project}
+        onConfirm={handleDeleteConfirmed}
       />
     </div>
   )
@@ -918,6 +931,109 @@ function ShareDialog({
             {t("close")}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DeleteProjectDialog({
+  open,
+  onOpenChange,
+  project,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  project: ProjectDetail
+  onConfirm: () => Promise<void>
+}) {
+  const t = useTranslations("projects")
+  const [step, setStep] = React.useState<1 | 2>(1)
+  const [typedName, setTypedName] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) {
+      setStep(1)
+      setTypedName("")
+      setBusy(false)
+    }
+  }, [open])
+
+  const canConfirm = typedName.trim() === project.name
+
+  async function submit() {
+    if (!canConfirm || busy) return
+    setBusy(true)
+    try {
+      await onConfirm()
+      onOpenChange(false)
+    } catch (err: any) {
+      toast.error(err?.message || t("deleteFailed"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>Mover proyecto a Papelera</DialogTitle>
+          <DialogDescription>
+            "{project.name}" seguirá perteneciendo solo a tu cuenta y podrás restaurarlo durante 30 días.
+          </DialogDescription>
+        </DialogHeader>
+
+        {step === 1 ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-[#ff0000]/20 bg-[#ff0000]/5 p-4 text-sm">
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#ff0000]" strokeWidth={2} />
+                <div>
+                  <p className="font-semibold">No se borra definitivamente.</p>
+                  <p className="mt-1 text-muted-foreground">
+                    El proyecto queda en Papelera, se revocan enlaces públicos y puedes restaurarlo desde Empresas.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancelar
+              </Button>
+              <Button type="button" className="bg-[#ff0000] text-white hover:bg-[#d90000]" onClick={() => setStep(2)}>
+                Continuar
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <label className="block text-sm font-medium">
+              Escribe el nombre exacto
+              <Input
+                value={typedName}
+                onChange={(event) => setTypedName(event.target.value)}
+                placeholder={project.name}
+                className="mt-2"
+                autoFocus
+              />
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setStep(1)} disabled={busy}>
+                Atrás
+              </Button>
+              <Button
+                type="button"
+                className="bg-[#ff0000] text-white hover:bg-[#d90000]"
+                disabled={!canConfirm || busy}
+                onClick={() => void submit()}
+              >
+                {busy ? "Moviendo..." : "Mover a Papelera"}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )

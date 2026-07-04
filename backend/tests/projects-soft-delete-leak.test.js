@@ -21,10 +21,16 @@ describe('projects · soft-deleted projects are not leaked', () => {
   let auth;
   let saved;
   let project;
+  let lastUpdate;
 
   beforeEach(() => {
     auth = installAuthSessionMock();
-    saved = { findFirst: prisma.project.findFirst, update: prisma.project.update };
+    saved = {
+      findFirst: prisma.project.findFirst,
+      findMany: prisma.project.findMany,
+      update: prisma.project.update,
+    };
+    lastUpdate = null;
 
     // Faithfully emulate Prisma equality filtering on the project row.
     prisma.project.findFirst = async ({ where = {} } = {}) => {
@@ -38,13 +44,37 @@ describe('projects · soft-deleted projects are not leaked', () => {
       }
       return { ...p, files: [], chats: [], documents: [], _count: { files: 0, chats: 0, memories: 0, documents: 0 } };
     };
-    prisma.project.update = async ({ data }) => ({ shareId: data.shareId || 'sid', ...data });
+    prisma.project.findMany = async ({ where = {} } = {}) => {
+      const p = project;
+      if (!p) return [];
+      if (where.userId !== undefined && p.userId !== where.userId) return [];
+      if (where.type !== undefined && p.type !== where.type) return [];
+      if (Object.prototype.hasOwnProperty.call(where, 'deletedAt')) {
+        if (where.deletedAt === null && p.deletedAt != null) return [];
+        if (where.deletedAt && where.deletedAt.not === null && p.deletedAt == null) return [];
+      }
+      return [{
+        ...p,
+        _count: { files: 0, chats: 0 },
+      }];
+    };
+    prisma.project.update = async (args) => {
+      lastUpdate = args;
+      project = { ...project, ...args.data };
+      if (args.select) {
+        const selected = {};
+        for (const key of Object.keys(args.select)) selected[key] = project[key];
+        return selected;
+      }
+      return { ...project };
+    };
 
     delete require.cache[require.resolve('../src/routes/projects')];
   });
 
   afterEach(() => {
     prisma.project.findFirst = saved.findFirst;
+    prisma.project.findMany = saved.findMany;
     prisma.project.update = saved.update;
     auth.restore();
     delete require.cache[require.resolve('../src/routes/projects')];
@@ -74,5 +104,70 @@ describe('projects · soft-deleted projects are not leaked', () => {
     project = { id: 'pr1', userId: auth.user.id, name: 'Trashed', deletedAt: new Date() };
     const res = await request(app()).post('/projects/pr1/share').set('Authorization', auth.authHeader);
     assert.equal(res.status, 404, 'a trashed project must not be re-shareable');
+  });
+
+  test('DELETE /:id moves a project to 30-day trash and revokes sharing', async () => {
+    project = {
+      id: 'pr1',
+      userId: auth.user.id,
+      name: 'Important Code App',
+      type: 'webapp',
+      deletedAt: null,
+      deleteAfter: null,
+      shareId: 'old-share',
+    };
+
+    const res = await request(app()).delete('/projects/pr1').set('Authorization', auth.authHeader);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.deleted, true);
+    assert.equal(res.body.softDeleted, true);
+    assert.equal(res.body.retentionDays, 30);
+    assert.equal(lastUpdate.where.id, 'pr1');
+    assert.equal(lastUpdate.data.shareId, null);
+    assert.ok(lastUpdate.data.deletedAt instanceof Date);
+    assert.ok(lastUpdate.data.deleteAfter instanceof Date);
+    assert.equal(
+      Math.round((lastUpdate.data.deleteAfter.getTime() - lastUpdate.data.deletedAt.getTime()) / (24 * 60 * 60 * 1000)),
+      30,
+    );
+  });
+
+  test('GET / lists live projects by default and trashed projects only with trash=true', async () => {
+    project = { id: 'pr1', userId: auth.user.id, name: 'Trashed', type: 'webapp', deletedAt: new Date(), deleteAfter: new Date() };
+
+    const live = await request(app()).get('/projects?type=webapp').set('Authorization', auth.authHeader);
+    assert.equal(live.status, 200);
+    assert.deepEqual(live.body.projects, []);
+
+    const trash = await request(app()).get('/projects?type=webapp&trash=true').set('Authorization', auth.authHeader);
+    assert.equal(trash.status, 200);
+    assert.equal(trash.body.projects.length, 1);
+    assert.equal(trash.body.projects[0].id, 'pr1');
+  });
+
+  test('POST /:id/restore restores only an owned trashed project', async () => {
+    project = {
+      id: 'pr1',
+      userId: auth.user.id,
+      name: 'Trashed',
+      type: 'webapp',
+      deletedAt: new Date(),
+      deleteAfter: new Date(),
+    };
+
+    const res = await request(app()).post('/projects/pr1/restore').set('Authorization', auth.authHeader);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.restored, true);
+    assert.equal(lastUpdate.where.id, 'pr1');
+    assert.deepEqual(lastUpdate.data, { deletedAt: null, deleteAfter: null });
+  });
+
+  test('POST /:id/share rejects APPS webapp projects as owner-private', async () => {
+    project = { id: 'pr1', userId: auth.user.id, name: 'Private App', type: 'webapp', deletedAt: null };
+    const res = await request(app()).post('/projects/pr1/share').set('Authorization', auth.authHeader);
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'APPS_PROJECT_PRIVATE');
   });
 });

@@ -101,11 +101,15 @@ async function softDelete(delegate, where, opts = {}) {
 async function cascadeSoftDeleteForUser(prisma, userId) {
   if (!prisma || !userId) throw new TypeError('cascadeSoftDeleteForUser: prisma + userId required');
   const now = new Date();
+  const projectDeleteAfter = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const results = {};
   const ops = [
     ['chats', () => prisma.chat.updateMany({ where: { userId, deletedAt: null }, data: { deletedAt: now } })],
     ['files', () => prisma.file.updateMany({ where: { userId, deletedAt: null }, data: { deletedAt: now } })],
-    ['projects', () => prisma.project.updateMany({ where: { userId, deletedAt: null }, data: { deletedAt: now } })],
+    ['projects', () => prisma.project.updateMany({
+      where: { userId, deletedAt: null },
+      data: { deletedAt: now, deleteAfter: projectDeleteAfter, shareId: null },
+    })],
     ['customGpts', () => prisma.customGpt.updateMany({ where: { creatorId: userId, deletedAt: null }, data: { deletedAt: now } })],
     // Messages cascade via chat.userId; updateMany supports nested
     // relation filters in Prisma.
