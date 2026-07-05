@@ -167,6 +167,54 @@ export async function askAI(messages: AIMessage[], opts?: { system?: string }): 
   if (!res.ok || !data?.ok) throw new Error('El servicio de IA no está disponible ahora mismo.')
   return String(data.text || '')
 }
+
+/**
+ * Streaming: tokens fluyen en tiempo real como ChatGPT. Pasa un callback
+ * que recibe cada fragmento (delta). La promesa resuelve al completar.
+ */
+export async function askAIStream(
+  messages: AIMessage[],
+  opts: { system?: string; onDelta: (delta: string) => void },
+): Promise<string> {
+  const res = await fetch('/api/apps-ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, system: opts.system, stream: true }),
+  })
+  if (res.status === 429) throw new Error('La IA está ocupada — espera unos segundos y reintenta.')
+  if (!res.ok) throw new Error('El servicio de IA no está disponible ahora mismo.')
+  if (!res.body) throw new Error('Streaming no soportado en este navegador.')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let full = ''
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\\n')
+    buf = lines.pop() || ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('data: ')) continue
+      const payload = trimmed.slice(6)
+      if (payload === '[DONE]') continue
+      try {
+        const parsed = JSON.parse(payload)
+        if (parsed.delta) {
+          full += parsed.delta
+          opts.onDelta(parsed.delta)
+        }
+        if (parsed.error) throw new Error(parsed.error)
+      } catch (e) {
+        if (e instanceof SyntaxError) continue
+        throw e
+      }
+    }
+  }
+  return full
+}
 `;
 
   // Tailwind v4 entry + design tokens. Re-theme an app by editing the six
@@ -341,8 +389,248 @@ export { Badge, type BadgeProps } from './badge'
     { path: 'src/ui/input.tsx', content: uiInput },
     { path: 'src/ui/badge.tsx', content: uiBadge },
     { path: 'src/ui/index.ts', content: uiIndex },
-    { path: '.gitignore', content: 'node_modules\ndist\n' },
+    { path: '.gitignore', content: 'node_modules\ndist\nserver/node_modules\nserver/*.db\n' },
   ];
 }
 
-module.exports = { starterFiles, escapeHtml };
+/**
+ * Full-stack starter: React+Vite frontend + Express API + SQLite (via
+ * better-sqlite3) backend. The runner starts both with `concurrently` so
+ * the preview shows a real app with persistent data — not just localStorage.
+ *
+ * Used when the skill `backend-real` triggers (user asks for "base de datos
+ * real", "backend", "API", "que guarde de verdad"). The agent builds ON this
+ * foundation, adding routes/entities as needed.
+ */
+function fullStackStarterFiles({ projectName } = {}) {
+  const base = starterFiles({ projectName });
+  const jsxName = jsxText(projectName) || 'Proyecto Codex';
+
+  // Override package.json to add the server deps + concurrently script.
+  const pkg = {
+    name: 'codex-workspace',
+    private: true,
+    version: '0.0.1',
+    type: 'module',
+    scripts: {
+      dev: 'concurrently -n api,web -c blue,green "npm run dev:api" "npm run dev:web"',
+      'dev:api': 'node --watch server/index.js',
+      'dev:web': 'vite',
+      build: 'vite build',
+      preview: 'vite preview',
+    },
+    dependencies: {
+      react: '^18.3.1',
+      'react-dom': '^18.3.1',
+      'lucide-react': '^0.469.0',
+      'framer-motion': '^11.15.0',
+      recharts: '^2.15.0',
+      clsx: '^2.1.1',
+      express: '^4.21.0',
+      cors: '^2.8.5',
+      'better-sqlite3': '^11.7.0',
+    },
+    devDependencies: {
+      '@vitejs/plugin-react': '^4.5.2',
+      '@tailwindcss/vite': '^4.1.0',
+      tailwindcss: '^4.1.0',
+      '@types/react': '^18.3.3',
+      '@types/react-dom': '^18.3.0',
+      '@types/express': '^4.17.21',
+      '@types/cors': '^2.8.17',
+      '@types/better-sqlite3': '^7.6.12',
+      concurrently: '^9.1.0',
+      typescript: '^5.5.4',
+      vite: '^7.0.0',
+    },
+  };
+
+  // Vite config with proxy to the Express API.
+  const viteConfigProxy = `import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server: {
+    host: true,
+    allowedHosts: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+    },
+  },
+})
+`;
+
+  // Express server with SQLite — a working API the agent extends.
+  const serverIndex = `import express from 'express'
+import cors from 'cors'
+import Database from 'better-sqlite3'
+
+const app = express()
+const PORT = process.env.API_PORT || 3001
+const db = new Database('server/data.db')
+
+// Enable WAL for better concurrent read performance.
+db.pragma('journal_mode = WAL')
+
+// Seed data on first boot — the agent adds more entities.
+db.exec(\`
+  CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    done INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+\`)
+const count = db.prepare('SELECT COUNT(*) as n FROM items').get()
+if (count.n === 0) {
+  const insert = db.prepare('INSERT INTO items (title) VALUES (?)')
+  insert.run('Bienvenido a tu app con backend real')
+  insert.run('Los datos se guardan en SQLite')
+  insert.run('Borra esto y crea los tuyos')
+}
+
+app.use(cors())
+app.use(express.json())
+
+// Health check — the runner probes this.
+app.get('/api/health', (_req, res) => res.json({ ok: true }))
+
+// RESTful CRUD for 'items' — the agent replaces this with real entities.
+app.get('/api/items', (_req, res) => {
+  res.json(db.prepare('SELECT * FROM items ORDER BY id DESC').all())
+})
+app.post('/api/items', (req, res) => {
+  const { title } = req.body
+  if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title required' })
+  const info = db.prepare('INSERT INTO items (title) VALUES (?)').run(title)
+  res.status(201).json({ id: info.lastInsertRowid, title, done: 0 })
+})
+app.patch('/api/items/:id', (req, res) => {
+  const { done } = req.body
+  db.prepare('UPDATE items SET done = ? WHERE id = ?').run(done ? 1 : 0, req.params.id)
+  res.json({ ok: true })
+})
+app.delete('/api/items/:id', (req, res) => {
+  db.prepare('DELETE FROM items WHERE id = ?').run(req.params.id)
+  res.json({ ok: true })
+})
+
+app.listen(PORT, () => console.log(\`API on http://localhost:\${PORT}\`))
+`;
+
+  // Frontend App that consumes the real API (replaces the placeholder shell).
+  const appWithApi = `import { useEffect, useState } from 'react'
+import { Button, Card, CardContent, Input, Badge } from './ui'
+
+type Item = { id: number; title: string; done: number }
+
+export default function App() {
+  const [items, setItems] = useState<Item[]>([])
+  const [title, setTitle] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = async () => {
+    try {
+      setError(null)
+      const res = await fetch('/api/items')
+      if (!res.ok) throw new Error('Error al cargar')
+      setItems(await res.json())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error desconocido')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const add = async () => {
+    if (!title.trim()) return
+    const res = await fetch('/api/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    })
+    if (res.ok) {
+      setTitle('')
+      load()
+    }
+  }
+
+  const toggle = async (item: Item) => {
+    await fetch(\`/api/items/\${item.id}\`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ done: !item.done }),
+    })
+    load()
+  }
+
+  const remove = async (id: number) => {
+    await fetch(\`/api/items/\${id}\`, { method: 'DELETE' })
+    load()
+  }
+
+  return (
+    <main className="mx-auto max-w-2xl p-6 bg-bg text-fg min-h-screen">
+      <Badge>App con backend real · SQLite</Badge>
+      <h1 className="mt-3 text-3xl font-bold">${jsxName}</h1>
+      <p className="mt-1 text-muted">Los datos se guardan de verdad. Recarga y siguen ahí.</p>
+
+      <div className="mt-6 flex gap-2">
+        <Input value={title} onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+          placeholder="Agregar item…" />
+        <Button onClick={add}>Agregar</Button>
+      </div>
+
+      {error && <p className="mt-4 text-red-400">{error}</p>}
+      {loading ? (
+        <p className="mt-4 text-muted">Cargando…</p>
+      ) : items.length === 0 ? (
+        <p className="mt-4 text-muted">Sin items todavía. Agrega el primero.</p>
+      ) : (
+        <div className="mt-4 space-y-2">
+          {items.map((item) => (
+            <Card key={item.id} className="flex items-center justify-between">
+              <CardContent className="flex flex-1 items-center gap-3 p-4">
+                <input type="checkbox" checked={!!item.done} onChange={() => toggle(item)} />
+                <span className={item.done ? 'line-through text-muted' : ''}>{item.title}</span>
+              </CardContent>
+              <Button variant="ghost" size="sm" onClick={() => remove(item.id)} className="mr-2">
+                Eliminar
+              </Button>
+            </Card>
+          ))}
+        </div>
+      )}
+    </main>
+  )
+}
+`;
+
+  // Replace package.json, vite.config.ts and App.tsx with the full-stack versions.
+  const overrides = new Map([
+    ['package.json', `${JSON.stringify(pkg, null, 2)}\n`],
+    ['vite.config.ts', viteConfigProxy],
+    ['src/App.tsx', appWithApi],
+  ]);
+
+  return base
+    .filter((f) => !overrides.has(f.path))
+    .concat([
+      { path: 'package.json', content: overrides.get('package.json') },
+      { path: 'vite.config.ts', content: overrides.get('vite.config.ts') },
+      { path: 'src/App.tsx', content: overrides.get('src/App.tsx') },
+      { path: 'server/index.js', content: serverIndex },
+      { path: 'server/.gitignore', content: 'node_modules\n*.db\n*.db-wal\n*.db-shm\n' },
+    ]);
+}
+
+module.exports = { starterFiles, fullStackStarterFiles, escapeHtml };

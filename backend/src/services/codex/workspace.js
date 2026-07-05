@@ -7,7 +7,7 @@
  * is reused by F3 checkpoints.
  */
 
-const { starterFiles } = require('./starter-files');
+const { starterFiles, fullStackStarterFiles } = require('./starter-files');
 
 const GIT_IDENT = ['-c', 'user.name=Codex Agent', '-c', 'user.email=codex@siragpt.local'];
 
@@ -32,9 +32,12 @@ async function gitCommitAll(runner, project, message) {
   return String(head.stdout || '').trim();
 }
 
-async function provisionWorkspace({ project, projectName, runner }) {
+async function provisionWorkspace({ project, projectName, runner, fullStack = false } = {}) {
   await runner.initWorkspace(project);
-  await runner.writeFiles(project, starterFiles({ projectName }));
+  const files = fullStack
+    ? fullStackStarterFiles({ projectName })
+    : starterFiles({ projectName });
+  await runner.writeFiles(project, files);
   const commitSha = await gitCommitAll(runner, project, 'chore(codex): workspace inicial');
   return { workspacePath: `projects/${project}`, commitSha };
 }

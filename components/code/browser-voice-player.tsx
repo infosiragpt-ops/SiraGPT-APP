@@ -19,9 +19,11 @@
  */
 
 import * as React from "react"
-import { Loader2, Pause, Play } from "lucide-react"
+import { Loader2, Pause, Play, Sparkles } from "lucide-react"
+import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api"
+import { isSupported as isKokoroSupported, isModelCached as isKokoroCached, loadModel as loadKokoro, synthesize as kokoroSynthesize, isReady as isKokoroReady, KOKORO_VOICE } from "@/lib/voice/local-neural-tts"
 
 // Voz femenina premade de ElevenLabs (cálida, profesional) + modelo
 // multilingüe para que hable español con acento natural.
@@ -62,6 +64,72 @@ function pickLocalVoice(): SpeechSynthesisVoice | null {
     es[0] ||
     null
   )
+}
+
+/** True when the device has at least one Spanish female voice for the fallback. */
+export function hasSpanishFemaleVoice(): boolean {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false
+  const voices = window.speechSynthesis.getVoices?.() || []
+  return voices.some((v) => /^es(-|_)?/i.test(v.lang) && FEMALE_ES_VOICE_HINTS.test(v.name))
+}
+
+/**
+ * Split a speakable text into short phrases that the synthesizer can utter as
+ * separate utterances. Doing one utterance per sentence:
+ *   - breaks the monotone cadence of the system voice (natural pauses),
+ *   - avoids Chrome's ~15 s cap that silently truncates long utterances,
+ *   - lets us vary pitch slightly per phrase for a warmer, less robotic feel.
+ *
+ * Keeps the split conservative: abbreviations (Dr., S.A., 1.5), decimals and
+ * single-word fragments are NOT split. Target ~120 chars/phrase max.
+ */
+const ABBREV_GUARD = /(?:[A-Z]\.|[A-Z]{2,4}\.)/
+function splitIntoPhrases(text: string): string[] {
+  const clean = toSpeakable(text)
+  if (!clean) return []
+  const out: string[] = []
+  let buf = ""
+  const flush = () => {
+    const t = buf.trim()
+    if (t) out.push(t)
+    buf = ""
+  }
+  // Walk char-by-char so we can detect sentence boundaries (.!?;:) while
+  // skipping abbreviations and decimal numbers.
+  for (let i = 0; i < clean.length; i += 1) {
+    const ch = clean[i]
+    buf += ch
+    if (/[.!?;:]/.test(ch)) {
+      // Lookahead: next non-space char starts a new sentence ONLY when the
+      // boundary is real (not an abbreviation like "Dr." or a decimal "1.5").
+      const rest = clean.slice(i + 1)
+      const nextWord = (rest.match(/^\s*([A-ZÁÉÍÓÚÑ0-9])/)?.[1]) ?? ""
+      const looksAbbrev = ABBREV_GUARD.test(clean.slice(Math.max(0, i - 6), i + 1))
+      const looksDecimal = /\d\.\d/.test(clean.slice(Math.max(0, i - 2), i + 2))
+      if (!looksAbbrev && !looksDecimal && nextWord) {
+        // Hard cap a single phrase to keep utterances short for Chrome.
+        if (buf.length > 220) {
+          // Long phrase — split at the last comma/semicolon if any.
+          const lastComma = Math.max(buf.lastIndexOf(","), buf.lastIndexOf(";"))
+          if (lastComma > 40) {
+            out.push(buf.slice(0, lastComma).trim())
+            buf = buf.slice(lastComma + 1)
+          }
+        }
+        flush()
+      }
+    }
+  }
+  flush()
+  return out.length ? out : [clean]
+}
+
+/** Leaning pitch per phrase index — oscillates around 1.08 for warmth. */
+function phrasePitch(index: number, total: number, isQuestion: boolean): number {
+  if (isQuestion) return 1.14 // questions rise at the end
+  const base = 1.08
+  const wave = Math.sin((index / Math.max(1, total)) * Math.PI) * 0.03
+  return Math.max(1.0, Math.min(1.16, base + wave))
 }
 
 /**
@@ -119,12 +187,19 @@ export function BrowserVoicePlayer({
   const [progress, setProgress] = React.useState(0)
   const [elapsedS, setElapsedS] = React.useState(0)
   const [realDurationS, setRealDurationS] = React.useState<number | null>(null)
+  const [kokoroAvailable, setKokoroAvailable] = React.useState(isKokoroSupported())
+  const [kokoroReady, setKokoroReady] = React.useState(isKokoroCached() && isKokoroReady())
+  const [kokoroDownloading, setKokoroDownloading] = React.useState(false)
+  const [kokoroProgress, setKokoroProgress] = React.useState(0)
 
   const audioRef = React.useRef<HTMLAudioElement | null>(null)
   const audioSrcRef = React.useRef<string | null>(null)
   const usingLocalRef = React.useRef(false)
   const startedAtRef = React.useRef<number | null>(null)
   const rafRef = React.useRef<number | null>(null)
+  // Per-play override of stopAll so the phrase queue's pending timeout honors a
+  // mid-speech stop without leaving a queued setTimeout that speaks after stop.
+  const stopAllRef = React.useRef<() => void>(() => {})
 
   const speakable = React.useMemo(() => text.trim().slice(0, MAX_TTS_CHARS), [text])
 
@@ -169,6 +244,8 @@ export function BrowserVoicePlayer({
     }
     stopTicker()
     setState("idle")
+    // Clear any pending phrase-queue timeout from playLocal.
+    stopAllRef.current = () => {}
   }, [stopTicker])
 
   // Reproduce el MP3 (ya cacheado o recién generado) con progreso REAL.
@@ -198,6 +275,8 @@ export function BrowserVoicePlayer({
   }, [])
 
   // Fallback 100% local: speechSynthesis con la mejor voz femenina es-*.
+  // Prosodia por frases: una utterance por oración con micro-pausas y pitch
+  // variable → suena menos robótico Y evita el corte de Chrome en >15s.
   const playLocal = React.useCallback(async () => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setSupported(false)
@@ -206,29 +285,72 @@ export function BrowserVoicePlayer({
     try {
       window.speechSynthesis.cancel()
       await waitForVoices()
-      const u = new SpeechSynthesisUtterance(toSpeakable(speakable))
-      u.lang = "es-ES"
-      // Prosodia cálida: ligeramente más aguda y fluida que el default plano.
-      u.rate = 1.03
-      u.pitch = 1.08
       const voice = pickLocalVoice()
-      if (voice) u.voice = voice
-      u.onend = () => {
-        setProgress(1)
-        setState("idle")
-        stopTicker()
+      // Degradación honesta: si no hay voz femenina española, avisa UNA vez
+      // y sugiere "Mejorar voz" (Kokoro local) para no repetir el aviso.
+      const hasFemale = voice && FEMALE_ES_VOICE_HINTS.test(voice.name)
+      if (!hasFemale && !kokoroReady) {
+        try {
+          const warnedKey = "siragpt:voice-no-female-es-warned"
+          if (!sessionStorage.getItem(warnedKey)) {
+            sessionStorage.setItem(warnedKey, "1")
+            toast.info("Tu dispositivo no tiene voz femenina en español. Toca el icono ✨ para descargar una voz natural gratuita.", { duration: 6000 })
+          }
+        } catch { /* private mode */ }
       }
-      u.onerror = () => {
+      const phrases = splitIntoPhrases(speakable)
+      if (!phrases.length) {
         setState("idle")
-        stopTicker()
+        return
       }
       usingLocalRef.current = true
       setProgress(0)
       setElapsedS(0)
       setState("playing")
       startedAtRef.current = Date.now()
-      window.speechSynthesis.speak(u)
+
+      const total = phrases.length
+      let idx = 0
+      let cancelled = false
+
+      const speakNext = () => {
+        if (cancelled) return
+        if (idx >= total) {
+          setProgress(1)
+          setState("idle")
+          stopTicker()
+          return
+        }
+        const phrase = phrases[idx]
+        const u = new SpeechSynthesisUtterance(phrase)
+        u.lang = "es-ES"
+        u.voice = voice
+        u.rate = 1.03
+        u.pitch = phrasePitch(idx, total, /\?\s*$/.test(phrase))
+        u.onend = () => {
+          if (cancelled) return
+          idx += 1
+          setProgress(idx / total)
+          // Micro-pausa entre frases (150-250ms) para prosodia natural.
+          const pause = phrase.endsWith(":") || phrase.endsWith(";") ? 250 : 160
+          window.setTimeout(speakNext, pause)
+        }
+        u.onerror = () => {
+          if (cancelled) return
+          idx += 1
+          window.setTimeout(speakNext, 120)
+        }
+        window.speechSynthesis.speak(u)
+      }
+      speakNext()
       if (typeof requestAnimationFrame === "function") rafRef.current = requestAnimationFrame(localTick)
+
+      // Patch stopAll so the cancel flag is honored by the pending timeout.
+      const origStop = stopAll
+      stopAllRef.current = () => {
+        cancelled = true
+        origStop()
+      }
     } catch {
       setSupported(false)
     }
@@ -238,6 +360,7 @@ export function BrowserVoicePlayer({
     // Pausa/reanuda si ya hay reproducción en curso.
     if (state === "playing") {
       if (usingLocalRef.current) {
+        stopAllRef.current()
         stopAll()
       } else if (audioRef.current) {
         audioRef.current.pause()
@@ -258,10 +381,20 @@ export function BrowserVoicePlayer({
       return
     }
 
-    // Primera escucha: genera con ElevenLabs (voz femenina multilingüe) y,
-    // si el backend lo rechaza (FREE / sin clave / error), usa la voz local.
+    // Primera escucha: escalera Kokoro (local) → ElevenLabs (API) → prosodia local.
     setState("loading")
     try {
+      // Tier 1: Kokoro neural local (si ya está descargado). Gratis, calidad alta.
+      if (kokoroReady) {
+        const blob = await kokoroSynthesize(speakable, KOKORO_VOICE)
+        if (blob) {
+          const src = URL.createObjectURL(blob)
+          audioSrcRef.current = src
+          playAudioSrc(src)
+          return
+        }
+      }
+      // Tier 2: ElevenLabs (voz femenina multilingüe vía API).
       const response: any = await apiClient.textToSpeech({
         text: speakable,
         voice_id: ELEVEN_FEMALE_VOICE_ID,
@@ -274,11 +407,12 @@ export function BrowserVoicePlayer({
         playAudioSrc(src)
         return
       }
+      // Tier 3: speechSynthesis con prosodia por frases.
       void playLocal()
     } catch {
       void playLocal()
     }
-  }, [playAudioSrc, playLocal, speakable, state, stopAll])
+  }, [playAudioSrc, playLocal, speakable, state, stopAll, kokoroReady])
 
   React.useEffect(() => {
     // Solo sondea soporte; sin auto-play. El botón queda listo para el clic.
@@ -294,6 +428,20 @@ export function BrowserVoicePlayer({
     // Mount-only a propósito: la limpieza corta audio al desmontar el turno.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const handleDownloadKokoro = React.useCallback(async () => {
+    if (!kokoroAvailable || kokoroReady || kokoroDownloading) return
+    setKokoroDownloading(true)
+    setKokoroProgress(0)
+    try {
+      const ok = await loadKokoro((loaded, total) => {
+        setKokoroProgress(total > 0 ? Math.round((loaded / total) * 100) : 0)
+      })
+      if (ok) setKokoroReady(true)
+    } finally {
+      setKokoroDownloading(false)
+    }
+  }, [kokoroAvailable, kokoroReady, kokoroDownloading])
 
   if (!supported) return null
 
@@ -333,6 +481,29 @@ export function BrowserVoicePlayer({
       <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
         {fmt(shownS)} / {fmt(totalS)}
       </span>
+      {/* Opt-in neural voice: downloads Kokoro (~80MB) once, then all
+          reproductions are local — no API, quality close to ElevenLabs. */}
+      {kokoroAvailable && !kokoroReady && (
+        <button
+          type="button"
+          onClick={() => void handleDownloadKokoro()}
+          disabled={kokoroDownloading}
+          aria-label="Mejorar voz (descarga una vez)"
+          title={kokoroDownloading ? `Descargando voz… ${kokoroProgress}%` : "Mejorar voz — descarga una vez (~80MB), gratis para siempre"}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-violet-500 hover:bg-violet-50 disabled:opacity-60"
+        >
+          {kokoroDownloading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Sparkles className="h-3.5 w-3.5" />
+          )}
+        </button>
+      )}
+      {kokoroReady && (
+        <span title="Voz neural local activa" className="shrink-0">
+          <Sparkles className="h-3 w-3 text-violet-400" />
+        </span>
+      )}
     </div>
   )
 }

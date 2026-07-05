@@ -49,7 +49,10 @@ async function createProject({ userId, name, brief = null, runner, db = defaultP
     data: { userId, name, brief, status: 'provisioning' },
   });
   try {
-    const { workspacePath } = await provisionWorkspace({ project: row.id, projectName: name, runner: runnerClient });
+    // Detect "backend real" intent from the brief so we provision the
+    // full-stack starter (Express + SQLite) instead of the SPA-only one.
+    const wantsBackend = typeof brief === 'string' && /\b(base de datos|backend|api real|que guarde|con servidor)\b/i.test(brief);
+    const { workspacePath } = await provisionWorkspace({ project: row.id, projectName: name, runner: runnerClient, fullStack: wantsBackend });
     const ready = await prisma.codexProject.update({
       where: { id: row.id },
       // The browser must never receive the runner's private localhost URL in

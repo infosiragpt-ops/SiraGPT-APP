@@ -2299,6 +2299,24 @@ export function AICodeChatPanel() {
                 getPrevContent: (p) => files[p]?.content ?? "",
                 read: meta?.read,
               })
+              // Derive real pending items from the files the agent actually
+              // wrote — so the spoken digest says what's left, not just what
+              // was done. Parity with the deterministic build path.
+              const writtenPaths = (meta!.written! || []).map((w) => w.path || "")
+              const spokenPending: string[] = []
+              if (writtenPaths.some((p) => /schema\.prisma$|\.prisma$/.test(p))) spokenPending.push("conectar la base de datos real")
+              if (writtenPaths.some((p) => /askAI|ai\.ts$/.test(p))) spokenPending.push("afinar el dominio del asistente")
+              if (writtenPaths.some((p) => /server\/|api\/|backend\//.test(p))) spokenPending.push("revisar los endpoints de la API")
+              if (!spokenPending.length) spokenPending.push("afinar el diseño a tu marca")
+              // Infer entities from model file names (e.g. "Producto.tsx" → "Producto")
+              const entityFiles = writtenPaths
+                .filter((p) => /\/(src|app)\/(components\/)?(pages\/|entities\/|features\/)?[A-Z]/.test(p))
+                .map((p) => p.replace(/.*\//, "").replace(/\.\w+$/, ""))
+                .filter((n) => n && n[0] === n[0].toUpperCase())
+                .slice(0, 5)
+              const spokenEntities = entityFiles.length
+                ? entityFiles.join(", ")
+                : undefined
               return {
                 ...base,
                 actions,
@@ -2307,6 +2325,8 @@ export function AICodeChatPanel() {
                   kind: iterate ? "patch" : "engine",
                   filesChanged: metrics.filesChanged,
                   durationMs: metrics.timeWorkedMs,
+                  entities: spokenEntities,
+                  pending: spokenPending,
                 }),
               }
             }
