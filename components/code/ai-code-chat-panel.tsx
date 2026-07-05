@@ -1143,9 +1143,7 @@ export function AICodeChatPanel() {
         text: string,
         sid: string,
         opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
-        // The engine may resolve to a sentinel ("workspace_sync_failed") for
-        // callers that inspect it; the resilience fallback just awaits.
-      ) => Promise<void | string>)
+      ) => Promise<void | "workspace_sync_failed">)
     | null
   >(null)
 
