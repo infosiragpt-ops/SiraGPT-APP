@@ -1,4 +1,18 @@
 @import 'katex/dist/katex.min.css';
+
+/* KaTeX display math: long formulas (matrices, integrals, multi-term
+   equations) overflowed the message bubble horizontally. Scroll the
+   formula itself instead of breaking the layout; the padding keeps the
+   scrollbar from clipping descenders. */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0.125rem;
+}
+.katex-display > .katex {
+  white-space: normal;
+}
+
 /* Syncfusion Spreadsheet styles (required for Excel Connector) */
 @import '@syncfusion/ej2-base/styles/tailwind.css';
 @import '@syncfusion/ej2-buttons/styles/tailwind.css';
