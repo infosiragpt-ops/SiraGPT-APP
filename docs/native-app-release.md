@@ -85,9 +85,9 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
 - Management/traceability workflow snapshot before this document refresh,
-  SHA `8dd5b0c7b2710de39ac286b5a373ecdeee3e3869`:
-  - CI: `28735031853`.
-  - Native readiness report with owner handoff artifact: `28735031854`.
+  SHA `2f265240121360b785213be92f2f33b2b638c050`:
+  - CI: `28735776623`.
+  - Native readiness report with owner handoff artifact: `28735776632`.
   - Native mobile builds: `28735031841`.
   - Native desktop builds: `28735031849`.
   - Docker build images: `28735031878`.
@@ -104,8 +104,8 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.
   - Allowed actions: `all`.
-  - Latest green CI: `28735031853`.
-  - Latest green native readiness report: `28735031854`.
+  - Latest green CI: `28735776623`.
+  - Latest green native readiness report: `28735776632`.
   - Latest green native mobile builds: `28735031841`.
   - Latest green native desktop builds: `28735031849`.
   - Latest green Docker build images: `28735031878`.
@@ -117,9 +117,9 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8dd5b0c7.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-8dd5b0c7.zip`.
-  - SHA-256: `4d7cd910671f71cbebf78224767eeb2c66fb597e0d9fe88adf8206e54329f033`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-2f265240.zip`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-2f265240.zip`.
+  - SHA-256: `95e6a6c1f78987784c67f00a4897cce48105ab4f9220f130ea737f17ff9eecd3`.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Rotate that password
