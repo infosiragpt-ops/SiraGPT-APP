@@ -1,59 +1,58 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T06:15:06.531Z",
+  "updatedAt": "2026-07-05T06:57:24.732Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
-    "tag": "native-qa-v0.4.3-8ae5bd1",
-    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-8ae5bd1",
-    "targetSha": "8ae5bd1b2f65f57ce22a74f4ba6d4cbf46767edb",
+    "tag": "native-qa-v0.4.3-0601139",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0601139",
+    "targetSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
     "assetCount": 17,
     "artifacts": [
-      "native-release-manifest.json",
-      "native-release-manifest.md",
       "SHA256SUMS.txt",
       "SiraGPT-0.4.3-arm64-mac.zip",
       "SiraGPT-0.4.3-arm64-mac.zip.blockmap",
       "SiraGPT-0.4.3-arm64.dmg",
       "SiraGPT-0.4.3-arm64.dmg.blockmap",
-      "SiraGPT-8ae5bd1-debug.apk",
-      "SiraGPT-8ae5bd1-ios-simulator-app.zip",
-      "SiraGPT-8ae5bd1-unsigned-release.aab",
-      "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip",
-      "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip.sha256",
-      "SiraGPT-native-store-owner-packet-8ae5bd1b.zip",
-      "SiraGPT-native-store-owner-packet-8ae5bd1b.zip.sha256",
+      "SiraGPT-0601139-debug.apk",
+      "SiraGPT-0601139-ios-simulator-app.zip",
+      "SiraGPT-0601139-unsigned-release.aab",
+      "SiraGPT-native-qa-v0.4.3-0601139.zip",
+      "SiraGPT-native-qa-v0.4.3-0601139.zip.sha256",
+      "SiraGPT-native-store-owner-packet-0601139e.zip",
+      "SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
       "SiraGPT.0.4.3.exe",
       "SiraGPT.Setup.0.4.3.exe",
-      "SiraGPT.Setup.0.4.3.exe.blockmap"
+      "SiraGPT.Setup.0.4.3.exe.blockmap",
+      "native-release-manifest.json",
+      "native-release-manifest.md"
     ],
     "durableZip": {
-      "name": "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip",
-      "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-8ae5bd1/SiraGPT-native-qa-v0.4.3-8ae5bd1.zip",
-      "checksumName": "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip.sha256",
-      "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-8ae5bd1/SiraGPT-native-qa-v0.4.3-8ae5bd1.zip.sha256",
-      "checksumSha256": "a9008a7c7f6d9f9aec44eff45facdd39fae73413f965548f5be2904826050b8a",
-      "size": 460278781
+      "name": "SiraGPT-native-qa-v0.4.3-0601139.zip",
+      "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-qa-v0.4.3-0601139.zip",
+      "checksumName": "SiraGPT-native-qa-v0.4.3-0601139.zip.sha256",
+      "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-qa-v0.4.3-0601139.zip.sha256",
+      "checksumSha256": "5d978589737f09d1f9f02839b9551f53afa0cef6a7daf9ccf675d0e6321051f6",
+      "size": 460277612
     }
   },
   "latestVerifiedRuns": {
-    "mobile": "28731162085",
-    "desktop": "28731162794",
-    "readiness": "28731000794",
-    "ci": "28731000793",
+    "mobile": "28732348269",
+    "desktop": "28732348253",
+    "readiness": "28732348267",
+    "ci": "28732038507",
     "docker": "28728027742"
   },
   "latestQaArtifactManifestRuns": {
-    "checkedAt": "2026-07-05T06:15:06.531Z",
-    "sourceSha": "8ae5bd1b2f65f57ce22a74f4ba6d4cbf46767edb",
-    "mobileRun": "28731162085",
-    "desktopRun": "28731162794",
+    "checkedAt": "2026-07-05T06:57:24.732Z",
+    "sourceSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
+    "mobileRun": "28732348269",
+    "desktopRun": "28732348253",
     "status": "verified-manifest-checksums-and-durable-release-zip-present",
     "artifactUploads": [
       {
-        "run": "28731162085",
+        "run": "28732348269",
         "name": "siragpt-mobile-android",
-        "artifactId": "8088778902",
         "platforms": [
           "android"
         ],
@@ -64,9 +63,8 @@
         ]
       },
       {
-        "run": "28731162085",
+        "run": "28732348269",
         "name": "siragpt-mobile-ios-simulator",
-        "artifactId": "8088779235",
         "platforms": [
           "ios"
         ],
@@ -77,9 +75,8 @@
         ]
       },
       {
-        "run": "28731162794",
+        "run": "28732348253",
         "name": "siragpt-desktop-macos",
-        "artifactId": "8088776772",
         "platforms": [
           "macos"
         ],
@@ -90,9 +87,8 @@
         ]
       },
       {
-        "run": "28731162794",
+        "run": "28732348253",
         "name": "siragpt-desktop-windows-x64",
-        "artifactId": "8088788945",
         "platforms": [
           "windows"
         ],
@@ -105,17 +101,17 @@
     ],
     "platformArtifacts": {
       "android": [
-        "SiraGPT-8ae5bd1-debug.apk",
-        "SiraGPT-8ae5bd1-unsigned-release.aab"
+        "SiraGPT-0601139-debug.apk",
+        "SiraGPT-0601139-unsigned-release.aab"
       ],
       "ios": [
-        "SiraGPT-8ae5bd1-ios-simulator-app.zip"
+        "SiraGPT-0601139-ios-simulator-app.zip"
       ],
       "macos": [
-        "SiraGPT-0.4.3-arm64.dmg",
         "SiraGPT-0.4.3-arm64-mac.zip",
-        "SiraGPT-0.4.3-arm64.dmg.blockmap",
-        "SiraGPT-0.4.3-arm64-mac.zip.blockmap"
+        "SiraGPT-0.4.3-arm64-mac.zip.blockmap",
+        "SiraGPT-0.4.3-arm64.dmg",
+        "SiraGPT-0.4.3-arm64.dmg.blockmap"
       ],
       "windows": [
         "SiraGPT 0.4.3.exe",
@@ -124,33 +120,33 @@
       ]
     },
     "releaseAssets": [
-      "native-release-manifest.json",
-      "native-release-manifest.md",
       "SHA256SUMS.txt",
       "SiraGPT-0.4.3-arm64-mac.zip",
       "SiraGPT-0.4.3-arm64-mac.zip.blockmap",
       "SiraGPT-0.4.3-arm64.dmg",
       "SiraGPT-0.4.3-arm64.dmg.blockmap",
-      "SiraGPT-8ae5bd1-debug.apk",
-      "SiraGPT-8ae5bd1-ios-simulator-app.zip",
-      "SiraGPT-8ae5bd1-unsigned-release.aab",
-      "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip",
-      "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip.sha256",
-      "SiraGPT-native-store-owner-packet-8ae5bd1b.zip",
-      "SiraGPT-native-store-owner-packet-8ae5bd1b.zip.sha256",
+      "SiraGPT-0601139-debug.apk",
+      "SiraGPT-0601139-ios-simulator-app.zip",
+      "SiraGPT-0601139-unsigned-release.aab",
+      "SiraGPT-native-qa-v0.4.3-0601139.zip",
+      "SiraGPT-native-qa-v0.4.3-0601139.zip.sha256",
+      "SiraGPT-native-store-owner-packet-0601139e.zip",
+      "SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
       "SiraGPT.0.4.3.exe",
       "SiraGPT.Setup.0.4.3.exe",
-      "SiraGPT.Setup.0.4.3.exe.blockmap"
+      "SiraGPT.Setup.0.4.3.exe.blockmap",
+      "native-release-manifest.json",
+      "native-release-manifest.md"
     ],
-    "durableZip": "SiraGPT-native-qa-v0.4.3-8ae5bd1.zip",
+    "durableZip": "SiraGPT-native-qa-v0.4.3-0601139.zip",
     "diagnosis": "The latest mobile and desktop QA workflow artifacts were downloaded, their manifests list generated platform binaries with SHA-256 checksums, and the public QA release includes a durable ZIP preserving platform directories and original Windows filenames."
   },
   "latestTraceabilityCommit": {
-    "sourceSha": "8ae5bd1b2f65f57ce22a74f4ba6d4cbf46767edb",
-    "sourceCommit": "docs(native): publish current QA release evidence"
+    "sourceSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
+    "sourceCommit": "fix(ci): run database backup through postgres container"
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T06:15:06.531Z",
+    "checkedAt": "2026-07-05T06:57:24.732Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
@@ -161,23 +157,23 @@
       "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/permissions",
       "gh run list --repo infosiragpt-ops/SiraGPT-APP --limit 50"
     ],
-    "ciRun": "28731000793",
-    "readinessRun": "28731000794",
-    "mobileRun": "28731162085",
-    "desktopRun": "28731162794",
+    "ciRun": "28732038507",
+    "readinessRun": "28732348267",
+    "mobileRun": "28732348269",
+    "desktopRun": "28732348253",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
     "diagnosis": "Public repository Actions are enabled and running. Standard GitHub-hosted Actions for public repositories are free; signed native release packaging is gated by missing platform signing and store-upload secrets."
   },
   "latestOwnerPacket": {
-    "sourceSha": "8ae5bd1b2f65f57ce22a74f4ba6d4cbf46767edb",
-    "sourceCommit": "docs(native): clarify artifact validation SHA",
-    "zipName": "SiraGPT-native-store-owner-packet-8ae5bd1b.zip",
-    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-8ae5bd1/SiraGPT-native-store-owner-packet-8ae5bd1b.zip",
-    "checksumName": "SiraGPT-native-store-owner-packet-8ae5bd1b.zip.sha256",
-    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-8ae5bd1/SiraGPT-native-store-owner-packet-8ae5bd1b.zip.sha256",
-    "checksumSha256": "840b0bdaefde75ddfe0de444d0d14336883f7303c8195586b545956286cc3d99",
-    "size": 5135435,
-    "uploadedAt": "2026-07-05T06:15:06.531Z",
+    "sourceSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
+    "sourceCommit": "fix(ci): run database backup through postgres container",
+    "zipName": "SiraGPT-native-store-owner-packet-0601139e.zip",
+    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-0601139e.zip",
+    "checksumName": "SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
+    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
+    "checksumSha256": "fefc5532f8cfaf3e5baf55d9e7a5cb9400f2d3aad71e2e1be95f2bc9f6210f03",
+    "size": 5135418,
+    "uploadedAt": "2026-07-05T06:57:24.732Z",
     "includes": [
       "native-signing-templates/all.env.example",
       "native-signing-templates/mobile.env.example",
@@ -225,7 +221,7 @@
     "notes": "The signed release workflow ran on the current production-main SHA and stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T06:15:06.531Z",
+    "checkedAt": "2026-07-05T06:57:24.732Z",
     "repo": "infosiragpt-ops/SiraGPT-APP",
     "configuredRepositorySecrets": [
       "VPS_HOST",

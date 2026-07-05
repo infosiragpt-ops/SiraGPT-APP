@@ -19,28 +19,27 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
-- Latest public QA packet: `native-qa-v0.4.3-8ae5bd1`
-  (`8ae5bd1b2f65f57ce22a74f4ba6d4cbf46767edb`)
+- Latest public QA packet: `native-qa-v0.4.3-0601139`
+  (`0601139e3b507b9733ad1fdd84290e3d8cf7a078`)
 - Latest verified native runs:
-  - Mobile: `28731162085`
-  - Desktop: `28731162794`
-  - Readiness report: `28731000794`
-  - CI: `28731000793`
-  - Docker images: `28728027742`
-- Latest native artifact verification SHA: `8ae5bd1b2f65f57ce22a74f4ba6d4cbf46767edb`
-  (`docs(native): clarify artifact validation SHA`)
-- Latest QA artifact manifest verification: mobile run `28731162085` and
-  desktop run `28731162794` were downloaded and each Android, iOS simulator,
+  - Mobile: `28732348269`
+  - Desktop: `28732348253`
+  - Readiness report: `28732348267`
+  - CI: `28732038507`
+- Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`
+  (`fix(ci): run database backup through postgres container`)
+- Latest QA artifact manifest verification: mobile run `28732348269` and
+  desktop run `28732348253` were downloaded and each Android, iOS simulator,
   macOS, and Windows artifact upload includes `native-release-manifest.json`,
   `native-release-manifest.md`, and `SHA256SUMS.txt`.
-- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-8ae5bd1.zip`
-  (`sha256:a9008a7c7f6d9f9aec44eff45facdd39fae73413f965548f5be2904826050b8a`)
+- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-0601139.zip`
+  (`sha256:5d978589737f09d1f9f02839b9551f53afa0cef6a7daf9ccf675d0e6321051f6`)
   preserves Android, iOS, macOS, and Windows folders plus original Windows
   filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8ae5bd1b.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-8ae5bd1/SiraGPT-native-store-owner-packet-8ae5bd1b.zip`)
-  with SHA-256 `840b0bdaefde75ddfe0de444d0d14336883f7303c8195586b545956286cc3d99`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-0601139e.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-0601139e.zip`)
+  with SHA-256 `fefc5532f8cfaf3e5baf55d9e7a5cb9400f2d3aad71e2e1be95f2bc9f6210f03`.
 - Latest signed release preflight: `28728938916`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28728938916`)
   stopped before package runners because signing secrets are still missing.
@@ -48,8 +47,8 @@ secrets. They must never be committed.
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
 - Latest GitHub Actions diagnostics: repository visibility is `PUBLIC`, Actions
-  is enabled with `allowed_actions=all`, CI run `28731000793` and native
-  readiness run `28731000794` are green. Standard GitHub-hosted Actions for
+  is enabled with `allowed_actions=all`, CI run `28732038507` and native
+  readiness run `28732348267` are green. Standard GitHub-hosted Actions for
   public repositories are free; this is separate from native signing readiness.
 
 The canonical draft metadata lives in
