@@ -37,6 +37,9 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   assert.ok(pkg.devDependencies.tailwindcss && pkg.devDependencies['@tailwindcss/vite'], 'tailwind v4');
   const viteCfg = files.find((f) => f.path === 'vite.config.ts').content;
   assert.match(viteCfg, /tailwindcss\(\)/);
+  // HMR is gated on SIRA_PREVIEW so the proxied preview console stays clean
+  // while a standalone `vite` run keeps hot-reload.
+  assert.match(viteCfg, /hmr:\s*process\.env\.SIRA_PREVIEW\s*\?\s*false\s*:\s*undefined/);
   const css = files.find((f) => f.path === 'src/index.css').content;
   assert.match(css, /@import "tailwindcss"/);
   assert.match(css, /@theme inline/);

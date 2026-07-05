@@ -336,6 +336,11 @@ async function runDev(entry, projectId) {
       // container hostname for ALL workspaces, including pre-existing ones
       // whose vite.config predates the allowedHosts fix in the starter.
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: process.env.VITE_EXTRA_ALLOWED_HOST || "runner",
+      // Marks "this Vite runs behind the SiraGPT tokenized preview proxy" so the
+      // generated vite.config disables HMR here (the proxy doesn't carry the HMR
+      // WebSocket → red console errors). A standalone `vite` run has no such env
+      // and keeps full hot-reload.
+      SIRA_PREVIEW: "1",
     },
   });
   entry.proc = devProc;
