@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T03:46:42Z",
+  "updatedAt": "2026-07-05T04:03:05Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -24,15 +24,15 @@
   "latestVerifiedRuns": {
     "mobile": "28727085656",
     "desktop": "28727085653",
-    "readiness": "28727085668",
-    "ci": "28727085654",
+    "readiness": "28728650058",
+    "ci": "28728766157",
     "docker": "28727085650"
   },
   "latestTraceabilityCommit": {
-    "sha": "ffb2f79076b4807f32f898e8b1b8ec60ca56844d",
-    "message": "chore(native): bundle signing templates in owner packet",
-    "ci": "28728379078",
-    "readiness": "28728379084",
+    "sha": "5970953f4c72a3f39850ac679a5d9b7f3a939c49",
+    "message": "test(native): align owner handoff traceability",
+    "ci": "28728766157",
+    "readiness": "28728650058",
     "mobile": "28728027750",
     "desktop": "28728027748",
     "docker": "28728027742"
@@ -58,11 +58,39 @@
     ]
   },
   "latestSignedPreflight": {
-    "run": "28727578162",
-    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28727578162",
+    "run": "28728938916",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28728938916",
+    "sourceSha": "5970953f4c72a3f39850ac679a5d9b7f3a939c49",
     "status": "blocked-missing-signing-secrets",
     "platform": "all",
-    "releaseTag": "native-v0.4.3-signing-preflight",
-    "notes": "The signed release workflow stopped in the cheap preflight before launching Android, iOS, macOS, or Windows package runners because native signing secrets are not configured."
+    "releaseTag": "native-v0.4.3-signing-preflight-5970953",
+    "failedJob": "Signed release preflight",
+    "failedStep": "Validate selected signing secrets",
+    "missingRequiredSecrets": {
+      "android": [
+        "ANDROID_KEYSTORE_BASE64",
+        "ANDROID_KEYSTORE_PASSWORD",
+        "ANDROID_KEY_ALIAS",
+        "ANDROID_KEY_PASSWORD"
+      ],
+      "ios": [
+        "APPLE_TEAM_ID",
+        "IOS_SIGNING_CERTIFICATE_BASE64",
+        "IOS_SIGNING_CERTIFICATE_PASSWORD",
+        "IOS_PROVISIONING_PROFILE_BASE64"
+      ],
+      "macos": [
+        "MACOS_CERTIFICATE_BASE64",
+        "MACOS_CERTIFICATE_PASSWORD",
+        "APPLE_TEAM_ID",
+        "APPLE_ID",
+        "APPLE_APP_SPECIFIC_PASSWORD"
+      ],
+      "windows": [
+        "WINDOWS_CERTIFICATE_BASE64",
+        "WINDOWS_CERTIFICATE_PASSWORD"
+      ]
+    },
+    "notes": "The signed release workflow ran on the current production-main SHA and stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
   }
 }

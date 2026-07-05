@@ -29,14 +29,15 @@ describe("generate-native-store-owner-packet", () => {
         status: string
         repository: string
         packetSourceSha: string
-        latestSignedPreflight: { run: string; status: string }
+        latestSignedPreflight: { run: string; sourceSha: string; status: string }
         zipPath: string
         checksumSha256: string
       }
       assert.equal(summary.status, "owner-action-required")
       assert.equal(summary.repository, "infosiragpt-ops/SiraGPT-APP")
       assert.equal(summary.packetSourceSha, "6a3d4efc370212f6e1d53944c4fbb5fa58374866")
-      assert.equal(summary.latestSignedPreflight.run, "28727578162")
+      assert.equal(summary.latestSignedPreflight.run, "28728938916")
+      assert.equal(summary.latestSignedPreflight.sourceSha, "5970953f4c72a3f39850ac679a5d9b7f3a939c49")
       assert.equal(summary.latestSignedPreflight.status, "blocked-missing-signing-secrets")
       assert.match(summary.checksumSha256, /^[a-f0-9]{64}$/)
       assert.ok(existsSync(zipOut))
@@ -46,13 +47,14 @@ describe("generate-native-store-owner-packet", () => {
       const manifest = JSON.parse(readFileSync(join(outDir, "PACKET-MANIFEST.json"), "utf8")) as {
         qaBinaryTargetSha: string
         latestOwnerPacket: { sourceSha: string; zipName: string }
-        latestSignedPreflight: { run: string }
+        latestSignedPreflight: { run: string; sourceSha: string }
         included: string[]
       }
       assert.equal(manifest.qaBinaryTargetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
       assert.equal(manifest.latestOwnerPacket.sourceSha, "ffb2f79076b4807f32f898e8b1b8ec60ca56844d")
       assert.equal(manifest.latestOwnerPacket.zipName, "SiraGPT-native-store-owner-packet-ffb2f790.zip")
-      assert.equal(manifest.latestSignedPreflight.run, "28727578162")
+      assert.equal(manifest.latestSignedPreflight.run, "28728938916")
+      assert.equal(manifest.latestSignedPreflight.sourceSha, "5970953f4c72a3f39850ac679a5d9b7f3a939c49")
       assert.ok(manifest.included.includes("native-store-submission-packet/"))
       assert.ok(manifest.included.includes("native-signing-templates/"))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "google-play", "README.md")))

@@ -24,14 +24,14 @@ secrets. They must never be committed.
 - Latest verified native runs:
   - Mobile: `28727085656`
   - Desktop: `28727085653`
-  - Readiness report: `28727085668`
-  - CI: `28727085654`
+  - Readiness report: `28728650058`
+  - CI: `28728766157`
   - Docker images: `28727085650`
-- Latest repository validation SHA: `1e657aaf40853df5a3f844b86028a17fae88cad0`
-  (`ci(native): automate store owner packet`)
+- Latest repository validation SHA: `5970953f4c72a3f39850ac679a5d9b7f3a939c49`
+  (`test(native): align owner handoff traceability`)
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest signed release preflight: `28727578162`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28727578162`)
+- Latest signed release preflight: `28728938916`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28728938916`)
   stopped before package runners because signing secrets are still missing.
 
 The canonical draft metadata lives in
