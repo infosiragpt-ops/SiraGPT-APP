@@ -72,11 +72,17 @@ function getCodexQueue() {
   return queue;
 }
 
-/** Enqueue a persisted run. Idempotent on runId (jobId === runId). */
-async function enqueueCodexRun({ runId }, opts = {}) {
+/**
+ * Enqueue a persisted run. Default jobId === runId (idempotent). Boot-recovery
+ * passes an explicit `jobId` to sidestep BullMQ's silent no-op when a dead job
+ * record with the same id lingers in Redis — accepted in the first argument
+ * (the documented call shape) or in opts, so a contract drift between the two
+ * can never silently discard it again.
+ */
+async function enqueueCodexRun({ runId, jobId } = {}, opts = {}) {
   if (!runId) throw new Error('runId is required');
   const q = getCodexQueue();
-  return q.add('codex-run', { runId }, { jobId: opts.jobId || String(runId), priority: opts.priority });
+  return q.add('codex-run', { runId }, { jobId: jobId || opts.jobId || String(runId), priority: opts.priority });
 }
 
 /** Remove a not-yet-running job. Running runs cancel cooperatively (status flip). */
@@ -177,6 +183,13 @@ async function closeCodexQueue() {
   await Promise.allSettled(closing);
 }
 
+/**
+ * Test hook: inject a fake Queue so contract tests exercise the REAL enqueue
+ * body without Redis (the boot-recovery jobId regression slipped past tests
+ * that faked this whole module). Pass null to restore lazy creation.
+ */
+function __setQueueForTests(q) { queue = q; }
+
 module.exports = {
   getQueueName,
   requireRedisUrl,
@@ -191,4 +204,5 @@ module.exports = {
   getCodexQueueHealth,
   closeCodexWorker,
   closeCodexQueue,
+  __setQueueForTests,
 };

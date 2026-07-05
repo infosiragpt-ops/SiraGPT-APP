@@ -20,7 +20,8 @@ function makeDeps(runs, priorEvents = []) {
   };
   const queue = {
     peekCodexJob: async (runId) => (runs.find((r) => r.id === runId)?._hasJob ? { id: runId } : null),
-    enqueueCodexRun: async ({ runId }) => { enqueued.push(runId); return { id: runId }; },
+    // Mirror the real contract: jobId arrives in the FIRST argument.
+    enqueueCodexRun: async ({ runId, jobId }) => { enqueued.push({ runId, jobId }); return { id: jobId || runId }; },
   };
   const eventStore = {
     appendEvent: async (runId, type, data) => { events.push({ runId, type, data }); },
@@ -46,7 +47,11 @@ test('interrupted running runs RESUME: re-queued with resume narrative, error cl
   assert.equal(res.erroredRunning, 0);
   assert.equal(runs[0].status, 'queued');
   assert.equal(runs[0].error, null);
-  assert.deepEqual(d.enqueued.sort(), ['r1', 'r2']);
+  const byRun = d.enqueued.map((e) => e.runId).sort();
+  assert.deepEqual(byRun, ['r1', 'r2']);
+  // The resume MUST carry a unique jobId (runId alone is a BullMQ no-op while
+  // the dead original job record lingers in Redis).
+  for (const e of d.enqueued) assert.equal(e.jobId, `${e.runId}:r1`);
   const resumeNotes = d.events.filter((e) => e.type === 'narrative_delta' && String(e.data.text).includes(RESUME_MARKER));
   assert.equal(resumeNotes.length, 2);
   const queuedEvents = d.events.filter((e) => e.type === 'run_status' && e.data.status === 'queued');
@@ -90,7 +95,9 @@ test('queued runs with no live job are re-enqueued; those with a job are left al
     prisma: d.prisma, queue: d.queue, eventStore: d.eventStore, env: { CODEX_AGENT_V2: '1', NODE_ENV: 'test' },
   });
   assert.equal(res.reenqueuedQueued, 1);
-  assert.deepEqual(d.enqueued, ['q1']);
+  assert.equal(d.enqueued.length, 1);
+  assert.equal(d.enqueued[0].runId, 'q1');
+  assert.match(String(d.enqueued[0].jobId), /^q1:rq\d+$/);
 });
 
 test('a DB failure never throws out of the sweep', async () => {

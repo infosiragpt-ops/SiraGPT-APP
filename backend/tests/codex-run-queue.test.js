@@ -38,3 +38,23 @@ test('requireRedisUrl throws when REDIS_URL is missing', () => {
   delete process.env.REDIS_URL;
   assert.throws(() => runQueue.requireRedisUrl(), /REDIS_URL is required/);
 });
+
+test('enqueueCodexRun forwards an explicit jobId to BullMQ in every call shape', async () => {
+  // Contract regression: boot-recovery passes jobId in the FIRST argument;
+  // the old signature only read opts.jobId, silently discarding it — resumed
+  // runs re-enqueued with jobId===runId, a BullMQ no-op while the dead job
+  // record lingered, so they sat 'queued' forever. Exercise the REAL body.
+  const adds = [];
+  runQueue.__setQueueForTests({
+    add: async (name, data, opts) => { adds.push({ name, data, opts }); return { id: opts.jobId }; },
+  });
+  try {
+    await runQueue.enqueueCodexRun({ runId: 'r1', jobId: 'r1:r1' }); // boot-recovery resume shape
+    await runQueue.enqueueCodexRun({ runId: 'r1' }, { jobId: 'r1:rq5' }); // opts shape
+    await runQueue.enqueueCodexRun({ runId: 'r1' }); // default: idempotent on runId
+    assert.deepEqual(adds.map((a) => a.opts.jobId), ['r1:r1', 'r1:rq5', 'r1']);
+    assert.ok(adds.every((a) => a.name === 'codex-run' && a.data.runId === 'r1'));
+  } finally {
+    runQueue.__setQueueForTests(null);
+  }
+});
