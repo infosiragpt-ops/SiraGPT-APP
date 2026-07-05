@@ -1426,7 +1426,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             );
         }
         return (
-            <code className="text-sm font-mono  px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
         );
@@ -1477,23 +1477,34 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
             h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
             h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
+            h4: ({ children }: any) => <h4 className="mb-2 text-base font-semibold leading-7">{children}</h4>,
+            hr: () => <hr className="my-4 border-muted" />,
             blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
             th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
+            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm align-top" style={{ overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
             strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
             em: ({ children }: any) => <em className="italic">{children}</em>,
-            a: ({ href, children, ...props }: any) => (
-                <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-                    title={href}
-                    {...props}
-                >
-                    {truncateUrl(children)}
-                </a>
-            ),
+            a: ({ href, children, ...props }: any) => {
+                // Only bare-URL link text goes through truncateUrl. Passing
+                // React children blindly broke two cases: nested markdown in
+                // the label ([**SiraGPT** docs](url) → children is an array →
+                // typeof guard returned '' → INVISIBLE link) and long prose
+                // labels with slashes got mangled by the domain/path logic.
+                const single = Array.isArray(children) && children.length === 1 ? children[0] : children;
+                const isBareUrl = typeof single === 'string' && /^(https?:\/\/|www\.)/i.test(single.trim());
+                return (
+                    <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                        title={href}
+                        {...props}
+                    >
+                        {isBareUrl ? truncateUrl(single) : children}
+                    </a>
+                );
+            },
         }), []);
 
         // Streaming-only map: stable as long as the message id doesn't
@@ -1506,7 +1517,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
                         <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
                     </div>
-                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
+                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
                 </div>
             ),
             code: ({ node, inline, className, children, ...props }: any) => {
@@ -1613,7 +1624,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
                             <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
                         </div>
-                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
+                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
                     </div>
                 );
             },

@@ -1136,6 +1136,17 @@ export function AICodeChatPanel() {
     )
   }, [setTurns])
 
+  // runCodexEngine is defined AFTER sendPrompt; the resilience fallback in
+  // sendPrompt's catch reaches it through this ref (kept fresh by an effect).
+  const codexEngineRef = React.useRef<
+    | ((
+        text: string,
+        sid: string,
+        opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
+      ) => Promise<void>)
+    | null
+  >(null)
+
   const sendPrompt = React.useCallback(
     async (
       prompt: string,
@@ -1455,6 +1466,31 @@ export function AICodeChatPanel() {
             }),
           })
         } else {
+          // Claude Code parity: when the CHOSEN model produced nothing even
+          // after the transport exhausted its retry budget, an agentic
+          // apply-turn must not die — degrade to the Codex engine with an
+          // honest note. Chat-only turns keep the plain error (re-ask is cheap).
+          const emptyModel = /no se recibi\u00f3 respuesta del modelo|empty model stream/i.test(
+            err?.message || "",
+          )
+          if (emptyModel && override?.autoApply && codexAvailable && codexEngineRef.current && sessionId) {
+            patchAssistant({
+              streaming: false,
+              agentLabel: "Modelo sin respuesta — continuando con el motor Codex",
+              agentPhases: buildCodeAgentPhases("generate", {
+                generate: {
+                  status: "done",
+                  detail: "El modelo elegido no respondió; delego en el motor Codex",
+                },
+              }),
+            })
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
+            await codexEngineRef.current(text, sessionId, { iterate: true, omitUserTurn: true })
+            return
+          }
           toast.error(err?.message || "Error en el chat de código")
           patchAssistant({
             streaming: false,
@@ -1634,7 +1670,7 @@ export function AICodeChatPanel() {
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, codexAvailable, files, markVoiced, sessionId, setTurns, token, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -2234,13 +2270,19 @@ export function AICodeChatPanel() {
   // the workspace. Deterministic buildApp fallback inside, so a build ALWAYS
   // lands even if the agent errors — mirroring runEngine's guarantees.
   const runCodexEngine = React.useCallback(
-    async (text: string, sid: string, opts?: { iterate?: boolean; displayText?: string }) => {
+    async (
+      text: string,
+      sid: string,
+      opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
+    ) => {
       const iterate = !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
         ...prev,
-        { id, role: "user", content: opts?.displayText ?? text },
+        ...(opts?.omitUserTurn
+          ? []
+          : [{ id, role: "user", content: opts?.displayText ?? text } as CodeChatTurn]),
         {
           id: assistantId,
           role: "assistant",
@@ -2688,6 +2730,11 @@ export function AICodeChatPanel() {
     },
     [activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
   )
+
+  // Keep the resilience-fallback ref pointing at the freshest engine closure.
+  React.useEffect(() => {
+    codexEngineRef.current = runCodexEngine
+  }, [runCodexEngine])
 
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
