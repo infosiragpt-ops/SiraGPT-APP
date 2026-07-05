@@ -32,6 +32,7 @@ import {
   Clock3,
   CircleHelp,
   ExternalLink,
+  FileCode2,
   History,
   Image as ImageIcon,
   LayoutGrid,
@@ -3767,12 +3768,17 @@ function CodeBlockCard({
   block: CodeBlock
   existingContent: string
 }) {
+  // Claude Code parity: the chat NEVER dumps code. Each block renders as a
+  // compact, COLLAPSED file chip (path · line count · actions); the code (or
+  // the diff, for files that exist in the workspace) only shows on demand.
   const [open, setOpen] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
 
+  const lineCount = React.useMemo(() => block.content.split("\n").length, [block.content])
+  const showDiff = !!block.path && existingContent.length > 0
   const diffLines = React.useMemo(
-    () => (open && block.path ? computeLineDiff(existingContent, block.content) : []),
-    [block.content, block.path, existingContent, open],
+    () => (open && showDiff ? computeLineDiff(existingContent, block.content) : []),
+    [block.content, existingContent, open, showDiff],
   )
 
   const copy = async () => {
@@ -3786,36 +3792,49 @@ function CodeBlockCard({
   }
 
   return (
-    <div className="mt-3 rounded-md border border-border/60 bg-muted/20">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-        <span>{block.language || "código"}</span>
-        {block.path ? <span className="text-foreground/80">{block.path}</span> : <span className="italic">sin ruta</span>}
-        <div className="ml-auto flex items-center gap-1">
-          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={copy}>
+    <div className="mt-2 rounded-md border border-border/50 bg-muted/15">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/30"
+        aria-expanded={open}
+      >
+        <FileCode2 className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+        <span className="min-w-0 truncate font-mono text-foreground/85">
+          {block.path || `fragmento ${block.language || "de código"}`}
+        </span>
+        <span className="shrink-0 opacity-60">· {lineCount} líneas</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px]"
+            onClick={(e) => {
+              e.stopPropagation()
+              void copy()
+            }}
+          >
             {copied ? "Copiado" : "Copiar"}
           </Button>
-          {block.path ? (
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-[11px]"
-                onClick={() => setOpen((v) => !v)}
-              >
-                {open ? "Ocultar diff" : "Ver diff"}
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
+          <span className="text-[11px] opacity-70">{open ? "Ocultar" : showDiff ? "Ver diff" : "Ver código"}</span>
+          <ChevronDown
+            className={cn("h-3.5 w-3.5 opacity-60 transition-transform", open && "rotate-180")}
+            aria-hidden="true"
+          />
+        </span>
+      </button>
       {open ? (
-        <div className="p-2">
-          <DiffView lines={diffLines} />
-        </div>
-      ) : (
-        <pre className="max-h-72 overflow-auto p-3 font-mono text-[12px] leading-relaxed">{block.content}</pre>
-      )}
+        showDiff ? (
+          <div className="border-t border-border/50 p-2">
+            <DiffView lines={diffLines} />
+          </div>
+        ) : (
+          <pre className="max-h-72 overflow-auto border-t border-border/50 p-3 font-mono text-[12px] leading-relaxed">
+            {block.content}
+          </pre>
+        )
+      ) : null}
     </div>
   )
 }
