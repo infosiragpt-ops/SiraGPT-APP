@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-05T01:39:51Z",
+  "repo": "infosiragpt-ops/SiraGPT-APP",
+  "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
+  "latestQaRelease": {
+    "tag": "native-qa-v0.4.3-0fb0493",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0fb0493",
+    "targetSha": "0fb0493464b841c11924e9ff9a087209fb8d25dd",
+    "assetCount": 10,
+    "artifacts": [
+      "SiraGPT-0.4.3-0fb0493-debug.apk",
+      "SiraGPT-0.4.3-0fb0493-play-upload-qa.aab",
+      "SiraGPT-0.4.3-0fb0493-ios-simulator-app.zip",
+      "SiraGPT-0.4.3-0fb0493-arm64.dmg",
+      "SiraGPT-0.4.3-0fb0493-arm64-mac.zip",
+      "SiraGPT-Setup-0.4.3-0fb0493-x64.exe",
+      "SiraGPT-0.4.3-0fb0493-x64-portable.exe",
+      "native-release-manifest.json",
+      "native-release-manifest.md",
+      "SHA256SUMS.txt"
+    ]
+  },
+  "latestVerifiedRuns": {
+    "mobile": "28725624118",
+    "desktop": "28725624116",
+    "readiness": "28725476833",
+    "ci": "28725476823"
+  },
+  "latestTraceabilityCommit": {
+    "sha": "4417069ebb9ee58e4ffe9abc87217c63cf2a6fd9",
+    "ci": "28725920929",
+    "readiness": "28725920932"
+  }
+}

@@ -9,5 +9,8 @@ describe("Native readiness GitHub Actions source", () => {
 
     assert.match(planStep, /GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64:\s*\$\{\{\s*secrets\.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64\s*\}\}/)
     assert.match(planStep, /npm run native:release:plan:ci/)
+    assert.match(planStep, /npm run native:release:handoff -- --out=output\/native-owner-handoff\.md --json-out=output\/native-owner-handoff\.json/)
+    assert.match(workflow, /output\/native-owner-handoff\.md/)
+    assert.match(workflow, /output\/native-owner-handoff\.json/)
   })
 })

@@ -52,6 +52,7 @@
     "native:release:plan": "node scripts/native-release-plan.js",
     "native:release:plan:ci": "node scripts/native-release-plan.js --secret-source=env --out=output/native-release-plan.md --json-out=output/native-release-plan.json",
     "native:release:manifest": "node scripts/generate-native-release-manifest.js",
+    "native:release:handoff": "node scripts/generate-native-owner-handoff.js",
     "native:play:upload": "node scripts/upload-google-play-aab.js",
     "native:store:readiness": "node scripts/native-store-readiness.js",
     "native:store:assets": "node scripts/native-store-assets-readiness.js",

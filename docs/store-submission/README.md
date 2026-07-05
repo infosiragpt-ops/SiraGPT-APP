@@ -162,6 +162,11 @@ secret names and source variable names, never secret values.
 `native:release:plan` generates a non-secret Markdown/JSON management packet
 for the current repo, including missing GitHub secret names, per-platform
 account actions, and safe `gh secret set` commands.
+`native:release:handoff` generates the owner handoff packet for Apple, Google,
+macOS, and Windows account work. It includes the latest QA release link,
+verified workflow run IDs, account-owner actions, secret names, dry-run
+commands, and signed workflow targets. It must not contain any password,
+keystore, certificate, provisioning profile, API private key, or cookie value.
 After generated native release artifacts exist, `native:release:manifest`
 generates the non-secret artifact manifest and `SHA256SUMS.txt` for that
 artifact directory.
@@ -169,4 +174,5 @@ artifact directory.
 presence, which is how GitHub Actions can audit configured native secrets
 without listing or printing secret values.
 The GitHub Actions workflow `Native readiness report` publishes both the
-non-secret release plan and the store asset readiness report as artifacts.
+non-secret release plan, the owner handoff packet, and the store asset
+readiness report as artifacts.

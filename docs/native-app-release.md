@@ -297,6 +297,7 @@ npm run native:store:readiness
 npm run native:store:assets:generate
 npm run native:store:assets
 npm run native:store:packet -- --require-ready
+npm run native:release:handoff -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-owner-handoff.md --json-out=output/native-owner-handoff.json
 npm run desktop:pack
 npm run desktop:pack:win
 npm run mobile:sync
