@@ -14,6 +14,10 @@
 siragpt.com, www.siragpt.com, office.siragpt.com {
 	encode zstd gzip
 
+	handle /api/agents* {
+		reverse_proxy frontend:3000
+	}
+
 	handle /api/* {
 		reverse_proxy backend:5000
 	}
@@ -76,6 +80,10 @@ https:// {
 		on_demand
 	}
 	encode zstd gzip
+
+	handle /api/agents* {
+		reverse_proxy frontend:3000
+	}
 
 	handle /api/* {
 		reverse_proxy backend:5000
