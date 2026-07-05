@@ -9544,6 +9544,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     !isExcelConnectorActive &&
     !hasRenderableMessages
 
+  // Autofocus the composer whenever the empty state shows (new chat /
+  // cleared chat) so the user can start typing without clicking first.
+  // Desktop only: focusing on mobile pops the keyboard over the hero.
+  React.useEffect(() => {
+    if (!isInitial) return undefined
+    if (typeof window === "undefined") return undefined
+    if (window.matchMedia("(max-width: 767px)").matches) return undefined
+    const id = window.setTimeout(() => textareaRef.current?.focus(), 80)
+    return () => window.clearTimeout(id)
+  }, [isInitial])
+
   // Any active tool/connector/thesis mode? Used to conditionally render active
   // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
@@ -10908,6 +10919,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="w-full max-w-[860px] px-4">
                   <div className="space-y-3">
+                  {/* Empty-state hero — greeting + rotating capability chips.
+                      Clicking a chip seeds the composer with a starter prompt
+                      and focuses it so the user only has to complete the idea. */}
+                  <ChatEmptyStateHero
+                    userName={user?.name || user?.email || null}
+                    onSelectPrompt={(prompt) => {
+                      setInput(prompt)
+                      window.setTimeout(() => {
+                        const el = textareaRef.current
+                        if (el) {
+                          el.focus()
+                          try { el.setSelectionRange(prompt.length, prompt.length) } catch { /* old Safari */ }
+                        }
+                      }, 0)
+                    }}
+                  />
                   {/*
                     Composer — premium production UI.
                     In DARK mode, inherits `composer-surface` from globals.css
