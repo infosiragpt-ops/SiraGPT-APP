@@ -48,7 +48,7 @@ Release requirements:
 
 - Android release builds require `android/keystore.properties` and the upload keystore in `android/keystores/`; both are intentionally ignored.
 - Android `versionCode` and iOS `CURRENT_PROJECT_VERSION` are synced from `package.json` by `npm run native:version:sync`.
-- Google Play publishing requires owner verification in Play Console.
+- Google Play publishing requires owner verification in Play Console and a Google Play Android Publisher service account secret in GitHub Actions.
 - iOS release builds require full Xcode, Apple Developer signing, a matching provisioning profile, App Store Connect access, and manual review metadata.
 
 ## GitHub Actions
@@ -98,7 +98,7 @@ Use `Native signed release packages` manually when real distribution credentials
 - macOS: signed and notarized `.dmg` and `.zip`.
 - Windows: signed `.exe` installer/portable artifacts.
 
-The workflow can optionally create or update a GitHub Release with the built native artifacts. It can also upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing.
+The workflow can optionally create or update a GitHub Release with the built native artifacts. It can also upload the signed Android `.aab` to Google Play when `upload_android_google_play` is enabled and upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing.
 
 The preflight validates package-signing credentials by default:
 
@@ -111,6 +111,13 @@ The preflight validates package-signing credentials by default:
 When `upload_ios_app_store_connect` is enabled for `platform=ios` or
 `platform=all`, the preflight also requires the `appstore` upload secret group
 before any macOS runner starts.
+
+When `upload_android_google_play` is enabled for `platform=android` or
+`platform=all`, the preflight also requires the `googleplay` upload secret group
+before the Android runner starts. The workflow defaults to the Google Play
+internal testing track `qa` with release status `draft`; use
+`android_release_status=inProgress` only with `android_user_fraction`, and use
+`completed` only when the release should go live on the chosen track.
 
 ### Required GitHub Secrets For Signed Distribution
 
@@ -176,6 +183,10 @@ Android signing secrets:
 - `ANDROID_KEY_ALIAS`: upload key alias.
 - `ANDROID_KEY_PASSWORD`: upload key password.
 
+Google Play upload secret:
+
+- `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`: base64-encoded Google Play service account JSON with Android Publisher API access.
+
 iOS/App Store Connect signing secrets:
 
 - `APPLE_TEAM_ID`: Apple Developer team id.
@@ -219,7 +230,9 @@ or print secret values.
    - `all` for the complete native release set.
 4. Set `release_tag`, for example `native-v0.4.3`.
 5. Enable `create_github_release` only when the artifacts should be attached to a public GitHub Release.
-6. Enable `upload_ios_app_store_connect` only when the signed iOS `.ipa` should be sent to App Store Connect/TestFlight. This requires `platform=ios` or `platform=all` plus the App Store Connect API key secrets.
+6. Enable `upload_android_google_play` only when the signed Android `.aab` should be sent to Google Play. This requires `platform=android` or `platform=all`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`, and the Play Console app/package already configured for `com.siragpt.app`.
+7. Set `android_play_track`, `android_release_status`, and `android_user_fraction` only for Android uploads. Keep `android_release_status=draft` for safe first uploads.
+8. Enable `upload_ios_app_store_connect` only when the signed iOS `.ipa` should be sent to App Store Connect/TestFlight. This requires `platform=ios` or `platform=all` plus the App Store Connect API key secrets.
 
 The workflow prints only secret names and readiness states. It must not print secret values.
 

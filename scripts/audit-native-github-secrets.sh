@@ -16,12 +16,13 @@ Groups:
   android   Android Play upload key secrets
   ios       iOS certificate and provisioning profile secrets
   appstore  App Store Connect API upload secrets
+  googleplay Google Play Android Publisher API upload secret
   macos     macOS Developer ID/notarization secrets
   windows   Windows code-signing secrets
-  mobile    android, ios
+  mobile    android, googleplay, ios, appstore
   desktop   macos, windows
   apple     ios, appstore, macos
-  all       android, ios, appstore, macos, windows
+  all       android, googleplay, ios, appstore, macos, windows
 EOF
 }
 
@@ -64,6 +65,9 @@ group_secrets() {
     appstore)
       echo "APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_API_ISSUER_ID APP_STORE_CONNECT_API_KEY_BASE64"
       ;;
+    googleplay)
+      echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"
+      ;;
     macos)
       echo "MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_TEAM_ID APPLE_ID APPLE_APP_SPECIFIC_PASSWORD"
       ;;
@@ -94,6 +98,7 @@ expand_group() {
   case "$1" in
     all)
       append_group android
+      append_group googleplay
       append_group ios
       append_group appstore
       append_group macos
@@ -110,9 +115,11 @@ expand_group() {
       ;;
     mobile)
       append_group android
+      append_group googleplay
       append_group ios
+      append_group appstore
       ;;
-    android|ios|appstore|macos|windows)
+    android|googleplay|ios|appstore|macos|windows)
       append_group "$1"
       ;;
     "")

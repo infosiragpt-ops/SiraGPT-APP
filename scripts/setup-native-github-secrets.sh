@@ -7,7 +7,7 @@ DRY_RUN=0
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/setup-native-github-secrets.sh [--repo=owner/name] [--platform=all|mobile|desktop|apple|android|ios|macos|windows] [--dry-run]
+Usage: bash scripts/setup-native-github-secrets.sh [--repo=owner/name] [--platform=all|mobile|desktop|apple|android|googleplay|ios|appstore|macos|windows] [--dry-run]
 
 Uploads native app signing secrets to GitHub Actions without printing secret
 values. File-based credentials are base64-encoded locally before upload.
@@ -27,6 +27,7 @@ Direct-value environment variables:
 
 File path environment variables:
   ANDROID_KEYSTORE_PATH
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH
   IOS_SIGNING_CERTIFICATE_PATH
   IOS_PROVISIONING_PROFILE_PATH
   APP_STORE_CONNECT_API_KEY_PATH
@@ -35,6 +36,7 @@ File path environment variables:
 
 Already-base64 environment variables are also accepted:
   ANDROID_KEYSTORE_BASE64
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64
   IOS_SIGNING_CERTIFICATE_BASE64
   IOS_PROVISIONING_PROFILE_BASE64
   APP_STORE_CONNECT_API_KEY_BASE64
@@ -94,6 +96,7 @@ expand_platform() {
   case "$1" in
     all)
       append_group android
+      append_group googleplay
       append_group ios
       append_group appstore
       append_group macos
@@ -101,6 +104,7 @@ expand_platform() {
       ;;
     mobile)
       append_group android
+      append_group googleplay
       append_group ios
       append_group appstore
       ;;
@@ -113,8 +117,11 @@ expand_platform() {
       append_group appstore
       append_group macos
       ;;
-    android|ios|appstore|macos|windows)
+    android|googleplay|ios|appstore|macos|windows)
       append_group "$1"
+      if [ "$1" = "android" ]; then
+        append_group googleplay
+      fi
       if [ "$1" = "ios" ]; then
         append_group appstore
       fi
@@ -137,6 +144,9 @@ group_secrets() {
       ;;
     appstore)
       echo "APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_API_ISSUER_ID APP_STORE_CONNECT_API_KEY_BASE64"
+      ;;
+    googleplay)
+      echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"
       ;;
     macos)
       echo "MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_TEAM_ID APPLE_ID APPLE_APP_SPECIFIC_PASSWORD"
@@ -163,6 +173,9 @@ secret_file_env() {
   case "$1" in
     ANDROID_KEYSTORE_BASE64)
       echo "ANDROID_KEYSTORE_PATH"
+      ;;
+    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64)
+      echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH"
       ;;
     IOS_SIGNING_CERTIFICATE_BASE64)
       echo "IOS_SIGNING_CERTIFICATE_PATH"

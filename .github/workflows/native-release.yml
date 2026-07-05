@@ -29,6 +29,30 @@ on:
         required: true
         default: false
         type: boolean
+      upload_android_google_play:
+        description: Upload the signed Android AAB to Google Play after building it
+        required: true
+        default: false
+        type: boolean
+      android_play_track:
+        description: Google Play track for Android uploads
+        required: true
+        default: qa
+        type: string
+      android_release_status:
+        description: Google Play release status for Android uploads
+        required: true
+        default: draft
+        type: choice
+        options:
+          - draft
+          - completed
+          - inProgress
+      android_user_fraction:
+        description: Required only when android_release_status is inProgress, for example 0.05
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -63,6 +87,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
           IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
@@ -77,11 +102,28 @@ jobs:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           UPLOAD_IOS_APP_STORE_CONNECT: ${{ inputs.upload_ios_app_store_connect }}
+          UPLOAD_ANDROID_GOOGLE_PLAY: ${{ inputs.upload_android_google_play }}
+          ANDROID_RELEASE_STATUS: ${{ inputs.android_release_status }}
+          ANDROID_USER_FRACTION: ${{ inputs.android_user_fraction }}
         run: |
           set -eu
           if [ "$UPLOAD_IOS_APP_STORE_CONNECT" = "true" ] && [ "$PLATFORM" != "ios" ] && [ "$PLATFORM" != "all" ]; then
             echo "upload_ios_app_store_connect requires platform ios or all" >&2
             exit 2
+          fi
+          if [ "$UPLOAD_ANDROID_GOOGLE_PLAY" = "true" ] && [ "$PLATFORM" != "android" ] && [ "$PLATFORM" != "all" ]; then
+            echo "upload_android_google_play requires platform android or all" >&2
+            exit 2
+          fi
+          if [ "$UPLOAD_ANDROID_GOOGLE_PLAY" = "true" ]; then
+            if [ "$ANDROID_RELEASE_STATUS" = "inProgress" ] && [ -z "$ANDROID_USER_FRACTION" ]; then
+              echo "android_user_fraction is required when android_release_status is inProgress" >&2
+              exit 2
+            fi
+            if [ "$ANDROID_RELEASE_STATUS" != "inProgress" ] && [ -n "$ANDROID_USER_FRACTION" ]; then
+              echo "android_user_fraction is only valid when android_release_status is inProgress" >&2
+              exit 2
+            fi
           fi
 
           case "$PLATFORM" in
@@ -95,6 +137,9 @@ jobs:
 
           if [ "$UPLOAD_IOS_APP_STORE_CONNECT" = "true" ]; then
             groups="$groups,appstore"
+          fi
+          if [ "$UPLOAD_ANDROID_GOOGLE_PLAY" = "true" ]; then
+            groups="$groups,googleplay"
           fi
 
           npm run native:version:check
@@ -176,6 +221,41 @@ jobs:
           path: output/native-release/android/*.aab
           retention-days: 30
           if-no-files-found: error
+
+      - name: Validate Google Play upload secret
+        if: ${{ inputs.upload_android_google_play }}
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+        run: npm run native:readiness -- --require=googleplay --only-required
+
+      - name: Upload Android bundle to Google Play
+        if: ${{ inputs.upload_android_google_play }}
+        shell: bash
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+          ANDROID_PLAY_TRACK: ${{ inputs.android_play_track }}
+          ANDROID_RELEASE_STATUS: ${{ inputs.android_release_status }}
+          ANDROID_USER_FRACTION: ${{ inputs.android_user_fraction }}
+        run: |
+          set -eu
+          aab_path="$(find output/native-release/android -type f -name '*.aab' -print -quit)"
+          if [ -z "$aab_path" ]; then
+            echo "No signed Android AAB found in output/native-release/android" >&2
+            exit 1
+          fi
+
+          args=(
+            "--aab=$aab_path"
+            "--package=com.siragpt.app"
+            "--track=$ANDROID_PLAY_TRACK"
+            "--status=$ANDROID_RELEASE_STATUS"
+            "--release-name=SiraGPT ${GITHUB_SHA::7}"
+          )
+          if [ -n "$ANDROID_USER_FRACTION" ]; then
+            args+=("--user-fraction=$ANDROID_USER_FRACTION")
+          fi
+
+          npm run native:play:upload -- "${args[@]}"
 
   ios:
     name: iOS signed IPA

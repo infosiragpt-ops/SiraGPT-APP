@@ -40,14 +40,17 @@ lives in `docs/store-submission/native-store-assets.json`.
 4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
    `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
-6. For iPhone, enable `upload_ios_app_store_connect` only when the signed
+6. For Android, enable `upload_android_google_play` only when the signed
+   `.aab` should be uploaded to Google Play from GitHub Actions.
+7. For iPhone, enable `upload_ios_app_store_connect` only when the signed
    `.ipa` should be uploaded to App Store Connect/TestFlight from GitHub
    Actions.
-7. Upload only after manual confirmation because binaries and store metadata
+8. Upload only after manual confirmation because binaries and store metadata
    are transmitted to third-party platforms.
 
 Do not use a normal email or account password as a native signing secret.
 Distribution requires dedicated signing material: Android upload keystore,
+Google Play service account JSON for automated Play uploads,
 Apple certificates/profiles and app-specific password, App Store Connect API
 key, and Windows code-signing certificate.
 
@@ -64,6 +67,13 @@ Current account blockers are owner actions:
 - Identity verification.
 - Real Android device verification in Play Console.
 - Contact phone verification.
+
+The signed release workflow can upload the generated `.aab` automatically when
+`upload_android_google_play` is enabled and
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` is configured. The first automated
+upload should target `android_play_track=qa` with
+`android_release_status=draft` so the owner can review it in Google Play
+Console before publishing.
 
 ### iPhone
 

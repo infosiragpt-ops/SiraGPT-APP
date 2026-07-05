@@ -26,6 +26,9 @@ const secretGroups = {
     "APP_STORE_CONNECT_API_ISSUER_ID",
     "APP_STORE_CONNECT_API_KEY_BASE64",
   ],
+  googleplay: [
+    "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64",
+  ],
   macos: [
     "MACOS_CERTIFICATE_BASE64",
     "MACOS_CERTIFICATE_PASSWORD",
@@ -46,7 +49,7 @@ const platforms = {
     workflowPlatform: "android",
     artifact: "signed Google Play upload .aab",
     releaseGroups: ["android"],
-    storeGroups: [],
+    storeGroups: ["googleplay"],
   },
   ios: {
     label: "iPhone / iOS",

@@ -18,6 +18,9 @@ const groups = {
     "APP_STORE_CONNECT_API_ISSUER_ID",
     "APP_STORE_CONNECT_API_KEY_BASE64",
   ],
+  googleplay: [
+    "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64",
+  ],
   macos: [
     "MACOS_CERTIFICATE_BASE64",
     "MACOS_CERTIFICATE_PASSWORD",
@@ -35,7 +38,7 @@ const aliases = {
   all: Object.keys(groups),
   apple: ["ios", "appstore", "macos"],
   desktop: ["macos", "windows"],
-  mobile: ["android", "ios"],
+  mobile: ["android", "googleplay", "ios", "appstore"],
 }
 
 function parseRequiredGroups(argv) {

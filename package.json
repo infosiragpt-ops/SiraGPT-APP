@@ -51,6 +51,7 @@
     "native:github-secrets:setup": "bash scripts/setup-native-github-secrets.sh",
     "native:release:plan": "node scripts/native-release-plan.js",
     "native:release:plan:ci": "node scripts/native-release-plan.js --secret-source=env --out=output/native-release-plan.md --json-out=output/native-release-plan.json",
+    "native:play:upload": "node scripts/upload-google-play-aab.js",
     "native:store:readiness": "node scripts/native-store-readiness.js",
     "native:store:assets": "node scripts/native-store-assets-readiness.js",
     "native:store:assets:generate": "node scripts/generate-native-store-assets.js",

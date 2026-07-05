@@ -7,7 +7,7 @@
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-3eec62c` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
-- Android signed Play release publishing is blocked until the Play upload keystore secrets are configured in GitHub Actions and Google Play account verification is complete.
+- Android signed Play release publishing is blocked until the Play upload keystore secrets, the Google Play service account upload secret, and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
 ## Latest Validation
@@ -47,7 +47,7 @@ The public repository currently has only VPS deployment secrets configured.
 Signed store distribution is not ready until these native release secrets are
 added to GitHub Actions:
 
-- Android: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+- Android: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`.
 - iOS/App Store Connect: `APPLE_TEAM_ID`, `IOS_SIGNING_CERTIFICATE_BASE64`, `IOS_SIGNING_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_BASE64`.
 - macOS: `MACOS_CERTIFICATE_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`.
 - Windows: `WINDOWS_CERTIFICATE_BASE64`, `WINDOWS_CERTIFICATE_PASSWORD`.
@@ -72,10 +72,13 @@ These are account-owner actions and cannot be completed by build tooling or loca
 ## Android Play Store Path
 
 1. Complete the Google Play developer account verification as the account owner.
-2. Return to the internal testing release in Google Play Console.
-3. Publish the prepared internal testing release if the review page enables `Guardar y publicar`.
-4. For production, complete app access, ads, content rating, target audience, data safety, privacy policy, store listing, screenshots, and release notes.
-5. Submit the production release only after a final manual confirmation.
+2. Create or select a Google Play service account with Android Publisher API access for package `com.siragpt.app`.
+3. Store the service account JSON as `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` in GitHub Actions secrets.
+4. Run `Native signed release packages` with `platform=android`, `upload_android_google_play=true`, `android_play_track=qa`, and `android_release_status=draft` for the first safe upload.
+5. Return to the internal testing release in Google Play Console and review the draft.
+6. Publish the prepared internal testing release if the review page enables `Guardar y publicar`.
+7. For production, complete app access, ads, content rating, target audience, data safety, privacy policy, store listing, screenshots, and release notes.
+8. Submit the production release only after a final manual confirmation.
 
 ## iOS App Store Path
 
@@ -126,6 +129,7 @@ non-secret checklist and asset readiness report as an artifact named
 
 - Creating the Android upload key creates a long-lived signing credential.
 - Uploading `.aab` or `.ipa` sends app binaries to Google/Apple.
+- Enabling `upload_android_google_play` in GitHub Actions uploads the signed Android binary to the selected Google Play track.
 - Enabling `upload_ios_app_store_connect` in GitHub Actions uploads the signed iOS binary to App Store Connect/TestFlight.
 - Creating or submitting store listings publishes text and metadata to third parties.
 - Paying developer fees or submitting apps for review requires explicit confirmation at action time.
