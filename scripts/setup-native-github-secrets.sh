@@ -11,6 +11,8 @@ Usage: bash scripts/setup-native-github-secrets.sh [--repo=owner/name] [--platfo
 
 Uploads native app signing secrets to GitHub Actions without printing secret
 values. File-based credentials are base64-encoded locally before upload.
+Use android/ios for package signing only. Use googleplay/appstore explicitly
+when store-upload credentials should also be configured.
 
 Direct-value environment variables:
   ANDROID_KEYSTORE_PASSWORD
@@ -119,12 +121,6 @@ expand_platform() {
       ;;
     android|googleplay|ios|appstore|macos|windows)
       append_group "$1"
-      if [ "$1" = "android" ]; then
-        append_group googleplay
-      fi
-      if [ "$1" = "ios" ]; then
-        append_group appstore
-      fi
       ;;
     *)
       echo "Unknown platform: $1" >&2

@@ -235,6 +235,10 @@ npm run native:github-secrets:setup -- --platform=macos
 npm run native:github-secrets:setup -- --platform=windows
 ```
 
+`platform=android` and `platform=ios` load package-signing material only.
+Use `platform=googleplay` and `platform=appstore` separately when the owner has
+approved automated store uploads.
+
 For example, Android can be loaded from a local upload keystore path:
 
 ```bash

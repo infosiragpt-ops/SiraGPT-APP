@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { describe, it } from "node:test"
 
 describe("generate-native-github-secrets-template", () => {
-  it("expands Android to include Google Play upload inputs", () => {
+  it("keeps Android signing separate from Google Play upload inputs", () => {
     const output = execFileSync("node", [
       "scripts/generate-native-github-secrets-template.js",
       "--platform=android",
@@ -14,7 +14,7 @@ describe("generate-native-github-secrets-template", () => {
 
     assert.match(output, /ANDROID_KEYSTORE_PATH=/)
     assert.match(output, /ANDROID_KEYSTORE_PASSWORD=/)
-    assert.match(output, /GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH=/)
+    assert.doesNotMatch(output, /GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH=/)
     assert.doesNotMatch(output, /IOS_SIGNING_CERTIFICATE_PATH=/)
     assert.doesNotMatch(output, /NORMAL_MAILBOX_PASSWORD_SHOULD_NOT_APPEAR/)
   })

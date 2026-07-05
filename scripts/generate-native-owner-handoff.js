@@ -51,6 +51,7 @@ const platforms = {
     workflowPlatform: "android",
     releaseGroups: ["android"],
     uploadGroups: ["googleplay"],
+    uploadSetupPlatform: "googleplay",
     firstWorkflow: "Native signed release packages with platform=android, upload_android_google_play=true, android_play_track=qa, android_release_status=draft",
     ownerSummary: "Complete Google Play account verification, create the Play service account, and provide the Android upload key material.",
   },
@@ -61,6 +62,7 @@ const platforms = {
     workflowPlatform: "ios",
     releaseGroups: ["ios"],
     uploadGroups: ["appstore"],
+    uploadSetupPlatform: "appstore",
     firstWorkflow: "Native signed release packages with platform=ios and upload_ios_app_store_connect=true only when App Store Connect upload is approved",
     ownerSummary: "Complete Apple Developer/App Store Connect setup and provide iOS distribution signing assets plus API key material.",
   },
@@ -71,6 +73,7 @@ const platforms = {
     workflowPlatform: "macos",
     releaseGroups: ["macos"],
     uploadGroups: [],
+    uploadSetupPlatform: "",
     firstWorkflow: "Native signed release packages with platform=macos and create_github_release=true",
     ownerSummary: "Provide Developer ID Application certificate and notarization credentials for public macOS distribution.",
   },
@@ -81,6 +84,7 @@ const platforms = {
     workflowPlatform: "windows",
     releaseGroups: ["windows"],
     uploadGroups: [],
+    uploadSetupPlatform: "",
     firstWorkflow: "Native signed release packages with platform=windows and create_github_release=true",
     ownerSummary: "Provide a Windows code-signing certificate for public installer trust.",
   },
@@ -185,6 +189,12 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
       allSecrets,
       dryRunCommand: `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.setupPlatform} --dry-run`,
       setupCommand: `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.setupPlatform}`,
+      uploadDryRunCommand: platform.uploadSetupPlatform
+        ? `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.uploadSetupPlatform} --dry-run`
+        : "",
+      uploadSetupCommand: platform.uploadSetupPlatform
+        ? `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.uploadSetupPlatform}`
+        : "",
       readinessCommand: `npm run native:readiness -- --require=${unique([...platform.releaseGroups, ...platform.uploadGroups]).join(",")} --only-required`,
     }
   })
@@ -383,18 +393,27 @@ function renderMarkdown(handoff) {
     lines.push("")
     lines.push(codeList(platform.allSecrets))
     lines.push("")
-    lines.push("Safe local dry-run:")
+    lines.push("Safe local signing dry-run:")
     lines.push("")
     lines.push("```bash")
     lines.push(platform.dryRunCommand)
     lines.push("```")
     lines.push("")
-    lines.push("Upload secrets only from a trusted machine after setting the matching environment variables or file path variables:")
+    lines.push("Upload signing secrets only from a trusted machine after setting the matching environment variables or file path variables:")
     lines.push("")
     lines.push("```bash")
     lines.push(platform.setupCommand)
     lines.push("```")
     lines.push("")
+    if (platform.uploadSetupCommand) {
+      lines.push("Store-upload credentials are separate and should be loaded only when the owner approves store upload:")
+      lines.push("")
+      lines.push("```bash")
+      lines.push(platform.uploadDryRunCommand)
+      lines.push(platform.uploadSetupCommand)
+      lines.push("```")
+      lines.push("")
+    }
     lines.push("Readiness gate after secrets are added:")
     lines.push("")
     lines.push("```bash")

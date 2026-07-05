@@ -227,7 +227,10 @@ availability from missing native signing and store-upload secret names.
 `native:github-secrets:setup` uploads native signing secrets from local
 environment variables or local file paths, base64-encoding file credentials
 before piping them into `gh secret set`. Use `--dry-run` first; it prints only
-secret names and source variable names, never secret values.
+secret names and source variable names, never secret values. `platform=android`
+and `platform=ios` configure package-signing material only; use
+`platform=googleplay` and `platform=appstore` separately for owner-approved
+store-upload credentials.
 `native:github-secrets:template` writes a blank owner-only template for the
 selected platform, including the safer local `*_PATH` variables where a file can
 be base64-encoded locally before upload. The template is a convenience artifact

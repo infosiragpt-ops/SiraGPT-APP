@@ -79,7 +79,9 @@ function usage() {
   return `Usage: node scripts/generate-native-github-secrets-template.js [--repo=owner/name] [--platform=all|mobile|desktop|apple|android|googleplay|ios|appstore|macos|windows] [--format=env|markdown|json] [--out=path]
 
 Generates a non-secret owner template for native signing inputs. The template
-contains variable names and comments only; it never reads or prints secret values.`
+contains variable names and comments only; it never reads or prints secret values.
+Use android/ios for package signing only. Use googleplay/appstore explicitly
+when store-upload credentials should also be configured.`
 }
 
 function parseArgs(argv) {
@@ -133,8 +135,6 @@ function expandPlatform(input) {
       throw new Error(`Unknown platform or group: ${name}`)
     }
     normalized.push(name)
-    if (name === "android") normalized.push("googleplay")
-    if (name === "ios") normalized.push("appstore")
   }
 
   return unique(normalized)

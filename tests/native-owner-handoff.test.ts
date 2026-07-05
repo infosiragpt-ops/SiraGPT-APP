@@ -71,7 +71,13 @@ describe("generate-native-owner-handoff", () => {
           requiredSecurityActions: string[]
           storePortals: Array<{ platform: string; portal: string; requiredOutput: string }>
         }
-        platformPlans: Array<{ key: string; allSecrets: string[]; dryRunCommand: string }>
+        platformPlans: Array<{
+          key: string
+          allSecrets: string[]
+          dryRunCommand: string
+          uploadDryRunCommand: string
+          uploadSetupCommand: string
+        }>
       }
       const markdown = readFileSync(mdOut, "utf8")
       const json = readFileSync(jsonOut, "utf8")
@@ -106,6 +112,8 @@ describe("generate-native-owner-handoff", () => {
       assert.ok(handoff.platformPlans[0].allSecrets.includes("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"))
       assert.ok(handoff.platformPlans[1].allSecrets.includes("APP_STORE_CONNECT_API_KEY_BASE64"))
       assert.match(handoff.platformPlans[0].dryRunCommand, /--platform=android --dry-run/)
+      assert.match(handoff.platformPlans[0].uploadDryRunCommand, /--platform=googleplay --dry-run/)
+      assert.match(handoff.platformPlans[1].uploadSetupCommand, /--platform=appstore/)
 
       for (const contents of [stdout, markdown, json]) {
         assert.doesNotMatch(contents, /BEGIN (RSA|OPENSSH|PRIVATE) KEY/)
