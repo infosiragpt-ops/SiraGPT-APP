@@ -22,13 +22,13 @@ secrets. They must never be committed.
 - Latest public QA packet: `native-qa-v0.4.3-0fb0493`
   (`0fb0493464b841c11924e9ff9a087209fb8d25dd`)
 - Latest verified native runs:
-  - Mobile: `28726202687`
-  - Desktop: `28726202695`
-  - Readiness report: `28726202685`
-  - CI: `28726202694`
-  - Docker images: `28726202674`
-- Latest repository validation SHA: `498374abc6dab1861170fb35bd0595fb4f1e56f7`
-  (`ci(native): add owner handoff packet`)
+  - Mobile: `28727085656`
+  - Desktop: `28727085653`
+  - Readiness report: `28727085668`
+  - CI: `28727085654`
+  - Docker images: `28727085650`
+- Latest repository validation SHA: `1e657aaf40853df5a3f844b86028a17fae88cad0`
+  (`ci(native): automate store owner packet`)
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 
 The canonical draft metadata lives in

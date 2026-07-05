@@ -7,7 +7,7 @@
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-0fb0493` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
-- The current repository validation SHA is `498374abc6dab1861170fb35bd0595fb4f1e56f7`; CI, Docker image build, native readiness, native mobile, and native desktop workflows are green.
+- The current repository validation SHA is `1e657aaf40853df5a3f844b86028a17fae88cad0`; CI, Docker image build, native readiness, native mobile, and native desktop workflows are green.
 - Android signed Play release publishing is blocked until the Play upload keystore secrets, the Google Play service account upload secret, and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
@@ -30,12 +30,12 @@
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
 - GitHub Actions `Native readiness report` run `28725476833` passed on the same SHA and produced the non-secret release plan/store packet.
-- Current traceability commit `498374abc6dab1861170fb35bd0595fb4f1e56f7` adds the owner handoff packet and is green in GitHub Actions:
-  - CI: `28726202694`
-  - Native readiness report: `28726202685`
-  - Native mobile builds: `28726202687`
-  - Native desktop builds: `28726202695`
-  - Docker build images: `28726202674`
+- Current traceability commit `1e657aaf40853df5a3f844b86028a17fae88cad0` automates the owner handoff packet and is green in GitHub Actions:
+  - CI: `28727085654`
+  - Native readiness report: `28727085668`
+  - Native mobile builds: `28727085656`
+  - Native desktop builds: `28727085653`
+  - Docker build images: `28727085650`
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - Public QA prerelease:
   - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0fb0493`
