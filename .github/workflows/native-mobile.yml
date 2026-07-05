@@ -97,13 +97,35 @@ jobs:
           cd android
           ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon --stacktrace
 
+      - name: Stage Android QA artifacts with manifest
+        shell: bash
+        run: |
+          set -eu
+          short_sha="${GITHUB_SHA::7}"
+          signing_label="unsigned-release"
+          if [ -f android/keystore.properties ]; then
+            signing_label="signed-release"
+          fi
+          mkdir -p output/native-qa/android
+          cp android/app/build/outputs/apk/debug/*.apk "output/native-qa/android/SiraGPT-${short_sha}-debug.apk"
+          cp android/app/build/outputs/bundle/release/*.aab "output/native-qa/android/SiraGPT-${short_sha}-${signing_label}.aab"
+          node scripts/generate-native-release-manifest.js \
+            --dir=output/native-qa \
+            --out=output/native-qa/native-release-manifest.json \
+            --markdown-out=output/native-qa/native-release-manifest.md \
+            --checksums-out=output/native-qa/SHA256SUMS.txt \
+            --release-tag="native-qa-${GITHUB_RUN_NUMBER}" \
+            --git-sha="$GITHUB_SHA"
+
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v6
         with:
           name: siragpt-mobile-android
           path: |
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/bundle/release/*.aab
+            output/native-qa/android/*
+            output/native-qa/native-release-manifest.json
+            output/native-qa/native-release-manifest.md
+            output/native-qa/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error
 
@@ -143,11 +165,34 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Stage iOS simulator artifact with manifest
+        shell: bash
+        run: |
+          set -eu
+          short_sha="${GITHUB_SHA::7}"
+          mkdir -p output/native-qa/ios
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Build/Products/Debug-iphonesimulator/*.app' -type d -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo "No iOS simulator .app found in DerivedData" >&2
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "output/native-qa/ios/SiraGPT-${short_sha}-ios-simulator-app.zip"
+          node scripts/generate-native-release-manifest.js \
+            --dir=output/native-qa \
+            --out=output/native-qa/native-release-manifest.json \
+            --markdown-out=output/native-qa/native-release-manifest.md \
+            --checksums-out=output/native-qa/SHA256SUMS.txt \
+            --release-tag="native-qa-${GITHUB_RUN_NUMBER}" \
+            --git-sha="$GITHUB_SHA"
+
       - name: Upload iOS debug app
         uses: actions/upload-artifact@v6
         with:
           name: siragpt-mobile-ios-simulator
           path: |
-            ~/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/*.app
+            output/native-qa/ios/*
+            output/native-qa/native-release-manifest.json
+            output/native-qa/native-release-manifest.md
+            output/native-qa/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error

@@ -117,8 +117,11 @@ desktop and mobile runs listed above. These artifacts prove the wrappers and
 unsigned QA packages build successfully for macOS, Windows, Android, and iOS
 simulator. The prerelease includes `native-release-manifest.json`,
 `native-release-manifest.md`, and `SHA256SUMS.txt` so every QA artifact can be
-verified against its SHA-256 checksum. Public distribution still requires
-signing and store credentials.
+verified against its SHA-256 checksum. New `Native mobile builds` and
+`Native desktop builds` workflow runs also stage their uploaded QA artifacts
+under `output/native-qa/` and include the same manifest and checksum files in
+each platform artifact. Public distribution still requires signing and store
+credentials.
 
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 
@@ -277,6 +280,10 @@ Public GitHub Releases should include `SHA256SUMS.txt` plus the generated
 release manifest. Those files are non-secret and are intended to verify that
 the downloaded Mac, Windows, iPhone, and Android artifacts match the release
 that Actions produced.
+QA workflow artifacts use the same verification format: each Android, iOS
+simulator, macOS, or Windows upload includes `native-release-manifest.json`,
+`native-release-manifest.md`, and `SHA256SUMS.txt` alongside the generated
+binary files.
 
 After native artifacts exist locally or inside the release workflow, generate
 the same verification packet with:

@@ -48,6 +48,11 @@
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`
   (`sha256:490bddebff1a2e64653a5986c1b98dd35a6347972512c2dc563e758aecc96926`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
+- `Native mobile builds` and `Native desktop builds` QA artifacts also include
+  `native-release-manifest.json`, `native-release-manifest.md`, and
+  `SHA256SUMS.txt` in each platform upload so the generated Android, iPhone
+  simulator, macOS, and Windows files can be verified before signing or store
+  submission.
 - Public QA prerelease:
   - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0fb0493`
 - Local downloaded QA artifacts:

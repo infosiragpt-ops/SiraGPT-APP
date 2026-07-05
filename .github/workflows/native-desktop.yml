@@ -51,14 +51,33 @@ jobs:
       - name: Build macOS artifacts
         run: npm run desktop:dist:mac
 
+      - name: Stage macOS QA artifacts with manifest
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p output/native-qa/macos
+          find output/desktop -maxdepth 1 -type f \( -name '*.dmg' -o -name '*-mac.zip' -o -name '*.blockmap' \) -exec cp {} output/native-qa/macos/ \;
+          if [ "$(find output/native-qa/macos -type f | wc -l | tr -d ' ')" -eq 0 ]; then
+            echo "No macOS artifacts found in output/desktop" >&2
+            exit 1
+          fi
+          node scripts/generate-native-release-manifest.js \
+            --dir=output/native-qa \
+            --out=output/native-qa/native-release-manifest.json \
+            --markdown-out=output/native-qa/native-release-manifest.md \
+            --checksums-out=output/native-qa/SHA256SUMS.txt \
+            --release-tag="native-qa-${GITHUB_RUN_NUMBER}" \
+            --git-sha="$GITHUB_SHA"
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v6
         with:
           name: siragpt-desktop-macos
           path: |
-            output/desktop/*.dmg
-            output/desktop/*-mac.zip
-            output/desktop/*.blockmap
+            output/native-qa/macos/*
+            output/native-qa/native-release-manifest.json
+            output/native-qa/native-release-manifest.md
+            output/native-qa/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error
 
@@ -88,12 +107,34 @@ jobs:
       - name: Build Windows artifacts
         run: npm run desktop:dist:win
 
+      - name: Stage Windows QA artifacts with manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "output/native-qa/windows" | Out-Null
+          $files = Get-ChildItem -Path "output/desktop" -File | Where-Object { $_.Name -like "*.exe" -or $_.Name -like "*.blockmap" }
+          if ($files.Count -eq 0) {
+            throw "No Windows artifacts found in output/desktop"
+          }
+          foreach ($file in $files) {
+            Copy-Item -Path $file.FullName -Destination "output/native-qa/windows/$($file.Name)" -Force
+          }
+          node scripts/generate-native-release-manifest.js `
+            --dir=output/native-qa `
+            --out=output/native-qa/native-release-manifest.json `
+            --markdown-out=output/native-qa/native-release-manifest.md `
+            --checksums-out=output/native-qa/SHA256SUMS.txt `
+            --release-tag="native-qa-$env:GITHUB_RUN_NUMBER" `
+            --git-sha="$env:GITHUB_SHA"
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v6
         with:
           name: siragpt-desktop-windows-x64
           path: |
-            output/desktop/*.exe
-            output/desktop/*.blockmap
+            output/native-qa/windows/*
+            output/native-qa/native-release-manifest.json
+            output/native-qa/native-release-manifest.md
+            output/native-qa/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error

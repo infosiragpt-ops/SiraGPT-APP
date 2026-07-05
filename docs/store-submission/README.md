@@ -51,6 +51,9 @@ lives in `docs/store-submission/native-store-assets.json`.
 ## Submission Order
 
 1. Keep `production-main` green for web, desktop, and mobile wrapper builds.
+   The `Native mobile builds` and `Native desktop builds` workflow artifacts
+   must include `native-release-manifest.json`, `native-release-manifest.md`,
+   and `SHA256SUMS.txt` alongside every QA binary upload.
 2. Complete owner-only account verification in Google Play Console and Apple
    Developer/App Store Connect.
 3. Add signing and store-upload secrets to GitHub Actions, never to the repo.
@@ -199,6 +202,9 @@ keystore, certificate, provisioning profile, API private key, or cookie value.
 After generated native release artifacts exist, `native:release:manifest`
 generates the non-secret artifact manifest and `SHA256SUMS.txt` for that
 artifact directory.
+The mobile and desktop QA workflows generate the same files under
+`output/native-qa/` before uploading platform artifacts, so short-lived Actions
+downloads and durable GitHub Releases use the same verification format.
 `native:release:plan:ci` generates the same packet from environment-variable
 presence, which is how GitHub Actions can audit configured native secrets
 without listing or printing secret values.
