@@ -1507,6 +1507,9 @@ class ApiClient {
         // observed `\n\n`, leaving any partial trailing frame for the next
         // iteration.
         let frameBuffer = '';
+        // Armed by a contentless [DONE]: break out of the read loop so the
+        // outer attempt loop reconnects (mirrors the abrupt-close retry).
+        let retryEmptyStream = false;
         let processedChunks = 0;
         const batchProcessingDelay = 20;
         let lastProcessTime = Date.now();
@@ -1562,6 +1565,23 @@ class ApiClient {
             if (payload === '[DONE]') {
               flushBatch();
               if (!hasDeliveredAnyContent) {
+                // A clean [DONE] with zero tokens means the PROVIDER produced
+                // nothing (transient provider error the backend closed over).
+                // Retry with the same backoff budget as an abrupt close —
+                // dying on the first empty stream while retrying empty
+                // closes was an inconsistency.
+                if (attempt < MAX_CONNECT_ATTEMPTS) {
+                  // Release the previous connection before reconnecting —
+                  // unlike the abrupt-close path (stream already ended),
+                  // here the body may still be open.
+                  try { await reader.cancel(); } catch { /* already closed */ }
+                  const delay = computeBackoff(attempt);
+                  console.warn(`[ai-stream] contentless [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
+                  await new Promise(r => setTimeout(r, delay));
+                  lastError = new Error('Empty model stream');
+                  retryEmptyStream = true;
+                  break;
+                }
                 onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
                 return;
               }
@@ -1659,6 +1679,7 @@ class ApiClient {
               console.warn('Failed to parse streaming data:', e);
             }
           }
+          if (retryEmptyStream) break; // reconnect via the outer attempt loop
         }
       } catch (error: any) {
         lastError = error;
