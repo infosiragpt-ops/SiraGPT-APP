@@ -65,6 +65,31 @@ describe("resolveAllowedOrigins", () => {
     });
     assert.deepEqual(result, ["https://a.com", "https://b.com"]);
   });
+
+  test("merges CODEX_PREVIEW_ORIGIN so generated apps' module fetches pass CORS", () => {
+    // A codex preview app fetches @vite/client / main.tsx with Origin equal to
+    // the preview origin; without this the strict callback 500s and the app
+    // stays blank. Present with an explicit list AND with the prod fallback,
+    // trailing slash trimmed.
+    const withList = resolveAllowedOrigins({
+      CORS_ORIGINS: "https://app.example.com",
+      CODEX_PREVIEW_ORIGIN: "https://preview.example.com/",
+    });
+    assert.ok(withList.includes("https://preview.example.com"));
+
+    const withFallback = resolveAllowedOrigins({
+      NODE_ENV: "production",
+      CODEX_PREVIEW_ORIGIN: "https://preview.example.com",
+    });
+    assert.ok(withFallback.includes("https://preview.example.com"));
+
+    // A non-https value is ignored (never widens the allowlist).
+    const ignored = resolveAllowedOrigins({
+      CORS_ORIGINS: "https://a.com",
+      CODEX_PREVIEW_ORIGIN: "not-a-url",
+    });
+    assert.deepEqual(ignored, ["https://a.com"]);
+  });
 });
 
 describe("validateAllowedOrigins", () => {

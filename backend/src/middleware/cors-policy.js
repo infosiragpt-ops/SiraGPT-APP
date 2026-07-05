@@ -110,6 +110,19 @@ function resolveReplitOrigins(env = process.env) {
     .map((host) => `https://${host}`);
 }
 
+/**
+ * The sibling origin that serves codex live previews (CODEX_PREVIEW_ORIGIN).
+ * ES-module sub-resource fetches from a generated app carry an `Origin`
+ * header equal to that origin; without this the strict CORS callback throws
+ * a 500 on @vite/client / main.tsx and the preview stays blank. Always
+ * allowed (it is our own controlled proxy host).
+ */
+function resolvePreviewOrigin(env = process.env) {
+  const raw = String(env.CODEX_PREVIEW_ORIGIN || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(raw)) return [];
+  try { return [new URL(raw).origin]; } catch { return []; }
+}
+
 function resolveAllowedOrigins(env = process.env) {
   const list = String(env.CORS_ORIGINS || '')
     .split(',')
@@ -117,11 +130,13 @@ function resolveAllowedOrigins(env = process.env) {
     .filter(Boolean);
 
   // Always merge in Replit-provided domains (*.replit.app and custom domains
-  // set by the platform) so the published app never hits a CORS wall.
+  // set by the platform) so the published app never hits a CORS wall, plus
+  // the codex preview origin (its apps fetch modules with that Origin).
   const replitOrigins = resolveReplitOrigins(env);
+  const previewOrigins = resolvePreviewOrigin(env);
 
   if (list.length > 0) {
-    const merged = [...new Set([...list, ...replitOrigins])];
+    const merged = [...new Set([...list, ...replitOrigins, ...previewOrigins])];
     return validateAllowedOrigins(merged);
   }
   if (env.NODE_ENV === 'production') {
@@ -131,10 +146,10 @@ function resolveAllowedOrigins(env = process.env) {
       + `Falling back to safe defaults: ${PROD_FALLBACK.join(', ')}. `
       + 'Set CORS_ORIGINS=https://yourdomain.com to override.'
     );
-    const merged = [...new Set([...PROD_FALLBACK, ...replitOrigins])];
+    const merged = [...new Set([...PROD_FALLBACK, ...replitOrigins, ...previewOrigins])];
     return merged;
   }
-  return [...DEV_FALLBACK];
+  return [...new Set([...DEV_FALLBACK, ...previewOrigins])];
 }
 
 function makeOriginCallback(allowed) {
@@ -150,4 +165,4 @@ function makeOriginCallback(allowed) {
   };
 }
 
-module.exports = { resolveAllowedOrigins, makeOriginCallback, validateAllowedOrigins, DEV_FALLBACK, PROD_FALLBACK };
+module.exports = { resolveAllowedOrigins, makeOriginCallback, validateAllowedOrigins, resolvePreviewOrigin, DEV_FALLBACK, PROD_FALLBACK };
