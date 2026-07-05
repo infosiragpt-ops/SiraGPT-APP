@@ -24,8 +24,8 @@ secrets. They must never be committed.
 - Last verified native QA runs:
   - Mobile: `28732348269`
   - Desktop: `28732348253`
-  - Readiness report: `28732703296`
-  - CI: `28732703286`
+  - Readiness report: `28734225636`
+  - CI: `28734225656`
 - Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`
   (`fix(ci): run database backup through postgres container`)
 - Management/traceability SHA validated before this packet refresh: `1d937068b66facec31e752c37ad30760f7b86aa3`
@@ -48,10 +48,11 @@ secrets. They must never be committed.
 - Latest secret-name audit: public repository Actions are running, but signed
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
-- GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`, Actions
-  is enabled with `allowed_actions=all`, CI run `28732703286` and native
-  readiness run `28732703296` are green. Standard GitHub-hosted Actions for
-  public repositories are free; this is separate from native signing readiness.
+- GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
+  Actions is enabled with `allowed_actions=all`, CI run `28734225656` and
+  native readiness run `28734225636` are green. Standard GitHub-hosted Actions
+  for public repositories are free; this is separate from native signing
+  readiness.
 
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest
@@ -164,6 +165,7 @@ npm run native:readiness
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
@@ -191,7 +193,9 @@ to QA releases or share with the account owner before store submission.
 `native:github-secrets:audit` checks which native signing secret names are
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native
-signing groups are configured.
+signing groups are configured. `native:github-secrets:report` writes a
+non-secret Markdown/JSON status packet that separates GitHub Actions
+availability from missing native signing and store-upload secret names.
 `native:github-secrets:setup` uploads native signing secrets from local
 environment variables or local file paths, base64-encoding file credentials
 before piping them into `gh secret set`. Use `--dry-run` first; it prints only
@@ -220,5 +224,5 @@ downloads and durable GitHub Releases use the same verification format.
 presence, which is how GitHub Actions can audit configured native secrets
 without listing or printing secret values.
 The GitHub Actions workflow `Native readiness report` publishes both the
-non-secret release plan, the owner handoff packet, and the store asset
-readiness report as artifacts.
+non-secret release plan, the GitHub secret-name report, the owner handoff
+packet, and the store asset readiness report as artifacts.

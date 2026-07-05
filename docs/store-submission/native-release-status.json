@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T08:00:31.324Z",
+  "updatedAt": "2026-07-05T08:20:17.354Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -43,8 +43,8 @@
   "latestVerifiedRuns": {
     "mobile": "28733828264",
     "desktop": "28733828240",
-    "readiness": "28733828227",
-    "ci": "28733828216",
+    "readiness": "28734225636",
+    "ci": "28734225656",
     "docker": "28733828233"
   },
   "latestQaArtifactManifestRuns": {
@@ -161,23 +161,25 @@
     "note": "This snapshot records the latest production-main management commit that adds an actionable signed-release preflight summary. QA binary target SHA remains separate from management SHA."
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T07:59:40.000Z",
+    "checkedAt": "2026-07-05T08:20:17.354Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
     "allowedActions": "all",
     "shaPinningRequired": false,
     "sourceCommands": [
-      "gh repo view infosiragpt-ops/SiraGPT-APP --json nameWithOwner,visibility,isPrivate,url",
+      "gh repo view infosiragpt-ops/SiraGPT-APP --json nameWithOwner,visibility,isPrivate,url,defaultBranchRef",
       "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/permissions",
-      "gh run list --repo infosiragpt-ops/SiraGPT-APP --limit 50"
+      "gh run list --repo infosiragpt-ops/SiraGPT-APP --limit 15",
+      "gh run view 28733963853 --repo infosiragpt-ops/SiraGPT-APP --log-failed"
     ],
-    "ciRun": "28733828216",
-    "readinessRun": "28733828227",
-    "mobileRun": "28732348269",
-    "desktopRun": "28732348253",
+    "ciRun": "28734225656",
+    "readinessRun": "28734225636",
+    "mobileRun": "28733828264",
+    "desktopRun": "28733828240",
+    "signedPreflightRun": "28733963853",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
-    "diagnosis": "Public repository Actions are enabled and running. Standard GitHub-hosted Actions for public repositories are free; signed native release packaging is gated by missing platform signing and store-upload secrets."
+    "diagnosis": "Public repository Actions are enabled and running. The failed Native signed release packages run stopped in signed-release preflight because native signing and store-upload secret names are missing; this is not a public repository Actions billing block."
   },
   "latestOwnerPacket": {
     "sourceSha": "10956297b606ee449c44707b956bbb7444eb3c94",
@@ -241,13 +243,36 @@
     }
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T06:57:24.732Z",
+    "checkedAt": "2026-07-05T08:20:17.354Z",
     "repo": "infosiragpt-ops/SiraGPT-APP",
+    "source": "github",
+    "sourceStatus": "available",
     "configuredRepositorySecrets": [
       "VPS_HOST",
       "VPS_PORT",
       "VPS_SSH_KEY",
       "VPS_USER"
+    ],
+    "configuredNativeSecrets": [],
+    "missingRequiredSecrets": [
+      "ANDROID_KEYSTORE_BASE64",
+      "ANDROID_KEYSTORE_PASSWORD",
+      "ANDROID_KEY_ALIAS",
+      "ANDROID_KEY_PASSWORD",
+      "APPLE_APP_SPECIFIC_PASSWORD",
+      "APPLE_ID",
+      "APPLE_TEAM_ID",
+      "APP_STORE_CONNECT_API_ISSUER_ID",
+      "APP_STORE_CONNECT_API_KEY_BASE64",
+      "APP_STORE_CONNECT_API_KEY_ID",
+      "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64",
+      "IOS_PROVISIONING_PROFILE_BASE64",
+      "IOS_SIGNING_CERTIFICATE_BASE64",
+      "IOS_SIGNING_CERTIFICATE_PASSWORD",
+      "MACOS_CERTIFICATE_BASE64",
+      "MACOS_CERTIFICATE_PASSWORD",
+      "WINDOWS_CERTIFICATE_BASE64",
+      "WINDOWS_CERTIFICATE_PASSWORD"
     ],
     "missingRequiredGroups": [
       "android",
@@ -258,7 +283,7 @@
       "windows"
     ],
     "status": "blocked-missing-native-signing-secrets",
-    "command": "bash scripts/audit-native-github-secrets.sh --repo=infosiragpt-ops/SiraGPT-APP --require=all --only-required",
-    "diagnosis": "The repository has deployment secrets only. Native app signing and store upload require dedicated platform credentials stored as GitHub Actions secrets; no secret values are committed or printed."
+    "command": "npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json",
+    "diagnosis": "The repository has deployment secrets only. Native app signing and store uploads require dedicated platform credentials stored as GitHub Actions secrets; the report lists secret names only and never reads or prints secret values."
   }
 }

@@ -9,6 +9,7 @@ on:
       - 'docs/mobile-store-release.md'
       - 'docs/store-submission/**'
       - 'scripts/native-release-plan.js'
+      - 'scripts/native-github-secrets-report.js'
       - 'scripts/generate-native-github-secrets-template.js'
       - 'scripts/generate-native-owner-handoff.js'
       - 'scripts/generate-native-store-owner-packet.js'
@@ -28,6 +29,7 @@ on:
       - 'docs/mobile-store-release.md'
       - 'docs/store-submission/**'
       - 'scripts/native-release-plan.js'
+      - 'scripts/native-github-secrets-report.js'
       - 'scripts/generate-native-github-secrets-template.js'
       - 'scripts/generate-native-owner-handoff.js'
       - 'scripts/generate-native-store-owner-packet.js'
@@ -97,6 +99,8 @@ jobs:
         run: |
           npm run native:release:plan:ci
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-release-plan.json','utf8')); if (!['ready','blocked'].includes(p.status)) throw new Error('invalid native readiness status'); if (p.githubSecretAudit.source !== 'env') throw new Error('expected env secret source'); console.log('native-readiness-status=' + p.status); console.log('native-readiness-missing-secrets=' + p.missingSecrets.length)"
+          npm run native:github-secrets:report -- --source=env --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-github-secrets-report.json','utf8')); if (!['ready','blocked-missing-native-signing-secrets'].includes(p.status)) throw new Error('invalid native github secrets report status'); console.log('native-github-secrets-report-status=' + p.status); console.log('native-github-secrets-report-missing-groups=' + p.missingRequiredGroups.length)"
           npm run native:release:handoff -- --out=output/native-owner-handoff.md --json-out=output/native-owner-handoff.json
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-owner-handoff.json','utf8')); if (p.status !== 'owner-action-required') throw new Error('invalid native owner handoff status'); console.log('native-owner-handoff-platforms=' + p.platformPlans.length)"
           node scripts/generate-native-store-owner-packet.js --repo=${{ github.repository }} --source-sha=${{ github.sha }} --secret-source=env --json > output/native-store-owner-packet-summary.json
@@ -113,6 +117,8 @@ jobs:
             output/native-store-submission-packet.json
             output/native-release-plan.md
             output/native-release-plan.json
+            output/native-github-secrets-report.md
+            output/native-github-secrets-report.json
             output/native-owner-handoff.md
             output/native-owner-handoff.json
             output/native-store-owner-packet-summary.json

@@ -97,11 +97,13 @@ Latest secret-name audit:
 
 ```bash
 npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --require=all --only-required
+npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 ```
 
 Result: `android`, `googleplay`, `ios`, `appstore`, `macos`, and `windows`
 are missing required native signing/upload secrets. The audit prints names and
-readiness states only; it does not read or print secret values.
+readiness states only; it does not read or print secret values. The report
+command writes a shareable Markdown/JSON diagnosis for the same blocker.
 This is the signed-release blocker. It is separate from public repository
 GitHub Actions availability, which is currently verified by green CI and native
 QA workflows.
@@ -162,6 +164,7 @@ npm run native:store:assets -- --require-ready
 npm run native:store:packet -- --require-ready
 npm run native:github-secrets:template -- --platform=mobile --out=output/native-mobile-signing.env.example
 npm run native:github-secrets:setup -- --platform=mobile --dry-run
+npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 npm run native:release:handoff -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-owner-handoff.md --json-out=output/native-owner-handoff.json
 ```

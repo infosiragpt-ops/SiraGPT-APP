@@ -9,9 +9,13 @@ describe("Native readiness GitHub Actions source", () => {
 
     assert.match(planStep, /GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64:\s*\$\{\{\s*secrets\.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64\s*\}\}/)
     assert.match(planStep, /npm run native:release:plan:ci/)
+    assert.match(planStep, /npm run native:github-secrets:report -- --source=env --out=output\/native-github-secrets-report\.md --json-out=output\/native-github-secrets-report\.json/)
     assert.match(planStep, /npm run native:release:handoff -- --out=output\/native-owner-handoff\.md --json-out=output\/native-owner-handoff\.json/)
     assert.match(planStep, /node scripts\/generate-native-store-owner-packet\.js --repo=\$\{\{ github\.repository \}\} --source-sha=\$\{\{ github\.sha \}\} --secret-source=env --json > output\/native-store-owner-packet-summary\.json/)
     assert.match(workflow, /scripts\/generate-native-github-secrets-template\.js/)
+    assert.match(workflow, /scripts\/native-github-secrets-report\.js/)
+    assert.match(workflow, /output\/native-github-secrets-report\.md/)
+    assert.match(workflow, /output\/native-github-secrets-report\.json/)
     assert.match(workflow, /output\/native-owner-handoff\.md/)
     assert.match(workflow, /output\/native-owner-handoff\.json/)
     assert.match(workflow, /output\/native-store-owner-packet-summary\.json/)

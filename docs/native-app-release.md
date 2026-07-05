@@ -86,8 +86,8 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Non-secret release plan and store packet generation: passed.
 - Management/traceability workflow snapshot before this document refresh,
   SHA `1d937068b66facec31e752c37ad30760f7b86aa3`:
-  - CI: `28732703286`.
-  - Native readiness report with owner handoff artifact: `28732703296`.
+  - CI: `28734225656`.
+  - Native readiness report with owner handoff artifact: `28734225636`.
 - Current native QA artifact set remains tied to SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
   - Native mobile builds: `28732348269`.
   - Native desktop builds: `28732348253`.
@@ -101,6 +101,8 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.
   - Allowed actions: `all`.
+  - Latest green CI: `28734225656`.
+  - Latest green native readiness report: `28734225636`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
 - Signed release preflight: `Native signed release packages` run `28733963853`.
   - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-1095629`.
@@ -173,6 +175,7 @@ npm run native:readiness:desktop
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
@@ -183,6 +186,13 @@ For GitHub repository secret-name auditing, use `npm run native:github-secrets:a
 To audit all required native signing groups while printing only required
 statuses, use
 `npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --only-required`.
+For a shareable non-secret diagnosis of the public repository Actions state and
+missing native secret names, use:
+
+```bash
+npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
+```
+
 For a non-secret management packet with missing GitHub secret names, owner
 account actions, and safe upload commands, use:
 
@@ -191,9 +201,11 @@ npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/n
 ```
 
 GitHub Actions also exposes `Native readiness report`, which generates and
-uploads the same non-secret Markdown/JSON packet as the artifact
-`siragpt-native-readiness-report`. That workflow inspects secret presence from
-GitHub Actions environment injection and never prints secret values.
+uploads the same non-secret Markdown/JSON packet plus
+`native-github-secrets-report.md` and `native-github-secrets-report.json` as
+the artifact `siragpt-native-readiness-report`. That workflow inspects secret
+presence from GitHub Actions environment injection and never prints secret
+values.
 
 To upload signing secrets from a trusted local machine without printing values,
 use the setup helper. It accepts existing base64 environment variables or
@@ -364,6 +376,7 @@ npm run native:readiness
 npm run native:readiness:desktop
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 npm run native:release:plan:ci
+npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
