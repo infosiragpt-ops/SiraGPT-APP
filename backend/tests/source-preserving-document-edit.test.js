@@ -609,6 +609,31 @@ describe('source-preserving document edit', () => {
     assert.equal(explicitSelection.selectionReason, 'current_docx_target_section');
   });
 
+  it('uses the just-uploaded DOCX as the base for "mi word en anexos" instrument edits', () => {
+    const selection = sourcePreservingInternals.selectSourcePreservingDocumentSet({
+      requestText: 'en mi word en anexos agrega el intruemnto en blanco y negri de forma profesional porfavor',
+      sourceFiles: [{
+        id: 'file-current',
+        filename: '775_785_final30-06-26.docx',
+        originalName: '775 785 - final30-06-26.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'current_upload',
+      }],
+      priorArtifacts: [{
+        id: 'artifact-integrated',
+        filename: '775_785_final30-06-26_con_anexos_documentos_integrados.docx',
+        originalName: '775_785_final30-06-26_con_anexos_documentos_integrados.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'generated_artifact',
+      }],
+    });
+
+    assert.equal(selection.sourceFile.id, 'file-current');
+    assert.equal(selection.selectionReason, 'current_upload_docx_edit');
+    assert.deepEqual(selection.referenceFiles, []);
+    assert.equal(selection.wantsReferenceIntegration, false);
+  });
+
   it('does not crash selecting a source set when there is no editable file at all', () => {
     // Regresión: fileStableKey(null) lanzaba "Cannot read properties of null
     // (reading 'id')" cuando no había archivo base ni artefacto previo, lo que
@@ -695,12 +720,14 @@ describe('source-preserving document edit', () => {
 
   it('does not mistake an instrument request for external reference integration because it mentions Word final', () => {
     const prompt = 'agrega al final un instrumento profesional de recolección de datos para esta investigación y valida el Word final';
+    const livePrompt = 'en mi word en anexos agrega el intruemnto en blanco y negri de forma profesional porfavor';
 
     assert.equal(sourcePreservingInternals.requestWantsReferenceIntegration(prompt), false);
+    assert.equal(sourcePreservingInternals.requestWantsReferenceIntegration(livePrompt), false);
     assert.equal(sourcePreservingInternals.requestWantsReferenceIntegration('analiza este documento adjunto y agrégalo a mi documento general'), true);
 
     const ops = sourcePreservingInternals.planSourcePreservingOperations({
-      requestText: prompt,
+      requestText: livePrompt,
       documentXml: '<w:document><w:body></w:body></w:document>',
       referenceFiles: [{ id: 'ref-original' }],
     });

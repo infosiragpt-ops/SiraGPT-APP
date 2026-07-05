@@ -543,6 +543,7 @@ function requestWantsReferenceIntegration(prompt = '') {
   const externalSource = /\b(otro\s+documento|otro\s+archivo|nuevo\s+documento|nuevo\s+archivo|documento\s+adjunto|archivo\s+adjunto|documentos?\s+de\s+soporte|insumo|contenido\s+de\s+otro)\b/.test(text)
     || /\b(?:este|esta|ese|esa|otro|otra|nuevo|nueva|adjunto|adjunta|subido|subida|cargado|cargada)\s+(?:pdf|docx|word|documento|archivo)\b/.test(text)
     || /\b(?:pdf|docx|word|documento|archivo)\s+(?:adjunto|adjunta|subido|subida|cargado|cargada|de\s+soporte)\b/.test(text);
+  if (!externalSource && (requestWantsInstrument(text) || /\banexos?\b/.test(text))) return false;
   const targetGeneral = requestMentionsGeneralDocument(text) || /\b(en|a|dentro\s+de)\s+(?:mi\s+)?(?:documento|archivo|word|tesis)\b/.test(text);
   return integrationVerb && (externalSource || targetGeneral) && /\b(agreg\w*|anad\w*|incorpor\w*|integra\w*|fusion\w*|combina\w*)\b/.test(text);
 }
@@ -591,15 +592,18 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
 
   let sourceFile = null;
   let selectionReason = 'first_supported_file';
-  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0 || generatedContinuation || needleMissingInCurrentUpload)) {
+  if (targetedSection && currentDocx.length) {
+    sourceFile = currentDocx[0];
+    selectionReason = 'current_docx_target_section';
+  } else if (hasExplicitCurrentUpload && !wantsReferenceIntegration && currentDocx.length) {
+    sourceFile = currentDocx[0];
+    selectionReason = 'current_upload_docx_edit';
+  } else if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0 || generatedContinuation || needleMissingInCurrentUpload)) {
     sourceFile = priorDocx[0];
     selectionReason = needleMissingInCurrentUpload ? 'artifact_continuity_needle' : 'latest_generated_docx_artifact';
   } else if (!explicitCurrentBase && priorSupported.length && currentSupported.length === 0) {
     sourceFile = priorSupported[0];
     selectionReason = 'latest_generated_artifact';
-  } else if (targetedSection && currentDocx.length) {
-    sourceFile = currentDocx[0];
-    selectionReason = 'current_docx_target_section';
   } else if (currentSupported.length) {
     sourceFile = currentSupported[0];
     selectionReason = 'current_supported_file';
