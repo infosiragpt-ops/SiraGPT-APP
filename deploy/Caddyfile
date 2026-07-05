@@ -46,7 +46,7 @@ api.siragpt.com {
 preview.siragpt.com, preview-62-72-11-231.sslip.io {
 	encode zstd gzip
 
-	@preview path /api/codex/projects/*/preview/*
+	@preview path_regexp preview ^/api/codex/projects/[^/]+/preview/.+
 	handle @preview {
 		reverse_proxy backend:5000 {
 			header_down -X-Frame-Options
