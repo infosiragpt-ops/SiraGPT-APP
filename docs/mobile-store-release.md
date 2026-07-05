@@ -36,10 +36,10 @@
   contains `native-release-manifest.json`, `native-release-manifest.md`, and
   `SHA256SUMS.txt`.
 - GitHub Actions `Native readiness report` run `28737691885` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
-- Native QA artifact target is `f2679e39b0acba43246cd59792da5caba4cddfe3`; current owner-handoff management evidence is tracked by commit `dac5e784ebf640cad1230c1cabf3f314b485a98e`.
+- Native QA artifact target is `f2679e39b0acba43246cd59792da5caba4cddfe3`; current owner-handoff management evidence is tracked by commit `99c5809b57b6cf121f48c5262e9557295f1c2d20`.
 - Latest green wrapper and management runs:
-  - CI: `28749111518`
-  - Native readiness report: `28749306918`
+  - CI: `28749985629`
+  - Native readiness report: `28750200123`
   - Native mobile builds: `28737926063`
   - Native desktop builds: `28737926072`
   - Docker build images: `28735031878`
@@ -56,9 +56,9 @@
   `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
   `SiraGPT 0.4.3.exe`.
 - Management/traceability commit validated before this document refresh:
-  `dac5e784ebf640cad1230c1cabf3f314b485a98e`
-  (`chore(ui-lock): re-baseline for collapsed code chips`) is green in CI run
-  `28749111518` and Native readiness report run `28749306918`. The current QA
+  `99c5809b57b6cf121f48c5262e9557295f1c2d20`
+  (`chore(ui-lock): re-baseline latest visual changes`) is green in CI run
+  `28749985629` and Native readiness report run `28750200123`. The current QA
   mobile and desktop binaries remain pinned to `f2679e39b0acba43246cd59792da5caba4cddfe3`.
 - GitHub repository diagnostics:
   - Repository visibility: `PUBLIC`
@@ -70,8 +70,8 @@
   package runners because Android, iOS, macOS, and Windows signing secrets are
   still missing. It uploaded `siragpt-native-signed-release-preflight` with
   `preflight.md` and `preflight.json` before stopping.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-dac5e784.zip`
-  (`sha256:9859aaa10e11dcb85c854ed16cf64a7d3fee1ceb323561903dd4c0f0306d96d1`).
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-99c5809b.zip`
+  (`sha256:cf2f334a52864cb029dd580e6190bf843fcc6e21cf7806796dc8e6a37767f431`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled. The signed release preflight also uploads `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`, even when the run intentionally stops because signing/upload secrets are missing.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
