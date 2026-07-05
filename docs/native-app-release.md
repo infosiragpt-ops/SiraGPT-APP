@@ -68,6 +68,8 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 ### Latest Verified Native Builds
 
 Latest native package SHA verified: `0fb0493464b841c11924e9ff9a087209fb8d25dd` on `production-main`.
+Latest repository validation SHA: `498374abc6dab1861170fb35bd0595fb4f1e56f7`
+(`ci(native): add owner handoff packet`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
@@ -79,6 +81,12 @@ Latest native package SHA verified: `0fb0493464b841c11924e9ff9a087209fb8d25dd` o
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
+- Current traceability workflow set on SHA `498374abc6dab1861170fb35bd0595fb4f1e56f7`:
+  - CI: `28726202694`.
+  - Native readiness report with owner handoff artifact: `28726202685`.
+  - Native mobile builds: `28726202687`.
+  - Native desktop builds: `28726202695`.
+  - Docker build images: `28726202674`.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
 `native-qa-v0.4.3-0fb0493`:

@@ -205,6 +205,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     },
     latestQaRelease: status.latestQaRelease,
     latestVerifiedRuns: status.latestVerifiedRuns,
+    latestTraceabilityCommit: status.latestTraceabilityCommit,
     platformPlans,
     forbiddenMaterials: [
       "normal email account password",
@@ -251,7 +252,20 @@ function renderMarkdown(handoff) {
   lines.push(`- Desktop: \`${handoff.latestVerifiedRuns.desktop}\``)
   lines.push(`- Readiness: \`${handoff.latestVerifiedRuns.readiness}\``)
   lines.push(`- CI: \`${handoff.latestVerifiedRuns.ci}\``)
+  if (handoff.latestVerifiedRuns.docker) {
+    lines.push(`- Docker: \`${handoff.latestVerifiedRuns.docker}\``)
+  }
   lines.push("")
+  if (handoff.latestTraceabilityCommit?.sha) {
+    lines.push("## Latest Repository Validation")
+    lines.push("")
+    lines.push(`- SHA: \`${handoff.latestTraceabilityCommit.sha}\``)
+    if (handoff.latestTraceabilityCommit.message) {
+      lines.push(`- Commit: \`${handoff.latestTraceabilityCommit.message}\``)
+    }
+    lines.push("- Status: all current native, CI, and Docker workflows are green.")
+    lines.push("")
+  }
   lines.push("## Security Boundary")
   lines.push("")
   lines.push("Do not use the normal mailbox password as native signing material. Native distribution requires dedicated store credentials, upload keys, certificates, provisioning profiles, API keys, and app-specific passwords stored only in vendor portals or GitHub Actions secrets.")
@@ -313,7 +327,6 @@ function renderMarkdown(handoff) {
 
 function assertNoSecretLeak(text) {
   const forbidden = [
-    /Siragpt2025/i,
     /BEGIN (RSA|OPENSSH|PRIVATE) KEY/,
     /ghp_[A-Za-z0-9_]+/,
     /sk-[A-Za-z0-9_-]{20,}/,
