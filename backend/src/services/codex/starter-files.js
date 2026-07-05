@@ -153,6 +153,28 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 }
 `;
 
+  // Helper de IA de la plataforma: las apps generadas integran chat/IA REAL
+  // llamando a este proxy (la key vive en el servidor, nunca en la app).
+  const aiHelperTs = `export type AIMessage = { role: 'system' | 'user' | 'assistant'; content: string }
+
+/**
+ * Habla con la IA de la plataforma SiraGPT (sin API key: el proxy del
+ * servidor usa el modelo gratuito). Lanza Error con mensaje legible si el
+ * servicio no está disponible — muéstralo en la UI, nunca lo silencies.
+ */
+export async function askAI(messages: AIMessage[], opts?: { system?: string }): Promise<string> {
+  const res = await fetch('/api/apps-ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, system: opts?.system }),
+  })
+  const data = await res.json().catch(() => null)
+  if (res.status === 429) throw new Error('La IA está ocupada — espera unos segundos y reintenta.')
+  if (!res.ok || !data?.ok) throw new Error('El servicio de IA no está disponible ahora mismo.')
+  return String(data.text || '')
+}
+`;
+
   const indexCss = `:root { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0; }
@@ -166,6 +188,7 @@ body { margin: 0; }
     { path: 'src/main.tsx', content: mainTsx },
     { path: 'src/App.tsx', content: appTsx },
     { path: 'src/index.css', content: indexCss },
+    { path: 'src/lib/ai.ts', content: aiHelperTs },
     { path: '.gitignore', content: 'node_modules\ndist\n' },
   ];
 }

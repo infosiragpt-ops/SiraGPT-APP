@@ -211,6 +211,32 @@ const BUILTIN_SKILLS = [
     ].join('\n'),
   },
   {
+    name: 'app-con-ia',
+    description: 'Apps con IA integrada (chat tipo ChatGPT/Claude, asistentes, generadores): UI de chat profesional sobre el helper askAI de la plataforma.',
+    body: [
+      '# Skill: app-con-ia',
+      '',
+      'El starter YA trae `src/lib/ai.ts` con `askAI(messages, { system? })`: habla con la IA de la plataforma SIN API keys (el proxy del servidor las gestiona). NUNCA pidas al usuario una API key ni inventes un endpoint propio.',
+      '',
+      '## UI de chat (estándar ChatGPT/Claude)',
+      '- Lista de mensajes con burbujas diferenciadas (usuario derecha/acento, asistente izquierda/neutra), auto-scroll al final.',
+      '- Composer: textarea que crece, Enter envía / Shift+Enter salto, botón enviar deshabilitado en vacío o mientras responde.',
+      '- Estado "pensando": burbuja del asistente con indicador animado mientras espera askAI.',
+      '- Errores VISIBLES: si askAI lanza, muestra el mensaje en una burbuja de error con botón reintentar. Nunca lo silencies.',
+      '- 3-4 sugerencias de inicio (chips clicables) relevantes al dominio pedido, que desaparecen al primer mensaje.',
+      '',
+      '## Estado y memoria',
+      '- Historial tipado `AIMessage[]` en useState + persistencia localStorage (`app:chat:v1`) con botón "Nueva conversación".',
+      '- SYSTEM PROMPT del dominio: define la personalidad/rol del asistente según el pedido (ej. asesor legal, tutor de inglés, chef) y pásalo en opts.system. Esto convierte la app genérica en EL producto pedido.',
+      '- Envía como contexto los últimos ~12 mensajes (la API acepta máx 30, 4000 chars por mensaje).',
+      '',
+      '## Calidad',
+      '- La respuesta puede tardar segundos: la UI nunca se congela (async + estados).',
+      '- Diseña la pantalla completa (header con nombre del asistente, área de chat, composer fijo abajo) — es un producto, no un demo.',
+      '- type_check + browser_check al cerrar: envía un mensaje de prueba mentalmente imposible de fallar ("hola") en tu revisión del flujo.',
+    ].join('\n'),
+  },
+  {
     name: 'debug-runtime',
     description: 'Diagnóstico disciplinado cuando la app no compila o no corre: leer el error REAL antes de tocar código.',
     body: [
@@ -339,6 +365,7 @@ module.exports = {
 // so the loop AUTO-INJECTS the matching playbook at run start (media-intent
 // doctrine: critical behaviour must not depend on the model asking for it).
 const SKILL_TRIGGERS = [
+  { name: 'app-con-ia', re: /\b(chat\s?bot|chatbot|asistente( virtual| de ia| inteligente| con ia)?|como (chat\s?gpt|chatgpt|claude|gemini|gpt)|con (ia|inteligencia artificial)|(usando|con|mediante) (la )?api de (ia|openai|gpt|claude)|agente de ia|ia integrada|tutor (virtual|de)|generador de texto)\b/i },
   { name: 'landing-profesional', re: /\b(landing|p[aá]gina (de aterrizaje|web|principal)|one[- ]?page|sitio (web )?promocional|portada)\b/i },
   { name: 'dashboard-kpis', re: /\b(dashboard|panel (de )?(control|m[eé]tricas|admin)|kpis?|anal[ií]tica|reportes? ejecutivos?)\b/i },
   { name: 'auth-basica', re: /\b(login|inicio de sesi[oó]n|registro de usuarios?|autenticaci[oó]n|sign ?in|sign ?up)\b/i },

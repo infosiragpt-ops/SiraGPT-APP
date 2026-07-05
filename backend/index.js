@@ -1005,6 +1005,9 @@ app.use('/api/credits', creditsRoutes);
 app.use('/api/admin/goals', goalsRoutes.adminRouter);
 app.use('/api/paraphrase', paraphraseRoutes);
 app.use('/api/free-ia', freeIaRoutes);
+// AI proxy for GENERATED apps (SiraGPT Apps): public by design (preview apps
+// carry no auth), free-tier model only, strict per-IP rate limit inside.
+app.use('/api/apps-ai', require('./src/routes/apps-ai').buildAppsAiRouter());
 app.use('/api/admin/rbac', rbacRoutes.adminRouter);
 app.use('/api/rbac', rbacRoutes);
 app.use('/api/images', imagesRoutes);

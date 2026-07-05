@@ -22,7 +22,8 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   const paths = files.map((f) => f.path);
   assert.deepEqual(paths, [
     'package.json', 'vite.config.ts', 'tsconfig.json', 'index.html',
-    'src/main.tsx', 'src/App.tsx', 'src/index.css', '.gitignore',
+    'src/main.tsx', 'src/App.tsx', 'src/index.css',
+    'src/lib/ai.ts', '.gitignore',
   ]);
   const pkg = JSON.parse(files.find((f) => f.path === 'package.json').content);
   assert.equal(pkg.scripts.dev, 'vite');
