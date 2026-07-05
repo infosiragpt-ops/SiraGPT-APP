@@ -83,9 +83,11 @@ These are account-owner actions and cannot be completed by build tooling or loca
 2. Sign in to Xcode with an Apple Developer account.
 3. Open the project with `npm run mobile:open:ios`.
 4. Configure signing for bundle ID `com.siragpt.app`.
-5. Archive from Xcode and upload to App Store Connect.
-6. Complete privacy nutrition labels, age rating, screenshots, app review information, pricing/availability, and TestFlight review.
-7. Submit to App Review only after a final manual confirmation.
+5. Add the Apple Developer signing secrets and App Store Connect API key secrets to GitHub Actions.
+6. Run `Native signed release packages` with `platform=ios` and enable `upload_ios_app_store_connect` when the signed `.ipa` should be uploaded automatically.
+7. Alternatively, archive from Xcode and upload to App Store Connect manually.
+8. Complete privacy nutrition labels, age rating, screenshots, app review information, pricing/availability, and TestFlight review.
+9. Submit to App Review only after a final manual confirmation.
 
 ## Store Listing Draft
 
@@ -124,5 +126,6 @@ non-secret checklist and asset readiness report as an artifact named
 
 - Creating the Android upload key creates a long-lived signing credential.
 - Uploading `.aab` or `.ipa` sends app binaries to Google/Apple.
+- Enabling `upload_ios_app_store_connect` in GitHub Actions uploads the signed iOS binary to App Store Connect/TestFlight.
 - Creating or submitting store listings publishes text and metadata to third parties.
 - Paying developer fees or submitting apps for review requires explicit confirmation at action time.

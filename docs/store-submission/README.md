@@ -40,7 +40,10 @@ lives in `docs/store-submission/native-store-assets.json`.
 4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
    `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
-6. Upload only after manual confirmation because binaries and store metadata
+6. For iPhone, enable `upload_ios_app_store_connect` only when the signed
+   `.ipa` should be uploaded to App Store Connect/TestFlight from GitHub
+   Actions.
+7. Upload only after manual confirmation because binaries and store metadata
    are transmitted to third-party platforms.
 
 Do not use a normal email or account password as a native signing secret.
@@ -67,7 +70,10 @@ Current account blockers are owner actions:
 App Store Connect requires app privacy details, privacy policy URL, age rating,
 screenshots, review information, signing, and an uploaded build. The app uses
 the Capacitor bundle ID `com.siragpt.app`; do not create a different bundle ID
-unless the native project and metadata are updated together.
+unless the native project and metadata are updated together. The signed release
+workflow can upload the generated `.ipa` automatically when
+`upload_ios_app_store_connect` is enabled and the App Store Connect API key
+secrets are configured.
 
 ### macOS
 

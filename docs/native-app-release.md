@@ -98,9 +98,9 @@ Use `Native signed release packages` manually when real distribution credentials
 - macOS: signed and notarized `.dmg` and `.zip`.
 - Windows: signed `.exe` installer/portable artifacts.
 
-The workflow can optionally create or update a GitHub Release with the built native artifacts. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing secrets for the selected platform are missing.
+The workflow can optionally create or update a GitHub Release with the built native artifacts. It can also upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing.
 
-The preflight validates package-signing credentials only:
+The preflight validates package-signing credentials by default:
 
 - `android`: Android upload keystore secrets.
 - `ios`: iOS signing certificate and provisioning profile.
@@ -108,7 +108,9 @@ The preflight validates package-signing credentials only:
 - `windows`: Windows code-signing certificate secrets.
 - `all`: all four package-signing groups above.
 
-App Store Connect upload credentials are still listed below because they are required for store submission automation, but the current signed package workflow does not upload binaries to App Store Connect.
+When `upload_ios_app_store_connect` is enabled for `platform=ios` or
+`platform=all`, the preflight also requires the `appstore` upload secret group
+before any macOS runner starts.
 
 ### Required GitHub Secrets For Signed Distribution
 
@@ -217,6 +219,7 @@ or print secret values.
    - `all` for the complete native release set.
 4. Set `release_tag`, for example `native-v0.4.3`.
 5. Enable `create_github_release` only when the artifacts should be attached to a public GitHub Release.
+6. Enable `upload_ios_app_store_connect` only when the signed iOS `.ipa` should be sent to App Store Connect/TestFlight. This requires `platform=ios` or `platform=all` plus the App Store Connect API key secrets.
 
 The workflow prints only secret names and readiness states. It must not print secret values.
 
