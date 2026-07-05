@@ -29,6 +29,7 @@
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
 - GitHub Actions `Native readiness report` run `28722835962` passed on the same SHA and produced the non-secret release plan/store packet.
+- Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - Public QA prerelease:
   - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-3eec62c`
 - Local downloaded QA artifacts:

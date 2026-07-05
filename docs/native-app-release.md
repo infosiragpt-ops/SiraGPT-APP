@@ -98,7 +98,7 @@ Use `Native signed release packages` manually when real distribution credentials
 - macOS: signed and notarized `.dmg` and `.zip`.
 - Windows: signed `.exe` installer/portable artifacts.
 
-The workflow can optionally create or update a GitHub Release with the built native artifacts. It can also upload the signed Android `.aab` to Google Play when `upload_android_google_play` is enabled and upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing.
+The workflow can optionally create or update a GitHub Release with the built native artifacts. When `create_github_release` is enabled, it also publishes `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` so every native installer can be audited by version, Git SHA, platform, size, and SHA-256 checksum. It can also upload the signed Android `.aab` to Google Play when `upload_android_google_play` is enabled and upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing.
 
 The preflight validates package-signing credentials by default:
 
@@ -235,6 +235,17 @@ or print secret values.
 8. Enable `upload_ios_app_store_connect` only when the signed iOS `.ipa` should be sent to App Store Connect/TestFlight. This requires `platform=ios` or `platform=all` plus the App Store Connect API key secrets.
 
 The workflow prints only secret names and readiness states. It must not print secret values.
+Public GitHub Releases should include `SHA256SUMS.txt` plus the generated
+release manifest. Those files are non-secret and are intended to verify that
+the downloaded Mac, Windows, iPhone, and Android artifacts match the release
+that Actions produced.
+
+After native artifacts exist locally or inside the release workflow, generate
+the same verification packet with:
+
+```bash
+npm run native:release:manifest -- --dir=output/native-release --out=output/native-release/native-release-manifest.json --markdown-out=output/native-release/native-release-manifest.md --checksums-out=output/native-release/SHA256SUMS.txt
+```
 
 Store publication requires account-level work outside Git:
 

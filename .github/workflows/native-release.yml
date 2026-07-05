@@ -567,12 +567,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Download native artifacts
         uses: actions/download-artifact@v6
         with:
           pattern: siragpt-native-*
           path: output/native-release
           merge-multiple: true
+
+      - name: Generate release manifest
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          node scripts/generate-native-release-manifest.js \
+            --dir=output/native-release \
+            --out=output/native-release/native-release-manifest.json \
+            --markdown-out=output/native-release/native-release-manifest.md \
+            --checksums-out=output/native-release/SHA256SUMS.txt \
+            --release-tag="$RELEASE_TAG" \
+            --git-sha="$GITHUB_SHA"
 
       - name: Create or update GitHub Release
         shell: bash
@@ -581,8 +598,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -eu
-          shopt -s globstar nullglob
-          files=(output/native-release/**/*)
+          mapfile -d '' files < <(find output/native-release -type f -print0 | sort -z)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No native artifacts found for release" >&2
             exit 1
@@ -590,9 +606,13 @@ jobs:
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "SiraGPT native $RELEASE_TAG" \
+              --notes-file output/native-release/native-release-manifest.md
           else
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "SiraGPT native $RELEASE_TAG" \
-              --notes "Signed native SiraGPT packages built from $GITHUB_SHA."
+              --notes-file output/native-release/native-release-manifest.md
           fi

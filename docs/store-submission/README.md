@@ -40,12 +40,15 @@ lives in `docs/store-submission/native-store-assets.json`.
 4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
    `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
-6. For Android, enable `upload_android_google_play` only when the signed
+6. Enable `create_github_release` when the signed artifacts should be published
+   with `native-release-manifest.json`, `native-release-manifest.md`, and
+   `SHA256SUMS.txt`.
+7. For Android, enable `upload_android_google_play` only when the signed
    `.aab` should be uploaded to Google Play from GitHub Actions.
-7. For iPhone, enable `upload_ios_app_store_connect` only when the signed
+8. For iPhone, enable `upload_ios_app_store_connect` only when the signed
    `.ipa` should be uploaded to App Store Connect/TestFlight from GitHub
    Actions.
-8. Upload only after manual confirmation because binaries and store metadata
+9. Upload only after manual confirmation because binaries and store metadata
    are transmitted to third-party platforms.
 
 Do not use a normal email or account password as a native signing secret.
@@ -159,6 +162,9 @@ secret names and source variable names, never secret values.
 `native:release:plan` generates a non-secret Markdown/JSON management packet
 for the current repo, including missing GitHub secret names, per-platform
 account actions, and safe `gh secret set` commands.
+After generated native release artifacts exist, `native:release:manifest`
+generates the non-secret artifact manifest and `SHA256SUMS.txt` for that
+artifact directory.
 `native:release:plan:ci` generates the same packet from environment-variable
 presence, which is how GitHub Actions can audit configured native secrets
 without listing or printing secret values.
