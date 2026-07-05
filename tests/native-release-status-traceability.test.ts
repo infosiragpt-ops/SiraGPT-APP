@@ -63,11 +63,32 @@ type NativeReleaseStatus = {
       missingSecrets: string
     }
   }
+  latestSignedAndroidRelease: {
+    tag: string
+    url: string
+    run: string
+    runUrl: string
+    sourceSha: string
+    status: string
+    createGithubRelease: boolean
+    googlePlayUpload: string
+    aab: {
+      name: string
+      kind: string
+      size: number
+      sha256: string
+    }
+    releaseAssets: string[]
+    verification: string
+  }
   latestOwnerPacket: {
     sourceSha: string
     sourceCommit: string
+    releaseTag: string
     zipName: string
+    zipUrl: string
     checksumName: string
+    checksumUrl: string
     checksumSha256: string
   }
   latestSecretAudit: {
@@ -77,19 +98,41 @@ type NativeReleaseStatus = {
 }
 
 describe("native release status traceability", () => {
-  it("keeps the latest owner packet and current wrapper validation traceable", () => {
+  it("keeps the latest signed Android release, owner packet, and current wrapper validation traceable", () => {
     const status = JSON.parse(
       readFileSync("docs/store-submission/native-release-status.json", "utf8"),
     ) as NativeReleaseStatus
-    const shortSha = status.latestTraceabilityCommit.sha.slice(0, 8)
+    const ownerPacketShortSha = status.latestOwnerPacket.sourceSha.slice(0, 8)
+    const signedAndroidShortSha = status.latestSignedAndroidRelease.sourceSha.slice(0, 7)
     const currentWrapperShortSha = status.latestCurrentProductionValidation.sourceSha.slice(0, 7)
 
     assert.equal(status.latestTraceabilityCommit.sha, status.latestTraceabilityCommit.validatedManagementSha)
     assert.equal(status.latestTraceabilityCommit.message, status.latestTraceabilityCommit.validatedManagementCommit)
-    assert.equal(status.latestOwnerPacket.sourceSha, status.latestTraceabilityCommit.sha)
-    assert.equal(status.latestOwnerPacket.sourceCommit, status.latestTraceabilityCommit.message)
-    assert.equal(status.latestOwnerPacket.zipName, `SiraGPT-native-store-owner-packet-${shortSha}.zip`)
-    assert.equal(status.latestOwnerPacket.checksumName, `SiraGPT-native-store-owner-packet-${shortSha}.zip.sha256`)
+
+    assert.match(status.latestSignedAndroidRelease.tag, /^native-android-signed-/)
+    assert.match(status.latestSignedAndroidRelease.url, /\/releases\/tag\/native-android-signed-/)
+    assert.match(status.latestSignedAndroidRelease.run, /^\d+$/)
+    assert.match(status.latestSignedAndroidRelease.runUrl, /\/actions\/runs\/\d+$/)
+    assert.match(status.latestSignedAndroidRelease.sourceSha, /^[a-f0-9]{40}$/)
+    assert.equal(status.latestSignedAndroidRelease.status, "verified-signed-android-aab")
+    assert.equal(status.latestSignedAndroidRelease.createGithubRelease, true)
+    assert.equal(status.latestSignedAndroidRelease.googlePlayUpload, "skipped-owner-service-account-missing")
+    assert.equal(status.latestSignedAndroidRelease.aab.name, `SiraGPT-${signedAndroidShortSha}.aab`)
+    assert.equal(status.latestSignedAndroidRelease.aab.kind, "play-aab")
+    assert.ok(status.latestSignedAndroidRelease.aab.size > 0)
+    assert.match(status.latestSignedAndroidRelease.aab.sha256, /^[a-f0-9]{64}$/)
+    assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes(status.latestSignedAndroidRelease.aab.name))
+    assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("SHA256SUMS.txt"))
+    assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("native-release-manifest.json"))
+    assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("preflight.json"))
+    assert.match(status.latestSignedAndroidRelease.verification, /OK/)
+
+    assert.equal(status.latestOwnerPacket.sourceSha, status.latestSignedAndroidRelease.sourceSha)
+    assert.equal(status.latestOwnerPacket.releaseTag, status.latestSignedAndroidRelease.tag)
+    assert.equal(status.latestOwnerPacket.zipName, `SiraGPT-native-store-owner-packet-${ownerPacketShortSha}.zip`)
+    assert.equal(status.latestOwnerPacket.checksumName, `SiraGPT-native-store-owner-packet-${ownerPacketShortSha}.zip.sha256`)
+    assert.match(status.latestOwnerPacket.zipUrl, new RegExp(`/releases/download/${status.latestOwnerPacket.releaseTag}/`))
+    assert.match(status.latestOwnerPacket.checksumUrl, new RegExp(`/releases/download/${status.latestOwnerPacket.releaseTag}/`))
     assert.match(status.latestOwnerPacket.checksumSha256, /^[a-f0-9]{64}$/)
 
     assert.equal(status.latestCurrentProductionValidation.status, "green-current-production-main-unsigned-wrapper-builds")
@@ -149,10 +192,7 @@ describe("native release status traceability", () => {
     )
 
     assert.equal(status.latestQaRelease.assetCount, status.latestQaRelease.artifacts.length)
-    assert.ok(status.latestQaRelease.artifacts.includes(status.latestOwnerPacket.zipName))
-    assert.ok(status.latestQaRelease.artifacts.includes(status.latestOwnerPacket.checksumName))
-    assert.ok(status.latestQaArtifactManifestRuns.releaseAssets.includes(status.latestOwnerPacket.zipName))
-    assert.ok(status.latestQaArtifactManifestRuns.releaseAssets.includes(status.latestOwnerPacket.checksumName))
+    assert.ok(status.latestQaArtifactManifestRuns.releaseAssets.length > 0)
 
     assert.ok(Date.parse(status.latestSecretAudit.checkedAt) <= Date.parse(status.updatedAt))
     assert.equal(status.latestSecretAudit.status, "blocked-missing-native-signing-secrets")
@@ -163,6 +203,9 @@ describe("native release status traceability", () => {
       status.latestOwnerPacket.sourceCommit,
       status.latestOwnerPacket.zipName,
       status.latestOwnerPacket.checksumName,
+      status.latestOwnerPacket.releaseTag,
+      status.latestSignedAndroidRelease.tag,
+      status.latestSignedAndroidRelease.aab.name,
       status.latestSignedPreflight.artifact.name,
     ]) {
       assert.doesNotMatch(value, /Siragpt\d+/i)
