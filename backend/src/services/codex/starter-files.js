@@ -54,6 +54,10 @@ function starterFiles({ projectName } = {}) {
     },
     devDependencies: {
       '@vitejs/plugin-react': '^4.5.2',
+      // Tailwind v4 via the Vite plugin: zero config files, design tokens in
+      // src/index.css. Same stack the /code landing scaffold already proved.
+      '@tailwindcss/vite': '^4.1.0',
+      tailwindcss: '^4.1.0',
       '@types/react': '^18.3.3',
       '@types/react-dom': '^18.3.0',
       typescript: '^5.5.4',
@@ -63,10 +67,11 @@ function starterFiles({ projectName } = {}) {
 
   const viteConfig = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   // Sandboxed single-tenant container: the platform proxy and the browser
   // verifier reach this dev server by container hostname, so Vite's default
   // localhost-only host check must be disabled or they get 403 Blocked.
@@ -121,38 +126,22 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
   // The "Workspace listo" marker keeps isStarterIndex able to detect an
   // untouched starter (so ensureAppsVitePreviewable can tell "still the shell"
-  // from "the agent built something").
-  const appTsx = `export default function App() {
+  // from "the agent built something"). Uses the Tailwind tokens + UI kit so
+  // the model sees a working in-repo example of the intended idiom.
+  const appTsx = `import { Badge, Card, CardContent } from './ui'
+
+export default function App() {
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        fontFamily: 'system-ui, sans-serif',
-        background: '#0b0b10',
-        color: '#e8e8f0',
-        margin: 0,
-      }}
-    >
-      <div style={{ textAlign: 'center', padding: '2rem' }}>
-        <h1 style={{ fontSize: '1.6rem', margin: '0 0 0.5rem' }}>
-          <span
-            style={{
-              display: 'inline-block',
-              width: '0.55rem',
-              height: '0.55rem',
-              borderRadius: '50%',
-              background: '#7c5cff',
-              marginRight: '0.5rem',
-            }}
-          />
-          ${jsxName}
-        </h1>
-        <p style={{ color: '#99a', margin: 0 }}>
-          Workspace listo. Describe en el chat que quieres construir.
-        </p>
-      </div>
+    <main className="grid min-h-screen place-items-center bg-bg text-fg">
+      <Card className="max-w-md text-center">
+        <CardContent className="p-8">
+          <Badge>SiraGPT Apps</Badge>
+          <h1 className="mt-4 text-2xl font-bold">${jsxName}</h1>
+          <p className="mt-2 text-muted">
+            Workspace listo. Describe en el chat que quieres construir.
+          </p>
+        </CardContent>
+      </Card>
     </main>
   )
 }
@@ -180,9 +169,162 @@ export async function askAI(messages: AIMessage[], opts?: { system?: string }): 
 }
 `;
 
-  const indexCss = `:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-body { margin: 0; }
+  // Tailwind v4 entry + design tokens. Re-theme an app by editing the six
+  // :root vars (light theme: flip color-scheme + the values); every class
+  // like bg-surface / text-muted / border-line follows automatically.
+  const indexCss = `@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0b10;
+  --surface: #14141c;
+  --fg: #e8e8f0;
+  --muted: #9a9ab0;
+  --accent: #7c5cff;
+  --line: #26263a;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-line: var(--line);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+`;
+
+  // ── src/ui — shadcn-style copy-paste kit (own the code, no dependency) ──
+  const uiButton = `import { ButtonHTMLAttributes, forwardRef } from 'react'
+import clsx from 'clsx'
+
+type Variant = 'primary' | 'secondary' | 'ghost' | 'destructive'
+type Size = 'sm' | 'md' | 'lg'
+
+const variants: Record<Variant, string> = {
+  primary: 'bg-accent text-white hover:opacity-90',
+  secondary: 'border border-line bg-surface text-fg hover:border-accent/60',
+  ghost: 'bg-transparent text-muted hover:bg-surface hover:text-fg',
+  destructive: 'bg-red-600 text-white hover:bg-red-500',
+}
+const sizes: Record<Size, string> = {
+  sm: 'h-8 rounded-md px-3 text-sm',
+  md: 'h-10 rounded-lg px-4 text-sm',
+  lg: 'h-12 rounded-lg px-6 text-base',
+}
+
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: Variant
+  size?: Size
+}
+
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant = 'primary', size = 'md', ...props }, ref) => (
+    <button
+      ref={ref}
+      className={clsx(
+        'inline-flex items-center justify-center gap-2 font-semibold transition-colors',
+        'focus-visible:outline-2 focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-50',
+        variants[variant],
+        sizes[size],
+        className,
+      )}
+      {...props}
+    />
+  ),
+)
+Button.displayName = 'Button'
+`;
+
+  const uiCard = `import { HTMLAttributes } from 'react'
+import clsx from 'clsx'
+
+export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={clsx('rounded-xl border border-line bg-surface', className)} {...props} />
+}
+
+export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={clsx('flex flex-col gap-1.5 p-5', className)} {...props} />
+}
+
+export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
+  return <h3 className={clsx('text-lg font-semibold text-fg', className)} {...props} />
+}
+
+export function CardDescription({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
+  return <p className={clsx('text-sm text-muted', className)} {...props} />
+}
+
+export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={clsx('p-5 pt-0', className)} {...props} />
+}
+
+export function CardFooter({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={clsx('flex items-center gap-3 p-5 pt-0', className)} {...props} />
+}
+`;
+
+  const uiInput = `import { InputHTMLAttributes, LabelHTMLAttributes, TextareaHTMLAttributes, forwardRef } from 'react'
+import clsx from 'clsx'
+
+const field =
+  'w-full rounded-lg border border-line bg-bg px-3 text-sm text-fg placeholder:text-muted ' +
+  'focus-visible:border-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50'
+
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  ({ className, ...props }, ref) => <input ref={ref} className={clsx(field, 'h-10', className)} {...props} />,
+)
+Input.displayName = 'Input'
+
+export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  ({ className, ...props }, ref) => <textarea ref={ref} className={clsx(field, 'min-h-24 py-2', className)} {...props} />,
+)
+Textarea.displayName = 'Textarea'
+
+export function Label({ className, ...props }: LabelHTMLAttributes<HTMLLabelElement>) {
+  return <label className={clsx('mb-1.5 block text-sm font-medium text-fg', className)} {...props} />
+}
+`;
+
+  const uiBadge = `import { HTMLAttributes } from 'react'
+import clsx from 'clsx'
+
+type Variant = 'default' | 'success' | 'warning' | 'danger' | 'outline'
+
+const variants: Record<Variant, string> = {
+  default: 'bg-accent/15 text-accent',
+  success: 'bg-emerald-500/15 text-emerald-400',
+  warning: 'bg-amber-500/15 text-amber-400',
+  danger: 'bg-red-500/15 text-red-400',
+  outline: 'border border-line text-muted',
+}
+
+export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
+  variant?: Variant
+}
+
+export function Badge({ className, variant = 'default', ...props }: BadgeProps) {
+  return (
+    <span
+      className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold', variants[variant], className)}
+      {...props}
+    />
+  )
+}
+`;
+
+  const uiIndex = `export { Button, type ButtonProps } from './button'
+export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './card'
+export { Input, Textarea, Label } from './input'
+export { Badge, type BadgeProps } from './badge'
 `;
 
   return [
@@ -194,6 +336,11 @@ body { margin: 0; }
     { path: 'src/App.tsx', content: appTsx },
     { path: 'src/index.css', content: indexCss },
     { path: 'src/lib/ai.ts', content: aiHelperTs },
+    { path: 'src/ui/button.tsx', content: uiButton },
+    { path: 'src/ui/card.tsx', content: uiCard },
+    { path: 'src/ui/input.tsx', content: uiInput },
+    { path: 'src/ui/badge.tsx', content: uiBadge },
+    { path: 'src/ui/index.ts', content: uiIndex },
     { path: '.gitignore', content: 'node_modules\ndist\n' },
   ];
 }

@@ -23,13 +23,28 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   assert.deepEqual(paths, [
     'package.json', 'vite.config.ts', 'tsconfig.json', 'index.html',
     'src/main.tsx', 'src/App.tsx', 'src/index.css',
-    'src/lib/ai.ts', '.gitignore',
+    'src/lib/ai.ts',
+    'src/ui/button.tsx', 'src/ui/card.tsx', 'src/ui/input.tsx', 'src/ui/badge.tsx', 'src/ui/index.ts',
+    '.gitignore',
   ]);
   const pkg = JSON.parse(files.find((f) => f.path === 'package.json').content);
   assert.equal(pkg.scripts.dev, 'vite');
   assert.ok(pkg.dependencies.react && pkg.dependencies['react-dom'], 'react runtime');
   assert.ok(pkg.devDependencies['@vitejs/plugin-react'], 'vite react plugin');
   assert.ok(pkg.devDependencies.vite && pkg.devDependencies.typescript);
+  // Tailwind v4 design system: plugin wired, entry css imports tailwind and
+  // defines the theme tokens the UI kit classes (bg-surface, text-fg…) map to.
+  assert.ok(pkg.devDependencies.tailwindcss && pkg.devDependencies['@tailwindcss/vite'], 'tailwind v4');
+  const viteCfg = files.find((f) => f.path === 'vite.config.ts').content;
+  assert.match(viteCfg, /tailwindcss\(\)/);
+  const css = files.find((f) => f.path === 'src/index.css').content;
+  assert.match(css, /@import "tailwindcss"/);
+  assert.match(css, /@theme inline/);
+  assert.match(css, /--color-accent/);
+  // The starter App dogfoods the kit so the model sees the intended idiom.
+  const app = files.find((f) => f.path === 'src/App.tsx').content;
+  assert.match(app, /from '\.\/ui'/);
+  assert.match(app, /Workspace listo/);
   // index.html mounts the TSX entry into #root.
   const html = files.find((f) => f.path === 'index.html').content;
   assert.match(html, /<div id="root">/);

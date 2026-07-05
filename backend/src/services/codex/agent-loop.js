@@ -95,13 +95,17 @@ function appsFallbackFiles({ prompt, projectName }) {
     dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1' },
     devDependencies: {
       '@vitejs/plugin-react': '^4.5.2',
+      // Keep in lockstep with starter-files.js: a repaired workspace must
+      // still resolve the Tailwind idiom the agent writes everywhere else.
+      '@tailwindcss/vite': '^4.1.0',
+      tailwindcss: '^4.1.0',
       '@types/react': '^18.3.3',
       '@types/react-dom': '^18.3.0',
       typescript: '^5.5.4',
       vite: '^7.0.0',
     },
   };
-  const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\n// server.allowedHosts: the proxy + browser verifier hit this by container hostname.\nexport default defineConfig({ plugins: [react()], server: { host: true, allowedHosts: true } })\n`;
+  const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\n\n// server.allowedHosts: the proxy + browser verifier hit this by container hostname.\nexport default defineConfig({ plugins: [react(), tailwindcss()], server: { host: true, allowedHosts: true } })\n`;
   const tsconfig = {
     compilerOptions: {
       target: 'ES2020', useDefineForClassFields: true, lib: ['ES2020', 'DOM', 'DOM.Iterable'],
@@ -110,7 +114,8 @@ function appsFallbackFiles({ prompt, projectName }) {
     },
     include: ['src'],
   };
-  const mainTsx = `import React from 'react'\nimport ReactDOM from 'react-dom/client'\nimport App from './App'\n\nReactDOM.createRoot(document.getElementById('root')!).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>,\n)\n`;
+  const mainTsx = `import React from 'react'\nimport ReactDOM from 'react-dom/client'\nimport App from './App'\nimport './index.css'\n\nReactDOM.createRoot(document.getElementById('root')!).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>,\n)\n`;
+  const indexCss = `@import "tailwindcss";\n\nbody { margin: 0; font-family: system-ui, sans-serif; }\n`;
   const appTsx = `const accent = '#ff0000'
 const card = { border: '1px solid #e9e9ec', borderRadius: 8, overflow: 'hidden', background: '#fff' } as const
 
@@ -174,6 +179,7 @@ export default function App() {
     { path: 'tsconfig.json', content: `${JSON.stringify(tsconfig, null, 2)}\n` },
     { path: 'index.html', content: indexHtml },
     { path: 'src/main.tsx', content: mainTsx },
+    { path: 'src/index.css', content: indexCss },
     { path: 'src/App.tsx', content: appTsx },
     { path: '.gitignore', content: 'node_modules\ndist\n' },
   ];
@@ -197,7 +203,8 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
     'Construyes el proyecto usando las herramientas disponibles (no inventes resultados).',
     'Trabajas paso a paso: piensa, usa una herramienta, lee el resultado, continúa.',
-    'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx y src/lib/ai.ts (helper askAI: las apps pueden integrar IA real —chatbots, asistentes— sin API keys; el proxy de la plataforma la sirve).',
+    'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css y src/lib/ai.ts (helper askAI: las apps pueden integrar IA real —chatbots, asistentes— sin API keys; el proxy de la plataforma la sirve).',
+    'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa repo_map (mapa rankeado de símbolos) al retomar un proyecto existente y list_files/grep_search para el detalle, en vez de adivinar rutas.',
