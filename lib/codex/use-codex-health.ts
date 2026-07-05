@@ -23,6 +23,28 @@ export function getCodexPreviewOrigin(): string | null {
   return cachedPreviewOrigin
 }
 
+// Await-able variant for consumers that must not race the hook's probe
+// (PreviewPane's runApp fires on mount, often BEFORE the health response
+// lands — a sync read there silently fell back to the sandboxed same-origin
+// preview). One in-flight probe shared across callers; failures resolve null.
+let previewOriginProbe: Promise<string | null> | null = null
+export function ensureCodexPreviewOrigin(): Promise<string | null> {
+  if (cachedPreviewOrigin) return Promise.resolve(cachedPreviewOrigin)
+  if (!previewOriginProbe) {
+    previewOriginProbe = codexApi
+      .health()
+      .then((h) => {
+        const origin = typeof h.previewOrigin === "string" ? h.previewOrigin.trim().replace(/\/+$/, "") : ""
+        cachedPreviewOrigin = /^https:\/\//.test(origin) ? origin : null
+        if (h.enabled) cached = true
+        return cachedPreviewOrigin
+      })
+      .catch(() => null)
+      .finally(() => { previewOriginProbe = null })
+  }
+  return previewOriginProbe
+}
+
 export function useCodexHealth() {
   const [enabled, setEnabled] = useState<boolean | null>(cached)
 

@@ -36,7 +36,7 @@ import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { CODE_OPEN_TOOL_EVENT, getActiveCodexProject, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { codexApi } from "@/lib/codex/codex-api"
-import { getCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
+import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
@@ -69,9 +69,10 @@ const READY_HEARTBEAT_MS = 60_000
 // zero access to siragpt.com cookies/storage/APIs — which lets the live
 // iframe drop the sandbox attribute (whose opaque origin broke Vite module
 // fetches AND localStorage). Replit's isolation model. Empty string (origin
-// unset / not yet probed / same as ours) → same-origin URL, sandbox stays on.
-function codexPreviewOrigin(): string {
-  const origin = getCodexPreviewOrigin()
+// unset / probe failed / same as ours) → same-origin URL, sandbox stays on.
+// Await-based: runApp fires on mount and must not race the health probe.
+async function codexPreviewOrigin(): Promise<string> {
+  const origin = await ensureCodexPreviewOrigin()
   if (!origin) return ""
   if (typeof window !== "undefined" && origin === window.location.origin) return ""
   return origin
@@ -326,7 +327,7 @@ export function PreviewPane() {
     const codexProjectId = getActiveCodexProject()
     if (codexProjectId) {
       modeRef.current = "codex"
-      const previewOrigin = codexPreviewOrigin()
+      const previewOrigin = await codexPreviewOrigin()
       const toDevUrl = (basePath?: string | null) => (basePath ? `${previewOrigin}${basePath}` : "")
       const codexStatus = async (): Promise<RunnerStatus> => {
         const st: any = await codexApi.previewStatus(codexProjectId).catch(() => null)
