@@ -91,6 +91,16 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Native mobile builds: `28735031841`.
   - Native desktop builds: `28735031849`.
   - Docker build images: `28735031878`.
+- Current production-main wrapper validation, SHA
+  `084aef49e4b9578e16a274ce3b8f0a851b8393b2`
+  (`docs(native): refresh owner packet traceability`):
+  - CI: `28736897932`.
+  - Native readiness report: `28736897973`.
+  - Native mobile builds: `28737089447`.
+  - Native desktop builds: `28737089417`.
+  - Result: Android debug APK, Android unsigned AAB, iPhone simulator app,
+    macOS DMG/ZIP, and Windows installer/portable QA artifacts were generated
+    with manifests and SHA-256 checksums.
 - Current native QA artifact set remains tied to SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
   - Native mobile builds: `28732348269`.
   - Native desktop builds: `28732348253`.
@@ -104,10 +114,10 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.
   - Allowed actions: `all`.
-  - Latest green CI: `28736531253`.
-  - Latest green native readiness report: `28736531246`.
-  - Latest green native mobile builds: `28735031841`.
-  - Latest green native desktop builds: `28735031849`.
+  - Latest green CI: `28736897932`.
+  - Latest green native readiness report: `28736897973`.
+  - Latest green native mobile builds: `28737089447`.
+  - Latest green native desktop builds: `28737089417`.
   - Latest green Docker build images: `28735031878`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
 - Signed release preflight: `Native signed release packages` run `28733963853`.

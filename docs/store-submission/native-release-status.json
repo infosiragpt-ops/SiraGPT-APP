@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T09:50:25.835Z",
+  "updatedAt": "2026-07-05T10:06:55Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -47,11 +47,67 @@
     }
   },
   "latestVerifiedRuns": {
-    "mobile": "28735031841",
-    "desktop": "28735031849",
-    "readiness": "28736531246",
-    "ci": "28736531253",
+    "mobile": "28737089447",
+    "desktop": "28737089417",
+    "readiness": "28736897973",
+    "ci": "28736897932",
     "docker": "28735031878"
+  },
+  "latestCurrentProductionValidation": {
+    "checkedAt": "2026-07-05T10:06:55Z",
+    "sourceSha": "084aef49e4b9578e16a274ce3b8f0a851b8393b2",
+    "sourceCommit": "docs(native): refresh owner packet traceability",
+    "status": "green-current-production-main-unsigned-wrapper-builds",
+    "ciRun": "28736897932",
+    "readinessRun": "28736897973",
+    "mobileRun": "28737089447",
+    "desktopRun": "28737089417",
+    "platforms": {
+      "android": {
+        "job": "Android APK + AAB",
+        "artifact": "siragpt-mobile-android",
+        "expectedFiles": [
+          "SiraGPT-084aef4-debug.apk",
+          "SiraGPT-084aef4-unsigned-release.aab",
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      },
+      "ios": {
+        "job": "iOS simulator build",
+        "artifact": "siragpt-mobile-ios-simulator",
+        "expectedFiles": [
+          "SiraGPT-084aef4-ios-simulator-app.zip",
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      },
+      "macos": {
+        "job": "macOS DMG + ZIP",
+        "artifact": "siragpt-desktop-macos",
+        "expectedFiles": [
+          "SiraGPT-0.4.3-arm64.dmg",
+          "SiraGPT-0.4.3-arm64-mac.zip",
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      },
+      "windows": {
+        "job": "Windows x64 NSIS + portable",
+        "artifact": "siragpt-desktop-windows-x64",
+        "expectedFiles": [
+          "SiraGPT Setup 0.4.3.exe",
+          "SiraGPT 0.4.3.exe",
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      }
+    },
+    "note": "CI, native readiness, Native mobile builds, and Native desktop builds all completed successfully on the current production-main SHA. These are unsigned QA wrapper artifacts; signed distribution still requires the missing platform credentials."
   },
   "latestQaArtifactManifestRuns": {
     "checkedAt": "2026-07-05T06:57:24.732Z",
@@ -175,7 +231,7 @@
     "note": "This snapshot records the current production-main management commit with the non-secret signed release gate summary, GitHub signing secret report, owner account readiness, and owner handoff packet. QA binary target SHA remains separate from management SHA."
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T09:45:33Z",
+    "checkedAt": "2026-07-05T10:06:55Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
@@ -184,17 +240,17 @@
     "sourceCommands": [
       "gh repo view infosiragpt-ops/SiraGPT-APP --json nameWithOwner,visibility,isPrivate,url,defaultBranchRef",
       "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/permissions",
-      "gh run list --repo infosiragpt-ops/SiraGPT-APP --commit f7ee609462cd732cdd28015cbd95976cfe10dfc3",
+      "gh run list --repo infosiragpt-ops/SiraGPT-APP --commit 084aef49e4b9578e16a274ce3b8f0a851b8393b2",
       "npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json"
     ],
-    "ciRun": "28736531253",
-    "readinessRun": "28736531246",
-    "mobileRun": "28735031841",
-    "desktopRun": "28735031849",
+    "ciRun": "28736897932",
+    "readinessRun": "28736897973",
+    "mobileRun": "28737089447",
+    "desktopRun": "28737089417",
     "dockerRun": "28735031878",
     "signedPreflightRun": "28733963853",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
-    "diagnosis": "Public repository Actions are enabled and running. The current production-main management commit is green in CI and native readiness; the signed native release package blocker is missing native signing and store-upload secret names, not public repository Actions billing or permissions."
+    "diagnosis": "Public repository Actions are enabled and running. The current production-main commit is green in CI, native readiness, Native mobile builds, and Native desktop builds. The signed native release package blocker is missing native signing and store-upload secret names, not public repository Actions billing or permissions."
   },
   "latestOwnerPacket": {
     "sourceSha": "f7ee609462cd732cdd28015cbd95976cfe10dfc3",
@@ -262,7 +318,7 @@
     }
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T09:50:25.835Z",
+    "checkedAt": "2026-07-05T10:03:32.284Z",
     "repo": "infosiragpt-ops/SiraGPT-APP",
     "source": "github",
     "sourceStatus": "available",

@@ -22,11 +22,18 @@ secrets. They must never be committed.
 - Latest public QA packet: `native-qa-v0.4.3-0601139`
   (`0601139e3b507b9733ad1fdd84290e3d8cf7a078`)
 - Last verified native QA runs:
-  - Mobile: `28735031841`
-  - Desktop: `28735031849`
-  - Readiness report: `28736531246`
-  - CI: `28736531253`
+  - Mobile: `28737089447`
+  - Desktop: `28737089417`
+  - Readiness report: `28736897973`
+  - CI: `28736897932`
   - Docker: `28735031878`
+- Current production-main wrapper validation: SHA
+  `084aef49e4b9578e16a274ce3b8f0a851b8393b2`
+  (`docs(native): refresh owner packet traceability`) is green in CI,
+  Native readiness report, Native mobile builds, and Native desktop builds.
+  These runs generated unsigned QA artifacts for Android, iPhone simulator,
+  macOS, and Windows with `native-release-manifest.json`,
+  `native-release-manifest.md`, and `SHA256SUMS.txt`.
 - Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`
   (`fix(ci): run database backup through postgres container`)
 - Management/traceability SHA validated before this packet refresh: `f7ee609462cd732cdd28015cbd95976cfe10dfc3`
@@ -50,9 +57,9 @@ secrets. They must never be committed.
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
-  Actions is enabled with `allowed_actions=all`, CI run `28736531253`, native
-  readiness run `28736531246`, native mobile run `28735031841`, native desktop
-  run `28735031849`, and Docker run `28735031878` are green. Standard
+  Actions is enabled with `allowed_actions=all`, CI run `28736897932`, native
+  readiness run `28736897973`, native mobile run `28737089447`, native desktop
+  run `28737089417`, and Docker run `28735031878` are green. Standard
   GitHub-hosted Actions for public repositories are free; this is separate from
   native signing readiness.
 

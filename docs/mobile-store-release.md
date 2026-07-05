@@ -38,11 +38,19 @@
 - GitHub Actions `Native readiness report` run `28732348267` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
 - Native QA artifact target remains `0601139e3b507b9733ad1fdd84290e3d8cf7a078`; current owner-handoff management evidence is tracked separately by the `f7ee609462cd732cdd28015cbd95976cfe10dfc3` commit below.
 - Latest green wrapper and management runs:
-  - CI: `28736531253`
-  - Native readiness report: `28736531246`
-  - Native mobile builds: `28735031841`
-  - Native desktop builds: `28735031849`
+  - CI: `28736897932`
+  - Native readiness report: `28736897973`
+  - Native mobile builds: `28737089447`
+  - Native desktop builds: `28737089417`
   - Docker build images: `28735031878`
+- Current production-main wrapper validation SHA:
+  `084aef49e4b9578e16a274ce3b8f0a851b8393b2`
+  (`docs(native): refresh owner packet traceability`) is green in CI, native
+  readiness, Native mobile builds, and Native desktop builds. The mobile run
+  produced Android APK/AAB and iPhone simulator QA artifacts; the desktop run
+  produced macOS and Windows QA artifacts. All platform uploads include
+  `native-release-manifest.json`, `native-release-manifest.md`, and
+  `SHA256SUMS.txt`.
 - Management/traceability commit validated before this document refresh:
   `f7ee609462cd732cdd28015cbd95976cfe10dfc3`
   (`docs(native): add store owner account readiness`) is green in CI run
