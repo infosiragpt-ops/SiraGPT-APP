@@ -34,7 +34,8 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { CODE_OPEN_TOOL_EVENT, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, getActiveCodexProject, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { codexApi } from "@/lib/codex/codex-api"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
@@ -153,7 +154,7 @@ export function PreviewPane() {
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
-  const modeRef = React.useRef<"host" | "github">("host")
+  const modeRef = React.useRef<"host" | "github" | "codex">("host")
   const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
   )
@@ -167,7 +168,9 @@ export function PreviewPane() {
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
     [files],
   )
-  const canRunProject = hasNodeProject || Boolean(gitBinding)
+  // A codex-backed chat is runnable even when the local mirror is partial —
+  // the real workspace (with its package.json) lives in the codex runner.
+  const canRunProject = hasNodeProject || Boolean(gitBinding) || Boolean(getActiveCodexProject())
   const projectSignature = React.useMemo(() => {
     if (!canRunProject) return ""
     // Fingerprint EVERY file by path + content length (not a fixed list of key
@@ -203,7 +206,10 @@ export function PreviewPane() {
   const stopApp = React.useCallback(() => {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
-    if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
+    if (modeRef.current === "codex") {
+      const codexProjectId = getActiveCodexProject()
+      if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
+    } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
     // The Shell tool loses its exec target when the run stops.
     setActiveHostRunId(null)
@@ -293,6 +299,38 @@ export function PreviewPane() {
         },
         "previewUrl" in started ? started.previewUrl || "" : "",
       )
+      return
+    }
+    // Codex-backed chat: the real workspace lives in the codex runner, so run
+    // it THERE and iframe the same-origin tokenized proxy. Pushing the local
+    // virtual FS to the host runner would boot a stale/partial copy (and the
+    // host runner is owner-gated anyway — this path works for every user).
+    const codexProjectId = getActiveCodexProject()
+    if (codexProjectId) {
+      modeRef.current = "codex"
+      const codexStatus = async (): Promise<RunnerStatus> => {
+        const st: any = await codexApi.previewStatus(codexProjectId).catch(() => null)
+        const p = st?.previewStatus || st || {}
+        return {
+          ready: Boolean(p.ready),
+          error: p.error || null,
+          framework: p.framework || null,
+          tail: p.tail,
+          devUrl: p.basePath || "",
+        }
+      }
+      const started: any = await codexApi.startPreview(codexProjectId).catch((err) => ({
+        error: err instanceof Error ? err.message : "runner unreachable",
+      }))
+      if (started?.error) {
+        // Unlike the host path, do NOT silently degrade on auto: the srcdoc
+        // fallback cannot render a multi-file Vite workspace (black screen) —
+        // an honest error banner beats a dead preview.
+        lastErrorLogRef.current = String(started.error)
+        setLiveRun({ phase: "error", devUrl: "", note: String(started.error) })
+        return
+      }
+      pollUntilReady(codexStatus, started?.previewStatus?.basePath || started?.basePath || "")
       return
     }
     // Workspace files are CodeFile objects; the runner wants path -> content.
@@ -411,7 +449,7 @@ export function PreviewPane() {
     // Run on initial mount too (autoRunSignal === 0): a freshly cloned/opened
     // runnable project must auto-start its dev server WITHOUT a manual click.
     // The signature dedupe and the "starting" queue below prevent duplicate runs.
-    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current)) || Boolean(getActiveCodexProject())
     if (!canRunProject || !projectSignature || !needsDevServer) {
       // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
       // force flag so it can't surprise a later run once it becomes runnable.
@@ -438,7 +476,7 @@ export function PreviewPane() {
     if (liveRun.phase === "starting") return
     if (!pendingAutoRunRef.current) return
     pendingAutoRunRef.current = false
-    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current)) || Boolean(getActiveCodexProject())
     if (!canRunProject || !projectSignature || !needsDevServer) {
       // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
       // force flag so it can't surprise a later run once it becomes runnable.

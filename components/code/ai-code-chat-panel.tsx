@@ -73,7 +73,7 @@ import { apiClient } from "@/lib/api"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
-import { CODE_OPEN_TOOL_LAUNCHER_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_LAUNCHER_EVENT, setActiveCodexProject, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
@@ -994,6 +994,16 @@ export function AICodeChatPanel() {
   // readPersistedCodexProject/persistCodexProject), so a reload reattaches to
   // the SAME project instead of iterating on a fresh empty one.
   const codexProjectRef = React.useRef<Record<string, string>>({})
+  // Keep the module-level active-codex-project in sync with the visible chat
+  // session so PreviewPane's ▶/auto-run targets THIS chat's server workspace
+  // (or falls back to the host/srcdoc path when the chat has no codex project).
+  React.useEffect(() => {
+    if (!sessionId) {
+      setActiveCodexProject(null)
+      return
+    }
+    setActiveCodexProject(codexProjectRef.current[sessionId] ?? readPersistedCodexProject(sessionId))
+  }, [sessionId])
 
   const abortRef = React.useRef<AbortController | null>(null)
   // Turn ids whose `voice` was created in THIS panel instance. La voz ya no
@@ -2447,6 +2457,10 @@ export function AICodeChatPanel() {
         }
         codexProjectRef.current[sid] = projectId
         persistCodexProject(sid, projectId)
+        // Publish the codex project so PreviewPane runs the app in the CODEX
+        // runner (tokenized proxy) instead of pushing a partial local mirror
+        // to the owner-gated host runner (which degraded to a black srcdoc).
+        setActiveCodexProject(projectId)
 
         setEnginePhase(
           iterate ? "Preparando turno del agente" : "Planificando la construcción",
@@ -2540,15 +2554,20 @@ export function AICodeChatPanel() {
         const succeeded = fold.status === "done"
 
         if (succeeded) {
-          // 4) Pull the files the run wrote. Prefer the bounded set of
-          //    file_write paths seen in the stream; else list the whole tree.
+          // 4) Pull the workspace back. Written paths first (freshest), then
+          //    the REST of the tree: the runner provisions the starter
+          //    (package.json, vite.config, src/ui…) before the run, so a
+          //    written-only pull left the local mirror without a package.json
+          //    — the preview couldn't tell it was a Vite project and fell into
+          //    the srcdoc Babel path (black screen, "Script error").
           let paths = fold.writtenPaths.filter(Boolean)
-          if (paths.length === 0) {
-            try {
-              paths = await codexApi.listFiles(projectId)
-            } catch {
-              paths = []
-            }
+          try {
+            const tree = await codexApi.listFiles(projectId)
+            const seen = new Set(paths)
+            paths = [...paths, ...tree.filter((p) => !seen.has(p))]
+          } catch {
+            // Keep the written set — partial beats empty; the tree listing is
+            // best-effort.
           }
           const sourcePaths = paths
             .filter((p) => !/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(p))

@@ -588,10 +588,14 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       await eventStore.appendEvent(run.id, 'reasoning_end', { blockId, durationMs: Number(r.durationMs) || 0 }, { prisma });
     }
 
-    // Narrative.
-    if (turn?.text && turn.text.trim()) {
-      await eventStore.appendEvent(run.id, 'narrative_delta', { text: turn.text.trim() }, { prisma });
-      messages.push({ role: 'assistant', content: turn.text.trim() });
+    // Narrative. Models sometimes regurgitate the transcript encoding into
+    // their own prose ("…\n[TOOL_RESULT]\n# Skill: …") — everything from that
+    // marker on is an echo of their input, not narration: it leaked playbook/
+    // file bodies into the user-facing chat and bloated the context. Cut it.
+    const narrativeText = String(turn?.text || '').split('[TOOL_RESULT')[0].trim();
+    if (narrativeText) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', { text: narrativeText }, { prisma });
+      messages.push({ role: 'assistant', content: narrativeText });
     }
 
     const allCalls = Array.isArray(turn?.toolCalls) ? turn.toolCalls : [];

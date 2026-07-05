@@ -114,7 +114,10 @@ export function foldCodexEvent(
     }
 
     case "narrative_delta": {
-      s.narrative += String(data.text || "")
+      // Defense for runs persisted before the backend stripped it: a model
+      // echoing its transcript encoding ("…[TOOL_RESULT]…") from that marker
+      // on is regurgitated input (playbook/file bodies), not narration.
+      s.narrative += String(data.text || "").split("[TOOL_RESULT")[0]
       if (s.phase === "plan" || s.phase === "context") s.phase = "generate"
       break
     }

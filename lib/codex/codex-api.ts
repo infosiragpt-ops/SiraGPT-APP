@@ -44,6 +44,7 @@ export const codexApi = {
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
   startPreview: (id: string) => req<{ devUrl: string; previewUrl?: string; basePath?: string }>(`/projects/${id}/preview/start`, { method: "POST" }),
   previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
+  stopPreview: (id: string) => req<{ ok: boolean }>(`/projects/${id}/preview/stop`, { method: "POST" }),
   exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
   listFiles: (id: string) => req<{ files: string[] }>(`/projects/${id}/files`).then((r) => r.files),
   // Workspace import (browser → Codex project): push the local files into the

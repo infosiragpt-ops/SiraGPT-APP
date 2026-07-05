@@ -97,6 +97,19 @@ export function getActiveHostRunId(): string | null {
   return _activeHostRunId
 }
 
+// Codex-backed chats build in a SERVER-side workspace (the codex runner), so
+// the preview must iframe that runner's tokenized proxy — pushing the local
+// virtual FS to the host runner would run a stale/partial copy. The chat panel
+// stores the resolved codex project here; PreviewPane checks it before the
+// host-runner path. Same late-consumer singleton pattern as the host run id.
+let _activeCodexProjectId: string | null = null
+export function setActiveCodexProject(projectId: string | null) {
+  _activeCodexProjectId = projectId
+}
+export function getActiveCodexProject(): string | null {
+  return _activeCodexProjectId
+}
+
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string
