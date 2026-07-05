@@ -191,6 +191,9 @@ services:
       CODEX_EXPORT_HOST_DIR: ${CODEX_EXPORT_HOST_DIR:-/opt/siragpt/.codex-workspaces}
       CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
       CODEX_MAX_STEPS: ${CODEX_MAX_STEPS:-24}
+      # Sibling origin (Caddy vhost) that serves codex previews unsandboxed —
+      # advertised to the frontend via GET /api/codex/health.
+      CODEX_PREVIEW_ORIGIN: ${CODEX_PREVIEW_ORIGIN:-}
       CODEX_VERIFY_DEV_SERVER: ${CODEX_VERIFY_DEV_SERVER:-1}
       CODEX_VERIFY_DEV_TIMEOUT_MS: ${CODEX_VERIFY_DEV_TIMEOUT_MS:-60000}
       SIRAGPT_WORKSPACE_RUN_PROXY_URLS: ${SIRAGPT_WORKSPACE_RUN_PROXY_URLS:-true}

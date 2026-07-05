@@ -26,7 +26,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
-export interface CodexHealth { ok: boolean; enabled: boolean }
+export interface CodexHealth { ok: boolean; enabled: boolean; previewOrigin?: string | null }
 export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
 export interface CodexProject { id: string; name: string; status: string; workspacePath: string | null; previewUrl: string | null; error: string | null }
 export interface CodexRun { id: string; projectId: string; mode: string; status: string; tier: string | null; model: string | null; planRunId: string | null; prompt: string | null; error: string | null; metric?: CodexRunMetric }

@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { CODE_OPEN_TOOL_EVENT, getActiveCodexProject, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { codexApi } from "@/lib/codex/codex-api"
+import { getCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
@@ -61,18 +62,19 @@ const AUTO_FIX_MAX = 3
 // live so the idle reaper never kills an app the user is actively viewing.
 const READY_HEARTBEAT_MS = 60_000
 
-// Codex previews are served from a SIBLING origin (preview.<host>, a Caddy
-// vhost that exposes ONLY the tokenized preview proxy). The generated app then
-// runs with its own browser origin — full module loading and localStorage for
-// the app, zero access to siragpt.com cookies/storage/APIs — which lets the
-// live iframe drop the sandbox attribute (whose opaque origin broke Vite
-// module fetches AND localStorage). Replit's isolation model. Empty string in
-// dev/localhost → same-origin URL, sandbox stays on.
+// Codex previews are served from a SIBLING origin (a Caddy vhost that exposes
+// ONLY the tokenized preview proxy; the backend advertises it via /health's
+// previewOrigin — env CODEX_PREVIEW_ORIGIN). The generated app then runs with
+// its own browser origin — full module loading and localStorage for the app,
+// zero access to siragpt.com cookies/storage/APIs — which lets the live
+// iframe drop the sandbox attribute (whose opaque origin broke Vite module
+// fetches AND localStorage). Replit's isolation model. Empty string (origin
+// unset / not yet probed / same as ours) → same-origin URL, sandbox stays on.
 function codexPreviewOrigin(): string {
-  if (typeof window === "undefined") return ""
-  const { protocol, hostname, host } = window.location
-  if (protocol !== "https:" || hostname === "localhost" || /^127\./.test(hostname)) return ""
-  return `${protocol}//preview.${host.replace(/^www\./, "")}`
+  const origin = getCodexPreviewOrigin()
+  if (!origin) return ""
+  if (typeof window !== "undefined" && origin === window.location.origin) return ""
+  return origin
 }
 
 type LogEntry = { level: string; text: string; id: number }

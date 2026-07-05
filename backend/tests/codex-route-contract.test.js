@@ -95,7 +95,18 @@ test('GET /health responds 200 with enabled=false when the flag is off', async (
   delete process.env.CODEX_AGENT_V2;
   const res = await request(buildApp()).get('/api/codex/health');
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body, { ok: true, enabled: false });
+  assert.deepEqual(res.body, { ok: true, enabled: false, previewOrigin: null });
+});
+
+test('GET /health advertises CODEX_PREVIEW_ORIGIN (trailing slash trimmed)', async () => {
+  process.env.CODEX_PREVIEW_ORIGIN = 'https://preview.example.com/';
+  try {
+    const res = await request(buildApp()).get('/api/codex/health');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.previewOrigin, 'https://preview.example.com');
+  } finally {
+    delete process.env.CODEX_PREVIEW_ORIGIN;
+  }
 });
 
 test('GET /access reports flag and user execution access', async () => {

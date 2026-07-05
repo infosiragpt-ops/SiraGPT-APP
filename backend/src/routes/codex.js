@@ -186,7 +186,12 @@ router.get('/health', (_req, res) => {
   // res.end (not res.json) so Express never attaches an ETag → a conditional
   // request can't get a 304 with a stale body. Paired with no-store this makes
   // the flag value impossible to cache.
-  const body = JSON.stringify({ ok: true, enabled: isCodexV2Enabled() });
+  // previewOrigin: sibling origin that serves the tokenized preview proxy
+  // (Caddy vhost). When set, the frontend iframes codex previews from there
+  // WITHOUT a sandbox — browser origin isolation replaces it (Replit model).
+  // Null ⇒ same-origin preview with the sandboxed iframe.
+  const previewOrigin = String(process.env.CODEX_PREVIEW_ORIGIN || '').trim().replace(/\/+$/, '') || null;
+  const body = JSON.stringify({ ok: true, enabled: isCodexV2Enabled(), previewOrigin });
   res.writeHead(200, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store, no-cache, must-revalidate',

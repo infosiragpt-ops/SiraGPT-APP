@@ -40,7 +40,10 @@ api.siragpt.com {
 # exposed on this host — the token in the path is the sole credential, so
 # nothing cookie-authenticated is reachable here. frame-ancestors lets the
 # platform embed it; X-Frame-Options is dropped for the same reason.
-preview.siragpt.com {
+# The sslip.io alias resolves to this VPS with zero DNS setup — it serves as
+# the preview origin until a real `preview.siragpt.com` A record exists (the
+# backend advertises whichever origin CODEX_PREVIEW_ORIGIN names).
+preview.siragpt.com, preview-62-72-11-231.sslip.io {
 	encode zstd gzip
 
 	@preview path /api/codex/projects/*/preview/*
