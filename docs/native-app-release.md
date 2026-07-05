@@ -302,7 +302,8 @@ Use `native:store:packet` to create the non-secret platform folders that can be
 used while filling Google Play, App Store Connect, macOS distribution, and
 Windows distribution forms.
 Use `native:store:owner-packet` to produce the full portable ZIP handoff with
-store material, owner checklist, release plan, manifest, and SHA-256 checksum.
+store material, owner checklist, release plan, blank signing input templates,
+manifest, and SHA-256 checksum.
 
 ## Validation Checklist
 

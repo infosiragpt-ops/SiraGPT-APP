@@ -51,8 +51,19 @@ describe("generate-native-store-owner-packet", () => {
       assert.equal(manifest.qaBinaryTargetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
       assert.equal(manifest.latestSignedPreflight.run, "28727578162")
       assert.ok(manifest.included.includes("native-store-submission-packet/"))
+      assert.ok(manifest.included.includes("native-signing-templates/"))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "google-play", "README.md")))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "app-store-connect", "README.md")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "all.env.example")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "mobile.env.example")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "desktop.env.example")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "android.env.example")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "ios.env.example")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "macos.env.example")))
+      assert.ok(existsSync(join(outDir, "native-signing-templates", "windows.env.example")))
+      assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /ANDROID_KEYSTORE_PATH=/)
+      assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /WINDOWS_CERTIFICATE_PATH=/)
+      assert.doesNotMatch(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /Siragpt2025/)
 
       for (const file of [
         join(outDir, "README.md"),

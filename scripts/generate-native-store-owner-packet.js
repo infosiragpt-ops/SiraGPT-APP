@@ -137,6 +137,7 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
     outputDirectory: relative(outDir),
     included: [
       "native-store-submission-packet/",
+      "native-signing-templates/",
       "native-store-submission-packet.json",
       "native-store-assets-report.md",
       "native-store-assets-report.json",
@@ -168,7 +169,8 @@ This ZIP contains public store submission material and owner-action checklists f
 1. Open \`native-store-submission-packet/README.md\` for platform listing material.
 2. Open \`native-owner-handoff.md\` for owner actions and GitHub secret names.
 3. Open \`native-release-plan.md\` for missing signing/upload secret groups.
-4. Use \`PACKET-MANIFEST.json\` to verify the packet source SHA and release references.
+4. Open \`native-signing-templates/all.env.example\` on the trusted owner machine to prepare local signing input variables.
+5. Use \`PACKET-MANIFEST.json\` to verify the packet source SHA and release references.
 
 Status: \`${manifest.status}\`
 `
@@ -220,6 +222,35 @@ function sha256File(filePath) {
   return hash.digest("hex")
 }
 
+function generateSigningTemplate({ args, outDir, platform, format, name }) {
+  exec("node", [
+    "scripts/generate-native-github-secrets-template.js",
+    `--repo=${args.repo}`,
+    `--platform=${platform}`,
+    `--format=${format}`,
+    `--out=${relative(path.join(outDir, "native-signing-templates", name))}`,
+  ], {
+    stdio: ["ignore", "pipe", "inherit"],
+  })
+}
+
+function generateSigningTemplates({ args, outDir }) {
+  const templates = [
+    ["all", "env", "all.env.example"],
+    ["all", "markdown", "README.md"],
+    ["mobile", "env", "mobile.env.example"],
+    ["desktop", "env", "desktop.env.example"],
+    ["android", "env", "android.env.example"],
+    ["ios", "env", "ios.env.example"],
+    ["macos", "env", "macos.env.example"],
+    ["windows", "env", "windows.env.example"],
+  ]
+
+  for (const [platform, format, name] of templates) {
+    generateSigningTemplate({ args, outDir, platform, format, name })
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
@@ -258,6 +289,7 @@ function main() {
     `--out=${relative(path.join(outDir, "native-release-plan.md"))}`,
     `--json-out=${relative(path.join(outDir, "native-release-plan.json"))}`,
   ])
+  generateSigningTemplates({ args, outDir })
 
   const releaseStatus = readJson(path.join(root, "docs/store-submission/native-release-status.json"))
   const manifest = createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus })

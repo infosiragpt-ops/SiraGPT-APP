@@ -161,9 +161,9 @@ directory with platform-specific listing copy, privacy drafts, account-action
 checklists, and copied assets for Google Play, App Store Connect, macOS, and
 Windows submission work.
 `native:store:owner-packet` builds on that packet and also includes the owner
-handoff, release plan, manifest, ZIP archive, and SHA-256 checksum. This is the
-portable non-secret handoff package to attach to QA releases or share with the
-account owner before store submission.
+handoff, release plan, blank signing input templates, manifest, ZIP archive,
+and SHA-256 checksum. This is the portable non-secret handoff package to attach
+to QA releases or share with the account owner before store submission.
 `native:github-secrets:audit` checks which native signing secret names are
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native
