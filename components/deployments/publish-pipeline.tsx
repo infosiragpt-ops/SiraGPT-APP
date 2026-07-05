@@ -11,6 +11,8 @@
 import * as React from "react"
 import { AlertTriangle, Check, Clock3, Loader2, MessageSquare, X } from "lucide-react"
 
+import { toast } from "sonner"
+
 import { cn } from "@/lib/utils"
 import type { PublishPhase } from "@/lib/deployments/deployments-api"
 
@@ -118,6 +120,27 @@ export function PublishPipeline({
     ]
       .filter(Boolean)
       .join("\n")
+    // If the /code agent chat is mounted in THIS page (the Publishing tab lives
+    // inside the workspace), hand it the failure directly — it repairs in place
+    // via its existing repair listener (waits for idle, classifies, fixes with
+    // the model + autoApply). No navigation, the user stays in the workspace and
+    // watches the agent work. Only fall back to a full /chat handoff when no
+    // in-page agent exists (the standalone /deployments page).
+    const agentReady = Boolean(
+      (window as unknown as { __siraCodeAgentReady?: boolean }).__siraCodeAgentReady,
+    )
+    if (agentReady) {
+      window.dispatchEvent(
+        new CustomEvent("siragpt:code-fix-error", {
+          detail: {
+            text: prompt,
+            label: "Falló la publicación (" + failedLabel + "). Diagnostica la causa y corrígela en el código.",
+          },
+        }),
+      )
+      toast.success("Enviado al agente — lo está resolviendo en el chat")
+      return
+    }
     try {
       window.sessionStorage.setItem("publishing-debug-prefill", prompt)
     } catch {

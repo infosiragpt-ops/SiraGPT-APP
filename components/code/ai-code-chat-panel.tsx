@@ -1736,19 +1736,23 @@ export function AICodeChatPanel() {
   const pendingInputRef = React.useRef<string[]>([])
 
   const repairFromLog = React.useCallback(
-    async (log: string) => {
+    async (log: string, visibleLabel?: string) => {
       const text = log.trim()
       if (!text || !user || !token || !sessionId) return
       const sid = sessionId
       patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
       const verdict = classifyBuildError(text)
       if (verdict.suggestedOverrides || verdict.suggestedPrismaModelRenames) {
-        await runDeterministicSRE(text, "Detecté un error en el build — reparación automática.", sid)
+        await runDeterministicSRE(
+          text,
+          visibleLabel || "Detecté un error en el build — reparación automática.",
+          sid,
+        )
         return
       }
       if (activeModelName) {
         await sendPrompt(
-          "Detecté un error en el preview en vivo. Arréglalo en el código y déjalo funcionando.",
+          visibleLabel || "Detecté un error en el preview en vivo. Arréglalo en el código y déjalo funcionando.",
           {
             systemPrompt: sreSystemPrompt(text, collectConfigFiles(files)),
             autoApply: true,
@@ -1775,12 +1779,14 @@ export function AICodeChatPanel() {
       }
     }
     const handler = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
+      const detail = (e as CustomEvent<{ text?: string; label?: string }>).detail
+      const text = detail?.text?.trim()
+      const label = detail?.label?.trim() || undefined
       if (!text) return
       const fire = () => {
         if (cancelled || repairInFlightRef.current) return
         repairInFlightRef.current = true
-        void repairFromLogRef.current(text).finally(() => {
+        void repairFromLogRef.current(text, label).finally(() => {
           repairInFlightRef.current = false
         })
       }
@@ -1808,9 +1814,14 @@ export function AICodeChatPanel() {
       }, 500)
     }
     window.addEventListener("siragpt:code-fix-error", handler)
+    // Readiness flag so in-page surfaces (e.g. the Publishing failure banner's
+    // "ASK AGENTE") can hand a problem straight to this agent instead of
+    // navigating away to /chat.
+    ;(window as unknown as { __siraCodeAgentReady?: boolean }).__siraCodeAgentReady = true
     return () => {
       cancelled = true
       clearWait()
+      ;(window as unknown as { __siraCodeAgentReady?: boolean }).__siraCodeAgentReady = false
       window.removeEventListener("siragpt:code-fix-error", handler)
     }
   }, [])
