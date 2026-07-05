@@ -132,6 +132,7 @@ import {
 import { DiffView } from "./diff-view"
 
 import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
+import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 type ComposerMode = "app" | "build" | "deps" | "plan" | "debug" | "ask" | "image"
 
@@ -3423,10 +3424,14 @@ function ChatBubble({
       {blocker ? (
         <ChatBlockerPanel title={blocker.title} rawError={turn.content} url={blocker.url} />
       ) : (
-        <div className="whitespace-pre-wrap text-sm leading-relaxed">
+        <div className="text-sm leading-relaxed break-words">
           {/* `body` already drops the planning line (now in the badge); strip
-              fenced blocks too so prose isn't shown twice (here + block cards). */}
-          {blocks.length > 0 ? stripFences(body) : body}
+              fenced blocks too so prose isn't shown twice (here + block cards).
+              Rendered as markdown so **bold**, `code`, lists & links render. */}
+          <MemoMarkdownBlock
+            content={mdPreserveBreaks(blocks.length > 0 ? stripFences(body) : body)}
+            components={CODE_CHAT_MD_COMPONENTS}
+          />
         </div>
       )}
       {(() => {
@@ -3453,6 +3458,71 @@ function ChatBubble({
       {turn.metrics ? <ChatWorkedSummary metrics={turn.metrics} /> : null}
     </div>
   )
+}
+
+// Compact markdown typography for the /code agent chat. Rendered via the shared
+// MemoMarkdownBlock (react-markdown + the app's sanitize plugins) so the agent's
+// **bold**, `inline code`, lists, headings, links and tables render like the
+// main chat instead of showing raw asterisks/backticks. Module-level constant →
+// stable reference so MemoMarkdownBlock's memo comparator holds across streams.
+const CODE_CHAT_MD_COMPONENTS = {
+  p: (props: any) => <p className="mb-2 last:mb-0" {...props} />,
+  strong: (props: any) => <strong className="font-semibold text-foreground" {...props} />,
+  em: (props: any) => <em className="italic" {...props} />,
+  ul: (props: any) => <ul className="mb-2 ml-4 list-disc space-y-1 last:mb-0" {...props} />,
+  ol: (props: any) => <ol className="mb-2 ml-4 list-decimal space-y-1 last:mb-0" {...props} />,
+  li: (props: any) => <li className="leading-relaxed" {...props} />,
+  h1: (props: any) => <h3 className="mb-1 mt-3 text-[14px] font-semibold first:mt-0" {...props} />,
+  h2: (props: any) => <h3 className="mb-1 mt-3 text-[14px] font-semibold first:mt-0" {...props} />,
+  h3: (props: any) => <h4 className="mb-1 mt-3 text-[13px] font-semibold first:mt-0" {...props} />,
+  h4: (props: any) => <h4 className="mb-1 mt-2 text-[13px] font-semibold first:mt-0" {...props} />,
+  a: (props: any) => (
+    <a
+      className="font-medium text-blue-600 underline underline-offset-2 hover:no-underline dark:text-blue-400"
+      target="_blank"
+      rel="noreferrer"
+      {...props}
+    />
+  ),
+  code: ({ className, children, ...rest }: any) => {
+    const isBlock = /(^|\s)language-/.test(className || "")
+    if (isBlock)
+      return (
+        <code className={className} {...rest}>
+          {children}
+        </code>
+      )
+    return (
+      <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[12px] text-foreground">{children}</code>
+    )
+  },
+  pre: (props: any) => (
+    <pre
+      className="mb-2 overflow-auto rounded-md border border-border/50 bg-muted/30 p-2.5 font-mono text-[12px] leading-relaxed last:mb-0"
+      {...props}
+    />
+  ),
+  blockquote: (props: any) => (
+    <blockquote className="mb-2 border-l-2 border-border/70 pl-3 text-muted-foreground last:mb-0" {...props} />
+  ),
+  hr: () => <hr className="my-3 border-border/50" />,
+  table: (props: any) => (
+    <div className="mb-2 overflow-x-auto">
+      <table className="w-full border-collapse text-[12px]" {...props} />
+    </div>
+  ),
+  th: (props: any) => (
+    <th className="border border-border/60 bg-muted/40 px-2 py-1 text-left font-semibold" {...props} />
+  ),
+  td: (props: any) => <td className="border border-border/50 px-2 py-1 align-top" {...props} />,
+}
+
+// The agent writes with meaningful single newlines (a bold label on its own
+// line, then its text; sequential sentences). Standard markdown collapses those
+// soft breaks into spaces — keep them as hard breaks so the layout survives.
+// Fenced blocks are already extracted to cards, so there's no code to corrupt.
+function mdPreserveBreaks(text: string): string {
+  return text.replace(/([^\n])\n(?!\n)/g, "$1  \n")
 }
 
 function stripFences(text: string): string {
