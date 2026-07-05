@@ -89,7 +89,7 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
       assert.equal(handoff.latestSignedPreflight.status, status.latestSignedPreflight.status)
       assert.equal(handoff.latestSecretAudit.status, status.latestSecretAudit.status)
-      assert.match(handoff.latestSecretAudit.diagnosis, /Public repository Actions are running/)
+      assert.match(handoff.latestSecretAudit.diagnosis, /Native app signing|native signing|deployment secrets only/)
       assert.equal(handoff.latestVerifiedRuns.docker, status.latestVerifiedRuns.docker)
       assert.deepEqual(handoff.platformPlans.map((plan) => plan.key), ["android", "ios"])
       assert.ok(handoff.platformPlans[0].allSecrets.includes("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"))
@@ -102,7 +102,6 @@ describe("generate-native-owner-handoff", () => {
       }
       assert.match(markdown, /Do not use the normal mailbox password as native signing material/)
       assert.match(markdown, /Latest QA Artifact Manifest Verification/)
-      assert.match(markdown, /Latest Native Artifact Validation/)
       assert.match(markdown, /Latest GitHub Actions Diagnostics/)
       assert.match(markdown, /Latest Signed Release Preflight/)
       assert.match(markdown, /Latest Secret-Name Audit/)

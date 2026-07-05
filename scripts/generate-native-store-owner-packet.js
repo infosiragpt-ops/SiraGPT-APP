@@ -7,7 +7,7 @@ const path = require("path")
 
 const root = path.resolve(__dirname, "..")
 const defaultRepo = process.env.GITHUB_REPOSITORY || "infosiragpt-ops/SiraGPT-APP"
-const defaultReleaseTag = "native-qa-v0.4.3-0fb0493"
+const defaultReleaseTag = "native-qa-v0.4.3-8ae5bd1"
 
 function usage() {
   return `Usage: node scripts/generate-native-store-owner-packet.js [--repo=owner/name] [--secret-source=env|github] [--out-dir=path] [--zip-out=path] [--checksum-out=path] [--source-sha=sha] [--source-commit=text] [--release-tag=tag] [--json] [--skip-zip]
