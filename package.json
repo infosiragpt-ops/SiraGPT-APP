@@ -58,6 +58,7 @@
     "native:store:assets": "node scripts/native-store-assets-readiness.js",
     "native:store:assets:generate": "node scripts/generate-native-store-assets.js",
     "native:store:packet": "node scripts/generate-native-store-packet.js",
+    "native:store:owner-packet": "node scripts/generate-native-store-owner-packet.js",
     "desktop:dev": "electron apps/desktop/main.cjs",
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",
     "desktop:pack:mac": "electron-builder --projectDir apps/desktop --mac dir --publish never",

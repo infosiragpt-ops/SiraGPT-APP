@@ -276,6 +276,7 @@ npm run native:store:readiness
 npm run native:store:assets:generate
 npm run native:store:assets
 npm run native:store:packet
+npm run native:store:owner-packet
 ```
 
 These checks intentionally validate public metadata and public store-listing
@@ -287,6 +288,8 @@ public product positioning or visible native store copy changes.
 Use `native:store:packet` to create the non-secret platform folders that can be
 used while filling Google Play, App Store Connect, macOS distribution, and
 Windows distribution forms.
+Use `native:store:owner-packet` to produce the full portable ZIP handoff with
+store material, owner checklist, release plan, manifest, and SHA-256 checksum.
 
 ## Validation Checklist
 
@@ -296,6 +299,7 @@ Before pushing native release changes:
 node -c apps/desktop/main.cjs
 node -c scripts/generate-native-store-assets.js
 node -c scripts/generate-native-store-packet.js
+node -c scripts/generate-native-store-owner-packet.js
 node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
@@ -305,6 +309,7 @@ npm run native:store:readiness
 npm run native:store:assets:generate
 npm run native:store:assets
 npm run native:store:packet -- --require-ready
+npm run native:store:owner-packet -- --repo=infosiragpt-ops/SiraGPT-APP --secret-source=env
 npm run native:release:handoff -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-owner-handoff.md --json-out=output/native-owner-handoff.json
 npm run desktop:pack
 npm run desktop:pack:win
