@@ -3242,11 +3242,11 @@ export function AICodeChatPanel() {
               aria-label={selectingTarget ? "Cancelar selección visual" : "Seleccionar elemento del preview"}
               title={selectingTarget ? "Cancelar selección visual" : "Seleccionar elemento del preview"}
               className={cn(
-                "code-target-select-button h-8 w-8 shrink-0 rounded-lg",
+                "code-target-select-button h-7 w-7 shrink-0 rounded-md",
                 selectingTarget && "code-target-select-button--active",
               )}
             >
-              <CodeTargetSelectIcon className="code-target-select-button__icon h-6 w-6" />
+              <CodeTargetSelectIcon className="code-target-select-button__icon h-[18px] w-[18px]" />
             </Button>
             <span className="min-w-0 flex-1" />
             <ModelPickerInline

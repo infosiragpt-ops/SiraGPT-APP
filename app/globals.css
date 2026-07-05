@@ -601,7 +601,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   overflow: visible;
   border: 0 !important;
   background: transparent !important;
-  color: hsl(222 24% 8% / 0.94) !important;
+  color: hsl(var(--muted-foreground)) !important;
   box-shadow: none !important;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -630,11 +630,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .code-target-select-button:hover,
 .code-target-select-button:focus-visible {
-  color: hsl(222 24% 4% / 1) !important;
-  transform: translateY(-1px);
+  background: hsl(var(--muted) / 0.6) !important;
+  color: hsl(var(--foreground)) !important;
 }
 
 .code-target-select-button--active {
+  background: hsl(var(--accent-violet) / 0.12) !important;
   color: hsl(var(--accent-violet)) !important;
 }
 
@@ -649,15 +650,6 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 .code-target-select-button:focus-visible {
   outline: 2px solid hsl(var(--accent-violet) / 0.42);
   outline-offset: 3px;
-}
-
-.dark .code-target-select-button {
-  color: hsl(216 29% 97% / 0.92) !important;
-}
-
-.dark .code-target-select-button:hover,
-.dark .code-target-select-button:focus-visible {
-  color: hsl(216 29% 100% / 1) !important;
 }
 
 .dark .code-target-select-button__icon {
