@@ -32,18 +32,23 @@ import {
   Clock3,
   CircleHelp,
   ExternalLink,
+  FileText,
   FileCode2,
   History,
   Image as ImageIcon,
   LayoutGrid,
   ListChecks,
+  Loader2,
   PackagePlus,
+  Paperclip,
   Plus,
+  RefreshCw,
   Rocket,
   Search,
   Server,
   Sparkles,
   StopCircle,
+  X,
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
@@ -70,6 +75,13 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
+import {
+  extractFilesFromDataTransfer,
+  extractFromClipboardEvent,
+  filesToFileList,
+  logIngest,
+  validateBatch,
+} from "@/lib/attachment-ingest"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
@@ -137,6 +149,110 @@ type ComposerMode = "app" | "build" | "deps" | "plan" | "debug" | "ask" | "image
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+const CODE_UPLOAD_REQUEST_MAX_FILES = 50
+const CODE_UPLOAD_REQUEST_MAX_BYTES = 220 * 1024 * 1024
+
+type CodeComposerAttachment = {
+  tempId: string
+  id?: string
+  fileId?: string
+  attachmentId?: string
+  name: string
+  originalName?: string
+  filename?: string
+  type?: string
+  mimeType?: string
+  size?: number
+  url?: string
+  preview?: string | null
+  file?: File
+  sourceChannel?: string
+  status: "uploading" | "ready" | "failed"
+  uploadError?: string
+}
+
+type CodeDispatchOptions = {
+  forceDeterministic?: boolean
+  files?: string[]
+}
+
+type PendingCodeInput = {
+  text: string
+  files?: string[]
+}
+
+function codeAttachmentId(file: CodeComposerAttachment): string {
+  return String(file.id || file.tempId || file.name)
+}
+
+function codeAttachmentFileId(file: CodeComposerAttachment): string | null {
+  return file.id || file.fileId || file.attachmentId || null
+}
+
+function codeAttachmentName(file: Pick<CodeComposerAttachment, "name" | "originalName" | "filename">): string {
+  return String(file.originalName || file.name || file.filename || "archivo")
+}
+
+function codeAttachmentType(file: Pick<CodeComposerAttachment, "type" | "mimeType">): string {
+  return String(file.mimeType || file.type || "application/octet-stream")
+}
+
+function formatCodeAttachmentBytes(size?: number): string {
+  const n = Number(size || 0)
+  if (!Number.isFinite(n) || n <= 0) return ""
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)} MB`
+}
+
+function buildCodeUploadChunks(files: File[], tempFiles: CodeComposerAttachment[]) {
+  const chunks: Array<{ files: File[]; temps: CodeComposerAttachment[] }> = []
+  let currentFiles: File[] = []
+  let currentTemps: CodeComposerAttachment[] = []
+  let currentBytes = 0
+
+  files.forEach((file, index) => {
+    const fileBytes = Number(file.size || 0)
+    const wouldOverflowCount = currentFiles.length >= CODE_UPLOAD_REQUEST_MAX_FILES
+    const wouldOverflowBytes =
+      currentFiles.length > 0 && currentBytes + fileBytes > CODE_UPLOAD_REQUEST_MAX_BYTES
+    if (wouldOverflowCount || wouldOverflowBytes) {
+      chunks.push({ files: currentFiles, temps: currentTemps })
+      currentFiles = []
+      currentTemps = []
+      currentBytes = 0
+    }
+    currentFiles.push(file)
+    currentTemps.push(tempFiles[index])
+    currentBytes += fileBytes
+  })
+
+  if (currentFiles.length > 0) chunks.push({ files: currentFiles, temps: currentTemps })
+  return chunks
+}
+
+function buildCodeAttachmentPromptBlock(files: CodeComposerAttachment[]): string {
+  const ready = files.filter((file) => file.status === "ready")
+  if (ready.length === 0) return ""
+  const rows = ready.map((file, index) => {
+    const id = file.id ? `id=${file.id}` : `temp=${file.tempId}`
+    const url = file.url ? `, url=${file.url}` : ""
+    const size = formatCodeAttachmentBytes(file.size)
+    return `- ${index + 1}. ${codeAttachmentName(file)} (${codeAttachmentType(file)}${size ? `, ${size}` : ""}, ${id}${url})`
+  })
+  return [
+    "Archivos adjuntos del usuario para este turno de APPS:",
+    ...rows,
+    "Usa estas referencias como contexto visual/documental del cambio. Si son imagenes, analiza lo que muestran antes de modificar el software. Si necesitas contenido interno que no este disponible en el workspace, indicalo explicitamente.",
+  ].join("\n")
+}
+
+function composeCodePromptWithAttachments(input: string, files: CodeComposerAttachment[]): string {
+  const text = input.trim()
+  const block = buildCodeAttachmentPromptBlock(files)
+  if (!block) return text
+  return [text || "Revisa los archivos adjuntos y aplicalos al proyecto de APPS.", "", block].join("\n")
+}
 
 function CodeTargetSelectIcon({ className }: { className?: string }) {
   return (
@@ -866,6 +982,9 @@ export function AICodeChatPanel() {
   )
 
   const [input, setInput] = React.useState("")
+  const [codeAttachments, setCodeAttachments] = React.useState<CodeComposerAttachment[]>([])
+  const [codeUploadProgress, setCodeUploadProgress] = React.useState<Record<string, number>>({})
+  const [codeDraggingFiles, setCodeDraggingFiles] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [buildingApp, setBuildingApp] = React.useState(false)
   const agentsActive =
@@ -1006,6 +1125,10 @@ export function AICodeChatPanel() {
   }, [sessionId])
 
   const abortRef = React.useRef<AbortController | null>(null)
+  const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const codeAttachmentsRef = React.useRef<CodeComposerAttachment[]>([])
+  const codeDragCounterRef = React.useRef(0)
+  const codeCancelledTempIdsRef = React.useRef<Set<string>>(new Set())
   // Turn ids whose `voice` was created in THIS panel instance. La voz ya no
   // se auto-reproduce nunca (solo al clic del usuario), pero el marcador se
   // conserva por si hace falta distinguir turnos frescos de rehidratados.
@@ -1094,6 +1217,309 @@ export function AICodeChatPanel() {
     toast("Selecciona en el preview la parte que quieres modificar.")
   }, [selectingTarget])
 
+  React.useEffect(() => {
+    codeAttachmentsRef.current = codeAttachments
+  }, [codeAttachments])
+
+  React.useEffect(() => {
+    return () => {
+      codeAttachmentsRef.current.forEach((file) => {
+        if (file.preview) URL.revokeObjectURL(file.preview)
+      })
+    }
+  }, [])
+
+  const showCodeUploadRejections = React.useCallback((rejected: Array<{ reason: string }>) => {
+    if (rejected.length === 0) return
+    const grouped = rejected.reduce<Record<string, number>>((acc, item) => {
+      acc[item.reason] = (acc[item.reason] || 0) + 1
+      return acc
+    }, {})
+    Object.entries(grouped).forEach(([reason, count]) => {
+      toast.error(count > 1 ? `${reason} (${count} archivos)` : reason)
+    })
+  }, [])
+
+  const uploadCodeFiles = React.useCallback(
+    async (fileList: FileList, sourceChannel: string = "picker") => {
+      if (fileList.length === 0) return
+      if (!user || !token) {
+        toast.error("Inicia sesión para adjuntar archivos.")
+        return
+      }
+
+      const incoming = Array.from(fileList)
+      const { accepted, rejected } = validateBatch(incoming, {
+        existingCount: codeAttachmentsRef.current.length,
+      })
+      showCodeUploadRejections(rejected)
+      if (accepted.length === 0) return
+
+      const idempotencyKey = `code-upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      const tempFiles: CodeComposerAttachment[] = accepted.map((file) => {
+        const tempId = `code-temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+        codeCancelledTempIdsRef.current.delete(tempId)
+        return {
+          tempId,
+          name: file.name,
+          originalName: file.name,
+          type: file.type,
+          mimeType: file.type,
+          size: file.size,
+          preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+          file,
+          sourceChannel,
+          status: "uploading",
+        }
+      })
+
+      setCodeAttachments((current) => {
+        const next = [...current, ...tempFiles]
+        codeAttachmentsRef.current = next
+        return next
+      })
+      setCodeUploadProgress((current) => {
+        const next = { ...current }
+        tempFiles.forEach((file) => {
+          next[file.tempId] = 1
+        })
+        return next
+      })
+
+      const chunks = buildCodeUploadChunks(accepted, tempFiles)
+      let failedChunks = 0
+
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index]
+        const chunkTempIds = new Set(chunk.temps.map((file) => file.tempId))
+        try {
+          const response: any = await apiClient.uploadFiles(filesToFileList(chunk.files), {
+            sourceChannel,
+            idempotencyKey: `${idempotencyKey}-${index + 1}`,
+            asyncProcessing: true,
+            onProgress: (pct) => {
+              setCodeUploadProgress((current) => {
+                const next = { ...current }
+                chunk.temps.forEach((file) => {
+                  next[file.tempId] = Math.max(next[file.tempId] || 1, Math.min(99, pct))
+                })
+                return next
+              })
+            },
+          })
+
+          if (!Array.isArray(response?.files)) {
+            failedChunks += 1
+            setCodeAttachments((current) => {
+              const next = current.map((file) =>
+                chunkTempIds.has(file.tempId)
+                  ? { ...file, status: "failed" as const, uploadError: "Respuesta sin archivos" }
+                  : file,
+              )
+              codeAttachmentsRef.current = next
+              return next
+            })
+            toast.error("La subida falló. Puedes reintentar desde el chip.")
+            continue
+          }
+
+          setCodeUploadProgress((current) => {
+            const next = { ...current }
+            chunk.temps.forEach((file) => {
+              next[file.tempId] = 100
+            })
+            return next
+          })
+
+          const merged: CodeComposerAttachment[] = response.files
+            .map((serverFile: any, serverIndex: number) => {
+              const temp = chunk.temps[serverIndex]
+              if (!temp || codeCancelledTempIdsRef.current.has(temp.tempId)) return null
+              const failed = serverFile?.success === false
+              return {
+                ...temp,
+                ...serverFile,
+                tempId: temp.tempId,
+                file: temp.file,
+                preview: temp.preview ?? serverFile?.preview ?? null,
+                name: serverFile?.originalName || serverFile?.name || temp.name,
+                originalName: serverFile?.originalName || temp.originalName || temp.name,
+                filename: serverFile?.filename,
+                type: serverFile?.mimeType || serverFile?.type || temp.type,
+                mimeType: serverFile?.mimeType || serverFile?.type || temp.mimeType,
+                size: Number(serverFile?.size || temp.size || 0),
+                sourceChannel,
+                status: failed ? ("failed" as const) : ("ready" as const),
+                uploadError: failed ? serverFile?.error || "No se pudo procesar el archivo." : undefined,
+              }
+            })
+            .filter(Boolean) as CodeComposerAttachment[]
+
+          const failedServerFiles = merged.filter((file) => file.status === "failed")
+          if (failedServerFiles.length > 0) {
+            failedChunks += 1
+            failedServerFiles.forEach((file) => toast.error(file.uploadError || "No se pudo procesar el archivo."))
+          }
+
+          setCodeAttachments((current) => {
+            const next = [
+              ...current.filter((file) => !chunkTempIds.has(file.tempId)),
+              ...merged,
+            ]
+            codeAttachmentsRef.current = next
+            return next
+          })
+
+          window.setTimeout(() => {
+            setCodeUploadProgress((current) => {
+              const next = { ...current }
+              chunk.temps.forEach((file) => {
+                delete next[file.tempId]
+              })
+              return next
+            })
+          }, 500)
+        } catch (error: any) {
+          failedChunks += 1
+          const reason = error?.message || "Error de subida"
+          setCodeAttachments((current) => {
+            const next = current.map((file) =>
+              chunkTempIds.has(file.tempId)
+                ? { ...file, status: "failed" as const, uploadError: reason }
+                : file,
+            )
+            codeAttachmentsRef.current = next
+            return next
+          })
+          toast.error(reason)
+        }
+      }
+
+      logIngest({
+        source: sourceChannel as any,
+        count: accepted.length,
+        total_bytes: accepted.reduce((sum, file) => sum + file.size, 0),
+        rejected_count: rejected.length,
+        rejected_codes: rejected.map((item) => item.code),
+      })
+
+      if (accepted.length >= 10 && failedChunks === 0) {
+        toast.success(`${accepted.length} archivos adjuntados al agente de APPS.`)
+      }
+    },
+    [showCodeUploadRejections, token, user],
+  )
+
+  const removeCodeAttachment = React.useCallback((index: number) => {
+    setCodeAttachments((current) => {
+      const removed = current[index]
+      if (removed?.tempId) codeCancelledTempIdsRef.current.add(removed.tempId)
+      if (removed?.preview) URL.revokeObjectURL(removed.preview)
+      const next = current.filter((_, i) => i !== index)
+      codeAttachmentsRef.current = next
+      return next
+    })
+  }, [])
+
+  const retryCodeAttachment = React.useCallback(
+    (file: CodeComposerAttachment) => {
+      if (!file.file) {
+        toast.error("No se puede reintentar: vuelve a arrastrar el archivo.")
+        return
+      }
+      setCodeAttachments((current) => {
+        const next = current.filter((item) => codeAttachmentId(item) !== codeAttachmentId(file))
+        codeAttachmentsRef.current = next
+        return next
+      })
+      uploadCodeFiles(filesToFileList([file.file]), file.sourceChannel || "retry")
+    },
+    [uploadCodeFiles],
+  )
+
+  const ingestDroppedCodeFiles = React.useCallback(
+    (dataTransfer: DataTransfer | null, sourceChannel: "drop" | "drop-internal" = "drop") => {
+      const files = extractFilesFromDataTransfer(dataTransfer)
+      if (files.length === 0) return false
+      void uploadCodeFiles(filesToFileList(files), sourceChannel)
+      return true
+    },
+    [uploadCodeFiles],
+  )
+
+  const handleCodeTextareaPaste = React.useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const { files, text } = extractFromClipboardEvent(event.nativeEvent)
+      if (files.length === 0) return
+      event.preventDefault()
+      if (text) {
+        setInput((current) => (current ? `${current}\n${text}` : text))
+      }
+      const isImageOnly = files.every((file) => file.type.startsWith("image/") && /^pasted-/.test(file.name))
+      void uploadCodeFiles(filesToFileList(files), isImageOnly ? "paste-image" : "paste-files")
+    },
+    [uploadCodeFiles],
+  )
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const isFileDrag = (event: DragEvent) =>
+      !!event.dataTransfer?.types && Array.from(event.dataTransfer.types).includes("Files")
+
+    const onDragEnter = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      codeDragCounterRef.current += 1
+      setCodeDraggingFiles(true)
+    }
+    const onDragOver = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"
+    }
+    const onDragLeave = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      codeDragCounterRef.current = Math.max(0, codeDragCounterRef.current - 1)
+      if (codeDragCounterRef.current === 0) setCodeDraggingFiles(false)
+    }
+    const onDrop = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      setCodeDraggingFiles(false)
+      codeDragCounterRef.current = 0
+      ingestDroppedCodeFiles(event.dataTransfer)
+    }
+    const onPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return
+      const target = event.target as HTMLElement | null
+      if (target === inputRef.current) return
+      const hasFile = !!event.clipboardData && (
+        event.clipboardData.files.length > 0 ||
+        Array.from(event.clipboardData.items || []).some((item) => item.kind === "file")
+      )
+      if (!hasFile) return
+      const { files } = extractFromClipboardEvent(event)
+      if (files.length === 0) return
+      event.preventDefault()
+      const isImageOnly = files.every((file) => file.type.startsWith("image/") && /^pasted-/.test(file.name))
+      void uploadCodeFiles(filesToFileList(files), isImageOnly ? "paste-image" : "paste-files")
+    }
+
+    window.addEventListener("dragenter", onDragEnter)
+    window.addEventListener("dragover", onDragOver)
+    window.addEventListener("dragleave", onDragLeave)
+    window.addEventListener("drop", onDrop)
+    document.addEventListener("paste", onPaste)
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter)
+      window.removeEventListener("dragover", onDragOver)
+      window.removeEventListener("dragleave", onDragLeave)
+      window.removeEventListener("drop", onDrop)
+      document.removeEventListener("paste", onPaste)
+    }
+  }, [ingestDroppedCodeFiles, uploadCodeFiles])
+
   // Auto-scroll on new content while the user is at the bottom — if
   // they scrolled up to read history, leave them alone.
   React.useEffect(() => {
@@ -1158,6 +1584,7 @@ export function AICodeChatPanel() {
         /** Phrasing for the spoken completion digest (default "patch");
          *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
         spokenKind?: "patch" | "debug"
+        files?: string[]
       },
     ) => {
       const normalized = normalizeChatInput(prompt)
@@ -1264,6 +1691,7 @@ export function AICodeChatPanel() {
             model: activeModelName,
             prompt: finalPrompt,
             streamId: id,
+            files: override?.files && override.files.length > 0 ? override.files : undefined,
             // The code chat generates code blocks (e.g. a full index.html);
             // it must use a plain LLM stream, never the web_search/artifact
             // agentic loop (which times out and returns the empty fallback
@@ -1733,7 +2161,7 @@ export function AICodeChatPanel() {
   // auto-repair the live dev server triggered) are NEVER dropped: they are
   // queued here (FIFO) and auto-dispatched in arrival order, one at a time,
   // as the panel goes idle.
-  const pendingInputRef = React.useRef<string[]>([])
+  const pendingInputRef = React.useRef<PendingCodeInput[]>([])
 
   const repairFromLog = React.useCallback(
     async (log: string, visibleLabel?: string) => {
@@ -2748,9 +3176,10 @@ export function AICodeChatPanel() {
   }, [runCodexEngine])
 
   const dispatch = React.useCallback(
-    async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
+    async (rawInput: string, opts?: CodeDispatchOptions) => {
       const text = rawInput.trim()
       if (!text) return
+      const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
       if (busy || buildingApp) {
         // The live dev server can fire a BACKGROUND auto-repair turn (it failed
         // to boot, e.g. a cold install over the 90s timeout) that holds the busy
@@ -2762,7 +3191,7 @@ export function AICodeChatPanel() {
           abortRef.current = null
           repairInFlightRef.current = false
         }
-        pendingInputRef.current.push(rawInput)
+        pendingInputRef.current.push({ text: rawInput, files: attachedFileIds })
         setInput("")
         toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
         return
@@ -2784,6 +3213,7 @@ export function AICodeChatPanel() {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
             autoApply: false,
             plainStyle: true,
+            files: attachedFileIds,
           })
           patchAgentState(sid, (s) => ({ ...s, phase: s.phase === "intake" ? "idle" : s.phase }))
           return
@@ -2829,6 +3259,7 @@ export function AICodeChatPanel() {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
             autoApply: false,
             plainStyle: true,
+            files: attachedFileIds,
           })
         } else {
           const cid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -2893,6 +3324,11 @@ export function AICodeChatPanel() {
           // Deterministic tier: enrich a bare context with the raw prompt so the
           // local scaffold still produces niche-coherent copy.
           const buildCtx = hasIntake ? action.context : { ...action.context, productType: buildText }
+          if (attachedFileIds.length > 0 && activeModelName && !opts?.forceDeterministic) {
+            await sendPrompt(buildText, { autoApply: true, files: attachedFileIds })
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+            return
+          }
           if (!opts?.forceDeterministic && codexAvailable) {
             // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
             // run whose file writes are read back into the workspace, with a
@@ -2921,6 +3357,10 @@ export function AICodeChatPanel() {
           return
         }
         case "patch": {
+          if (attachedFileIds.length > 0 && activeModelName) {
+            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds })
+            return
+          }
           if (runDeterministicPatch(action.instruction, sid)) {
             return
           }
@@ -2935,7 +3375,7 @@ export function AICodeChatPanel() {
           if (engineMode && engineAvailable) {
             await runEngine(action.instruction, sid, { iterate: true })
           } else {
-            await sendPrompt(action.instruction, { autoApply: true })
+            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds })
           }
           return
         }
@@ -2946,6 +3386,7 @@ export function AICodeChatPanel() {
               systemPrompt: sreSystemPrompt(action.log, collectConfigFiles(files)),
               autoApply: true,
               spokenKind: "debug",
+              files: attachedFileIds,
             })
           } else {
             await runDeterministicSRE(action.log, text, sid)
@@ -2956,6 +3397,13 @@ export function AICodeChatPanel() {
           // Ask/Plan/Image are read-only: they must stream an answer via
           // sendPrompt (autoApply stays false because composerMode !== "app")
           // and must NEVER route into runCodexEngine/runEngine, which apply files.
+          if (attachedFileIds.length > 0 && activeModelName) {
+            await sendPrompt(text, {
+              autoApply: composerMode === "app" || composerMode === "build",
+              files: attachedFileIds,
+            })
+            return
+          }
           if ((composerMode === "app" || composerMode === "build") && codexAvailable) {
             // Codex build mode iterates on the session's existing project
             // (after syncing the local workspace into it). A failed sync falls
@@ -3021,7 +3469,7 @@ export function AICodeChatPanel() {
       while (!cancelled && !busyRef.current && !buildingAppRef.current) {
         const parked = pendingInputRef.current.shift()
         if (!parked) return
-        await dispatchRef.current?.(parked)
+        await dispatchRef.current?.(parked.text, { files: parked.files })
       }
     })()
     return () => {
@@ -3039,7 +3487,7 @@ export function AICodeChatPanel() {
       const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
       if (!text) return
       if (busyRef.current || buildingAppRef.current) {
-        pendingInputRef.current.push(text)
+        pendingInputRef.current.push({ text })
         return
       }
       void dispatchRef.current?.(text)
@@ -3092,17 +3540,111 @@ export function AICodeChatPanel() {
     return () => window.clearTimeout(t)
   }, [buildingApp])
 
+  const readyCodeAttachments = React.useMemo(
+    () => codeAttachments.filter((file) => file.status === "ready"),
+    [codeAttachments],
+  )
+  const hasUploadingCodeAttachments = codeAttachments.some((file) => file.status === "uploading")
+  const hasFailedCodeAttachments = codeAttachments.some((file) => file.status === "failed")
+  const canSubmitCodePrompt = (input.trim().length > 0 || readyCodeAttachments.length > 0) && !hasUploadingCodeAttachments
+
+  const clearSentCodeAttachments = React.useCallback((sentFiles: CodeComposerAttachment[]) => {
+    if (sentFiles.length === 0) return
+    const sent = new Set(sentFiles.map(codeAttachmentId))
+    setCodeAttachments((current) => {
+      const next = current.filter((file) => {
+        const shouldRemove = sent.has(codeAttachmentId(file))
+        if (shouldRemove && file.preview) URL.revokeObjectURL(file.preview)
+        return !shouldRemove
+      })
+      codeAttachmentsRef.current = next
+      return next
+    })
+    setCodeUploadProgress((current) => {
+      const next = { ...current }
+      sentFiles.forEach((file) => {
+        delete next[file.tempId]
+      })
+      return next
+    })
+  }, [])
+
+  const submitCodePrompt = React.useCallback(() => {
+    if (hasUploadingCodeAttachments) {
+      toast("Espera a que termine la subida antes de enviar.")
+      return
+    }
+    if (!input.trim() && readyCodeAttachments.length === 0) {
+      if (hasFailedCodeAttachments) toast.error("Reintenta o elimina los adjuntos con error.")
+      return
+    }
+    if (!user || !token) {
+      toast.error("Inicia sesión para usar el chat de código.")
+      return
+    }
+    if (!sessionId) {
+      toast.error("Abre o crea un chat de código antes de enviar archivos.")
+      return
+    }
+
+    const payload = composeCodePromptWithAttachments(input, readyCodeAttachments)
+    const fileIds = readyCodeAttachments.map(codeAttachmentFileId).filter((id): id is string => Boolean(id))
+    if (!payload.trim()) return
+    void dispatch(payload, { files: fileIds })
+    clearSentCodeAttachments(readyCodeAttachments)
+  }, [
+    clearSentCodeAttachments,
+    dispatch,
+    hasFailedCodeAttachments,
+    hasUploadingCodeAttachments,
+    input,
+    readyCodeAttachments,
+    sessionId,
+    token,
+    user,
+  ])
+
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    dispatch(input)
+    submitCodePrompt()
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      dispatch(input)
+      submitCodePrompt()
     }
   }
+
+  const handleComposerFileInput = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.currentTarget.files
+      if (files?.length) void uploadCodeFiles(files, "picker")
+      event.currentTarget.value = ""
+    },
+    [uploadCodeFiles],
+  )
+
+  const handleComposerDragOver = React.useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const hasFiles = Array.from(event.dataTransfer.types || []).includes("Files")
+    if (!hasFiles) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = "copy"
+    setCodeDraggingFiles(true)
+  }, [])
+
+  const handleComposerDrop = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types || []).includes("Files")) return
+      event.preventDefault()
+      event.stopPropagation()
+      setCodeDraggingFiles(false)
+      codeDragCounterRef.current = 0
+      ingestDroppedCodeFiles(event.dataTransfer, "drop-internal")
+    },
+    [ingestDroppedCodeFiles],
+  )
 
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
   const activeSessionTitle =
@@ -3123,7 +3665,12 @@ export function AICodeChatPanel() {
   }, [composerMode])
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
+    <div className="relative flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
+      {codeDraggingFiles ? (
+        <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
+          Suelta archivos para adjuntarlos al agente de APPS
+        </div>
+      ) : null}
       {/* Replit-style panel header: current thread title + history / new-chat
           actions (the session tabs collapsed into the history dropdown). */}
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
@@ -3208,13 +3755,35 @@ export function AICodeChatPanel() {
       <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
         {/* Replit-style composer card: the text field on top, then a footer
             row with + on the left and model / Plan / mic / send on the right. */}
-        <div className="group rounded-xl border border-border/70 bg-background px-3 py-2.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#0f87ff]/50 focus-within:shadow-[0_0_0_3px_rgba(15,135,255,0.10)]">
+        <div
+          className={cn(
+            "group rounded-xl border border-border/70 bg-background px-3 py-2.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#0f87ff]/50 focus-within:shadow-[0_0_0_3px_rgba(15,135,255,0.10)]",
+            codeDraggingFiles && "border-[#0f87ff]/60 shadow-[0_0_0_3px_rgba(15,135,255,0.10)]",
+          )}
+          onDragOver={handleComposerDragOver}
+          onDrop={handleComposerDrop}
+        >
+          <input
+            ref={codeFileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleComposerFileInput}
+            aria-label="Adjuntar archivos al agente de APPS"
+          />
+          <CodeAttachmentTray
+            files={codeAttachments}
+            progress={codeUploadProgress}
+            onRemove={removeCodeAttachment}
+            onRetry={retryCodeAttachment}
+          />
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={handleCodeTextareaPaste}
             placeholder={COMPOSER_PLACEHOLDER[composerMode]}
             rows={1}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
@@ -3233,6 +3802,17 @@ export function AICodeChatPanel() {
               onIncludeContextChange={setIncludeContext}
               onEngineModeChange={setEngineMode}
             />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => codeFileInputRef.current?.click()}
+              aria-label="Adjuntar imagen o documento"
+              title="Adjuntar imagen, PDF, Word, Excel o PPT"
+              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            >
+              <Paperclip className="h-[16px] w-[16px]" />
+            </Button>
             <Button
               type="button"
               variant="ghost"
@@ -3292,7 +3872,7 @@ export function AICodeChatPanel() {
             />
             {busy ? (
               <>
-                {input.trim() ? (
+                {canSubmitCodePrompt ? (
                   <Button
                     type="submit"
                     size="icon"
@@ -3320,11 +3900,11 @@ export function AICodeChatPanel() {
                 size="icon"
                 className={cn(
                   "h-8 w-8 shrink-0 rounded-full transition-colors",
-                  input.trim()
+                  canSubmitCodePrompt
                     ? "bg-[#0f87ff] text-white hover:bg-[#0c74dd]"
                     : "bg-muted text-muted-foreground/50",
                 )}
-                disabled={!input.trim()}
+                disabled={!canSubmitCodePrompt}
                 aria-label="Enviar"
               >
                 <ArrowUp className="h-4 w-4" strokeWidth={2.25} />
@@ -3333,6 +3913,109 @@ export function AICodeChatPanel() {
           </div>
         </div>
       </form>
+    </div>
+  )
+}
+
+function CodeAttachmentTray({
+  files,
+  progress,
+  onRemove,
+  onRetry,
+}: {
+  files: CodeComposerAttachment[]
+  progress: Record<string, number>
+  onRemove: (index: number) => void
+  onRetry: (file: CodeComposerAttachment) => void
+}) {
+  if (files.length === 0) return null
+
+  return (
+    <div className="mb-2 flex max-h-[112px] flex-wrap gap-2 overflow-y-auto px-0.5">
+      {files.map((file, index) => {
+        const type = codeAttachmentType(file)
+        const name = codeAttachmentName(file)
+        const isImage = type.startsWith("image/")
+        const pct = Math.max(1, Math.min(100, progress[file.tempId] ?? (file.status === "ready" ? 100 : 1)))
+        const previewStyle =
+          isImage && file.preview
+            ? {
+                backgroundImage: `url(${file.preview})`,
+                backgroundPosition: "center",
+                backgroundSize: "cover",
+              }
+            : undefined
+
+        return (
+          <div
+            key={codeAttachmentId(file)}
+            className={cn(
+              "group/attachment relative flex max-w-full items-center gap-2 overflow-hidden rounded-lg border bg-muted/25 px-2 py-1.5 text-left shadow-sm",
+              file.status === "failed"
+                ? "border-red-200 bg-red-50/70 text-red-950 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200"
+                : "border-border/65",
+            )}
+            title={file.status === "failed" ? file.uploadError || "Error de subida" : name}
+          >
+            <span
+              className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-background text-muted-foreground",
+                isImage && file.preview && "border-transparent bg-muted",
+              )}
+              style={previewStyle}
+              aria-hidden="true"
+            >
+              {isImage && file.preview ? null : isImage ? (
+                <ImageIcon className="h-4 w-4" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block max-w-[13rem] truncate text-[12px] font-medium text-foreground">
+                {name}
+              </span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                {file.status === "uploading" ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {pct}%
+                  </>
+                ) : file.status === "failed" ? (
+                  "Error"
+                ) : (
+                  formatCodeAttachmentBytes(file.size) || "Listo"
+                )}
+              </span>
+              {file.status === "uploading" ? (
+                <span className="mt-1 block h-1 overflow-hidden rounded-full bg-muted">
+                  <span className="block h-full rounded-full bg-[#0f87ff]" style={{ width: `${pct}%` }} />
+                </span>
+              ) : null}
+            </span>
+            {file.status === "failed" ? (
+              <button
+                type="button"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
+                onClick={() => onRetry(file)}
+                aria-label={`Reintentar ${name}`}
+                title="Reintentar subida"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => onRemove(index)}
+              aria-label={`Quitar ${name}`}
+              title="Quitar adjunto"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )
+      })}
     </div>
   )
 }
