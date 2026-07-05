@@ -67,29 +67,32 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Latest native package SHA verified: `3eec62c1ba14313d5f04017ccff75685b6ebb17b` on `production-main`.
+Latest native package SHA verified: `0fb0493464b841c11924e9ff9a087209fb8d25dd` on `production-main`.
 
-- Desktop workflow: `Native desktop builds` run `28722835938`.
+- Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
   - Windows x64 NSIS + portable: passed.
   - Artifacts: `siragpt-desktop-macos`, `siragpt-desktop-windows-x64`.
-- Mobile workflow: `Native mobile builds` run `28722835932`.
+- Mobile workflow: `Native mobile builds` run `28725624118`.
   - Android APK + AAB: passed.
   - iOS simulator build: passed.
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
-- Readiness workflow: `Native readiness report` run `28722835962`.
+- Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
-`native-qa-v0.4.3-3eec62c`:
+`native-qa-v0.4.3-0fb0493`:
 
-https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-3eec62c
+https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0fb0493
 
 The prerelease above is the latest durable public QA download packet. The
 verified SHA also has fresh 14-day GitHub Actions artifacts attached to the
 desktop and mobile runs listed above. These artifacts prove the wrappers and
 unsigned QA packages build successfully for macOS, Windows, Android, and iOS
-simulator. Public distribution still requires signing and store credentials.
+simulator. The prerelease includes `native-release-manifest.json`,
+`native-release-manifest.md`, and `SHA256SUMS.txt` so every QA artifact can be
+verified against its SHA-256 checksum. Public distribution still requires
+signing and store credentials.
 
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 

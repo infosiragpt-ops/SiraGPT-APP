@@ -19,12 +19,12 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
-- Latest public QA packet: `native-qa-v0.4.3-3eec62c`
-  (`3eec62c1ba14313d5f04017ccff75685b6ebb17b`)
+- Latest public QA packet: `native-qa-v0.4.3-0fb0493`
+  (`0fb0493464b841c11924e9ff9a087209fb8d25dd`)
 - Latest verified native runs:
-  - Mobile: `28722835932`
-  - Desktop: `28722835938`
-  - Readiness report: `28722835962`
+  - Mobile: `28725624118`
+  - Desktop: `28725624116`
+  - Readiness report: `28725476833`
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 
 The canonical draft metadata lives in

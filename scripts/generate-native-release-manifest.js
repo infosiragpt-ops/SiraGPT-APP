@@ -84,39 +84,44 @@ function sha256File(filePath) {
 function classifyArtifact(relativePath) {
   const normalized = relativePath.replaceAll(path.sep, "/").toLowerCase()
   const extension = path.extname(normalized)
+  const isUnder = (directory) => normalized.startsWith(`${directory}/`) || normalized.includes(`/${directory}/`)
 
-  if (normalized.includes("/android/") || extension === ".aab" || extension === ".apk") {
+  if (extension === ".blockmap") {
+    return {
+      platform: isUnder("macos") ? "macos" : isUnder("windows") ? "windows" : "desktop",
+      kind: "update-blockmap",
+    }
+  }
+
+  if (isUnder("android") || extension === ".aab" || extension === ".apk") {
     return {
       platform: "android",
       kind: extension === ".apk" ? "debug-apk" : "play-aab",
     }
   }
 
-  if (normalized.includes("/ios/") || extension === ".ipa") {
+  if (isUnder("ios") || extension === ".ipa") {
     return {
       platform: "ios",
-      kind: "app-store-ipa",
+      kind: extension === ".ipa"
+        ? "app-store-ipa"
+        : normalized.includes("simulator")
+          ? "simulator-app-zip"
+          : "ios-artifact",
     }
   }
 
-  if (normalized.includes("/macos/") || extension === ".dmg" || normalized.endsWith("-mac.zip")) {
+  if (isUnder("macos") || extension === ".dmg" || normalized.endsWith("-mac.zip")) {
     return {
       platform: "macos",
       kind: extension === ".dmg" ? "dmg" : "zip",
     }
   }
 
-  if (normalized.includes("/windows/") || extension === ".exe") {
+  if (isUnder("windows") || extension === ".exe") {
     return {
       platform: "windows",
       kind: normalized.includes("portable") ? "portable-exe" : "installer-exe",
-    }
-  }
-
-  if (extension === ".blockmap") {
-    return {
-      platform: "desktop",
-      kind: "update-blockmap",
     }
   }
 
