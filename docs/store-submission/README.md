@@ -19,57 +19,56 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
-- Latest public QA packet: `native-qa-v0.4.3-f2679e3`
-  (`f2679e39b0acba43246cd59792da5caba4cddfe3`)
+- Latest public QA packet: `native-qa-v0.4.3-e6062026`
+  (`e6062026f64e1e29103fa3818d17cf6faef09734`)
 - Last verified native QA runs:
-  - Mobile: `28737926063`
-  - Desktop: `28737926072`
-  - Readiness report: `28737691885`
-  - CI: `28737691884`
+  - Mobile: `28751219114`
+  - Desktop: `28751220141`
+  - Readiness report: `28751218198`
+  - CI: `28750893663`
   - Docker: `28735031878`
 - Current production-main wrapper validation: SHA
-  `f2679e39b0acba43246cd59792da5caba4cddfe3`
-  (`docs(native): refresh current qa build traceability`) is green in CI,
-  Native readiness report, Native mobile builds, and Native desktop builds.
-  These runs generated unsigned QA artifacts for Android, iPhone simulator,
-  macOS, and Windows with `native-release-manifest.json`,
-  `native-release-manifest.md`, and `SHA256SUMS.txt`. The downloaded artifact
-  contents include `SiraGPT-f2679e3-debug.apk`,
-  `SiraGPT-f2679e3-unsigned-release.aab`,
-  `SiraGPT-f2679e3-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
+  `e6062026f64e1e29103fa3818d17cf6faef09734`
+  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`) is green in CI, Native readiness report, Native mobile
+  builds, and Native desktop builds. These runs generated unsigned QA
+  artifacts for Android, iPhone simulator, macOS, and Windows with
+  `native-release-manifest.json`, `native-release-manifest.md`, and
+  `SHA256SUMS.txt`. The downloaded artifact contents include
+  `SiraGPT-e606202-debug.apk`,
+  `SiraGPT-e606202-unsigned-release.aab`,
+  `SiraGPT-e606202-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
   `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
   `SiraGPT 0.4.3.exe`.
-- Latest native artifact verification SHA: `f2679e39b0acba43246cd59792da5caba4cddfe3`
-  (`docs(native): refresh current qa build traceability`)
+- Latest native artifact verification SHA: `e6062026f64e1e29103fa3818d17cf6faef09734`
+  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`)
 - Management/traceability SHA validated before this packet refresh:
-  `99c5809b57b6cf121f48c5262e9557295f1c2d20`
-  (`chore(ui-lock): re-baseline latest visual changes`)
-- Latest QA artifact manifest verification: mobile run `28737926063` and
-  desktop run `28737926072` were downloaded and each Android, iOS simulator,
-  macOS, and Windows artifact upload includes `native-release-manifest.json`,
-  `native-release-manifest.md`, and `SHA256SUMS.txt`.
-- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-f2679e3.zip`
-  (`sha256:b3c935392dd11c70915f71b1886e0b1341139d0bf0dedef1cc173421c3163928`)
-  preserves Android, iOS, macOS, and Windows folders plus original Windows
-  filenames.
+  `e6062026f64e1e29103fa3818d17cf6faef09734`
+  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`)
+- Latest QA artifact manifest verification: mobile run `28751219114` and
+  desktop run `28751220141` were downloaded and each Android, iOS
+  simulator, macOS, and Windows artifact upload includes
+  `native-release-manifest.json`, `native-release-manifest.md`, and
+  `SHA256SUMS.txt`.
+- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-e6062026.zip`
+  (`sha256:9e677f6cb8a8b7f09efb707fdaa8ca710d4aabf9ceb2e2cebe868af4ab0fe23c`) preserves Android, iOS, macOS, and
+  Windows folders plus original Windows filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-99c5809b.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-99c5809b.zip`)
-  with SHA-256 `cf2f334a52864cb029dd580e6190bf843fcc6e21cf7806796dc8e6a37767f431`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-e6062026.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-e6062026.zip`)
+  with SHA-256 `a1e8d3e79659fa0d687311e83f24a081eae22eb69d58a9df075d315896f6a59f`.
 - Latest signed release preflight: `28748232904`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`)
-  stopped before package runners because signing secrets are still missing, after
-  uploading `siragpt-native-signed-release-preflight` with `preflight.md` and
-  `preflight.json`.
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`) stopped before package runners because signing
+  secrets are still missing, after uploading `siragpt-native-signed-release-preflight`
+  with `preflight.md` and `preflight.json`.
 - Latest secret-name audit: public repository Actions are running, but signed
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
-  Actions is enabled with `allowed_actions=all`, CI run `28749985629`, native
-  readiness run `28750200123`, native mobile run `28737926063`, native desktop
-  run `28737926072`, and Docker run `28735031878` are green. Standard
-  GitHub-hosted Actions for public repositories are free; this is separate from
-  native signing readiness.
+  Actions is enabled with `allowed_actions=all`, CI
+  run `28750893663`, native readiness run `28751218198`, native mobile
+  run `28751219114`, native desktop run `28751220141`, and Docker
+  run `28735031878` are green. Standard GitHub-hosted Actions for public
+  repositories are free; this is separate from native signing readiness.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Treat that mailbox

@@ -6,8 +6,8 @@
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Public GitHub prerelease `native-qa-v0.4.3-f2679e3` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows, plus a durable all-platform QA ZIP and the current owner handoff packet.
-- The latest native artifact verification SHA is `f2679e39b0acba43246cd59792da5caba4cddfe3`; CI, native readiness, native mobile, and native desktop workflows are green for that native artifact set.
+- Public GitHub prerelease `native-qa-v0.4.3-e6062026` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows, plus a durable all-platform QA ZIP and the current owner handoff packet.
+- The latest native artifact verification SHA is `e6062026f64e1e29103fa3818d17cf6faef09734`; CI, native readiness, native mobile, and native desktop workflows are green for that native artifact set.
 - Android signed Play release publishing is blocked until the Play upload keystore secrets, the Google Play service account upload secret, and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
@@ -22,56 +22,51 @@
   store assets without reading signing credentials.
 - `npm run native:store:packet` exports platform-specific, non-secret submission
   folders under `output/native-store-submission-packet/`.
-- GitHub Actions `Native mobile builds` run `28737926063` passed on `production-main` SHA `f2679e39b0acba43246cd59792da5caba4cddfe3`.
+- GitHub Actions `Native mobile builds` run `28751219114` passed on `production-main` SHA `e6062026f64e1e29103fa3818d17cf6faef09734`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
 - The Android upload was downloaded and its manifest lists
-  `SiraGPT-f2679e3-debug.apk` and
-  `SiraGPT-f2679e3-unsigned-release.aab` with SHA-256 checksums.
-- GitHub Actions `Native desktop builds` run `28737926072` passed on the same SHA and produced unsigned QA artifacts:
+  `SiraGPT-e606202-debug.apk` and
+  `SiraGPT-e606202-unsigned-release.aab` with SHA-256 checksums.
+- GitHub Actions `Native desktop builds` run `28751220141` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
 - The iOS simulator, macOS, and Windows uploads were downloaded and each
   contains `native-release-manifest.json`, `native-release-manifest.md`, and
   `SHA256SUMS.txt`.
-- GitHub Actions `Native readiness report` run `28737691885` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
-- Native QA artifact target is `f2679e39b0acba43246cd59792da5caba4cddfe3`; current owner-handoff management evidence is tracked by commit `99c5809b57b6cf121f48c5262e9557295f1c2d20`.
+- GitHub Actions `Native readiness report` run `28751218198` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
+- Native QA artifact target is `e6062026f64e1e29103fa3818d17cf6faef09734`; current owner-handoff management evidence is tracked by commit `e6062026f64e1e29103fa3818d17cf6faef09734`.
 - Latest green wrapper and management runs:
-  - CI: `28749985629`
-  - Native readiness report: `28750200123`
-  - Native mobile builds: `28737926063`
-  - Native desktop builds: `28737926072`
+  - CI: `28750893663`
+  - Native readiness report: `28751218198`
+  - Native mobile builds: `28751219114`
+  - Native desktop builds: `28751220141`
   - Docker build images: `28735031878`
 - Current production-main wrapper validation SHA:
-  `f2679e39b0acba43246cd59792da5caba4cddfe3`
-  (`docs(native): refresh current qa build traceability`) is green in CI, native
-  readiness, Native mobile builds, and Native desktop builds. The mobile run
-  produced Android APK/AAB and iPhone simulator QA artifacts; the desktop run
-  produced macOS and Windows QA artifacts. All platform uploads include
-  `native-release-manifest.json`, `native-release-manifest.md`, and
-  `SHA256SUMS.txt`. The downloaded artifact contents include
-  `SiraGPT-f2679e3-debug.apk`, `SiraGPT-f2679e3-unsigned-release.aab`,
-  `SiraGPT-f2679e3-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
+  `e6062026f64e1e29103fa3818d17cf6faef09734`
+  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`) is green in CI, native readiness, Native mobile builds, and
+  Native desktop builds. The mobile run produced Android APK/AAB and iPhone
+  simulator QA artifacts; the desktop run produced macOS and Windows QA
+  artifacts. All platform uploads include `native-release-manifest.json`,
+  `native-release-manifest.md`, and `SHA256SUMS.txt`. The downloaded artifact
+  contents include `SiraGPT-e606202-debug.apk`,
+  `SiraGPT-e606202-unsigned-release.aab`,
+  `SiraGPT-e606202-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
   `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
   `SiraGPT 0.4.3.exe`.
 - Management/traceability commit validated before this document refresh:
-  `99c5809b57b6cf121f48c5262e9557295f1c2d20`
-  (`chore(ui-lock): re-baseline latest visual changes`) is green in CI run
-  `28749985629` and Native readiness report run `28750200123`. The current QA
-  mobile and desktop binaries remain pinned to `f2679e39b0acba43246cd59792da5caba4cddfe3`.
+  `e6062026f64e1e29103fa3818d17cf6faef09734`
+  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`) is green in CI run `28750893663` and Native readiness report run `28751218198`.
 - GitHub repository diagnostics:
   - Repository visibility: `PUBLIC`
   - Actions enabled: `true`
   - Allowed actions: `all`
   - Result: public-repository Actions are not the blocker; missing native signing/store-upload secrets are.
 - Signed native preflight run `28748232904` was triggered for `platform=all`
-  on SHA `26f5d5950ae3bf052f227d43e87faf5a3973203c` and stopped before
-  package runners because Android, iOS, macOS, and Windows signing secrets are
-  still missing. It uploaded `siragpt-native-signed-release-preflight` with
-  `preflight.md` and `preflight.json` before stopping.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-99c5809b.zip`
-  (`sha256:cf2f334a52864cb029dd580e6190bf843fcc6e21cf7806796dc8e6a37767f431`).
+  on SHA `26f5d5950ae3bf052f227d43e87faf5a3973203c` and stopped before package runners because Android, iOS, macOS, and Windows signing secrets are still missing. It uploaded `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json` before stopping.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-e6062026.zip`
+  (`sha256:a1e8d3e79659fa0d687311e83f24a081eae22eb69d58a9df075d315896f6a59f`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled. The signed release preflight also uploads `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`, even when the run intentionally stops because signing/upload secrets are missing.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
@@ -79,16 +74,16 @@
   simulator, macOS, and Windows files can be verified before signing or store
   submission.
 - Public QA prerelease:
-  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-f2679e3`
+  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-e6062026`
 - Local downloaded QA artifacts:
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-mobile-android/android/SiraGPT-f2679e3-debug.apk`
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-mobile-android/android/SiraGPT-f2679e3-unsigned-release.aab`
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-mobile-ios-simulator/ios/SiraGPT-f2679e3-ios-simulator-app.zip`
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-desktop-macos/macos/SiraGPT-0.4.3-arm64.dmg`
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-desktop-macos/macos/SiraGPT-0.4.3-arm64-mac.zip`
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-desktop-windows-x64/windows/SiraGPT Setup 0.4.3.exe`
-  - `/tmp/siragpt-native-artifacts-f2679e39/siragpt-desktop-windows-x64/windows/SiraGPT 0.4.3.exe`
-  - `/tmp/SiraGPT-native-qa-v0.4.3-f2679e3.zip`
+  - `output/native-qa-e6062026/mobile/android/android/SiraGPT-e606202-debug.apk`
+  - `output/native-qa-e6062026/mobile/android/android/SiraGPT-e606202-unsigned-release.aab`
+  - `output/native-qa-e6062026/mobile/ios/ios/SiraGPT-e606202-ios-simulator-app.zip`
+  - `output/native-qa-e6062026/desktop/macos/macos/SiraGPT-0.4.3-arm64.dmg`
+  - `output/native-qa-e6062026/desktop/macos/macos/SiraGPT-0.4.3-arm64-mac.zip`
+  - `output/native-qa-e6062026/desktop/windows/windows/SiraGPT Setup 0.4.3.exe`
+  - `output/native-qa-e6062026/desktop/windows/windows/SiraGPT 0.4.3.exe`
+  - `output/SiraGPT-native-qa-v0.4.3-e6062026.zip`
 
 ## Current GitHub Secrets State
 
