@@ -30,6 +30,8 @@ const eventStoreDefault = (() => {
 })();
 
 const INTERRUPTED_MSG = 'Corrida interrumpida por reinicio del backend';
+const RESUME_MARKER = 'Reanudando tras reinicio del servidor';
+const MAX_BOOT_RESUMES = 2;
 
 async function recoverCodexRunsAfterBoot({
   prisma = defaultPrisma,
@@ -38,32 +40,62 @@ async function recoverCodexRunsAfterBoot({
   env = process.env,
   clock = () => new Date(),
 } = {}) {
-  const result = { erroredRunning: 0, reenqueuedQueued: 0, scanned: 0 };
+  const result = { erroredRunning: 0, resumedRunning: 0, reenqueuedQueued: 0, scanned: 0 };
   if (!isCodexV2Enabled(env)) return result;
   if (!prisma || !prisma.codexRun) return result;
 
   try {
-    // a) zombie running → error
+    // a) zombie running → RESUME (re-enqueue the SAME run). The workspace and
+    //    the event log persist across restarts, and the agent-loop rebuilds
+    //    its file tree from the real workspace — so the run continues where
+    //    it left off instead of dying and dropping the user to the template
+    //    builder (root cause of the "skeletal product" reports: every backend
+    //    deploy killed the in-flight build). The panel's SSE stream reconnects
+    //    on its own because the run never turns terminal. Bounded: after
+    //    MAX_BOOT_RESUMES interruptions the run is marked error as before.
+    // Snapshot BOTH lists up front: the resume path below flips running rows
+    // to 'queued' (already enqueued) — re-scanning them in phase (b) would
+    // double-enqueue within the same sweep.
     const running = await prisma.codexRun.findMany({ where: { status: 'running' } });
+    const queuedSnapshot = await prisma.codexRun.findMany({ where: { status: 'queued' } });
     for (const run of running) {
       result.scanned += 1;
       try {
-        await prisma.codexRun.update({
-          where: { id: run.id },
-          data: { status: 'error', error: INTERRUPTED_MSG, finishedAt: clock() },
-        });
-        if (eventStore) {
-          await eventStore.appendEvent(run.id, 'run_status', { status: 'error' }, { prisma }).catch(() => {});
+        let resumes = 0;
+        if (eventStore && eventStore.listEvents) {
+          const events = await eventStore.listEvents(run.id, { afterSeq: 0, prisma }).catch(() => []);
+          resumes = (events || []).filter(
+            (e) => e && e.type === 'narrative_delta' && String(e.data?.text || '').includes(RESUME_MARKER),
+          ).length;
         }
-        result.erroredRunning += 1;
+        if (resumes >= MAX_BOOT_RESUMES || !queue || !queue.enqueueCodexRun) {
+          await prisma.codexRun.update({
+            where: { id: run.id },
+            data: { status: 'error', error: INTERRUPTED_MSG, finishedAt: clock() },
+          });
+          if (eventStore) {
+            await eventStore.appendEvent(run.id, 'run_status', { status: 'error' }, { prisma }).catch(() => {});
+          }
+          result.erroredRunning += 1;
+        } else {
+          await prisma.codexRun.update({
+            where: { id: run.id },
+            data: { status: 'queued', error: null },
+          });
+          if (eventStore) {
+            await eventStore.appendEvent(run.id, 'narrative_delta', { text: `${RESUME_MARKER} — continúo el build donde quedó.` }, { prisma }).catch(() => {});
+            await eventStore.appendEvent(run.id, 'run_status', { status: 'queued' }, { prisma }).catch(() => {});
+          }
+          await queue.enqueueCodexRun({ runId: run.id });
+          result.resumedRunning += 1;
+        }
       } catch (err) {
-        if (env.NODE_ENV !== 'test') console.warn('[codex boot-recovery] running→error failed:', err?.message || err);
+        if (env.NODE_ENV !== 'test') console.warn('[codex boot-recovery] running recovery failed:', err?.message || err);
       }
     }
 
-    // b) stuck queued with no live job → re-enqueue
-    const queued = await prisma.codexRun.findMany({ where: { status: 'queued' } });
-    for (const run of queued) {
+    // b) stuck queued with no live job → re-enqueue (pre-resume snapshot).
+    for (const run of queuedSnapshot) {
       result.scanned += 1;
       try {
         const job = queue && queue.peekCodexJob ? await queue.peekCodexJob(run.id) : null;
@@ -81,4 +113,4 @@ async function recoverCodexRunsAfterBoot({
   return result;
 }
 
-module.exports = { recoverCodexRunsAfterBoot, INTERRUPTED_MSG };
+module.exports = { recoverCodexRunsAfterBoot, INTERRUPTED_MSG, RESUME_MARKER, MAX_BOOT_RESUMES };
