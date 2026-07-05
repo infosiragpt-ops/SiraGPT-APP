@@ -19,42 +19,43 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
-- Latest public QA packet: `native-qa-v0.4.3-0601139`
-  (`0601139e3b507b9733ad1fdd84290e3d8cf7a078`)
+- Latest public QA packet: `native-qa-v0.4.3-f2679e3`
+  (`f2679e39b0acba43246cd59792da5caba4cddfe3`)
 - Last verified native QA runs:
-  - Mobile: `28737444000`
-  - Desktop: `28737443998`
-  - Readiness report: `28737287330`
-  - CI: `28737287331`
+  - Mobile: `28737926063`
+  - Desktop: `28737926072`
+  - Readiness report: `28737691885`
+  - CI: `28737691884`
   - Docker: `28735031878`
 - Current production-main wrapper validation: SHA
-  `133c40cd0c14fd5aa293939319c6529a31fbd21c`
-  (`docs(native): record current wrapper validation`) is green in CI,
+  `f2679e39b0acba43246cd59792da5caba4cddfe3`
+  (`docs(native): refresh current qa build traceability`) is green in CI,
   Native readiness report, Native mobile builds, and Native desktop builds.
   These runs generated unsigned QA artifacts for Android, iPhone simulator,
   macOS, and Windows with `native-release-manifest.json`,
   `native-release-manifest.md`, and `SHA256SUMS.txt`. The downloaded artifact
-  contents include `SiraGPT-133c40c-debug.apk`,
-  `SiraGPT-133c40c-unsigned-release.aab`,
-  `SiraGPT-133c40c-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
+  contents include `SiraGPT-f2679e3-debug.apk`,
+  `SiraGPT-f2679e3-unsigned-release.aab`,
+  `SiraGPT-f2679e3-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
   `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
   `SiraGPT 0.4.3.exe`.
-- Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`
-  (`fix(ci): run database backup through postgres container`)
-- Management/traceability SHA validated before this packet refresh: `f7ee609462cd732cdd28015cbd95976cfe10dfc3`
-  (`docs(native): add store owner account readiness`)
-- Latest QA artifact manifest verification: mobile run `28732348269` and
-  desktop run `28732348253` were downloaded and each Android, iOS simulator,
+- Latest native artifact verification SHA: `f2679e39b0acba43246cd59792da5caba4cddfe3`
+  (`docs(native): refresh current qa build traceability`)
+- Management/traceability SHA validated before this packet refresh:
+  `f2679e39b0acba43246cd59792da5caba4cddfe3`
+  (`docs(native): refresh current qa build traceability`)
+- Latest QA artifact manifest verification: mobile run `28737926063` and
+  desktop run `28737926072` were downloaded and each Android, iOS simulator,
   macOS, and Windows artifact upload includes `native-release-manifest.json`,
   `native-release-manifest.md`, and `SHA256SUMS.txt`.
-- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-0601139.zip`
-  (`sha256:5d978589737f09d1f9f02839b9551f53afa0cef6a7daf9ccf675d0e6321051f6`)
+- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-f2679e3.zip`
+  (`sha256:b3c935392dd11c70915f71b1886e0b1341139d0bf0dedef1cc173421c3163928`)
   preserves Android, iOS, macOS, and Windows folders plus original Windows
   filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f7ee6094.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-f7ee6094.zip`)
-  with SHA-256 `5c6a750f6f891bb07d8aa75bc8501fe482a82dbe968a17c121476ec530539285`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f2679e39.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-f2679e39.zip`)
+  with SHA-256 `c35ab55a5ec0b458f442bd3d0c7734f626f4405367e5d1ac7e66c3f7209ff179`.
 - Latest signed release preflight: `28733963853`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733963853`)
   stopped before package runners because signing secrets are still missing.
@@ -62,9 +63,9 @@ secrets. They must never be committed.
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
-  Actions is enabled with `allowed_actions=all`, CI run `28737287331`, native
-  readiness run `28737287330`, native mobile run `28737444000`, native desktop
-  run `28737443998`, and Docker run `28735031878` are green. Standard
+  Actions is enabled with `allowed_actions=all`, CI run `28737691884`, native
+  readiness run `28737691885`, native mobile run `28737926063`, native desktop
+  run `28737926072`, and Docker run `28735031878` are green. Standard
   GitHub-hosted Actions for public repositories are free; this is separate from
   native signing readiness.
 

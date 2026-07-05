@@ -67,9 +67,9 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Latest durable public QA release packet target SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`.
-Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`
-(`fix(ci): run database backup through postgres container`).
+Latest durable public QA release packet target SHA: `f2679e39b0acba43246cd59792da5caba4cddfe3`.
+Latest native artifact verification SHA: `f2679e39b0acba43246cd59792da5caba4cddfe3`
+(`docs(native): refresh current qa build traceability`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
@@ -79,39 +79,39 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Android APK + AAB: passed.
   - iOS simulator build: passed.
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
-- Latest QA wrapper rebuilds on `production-main` SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
-  - Native mobile builds: `28732348269`.
-  - Native desktop builds: `28732348253`.
+- Latest QA wrapper rebuilds on `production-main` SHA `f2679e39b0acba43246cd59792da5caba4cddfe3`:
+  - Native mobile builds: `28737926063`.
+  - Native desktop builds: `28737926072`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
 - Management/traceability workflow snapshot before this document refresh,
-  SHA `f7ee609462cd732cdd28015cbd95976cfe10dfc3`:
-  - CI: `28736531253`.
-  - Native readiness report with owner handoff artifact: `28736531246`.
-  - Native mobile builds: `28735031841`.
-  - Native desktop builds: `28735031849`.
+  SHA `f2679e39b0acba43246cd59792da5caba4cddfe3`:
+  - CI: `28737691884`.
+  - Native readiness report with owner handoff artifact: `28737691885`.
+  - Native mobile builds: `28737926063`.
+  - Native desktop builds: `28737926072`.
   - Docker build images: `28735031878`.
 - Current production-main wrapper validation, SHA
-  `133c40cd0c14fd5aa293939319c6529a31fbd21c`
-  (`docs(native): record current wrapper validation`):
-  - CI: `28737287331`.
-  - Native readiness report: `28737287330`.
-  - Native mobile builds: `28737444000`.
-  - Native desktop builds: `28737443998`.
+  `f2679e39b0acba43246cd59792da5caba4cddfe3`
+  (`docs(native): refresh current qa build traceability`):
+  - CI: `28737691884`.
+  - Native readiness report: `28737691885`.
+  - Native mobile builds: `28737926063`.
+  - Native desktop builds: `28737926072`.
   - Result: Android debug APK, Android unsigned AAB, iPhone simulator app,
     macOS DMG/ZIP, and Windows installer/portable QA artifacts were generated
     with manifests and SHA-256 checksums.
   - Downloaded artifact contents verified:
-    `SiraGPT-133c40c-debug.apk`, `SiraGPT-133c40c-unsigned-release.aab`,
-    `SiraGPT-133c40c-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
+    `SiraGPT-f2679e3-debug.apk`, `SiraGPT-f2679e3-unsigned-release.aab`,
+    `SiraGPT-f2679e3-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
     `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
     `SiraGPT 0.4.3.exe`.
-- Current native QA artifact set remains tied to SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
-  - Native mobile builds: `28732348269`.
-  - Native desktop builds: `28732348253`.
+- Current native QA artifact set is tied to SHA `f2679e39b0acba43246cd59792da5caba4cddfe3`:
+  - Native mobile builds: `28737926063`.
+  - Native desktop builds: `28737926072`.
 - Latest QA artifact manifest verification:
-  - Android artifact upload contains `SiraGPT-0601139-debug.apk`,
-    `SiraGPT-0601139-unsigned-release.aab`, `native-release-manifest.json`,
+  - Android artifact upload contains `SiraGPT-f2679e3-debug.apk`,
+    `SiraGPT-f2679e3-unsigned-release.aab`, `native-release-manifest.json`,
     `native-release-manifest.md`, and `SHA256SUMS.txt`.
   - iOS simulator, macOS, and Windows artifact uploads also include the manifest
     and checksum files alongside their generated binaries.
@@ -119,10 +119,10 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.
   - Allowed actions: `all`.
-  - Latest green CI: `28737287331`.
-  - Latest green native readiness report: `28737287330`.
-  - Latest green native mobile builds: `28737444000`.
-  - Latest green native desktop builds: `28737443998`.
+  - Latest green CI: `28737691884`.
+  - Latest green native readiness report: `28737691885`.
+  - Latest green native mobile builds: `28737926063`.
+  - Latest green native desktop builds: `28737926072`.
   - Latest green Docker build images: `28735031878`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
 - Signed release preflight: `Native signed release packages` run `28733963853`.
@@ -132,9 +132,9 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f7ee6094.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-f7ee6094.zip`.
-  - SHA-256: `5c6a750f6f891bb07d8aa75bc8501fe482a82dbe968a17c121476ec530539285`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f2679e39.zip`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-f2679e39.zip`.
+  - SHA-256: `c35ab55a5ec0b458f442bd3d0c7734f626f4405367e5d1ac7e66c3f7209ff179`.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Rotate that password
@@ -142,9 +142,9 @@ outside GitHub. Mailbox passwords are not native signing or store-upload
 credentials.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
-`native-qa-v0.4.3-0601139`:
+`native-qa-v0.4.3-f2679e3`:
 
-https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0601139
+https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-f2679e3
 
 The prerelease above is the latest durable public QA download packet. The
 verified SHA also has fresh 14-day GitHub Actions artifacts attached to the
@@ -156,7 +156,7 @@ verified against its SHA-256 checksum. New `Native mobile builds` and
 `Native desktop builds` workflow runs also stage their uploaded QA artifacts
 under `output/native-qa/` and include the same manifest and checksum files in
 each platform artifact. The release also includes
-`SiraGPT-native-qa-v0.4.3-0601139.zip`, a single durable ZIP preserving platform
+`SiraGPT-native-qa-v0.4.3-f2679e3.zip`, a single durable ZIP preserving platform
 folders and original Windows filenames, plus its `.sha256` checksum. Public
 distribution still requires signing and store credentials.
 

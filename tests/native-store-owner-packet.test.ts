@@ -9,7 +9,7 @@ describe("generate-native-store-owner-packet", () => {
   it("creates a non-secret store owner packet with zip and checksum", () => {
     const dir = mkdtempSync(join(tmpdir(), "siragpt-native-store-owner-packet-"))
     const status = JSON.parse(readFileSync("docs/store-submission/native-release-status.json", "utf8")) as {
-      latestQaRelease: { targetSha: string }
+      latestQaRelease: { tag: string; targetSha: string }
       latestOwnerPacket: { sourceSha: string; zipName: string }
     }
 
@@ -49,11 +49,13 @@ describe("generate-native-store-owner-packet", () => {
       assert.match(readFileSync(checksumOut, "utf8"), new RegExp(`^${summary.checksumSha256}\\s+packet\\.zip\\n$`))
 
       const manifest = JSON.parse(readFileSync(join(outDir, "PACKET-MANIFEST.json"), "utf8")) as {
+        releaseTag: string
         qaBinaryTargetSha: string
         latestOwnerPacket: { sourceSha: string; zipName: string }
         latestSignedPreflight: { run: string; sourceSha: string }
         included: string[]
       }
+      assert.equal(manifest.releaseTag, status.latestQaRelease.tag)
       assert.equal(manifest.qaBinaryTargetSha, status.latestQaRelease.targetSha)
       assert.equal(manifest.latestOwnerPacket.sourceSha, status.latestOwnerPacket.sourceSha)
       assert.equal(manifest.latestOwnerPacket.zipName, status.latestOwnerPacket.zipName)

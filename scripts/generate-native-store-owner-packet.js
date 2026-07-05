@@ -7,7 +7,6 @@ const path = require("path")
 
 const root = path.resolve(__dirname, "..")
 const defaultRepo = process.env.GITHUB_REPOSITORY || "infosiragpt-ops/SiraGPT-APP"
-const defaultReleaseTag = "native-qa-v0.4.3-8ae5bd1"
 
 function usage() {
   return `Usage: node scripts/generate-native-store-owner-packet.js [--repo=owner/name] [--secret-source=env|github] [--out-dir=path] [--zip-out=path] [--checksum-out=path] [--source-sha=sha] [--source-commit=text] [--release-tag=tag] [--json] [--skip-zip]
@@ -26,7 +25,7 @@ function parseArgs(argv) {
     checksumOut: "",
     sourceSha: "",
     sourceCommit: "",
-    releaseTag: defaultReleaseTag,
+    releaseTag: "",
     format: "markdown",
     skipZip: false,
     help: false,
@@ -306,6 +305,7 @@ function main() {
   generateSigningTemplates({ args, outDir })
 
   const releaseStatus = readJson(path.join(root, "docs/store-submission/native-release-status.json"))
+  args.releaseTag = args.releaseTag || releaseStatus.latestQaRelease?.tag || "native-qa-unset"
   const manifest = createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus })
   writeFile(path.join(outDir, "PACKET-MANIFEST.json"), `${JSON.stringify(manifest, null, 2)}\n`)
   writeFile(path.join(outDir, "README.md"), renderReadme(manifest))
