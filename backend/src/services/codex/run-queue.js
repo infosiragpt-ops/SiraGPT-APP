@@ -134,6 +134,25 @@ async function peekCodexJob(runId) {
   return getCodexQueue().getJob(String(runId)).catch(() => null);
 }
 
+const LIVE_JOB_STATES = new Set(['waiting', 'active', 'delayed', 'prioritized', 'waiting-children']);
+
+/**
+ * A job counts as LIVE only while it can still run. A completed/failed record
+ * lingering in Redis (removeOnComplete/Fail retention) is NOT live — treating
+ * it as such made boot-recovery skip re-enqueues and resumed runs sat 'queued'
+ * forever (BullMQ also silently ignores q.add with an existing jobId).
+ */
+async function peekLiveCodexJob(runId) {
+  const job = await peekCodexJob(runId);
+  if (!job) return null;
+  try {
+    const state = typeof job.getState === 'function' ? await job.getState() : null;
+    return state && LIVE_JOB_STATES.has(state) ? job : null;
+  } catch {
+    return job; // state unavailable → be conservative, treat as live
+  }
+}
+
 async function getCodexQueueHealth() {
   const q = getCodexQueue();
   const counts = await q.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed', 'paused');
@@ -167,6 +186,7 @@ module.exports = {
   enqueueCodexRun,
   cancelQueuedCodexRun,
   peekCodexJob,
+  peekLiveCodexJob,
   startCodexWorker,
   getCodexQueueHealth,
   closeCodexWorker,

@@ -86,7 +86,10 @@ async function recoverCodexRunsAfterBoot({
             await eventStore.appendEvent(run.id, 'narrative_delta', { text: `${RESUME_MARKER} — continúo el build donde quedó.` }, { prisma }).catch(() => {});
             await eventStore.appendEvent(run.id, 'run_status', { status: 'queued' }, { prisma }).catch(() => {});
           }
-          await queue.enqueueCodexRun({ runId: run.id });
+          // Unique jobId per resume: BullMQ silently ignores q.add when a
+          // job with the same id already exists (the dead original lingers
+          // in Redis), so re-using runId left resumed runs queued forever.
+          await queue.enqueueCodexRun({ runId: run.id, jobId: `${run.id}:r${resumes + 1}` });
           result.resumedRunning += 1;
         }
       } catch (err) {
@@ -98,9 +101,14 @@ async function recoverCodexRunsAfterBoot({
     for (const run of queuedSnapshot) {
       result.scanned += 1;
       try {
-        const job = queue && queue.peekCodexJob ? await queue.peekCodexJob(run.id) : null;
+        const peek = queue && (queue.peekLiveCodexJob || queue.peekCodexJob);
+        const job = peek ? await peek.call(queue, run.id) : null;
         if (!job) {
-          if (queue && queue.enqueueCodexRun) await queue.enqueueCodexRun({ runId: run.id });
+          // Unique jobId here too — a dead job record with the runId lingering
+          // in Redis makes q.add(runId) a silent no-op (same trap as above).
+          if (queue && queue.enqueueCodexRun) {
+            await queue.enqueueCodexRun({ runId: run.id, jobId: `${run.id}:rq${clock().getTime()}` });
+          }
           result.reenqueuedQueued += 1;
         }
       } catch (err) {
