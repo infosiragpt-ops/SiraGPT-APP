@@ -11,6 +11,7 @@ describe("generate-native-store-owner-packet", () => {
     const status = JSON.parse(readFileSync("docs/store-submission/native-release-status.json", "utf8")) as {
       latestQaRelease: { tag: string; targetSha: string }
       latestOwnerPacket: { sourceSha: string; zipName: string }
+      latestSignedPreflight: { run: string; sourceSha: string; status: string }
     }
 
     try {
@@ -40,9 +41,9 @@ describe("generate-native-store-owner-packet", () => {
       assert.equal(summary.status, "owner-action-required")
       assert.equal(summary.repository, "infosiragpt-ops/SiraGPT-APP")
       assert.equal(summary.packetSourceSha, "6a3d4efc370212f6e1d53944c4fbb5fa58374866")
-      assert.equal(summary.latestSignedPreflight.run, "28733963853")
-      assert.equal(summary.latestSignedPreflight.sourceSha, "10956297b606ee449c44707b956bbb7444eb3c94")
-      assert.equal(summary.latestSignedPreflight.status, "blocked-missing-signing-secrets")
+      assert.equal(summary.latestSignedPreflight.run, status.latestSignedPreflight.run)
+      assert.equal(summary.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
+      assert.equal(summary.latestSignedPreflight.status, status.latestSignedPreflight.status)
       assert.match(summary.checksumSha256, /^[a-f0-9]{64}$/)
       assert.ok(existsSync(zipOut))
       assert.ok(existsSync(checksumOut))
@@ -59,8 +60,8 @@ describe("generate-native-store-owner-packet", () => {
       assert.equal(manifest.qaBinaryTargetSha, status.latestQaRelease.targetSha)
       assert.equal(manifest.latestOwnerPacket.sourceSha, status.latestOwnerPacket.sourceSha)
       assert.equal(manifest.latestOwnerPacket.zipName, status.latestOwnerPacket.zipName)
-      assert.equal(manifest.latestSignedPreflight.run, "28733963853")
-      assert.equal(manifest.latestSignedPreflight.sourceSha, "10956297b606ee449c44707b956bbb7444eb3c94")
+      assert.equal(manifest.latestSignedPreflight.run, status.latestSignedPreflight.run)
+      assert.equal(manifest.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
       assert.ok(manifest.included.includes("native-store-submission-packet/"))
       assert.ok(manifest.included.includes("native-signing-templates/"))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "google-play", "README.md")))

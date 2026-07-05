@@ -125,10 +125,11 @@ Latest native artifact verification SHA: `f2679e39b0acba43246cd59792da5caba4cddf
   - Latest green native desktop builds: `28737926072`.
   - Latest green Docker build images: `28735031878`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
-- Signed release preflight: `Native signed release packages` run `28733963853`.
-  - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-1095629`.
+- Signed release preflight: `Native signed release packages` run `28748232904`.
+  - Input: `platform=all`, `release_tag=native-v0.4.3-preflight-26f5d59`.
   - Result: stopped in preflight before Android, iOS, macOS, Windows, or GitHub Release package runners because signing secrets are not configured yet.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733963853`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`.
+  - Artifact: `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`.
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.

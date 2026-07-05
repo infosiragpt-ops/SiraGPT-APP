@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T10:55:00Z",
+  "updatedAt": "2026-07-05T17:10:00Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -215,7 +215,7 @@
     "note": "This snapshot records the current production-main management commit with green CI/readiness and the current non-secret native QA prerelease. Signed distribution remains separated from QA binaries and requires owner-provided signing/store credentials."
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T10:53:23Z",
+    "checkedAt": "2026-07-05T17:10:00Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
@@ -224,16 +224,17 @@
     "sourceCommands": [
       "gh release view native-qa-v0.4.3-f2679e3 --repo infosiragpt-ops/SiraGPT-APP --json url,tagName,targetCommitish,assets",
       "gh run list --repo infosiragpt-ops/SiraGPT-APP --branch production-main --limit 8 --json databaseId,name,status,conclusion,headSha,createdAt,url,event",
-      "npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json"
+      "npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json",
+      "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904/artifacts --jq '.artifacts[] | {id,name,expired,size_in_bytes,archive_download_url}'"
     ],
     "ciRun": "28737691884",
     "readinessRun": "28737691885",
     "mobileRun": "28737926063",
     "desktopRun": "28737926072",
     "dockerRun": "28735031878",
-    "signedPreflightRun": "28733963853",
+    "signedPreflightRun": "28748232904",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
-    "diagnosis": "Public repository Actions are enabled and running on the current production-main commit. The current QA native workflows and prerelease are green; the signed native release package blocker is missing native signing and store-upload secret names, not public repository Actions billing or permissions."
+    "diagnosis": "Public repository Actions are enabled and running on production-main. The QA native workflows and prerelease are green; the latest signed native release preflight also ran and uploaded the siragpt-native-signed-release-preflight artifact before stopping at missing signing secret names. The blocker is missing native signing and store-upload secret names, not public repository Actions billing or permissions."
   },
   "latestOwnerPacket": {
     "sourceSha": "f2679e39b0acba43246cd59792da5caba4cddfe3",
@@ -260,12 +261,12 @@
     ]
   },
   "latestSignedPreflight": {
-    "run": "28733963853",
-    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733963853",
-    "sourceSha": "10956297b606ee449c44707b956bbb7444eb3c94",
+    "run": "28748232904",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904",
+    "sourceSha": "26f5d5950ae3bf052f227d43e87faf5a3973203c",
     "status": "blocked-missing-signing-secrets",
     "platform": "all",
-    "releaseTag": "native-v0.4.3-signing-preflight-1095629",
+    "releaseTag": "native-v0.4.3-preflight-26f5d59",
     "failedJob": "Signed release preflight",
     "failedStep": "Validate selected signing secrets",
     "missingRequiredSecrets": {
@@ -293,7 +294,18 @@
         "WINDOWS_CERTIFICATE_PASSWORD"
       ]
     },
-    "notes": "The signed release workflow ran on the current production-main SHA with create_github_release=false and store uploads disabled. The new preflight summary reported blocked-missing-signing-secrets for platform=all and stopped before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured.",
+    "artifact": {
+      "id": "8093885822",
+      "name": "siragpt-native-signed-release-preflight",
+      "archiveDownloadUrl": "https://api.github.com/repos/infosiragpt-ops/SiraGPT-APP/actions/artifacts/8093885822/zip",
+      "expired": false,
+      "size": 1642,
+      "verifiedFiles": [
+        "preflight.md",
+        "preflight.json"
+      ]
+    },
+    "notes": "The signed release workflow ran on production-main commit 26f5d5950 with create_github_release=false and store uploads disabled. The preflight summary reported blocked-missing-signing-secrets for platform=all, uploaded the siragpt-native-signed-release-preflight artifact with preflight.md and preflight.json, and stopped before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured.",
     "summarySignals": {
       "status": "native-signed-preflight-status=blocked-missing-signing-secrets",
       "platform": "native-signed-preflight-platform=all",

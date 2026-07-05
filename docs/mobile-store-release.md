@@ -66,10 +66,11 @@
   - Actions enabled: `true`
   - Allowed actions: `all`
   - Result: public-repository Actions are not the blocker; missing native signing/store-upload secrets are.
-- Signed native preflight run `28733963853` was triggered for `platform=all`
-  on SHA `10956297b606ee449c44707b956bbb7444eb3c94` and stopped before
+- Signed native preflight run `28748232904` was triggered for `platform=all`
+  on SHA `26f5d5950ae3bf052f227d43e87faf5a3973203c` and stopped before
   package runners because Android, iOS, macOS, and Windows signing secrets are
-  still missing.
+  still missing. It uploaded `siragpt-native-signed-release-preflight` with
+  `preflight.md` and `preflight.json` before stopping.
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f2679e39.zip`
   (`sha256:c35ab55a5ec0b458f442bd3d0c7734f626f4405367e5d1ac7e66c3f7209ff179`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled. The signed release preflight also uploads `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`, even when the run intentionally stops because signing/upload secrets are missing.
