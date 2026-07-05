@@ -26,6 +26,7 @@ describe("generate-native-owner-handoff", () => {
         latestQaRelease: { tag: string; targetSha: string }
         latestTraceabilityCommit: { sha: string }
         latestSignedPreflight: { run: string; sourceSha: string; status: string }
+        latestSecretAudit: { status: string; diagnosis: string }
         latestVerifiedRuns: { docker?: string }
         platformPlans: Array<{ key: string; allSecrets: string[]; dryRunCommand: string }>
       }
@@ -35,11 +36,13 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.status, "owner-action-required")
       assert.equal(handoff.latestQaRelease.tag, "native-qa-v0.4.3-0fb0493")
       assert.equal(handoff.latestQaRelease.targetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
-      assert.equal(handoff.latestTraceabilityCommit.sha, "e71443c46699d235cddb73102830c92982298765")
+      assert.equal(handoff.latestTraceabilityCommit.sha, "b78c076e8445020d1ad471c2ee635bb37a507aa8")
       assert.equal(handoff.latestSignedPreflight.run, "28728938916")
       assert.equal(handoff.latestSignedPreflight.sourceSha, "5970953f4c72a3f39850ac679a5d9b7f3a939c49")
       assert.equal(handoff.latestSignedPreflight.status, "blocked-missing-signing-secrets")
-      assert.equal(handoff.latestVerifiedRuns.docker, "28727085650")
+      assert.equal(handoff.latestSecretAudit.status, "missing-native-signing-and-store-upload-secrets")
+      assert.match(handoff.latestSecretAudit.diagnosis, /Public repository Actions are running/)
+      assert.equal(handoff.latestVerifiedRuns.docker, "28728027742")
       assert.deepEqual(handoff.platformPlans.map((plan) => plan.key), ["android", "ios"])
       assert.ok(handoff.platformPlans[0].allSecrets.includes("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"))
       assert.ok(handoff.platformPlans[1].allSecrets.includes("APP_STORE_CONNECT_API_KEY_BASE64"))
@@ -52,6 +55,7 @@ describe("generate-native-owner-handoff", () => {
       assert.match(markdown, /Do not use the normal mailbox password as native signing material/)
       assert.match(markdown, /Latest Repository Validation/)
       assert.match(markdown, /Latest Signed Release Preflight/)
+      assert.match(markdown, /Latest Secret-Name Audit/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

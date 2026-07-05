@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T04:37:54Z",
+  "updatedAt": "2026-07-05T04:49:21Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -24,15 +24,15 @@
   "latestVerifiedRuns": {
     "mobile": "28729582734",
     "desktop": "28729583294",
-    "readiness": "28729412226",
-    "ci": "28729412232",
-    "docker": "28727085650"
+    "readiness": "28729705627",
+    "ci": "28729705626",
+    "docker": "28728027742"
   },
   "latestTraceabilityCommit": {
-    "sha": "e71443c46699d235cddb73102830c92982298765",
-    "message": "docs(native): publish current owner packet",
-    "ci": "28729412232",
-    "readiness": "28729412226",
+    "sha": "b78c076e8445020d1ad471c2ee635bb37a507aa8",
+    "message": "docs(native): record latest qa build runs",
+    "ci": "28729705626",
+    "readiness": "28729705627",
     "mobile": "28729582734",
     "desktop": "28729583294",
     "docker": "28728027742"
@@ -92,5 +92,44 @@
       ]
     },
     "notes": "The signed release workflow ran on the current production-main SHA and stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
+  },
+  "latestSecretAudit": {
+    "checkedAt": "2026-07-05T04:49:21Z",
+    "command": "bash scripts/audit-native-github-secrets.sh --repo=infosiragpt-ops/SiraGPT-APP --only-required",
+    "status": "missing-native-signing-and-store-upload-secrets",
+    "diagnosis": "Public repository Actions are running. Signed native release packaging is blocked by missing platform signing and store-upload secret names.",
+    "missingRequiredSecrets": {
+      "android": [
+        "ANDROID_KEYSTORE_BASE64",
+        "ANDROID_KEYSTORE_PASSWORD",
+        "ANDROID_KEY_ALIAS",
+        "ANDROID_KEY_PASSWORD"
+      ],
+      "googleplay": [
+        "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"
+      ],
+      "ios": [
+        "APPLE_TEAM_ID",
+        "IOS_SIGNING_CERTIFICATE_BASE64",
+        "IOS_SIGNING_CERTIFICATE_PASSWORD",
+        "IOS_PROVISIONING_PROFILE_BASE64"
+      ],
+      "appstore": [
+        "APP_STORE_CONNECT_API_KEY_ID",
+        "APP_STORE_CONNECT_API_ISSUER_ID",
+        "APP_STORE_CONNECT_API_KEY_BASE64"
+      ],
+      "macos": [
+        "MACOS_CERTIFICATE_BASE64",
+        "MACOS_CERTIFICATE_PASSWORD",
+        "APPLE_TEAM_ID",
+        "APPLE_ID",
+        "APPLE_APP_SPECIFIC_PASSWORD"
+      ],
+      "windows": [
+        "WINDOWS_CERTIFICATE_BASE64",
+        "WINDOWS_CERTIFICATE_PASSWORD"
+      ]
+    }
   }
 }

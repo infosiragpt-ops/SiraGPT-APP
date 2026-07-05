@@ -207,6 +207,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     latestVerifiedRuns: status.latestVerifiedRuns,
     latestTraceabilityCommit: status.latestTraceabilityCommit,
     latestSignedPreflight: status.latestSignedPreflight,
+    latestSecretAudit: status.latestSecretAudit,
     platformPlans,
     forbiddenMaterials: [
       "normal email account password",
@@ -278,6 +279,17 @@ function renderMarkdown(handoff) {
     if (handoff.latestSignedPreflight.notes) {
       lines.push(`- Notes: ${handoff.latestSignedPreflight.notes}`)
     }
+    lines.push("")
+  }
+  if (handoff.latestSecretAudit?.status) {
+    lines.push("## Latest Secret-Name Audit")
+    lines.push("")
+    lines.push(`- Checked: \`${handoff.latestSecretAudit.checkedAt}\``)
+    lines.push(`- Status: \`${handoff.latestSecretAudit.status}\``)
+    if (handoff.latestSecretAudit.diagnosis) {
+      lines.push(`- Diagnosis: ${handoff.latestSecretAudit.diagnosis}`)
+    }
+    lines.push(`- Command: \`${handoff.latestSecretAudit.command}\``)
     lines.push("")
   }
   lines.push("## Security Boundary")

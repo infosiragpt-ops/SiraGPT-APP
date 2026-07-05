@@ -68,8 +68,8 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 ### Latest Verified Native Builds
 
 Latest durable public QA release packet target SHA: `0fb0493464b841c11924e9ff9a087209fb8d25dd`.
-Latest repository validation SHA: `e71443c46699d235cddb73102830c92982298765`
-(`docs(native): publish current owner packet`).
+Latest repository validation SHA: `b78c076e8445020d1ad471c2ee635bb37a507aa8`
+(`docs(native): record latest qa build runs`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
@@ -84,16 +84,19 @@ Latest repository validation SHA: `e71443c46699d235cddb73102830c92982298765`
   - Native desktop builds: `28729583294`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
-- Current traceability workflow set on SHA `e71443c46699d235cddb73102830c92982298765`:
-  - CI: `28729412232`.
-  - Native readiness report with owner handoff artifact: `28729412226`.
+- Current traceability workflow set on SHA `b78c076e8445020d1ad471c2ee635bb37a507aa8`:
+  - CI: `28729705626`.
+  - Native readiness report with owner handoff artifact: `28729705627`.
   - Native mobile builds: `28729582734`.
   - Native desktop builds: `28729583294`.
-  - Docker build images: `28727085650`.
+  - Docker build images: `28728027742`.
 - Signed release preflight: `Native signed release packages` run `28728938916`.
   - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-5970953`.
   - Result: stopped in preflight before Android, iOS, macOS, Windows, or GitHub Release package runners because signing secrets are not configured yet.
   - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28728938916`.
+  - Diagnosis: public repository Actions are running; signed native release
+    packaging is blocked by missing signing and store-upload secrets, not by
+    repository visibility.
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`.
   - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-47bc2475.zip`.
   - SHA-256: `490bddebff1a2e64653a5986c1b98dd35a6347972512c2dc563e758aecc96926`.

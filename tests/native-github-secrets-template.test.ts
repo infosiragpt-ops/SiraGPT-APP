@@ -16,7 +16,7 @@ describe("generate-native-github-secrets-template", () => {
     assert.match(output, /ANDROID_KEYSTORE_PASSWORD=/)
     assert.match(output, /GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH=/)
     assert.doesNotMatch(output, /IOS_SIGNING_CERTIFICATE_PATH=/)
-    assert.doesNotMatch(output, /Siragpt2025/)
+    assert.doesNotMatch(output, /NORMAL_MAILBOX_PASSWORD_SHOULD_NOT_APPEAR/)
   })
 
   it("prints JSON metadata with names only", () => {

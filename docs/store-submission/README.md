@@ -24,11 +24,11 @@ secrets. They must never be committed.
 - Latest verified native runs:
   - Mobile: `28729582734`
   - Desktop: `28729583294`
-  - Readiness report: `28729412226`
-  - CI: `28729412232`
-  - Docker images: `28727085650`
-- Latest repository validation SHA: `e71443c46699d235cddb73102830c92982298765`
-  (`docs(native): publish current owner packet`)
+  - Readiness report: `28729705627`
+  - CI: `28729705626`
+  - Docker images: `28728027742`
+- Latest repository validation SHA: `b78c076e8445020d1ad471c2ee635bb37a507aa8`
+  (`docs(native): record latest qa build runs`)
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-47bc2475.zip`)
@@ -36,6 +36,9 @@ secrets. They must never be committed.
 - Latest signed release preflight: `28728938916`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28728938916`)
   stopped before package runners because signing secrets are still missing.
+- Latest secret-name audit: public repository Actions are running, but signed
+  native release packaging is blocked by missing platform signing and
+  store-upload secret names.
 
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest
@@ -181,7 +184,9 @@ be base64-encoded locally before upload. The template is a convenience artifact
 for the account owner and must not be committed after values are filled.
 `native:release:plan` generates a non-secret Markdown/JSON management packet
 for the current repo, including missing GitHub secret names, per-platform
-account actions, and safe `gh secret set` commands.
+account actions, safe `gh secret set` commands, and the Actions-vs-signing
+diagnosis that separates public repository workflow availability from missing
+native signing material.
 `native:release:handoff` generates the owner handoff packet for Apple, Google,
 macOS, and Windows account work. It includes the latest QA release link,
 verified workflow run IDs, account-owner actions, secret names, dry-run

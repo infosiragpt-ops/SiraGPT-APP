@@ -68,7 +68,7 @@ describe("generate-native-store-owner-packet", () => {
       assert.ok(existsSync(join(outDir, "native-signing-templates", "windows.env.example")))
       assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /ANDROID_KEYSTORE_PATH=/)
       assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /WINDOWS_CERTIFICATE_PATH=/)
-      assert.doesNotMatch(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /Siragpt2025/)
+      assert.doesNotMatch(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /NORMAL_MAILBOX_PASSWORD_SHOULD_NOT_APPEAR/)
 
       for (const file of [
         join(outDir, "README.md"),

@@ -260,11 +260,30 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
 
   const missingSecrets = unique(platformPlans.flatMap((platform) => platform.allSecrets.missing))
   const ready = canAudit && missingSecrets.length === 0
+  const statusReason = !canAudit
+    ? "secret-audit-unavailable"
+    : ready
+      ? "all-native-signing-secrets-configured"
+      : "missing-native-signing-or-store-upload-secrets"
+  const signedReleaseStatus = ready
+    ? "ready-to-run"
+    : "blocked-missing-signing-secrets"
 
   return {
     generatedAt,
     repo,
     status: ready ? "ready" : "blocked",
+    statusReason,
+    actionsVsSigningDiagnosis: {
+      publicRepoActionsGate: "separate-from-native-signing",
+      signedReleaseStatus,
+      message: ready
+        ? "GitHub Actions can run the signed release workflow when the owner approves the selected platform and release target."
+        : "GitHub Actions can run CI and QA workflows in the public repository, but signed native release package jobs still require the missing GitHub Actions secret names below.",
+      nextOwnerAction: ready
+        ? "Run Native signed release packages with the selected platform and upload flags."
+        : "Configure the missing native signing and store-upload secret names as GitHub Actions secrets from a trusted machine.",
+    },
     githubSecretAudit: {
       source: secrets.source,
       status: secrets.status,
@@ -302,9 +321,17 @@ function renderMarkdown(plan) {
   lines.push(`Generated: ${plan.generatedAt}`)
   lines.push(`Repository: \`${plan.repo}\``)
   lines.push(`Status: \`${plan.status}\``)
+  lines.push(`Status reason: \`${plan.statusReason}\``)
   lines.push(`Secret audit source: \`${plan.githubSecretAudit.source}\``)
   lines.push("")
   lines.push("This plan contains secret names only. It must never include passwords, certificates, keystores, provisioning profiles, API private keys, or app-specific passwords.")
+  lines.push("")
+  lines.push("## Actions vs Signed Release Diagnosis")
+  lines.push("")
+  lines.push("- Public repository Actions and native signing are separate gates.")
+  lines.push(`- Signed release status: \`${plan.actionsVsSigningDiagnosis.signedReleaseStatus}\``)
+  lines.push(`- Diagnosis: ${plan.actionsVsSigningDiagnosis.message}`)
+  lines.push(`- Next owner action: ${plan.actionsVsSigningDiagnosis.nextOwnerAction}`)
   lines.push("")
   lines.push("## Native Identity")
   lines.push("")
