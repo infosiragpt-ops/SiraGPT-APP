@@ -205,6 +205,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     },
     latestQaRelease: status.latestQaRelease,
     latestVerifiedRuns: status.latestVerifiedRuns,
+    latestQaArtifactManifestRuns: status.latestQaArtifactManifestRuns,
     latestTraceabilityCommit: status.latestTraceabilityCommit,
     latestActionsDiagnostics: status.latestActionsDiagnostics,
     latestSignedPreflight: status.latestSignedPreflight,
@@ -259,6 +260,27 @@ function renderMarkdown(handoff) {
     lines.push(`- Docker: \`${handoff.latestVerifiedRuns.docker}\``)
   }
   lines.push("")
+  if (handoff.latestQaArtifactManifestRuns?.status) {
+    lines.push("## Latest QA Artifact Manifest Verification")
+    lines.push("")
+    lines.push(`- Checked: \`${handoff.latestQaArtifactManifestRuns.checkedAt}\``)
+    lines.push(`- Source SHA: \`${handoff.latestQaArtifactManifestRuns.sourceSha}\``)
+    lines.push(`- Mobile run: \`${handoff.latestQaArtifactManifestRuns.mobileRun}\``)
+    lines.push(`- Desktop run: \`${handoff.latestQaArtifactManifestRuns.desktopRun}\``)
+    lines.push(`- Status: \`${handoff.latestQaArtifactManifestRuns.status}\``)
+    if (handoff.latestQaArtifactManifestRuns.diagnosis) {
+      lines.push(`- Diagnosis: ${handoff.latestQaArtifactManifestRuns.diagnosis}`)
+    }
+    if (handoff.latestQaArtifactManifestRuns.platformArtifacts) {
+      lines.push("")
+      lines.push("Verified artifact files:")
+      lines.push("")
+      for (const [platform, files] of Object.entries(handoff.latestQaArtifactManifestRuns.platformArtifacts)) {
+        lines.push(`- ${platform}: ${files.map((file) => `\`${file}\``).join(", ")}`)
+      }
+    }
+    lines.push("")
+  }
   if (handoff.latestTraceabilityCommit?.sha) {
     lines.push("## Latest Repository Validation")
     lines.push("")

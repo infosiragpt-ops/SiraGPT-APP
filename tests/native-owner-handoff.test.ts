@@ -22,6 +22,12 @@ describe("generate-native-owner-handoff", () => {
         readinessRun: string
         diagnosis: string
       }
+      latestQaArtifactManifestRuns: {
+        status: string
+        mobileRun: string
+        desktopRun: string
+        platformArtifacts: Record<string, string[]>
+      }
       latestVerifiedRuns: { docker?: string }
     }
 
@@ -50,6 +56,12 @@ describe("generate-native-owner-handoff", () => {
           readinessRun: string
           diagnosis: string
         }
+        latestQaArtifactManifestRuns: {
+          status: string
+          mobileRun: string
+          desktopRun: string
+          platformArtifacts: Record<string, string[]>
+        }
         latestSignedPreflight: { run: string; sourceSha: string; status: string }
         latestSecretAudit: { status: string; diagnosis: string }
         latestVerifiedRuns: { docker?: string }
@@ -69,6 +81,10 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.latestActionsDiagnostics.ciRun, status.latestActionsDiagnostics.ciRun)
       assert.equal(handoff.latestActionsDiagnostics.readinessRun, status.latestActionsDiagnostics.readinessRun)
       assert.match(handoff.latestActionsDiagnostics.diagnosis, /Public repository Actions are enabled/)
+      assert.equal(handoff.latestQaArtifactManifestRuns.status, status.latestQaArtifactManifestRuns.status)
+      assert.equal(handoff.latestQaArtifactManifestRuns.mobileRun, status.latestQaArtifactManifestRuns.mobileRun)
+      assert.equal(handoff.latestQaArtifactManifestRuns.desktopRun, status.latestQaArtifactManifestRuns.desktopRun)
+      assert.deepEqual(handoff.latestQaArtifactManifestRuns.platformArtifacts.android, status.latestQaArtifactManifestRuns.platformArtifacts.android)
       assert.equal(handoff.latestSignedPreflight.run, status.latestSignedPreflight.run)
       assert.equal(handoff.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
       assert.equal(handoff.latestSignedPreflight.status, status.latestSignedPreflight.status)
@@ -85,6 +101,7 @@ describe("generate-native-owner-handoff", () => {
         assert.doesNotMatch(contents, /sk-[A-Za-z0-9_-]{20,}/)
       }
       assert.match(markdown, /Do not use the normal mailbox password as native signing material/)
+      assert.match(markdown, /Latest QA Artifact Manifest Verification/)
       assert.match(markdown, /Latest Repository Validation/)
       assert.match(markdown, /Latest GitHub Actions Diagnostics/)
       assert.match(markdown, /Latest Signed Release Preflight/)

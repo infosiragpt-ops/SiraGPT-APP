@@ -7,7 +7,7 @@
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-0fb0493` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
-- The current repository validation SHA is `5a7292a923df007828a18943a9b037a939c1a7be`; CI, Docker image build, native readiness, native mobile, and native desktop workflows are green.
+- The current repository validation SHA is `69c44fa8a646d556f379a6f83431d5a2338cbc7e`; CI, Docker image build, native readiness, native mobile, and native desktop workflows are green.
 - Android signed Play release publishing is blocked until the Play upload keystore secrets, the Google Play service account upload secret, and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
@@ -22,19 +22,25 @@
   store assets without reading signing credentials.
 - `npm run native:store:packet` exports platform-specific, non-secret submission
   folders under `output/native-store-submission-packet/`.
-- GitHub Actions `Native mobile builds` run `28729582734` passed on `production-main` SHA `e71443c46699d235cddb73102830c92982298765`.
+- GitHub Actions `Native mobile builds` run `28730573548` passed on `production-main` SHA `69c44fa8a646d556f379a6f83431d5a2338cbc7e`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
-- GitHub Actions `Native desktop builds` run `28729583294` passed on the same SHA and produced unsigned QA artifacts:
+- The Android upload was downloaded and its manifest lists
+  `SiraGPT-69c44fa-debug.apk` and
+  `SiraGPT-69c44fa-unsigned-release.aab` with SHA-256 checksums.
+- GitHub Actions `Native desktop builds` run `28730573563` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
-- GitHub Actions `Native readiness report` run `28730040206` passed on the current traceability SHA and produced the non-secret release plan/store packet.
-- Current traceability commit `5a7292a923df007828a18943a9b037a939c1a7be` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28730040205`
-  - Native readiness report: `28730040206`
-  - Native mobile builds: `28729582734`
-  - Native desktop builds: `28729583294`
+- The iOS simulator, macOS, and Windows uploads were downloaded and each
+  contains `native-release-manifest.json`, `native-release-manifest.md`, and
+  `SHA256SUMS.txt`.
+- GitHub Actions `Native readiness report` run `28730573555` passed on the current traceability SHA and produced the non-secret release plan/store packet.
+- Current traceability commit `69c44fa8a646d556f379a6f83431d5a2338cbc7e` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
+  - CI: `28730573570`
+  - Native readiness report: `28730573555`
+  - Native mobile builds: `28730573548`
+  - Native desktop builds: `28730573563`
   - Docker build images: `28728027742`
 - GitHub repository diagnostics:
   - Repository visibility: `PUBLIC`

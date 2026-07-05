@@ -22,13 +22,17 @@ secrets. They must never be committed.
 - Latest public QA packet: `native-qa-v0.4.3-0fb0493`
   (`0fb0493464b841c11924e9ff9a087209fb8d25dd`)
 - Latest verified native runs:
-  - Mobile: `28729582734`
-  - Desktop: `28729583294`
-  - Readiness report: `28730040206`
-  - CI: `28730040205`
+  - Mobile: `28730573548`
+  - Desktop: `28730573563`
+  - Readiness report: `28730573555`
+  - CI: `28730573570`
   - Docker images: `28728027742`
-- Latest repository validation SHA: `5a7292a923df007828a18943a9b037a939c1a7be`
-  (`docs(native): clarify signing actions gate`)
+- Latest repository validation SHA: `69c44fa8a646d556f379a6f83431d5a2338cbc7e`
+  (`ci(native): attach QA artifact manifests`)
+- Latest QA artifact manifest verification: mobile run `28730573548` and
+  desktop run `28730573563` were downloaded and each Android, iOS simulator,
+  macOS, and Windows artifact upload includes `native-release-manifest.json`,
+  `native-release-manifest.md`, and `SHA256SUMS.txt`.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-47bc2475.zip`)
@@ -40,8 +44,8 @@ secrets. They must never be committed.
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
 - Latest GitHub Actions diagnostics: repository visibility is `PUBLIC`, Actions
-  is enabled with `allowed_actions=all`, CI run `28730040205` and native
-  readiness run `28730040206` are green. Standard GitHub-hosted Actions for
+  is enabled with `allowed_actions=all`, CI run `28730573570` and native
+  readiness run `28730573555` are green. Standard GitHub-hosted Actions for
   public repositories are free; this is separate from native signing readiness.
 
 The canonical draft metadata lives in

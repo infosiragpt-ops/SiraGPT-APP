@@ -68,8 +68,8 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 ### Latest Verified Native Builds
 
 Latest durable public QA release packet target SHA: `0fb0493464b841c11924e9ff9a087209fb8d25dd`.
-Latest repository validation SHA: `5a7292a923df007828a18943a9b037a939c1a7be`
-(`docs(native): clarify signing actions gate`).
+Latest repository validation SHA: `69c44fa8a646d556f379a6f83431d5a2338cbc7e`
+(`ci(native): attach QA artifact manifests`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
@@ -79,17 +79,23 @@ Latest repository validation SHA: `5a7292a923df007828a18943a9b037a939c1a7be`
   - Android APK + AAB: passed.
   - iOS simulator build: passed.
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
-- Latest QA wrapper rebuilds on `production-main` SHA `e71443c46699d235cddb73102830c92982298765`:
-  - Native mobile builds: `28729582734`.
-  - Native desktop builds: `28729583294`.
+- Latest QA wrapper rebuilds on `production-main` SHA `69c44fa8a646d556f379a6f83431d5a2338cbc7e`:
+  - Native mobile builds: `28730573548`.
+  - Native desktop builds: `28730573563`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
-- Current traceability workflow set on SHA `5a7292a923df007828a18943a9b037a939c1a7be`:
-  - CI: `28730040205`.
-  - Native readiness report with owner handoff artifact: `28730040206`.
-  - Native mobile builds: `28729582734`.
-  - Native desktop builds: `28729583294`.
+- Current traceability workflow set on SHA `69c44fa8a646d556f379a6f83431d5a2338cbc7e`:
+  - CI: `28730573570`.
+  - Native readiness report with owner handoff artifact: `28730573555`.
+  - Native mobile builds: `28730573548`.
+  - Native desktop builds: `28730573563`.
   - Docker build images: `28728027742`.
+- Latest QA artifact manifest verification:
+  - Android artifact upload contains `SiraGPT-69c44fa-debug.apk`,
+    `SiraGPT-69c44fa-unsigned-release.aab`, `native-release-manifest.json`,
+    `native-release-manifest.md`, and `SHA256SUMS.txt`.
+  - iOS simulator, macOS, and Windows artifact uploads also include the manifest
+    and checksum files alongside their generated binaries.
 - GitHub Actions diagnostics on `infosiragpt-ops/SiraGPT-APP`:
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T05:04:59Z",
+  "updatedAt": "2026-07-05T05:30:42Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -22,23 +22,105 @@
     ]
   },
   "latestVerifiedRuns": {
-    "mobile": "28729582734",
-    "desktop": "28729583294",
-    "readiness": "28730040206",
-    "ci": "28730040205",
+    "mobile": "28730573548",
+    "desktop": "28730573563",
+    "readiness": "28730573555",
+    "ci": "28730573570",
     "docker": "28728027742"
   },
+  "latestQaArtifactManifestRuns": {
+    "checkedAt": "2026-07-05T05:30:42Z",
+    "sourceSha": "69c44fa8a646d556f379a6f83431d5a2338cbc7e",
+    "mobileRun": "28730573548",
+    "desktopRun": "28730573563",
+    "status": "verified-manifest-and-checksums-present",
+    "artifactUploads": [
+      {
+        "run": "28730573548",
+        "name": "siragpt-mobile-android",
+        "artifactId": "8088611731",
+        "platforms": [
+          "android"
+        ],
+        "manifestFiles": [
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      },
+      {
+        "run": "28730573548",
+        "name": "siragpt-mobile-ios-simulator",
+        "artifactId": "8088610743",
+        "platforms": [
+          "ios"
+        ],
+        "manifestFiles": [
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      },
+      {
+        "run": "28730573563",
+        "name": "siragpt-desktop-macos",
+        "artifactId": "8088612411",
+        "platforms": [
+          "macos"
+        ],
+        "manifestFiles": [
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      },
+      {
+        "run": "28730573563",
+        "name": "siragpt-desktop-windows-x64",
+        "artifactId": "8088618234",
+        "platforms": [
+          "windows"
+        ],
+        "manifestFiles": [
+          "native-release-manifest.json",
+          "native-release-manifest.md",
+          "SHA256SUMS.txt"
+        ]
+      }
+    ],
+    "platformArtifacts": {
+      "android": [
+        "SiraGPT-69c44fa-debug.apk",
+        "SiraGPT-69c44fa-unsigned-release.aab"
+      ],
+      "ios": [
+        "SiraGPT-69c44fa-ios-simulator-app.zip"
+      ],
+      "macos": [
+        "SiraGPT-0.4.3-arm64.dmg",
+        "SiraGPT-0.4.3-arm64-mac.zip",
+        "SiraGPT-0.4.3-arm64.dmg.blockmap",
+        "SiraGPT-0.4.3-arm64-mac.zip.blockmap"
+      ],
+      "windows": [
+        "SiraGPT 0.4.3.exe",
+        "SiraGPT Setup 0.4.3.exe",
+        "SiraGPT Setup 0.4.3.exe.blockmap"
+      ]
+    },
+    "diagnosis": "The latest mobile and desktop QA workflow artifacts were downloaded and their manifests list the generated platform binaries with SHA-256 checksums."
+  },
   "latestTraceabilityCommit": {
-    "sha": "5a7292a923df007828a18943a9b037a939c1a7be",
-    "message": "docs(native): clarify signing actions gate",
-    "ci": "28730040205",
-    "readiness": "28730040206",
-    "mobile": "28729582734",
-    "desktop": "28729583294",
+    "sha": "69c44fa8a646d556f379a6f83431d5a2338cbc7e",
+    "message": "ci(native): attach QA artifact manifests",
+    "ci": "28730573570",
+    "readiness": "28730573555",
+    "mobile": "28730573548",
+    "desktop": "28730573563",
     "docker": "28728027742"
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T05:04:59Z",
+    "checkedAt": "2026-07-05T05:30:42Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
@@ -48,8 +130,8 @@
       "gh repo view infosiragpt-ops/SiraGPT-APP --json nameWithOwner,visibility,isPrivate,url",
       "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/permissions"
     ],
-    "ciRun": "28730040205",
-    "readinessRun": "28730040206",
+    "ciRun": "28730573570",
+    "readinessRun": "28730573555",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
     "diagnosis": "Public repository Actions are enabled and running. Standard GitHub-hosted Actions for public repositories are free; signed native release packaging is gated by missing platform signing and store-upload secrets."
   },
@@ -110,7 +192,7 @@
     "notes": "The signed release workflow ran on the current production-main SHA and stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T05:04:59Z",
+    "checkedAt": "2026-07-05T05:30:42Z",
     "command": "bash scripts/audit-native-github-secrets.sh --repo=infosiragpt-ops/SiraGPT-APP --only-required",
     "status": "missing-native-signing-and-store-upload-secrets",
     "diagnosis": "Public repository Actions are running. Signed native release packaging is blocked by missing platform signing and store-upload secret names.",
