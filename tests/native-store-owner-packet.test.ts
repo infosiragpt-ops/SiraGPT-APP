@@ -51,8 +51,8 @@ describe("generate-native-store-owner-packet", () => {
         included: string[]
       }
       assert.equal(manifest.qaBinaryTargetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
-      assert.equal(manifest.latestOwnerPacket.sourceSha, "ffb2f79076b4807f32f898e8b1b8ec60ca56844d")
-      assert.equal(manifest.latestOwnerPacket.zipName, "SiraGPT-native-store-owner-packet-ffb2f790.zip")
+      assert.equal(manifest.latestOwnerPacket.sourceSha, "47bc24757c9167c747fce099e083325f8aea127e")
+      assert.equal(manifest.latestOwnerPacket.zipName, "SiraGPT-native-store-owner-packet-47bc2475.zip")
       assert.equal(manifest.latestSignedPreflight.run, "28728938916")
       assert.equal(manifest.latestSignedPreflight.sourceSha, "5970953f4c72a3f39850ac679a5d9b7f3a939c49")
       assert.ok(manifest.included.includes("native-store-submission-packet/"))

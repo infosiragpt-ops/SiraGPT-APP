@@ -30,9 +30,9 @@
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
 - GitHub Actions `Native readiness report` run `28725476833` passed on the same SHA and produced the non-secret release plan/store packet.
-- Current traceability commit `5970953f4c72a3f39850ac679a5d9b7f3a939c49` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28728766157`
-  - Native readiness report: `28728650058`
+- Current traceability commit `47bc24757c9167c747fce099e083325f8aea127e` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
+  - CI: `28729126060`
+  - Native readiness report: `28729126069`
   - Native mobile builds: `28727085656`
   - Native desktop builds: `28727085653`
   - Docker build images: `28727085650`
@@ -40,6 +40,8 @@
   on SHA `5970953f4c72a3f39850ac679a5d9b7f3a939c49` and stopped before
   package runners because Android, iOS, macOS, and Windows signing secrets are
   still missing.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`
+  (`sha256:490bddebff1a2e64653a5986c1b98dd35a6347972512c2dc563e758aecc96926`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - Public QA prerelease:
   - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0fb0493`
