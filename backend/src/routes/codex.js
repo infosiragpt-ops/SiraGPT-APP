@@ -290,9 +290,24 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
     }
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
+    const runner = createRunnerClient();
+    // REUSE a live dev server before minting anything: the tokenized base is
+    // baked into Vite's --base, so restarting re-mints it and instantly 404s
+    // ("public base URL" error) every asset URL an already-open iframe holds —
+    // two viewers or a start racing an auto-run left the preview blank. Only
+    // reuse while the embedded token is still comfortably valid.
+    const live = await runner.devStatus(project.id).catch(() => null);
+    const liveBase = String(live?.basePath || '');
+    const liveToken = /\/preview\/([^/]+)\/app\/$/.exec(liveBase)?.[1];
+    const livePayload = liveToken ? verifyPreviewToken(decodeURIComponent(liveToken)) : null;
+    const tokenFreshMs = Number(livePayload?.exp || 0) - Date.now();
+    if (live?.running && livePayload && livePayload.projectId === project.id && tokenFreshMs > 10 * 60 * 1000) {
+      if (Number.isInteger(live.port)) previewPortCache.set(project.id, { port: live.port, ts: Date.now() });
+      const previewStatus = live.ready ? live : await waitForRunnerPreviewReady(runner, project.id);
+      return res.json({ ok: true, reused: true, port: live.port, project: project.id, previewStatus, devUrl: liveBase, previewUrl: liveBase, basePath: liveBase });
+    }
     const token = previewTokenFor({ projectId: project.id, userId: req.user.id });
     const basePath = codexPreviewBasePath(project.id, token);
-    const runner = createRunnerClient();
     const out = await runner.startDev(project.id, { basePath });
     if (Number.isInteger(out?.port)) {
       previewPortCache.set(project.id, { port: out.port, ts: Date.now() });

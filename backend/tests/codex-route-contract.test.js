@@ -158,6 +158,23 @@ test('POST /projects/:id/preview/start proxies the runner and adds devUrl', asyn
   assert.match(runnerCalls.at(-1)[2].basePath, /^\/api\/codex\/projects\/p1\/preview\/.+\/app\/$/);
 });
 
+test('POST /projects/:id/preview/start REUSES a live dev server (same tokenized base)', async () => {
+  // First start mints the base; a second start while the server is live must
+  // return the SAME base instead of restarting with a fresh token — a restart
+  // 404s every asset URL an already-open iframe still holds.
+  const app = buildApp();
+  const first = await request(app).post('/api/codex/projects/p1/preview/start');
+  assert.equal(first.status, 200);
+  const liveBase = first.body.basePath;
+  runnerStatusQueue = [{ running: true, ready: true, project: 'p1', port: 5173, basePath: liveBase }];
+  const startsBefore = runnerCalls.filter((c) => c[0] === 'startDev').length;
+  const second = await request(app).post('/api/codex/projects/p1/preview/start');
+  assert.equal(second.status, 200);
+  assert.equal(second.body.reused, true);
+  assert.equal(second.body.basePath, liveBase);
+  assert.equal(runnerCalls.filter((c) => c[0] === 'startDev').length, startsBefore, 'no restart on reuse');
+});
+
 test('POST /projects/:id/preview/start waits for runner readiness', async () => {
   process.env.CODEX_PREVIEW_START_POLL_MS = '1';
   process.env.CODEX_PREVIEW_START_TIMEOUT_MS = '1000';
