@@ -84,7 +84,16 @@ async function checkApp({ url, settleMs = DEFAULT_SETTLE_MS, timeoutMs = DEFAULT
     const page = await browser.newPage();
     page.on('pageerror', (err) => pushError('exception', err && err.message));
     page.on('console', (msg) => {
-      if (msg.type && msg.type() === 'error') pushError('console.error', msg.text && msg.text());
+      if (!msg.type || msg.type() !== 'error') return;
+      // Resource-load failures surface here with a URL-less text ("Failed to
+      // load resource: … 404"); the URL lives in msg.location(). Skip the
+      // same noise requestfailed skips (favicon, sourcemaps) and attach the
+      // URL to real ones so the agent knows WHICH resource broke.
+      const loc = msg.location ? msg.location() : null;
+      const locUrl = loc && loc.url ? String(loc.url) : '';
+      if (/favicon|\.map($|\?)/.test(locUrl)) return;
+      const text = msg.text ? msg.text() : '';
+      pushError('console.error', locUrl && /Failed to load resource/i.test(text) ? `${text} (${locUrl})` : text);
     });
     page.on('requestfailed', (req) => {
       const reqUrl = req.url ? req.url() : '';

@@ -36,7 +36,14 @@ function fakePuppeteer({ snapshot, fire = [] } = {}) {
           on: (evt, cb) => { handlers[evt] = cb; },
           goto: async () => {
             for (const [evt, payload] of fire) {
-              if (evt === 'console') handlers.console?.({ type: () => 'error', text: () => payload });
+              if (evt === 'console') {
+                const p = typeof payload === 'object' ? payload : { text: payload };
+                handlers.console?.({
+                  type: () => 'error',
+                  text: () => p.text,
+                  ...(p.url ? { location: () => ({ url: p.url }) } : {}),
+                });
+              }
               else if (evt === 'pageerror') handlers.pageerror?.(new Error(payload));
               else if (evt === 'requestfailed') handlers.requestfailed?.({ url: () => payload, failure: () => ({ errorText: 'ERR' }) });
             }
@@ -89,6 +96,23 @@ test('checkApp: favicon/map request failures are ignored', async () => {
   });
   assert.equal(r.ok, true);
   assert.equal(r.errors.length, 0);
+});
+
+test('checkApp: favicon console 404 is noise; real resource errors carry their URL', async () => {
+  const r = await bc.checkApp({
+    url: 'http://x:5173',
+    settleMs: 1,
+    puppeteerImpl: fakePuppeteer({
+      snapshot: { title: 't', rootChars: 10, overlay: null },
+      fire: [
+        ['console', { text: 'Failed to load resource: the server responded with a status of 404 (Not Found)', url: 'http://x/favicon.ico' }],
+        ['console', { text: 'Failed to load resource: the server responded with a status of 404 (Not Found)', url: 'http://x/src/data.json' }],
+      ],
+    }),
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0], /src\/data\.json/);
 });
 
 test('checkApp: launch failure degrades to unavailable (never throws)', async () => {
