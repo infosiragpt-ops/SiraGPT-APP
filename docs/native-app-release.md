@@ -102,16 +102,16 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Actions enabled: `true`.
   - Allowed actions: `all`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
-- Signed release preflight: `Native signed release packages` run `28733337158`.
-  - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-7d0d47c`.
+- Signed release preflight: `Native signed release packages` run `28733963853`.
+  - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-1095629`.
   - Result: stopped in preflight before Android, iOS, macOS, Windows, or GitHub Release package runners because signing secrets are not configured yet.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733337158`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733963853`.
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-7d0d47cf.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-7d0d47cf.zip`.
-  - SHA-256: `851712786dbc5af105a659de824de18a557a26825b8f0534ef5d27a57f0505c6`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-10956297.zip`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-10956297.zip`.
+  - SHA-256: `094075810102f8c1a88bfd51308188719d64d4350cbedaaad8a52eae3e904292`.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
 `native-qa-v0.4.3-0601139`:

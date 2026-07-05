@@ -39,11 +39,11 @@ secrets. They must never be committed.
   preserves Android, iOS, macOS, and Windows folders plus original Windows
   filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-7d0d47cf.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-7d0d47cf.zip`)
-  with SHA-256 `851712786dbc5af105a659de824de18a557a26825b8f0534ef5d27a57f0505c6`.
-- Latest signed release preflight: `28733337158`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733337158`)
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-10956297.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-10956297.zip`)
+  with SHA-256 `094075810102f8c1a88bfd51308188719d64d4350cbedaaad8a52eae3e904292`.
+- Latest signed release preflight: `28733963853`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733963853`)
   stopped before package runners because signing secrets are still missing.
 - Latest secret-name audit: public repository Actions are running, but signed
   native release packaging is blocked by missing platform signing and

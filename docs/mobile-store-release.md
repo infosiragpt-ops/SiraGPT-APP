@@ -50,12 +50,12 @@
   - Actions enabled: `true`
   - Allowed actions: `all`
   - Result: public-repository Actions are not the blocker; missing native signing/store-upload secrets are.
-- Signed native preflight run `28733337158` was triggered for `platform=all`
-  on SHA `7d0d47cfb3c79d3d075037d2560340877e5bf0be` and stopped before
+- Signed native preflight run `28733963853` was triggered for `platform=all`
+  on SHA `10956297b606ee449c44707b956bbb7444eb3c94` and stopped before
   package runners because Android, iOS, macOS, and Windows signing secrets are
   still missing.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-7d0d47cf.zip`
-  (`sha256:851712786dbc5af105a659de824de18a557a26825b8f0534ef5d27a57f0505c6`).
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-10956297.zip`
+  (`sha256:094075810102f8c1a88bfd51308188719d64d4350cbedaaad8a52eae3e904292`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
