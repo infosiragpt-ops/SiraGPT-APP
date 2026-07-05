@@ -15,7 +15,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "usage", label: "Usage", icon: BarChart3 },
 ]
 
-export function AppsPage() {
+function AppsPage() {
   const [tab, setTab] = React.useState<Tab>("agents")
 
   return (

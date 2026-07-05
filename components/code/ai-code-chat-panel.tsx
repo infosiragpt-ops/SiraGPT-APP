@@ -43,7 +43,6 @@ import {
   Search,
   Server,
   Sparkles,
-  SquareDashedMousePointer,
   StopCircle,
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
@@ -138,6 +137,35 @@ type ComposerMode = "app" | "build" | "deps" | "plan" | "debug" | "ask" | "image
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+function CodeTargetSelectIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect
+        x="3.75"
+        y="3.75"
+        width="14"
+        height="14"
+        rx="2.75"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray="2.9 3.8"
+      />
+      <path
+        d="M10.24 9.38c-.37-.91.56-1.78 1.43-1.34l8.33 4.22c.82.42.83 1.59.02 2.02l-3.32 1.76c-.2.11-.37.28-.48.49l-1.74 3.37c-.42.82-1.59.82-2.02 0l-4.02-7.98c-.14-.28-.15-.6-.04-.89l1.84-1.65Z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
 
 // Coalesce the (possibly many) file-apply batches an agent emits within a
 // single turn into ONE forced preview restart. We deliberately do NOT gate on
@@ -1522,12 +1550,21 @@ export function AICodeChatPanel() {
           now: Date.now(),
           getPrevContent: (p) => files[p]?.content ?? "",
         })
-        // Claude Code-style spoken completion digest for the finished build.
+        // Claude Code-style spoken completion digest for the finished build:
+        // what was built (entities/screens) AND what's honestly pending —
+        // derived from REAL build facts, never invented.
+        const spokenPending: string[] = []
+        if (appliedFiles.some((f) => /schema\.prisma$/.test(f.path))) {
+          spokenPending.push("conectar la base de datos real")
+        }
+        spokenPending.push("afinar el diseño a tu marca")
         const spoken = buildSpokenSummary({
           kind: "build",
           filesChanged: metrics.filesChanged,
           durationMs: metrics.timeWorkedMs,
           appName: ctx?.brand || ctx?.productType || "",
+          entities: (ctx?.dataEntities || "").trim(),
+          pending: spokenPending,
         })
         markVoiced(`${id}-a`)
         setTurns((prev) =>
@@ -3100,7 +3137,7 @@ export function AICodeChatPanel() {
                 selectingTarget && "code-target-select-button--active",
               )}
             >
-              <SquareDashedMousePointer className="code-target-select-button__icon h-4 w-4" />
+              <CodeTargetSelectIcon className="code-target-select-button__icon h-6 w-6" />
             </Button>
             <span className="min-w-0 flex-1" />
             <ModelPickerInline

@@ -36,19 +36,71 @@ const ELEVEN_VOICE_SETTINGS = {
 // El texto hablado de un turno es corto; este tope protege el presupuesto TTS.
 const MAX_TTS_CHARS = 2400
 
-// Nombres de voces femeninas es-* típicas de macOS/Windows/Google para que el
-// fallback local también suene mujer siempre que el sistema lo permita.
-const FEMALE_ES_VOICE_HINTS = /m[oó]nica|paulina|helena|sabina|elvira|isabela|camila|luciana|francisca|soledad|marisol|female|mujer/i
+// Nombres de voces femeninas es-* típicas de macOS/Windows/Google/Edge para
+// que el fallback local también suene mujer siempre que el sistema lo permita.
+const FEMALE_ES_VOICE_HINTS =
+  /m[oó]nica|paulina|helena|sabina|dalia|ximena|catalina|ang[eé]lica|esperanza|luz|andrea|elvira|isabela|camila|luciana|francisca|soledad|marisol|female|mujer/i
+// Marcas de calidad del propio sistema: las variantes mejoradas/naturales
+// suenan MUCHO mejor que las compactas por defecto.
+const QUALITY_VOICE_HINTS = /enhanced|mejorada|premium|natural|neural|siri/i
 
 function pickLocalVoice(): SpeechSynthesisVoice | null {
   const voices = window.speechSynthesis.getVoices?.() || []
   const es = voices.filter((v) => /^es(-|_)?/i.test(v.lang))
+  const female = es.filter((v) => FEMALE_ES_VOICE_HINTS.test(v.name))
   return (
-    es.find((v) => FEMALE_ES_VOICE_HINTS.test(v.name)) ||
+    // 1) Femenina en su variante de calidad (Enhanced/Natural/Neural).
+    female.find((v) => QUALITY_VOICE_HINTS.test(v.name)) ||
+    // 2) Femenina servida por el navegador (Google/Edge — no localService):
+    //    suele ser neural y muy superior a las voces compactas del SO.
+    female.find((v) => v.localService === false) ||
+    female[0] ||
+    // 3) Sin femenina identificable: cualquier es-* de calidad o de navegador.
+    es.find((v) => QUALITY_VOICE_HINTS.test(v.name)) ||
+    es.find((v) => v.localService === false) ||
     es.find((v) => /google|microsoft/i.test(v.name)) ||
     es[0] ||
     null
   )
+}
+
+/**
+ * El sintetizador puebla getVoices() de forma asíncrona (Chrome lo entrega
+ * vacío en la primera llamada). Espera una vez a `voiceschanged` (con tope)
+ * para no hablar con la voz robótica por defecto.
+ */
+function waitForVoices(timeoutMs = 600): Promise<void> {
+  return new Promise((resolve) => {
+    const synth = window.speechSynthesis
+    if ((synth.getVoices?.() || []).length > 0) {
+      resolve()
+      return
+    }
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      synth.removeEventListener?.("voiceschanged", finish)
+      resolve()
+    }
+    synth.addEventListener?.("voiceschanged", finish)
+    window.setTimeout(finish, timeoutMs)
+  })
+}
+
+/**
+ * El resumen puede traer markdown (negritas, backticks, viñetas, emojis);
+ * leído tal cual suena robótico ("asterisco asterisco…"). Se limpia a prosa.
+ */
+function toSpeakable(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ") // bloques de código fuera
+    .replace(/[*_`#>~]+/g, "")
+    .replace(/^\s*[-•]\s+/gm, ", ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // enlaces → su texto
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, " ") // emojis
+    .replace(/\s+/g, " ")
+    .trim()
 }
 
 type EngineState = "idle" | "loading" | "playing" | "paused"
@@ -146,16 +198,19 @@ export function BrowserVoicePlayer({
   }, [])
 
   // Fallback 100% local: speechSynthesis con la mejor voz femenina es-*.
-  const playLocal = React.useCallback(() => {
+  const playLocal = React.useCallback(async () => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setSupported(false)
       return
     }
     try {
       window.speechSynthesis.cancel()
-      const u = new SpeechSynthesisUtterance(speakable)
+      await waitForVoices()
+      const u = new SpeechSynthesisUtterance(toSpeakable(speakable))
       u.lang = "es-ES"
-      u.rate = 1
+      // Prosodia cálida: ligeramente más aguda y fluida que el default plano.
+      u.rate = 1.03
+      u.pitch = 1.08
       const voice = pickLocalVoice()
       if (voice) u.voice = voice
       u.onend = () => {
@@ -219,9 +274,9 @@ export function BrowserVoicePlayer({
         playAudioSrc(src)
         return
       }
-      playLocal()
+      void playLocal()
     } catch {
-      playLocal()
+      void playLocal()
     }
   }, [playAudioSrc, playLocal, speakable, state, stopAll])
 

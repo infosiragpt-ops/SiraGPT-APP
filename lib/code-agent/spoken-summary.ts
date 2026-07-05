@@ -24,6 +24,10 @@ export type SpokenSummaryInput = {
   fixedErrors?: number
   /** Short app/goal name to personalize the build summary (already-trusted UI text). */
   appName?: string
+  /** Human list of the entities/screens built ("Producto, Venta y Cliente"). */
+  entities?: string
+  /** What's honestly left to improve (max 2 spoken; derived from real build facts). */
+  pending?: string[]
 }
 
 const MAX_APP_NAME = 60
@@ -53,7 +57,15 @@ export function buildSpokenSummary(input: SpokenSummaryInput): string {
       const parts = [`Listo. Construí ${what}`]
       if (files) parts.push(`con ${speakFiles(files)}`)
       if (dur) parts.push(dur)
-      return `${parts.join(" ")}. El preview ya está corriendo — revísalo y dime qué ajusto.`
+      const sentences = [`${parts.join(" ")}.`]
+      const entities = (input.entities || "").trim()
+      if (entities) sentences.push(`Incluye pantallas para ${entities}.`)
+      const pending = (input.pending || []).map((p) => p.trim()).filter(Boolean).slice(0, 2)
+      if (pending.length) {
+        sentences.push(`Queda pendiente ${pending.join(" y ")}.`)
+      }
+      sentences.push("El preview ya está corriendo — revísalo y dime qué ajusto.")
+      return sentences.join(" ")
     }
     case "patch": {
       const parts = ["Hecho. Apliqué los cambios"]

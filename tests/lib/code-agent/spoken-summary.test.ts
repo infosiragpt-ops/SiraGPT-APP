@@ -53,3 +53,33 @@ describe('buildSpokenSummary (Claude Code-style spoken digest)', () => {
     expect(s.length).toBeLessThanOrEqual(220)
   })
 })
+
+describe('resumen hablado con entidades y pendientes', () => {
+  it('incluye pantallas construidas y lo pendiente, en ese orden', () => {
+    const s = buildSpokenSummary({
+      kind: 'build',
+      filesChanged: 23,
+      durationMs: 42000,
+      appName: 'Venta de autos',
+      entities: 'Producto, Venta y Cliente',
+      pending: ['conectar la base de datos real', 'afinar el diseño a tu marca'],
+    })
+    expect(s).toContain('Construí tu app «Venta de autos» con 23 archivos')
+    expect(s).toContain('Incluye pantallas para Producto, Venta y Cliente.')
+    expect(s).toContain('Queda pendiente conectar la base de datos real y afinar el diseño a tu marca.')
+    expect(s.indexOf('Incluye')).toBeLessThan(s.indexOf('Queda pendiente'))
+    expect(s).toMatch(/revísalo y dime qué ajusto\.$/)
+  })
+
+  it('sin entidades ni pendientes mantiene el formato corto original', () => {
+    const s = buildSpokenSummary({ kind: 'build', filesChanged: 3 })
+    expect(s).not.toContain('Incluye pantallas')
+    expect(s).not.toContain('Queda pendiente')
+  })
+
+  it('recorta pendientes a dos', () => {
+    const s = buildSpokenSummary({ kind: 'build', pending: ['a', 'b', 'c'] })
+    expect(s).toContain('Queda pendiente a y b.')
+    expect(s).not.toContain(' c.')
+  })
+})
