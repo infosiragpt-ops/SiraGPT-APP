@@ -29,12 +29,15 @@ describe("generate-native-store-owner-packet", () => {
         status: string
         repository: string
         packetSourceSha: string
+        latestSignedPreflight: { run: string; status: string }
         zipPath: string
         checksumSha256: string
       }
       assert.equal(summary.status, "owner-action-required")
       assert.equal(summary.repository, "infosiragpt-ops/SiraGPT-APP")
       assert.equal(summary.packetSourceSha, "6a3d4efc370212f6e1d53944c4fbb5fa58374866")
+      assert.equal(summary.latestSignedPreflight.run, "28727578162")
+      assert.equal(summary.latestSignedPreflight.status, "blocked-missing-signing-secrets")
       assert.match(summary.checksumSha256, /^[a-f0-9]{64}$/)
       assert.ok(existsSync(zipOut))
       assert.ok(existsSync(checksumOut))
@@ -42,9 +45,11 @@ describe("generate-native-store-owner-packet", () => {
 
       const manifest = JSON.parse(readFileSync(join(outDir, "PACKET-MANIFEST.json"), "utf8")) as {
         qaBinaryTargetSha: string
+        latestSignedPreflight: { run: string }
         included: string[]
       }
       assert.equal(manifest.qaBinaryTargetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
+      assert.equal(manifest.latestSignedPreflight.run, "28727578162")
       assert.ok(manifest.included.includes("native-store-submission-packet/"))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "google-play", "README.md")))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "app-store-connect", "README.md")))

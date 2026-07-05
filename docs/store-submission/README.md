@@ -30,6 +30,9 @@ secrets. They must never be committed.
 - Latest repository validation SHA: `1e657aaf40853df5a3f844b86028a17fae88cad0`
   (`ci(native): automate store owner packet`)
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
+- Latest signed release preflight: `28727578162`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28727578162`)
+  stopped before package runners because signing secrets are still missing.
 
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest

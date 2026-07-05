@@ -36,6 +36,9 @@
   - Native mobile builds: `28727085656`
   - Native desktop builds: `28727085653`
   - Docker build images: `28727085650`
+- Signed native preflight run `28727578162` was triggered for `platform=all`
+  and stopped before package runners because Android, iOS, macOS, and Windows
+  signing secrets are still missing.
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - Public QA prerelease:
   - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0fb0493`
@@ -66,6 +69,16 @@ inside the vendor store portals.
 Normal email/account passwords are not valid native signing credentials. Use
 dedicated upload keys, certificates, provisioning profiles, App Store Connect
 API keys, and Apple app-specific passwords for the signing workflow.
+
+Latest secret-name audit:
+
+```bash
+npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --require=all --only-required
+```
+
+Result: `android`, `googleplay`, `ios`, `appstore`, `macos`, and `windows`
+are missing required native signing/upload secrets. The audit prints names and
+readiness states only; it does not read or print secret values.
 
 ## Current Google Play Blockers
 

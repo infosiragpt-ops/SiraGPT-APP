@@ -206,6 +206,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     latestQaRelease: status.latestQaRelease,
     latestVerifiedRuns: status.latestVerifiedRuns,
     latestTraceabilityCommit: status.latestTraceabilityCommit,
+    latestSignedPreflight: status.latestSignedPreflight,
     platformPlans,
     forbiddenMaterials: [
       "normal email account password",
@@ -264,6 +265,19 @@ function renderMarkdown(handoff) {
       lines.push(`- Commit: \`${handoff.latestTraceabilityCommit.message}\``)
     }
     lines.push("- Status: all current native, CI, and Docker workflows are green.")
+    lines.push("")
+  }
+  if (handoff.latestSignedPreflight?.run) {
+    lines.push("## Latest Signed Release Preflight")
+    lines.push("")
+    lines.push(`- Run: \`${handoff.latestSignedPreflight.run}\``)
+    lines.push(`- URL: ${handoff.latestSignedPreflight.url}`)
+    lines.push(`- Status: \`${handoff.latestSignedPreflight.status}\``)
+    lines.push(`- Platform: \`${handoff.latestSignedPreflight.platform}\``)
+    lines.push(`- Release tag: \`${handoff.latestSignedPreflight.releaseTag}\``)
+    if (handoff.latestSignedPreflight.notes) {
+      lines.push(`- Notes: ${handoff.latestSignedPreflight.notes}`)
+    }
     lines.push("")
   }
   lines.push("## Security Boundary")

@@ -11,6 +11,7 @@ Usage: bash scripts/audit-native-github-secrets.sh [--repo=owner/name] [--requir
 
 Audits GitHub Actions secret names required for native app signing.
 It prints only secret names and readiness states; it never reads or prints secret values.
+When --only-required is used without --require, all native signing groups are checked.
 
 Groups:
   android   Android Play upload key secrets
@@ -137,7 +138,7 @@ if [ -n "$REQUIRE" ]; then
   for group in "${REQUIRED_GROUPS[@]}"; do
     expand_group "${group//[[:space:]]/}"
   done
-elif [ "$ONLY_REQUIRED" -eq 0 ]; then
+else
   expand_group all
 fi
 

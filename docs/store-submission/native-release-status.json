@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T02:44:00Z",
+  "updatedAt": "2026-07-05T03:00:00Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -36,5 +36,13 @@
     "mobile": "28727085656",
     "desktop": "28727085653",
     "docker": "28727085650"
+  },
+  "latestSignedPreflight": {
+    "run": "28727578162",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28727578162",
+    "status": "blocked-missing-signing-secrets",
+    "platform": "all",
+    "releaseTag": "native-v0.4.3-signing-preflight",
+    "notes": "The signed release workflow stopped in the cheap preflight before launching Android, iOS, macOS, or Windows package runners because native signing secrets are not configured."
   }
 }

@@ -87,6 +87,10 @@ Latest repository validation SHA: `1e657aaf40853df5a3f844b86028a17fae88cad0`
   - Native mobile builds: `28727085656`.
   - Native desktop builds: `28727085653`.
   - Docker build images: `28727085650`.
+- Signed release preflight: `Native signed release packages` run `28727578162`.
+  - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight`.
+  - Result: intentionally stopped in preflight before Android, iOS, macOS, or Windows runners because signing secrets are not configured yet.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28727578162`.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
 `native-qa-v0.4.3-0fb0493`:
@@ -149,6 +153,9 @@ npm run native:release:plan
 
 For focused CI/preflight output, use `npm run native:readiness -- --require=android,ios,macos,windows --only-required`.
 For GitHub repository secret-name auditing, use `npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP`.
+To audit all required native signing groups while printing only required
+statuses, use
+`npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --only-required`.
 For a non-secret management packet with missing GitHub secret names, owner
 account actions, and safe upload commands, use:
 

@@ -133,6 +133,7 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
     latestQaRelease: releaseStatus.latestQaRelease,
     latestVerifiedRuns: releaseStatus.latestVerifiedRuns,
     latestTraceabilityCommit: releaseStatus.latestTraceabilityCommit,
+    latestSignedPreflight: releaseStatus.latestSignedPreflight,
     outputDirectory: relative(outDir),
     included: [
       "native-store-submission-packet/",
@@ -158,6 +159,7 @@ Generated: ${manifest.generatedAt}
 - Packet source SHA: \`${manifest.packetSourceSha}\`
 - QA release: ${manifest.releaseUrl}
 - QA binary target SHA: \`${manifest.qaBinaryTargetSha}\`
+- Latest signed preflight: ${manifest.latestSignedPreflight?.url || "not recorded"}
 
 This ZIP contains public store submission material and owner-action checklists for Android, iPhone, macOS, and Windows. It contains secret names only, not secret values. Do not add passwords, keystores, certificates, provisioning profiles, API private keys, cookies, recovery codes, or app-specific password values to this packet.
 
