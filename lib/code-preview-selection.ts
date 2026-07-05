@@ -11,15 +11,28 @@ export type CodePreviewSelectionRect = {
 
 export type CodePreviewSelectionDetail = {
   selector?: string
+  selectionMethod?: "dom" | "region"
   tagName?: string
   id?: string
   className?: string
   text?: string
+  parent?: {
+    selector?: string
+    tagName?: string
+    className?: string
+    text?: string
+  } | null
   role?: string
   ariaLabel?: string
   href?: string
   src?: string
   rect?: CodePreviewSelectionRect
+  relativePoint?: {
+    x: number
+    y: number
+    percentX: number
+    percentY: number
+  }
   pageUrl?: string
   pageTitle?: string
   previewKind?: string

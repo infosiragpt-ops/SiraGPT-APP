@@ -62,7 +62,10 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
   var box = null;
   var label = null;
   var lastTarget = null;
+  var pendingTarget = null;
+  var frame = 0;
   var style = null;
+  function send(type, extra){try{var payload=extra||{};payload.type=type;parent.postMessage(payload,'*')}catch(e){}}
   function norm(value, limit){
     return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit || 220);
   }
@@ -76,6 +79,40 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
     if (typeof el.className === 'string') return el.className;
     if (el.className && typeof el.className.baseVal === 'string') return el.className.baseVal;
     return '';
+  }
+  function isSelectorUi(el){
+    return !!(el && el.nodeType === 1 && el.getAttribute('data-sgpt-selector-ui') === 'true');
+  }
+  function pointFromEvent(event){
+    var p = event;
+    if (event && event.touches && event.touches[0]) p = event.touches[0];
+    if (event && event.changedTouches && event.changedTouches[0]) p = event.changedTouches[0];
+    if (!p || typeof p.clientX !== 'number' || typeof p.clientY !== 'number') return null;
+    return { x: p.clientX, y: p.clientY };
+  }
+  function targetFromEvent(event){
+    var point = pointFromEvent(event);
+    var target = point ? document.elementFromPoint(point.x, point.y) : null;
+    if (!target && event && typeof event.composedPath === 'function') {
+      var path = event.composedPath();
+      for (var i = 0; i < path.length; i += 1) {
+        if (path[i] && path[i].nodeType === 1) { target = path[i]; break; }
+      }
+    }
+    if (!target && event) target = event.target;
+    while (target && isSelectorUi(target)) target = target.parentElement;
+    if (!target || target === document || target === document.documentElement || target === document.body || target.nodeType !== 1) return null;
+    return target;
+  }
+  function parentSummary(el){
+    var parent = el && el.parentElement;
+    if (!parent || parent === document.body || parent === document.documentElement) return null;
+    return {
+      selector: shortSelector(parent),
+      tagName: (parent.tagName || '').toLowerCase(),
+      className: norm(classNameOf(parent), 180),
+      text: norm(parent.innerText || parent.textContent || '', 180)
+    };
   }
   function shortSelector(el){
     if (!el || el.nodeType !== 1) return '';
@@ -106,19 +143,19 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
     if (!style) {
       style = document.createElement('style');
       style.setAttribute('data-sgpt-selector-ui', 'true');
-      style.textContent = 'html[data-sgpt-selecting="true"],html[data-sgpt-selecting="true"] *{cursor:crosshair!important}';
+      style.textContent = 'html[data-sgpt-selecting="true"],html[data-sgpt-selecting="true"] *{cursor:crosshair!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}html[data-sgpt-selecting="true"]{touch-action:none!important}';
       document.head ? document.head.appendChild(style) : document.documentElement.appendChild(style);
     }
     if (!box) {
       box = document.createElement('div');
       box.setAttribute('data-sgpt-selector-ui', 'true');
-      box.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #7c3aed;border-radius:8px;box-shadow:0 0 0 99999px rgba(15,23,42,.10),0 10px 30px rgba(124,58,237,.28);background:rgba(124,58,237,.08);transition:transform 90ms ease,width 90ms ease,height 90ms ease;';
+      box.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #7c3aed;border-radius:8px;box-shadow:0 0 0 99999px rgba(15,23,42,.08),0 8px 24px rgba(124,58,237,.18);background:rgba(124,58,237,.07);will-change:transform,width,height;';
       document.documentElement.appendChild(box);
     }
     if (!label) {
       label = document.createElement('div');
       label.setAttribute('data-sgpt-selector-ui', 'true');
-      label.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;max-width:min(340px,calc(100vw - 24px));border:1px solid rgba(255,255,255,.42);border-radius:999px;background:rgba(17,24,39,.88);color:white;padding:6px 10px;font:600 12px/1.2 Inter,system-ui,sans-serif;box-shadow:0 12px 32px rgba(15,23,42,.22);backdrop-filter:blur(14px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      label.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;max-width:min(340px,calc(100vw - 24px));border:1px solid rgba(255,255,255,.34);border-radius:999px;background:rgba(17,24,39,.92);color:white;padding:6px 10px;font:600 12px/1.2 Inter,system-ui,sans-serif;box-shadow:0 12px 28px rgba(15,23,42,.18);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;will-change:transform;';
       document.documentElement.appendChild(label);
     }
   }
@@ -136,14 +173,26 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
     var left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - 348));
     label.style.transform = 'translate(' + left + 'px,' + top + 'px)';
   }
+  function scheduleDraw(el){
+    if (!el || el.nodeType !== 1 || isSelectorUi(el)) return;
+    pendingTarget = el;
+    lastTarget = el;
+    if (frame) return;
+    frame = window.requestAnimationFrame(function(){
+      frame = 0;
+      draw(pendingTarget);
+    });
+  }
   function describe(el){
     var rect = el.getBoundingClientRect();
     return {
+      selectionMethod: 'dom',
       selector: shortSelector(el),
       tagName: (el.tagName || '').toLowerCase(),
       id: el.id || '',
       className: norm(classNameOf(el), 260),
       text: norm(el.innerText || el.textContent || '', 260),
+      parent: parentSummary(el),
       role: el.getAttribute('role') || '',
       ariaLabel: el.getAttribute('aria-label') || '',
       href: el.getAttribute('href') || '',
@@ -162,48 +211,70 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
   function cleanup(reason){
     active = false;
     lastTarget = null;
+    pendingTarget = null;
+    if (frame) { window.cancelAnimationFrame(frame); frame = 0; }
     document.documentElement.removeAttribute('data-sgpt-selecting');
-    document.removeEventListener('mousemove', onMove, true);
-    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('pointermove', onPointerMove, true);
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('mousemove', onPointerMove, true);
+    document.removeEventListener('click', onClickFallback, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('resize', onViewportChange, true);
     if (box) { box.remove(); box = null; }
     if (label) { label.remove(); label = null; }
     if (reason) {
-      try { parent.postMessage({ type: 'sgpt-preview-selection-cancelled', reason: reason }, '*'); } catch (_) {}
+      send('sgpt-preview-selection-cancelled', { reason: reason });
     }
   }
-  function onMove(event){
+  function capture(event, explicitTarget){
     if (!active) return;
-    var target = event.target;
-    if (!target || target.nodeType !== 1 || target.getAttribute('data-sgpt-selector-ui') === 'true') return;
-    lastTarget = target;
-    draw(target);
-  }
-  function onClick(event){
-    if (!active) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation();
-    var target = lastTarget || event.target;
+    if (event && event.preventDefault) event.preventDefault();
+    if (event && event.stopPropagation) event.stopPropagation();
+    if (event && event.stopImmediatePropagation) event.stopImmediatePropagation();
+    var target = explicitTarget || targetFromEvent(event) || lastTarget;
     if (!target || target.nodeType !== 1) return cleanup('No se pudo seleccionar ese elemento.');
     var detail = describe(target);
     cleanup('');
-    try { parent.postMessage({ type: 'sgpt-preview-selection', detail: detail }, '*'); } catch (_) {}
+    send('sgpt-preview-selection', { detail: detail });
+  }
+  function onPointerMove(event){
+    if (!active) return;
+    scheduleDraw(targetFromEvent(event));
+  }
+  function onPointerDown(event){
+    capture(event);
+  }
+  function onClickFallback(event){
+    if (!active) return;
+    capture(event);
+  }
+  function onViewportChange(){
+    if (!active || !lastTarget) return;
+    scheduleDraw(lastTarget);
   }
   function onKey(event){
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
       cleanup('Selección cancelada.');
+    } else if (event.key === 'Enter' && lastTarget) {
+      capture(event, lastTarget);
     }
   }
   function start(){
+    if (active) cleanup('');
     active = true;
     ensureUi();
     document.documentElement.setAttribute('data-sgpt-selecting', 'true');
-    document.addEventListener('mousemove', onMove, true);
-    document.addEventListener('click', onClick, true);
+    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('mousemove', onPointerMove, true);
+    document.addEventListener('click', onClickFallback, true);
     document.addEventListener('keydown', onKey, true);
+    window.addEventListener('scroll', onViewportChange, true);
+    window.addEventListener('resize', onViewportChange, true);
+    send('sgpt-preview-selection-ready', {});
   }
   window.addEventListener('message', function(event){
     var msg = event.data || {};

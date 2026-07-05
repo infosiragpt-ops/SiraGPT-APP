@@ -19,12 +19,15 @@ describe("buildPreviewDocument", () => {
     assert.equal(r.kind, "empty")
   })
 
-  it("renders an html entry and injects the console bridge", () => {
+  it("renders an html entry and injects the console + visual selector bridges", () => {
     const r = buildPreviewDocument(files({ "index.html": "<html><head></head><body>hola</body></html>" }), null)
     assert.equal(r.kind, "html")
     assert.equal(r.entry, "index.html")
     assert.match(r.html, /hola/)
     assert.match(r.html, /sgpt-preview-console/)
+    assert.match(r.html, /sgpt-preview-selection-ready/)
+    assert.match(r.html, /pointerdown/)
+    assert.match(r.html, /selectionMethod: 'dom'/)
   })
 
   it("inlines local stylesheets and scripts in html", () => {

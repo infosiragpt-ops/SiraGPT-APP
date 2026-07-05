@@ -232,19 +232,28 @@ function buildSelectedElementPrompt(detail: CodePreviewSelectionDetail, existing
   const rect = detail.rect
     ? `${detail.rect.width}x${detail.rect.height} en x:${detail.rect.x}, y:${detail.rect.y}`
     : "sin dato"
+  const point = detail.relativePoint
+    ? `${detail.relativePoint.percentX}% / ${detail.relativePoint.percentY}% del preview`
+    : "sin dato"
+  const parent = detail.parent
+    ? `${selectionValue(detail.parent.selector, 160)} · ${selectionValue(detail.parent.text, 180)}`
+    : "sin dato"
   const currentInstruction = existingInstruction.trim()
   return [
     "Modifica el elemento que acabo de seleccionar en el preview de APPS.",
     "",
     "Elemento seleccionado:",
+    `- método de selección: ${selectionValue(detail.selectionMethod || "dom", 80)}`,
     `- selector CSS: ${selectionValue(detail.selector)}`,
     `- etiqueta: ${selectionValue(detail.tagName, 80)}`,
     `- texto visible: ${selectionValue(detail.text)}`,
+    `- contenedor padre: ${parent}`,
     `- clases: ${selectionValue(detail.className)}`,
     `- id: ${selectionValue(detail.id, 120)}`,
     `- role/aria: ${selectionValue([detail.role, detail.ariaLabel].filter(Boolean).join(" / "), 160)}`,
     `- href/src: ${selectionValue([detail.href, detail.src].filter(Boolean).join(" / "), 180)}`,
     `- caja visual: ${rect}`,
+    `- punto relativo: ${point}`,
     `- preview: ${selectionValue(detail.previewKind, 80)} · ${selectionValue(detail.entry || detail.pageUrl, 180)}`,
     `- archivo activo probable: ${selectionValue(detail.activePath, 180)}`,
     "",
@@ -252,6 +261,9 @@ function buildSelectedElementPrompt(detail: CodePreviewSelectionDetail, existing
       ? `Cambio solicitado por el usuario:\n${currentInstruction}`
       : "Cambio solicitado:\n",
     "",
+    detail.selectionMethod === "region"
+      ? "Si la selección vino como región visual, usa las coordenadas, el archivo activo y el texto visible del preview para localizar el componente más probable antes de editar."
+      : "Usa el selector DOM y el contenedor padre para localizar el componente correcto antes de editar.",
     "Aplica el cambio en los archivos correctos del workspace, conserva el resto del diseño y verifica que el preview siga funcionando.",
   ].join("\n")
 }

@@ -650,6 +650,13 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   filter: none;
 }
 
+@media (pointer: coarse) {
+  .code-target-select-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .code-target-select-button,
   .code-target-select-button__icon {

@@ -102,6 +102,9 @@ test('token app proxy injects the visual selector bridge into HTML responses', a
     assert.equal(res.status, 200);
     assert.match(res.text, /__sgptPreviewSelectorBridge/);
     assert.match(res.text, /sgpt-preview-select-start/);
+    assert.match(res.text, /sgpt-preview-selection-ready/);
+    assert.match(res.text, /pointerdown/);
+    assert.match(res.text, /selectionMethod: 'dom'/);
     assert.ok(Number(res.headers['content-length']) > 43);
     assert.equal(upstreamOptions.headers['accept-encoding'], undefined);
   } finally {

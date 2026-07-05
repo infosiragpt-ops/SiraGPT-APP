@@ -128,6 +128,9 @@ export function PreviewPane() {
   const logSeq = React.useRef(0)
   const previewFrameRef = React.useRef<HTMLIFrameElement | null>(null)
   const [selectionMode, setSelectionMode] = React.useState(false)
+  const [selectionFallback, setSelectionFallback] = React.useState(false)
+  const selectionReadyRef = React.useRef(false)
+  const selectionTimersRef = React.useRef<number[]>([])
   const previewMetaRef = React.useRef<{
     activePath: string | null
     activeFolderId: string | null
@@ -154,6 +157,11 @@ export function PreviewPane() {
   const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
   )
+
+  const clearSelectionTimers = React.useCallback(() => {
+    for (const timer of selectionTimersRef.current) window.clearTimeout(timer)
+    selectionTimersRef.current = []
+  }, [])
 
   const hasNodeProject = React.useMemo(
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
@@ -627,6 +635,12 @@ export function PreviewPane() {
         setLogs((prev) => (prev.length > 250 ? [...prev.slice(-250), entry] : [...prev, entry]))
         return
       }
+      if (m.type === "sgpt-preview-selection-ready") {
+        selectionReadyRef.current = true
+        setSelectionMode(true)
+        setSelectionFallback(false)
+        return
+      }
       if (m.type === "sgpt-preview-selection") {
         const meta = previewMetaRef.current
         const raw = (m.detail || {}) as CodePreviewSelectionDetail
@@ -639,11 +653,17 @@ export function PreviewPane() {
           capturedAt: raw.capturedAt || new Date().toISOString(),
         }
         setSelectionMode(false)
+        setSelectionFallback(false)
+        selectionReadyRef.current = false
+        clearSelectionTimers()
         window.dispatchEvent(new CustomEvent<CodePreviewSelectionDetail>(CODE_SELECTION_CAPTURED_EVENT, { detail }))
         return
       }
       if (m.type === "sgpt-preview-selection-cancelled") {
         setSelectionMode(false)
+        setSelectionFallback(false)
+        selectionReadyRef.current = false
+        clearSelectionTimers()
         window.dispatchEvent(
           new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
             detail: { reason: String(m.reason || "Selección cancelada."), source: "preview" },
@@ -653,7 +673,7 @@ export function PreviewPane() {
     }
     window.addEventListener("message", onMsg)
     return () => window.removeEventListener("message", onMsg)
-  }, [])
+  }, [clearSelectionTimers])
 
   const refresh = React.useCallback(() => {
     setSnapshot({ files, activePath })
@@ -745,29 +765,52 @@ export function PreviewPane() {
     return true
   }, [])
 
+  React.useEffect(() => {
+    return () => clearSelectionTimers()
+  }, [clearSelectionTimers])
+
   const cancelSelectionFromPreview = React.useCallback((reason: string) => {
+    clearSelectionTimers()
+    selectionReadyRef.current = false
     setSelectionMode(false)
+    setSelectionFallback(false)
     window.dispatchEvent(
       new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
         detail: { reason, source: "preview" },
       }),
     )
-  }, [])
+  }, [clearSelectionTimers])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const startSelection = () => {
+      clearSelectionTimers()
+      selectionReadyRef.current = false
       setConsoleOpen(false)
       setSelectionMode(true)
-      window.setTimeout(() => {
-        if (!postSelectionMessage("sgpt-preview-select-start")) {
+      setSelectionFallback(false)
+      const arm = () => {
+        postSelectionMessage("sgpt-preview-select-start")
+      }
+      const fallback = () => {
+        if (selectionReadyRef.current) return
+        if (!previewFrameRef.current?.contentWindow) {
           cancelSelectionFromPreview("Abre un preview renderizable antes de seleccionar un elemento.")
+          return
         }
-      }, 80)
+        setSelectionFallback(true)
+      }
+      arm()
+      selectionTimersRef.current.push(window.setTimeout(arm, 120))
+      selectionTimersRef.current.push(window.setTimeout(arm, 360))
+      selectionTimersRef.current.push(window.setTimeout(fallback, 760))
     }
     const cancelSelection = (event: Event) => {
       const detail = (event as CustomEvent<CodePreviewSelectionCancelDetail>).detail
+      clearSelectionTimers()
+      selectionReadyRef.current = false
       setSelectionMode(false)
+      setSelectionFallback(false)
       if (detail?.source !== "preview") {
         postSelectionMessage("sgpt-preview-select-cancel")
       }
@@ -778,12 +821,71 @@ export function PreviewPane() {
       window.removeEventListener(CODE_SELECT_TARGET_EVENT, startSelection)
       window.removeEventListener(CODE_SELECTION_CANCEL_EVENT, cancelSelection)
     }
-  }, [cancelSelectionFromPreview, postSelectionMessage])
+  }, [cancelSelectionFromPreview, clearSelectionTimers, postSelectionMessage])
 
   const handlePreviewFrameLoad = React.useCallback(() => {
     if (!selectionMode) return
-    window.setTimeout(() => postSelectionMessage("sgpt-preview-select-start"), 80)
-  }, [postSelectionMessage, selectionMode])
+    clearSelectionTimers()
+    selectionReadyRef.current = false
+    setSelectionFallback(false)
+    selectionTimersRef.current.push(window.setTimeout(() => postSelectionMessage("sgpt-preview-select-start"), 40))
+    selectionTimersRef.current.push(window.setTimeout(() => {
+      if (!selectionReadyRef.current) postSelectionMessage("sgpt-preview-select-start")
+    }, 180))
+    selectionTimersRef.current.push(window.setTimeout(() => {
+      if (!selectionReadyRef.current) setSelectionFallback(true)
+    }, 760))
+  }, [clearSelectionTimers, postSelectionMessage, selectionMode])
+
+  const captureFallbackSelection = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!selectionFallback) return
+    event.preventDefault()
+    event.stopPropagation()
+    clearSelectionTimers()
+    selectionReadyRef.current = false
+    const frameRect = previewFrameRef.current?.getBoundingClientRect()
+    const hostRect = event.currentTarget.getBoundingClientRect()
+    const rect = frameRect && frameRect.width > 0 && frameRect.height > 0 ? frameRect : hostRect
+    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width)
+    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height)
+    const percentX = rect.width > 0 ? Math.round((x / rect.width) * 1000) / 10 : 0
+    const percentY = rect.height > 0 ? Math.round((y / rect.height) * 1000) / 10 : 0
+    const meta = previewMetaRef.current
+    const detail: CodePreviewSelectionDetail = {
+      selectionMethod: "region",
+      selector: `preview-region(${percentX}%, ${percentY}%)`,
+      tagName: "region",
+      text: "Área visual seleccionada por coordenadas en el preview.",
+      className: "",
+      id: "",
+      role: "",
+      ariaLabel: "",
+      href: "",
+      src: "",
+      rect: {
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+      relativePoint: {
+        x: Math.round(x),
+        y: Math.round(y),
+        percentX,
+        percentY,
+      },
+      pageUrl: meta.liveSrc || meta.entry || "",
+      pageTitle: "Preview APPS",
+      previewKind: meta.isLive ? "live-region" : `${meta.previewKind}-region`,
+      entry: meta.isLive ? meta.liveSrc : meta.entry,
+      activePath: meta.activePath,
+      activeFolderId: meta.activeFolderId,
+      capturedAt: new Date().toISOString(),
+    }
+    setSelectionMode(false)
+    setSelectionFallback(false)
+    window.dispatchEvent(new CustomEvent<CodePreviewSelectionDetail>(CODE_SELECTION_CAPTURED_EVENT, { detail }))
+  }, [clearSelectionTimers, selectionFallback])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
@@ -979,9 +1081,21 @@ export function PreviewPane() {
         {selectionMode ? (
           <div className="pointer-events-none absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/45 bg-zinc-950/82 px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_18px_45px_-28px_rgba(15,23,42,0.72)] backdrop-blur-xl">
             <MousePointer2 className="h-3.5 w-3.5 text-violet-200" />
-            <span>Selecciona un elemento del preview</span>
+            <span>{selectionFallback ? "Selecciona un área del preview" : "Selecciona un elemento del preview"}</span>
             <span className="rounded-full bg-white/12 px-1.5 py-px font-mono text-[10px] text-white/75">Esc</span>
           </div>
+        ) : null}
+        {selectionFallback ? (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Seleccionar área del preview"
+            className="absolute inset-0 z-20 cursor-crosshair bg-violet-500/[0.015] touch-none"
+            onPointerDown={captureFallbackSelection}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") cancelSelectionFromPreview("Selección cancelada.")
+            }}
+          />
         ) : null}
         {liveRun.phase === "ready" ? (
           // Real running app from the cloud runner (npm dev server).
