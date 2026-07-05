@@ -27,7 +27,7 @@ secrets. They must never be committed.
   - Readiness report: `28730573555`
   - CI: `28730573570`
   - Docker images: `28728027742`
-- Latest repository validation SHA: `69c44fa8a646d556f379a6f83431d5a2338cbc7e`
+- Latest native artifact verification SHA: `69c44fa8a646d556f379a6f83431d5a2338cbc7e`
   (`ci(native): attach QA artifact manifests`)
 - Latest QA artifact manifest verification: mobile run `28730573548` and
   desktop run `28730573563` were downloaded and each Android, iOS simulator,

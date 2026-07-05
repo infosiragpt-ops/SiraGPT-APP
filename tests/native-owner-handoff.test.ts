@@ -102,7 +102,7 @@ describe("generate-native-owner-handoff", () => {
       }
       assert.match(markdown, /Do not use the normal mailbox password as native signing material/)
       assert.match(markdown, /Latest QA Artifact Manifest Verification/)
-      assert.match(markdown, /Latest Repository Validation/)
+      assert.match(markdown, /Latest Native Artifact Validation/)
       assert.match(markdown, /Latest GitHub Actions Diagnostics/)
       assert.match(markdown, /Latest Signed Release Preflight/)
       assert.match(markdown, /Latest Secret-Name Audit/)

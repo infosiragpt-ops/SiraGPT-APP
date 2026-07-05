@@ -282,13 +282,13 @@ function renderMarkdown(handoff) {
     lines.push("")
   }
   if (handoff.latestTraceabilityCommit?.sha) {
-    lines.push("## Latest Repository Validation")
+    lines.push("## Latest Native Artifact Validation")
     lines.push("")
     lines.push(`- SHA: \`${handoff.latestTraceabilityCommit.sha}\``)
     if (handoff.latestTraceabilityCommit.message) {
       lines.push(`- Commit: \`${handoff.latestTraceabilityCommit.message}\``)
     }
-    lines.push("- Status: all current native, CI, and Docker workflows are green.")
+    lines.push("- Status: the listed native, CI, readiness, and Docker workflows are green.")
     lines.push("")
   }
   if (handoff.latestActionsDiagnostics?.actionsEnabled !== undefined) {

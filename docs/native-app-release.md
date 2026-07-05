@@ -68,7 +68,7 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 ### Latest Verified Native Builds
 
 Latest durable public QA release packet target SHA: `0fb0493464b841c11924e9ff9a087209fb8d25dd`.
-Latest repository validation SHA: `69c44fa8a646d556f379a6f83431d5a2338cbc7e`
+Latest native artifact verification SHA: `69c44fa8a646d556f379a6f83431d5a2338cbc7e`
 (`ci(native): attach QA artifact manifests`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
