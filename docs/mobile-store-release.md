@@ -36,16 +36,17 @@
   contains `native-release-manifest.json`, `native-release-manifest.md`, and
   `SHA256SUMS.txt`.
 - GitHub Actions `Native readiness report` run `28732348267` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
-- Native artifact traceability commit `0601139e3b507b9733ad1fdd84290e3d8cf7a078` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28735776623`
-  - Native readiness report: `28735776632`
+- Native QA artifact target remains `0601139e3b507b9733ad1fdd84290e3d8cf7a078`; current owner-handoff management evidence is tracked separately by the `f7ee609462cd732cdd28015cbd95976cfe10dfc3` commit below.
+- Latest green wrapper and management runs:
+  - CI: `28736531253`
+  - Native readiness report: `28736531246`
   - Native mobile builds: `28735031841`
   - Native desktop builds: `28735031849`
   - Docker build images: `28735031878`
 - Management/traceability commit validated before this document refresh:
-  `2f265240121360b785213be92f2f33b2b638c050`
-  (`ci(native): add signed release gate summary`) is green in CI run
-  `28735776623`, Native readiness report run `28735776632`, native mobile run
+  `f7ee609462cd732cdd28015cbd95976cfe10dfc3`
+  (`docs(native): add store owner account readiness`) is green in CI run
+  `28736531253`, Native readiness report run `28736531246`, native mobile run
   `28735031841`, native desktop run `28735031849`, and Docker run
   `28735031878`.
 - GitHub repository diagnostics:
@@ -57,8 +58,8 @@
   on SHA `10956297b606ee449c44707b956bbb7444eb3c94` and stopped before
   package runners because Android, iOS, macOS, and Windows signing secrets are
   still missing.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-2f265240.zip`
-  (`sha256:95e6a6c1f78987784c67f00a4897cce48105ab4f9220f130ea737f17ff9eecd3`).
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f7ee6094.zip`
+  (`sha256:5c6a750f6f891bb07d8aa75bc8501fe482a82dbe968a17c121476ec530539285`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
