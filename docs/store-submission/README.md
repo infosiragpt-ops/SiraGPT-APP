@@ -42,8 +42,8 @@ secrets. They must never be committed.
 - Latest native artifact verification SHA: `e6062026f64e1e29103fa3818d17cf6faef09734`
   (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`)
 - Management/traceability SHA validated before this packet refresh:
-  `e6062026f64e1e29103fa3818d17cf6faef09734`
-  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`)
+  `8101bb62c625c6980aebda2dfd0110e81d1be07e`
+  (`docs(native): publish current actions diagnostics`)
 - Latest QA artifact manifest verification: mobile run `28751219114` and
   desktop run `28751220141` were downloaded and each Android, iOS
   simulator, macOS, and Windows artifact upload includes
@@ -53,9 +53,9 @@ secrets. They must never be committed.
   (`sha256:9e677f6cb8a8b7f09efb707fdaa8ca710d4aabf9ceb2e2cebe868af4ab0fe23c`) preserves Android, iOS, macOS, and
   Windows folders plus original Windows filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-e6062026.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-e6062026.zip`)
-  with SHA-256 `a1e8d3e79659fa0d687311e83f24a081eae22eb69d58a9df075d315896f6a59f`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8101bb62.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-8101bb62.zip`)
+  with SHA-256 `c7df33d7ef759be132e9bdfecdf7464d1bc3e090ae7cf25e4bbb3d8702ba0513`.
 - Latest signed release preflight: `28748232904`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`) stopped before package runners because signing
   secrets are still missing, after uploading `siragpt-native-signed-release-preflight`
@@ -65,7 +65,7 @@ secrets. They must never be committed.
   store-upload secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
   Actions is enabled with `allowed_actions=all`, CI
-  run `28750893663`, native readiness run `28751218198`, native mobile
+  run `28751857678`, native readiness run `28751857663`, native mobile
   run `28751219114`, native desktop run `28751220141`, and Docker
   run `28735031878` are green. Standard GitHub-hosted Actions for public
   repositories are free; this is separate from native signing readiness.

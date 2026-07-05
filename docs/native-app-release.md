@@ -99,12 +99,15 @@ Latest native artifact verification SHA: `e6062026f64e1e29103fa3818d17cf6faef097
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.
   - Allowed actions: `all`.
-  - Latest green CI: `28750893663`.
-  - Latest green native readiness report: `28751218198`.
+  - Latest green CI: `28751857678`.
+  - Latest green native readiness report: `28751857663`.
   - Latest green native mobile builds: `28751219114`.
   - Latest green native desktop builds: `28751220141`.
   - Latest green Docker build images: `28735031878`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
+- Latest management/owner-handoff traceability SHA:
+  `8101bb62c625c6980aebda2dfd0110e81d1be07e`
+  (`docs(native): publish current actions diagnostics`).
 - Signed release preflight: `Native signed release packages` run `28748232904`.
   - Input: `platform=all`, `release_tag=native-v0.4.3-preflight-26f5d59`.
   - Result: stopped in preflight before Android, iOS, macOS, Windows, or GitHub Release package runners because signing secrets are not configured yet.
@@ -113,9 +116,9 @@ Latest native artifact verification SHA: `e6062026f64e1e29103fa3818d17cf6faef097
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-e6062026.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-e6062026.zip`.
-  - SHA-256: `a1e8d3e79659fa0d687311e83f24a081eae22eb69d58a9df075d315896f6a59f`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8101bb62.zip`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-8101bb62.zip`.
+  - SHA-256: `c7df33d7ef759be132e9bdfecdf7464d1bc3e090ae7cf25e4bbb3d8702ba0513`.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Rotate that password
@@ -135,8 +138,9 @@ simulator. The prerelease includes `native-release-manifest.json`,
 `native-release-manifest.md`, and `SHA256SUMS.txt` so every QA artifact can
 be verified against its SHA-256 checksum. The release also includes
 `SiraGPT-native-qa-v0.4.3-e6062026.zip`, a single durable ZIP preserving platform folders and
-original Windows filenames, plus its `.sha256` checksum. Public distribution
-still requires signing and store credentials.
+original Windows filenames, plus its `.sha256` checksum. The release also
+contains the current owner handoff packet for the latest management SHA. Public
+distribution still requires signing and store credentials.
 
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 
