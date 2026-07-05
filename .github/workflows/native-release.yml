@@ -105,46 +105,11 @@ jobs:
           UPLOAD_ANDROID_GOOGLE_PLAY: ${{ inputs.upload_android_google_play }}
           ANDROID_RELEASE_STATUS: ${{ inputs.android_release_status }}
           ANDROID_USER_FRACTION: ${{ inputs.android_user_fraction }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -eu
-          if [ "$UPLOAD_IOS_APP_STORE_CONNECT" = "true" ] && [ "$PLATFORM" != "ios" ] && [ "$PLATFORM" != "all" ]; then
-            echo "upload_ios_app_store_connect requires platform ios or all" >&2
-            exit 2
-          fi
-          if [ "$UPLOAD_ANDROID_GOOGLE_PLAY" = "true" ] && [ "$PLATFORM" != "android" ] && [ "$PLATFORM" != "all" ]; then
-            echo "upload_android_google_play requires platform android or all" >&2
-            exit 2
-          fi
-          if [ "$UPLOAD_ANDROID_GOOGLE_PLAY" = "true" ]; then
-            if [ "$ANDROID_RELEASE_STATUS" = "inProgress" ] && [ -z "$ANDROID_USER_FRACTION" ]; then
-              echo "android_user_fraction is required when android_release_status is inProgress" >&2
-              exit 2
-            fi
-            if [ "$ANDROID_RELEASE_STATUS" != "inProgress" ] && [ -n "$ANDROID_USER_FRACTION" ]; then
-              echo "android_user_fraction is only valid when android_release_status is inProgress" >&2
-              exit 2
-            fi
-          fi
-
-          case "$PLATFORM" in
-            all) groups="android,ios,macos,windows" ;;
-            android|ios|macos|windows) groups="$PLATFORM" ;;
-            *)
-              echo "Unknown platform: $PLATFORM" >&2
-              exit 2
-              ;;
-          esac
-
-          if [ "$UPLOAD_IOS_APP_STORE_CONNECT" = "true" ]; then
-            groups="$groups,appstore"
-          fi
-          if [ "$UPLOAD_ANDROID_GOOGLE_PLAY" = "true" ]; then
-            groups="$groups,googleplay"
-          fi
-
           npm run native:version:check
-          echo "Validating signing readiness for: $groups"
-          npm run native:readiness -- --require="$groups" --only-required
+          npm run native:release:preflight
 
   android:
     name: Android signed AAB

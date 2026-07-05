@@ -69,6 +69,8 @@ lives in `docs/store-submission/native-store-assets.json`.
 4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
    `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
+   Its preflight writes a GitHub Actions step summary with the selected platform,
+   release tag, missing secret names, and safe next steps before stopping.
 6. Enable `create_github_release` when the signed artifacts should be published
    with `native-release-manifest.json`, `native-release-manifest.md`, and
    `SHA256SUMS.txt`.

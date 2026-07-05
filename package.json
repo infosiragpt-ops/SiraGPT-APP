@@ -52,6 +52,7 @@
     "native:github-secrets:template": "node scripts/generate-native-github-secrets-template.js",
     "native:release:plan": "node scripts/native-release-plan.js",
     "native:release:plan:ci": "node scripts/native-release-plan.js --secret-source=env --out=output/native-release-plan.md --json-out=output/native-release-plan.json",
+    "native:release:preflight": "node scripts/native-release-preflight-summary.js",
     "native:release:manifest": "node scripts/generate-native-release-manifest.js",
     "native:release:handoff": "node scripts/generate-native-owner-handoff.js",
     "native:play:upload": "node scripts/upload-google-play-aab.js",
