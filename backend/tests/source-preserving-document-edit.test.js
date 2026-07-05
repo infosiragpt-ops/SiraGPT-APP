@@ -814,6 +814,50 @@ describe('source-preserving document edit', () => {
     assert.doesNotMatch(xml, /siraGPT Document Pipeline/);
   });
 
+  it('treats "intruemnto en blanco y negri" as a real instrument appendix edit', async () => {
+    const savedNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-instrument-typo-'));
+      const originalPath = path.join(tmp, 'tesis.docx');
+      fs.writeFileSync(originalPath, await makeDocxWithAnexo3CronogramaBuffer());
+
+      const prompt = 'en mi word en anexos agrega el intruemnto en blanco y negri de forma profesional';
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: '775_785_final30-06-26_con_anexos.docx',
+          filename: '775_785_final30-06-26_con_anexos.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: [
+            'Implementación de un sistema de ventilación inteligente para optimizar la seguridad y la eficiencia.',
+            'Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis',
+          ].join('\n'),
+        },
+        prompt,
+        displayPrompt: prompt,
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.ok(result.validation.details.operationCriteria.some((check) => check.id === 'instrument_appended' && check.passed));
+
+      const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+      assert.match(xml, /Anexo 4\. Instrumento de recolección de datos/);
+      assert.match(xml, /Formato de presentación: versión en blanco y negro/);
+      assert.match(xml, /Escala de respuesta/);
+      assert.match(xml, /Datos generales/);
+      assert.match(xml, /Portada original UPN/);
+      assert.doesNotMatch(xml, /Contenido agregado según solicitud/);
+    } finally {
+      if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = savedNodeEnv;
+    }
+  });
+
   it('fills only the requested DOCX section instead of appending a new appendix', async () => {
     const original = await makeDocxWithAnexo3Buffer();
     const edited = fillDocxSectionBuffer(original, parseTargetSectionRequest('completa el anexo 3'), [
@@ -1328,6 +1372,13 @@ describe('source-preserving document edit', () => {
     );
 
     assert.equal(title, 'Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana durante el periodo 2020-2025');
+
+    const withAppendixTail = inferDocumentTitle(
+      'Implementación de un sistema de ventilación inteligente para optimizar la seguridad. Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis',
+      'tesis.docx',
+    );
+
+    assert.equal(withAppendixTail, 'Implementación de un sistema de ventilación inteligente para optimizar la seguridad.');
   });
 });
 

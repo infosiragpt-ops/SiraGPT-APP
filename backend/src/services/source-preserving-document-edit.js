@@ -42,6 +42,19 @@ function withCollapsedRepeats(textNorm) {
   return `${textNorm} ${String(textNorm).replace(/([a-z])\1+/g, '$1')}`;
 }
 
+const INSTRUMENT_REQUEST_RE = /\b(?:instrumento\w*|instrument\w*|intuemtno\w*|instumento\w*|intruemnto\w*|intrumento\w*|intrumneto\w*|cuestionario\w*|encuesta\w*|escala\w*)\b/;
+
+function requestWantsInstrument(text = '') {
+  return INSTRUMENT_REQUEST_RE.test(normalizeText(text));
+}
+
+function requestWantsBlackAndWhite(text = '') {
+  const normalized = normalizeText(text);
+  return /\bblanco\s*(?:y|e|\/|-)?\s*negr\w*\b/.test(normalized)
+    || /\bb\s*\/\s*n\b/.test(normalized)
+    || /\bmonocrom\w*\b/.test(normalized);
+}
+
 function requestWantsMinimalProofreading(prompt = '') {
   const text = normalizeText(prompt);
   if (!text) return false;
@@ -109,7 +122,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(editVerbHay)
     || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(editVerbHay))
   );
-  const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
+  const instrument = requestWantsInstrument(text) || /\banexos?\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
   const continuationDocRef = /\b(mi|mismo|misma|documento|archivo|word|docx|tesis|general|principal)\b/.test(text);
@@ -632,10 +645,17 @@ function compact(value, max = 180) {
   return `${clipped.slice(0, boundary > 80 ? boundary : clipped.length).trim()}...`;
 }
 
+function cleanDocumentTitleCandidate(value = '') {
+  const text = String(value || '')
+    .replace(/\s+\b(?:anexo|appendix)\s+(?:n(?:ro|umero)?\.?\s*)?(?:0*\d{1,3}|[ivxlcdm]{1,10})\b.*$/i, '')
+    .trim();
+  return compact(text, 180);
+}
+
 function inferDocumentTitle(sourceText = '', originalName = '') {
   const source = String(sourceText || '').replace(/\r\n/g, '\n');
   const quoted = source.match(/[“"]([^”"\n]{18,220})[”"]/);
-  if (quoted?.[1]) return compact(quoted[1], 180);
+  if (quoted?.[1]) return cleanDocumentTitleCandidate(quoted[1]);
 
   const lines = source
     .split(/\n+/)
@@ -648,7 +668,10 @@ function inferDocumentTitle(sourceText = '', originalName = '') {
       return !/\b(universidad|facultad|carrera|autor|asesor|codigo orcid|ciudad|ano de elaboracion|capitulo|indice|tabla de contenido)\b/.test(normalized);
     });
   const candidate = lines.find((line) => line.split(/\s+/).length >= 5) || '';
-  if (candidate) return compact(candidate, 180);
+  if (candidate) {
+    const title = cleanDocumentTitleCandidate(candidate);
+    if (normalizeText(title).length >= 18) return title;
+  }
   return compact(path.basename(String(originalName || 'Documento'), path.extname(String(originalName || ''))), 180);
 }
 
@@ -692,6 +715,19 @@ function block(kind, text) {
   return { kind, text: String(text || '').trim() };
 }
 
+function inferNextAppendixNumber(sourceText = '') {
+  const text = normalizeText(sourceText);
+  if (!text) return 1;
+  let max = 0;
+  const re = /\banexo\s*(?:n(?:ro|umero)?\.?\s*)?0*(\d{1,3})\b|\banexo\s+([ivxlcdm]{1,10})\b/g;
+  let match;
+  while ((match = re.exec(text))) {
+    const value = match[1] ? Number(match[1]) : romanToNumber(match[2]);
+    if (Number.isFinite(value) && value > max) max = value;
+  }
+  return max > 0 ? max + 1 : 1;
+}
+
 // Just the instrument content (no ANEXOS / Anexo-N heading), so it can be
 // reused either as a standalone appendix or as the body of a brand-new labeled
 // anexo (e.g. "Anexo 4. Instrumentos...").
@@ -700,10 +736,14 @@ function buildInstrumentAppendixBody({ prompt = '', sourceText = '', originalNam
   const variables = inferResearchVariables(title);
   const population = inferPopulation(sourceText, title);
   const place = inferPlace(sourceText, title);
+  const blackAndWhite = requestWantsBlackAndWhite(prompt);
 
   return [
     block('normal', `Título de la investigación: ${title}.`),
     block('normal', `Instrumento propuesto: cuestionario estructurado dirigido a ${population}.`),
+    ...(blackAndWhite
+      ? [block('normal', 'Formato de presentación: versión en blanco y negro, sin colores ni elementos decorativos, lista para impresión académica.')]
+      : []),
     block('normal', `Objetivo del instrumento: recopilar información pertinente para analizar ${variables.independent} y su relación con ${variables.dependent} en ${place}.`),
     block('heading3', 'Instrucciones'),
     block('normal', 'Lea cada afirmación y marque una sola alternativa según su experiencia o percepción. La información será usada únicamente con fines académicos y se tratará de forma confidencial.'),
@@ -731,10 +771,13 @@ function buildInstrumentAppendixBody({ prompt = '', sourceText = '', originalNam
 }
 
 function buildInstrumentAppendix(options = {}) {
+  const appendixNumber = Number.isFinite(Number(options.appendixNumber))
+    ? Math.max(1, Number(options.appendixNumber))
+    : inferNextAppendixNumber(options.sourceText || '');
   return [
     block('pageBreak', ''),
     block('heading1', 'ANEXOS'),
-    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
+    block('heading2', `Anexo ${appendixNumber}. Instrumento de recolección de datos`),
     ...buildInstrumentAppendixBody(options),
   ];
 }
@@ -751,8 +794,7 @@ function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '' 
 }
 
 function buildAppendixBlocks(options = {}) {
-  const text = normalizeText(options.prompt);
-  if (/\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala)\b/.test(text)) {
+  if (requestWantsInstrument(options.prompt)) {
     return buildInstrumentAppendix(options);
   }
   return buildGenericAppendix(options);
@@ -3685,7 +3727,7 @@ function splitRequestClauses(text) {
 }
 
 function clauseWantsInstrument(clauseNorm) {
-  return /\b(instrumento\w*|instrument\w*|intuemtno|intrumneto|intrumento|cuestionario\w*|encuesta\w*|escala\w*)\b/.test(clauseNorm);
+  return requestWantsInstrument(clauseNorm);
 }
 
 function clauseIsFill(clauseNorm) {
