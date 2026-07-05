@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T04:16:36Z",
+  "updatedAt": "2026-07-05T04:37:54Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -22,19 +22,19 @@
     ]
   },
   "latestVerifiedRuns": {
-    "mobile": "28727085656",
-    "desktop": "28727085653",
-    "readiness": "28729126069",
-    "ci": "28729126060",
+    "mobile": "28729582734",
+    "desktop": "28729583294",
+    "readiness": "28729412226",
+    "ci": "28729412232",
     "docker": "28727085650"
   },
   "latestTraceabilityCommit": {
-    "sha": "47bc24757c9167c747fce099e083325f8aea127e",
-    "message": "docs(native): record current signing preflight",
-    "ci": "28729126060",
-    "readiness": "28729126069",
-    "mobile": "28728027750",
-    "desktop": "28728027748",
+    "sha": "e71443c46699d235cddb73102830c92982298765",
+    "message": "docs(native): publish current owner packet",
+    "ci": "28729412232",
+    "readiness": "28729412226",
+    "mobile": "28729582734",
+    "desktop": "28729583294",
     "docker": "28728027742"
   },
   "latestOwnerPacket": {

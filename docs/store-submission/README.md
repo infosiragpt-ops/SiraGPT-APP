@@ -22,13 +22,13 @@ secrets. They must never be committed.
 - Latest public QA packet: `native-qa-v0.4.3-0fb0493`
   (`0fb0493464b841c11924e9ff9a087209fb8d25dd`)
 - Latest verified native runs:
-  - Mobile: `28727085656`
-  - Desktop: `28727085653`
-  - Readiness report: `28729126069`
-  - CI: `28729126060`
+  - Mobile: `28729582734`
+  - Desktop: `28729583294`
+  - Readiness report: `28729412226`
+  - CI: `28729412232`
   - Docker images: `28727085650`
-- Latest repository validation SHA: `47bc24757c9167c747fce099e083325f8aea127e`
-  (`docs(native): record current signing preflight`)
+- Latest repository validation SHA: `e71443c46699d235cddb73102830c92982298765`
+  (`docs(native): publish current owner packet`)
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-47bc2475.zip`)

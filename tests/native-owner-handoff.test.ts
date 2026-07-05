@@ -35,7 +35,7 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.status, "owner-action-required")
       assert.equal(handoff.latestQaRelease.tag, "native-qa-v0.4.3-0fb0493")
       assert.equal(handoff.latestQaRelease.targetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
-      assert.equal(handoff.latestTraceabilityCommit.sha, "47bc24757c9167c747fce099e083325f8aea127e")
+      assert.equal(handoff.latestTraceabilityCommit.sha, "e71443c46699d235cddb73102830c92982298765")
       assert.equal(handoff.latestSignedPreflight.run, "28728938916")
       assert.equal(handoff.latestSignedPreflight.sourceSha, "5970953f4c72a3f39850ac679a5d9b7f3a939c49")
       assert.equal(handoff.latestSignedPreflight.status, "blocked-missing-signing-secrets")

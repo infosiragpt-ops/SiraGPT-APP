@@ -22,19 +22,19 @@
   store assets without reading signing credentials.
 - `npm run native:store:packet` exports platform-specific, non-secret submission
   folders under `output/native-store-submission-packet/`.
-- GitHub Actions `Native mobile builds` run `28725624118` passed on `production-main` SHA `0fb0493464b841c11924e9ff9a087209fb8d25dd`.
+- GitHub Actions `Native mobile builds` run `28729582734` passed on `production-main` SHA `e71443c46699d235cddb73102830c92982298765`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
-- GitHub Actions `Native desktop builds` run `28725624116` passed on the same SHA and produced unsigned QA artifacts:
+- GitHub Actions `Native desktop builds` run `28729583294` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
-- GitHub Actions `Native readiness report` run `28725476833` passed on the same SHA and produced the non-secret release plan/store packet.
-- Current traceability commit `47bc24757c9167c747fce099e083325f8aea127e` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28729126060`
-  - Native readiness report: `28729126069`
-  - Native mobile builds: `28727085656`
-  - Native desktop builds: `28727085653`
+- GitHub Actions `Native readiness report` run `28729412226` passed on the current traceability SHA and produced the non-secret release plan/store packet.
+- Current traceability commit `e71443c46699d235cddb73102830c92982298765` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
+  - CI: `28729412232`
+  - Native readiness report: `28729412226`
+  - Native mobile builds: `28729582734`
+  - Native desktop builds: `28729583294`
   - Docker build images: `28727085650`
 - Signed native preflight run `28728938916` was triggered for `platform=all`
   on SHA `5970953f4c72a3f39850ac679a5d9b7f3a939c49` and stopped before

@@ -67,9 +67,9 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Latest native package SHA verified: `0fb0493464b841c11924e9ff9a087209fb8d25dd` on `production-main`.
-Latest repository validation SHA: `47bc24757c9167c747fce099e083325f8aea127e`
-(`docs(native): record current signing preflight`).
+Latest durable public QA release packet target SHA: `0fb0493464b841c11924e9ff9a087209fb8d25dd`.
+Latest repository validation SHA: `e71443c46699d235cddb73102830c92982298765`
+(`docs(native): publish current owner packet`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
@@ -79,13 +79,16 @@ Latest repository validation SHA: `47bc24757c9167c747fce099e083325f8aea127e`
   - Android APK + AAB: passed.
   - iOS simulator build: passed.
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
+- Latest QA wrapper rebuilds on `production-main` SHA `e71443c46699d235cddb73102830c92982298765`:
+  - Native mobile builds: `28729582734`.
+  - Native desktop builds: `28729583294`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
-- Current traceability workflow set on SHA `47bc24757c9167c747fce099e083325f8aea127e`:
-  - CI: `28729126060`.
-  - Native readiness report with owner handoff artifact: `28729126069`.
-  - Native mobile builds: `28727085656`.
-  - Native desktop builds: `28727085653`.
+- Current traceability workflow set on SHA `e71443c46699d235cddb73102830c92982298765`:
+  - CI: `28729412232`.
+  - Native readiness report with owner handoff artifact: `28729412226`.
+  - Native mobile builds: `28729582734`.
+  - Native desktop builds: `28729583294`.
   - Docker build images: `28727085650`.
 - Signed release preflight: `Native signed release packages` run `28728938916`.
   - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-5970953`.
