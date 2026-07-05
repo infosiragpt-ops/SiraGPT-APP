@@ -43,6 +43,20 @@ const assets = [
     }),
   },
   {
+    path: "android/tablet-chat.png",
+    width: 2048,
+    height: 1536,
+    html: (asset) => tabletScreen(asset, {
+      platform: "Android tablet",
+      title: "Productividad con IA en pantalla grande",
+      subtitle: "Chat, documentos, voz y APPS con espacio para revisar resultados y trabajar con archivos.",
+      selected: "Chat",
+      prompt: "Organiza este proyecto y genera el documento final",
+      response: "Plan listo. Prepare acciones, documentos y una entrega verificable con descarga.",
+      cards: ["Contexto", "Documento", "Descarga"],
+    }),
+  },
+  {
     path: "ios/iphone-chat.png",
     width: 1290,
     height: 2796,
@@ -79,6 +93,48 @@ const assets = [
       response: "Plan extendido preparado. Los agentes organizan UI, datos, preview, pruebas y entrega.",
       cards: ["Plan", "Preview", "Codigo"],
       tool: "APPS",
+    }),
+  },
+  {
+    path: "ios/ipad-chat.png",
+    width: 2048,
+    height: 2732,
+    html: (asset) => tabletScreen(asset, {
+      platform: "iPad",
+      title: "Chat profesional con contexto",
+      subtitle: "Trabaja conversaciones largas, archivos y respuestas con una vista amplia.",
+      selected: "Chat",
+      prompt: "Resume la reunion y crea tareas",
+      response: "Resumen preparado con acuerdos, responsables y siguientes pasos.",
+      cards: ["Resumen", "Tareas", "Seguimiento"],
+    }),
+  },
+  {
+    path: "ios/ipad-documents.png",
+    width: 2048,
+    height: 2732,
+    html: (asset) => tabletScreen(asset, {
+      platform: "iPad",
+      title: "Documentos completos, editables y listos",
+      subtitle: "Sube Word, PDF, Excel o presentaciones y recibe entregables en el formato solicitado.",
+      selected: "Documentos",
+      prompt: "Corrige el Word y conserva mi formato",
+      response: "Archivo actualizado con estructura original, validacion y descarga disponible.",
+      cards: ["DOCX", "Vista previa", "Validado"],
+    }),
+  },
+  {
+    path: "ios/ipad-projects.png",
+    width: 2048,
+    height: 2732,
+    html: (asset) => tabletScreen(asset, {
+      platform: "iPad",
+      title: "APPS con agentes trabajando",
+      subtitle: "Crea proyectos, revisa previews y controla codigo desde una experiencia nativa.",
+      selected: "APPS",
+      prompt: "Crea una app full-stack de ventas",
+      response: "Agentes preparando plan, interfaz, datos, preview y pruebas.",
+      cards: ["Plan", "Preview", "Codigo"],
     }),
   },
   {
@@ -407,6 +463,100 @@ function desktopScreen(asset, options) {
   .dock span { flex: 1; color: #94a3b8; font-size: 20px; }
   .dock b { width: 44px; height: 44px; border-radius: 999px; background: #f8fafc; display: grid; place-items: center; font-size: 24px; }
   .dock strong { padding: 14px 20px; border-radius: 999px; background: #0f172a; color: #fff; }
+  `
+
+  return htmlShell(asset, body, css)
+}
+
+function tabletScreen(asset, options) {
+  const safe = Object.fromEntries(Object.entries(options).map(([key, value]) => [key, escapeHtml(value)]))
+  const cards = options.cards.map((card) => `<div class="mini-card">${escapeHtml(card)}</div>`).join("")
+  const isPortrait = asset.height > asset.width
+  const body = `
+<main class="tablet ${isPortrait ? "portrait" : "landscape"}">
+  <header>
+    <div class="brand"><img class="logo" src="${logoDataUrl}" alt=""><strong>SiraGPT</strong></div>
+    <span class="pill">${safe.platform}</span>
+  </header>
+  <section class="workspace">
+    <aside>
+      ${navItem("Chat", options.selected)}
+      ${navItem("Documentos", options.selected)}
+      ${navItem("APPS", options.selected)}
+      ${navItem("Voz", options.selected)}
+    </aside>
+    <section class="content">
+      <div class="copy">
+        <p>App nativa</p>
+        <h1>${safe.title}</h1>
+        <h2>${safe.subtitle}</h2>
+      </div>
+      <div class="chat-panel">
+        <div class="bubble user">${safe.prompt}</div>
+        <div class="assistant-card">
+          <div class="assistant-head"><img src="${logoDataUrl}" alt=""><strong>SiraGPT</strong></div>
+          <p>${safe.response}</p>
+          <div class="cards">${cards}</div>
+        </div>
+      </div>
+    </section>
+  </section>
+  <section class="composer">
+    <span>Preguntale a Sira GPT</span>
+    <b>+</b>
+    <strong>Enviar</strong>
+  </section>
+</main>`
+
+  const base = Math.min(asset.width / 2048, asset.height / 1536)
+  const css = `
+  .tablet {
+    width: ${asset.width}px;
+    height: ${asset.height}px;
+    padding: ${Math.round(54 * base)}px;
+    display: flex;
+    flex-direction: column;
+    gap: ${Math.round(34 * base)}px;
+    background:
+      radial-gradient(circle at 18% 18%, rgba(239, 68, 68, 0.1), transparent 27%),
+      radial-gradient(circle at 84% 76%, rgba(20, 184, 166, 0.14), transparent 34%),
+      #ffffff;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: ${Math.round(18 * base)}px; font-size: ${Math.round(30 * base)}px; }
+  .logo { width: ${Math.round(58 * base)}px; height: ${Math.round(58 * base)}px; }
+  .pill { padding: ${Math.round(14 * base)}px ${Math.round(22 * base)}px; font-size: ${Math.round(20 * base)}px; font-weight: 800; }
+  .workspace { flex: 1; display: grid; grid-template-columns: ${Math.round(280 * base)}px 1fr; gap: ${Math.round(30 * base)}px; min-height: 0; }
+  aside { border: 1px solid #e2e8f0; border-radius: ${Math.round(34 * base)}px; background: rgba(255,255,255,.82); padding: ${Math.round(22 * base)}px; display: grid; align-content: start; gap: ${Math.round(14 * base)}px; box-shadow: 0 ${Math.round(18 * base)}px ${Math.round(60 * base)}px rgba(15,23,42,.08); }
+  .nav-item { padding: ${Math.round(18 * base)}px ${Math.round(20 * base)}px; border-radius: ${Math.round(20 * base)}px; font-size: ${Math.round(21 * base)}px; color: #64748b; }
+  .nav-item.active { background: #0f172a; color: #fff; font-weight: 800; }
+  .content { min-width: 0; border: 1px solid #dbe3ee; border-radius: ${Math.round(42 * base)}px; background: rgba(255,255,255,.88); box-shadow: 0 ${Math.round(24 * base)}px ${Math.round(88 * base)}px rgba(15,23,42,.1); padding: ${Math.round(48 * base)}px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(${Math.round(520 * base)}px, ${Math.round(720 * base)}px); gap: ${Math.round(44 * base)}px; align-items: center; }
+  .copy p { margin: 0 0 ${Math.round(18 * base)}px; color: #0f766e; font-size: ${Math.round(22 * base)}px; font-weight: 900; }
+  h1 { margin: 0; font-size: ${Math.round(72 * base)}px; line-height: 1; letter-spacing: 0; max-width: ${Math.round(780 * base)}px; }
+  h2 { margin: ${Math.round(24 * base)}px 0 0; color: #475569; font-size: ${Math.round(28 * base)}px; line-height: 1.35; font-weight: 500; max-width: ${Math.round(780 * base)}px; }
+  .chat-panel { display: grid; gap: ${Math.round(22 * base)}px; }
+  .bubble, .assistant-card { border-radius: ${Math.round(32 * base)}px; padding: ${Math.round(28 * base)}px; font-size: ${Math.round(26 * base)}px; line-height: 1.35; }
+  .user { justify-self: end; max-width: ${Math.round(560 * base)}px; background: #f1f5f9; }
+  .assistant-card { background: #f8fafc; border: 1px solid #e2e8f0; }
+  .assistant-head { display: flex; align-items: center; gap: ${Math.round(16 * base)}px; font-size: ${Math.round(24 * base)}px; }
+  .assistant-head img { width: ${Math.round(44 * base)}px; height: ${Math.round(44 * base)}px; border-radius: ${Math.round(13 * base)}px; }
+  .assistant-card p { margin: ${Math.round(24 * base)}px 0 0; color: #334155; font-size: ${Math.round(25 * base)}px; line-height: 1.45; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: ${Math.round(14 * base)}px; margin-top: ${Math.round(28 * base)}px; }
+  .mini-card { min-height: ${Math.round(86 * base)}px; border-radius: ${Math.round(22 * base)}px; background: #fff; border: 1px solid #e2e8f0; display: grid; place-items: center; text-align: center; padding: ${Math.round(12 * base)}px; font-size: ${Math.round(20 * base)}px; font-weight: 800; }
+  .composer { min-height: ${Math.round(104 * base)}px; border: 1px solid #dbe3ee; border-radius: ${Math.round(34 * base)}px; background: #fff; box-shadow: 0 ${Math.round(18 * base)}px ${Math.round(70 * base)}px rgba(15,23,42,.08); padding: ${Math.round(18 * base)}px ${Math.round(22 * base)}px; display: flex; align-items: center; gap: ${Math.round(16 * base)}px; }
+  .composer span { flex: 1; color: #94a3b8; font-size: ${Math.round(24 * base)}px; }
+  .composer b { width: ${Math.round(56 * base)}px; height: ${Math.round(56 * base)}px; border-radius: 999px; background: #f8fafc; display: grid; place-items: center; font-size: ${Math.round(30 * base)}px; }
+  .composer strong { padding: ${Math.round(16 * base)}px ${Math.round(24 * base)}px; border-radius: 999px; background: #0f172a; color: #fff; font-size: ${Math.round(19 * base)}px; }
+  .portrait { padding: 72px 64px; gap: 48px; }
+  .portrait .workspace { grid-template-columns: 1fr; grid-template-rows: auto 1fr; align-content: start; }
+  .portrait aside { grid-template-columns: repeat(4, 1fr); }
+  .portrait .content { grid-template-columns: 1fr; align-content: start; gap: 70px; padding: 74px; }
+  .portrait h1 { font-size: 96px; max-width: 1500px; }
+  .portrait h2 { font-size: 38px; max-width: 1320px; }
+  .portrait .chat-panel { max-width: 1320px; width: 100%; justify-self: center; }
+  .portrait .bubble, .portrait .assistant-card { font-size: 36px; padding: 42px; }
+  .portrait .assistant-card p { font-size: 34px; }
+  .portrait .mini-card { font-size: 28px; min-height: 124px; }
   `
 
   return htmlShell(asset, body, css)
