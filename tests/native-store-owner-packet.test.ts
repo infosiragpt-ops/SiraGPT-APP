@@ -45,10 +45,13 @@ describe("generate-native-store-owner-packet", () => {
 
       const manifest = JSON.parse(readFileSync(join(outDir, "PACKET-MANIFEST.json"), "utf8")) as {
         qaBinaryTargetSha: string
+        latestOwnerPacket: { sourceSha: string; zipName: string }
         latestSignedPreflight: { run: string }
         included: string[]
       }
       assert.equal(manifest.qaBinaryTargetSha, "0fb0493464b841c11924e9ff9a087209fb8d25dd")
+      assert.equal(manifest.latestOwnerPacket.sourceSha, "ffb2f79076b4807f32f898e8b1b8ec60ca56844d")
+      assert.equal(manifest.latestOwnerPacket.zipName, "SiraGPT-native-store-owner-packet-ffb2f790.zip")
       assert.equal(manifest.latestSignedPreflight.run, "28727578162")
       assert.ok(manifest.included.includes("native-store-submission-packet/"))
       assert.ok(manifest.included.includes("native-signing-templates/"))

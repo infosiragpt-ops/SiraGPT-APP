@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T03:00:00Z",
+  "updatedAt": "2026-07-05T03:46:42Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -29,13 +29,33 @@
     "docker": "28727085650"
   },
   "latestTraceabilityCommit": {
-    "sha": "1e657aaf40853df5a3f844b86028a17fae88cad0",
-    "message": "ci(native): automate store owner packet",
-    "ci": "28727085654",
-    "readiness": "28727085668",
-    "mobile": "28727085656",
-    "desktop": "28727085653",
-    "docker": "28727085650"
+    "sha": "ffb2f79076b4807f32f898e8b1b8ec60ca56844d",
+    "message": "chore(native): bundle signing templates in owner packet",
+    "ci": "28728379078",
+    "readiness": "28728379084",
+    "mobile": "28728027750",
+    "desktop": "28728027748",
+    "docker": "28728027742"
+  },
+  "latestOwnerPacket": {
+    "sourceSha": "ffb2f79076b4807f32f898e8b1b8ec60ca56844d",
+    "sourceCommit": "chore(native): bundle signing templates in owner packet",
+    "zipName": "SiraGPT-native-store-owner-packet-ffb2f790.zip",
+    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-ffb2f790.zip",
+    "checksumName": "SiraGPT-native-store-owner-packet-ffb2f790.zip.sha256",
+    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-ffb2f790.zip.sha256",
+    "checksumSha256": "83c026b14cc2f6026dd4d9a1cb9d956c945fd12f256ddf01644c9a9bd9073ecf",
+    "size": 5132667,
+    "uploadedAt": "2026-07-05T03:46:42Z",
+    "includes": [
+      "native-signing-templates/all.env.example",
+      "native-signing-templates/mobile.env.example",
+      "native-signing-templates/desktop.env.example",
+      "native-signing-templates/android.env.example",
+      "native-signing-templates/ios.env.example",
+      "native-signing-templates/macos.env.example",
+      "native-signing-templates/windows.env.example"
+    ]
   },
   "latestSignedPreflight": {
     "run": "28727578162",
