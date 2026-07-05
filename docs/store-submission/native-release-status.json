@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T17:10:00Z",
+  "updatedAt": "2026-07-05T17:42:35Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
     "tag": "native-qa-v0.4.3-f2679e3",
     "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-f2679e3",
     "targetSha": "f2679e39b0acba43246cd59792da5caba4cddfe3",
-    "assetCount": 19,
+    "assetCount": 23,
     "artifacts": [
       "native-release-manifest-android.json",
       "native-release-manifest-ios-simulator.json",
@@ -26,8 +26,12 @@
       "SiraGPT-native-qa-v0.4.3-f2679e3.zip.sha256",
       "SiraGPT-native-store-owner-packet-f2679e39.zip",
       "SiraGPT-native-store-owner-packet-f2679e39.zip.sha256",
+      "SiraGPT-native-store-owner-packet-14a2ed9f.zip",
+      "SiraGPT-native-store-owner-packet-14a2ed9f.zip.sha256",
       "SiraGPT.0.4.3.exe",
-      "SiraGPT.Setup.0.4.3.exe"
+      "SiraGPT.Setup.0.4.3.exe",
+      "SiraGPT-native-store-owner-packet-dac5e784.zip",
+      "SiraGPT-native-store-owner-packet-dac5e784.zip.sha256"
     ],
     "durableZip": {
       "name": "SiraGPT-native-qa-v0.4.3-f2679e3.zip",
@@ -195,27 +199,31 @@
       "SiraGPT-native-qa-v0.4.3-f2679e3.zip.sha256",
       "SiraGPT-native-store-owner-packet-f2679e39.zip",
       "SiraGPT-native-store-owner-packet-f2679e39.zip.sha256",
+      "SiraGPT-native-store-owner-packet-14a2ed9f.zip",
+      "SiraGPT-native-store-owner-packet-14a2ed9f.zip.sha256",
       "SiraGPT.0.4.3.exe",
-      "SiraGPT.Setup.0.4.3.exe"
+      "SiraGPT.Setup.0.4.3.exe",
+      "SiraGPT-native-store-owner-packet-dac5e784.zip",
+      "SiraGPT-native-store-owner-packet-dac5e784.zip.sha256"
     ],
     "durableZip": "SiraGPT-native-qa-v0.4.3-f2679e3.zip",
     "diagnosis": "The latest mobile and desktop QA workflow artifacts were downloaded, checksum-verified, and republished in the current public QA prerelease. The release includes a durable all-platform QA ZIP plus the current clean owner handoff packet. The durable QA ZIP preserves platform folders and original Windows filenames; GitHub release asset names for individual Windows executables are normalized with dots by GitHub."
   },
   "latestTraceabilityCommit": {
-    "sourceSha": "f2679e39b0acba43246cd59792da5caba4cddfe3",
-    "sourceCommit": "docs(native): refresh current qa build traceability",
-    "sha": "f2679e39b0acba43246cd59792da5caba4cddfe3",
-    "message": "docs(native): refresh current qa build traceability",
-    "validatedManagementSha": "f2679e39b0acba43246cd59792da5caba4cddfe3",
-    "validatedManagementCommit": "docs(native): refresh current qa build traceability",
+    "sourceSha": "dac5e784ebf640cad1230c1cabf3f314b485a98e",
+    "sourceCommit": "chore(ui-lock): re-baseline for collapsed code chips",
+    "sha": "dac5e784ebf640cad1230c1cabf3f314b485a98e",
+    "message": "chore(ui-lock): re-baseline for collapsed code chips",
+    "validatedManagementSha": "dac5e784ebf640cad1230c1cabf3f314b485a98e",
+    "validatedManagementCommit": "chore(ui-lock): re-baseline for collapsed code chips",
     "validatedManagementRuns": {
-      "ci": "28737691884",
-      "readiness": "28737691885"
+      "ci": "28749111518",
+      "readiness": "28749306918"
     },
-    "note": "This snapshot records the current production-main management commit with green CI/readiness and the current non-secret native QA prerelease. Signed distribution remains separated from QA binaries and requires owner-provided signing/store credentials."
+    "note": "This snapshot records the current production-main management head with green CI, green native readiness, current non-secret owner packet traceability, and the latest signed preflight artifact. QA binaries remain pinned to the current public QA prerelease target SHA; signed distribution still requires owner-provided signing/store credentials."
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T17:10:00Z",
+    "checkedAt": "2026-07-05T17:42:35Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
@@ -227,25 +235,25 @@
       "npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json",
       "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904/artifacts --jq '.artifacts[] | {id,name,expired,size_in_bytes,archive_download_url}'"
     ],
-    "ciRun": "28737691884",
-    "readinessRun": "28737691885",
+    "ciRun": "28749111518",
+    "readinessRun": "28749306918",
     "mobileRun": "28737926063",
     "desktopRun": "28737926072",
     "dockerRun": "28735031878",
     "signedPreflightRun": "28748232904",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
-    "diagnosis": "Public repository Actions are enabled and running on production-main. The QA native workflows and prerelease are green; the latest signed native release preflight also ran and uploaded the siragpt-native-signed-release-preflight artifact before stopping at missing signing secret names. The blocker is missing native signing and store-upload secret names, not public repository Actions billing or permissions."
+    "diagnosis": "Public repository Actions are enabled and running on production-main. The current production-main head has green CI and green native readiness. The QA native workflows and prerelease are green and the latest owner packet is attached to the QA prerelease. The latest signed native release preflight ran and uploaded the siragpt-native-signed-release-preflight artifact before stopping at missing signing secret names. The blocker is missing native signing and store-upload secret names, not public repository Actions billing or permissions."
   },
   "latestOwnerPacket": {
-    "sourceSha": "f2679e39b0acba43246cd59792da5caba4cddfe3",
-    "sourceCommit": "docs(native): refresh current qa build traceability",
-    "zipName": "SiraGPT-native-store-owner-packet-f2679e39.zip",
-    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-f2679e39.zip",
-    "checksumName": "SiraGPT-native-store-owner-packet-f2679e39.zip.sha256",
-    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-f2679e39.zip.sha256",
-    "checksumSha256": "c35ab55a5ec0b458f442bd3d0c7734f626f4405367e5d1ac7e66c3f7209ff179",
-    "size": 5137506,
-    "uploadedAt": "2026-07-05T10:55:00Z",
+    "sourceSha": "dac5e784ebf640cad1230c1cabf3f314b485a98e",
+    "sourceCommit": "chore(ui-lock): re-baseline for collapsed code chips",
+    "zipName": "SiraGPT-native-store-owner-packet-dac5e784.zip",
+    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-dac5e784.zip",
+    "checksumName": "SiraGPT-native-store-owner-packet-dac5e784.zip.sha256",
+    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-dac5e784.zip.sha256",
+    "checksumSha256": "9859aaa10e11dcb85c854ed16cf64a7d3fee1ceb323561903dd4c0f0306d96d1",
+    "size": 5138304,
+    "uploadedAt": "2026-07-05T17:42:35Z",
     "includes": [
       "native-github-secrets-report.md",
       "native-github-secrets-report.json",
@@ -313,7 +321,7 @@
     }
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T10:53:23.473Z",
+    "checkedAt": "2026-07-05T17:32:55.729Z",
     "repo": "infosiragpt-ops/SiraGPT-APP",
     "source": "github",
     "sourceStatus": "available",

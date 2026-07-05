@@ -98,8 +98,11 @@ describe("native release status traceability", () => {
     assert.equal(status.latestCurrentProductionValidation.readinessRun, status.latestVerifiedRuns.readiness)
     assert.equal(status.latestCurrentProductionValidation.mobileRun, status.latestVerifiedRuns.mobile)
     assert.equal(status.latestCurrentProductionValidation.desktopRun, status.latestVerifiedRuns.desktop)
-    assert.equal(status.latestActionsDiagnostics.ciRun, status.latestVerifiedRuns.ci)
-    assert.equal(status.latestActionsDiagnostics.readinessRun, status.latestVerifiedRuns.readiness)
+    assert.equal(status.latestActionsDiagnostics.ciRun, status.latestTraceabilityCommit.validatedManagementRuns.ci)
+    assert.equal(
+      status.latestActionsDiagnostics.readinessRun,
+      status.latestTraceabilityCommit.validatedManagementRuns.readiness,
+    )
     assert.equal(status.latestActionsDiagnostics.mobileRun, status.latestVerifiedRuns.mobile)
     assert.equal(status.latestActionsDiagnostics.desktopRun, status.latestVerifiedRuns.desktop)
     assert.equal(status.latestActionsDiagnostics.signedPreflightRun, status.latestSignedPreflight.run)

@@ -42,8 +42,8 @@ secrets. They must never be committed.
 - Latest native artifact verification SHA: `f2679e39b0acba43246cd59792da5caba4cddfe3`
   (`docs(native): refresh current qa build traceability`)
 - Management/traceability SHA validated before this packet refresh:
-  `f2679e39b0acba43246cd59792da5caba4cddfe3`
-  (`docs(native): refresh current qa build traceability`)
+  `dac5e784ebf640cad1230c1cabf3f314b485a98e`
+  (`chore(ui-lock): re-baseline for collapsed code chips`)
 - Latest QA artifact manifest verification: mobile run `28737926063` and
   desktop run `28737926072` were downloaded and each Android, iOS simulator,
   macOS, and Windows artifact upload includes `native-release-manifest.json`,
@@ -53,18 +53,20 @@ secrets. They must never be committed.
   preserves Android, iOS, macOS, and Windows folders plus original Windows
   filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f2679e39.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-f2679e39.zip`)
-  with SHA-256 `c35ab55a5ec0b458f442bd3d0c7734f626f4405367e5d1ac7e66c3f7209ff179`.
-- Latest signed release preflight: `28733963853`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733963853`)
-  stopped before package runners because signing secrets are still missing.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-dac5e784.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-f2679e3/SiraGPT-native-store-owner-packet-dac5e784.zip`)
+  with SHA-256 `9859aaa10e11dcb85c854ed16cf64a7d3fee1ceb323561903dd4c0f0306d96d1`.
+- Latest signed release preflight: `28748232904`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`)
+  stopped before package runners because signing secrets are still missing, after
+  uploading `siragpt-native-signed-release-preflight` with `preflight.md` and
+  `preflight.json`.
 - Latest secret-name audit: public repository Actions are running, but signed
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
-  Actions is enabled with `allowed_actions=all`, CI run `28737691884`, native
-  readiness run `28737691885`, native mobile run `28737926063`, native desktop
+  Actions is enabled with `allowed_actions=all`, CI run `28749111518`, native
+  readiness run `28749306918`, native mobile run `28737926063`, native desktop
   run `28737926072`, and Docker run `28735031878` are green. Standard
   GitHub-hosted Actions for public repositories are free; this is separate from
   native signing readiness.
