@@ -20,6 +20,7 @@ import {
   Lock,
   Monitor,
   MonitorSmartphone,
+  MousePointer2,
   Play,
   RefreshCw,
   RotateCw,
@@ -40,6 +41,13 @@ import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService } from "@/lib/github-service"
 import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
 import { buildRuntimeEnv } from "@/lib/code-secrets"
+import {
+  CODE_SELECT_TARGET_EVENT,
+  CODE_SELECTION_CANCEL_EVENT,
+  CODE_SELECTION_CAPTURED_EVENT,
+  type CodePreviewSelectionCancelDetail,
+  type CodePreviewSelectionDetail,
+} from "@/lib/code-preview-selection"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error" | "stuck"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
@@ -118,6 +126,23 @@ export function PreviewPane() {
   const [consoleOpen, setConsoleOpen] = React.useState(false)
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
+  const previewFrameRef = React.useRef<HTMLIFrameElement | null>(null)
+  const [selectionMode, setSelectionMode] = React.useState(false)
+  const previewMetaRef = React.useRef<{
+    activePath: string | null
+    activeFolderId: string | null
+    entry: string | null
+    previewKind: string
+    liveSrc: string
+    isLive: boolean
+  }>({
+    activePath: null,
+    activeFolderId: null,
+    entry: null,
+    previewKind: "empty",
+    liveSrc: "",
+    isLive: false,
+  })
 
   // Phase B — run a real Vite app and iframe it live via the no-Docker host
   // runner. The dev server stays private on the server; the browser reaches it
@@ -595,10 +620,36 @@ export function PreviewPane() {
   React.useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       const m = e.data
-      if (!m || m.type !== "sgpt-preview-console") return
-      logSeq.current += 1
-      const entry: LogEntry = { level: String(m.level || "log"), text: String(m.text ?? ""), id: logSeq.current }
-      setLogs((prev) => (prev.length > 250 ? [...prev.slice(-250), entry] : [...prev, entry]))
+      if (!m || typeof m !== "object") return
+      if (m.type === "sgpt-preview-console") {
+        logSeq.current += 1
+        const entry: LogEntry = { level: String(m.level || "log"), text: String(m.text ?? ""), id: logSeq.current }
+        setLogs((prev) => (prev.length > 250 ? [...prev.slice(-250), entry] : [...prev, entry]))
+        return
+      }
+      if (m.type === "sgpt-preview-selection") {
+        const meta = previewMetaRef.current
+        const raw = (m.detail || {}) as CodePreviewSelectionDetail
+        const detail: CodePreviewSelectionDetail = {
+          ...raw,
+          previewKind: meta.isLive ? "live" : meta.previewKind,
+          entry: meta.isLive ? meta.liveSrc : meta.entry,
+          activePath: meta.activePath,
+          activeFolderId: meta.activeFolderId,
+          capturedAt: raw.capturedAt || new Date().toISOString(),
+        }
+        setSelectionMode(false)
+        window.dispatchEvent(new CustomEvent<CodePreviewSelectionDetail>(CODE_SELECTION_CAPTURED_EVENT, { detail }))
+        return
+      }
+      if (m.type === "sgpt-preview-selection-cancelled") {
+        setSelectionMode(false)
+        window.dispatchEvent(
+          new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
+            detail: { reason: String(m.reason || "Selección cancelada."), source: "preview" },
+          }),
+        )
+      }
     }
     window.addEventListener("message", onMsg)
     return () => window.removeEventListener("message", onMsg)
@@ -633,6 +684,15 @@ export function PreviewPane() {
     const clean = `/${(navPath || "/").replace(/^\/+/, "")}`
     return liveRun.devUrl.replace(/\/+$/, "") + clean
   }, [liveRun.devUrl, navPath])
+
+  previewMetaRef.current = {
+    activePath,
+    activeFolderId: activeFolder?.id ?? null,
+    entry: result.entry,
+    previewKind: result.kind,
+    liveSrc,
+    isLive,
+  }
 
   // Device framing: "responsive" fills the pane; tablet/phone render a fixed
   // viewport (swapped when rotated) with a live width×height readout.
@@ -677,6 +737,53 @@ export function PreviewPane() {
   React.useEffect(() => {
     setPathDraft(navPath)
   }, [navPath])
+
+  const postSelectionMessage = React.useCallback((type: "sgpt-preview-select-start" | "sgpt-preview-select-cancel") => {
+    const frame = previewFrameRef.current
+    if (!frame?.contentWindow) return false
+    frame.contentWindow.postMessage({ type }, "*")
+    return true
+  }, [])
+
+  const cancelSelectionFromPreview = React.useCallback((reason: string) => {
+    setSelectionMode(false)
+    window.dispatchEvent(
+      new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
+        detail: { reason, source: "preview" },
+      }),
+    )
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const startSelection = () => {
+      setConsoleOpen(false)
+      setSelectionMode(true)
+      window.setTimeout(() => {
+        if (!postSelectionMessage("sgpt-preview-select-start")) {
+          cancelSelectionFromPreview("Abre un preview renderizable antes de seleccionar un elemento.")
+        }
+      }, 80)
+    }
+    const cancelSelection = (event: Event) => {
+      const detail = (event as CustomEvent<CodePreviewSelectionCancelDetail>).detail
+      setSelectionMode(false)
+      if (detail?.source !== "preview") {
+        postSelectionMessage("sgpt-preview-select-cancel")
+      }
+    }
+    window.addEventListener(CODE_SELECT_TARGET_EVENT, startSelection)
+    window.addEventListener(CODE_SELECTION_CANCEL_EVENT, cancelSelection)
+    return () => {
+      window.removeEventListener(CODE_SELECT_TARGET_EVENT, startSelection)
+      window.removeEventListener(CODE_SELECTION_CANCEL_EVENT, cancelSelection)
+    }
+  }, [cancelSelectionFromPreview, postSelectionMessage])
+
+  const handlePreviewFrameLoad = React.useCallback(() => {
+    if (!selectionMode) return
+    window.setTimeout(() => postSelectionMessage("sgpt-preview-select-start"), 80)
+  }, [postSelectionMessage, selectionMode])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
@@ -865,16 +972,25 @@ export function PreviewPane() {
           canvas only shows behind the framed tablet/phone mockups. */}
       <div
         className={cn(
-          "min-h-0 flex-1 overflow-auto p-0",
+          "relative min-h-0 flex-1 overflow-auto p-0",
           framed ? "bg-zinc-100 dark:bg-zinc-900/55" : "bg-white dark:bg-zinc-900",
         )}
       >
+        {selectionMode ? (
+          <div className="pointer-events-none absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/45 bg-zinc-950/82 px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_18px_45px_-28px_rgba(15,23,42,0.72)] backdrop-blur-xl">
+            <MousePointer2 className="h-3.5 w-3.5 text-violet-200" />
+            <span>Selecciona un elemento del preview</span>
+            <span className="rounded-full bg-white/12 px-1.5 py-px font-mono text-[10px] text-white/75">Esc</span>
+          </div>
+        ) : null}
         {liveRun.phase === "ready" ? (
           // Real running app from the cloud runner (npm dev server).
           <DeviceFrame device={device} width={frameW} height={frameH}>
             <iframe
+              ref={previewFrameRef}
               src={liveSrc}
               title="App en vivo (dev server)"
+              onLoad={handlePreviewFrameLoad}
               // El dev server se sirve same-origin (vía proxy /api/code-runner)
               // pero ejecuta CÓDIGO GENERADO NO CONFIABLE: el sandbox SIN
               // allow-same-origin lo aísla en un origen opaco para que no pueda
@@ -931,9 +1047,11 @@ export function PreviewPane() {
         ) : (
           <DeviceFrame device={device} width={frameW} height={frameH}>
             <iframe
+              ref={previewFrameRef}
               key={staticPreviewKey}
               srcDoc={result.html}
               title="Preview en vivo"
+              onLoad={handlePreviewFrameLoad}
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
               sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
             />

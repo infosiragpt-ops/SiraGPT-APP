@@ -61,3 +61,51 @@ test('token app proxy forwards the full Vite base path upstream', async () => {
     restoreHostRunner();
   }
 });
+
+test('token app proxy injects the visual selector bridge into HTML responses', async () => {
+  const hostRunnerPath = require.resolve('../src/services/code/host-runner');
+  const restoreHostRunner = mockResolvedModule(hostRunnerPath, {
+    enabled: () => true,
+    startAllowed: () => true,
+    getRunForProxy: () => ({ port: 43124 }),
+    getStatus: () => null,
+    stopRun: () => {},
+  });
+
+  const originalRequest = http.request;
+  let upstreamOptions = null;
+  http.request = (...args) => {
+    const [options, callback] = args;
+    if (options && options.hostname === '127.0.0.1' && Number(options.port) === 43124) {
+      upstreamOptions = options;
+      const upstream = new PassThrough();
+      upstream.statusCode = 200;
+      upstream.headers = {
+        'content-type': 'text/html; charset=utf-8',
+        'content-length': '43',
+      };
+      process.nextTick(() => {
+        callback(upstream);
+        upstream.end('<html><head></head><body><h1>Hola</h1></body></html>');
+      });
+      return new Writable({ write(_chunk, _encoding, done) { done(); } });
+    }
+    return originalRequest.apply(http, args);
+  };
+
+  try {
+    const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+    const res = await request(app)
+      .get('/api/code-runner/run-1/abcdef1234/app/')
+      .set('Accept-Encoding', 'gzip, br');
+
+    assert.equal(res.status, 200);
+    assert.match(res.text, /__sgptPreviewSelectorBridge/);
+    assert.match(res.text, /sgpt-preview-select-start/);
+    assert.ok(Number(res.headers['content-length']) > 43);
+    assert.equal(upstreamOptions.headers['accept-encoding'], undefined);
+  } finally {
+    http.request = originalRequest;
+    restoreHostRunner();
+  }
+});

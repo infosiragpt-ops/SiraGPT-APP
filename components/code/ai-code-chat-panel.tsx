@@ -42,6 +42,7 @@ import {
   Search,
   Server,
   Sparkles,
+  SquareDashedMousePointer,
   StopCircle,
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
@@ -120,6 +121,13 @@ import {
   initialCodexEngineFold,
   type CodexEngineFoldState,
 } from "@/lib/code-agent/codex-engine-mapping"
+import {
+  CODE_SELECT_TARGET_EVENT,
+  CODE_SELECTION_CANCEL_EVENT,
+  CODE_SELECTION_CAPTURED_EVENT,
+  type CodePreviewSelectionCancelDetail,
+  type CodePreviewSelectionDetail,
+} from "@/lib/code-preview-selection"
 
 import { DiffView } from "./diff-view"
 
@@ -182,6 +190,40 @@ function buildAppsModePrompt(userText: string): string {
     "",
     "SOLICITUD DEL USUARIO:",
     userText,
+  ].join("\n")
+}
+
+function selectionValue(value: unknown, max = 240): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim()
+  if (!text) return "sin dato"
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+function buildSelectedElementPrompt(detail: CodePreviewSelectionDetail, existingInstruction: string): string {
+  const rect = detail.rect
+    ? `${detail.rect.width}x${detail.rect.height} en x:${detail.rect.x}, y:${detail.rect.y}`
+    : "sin dato"
+  const currentInstruction = existingInstruction.trim()
+  return [
+    "Modifica el elemento que acabo de seleccionar en el preview de APPS.",
+    "",
+    "Elemento seleccionado:",
+    `- selector CSS: ${selectionValue(detail.selector)}`,
+    `- etiqueta: ${selectionValue(detail.tagName, 80)}`,
+    `- texto visible: ${selectionValue(detail.text)}`,
+    `- clases: ${selectionValue(detail.className)}`,
+    `- id: ${selectionValue(detail.id, 120)}`,
+    `- role/aria: ${selectionValue([detail.role, detail.ariaLabel].filter(Boolean).join(" / "), 160)}`,
+    `- href/src: ${selectionValue([detail.href, detail.src].filter(Boolean).join(" / "), 180)}`,
+    `- caja visual: ${rect}`,
+    `- preview: ${selectionValue(detail.previewKind, 80)} · ${selectionValue(detail.entry || detail.pageUrl, 180)}`,
+    `- archivo activo probable: ${selectionValue(detail.activePath, 180)}`,
+    "",
+    currentInstruction
+      ? `Cambio solicitado por el usuario:\n${currentInstruction}`
+      : "Cambio solicitado:\n",
+    "",
+    "Aplica el cambio en los archivos correctos del workspace, conserva el resto del diseño y verifica que el preview siga funcionando.",
   ].join("\n")
 }
 
@@ -789,6 +831,7 @@ export function AICodeChatPanel() {
     busy || buildingApp || agentPhase === "generating" || agentPhase === "debugging"
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
+  const [selectingTarget, setSelectingTarget] = React.useState(false)
 
   // The /code chat picks its OWN model — a fast, streaming one — independent of
   // the main chat (whose default may be a slow reasoning model that times out
@@ -921,6 +964,7 @@ export function AICodeChatPanel() {
   }, [])
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
   const scrollerRef = React.useRef<HTMLDivElement | null>(null)
+  const selectionRequestRef = React.useRef(0)
   // Allow Cmd/Ctrl+L from anywhere in the workspace to focus the
   // composer. The provider exposes a small bus so we don't drill refs.
   React.useEffect(() => {
@@ -941,6 +985,63 @@ export function AICodeChatPanel() {
     window.addEventListener("siragpt:code-composer-mode", handler)
     return () => window.removeEventListener("siragpt:code-composer-mode", handler)
   }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onSelectionCaptured = (event: Event) => {
+      const detail = (event as CustomEvent<CodePreviewSelectionDetail>).detail
+      if (!detail) return
+      setSelectingTarget(false)
+      setComposerMode((mode) => (mode === "plan" || mode === "ask" || mode === "image" ? "build" : mode))
+      setInput((prev) => buildSelectedElementPrompt(detail, prev))
+      window.requestAnimationFrame(() => {
+        const inputEl = inputRef.current
+        inputEl?.focus()
+        if (inputEl) {
+          const end = inputEl.value.length
+          inputEl.setSelectionRange(end, end)
+        }
+      })
+      toast.success("Elemento seleccionado. Describe el cambio y envíalo.")
+    }
+    const onSelectionCancel = (event: Event) => {
+      setSelectingTarget(false)
+      const reason = (event as CustomEvent<CodePreviewSelectionCancelDetail>).detail?.reason
+      if (reason) toast.message(reason)
+    }
+    window.addEventListener(CODE_SELECTION_CAPTURED_EVENT, onSelectionCaptured)
+    window.addEventListener(CODE_SELECTION_CANCEL_EVENT, onSelectionCancel)
+    return () => {
+      window.removeEventListener(CODE_SELECTION_CAPTURED_EVENT, onSelectionCaptured)
+      window.removeEventListener(CODE_SELECTION_CANCEL_EVENT, onSelectionCancel)
+    }
+  }, [])
+
+  const toggleTargetSelection = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    if (selectingTarget) {
+      setSelectingTarget(false)
+      window.dispatchEvent(
+        new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
+          detail: { reason: "Selección cancelada.", source: "chat" },
+        }),
+      )
+      return
+    }
+    selectionRequestRef.current += 1
+    setSelectingTarget(true)
+    setComposerMode((mode) => (mode === "plan" || mode === "ask" || mode === "image" ? "build" : mode))
+    window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent(CODE_SELECT_TARGET_EVENT, {
+          detail: { requestId: selectionRequestRef.current },
+        }),
+      )
+    }, 90)
+    inputRef.current?.blur()
+    toast("Selecciona en el preview la parte que quieres modificar.")
+  }, [selectingTarget])
 
   // Auto-scroll on new content while the user is at the bottom — if
   // they scrolled up to read history, leave them alone.
@@ -2985,6 +3086,21 @@ export function AICodeChatPanel() {
               onIncludeContextChange={setIncludeContext}
               onEngineModeChange={setEngineMode}
             />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={toggleTargetSelection}
+              aria-pressed={selectingTarget}
+              aria-label={selectingTarget ? "Cancelar selección visual" : "Seleccionar elemento del preview"}
+              title={selectingTarget ? "Cancelar selección visual" : "Seleccionar elemento del preview"}
+              className={cn(
+                "code-target-select-button h-8 w-8 shrink-0 rounded-lg",
+                selectingTarget && "code-target-select-button--active",
+              )}
+            >
+              <SquareDashedMousePointer className="code-target-select-button__icon h-4 w-4" />
+            </Button>
             <span className="min-w-0 flex-1" />
             <ModelPickerInline
               models={pickerModels}

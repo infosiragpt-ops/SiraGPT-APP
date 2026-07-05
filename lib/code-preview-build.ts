@@ -54,6 +54,167 @@ const CONSOLE_BRIDGE = `<script>
 })();
 </script>`
 
+const PREVIEW_SELECTOR_BRIDGE = `<script>
+(function(){
+  if (window.__sgptPreviewSelectorBridge) return;
+  window.__sgptPreviewSelectorBridge = true;
+  var active = false;
+  var box = null;
+  var label = null;
+  var lastTarget = null;
+  var style = null;
+  function norm(value, limit){
+    return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit || 220);
+  }
+  function escIdent(value){
+    if (!value) return '';
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, function(ch){ return '\\\\' + ch; });
+  }
+  function classNameOf(el){
+    if (!el) return '';
+    if (typeof el.className === 'string') return el.className;
+    if (el.className && typeof el.className.baseVal === 'string') return el.className.baseVal;
+    return '';
+  }
+  function shortSelector(el){
+    if (!el || el.nodeType !== 1) return '';
+    var tag = (el.tagName || '').toLowerCase();
+    if (el.id) return tag + '#' + escIdent(el.id);
+    var out = [];
+    var node = el;
+    var depth = 0;
+    while (node && node.nodeType === 1 && depth < 6) {
+      var part = (node.tagName || '').toLowerCase();
+      var classes = classNameOf(node).split(/\\s+/).filter(Boolean).slice(0, 2);
+      if (classes.length) {
+        part += '.' + classes.map(escIdent).join('.');
+      } else if (node.parentElement) {
+        var same = Array.prototype.filter.call(node.parentElement.children, function(child){
+          return child.tagName === node.tagName;
+        });
+        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+      }
+      out.unshift(part);
+      if (node.id || part === 'body' || part === 'html') break;
+      node = node.parentElement;
+      depth += 1;
+    }
+    return out.join(' > ');
+  }
+  function ensureUi(){
+    if (!style) {
+      style = document.createElement('style');
+      style.setAttribute('data-sgpt-selector-ui', 'true');
+      style.textContent = 'html[data-sgpt-selecting="true"],html[data-sgpt-selecting="true"] *{cursor:crosshair!important}';
+      document.head ? document.head.appendChild(style) : document.documentElement.appendChild(style);
+    }
+    if (!box) {
+      box = document.createElement('div');
+      box.setAttribute('data-sgpt-selector-ui', 'true');
+      box.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #7c3aed;border-radius:8px;box-shadow:0 0 0 99999px rgba(15,23,42,.10),0 10px 30px rgba(124,58,237,.28);background:rgba(124,58,237,.08);transition:transform 90ms ease,width 90ms ease,height 90ms ease;';
+      document.documentElement.appendChild(box);
+    }
+    if (!label) {
+      label = document.createElement('div');
+      label.setAttribute('data-sgpt-selector-ui', 'true');
+      label.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;max-width:min(340px,calc(100vw - 24px));border:1px solid rgba(255,255,255,.42);border-radius:999px;background:rgba(17,24,39,.88);color:white;padding:6px 10px;font:600 12px/1.2 Inter,system-ui,sans-serif;box-shadow:0 12px 32px rgba(15,23,42,.22);backdrop-filter:blur(14px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      document.documentElement.appendChild(label);
+    }
+  }
+  function draw(el){
+    if (!el || el.nodeType !== 1 || el.getAttribute('data-sgpt-selector-ui') === 'true') return;
+    ensureUi();
+    var rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    box.style.transform = 'translate(' + Math.max(0, rect.left) + 'px,' + Math.max(0, rect.top) + 'px)';
+    box.style.width = Math.max(0, rect.width) + 'px';
+    box.style.height = Math.max(0, rect.height) + 'px';
+    var selector = shortSelector(el) || (el.tagName || '').toLowerCase();
+    label.textContent = 'Seleccionar ' + selector;
+    var top = Math.max(8, rect.top - 34);
+    var left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - 348));
+    label.style.transform = 'translate(' + left + 'px,' + top + 'px)';
+  }
+  function describe(el){
+    var rect = el.getBoundingClientRect();
+    return {
+      selector: shortSelector(el),
+      tagName: (el.tagName || '').toLowerCase(),
+      id: el.id || '',
+      className: norm(classNameOf(el), 260),
+      text: norm(el.innerText || el.textContent || '', 260),
+      role: el.getAttribute('role') || '',
+      ariaLabel: el.getAttribute('aria-label') || '',
+      href: el.getAttribute('href') || '',
+      src: el.getAttribute('src') || '',
+      rect: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      },
+      pageUrl: location.pathname + location.search + location.hash,
+      pageTitle: document.title || '',
+      capturedAt: new Date().toISOString()
+    };
+  }
+  function cleanup(reason){
+    active = false;
+    lastTarget = null;
+    document.documentElement.removeAttribute('data-sgpt-selecting');
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('keydown', onKey, true);
+    if (box) { box.remove(); box = null; }
+    if (label) { label.remove(); label = null; }
+    if (reason) {
+      try { parent.postMessage({ type: 'sgpt-preview-selection-cancelled', reason: reason }, '*'); } catch (_) {}
+    }
+  }
+  function onMove(event){
+    if (!active) return;
+    var target = event.target;
+    if (!target || target.nodeType !== 1 || target.getAttribute('data-sgpt-selector-ui') === 'true') return;
+    lastTarget = target;
+    draw(target);
+  }
+  function onClick(event){
+    if (!active) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    var target = lastTarget || event.target;
+    if (!target || target.nodeType !== 1) return cleanup('No se pudo seleccionar ese elemento.');
+    var detail = describe(target);
+    cleanup('');
+    try { parent.postMessage({ type: 'sgpt-preview-selection', detail: detail }, '*'); } catch (_) {}
+  }
+  function onKey(event){
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      cleanup('Selección cancelada.');
+    }
+  }
+  function start(){
+    active = true;
+    ensureUi();
+    document.documentElement.setAttribute('data-sgpt-selecting', 'true');
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKey, true);
+  }
+  window.addEventListener('message', function(event){
+    var msg = event.data || {};
+    if (msg.type === 'sgpt-preview-select-start') start();
+    if (msg.type === 'sgpt-preview-select-cancel') cleanup('Selección cancelada.');
+  });
+})();
+</script>`
+
+const PREVIEW_BRIDGES = `${CONSOLE_BRIDGE}\n${PREVIEW_SELECTOR_BRIDGE}`
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
@@ -90,11 +251,11 @@ function buildHtmlDocument(files: CodeFiles, entry: string): string {
 
   // Inject the console bridge as early as possible.
   if (/<head[^>]*>/i.test(html)) {
-    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${CONSOLE_BRIDGE}`)
+    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${PREVIEW_BRIDGES}`)
   } else if (/<html[^>]*>/i.test(html)) {
-    html = html.replace(/<html[^>]*>/i, (m) => `${m}\n${CONSOLE_BRIDGE}`)
+    html = html.replace(/<html[^>]*>/i, (m) => `${m}\n${PREVIEW_BRIDGES}`)
   } else {
-    html = `${CONSOLE_BRIDGE}\n${html}`
+    html = `${PREVIEW_BRIDGES}\n${html}`
   }
   return html
 }
@@ -191,7 +352,7 @@ try {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-${CONSOLE_BRIDGE}
+${PREVIEW_BRIDGES}
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   html,body{margin:0;padding:0;background:#fff;font-family:Inter,system-ui,sans-serif}
@@ -245,7 +406,7 @@ function buildMarkdownDocument(files: CodeFiles, entry: string): string {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-${CONSOLE_BRIDGE}
+${PREVIEW_BRIDGES}
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   body{margin:0;background:#fff;color:#111;font-family:Inter,system-ui,sans-serif;line-height:1.65}
@@ -271,7 +432,7 @@ ${CONSOLE_BRIDGE}
 function buildSvgDocument(files: CodeFiles, entry: string): string {
   const svg = files[entry]?.content ?? ""
   return `<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8" />${CONSOLE_BRIDGE}
+<html lang="es"><head><meta charset="UTF-8" />${PREVIEW_BRIDGES}
 <style>html,body{margin:0;height:100%}body{display:flex;align-items:center;justify-content:center;background:#fafafa}svg{max-width:96vw;max-height:96vh}</style>
 </head><body>${svg}</body></html>`
 }
