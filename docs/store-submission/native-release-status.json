@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T19:22:50Z",
+  "updatedAt": "2026-07-05T19:50:50Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -240,18 +240,19 @@
     "dockerRun": "28735031878",
     "signedPreflightRun": "28748232904",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
-    "diagnosis": "Public repository Actions are enabled and running on production-main. The current production-main management head has green CI and green native readiness, while the current native QA binary release contains green Android, iPhone simulator, macOS, and Windows artifacts plus the current non-secret owner handoff packet. The signed native release blocker remains missing signing and store-upload secret names, not public repository Actions billing or permissions."
+    "diagnosis": "Public repository Actions are enabled and running on production-main. The current production-main management head has green CI and green native readiness, while the current native QA binary release contains green Android, iPhone simulator, macOS, and Windows artifacts plus the current non-secret owner handoff packet. Android package signing is configured and a signed AAB release has been verified; remaining blockers are Google Play upload, iOS/App Store, macOS notarized signing, and Windows code-signing credentials, not public repository Actions billing or permissions."
   },
   "latestOwnerPacket": {
-    "sourceSha": "8101bb62c625c6980aebda2dfd0110e81d1be07e",
-    "sourceCommit": "docs(native): publish current actions diagnostics",
-    "zipName": "SiraGPT-native-store-owner-packet-8101bb62.zip",
-    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-8101bb62.zip",
-    "checksumName": "SiraGPT-native-store-owner-packet-8101bb62.zip.sha256",
-    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-8101bb62.zip.sha256",
-    "checksumSha256": "c7df33d7ef759be132e9bdfecdf7464d1bc3e090ae7cf25e4bbb3d8702ba0513",
-    "size": 5138177,
-    "uploadedAt": "2026-07-05T19:22:50Z",
+    "sourceSha": "4a5e5f8e024d6e4b9fdeb3f5e399d7558612da42",
+    "sourceCommit": "ci(native): split Android signing from store upload",
+    "releaseTag": "native-android-signed-v0.4.3-4a5e5f8",
+    "zipName": "SiraGPT-native-store-owner-packet-4a5e5f8e.zip",
+    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-4a5e5f8/SiraGPT-native-store-owner-packet-4a5e5f8e.zip",
+    "checksumName": "SiraGPT-native-store-owner-packet-4a5e5f8e.zip.sha256",
+    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-4a5e5f8/SiraGPT-native-store-owner-packet-4a5e5f8e.zip.sha256",
+    "checksumSha256": "da851aece87aa8427a37f9ab264237e31ea4cf259b9cc4c381f8512278f9b54b",
+    "size": 5138928,
+    "uploadedAt": "2026-07-05T19:54:18Z",
     "includes": [
       "native-github-secrets-report.md",
       "native-github-secrets-report.json",
@@ -318,23 +319,55 @@
       "missingSecrets": "native-signed-preflight-missing-secrets=14"
     }
   },
+  "latestSignedAndroidRelease": {
+    "checkedAt": "2026-07-05T19:50:50Z",
+    "tag": "native-android-signed-v0.4.3-4a5e5f8",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-4a5e5f8",
+    "run": "28752581055",
+    "runUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28752581055",
+    "sourceSha": "4a5e5f8e024d6e4b9fdeb3f5e399d7558612da42",
+    "status": "verified-signed-android-aab",
+    "createGithubRelease": true,
+    "googlePlayUpload": "skipped-owner-service-account-missing",
+    "aab": {
+      "name": "SiraGPT-4a5e5f8.aab",
+      "kind": "play-aab",
+      "size": 3024917,
+      "sha256": "9aa139e5783df37a3bd8d852e19c32fdc37c861eae7e0bb9574094e32394d348"
+    },
+    "releaseAssets": [
+      "SiraGPT-4a5e5f8.aab",
+      "SHA256SUMS.txt",
+      "native-release-manifest.json",
+      "native-release-manifest.md",
+      "preflight.json",
+      "preflight.md"
+    ],
+    "verification": "Downloaded all release assets and shasum -a 256 -c SHA256SUMS.txt returned OK for preflight.json, preflight.md, and SiraGPT-4a5e5f8.aab.",
+    "notes": "Android upload keystore secrets are configured in GitHub Actions and the signed Android AAB was built and published as a GitHub Release. Automated Google Play upload was intentionally disabled because GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 is still missing and Play Console owner verification remains an external owner action."
+  },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T19:22:33.471Z",
+    "checkedAt": "2026-07-05T19:50:04.600Z",
     "repo": "infosiragpt-ops/SiraGPT-APP",
     "source": "github",
     "sourceStatus": "available",
     "configuredRepositorySecrets": [
+      "ANDROID_KEYSTORE_BASE64",
+      "ANDROID_KEYSTORE_PASSWORD",
+      "ANDROID_KEY_ALIAS",
+      "ANDROID_KEY_PASSWORD",
       "VPS_HOST",
       "VPS_PORT",
       "VPS_SSH_KEY",
       "VPS_USER"
     ],
-    "configuredNativeSecrets": [],
-    "missingRequiredSecrets": [
+    "configuredNativeSecrets": [
       "ANDROID_KEYSTORE_BASE64",
       "ANDROID_KEYSTORE_PASSWORD",
       "ANDROID_KEY_ALIAS",
-      "ANDROID_KEY_PASSWORD",
+      "ANDROID_KEY_PASSWORD"
+    ],
+    "missingRequiredSecrets": [
       "APPLE_APP_SPECIFIC_PASSWORD",
       "APPLE_ID",
       "APPLE_TEAM_ID",
@@ -351,7 +384,6 @@
       "WINDOWS_CERTIFICATE_PASSWORD"
     ],
     "missingRequiredGroups": [
-      "android",
       "googleplay",
       "ios",
       "appstore",
@@ -360,6 +392,6 @@
     ],
     "status": "blocked-missing-native-signing-secrets",
     "command": "npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json --json",
-    "diagnosis": "The repository has deployment secrets only. Native app signing and store uploads require dedicated platform credentials stored as GitHub Actions secrets; the report lists secret names only, never reads or prints secret values, and the release plan shows the per-platform gate status."
+    "diagnosis": "Android package signing secrets are configured and verified by the signed Android release. Remaining native distribution blockers are Google Play service account upload, iOS/App Store signing and upload, macOS Developer ID/notarization, and Windows code-signing secrets. The report lists secret names only, never reads or prints secret values, and the release plan shows the per-platform gate status."
   }
 }

@@ -225,6 +225,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     latestTraceabilityCommit: status.latestTraceabilityCommit,
     latestActionsDiagnostics: status.latestActionsDiagnostics,
     latestSignedPreflight: status.latestSignedPreflight,
+    latestSignedAndroidRelease: status.latestSignedAndroidRelease,
     latestSecretAudit: status.latestSecretAudit,
     platformPlans,
     forbiddenMaterials: [
@@ -356,6 +357,26 @@ function renderMarkdown(handoff) {
     lines.push(`- Release tag: \`${handoff.latestSignedPreflight.releaseTag}\``)
     if (handoff.latestSignedPreflight.notes) {
       lines.push(`- Notes: ${handoff.latestSignedPreflight.notes}`)
+    }
+    lines.push("")
+  }
+  if (handoff.latestSignedAndroidRelease?.tag) {
+    lines.push("## Latest Signed Android Release")
+    lines.push("")
+    lines.push(`- Tag: \`${handoff.latestSignedAndroidRelease.tag}\``)
+    lines.push(`- URL: ${handoff.latestSignedAndroidRelease.url}`)
+    lines.push(`- Source SHA: \`${handoff.latestSignedAndroidRelease.sourceSha}\``)
+    lines.push(`- Workflow run: \`${handoff.latestSignedAndroidRelease.run}\``)
+    lines.push(`- Status: \`${handoff.latestSignedAndroidRelease.status}\``)
+    if (handoff.latestSignedAndroidRelease.aab?.name) {
+      lines.push(`- AAB: \`${handoff.latestSignedAndroidRelease.aab.name}\``)
+      lines.push(`- AAB SHA-256: \`${handoff.latestSignedAndroidRelease.aab.sha256}\``)
+    }
+    if (handoff.latestSignedAndroidRelease.verification) {
+      lines.push(`- Verification: ${handoff.latestSignedAndroidRelease.verification}`)
+    }
+    if (handoff.latestSignedAndroidRelease.googlePlayUpload) {
+      lines.push(`- Google Play upload: \`${handoff.latestSignedAndroidRelease.googlePlayUpload}\``)
     }
     lines.push("")
   }

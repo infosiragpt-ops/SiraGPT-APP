@@ -12,6 +12,7 @@ describe("generate-native-owner-handoff", () => {
       latestQaRelease: { tag: string; targetSha: string }
       latestTraceabilityCommit: { sha: string }
       latestSignedPreflight: { run: string; sourceSha: string; status: string }
+      latestSignedAndroidRelease?: { tag: string; sourceSha: string; status: string }
       latestSecretAudit: { status: string; diagnosis: string }
       latestActionsDiagnostics: {
         repoVisibility: string
@@ -63,6 +64,7 @@ describe("generate-native-owner-handoff", () => {
           platformArtifacts: Record<string, string[]>
         }
         latestSignedPreflight: { run: string; sourceSha: string; status: string }
+        latestSignedAndroidRelease?: { tag: string; sourceSha: string; status: string }
         latestSecretAudit: { status: string; diagnosis: string }
         latestVerifiedRuns: { docker?: string }
         ownerAccount: {
@@ -100,8 +102,13 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.latestSignedPreflight.run, status.latestSignedPreflight.run)
       assert.equal(handoff.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
       assert.equal(handoff.latestSignedPreflight.status, status.latestSignedPreflight.status)
+      if (status.latestSignedAndroidRelease) {
+        assert.equal(handoff.latestSignedAndroidRelease?.tag, status.latestSignedAndroidRelease.tag)
+        assert.equal(handoff.latestSignedAndroidRelease?.sourceSha, status.latestSignedAndroidRelease.sourceSha)
+        assert.equal(handoff.latestSignedAndroidRelease?.status, status.latestSignedAndroidRelease.status)
+      }
       assert.equal(handoff.latestSecretAudit.status, status.latestSecretAudit.status)
-      assert.match(handoff.latestSecretAudit.diagnosis, /Native app signing|native signing|deployment secrets only/)
+      assert.match(handoff.latestSecretAudit.diagnosis, /Android package signing|Native app signing|native signing|deployment secrets only/)
       assert.equal(handoff.latestVerifiedRuns.docker, status.latestVerifiedRuns.docker)
       assert.equal(handoff.ownerAccount.email, "infosiragpt@gmail.com")
       assert.equal(handoff.ownerAccount.status, "rotation-required-before-store-use")
@@ -128,6 +135,7 @@ describe("generate-native-owner-handoff", () => {
       assert.match(markdown, /Latest QA Artifact Manifest Verification/)
       assert.match(markdown, /Latest GitHub Actions Diagnostics/)
       assert.match(markdown, /Latest Signed Release Preflight/)
+      assert.match(markdown, /Latest Signed Android Release/)
       assert.match(markdown, /Latest Secret-Name Audit/)
     } finally {
       rmSync(dir, { recursive: true, force: true })

@@ -116,9 +116,19 @@ Latest native artifact verification SHA: `e6062026f64e1e29103fa3818d17cf6faef097
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8101bb62.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-8101bb62.zip`.
-  - SHA-256: `c7df33d7ef759be132e9bdfecdf7464d1bc3e090ae7cf25e4bbb3d8702ba0513`.
+- Signed Android release: `native-android-signed-v0.4.3-4a5e5f8`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-4a5e5f8`.
+  - Source SHA: `4a5e5f8e024d6e4b9fdeb3f5e399d7558612da42`.
+  - Workflow run: `28752581055`.
+  - Result: `SiraGPT-4a5e5f8.aab` was signed, published to GitHub Releases,
+    downloaded locally, and verified against `SHA256SUMS.txt`.
+  - AAB SHA-256:
+    `9aa139e5783df37a3bd8d852e19c32fdc37c861eae7e0bb9574094e32394d348`.
+  - Google Play upload was intentionally skipped because the Play service
+    account secret and owner Play Console verification are still missing.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-4a5e5f8e.zip`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-4a5e5f8/SiraGPT-native-store-owner-packet-4a5e5f8e.zip`.
+  - SHA-256: `da851aece87aa8427a37f9ab264237e31ea4cf259b9cc4c381f8512278f9b54b`.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Rotate that password
@@ -139,12 +149,16 @@ simulator. The prerelease includes `native-release-manifest.json`,
 be verified against its SHA-256 checksum. The release also includes
 `SiraGPT-native-qa-v0.4.3-e6062026.zip`, a single durable ZIP preserving platform folders and
 original Windows filenames, plus its `.sha256` checksum. The release also
-contains the current owner handoff packet for the latest management SHA. Public
-distribution still requires signing and store credentials.
+contains the previous owner handoff packet for that management SHA. The current
+owner handoff packet is attached to the signed Android release listed above.
+Public distribution for Google Play upload, iPhone, macOS, and Windows still
+requires owner-provided signing and store credentials.
 
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 
-- Android: signed Play upload `.aab`.
+- Android: signed Play upload `.aab`. Android package signing is already
+  configured; Google Play upload still needs `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`
+  and owner Play Console verification.
 - iOS: signed App Store Connect `.ipa`.
 - macOS: signed and notarized `.dmg` and `.zip`.
 - Windows: signed `.exe` installer/portable artifacts.
@@ -255,6 +269,10 @@ The template command writes a blank owner-only `.env` example with the exact
 file-path variables and secret names needed for the selected platform. It does
 not read or print secret values, and the generated file must not be committed
 after the owner fills it locally.
+
+Android signing secrets are already configured in GitHub Actions for the
+current signed `.aab`. Keep the local upload keystore outside the repository
+and do not rotate it casually after a Play upload has been accepted.
 
 Android signing secrets:
 

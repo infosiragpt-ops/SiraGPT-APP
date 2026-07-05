@@ -53,16 +53,23 @@ secrets. They must never be committed.
   (`sha256:9e677f6cb8a8b7f09efb707fdaa8ca710d4aabf9ceb2e2cebe868af4ab0fe23c`) preserves Android, iOS, macOS, and
   Windows folders plus original Windows filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8101bb62.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-e6062026/SiraGPT-native-store-owner-packet-8101bb62.zip`)
-  with SHA-256 `c7df33d7ef759be132e9bdfecdf7464d1bc3e090ae7cf25e4bbb3d8702ba0513`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-4a5e5f8e.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-4a5e5f8/SiraGPT-native-store-owner-packet-4a5e5f8e.zip`)
+  with SHA-256 `da851aece87aa8427a37f9ab264237e31ea4cf259b9cc4c381f8512278f9b54b`.
 - Latest signed release preflight: `28748232904`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`) stopped before package runners because signing
   secrets are still missing, after uploading `siragpt-native-signed-release-preflight`
   with `preflight.md` and `preflight.json`.
-- Latest secret-name audit: public repository Actions are running, but signed
-  native release packaging is blocked by missing platform signing and
-  store-upload secret names.
+- Latest signed Android release: `native-android-signed-v0.4.3-4a5e5f8`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-4a5e5f8`) produced
+  `SiraGPT-4a5e5f8.aab` from SHA
+  `4a5e5f8e024d6e4b9fdeb3f5e399d7558612da42`.
+  The release checksum audit passed for `preflight.json`, `preflight.md`, and
+  the signed `.aab`.
+- Latest secret-name audit: public repository Actions are running, Android
+  package signing is ready, and remaining signed native distribution blockers
+  are Google Play upload, iOS/App Store, macOS notarization/signing, and Windows
+  code-signing secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
   Actions is enabled with `allowed_actions=all`, CI
   run `28751857678`, native readiness run `28751857663`, native mobile
@@ -94,7 +101,9 @@ lives in `docs/store-submission/native-store-assets.json`.
    and `SHA256SUMS.txt` alongside every QA binary upload.
 2. Complete owner-only account verification in Google Play Console and Apple
    Developer/App Store Connect.
-3. Add signing and store-upload secrets to GitHub Actions, never to the repo.
+3. Add remaining signing and store-upload secrets to GitHub Actions, never to
+   the repo. Android package signing is already configured; Google Play upload
+   is separate.
 4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
    `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
@@ -137,6 +146,12 @@ The signed release workflow can upload the generated `.aab` automatically when
 upload should target `android_play_track=qa` with
 `android_release_status=draft` so the owner can review it in Google Play
 Console before publishing.
+
+Android package signing itself is already configured and verified. The current
+signed `.aab` is attached to the `native-android-signed-v0.4.3-4a5e5f8`
+GitHub Release. The remaining Android owner action is Google Play Console
+verification plus `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` for automated
+Play uploads.
 
 ### iPhone
 

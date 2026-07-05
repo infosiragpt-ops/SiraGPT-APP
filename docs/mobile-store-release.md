@@ -8,7 +8,10 @@
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-e6062026` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows, plus a durable all-platform QA ZIP and the current owner handoff packet.
 - The latest native artifact verification SHA is `e6062026f64e1e29103fa3818d17cf6faef09734`; CI, native readiness, native mobile, and native desktop workflows are green for that native artifact set.
-- Android signed Play release publishing is blocked until the Play upload keystore secrets, the Google Play service account upload secret, and Google Play account verification are complete.
+- Android package signing is configured and verified by the signed AAB release
+  `native-android-signed-v0.4.3-4a5e5f8`.
+- Android Google Play upload is blocked until the Google Play service account
+  upload secret and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
 ## Latest Validation
@@ -65,8 +68,16 @@
   - Result: public-repository Actions are not the blocker; missing native signing/store-upload secrets are.
 - Signed native preflight run `28748232904` was triggered for `platform=all`
   on SHA `26f5d5950ae3bf052f227d43e87faf5a3973203c` and stopped before package runners because Android, iOS, macOS, and Windows signing secrets are still missing. It uploaded `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json` before stopping.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8101bb62.zip`
-  (`sha256:c7df33d7ef759be132e9bdfecdf7464d1bc3e090ae7cf25e4bbb3d8702ba0513`).
+- Signed Android release run `28752581055` passed on SHA
+  `4a5e5f8e024d6e4b9fdeb3f5e399d7558612da42` and published
+  `SiraGPT-4a5e5f8.aab` to
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-4a5e5f8`.
+  Local checksum verification passed for `preflight.json`, `preflight.md`, and
+  the signed `.aab`; the AAB SHA-256 is
+  `9aa139e5783df37a3bd8d852e19c32fdc37c861eae7e0bb9574094e32394d348`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-4a5e5f8e.zip`
+  (`sha256:da851aece87aa8427a37f9ab264237e31ea4cf259b9cc4c381f8512278f9b54b`) is attached to
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-4a5e5f8`.
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled. The signed release preflight also uploads `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`, even when the run intentionally stops because signing/upload secrets are missing.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
@@ -87,11 +98,14 @@
 
 ## Current GitHub Secrets State
 
-The public repository currently has only VPS deployment secrets configured.
-Signed store distribution is not ready until these native release secrets are
-added to GitHub Actions:
+The public repository has VPS deployment secrets and Android package-signing
+secrets configured. Signed store distribution is not fully ready until the
+remaining native release secrets are added to GitHub Actions:
 
-- Android: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`.
+- Android: package signing is ready with `ANDROID_KEYSTORE_BASE64`,
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
+  `ANDROID_KEY_PASSWORD`; Google Play upload still needs
+  `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`.
 - iOS/App Store Connect: `APPLE_TEAM_ID`, `IOS_SIGNING_CERTIFICATE_BASE64`, `IOS_SIGNING_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_BASE64`.
 - macOS: `MACOS_CERTIFICATE_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`.
 - Windows: `WINDOWS_CERTIFICATE_BASE64`, `WINDOWS_CERTIFICATE_PASSWORD`.
@@ -112,10 +126,11 @@ npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --requ
 npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 ```
 
-Result: `android`, `googleplay`, `ios`, `appstore`, `macos`, and `windows`
-are missing required native signing/upload secrets. The audit prints names and
-readiness states only; it does not read or print secret values. The report
-command writes a shareable Markdown/JSON diagnosis for the same blocker.
+Result: `android` is ready for package signing. `googleplay`, `ios`,
+`appstore`, `macos`, and `windows` are still missing required native
+signing/upload secrets. The audit prints names and readiness states only; it
+does not read or print secret values. The report command writes a shareable
+Markdown/JSON diagnosis for the same blocker.
 This is the signed-release blocker. It is separate from public repository
 GitHub Actions availability, which is currently verified by green CI and native
 QA workflows.
