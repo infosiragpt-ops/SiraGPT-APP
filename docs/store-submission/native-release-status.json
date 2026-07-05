@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T06:57:24.732Z",
+  "updatedAt": "2026-07-05T07:09:54.000Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -39,8 +39,8 @@
   "latestVerifiedRuns": {
     "mobile": "28732348269",
     "desktop": "28732348253",
-    "readiness": "28732348267",
-    "ci": "28732038507",
+    "readiness": "28732703296",
+    "ci": "28732703286",
     "docker": "28728027742"
   },
   "latestQaArtifactManifestRuns": {
@@ -143,10 +143,12 @@
   },
   "latestTraceabilityCommit": {
     "sourceSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
-    "sourceCommit": "fix(ci): run database backup through postgres container"
+    "sourceCommit": "fix(ci): run database backup through postgres container",
+    "managementSha": "1d937068b66facec31e752c37ad30760f7b86aa3",
+    "managementCommit": "docs(native): publish QA package for current production"
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-05T06:57:24.732Z",
+    "checkedAt": "2026-07-05T07:09:54.000Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
@@ -157,8 +159,8 @@
       "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/permissions",
       "gh run list --repo infosiragpt-ops/SiraGPT-APP --limit 50"
     ],
-    "ciRun": "28732038507",
-    "readinessRun": "28732348267",
+    "ciRun": "28732703286",
+    "readinessRun": "28732703296",
     "mobileRun": "28732348269",
     "desktopRun": "28732348253",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",

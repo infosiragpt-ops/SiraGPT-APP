@@ -37,10 +37,13 @@
   `SHA256SUMS.txt`.
 - GitHub Actions `Native readiness report` run `28732348267` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
 - Native artifact traceability commit `0601139e3b507b9733ad1fdd84290e3d8cf7a078` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28732038507`
-  - Native readiness report: `28732348267`
+  - CI: `28732703286`
+  - Native readiness report: `28732703296`
   - Native mobile builds: `28732348269`
   - Native desktop builds: `28732348253`
+- Management/traceability commit `1d937068b66facec31e752c37ad30760f7b86aa3`
+  (`docs(native): publish QA package for current production`) is also green in
+  CI run `28732703286` and Native readiness report run `28732703296`.
 - GitHub repository diagnostics:
   - Repository visibility: `PUBLIC`
   - Actions enabled: `true`

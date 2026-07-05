@@ -84,9 +84,10 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Native desktop builds: `28732348253`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
-- Current traceability workflow set on SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
-  - CI: `28732038507`.
-  - Native readiness report with owner handoff artifact: `28732348267`.
+- Current management/traceability workflow set on SHA `1d937068b66facec31e752c37ad30760f7b86aa3`:
+  - CI: `28732703286`.
+  - Native readiness report with owner handoff artifact: `28732703296`.
+- Current native QA artifact set remains tied to SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
   - Native mobile builds: `28732348269`.
   - Native desktop builds: `28732348253`.
 - Latest QA artifact manifest verification:
