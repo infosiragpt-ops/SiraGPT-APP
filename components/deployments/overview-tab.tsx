@@ -9,6 +9,7 @@ import {
   List,
   Loader2,
   Lock,
+  ExternalLink,
   QrCode,
   Rocket,
   RotateCcw,
@@ -278,6 +279,7 @@ export function OverviewTab({
                   copyKey="default"
                   copiedKey={copiedKey}
                   onCopy={copyValue}
+                  projectId={deployment.projectId}
                 />
                 {customDomains.map((domain) => (
                   <DomainLine
@@ -286,8 +288,19 @@ export function OverviewTab({
                     copyKey={domain.id}
                     copiedKey={copiedKey}
                     onCopy={copyValue}
+                    projectId={deployment.projectId}
                   />
                 ))}
+                {deployment.projectId ? (
+                  <button
+                    type="button"
+                    onClick={() => openCreatedApp(deployment.projectId)}
+                    className="mt-0.5 inline-flex h-7 items-center gap-1.5 rounded-[6px] border-0 bg-[#0f6ecb] px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#1679dc]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Abrir app
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => onNavigate("domains")}
@@ -414,28 +427,54 @@ function FieldRow({
   )
 }
 
+// The synthetic <name>.replit.app label is a Replit-style badge — the clone
+// doesn't provision real hosting. What the user actually wants ("ver lo que
+// creé") is the running app, which lives in the linked workspace project. Open
+// it there: the preview auto-runs on mount (and self-heals a dead project).
+function openCreatedApp(projectId?: string | null) {
+  if (typeof window === "undefined") return
+  if (projectId) {
+    window.open(`/code?folder=${encodeURIComponent(projectId)}`, "_blank", "noopener")
+  }
+}
+
 function DomainLine({
   hostname,
   copyKey,
   copiedKey,
   onCopy,
+  projectId,
 }: {
   hostname: string
   copyKey: string
   copiedKey: string | null
   onCopy: (key: string, value: string) => void
+  projectId?: string | null
 }) {
   const url = displayUrl(hostname)
+  // With a linked project, clicking the domain opens the actual created app
+  // (the workspace preview) instead of the non-resolving .replit.app label.
   return (
     <span className="inline-flex max-w-full min-w-0 items-center gap-2">
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        className="min-w-0 max-w-[min(72vw,520px)] truncate text-[14px] font-semibold text-white hover:underline"
-      >
-        {url}
-      </a>
+      {projectId ? (
+        <button
+          type="button"
+          onClick={() => openCreatedApp(projectId)}
+          title="Abrir tu app"
+          className="min-w-0 max-w-[min(72vw,520px)] truncate text-left text-[14px] font-semibold text-white hover:underline"
+        >
+          {url}
+        </button>
+      ) : (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="min-w-0 max-w-[min(72vw,520px)] truncate text-[14px] font-semibold text-white hover:underline"
+        >
+          {url}
+        </a>
+      )}
       <button
         type="button"
         onClick={() => onCopy(copyKey, url)}
