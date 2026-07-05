@@ -35,6 +35,11 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   assert.match(html, /<div id="root">/);
   assert.match(html, /src="\/src\/main\.tsx"/);
   assert.match(files.find((f) => f.path === '.gitignore').content, /node_modules/);
+  // Vite 7 host-checks the Host header: without allowedHosts the platform
+  // proxy and the browser verifier (http://runner:5173) get 403 Blocked.
+  const vite = files.find((f) => f.path === 'vite.config.ts').content;
+  assert.match(vite, /allowedHosts:\s*true/);
+  assert.match(vite, /host:\s*true/);
 });
 
 test('the generated .tsx/.ts files parse cleanly (valid TypeScript/JSX)', { skip: !ts }, () => {

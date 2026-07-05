@@ -101,7 +101,7 @@ function appsFallbackFiles({ prompt, projectName }) {
       vite: '^7.0.0',
     },
   };
-  const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({ plugins: [react()] })\n`;
+  const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\n// server.allowedHosts: the proxy + browser verifier hit this by container hostname.\nexport default defineConfig({ plugins: [react()], server: { host: true, allowedHosts: true } })\n`;
   const tsconfig = {
     compilerOptions: {
       target: 'ES2020', useDefineForClassFields: true, lib: ['ES2020', 'DOM', 'DOM.Iterable'],

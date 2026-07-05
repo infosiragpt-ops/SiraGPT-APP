@@ -67,6 +67,10 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Sandboxed single-tenant container: the platform proxy and the browser
+  // verifier reach this dev server by container hostname, so Vite's default
+  // localhost-only host check must be disabled or they get 403 Blocked.
+  server: { host: true, allowedHosts: true },
 })
 `;
 

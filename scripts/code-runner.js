@@ -324,7 +324,19 @@ async function runDev(entry, projectId) {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, PORT: String(port), HOST: "0.0.0.0", BROWSER: "none" },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: "0.0.0.0",
+      BROWSER: "none",
+      // Vite 7 host-checks the Host header and 403s anything that isn't
+      // localhost — the backend's browser verifier reaches this dev server as
+      // http://runner:5173, so every check saw "Blocked request" instead of
+      // the app. This env var (Vite's official escape hatch) whitelists the
+      // container hostname for ALL workspaces, including pre-existing ones
+      // whose vite.config predates the allowedHosts fix in the starter.
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: process.env.VITE_EXTRA_ALLOWED_HOST || "runner",
+    },
   });
   entry.proc = devProc;
   pipe(entry, devProc.stdout, "[dev]");
