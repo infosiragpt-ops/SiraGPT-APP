@@ -120,6 +120,18 @@ function runNpmScript(scriptName, extraArgs) {
 }
 
 function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }) {
+  const ownerPacket = releaseStatus.latestOwnerPacket
+    ? {
+        sourceSha: releaseStatus.latestOwnerPacket.sourceSha,
+        sourceCommit: releaseStatus.latestOwnerPacket.sourceCommit,
+        zipName: releaseStatus.latestOwnerPacket.zipName,
+        zipUrl: releaseStatus.latestOwnerPacket.zipUrl,
+        checksumName: releaseStatus.latestOwnerPacket.checksumName,
+        checksumUrl: releaseStatus.latestOwnerPacket.checksumUrl,
+        uploadedAt: releaseStatus.latestOwnerPacket.uploadedAt,
+      }
+    : null
+
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -133,7 +145,7 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
     latestQaRelease: releaseStatus.latestQaRelease,
     latestVerifiedRuns: releaseStatus.latestVerifiedRuns,
     latestTraceabilityCommit: releaseStatus.latestTraceabilityCommit,
-    latestOwnerPacket: releaseStatus.latestOwnerPacket,
+    latestOwnerPacket: ownerPacket,
     latestSignedPreflight: releaseStatus.latestSignedPreflight,
     outputDirectory: relative(outDir),
     included: [

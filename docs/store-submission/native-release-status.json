@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T07:09:54.000Z",
+  "updatedAt": "2026-07-05T07:28:44.000Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
     "tag": "native-qa-v0.4.3-0601139",
     "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-0601139",
     "targetSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
-    "assetCount": 17,
+    "assetCount": 19,
     "artifacts": [
       "SHA256SUMS.txt",
       "SiraGPT-0.4.3-arm64-mac.zip",
@@ -21,6 +21,8 @@
       "SiraGPT-native-qa-v0.4.3-0601139.zip.sha256",
       "SiraGPT-native-store-owner-packet-0601139e.zip",
       "SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
+      "SiraGPT-native-store-owner-packet-7d0d47cf.zip",
+      "SiraGPT-native-store-owner-packet-7d0d47cf.zip.sha256",
       "SiraGPT.0.4.3.exe",
       "SiraGPT.Setup.0.4.3.exe",
       "SiraGPT.Setup.0.4.3.exe.blockmap",
@@ -132,6 +134,8 @@
       "SiraGPT-native-qa-v0.4.3-0601139.zip.sha256",
       "SiraGPT-native-store-owner-packet-0601139e.zip",
       "SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
+      "SiraGPT-native-store-owner-packet-7d0d47cf.zip",
+      "SiraGPT-native-store-owner-packet-7d0d47cf.zip.sha256",
       "SiraGPT.0.4.3.exe",
       "SiraGPT.Setup.0.4.3.exe",
       "SiraGPT.Setup.0.4.3.exe.blockmap",
@@ -172,15 +176,15 @@
     "diagnosis": "Public repository Actions are enabled and running. Standard GitHub-hosted Actions for public repositories are free; signed native release packaging is gated by missing platform signing and store-upload secrets."
   },
   "latestOwnerPacket": {
-    "sourceSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
-    "sourceCommit": "fix(ci): run database backup through postgres container",
-    "zipName": "SiraGPT-native-store-owner-packet-0601139e.zip",
-    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-0601139e.zip",
-    "checksumName": "SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
-    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-0601139e.zip.sha256",
-    "checksumSha256": "fefc5532f8cfaf3e5baf55d9e7a5cb9400f2d3aad71e2e1be95f2bc9f6210f03",
-    "size": 5135418,
-    "uploadedAt": "2026-07-05T06:57:24.732Z",
+    "sourceSha": "7d0d47cfb3c79d3d075037d2560340877e5bf0be",
+    "sourceCommit": "docs(native): clarify validation snapshot wording",
+    "zipName": "SiraGPT-native-store-owner-packet-7d0d47cf.zip",
+    "zipUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-7d0d47cf.zip",
+    "checksumName": "SiraGPT-native-store-owner-packet-7d0d47cf.zip.sha256",
+    "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-7d0d47cf.zip.sha256",
+    "checksumSha256": "851712786dbc5af105a659de824de18a557a26825b8f0534ef5d27a57f0505c6",
+    "size": 5135726,
+    "uploadedAt": "2026-07-05T07:28:44.000Z",
     "includes": [
       "native-signing-templates/all.env.example",
       "native-signing-templates/mobile.env.example",
@@ -192,12 +196,12 @@
     ]
   },
   "latestSignedPreflight": {
-    "run": "28728938916",
-    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28728938916",
-    "sourceSha": "5970953f4c72a3f39850ac679a5d9b7f3a939c49",
+    "run": "28733337158",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28733337158",
+    "sourceSha": "7d0d47cfb3c79d3d075037d2560340877e5bf0be",
     "status": "blocked-missing-signing-secrets",
     "platform": "all",
-    "releaseTag": "native-v0.4.3-signing-preflight-5970953",
+    "releaseTag": "native-v0.4.3-signing-preflight-7d0d47c",
     "failedJob": "Signed release preflight",
     "failedStep": "Validate selected signing secrets",
     "missingRequiredSecrets": {
@@ -225,7 +229,7 @@
         "WINDOWS_CERTIFICATE_PASSWORD"
       ]
     },
-    "notes": "The signed release workflow ran on the current production-main SHA and stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
+    "notes": "The signed release workflow ran on the current production-main SHA with create_github_release=false and store uploads disabled. It stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
   },
   "latestSecretAudit": {
     "checkedAt": "2026-07-05T06:57:24.732Z",
