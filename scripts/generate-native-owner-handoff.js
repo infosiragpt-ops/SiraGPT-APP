@@ -206,6 +206,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     latestQaRelease: status.latestQaRelease,
     latestVerifiedRuns: status.latestVerifiedRuns,
     latestTraceabilityCommit: status.latestTraceabilityCommit,
+    latestActionsDiagnostics: status.latestActionsDiagnostics,
     latestSignedPreflight: status.latestSignedPreflight,
     latestSecretAudit: status.latestSecretAudit,
     platformPlans,
@@ -266,6 +267,24 @@ function renderMarkdown(handoff) {
       lines.push(`- Commit: \`${handoff.latestTraceabilityCommit.message}\``)
     }
     lines.push("- Status: all current native, CI, and Docker workflows are green.")
+    lines.push("")
+  }
+  if (handoff.latestActionsDiagnostics?.actionsEnabled !== undefined) {
+    lines.push("## Latest GitHub Actions Diagnostics")
+    lines.push("")
+    lines.push(`- Checked: \`${handoff.latestActionsDiagnostics.checkedAt}\``)
+    lines.push(`- Repository visibility: \`${handoff.latestActionsDiagnostics.repoVisibility}\``)
+    lines.push(`- Private repository: \`${handoff.latestActionsDiagnostics.isPrivate}\``)
+    lines.push(`- Actions enabled: \`${handoff.latestActionsDiagnostics.actionsEnabled}\``)
+    lines.push(`- Allowed actions: \`${handoff.latestActionsDiagnostics.allowedActions}\``)
+    lines.push(`- CI run: \`${handoff.latestActionsDiagnostics.ciRun}\``)
+    lines.push(`- Native readiness run: \`${handoff.latestActionsDiagnostics.readinessRun}\``)
+    if (handoff.latestActionsDiagnostics.officialBillingDocs) {
+      lines.push(`- GitHub billing docs: ${handoff.latestActionsDiagnostics.officialBillingDocs}`)
+    }
+    if (handoff.latestActionsDiagnostics.diagnosis) {
+      lines.push(`- Diagnosis: ${handoff.latestActionsDiagnostics.diagnosis}`)
+    }
     lines.push("")
   }
   if (handoff.latestSignedPreflight?.run) {

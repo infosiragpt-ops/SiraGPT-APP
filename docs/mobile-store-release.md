@@ -7,7 +7,7 @@
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-0fb0493` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
-- The current repository validation SHA is `b78c076e8445020d1ad471c2ee635bb37a507aa8`; CI, Docker image build, native readiness, native mobile, and native desktop workflows are green.
+- The current repository validation SHA is `5a7292a923df007828a18943a9b037a939c1a7be`; CI, Docker image build, native readiness, native mobile, and native desktop workflows are green.
 - Android signed Play release publishing is blocked until the Play upload keystore secrets, the Google Play service account upload secret, and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
@@ -29,13 +29,18 @@
 - GitHub Actions `Native desktop builds` run `28729583294` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
-- GitHub Actions `Native readiness report` run `28729705627` passed on the current traceability SHA and produced the non-secret release plan/store packet.
-- Current traceability commit `b78c076e8445020d1ad471c2ee635bb37a507aa8` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28729705626`
-  - Native readiness report: `28729705627`
+- GitHub Actions `Native readiness report` run `28730040206` passed on the current traceability SHA and produced the non-secret release plan/store packet.
+- Current traceability commit `5a7292a923df007828a18943a9b037a939c1a7be` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
+  - CI: `28730040205`
+  - Native readiness report: `28730040206`
   - Native mobile builds: `28729582734`
   - Native desktop builds: `28729583294`
   - Docker build images: `28728027742`
+- GitHub repository diagnostics:
+  - Repository visibility: `PUBLIC`
+  - Actions enabled: `true`
+  - Allowed actions: `all`
+  - Result: public-repository Actions are not the blocker; missing native signing/store-upload secrets are.
 - Signed native preflight run `28728938916` was triggered for `platform=all`
   on SHA `5970953f4c72a3f39850ac679a5d9b7f3a939c49` and stopped before
   package runners because Android, iOS, macOS, and Windows signing secrets are

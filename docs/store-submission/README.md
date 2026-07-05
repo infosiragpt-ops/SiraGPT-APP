@@ -24,11 +24,11 @@ secrets. They must never be committed.
 - Latest verified native runs:
   - Mobile: `28729582734`
   - Desktop: `28729583294`
-  - Readiness report: `28729705627`
-  - CI: `28729705626`
+  - Readiness report: `28730040206`
+  - CI: `28730040205`
   - Docker images: `28728027742`
-- Latest repository validation SHA: `b78c076e8445020d1ad471c2ee635bb37a507aa8`
-  (`docs(native): record latest qa build runs`)
+- Latest repository validation SHA: `5a7292a923df007828a18943a9b037a939c1a7be`
+  (`docs(native): clarify signing actions gate`)
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-47bc2475.zip`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0fb0493/SiraGPT-native-store-owner-packet-47bc2475.zip`)
@@ -39,6 +39,10 @@ secrets. They must never be committed.
 - Latest secret-name audit: public repository Actions are running, but signed
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
+- Latest GitHub Actions diagnostics: repository visibility is `PUBLIC`, Actions
+  is enabled with `allowed_actions=all`, CI run `28730040205` and native
+  readiness run `28730040206` are green. Standard GitHub-hosted Actions for
+  public repositories are free; this is separate from native signing readiness.
 
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest

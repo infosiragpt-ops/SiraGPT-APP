@@ -68,8 +68,8 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 ### Latest Verified Native Builds
 
 Latest durable public QA release packet target SHA: `0fb0493464b841c11924e9ff9a087209fb8d25dd`.
-Latest repository validation SHA: `b78c076e8445020d1ad471c2ee635bb37a507aa8`
-(`docs(native): record latest qa build runs`).
+Latest repository validation SHA: `5a7292a923df007828a18943a9b037a939c1a7be`
+(`docs(native): clarify signing actions gate`).
 
 - Desktop workflow: `Native desktop builds` run `28725624116`.
   - macOS DMG + ZIP: passed.
@@ -84,12 +84,17 @@ Latest repository validation SHA: `b78c076e8445020d1ad471c2ee635bb37a507aa8`
   - Native desktop builds: `28729583294`.
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
-- Current traceability workflow set on SHA `b78c076e8445020d1ad471c2ee635bb37a507aa8`:
-  - CI: `28729705626`.
-  - Native readiness report with owner handoff artifact: `28729705627`.
+- Current traceability workflow set on SHA `5a7292a923df007828a18943a9b037a939c1a7be`:
+  - CI: `28730040205`.
+  - Native readiness report with owner handoff artifact: `28730040206`.
   - Native mobile builds: `28729582734`.
   - Native desktop builds: `28729583294`.
   - Docker build images: `28728027742`.
+- GitHub Actions diagnostics on `infosiragpt-ops/SiraGPT-APP`:
+  - Repository visibility: `PUBLIC`.
+  - Actions enabled: `true`.
+  - Allowed actions: `all`.
+  - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
 - Signed release preflight: `Native signed release packages` run `28728938916`.
   - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-5970953`.
   - Result: stopped in preflight before Android, iOS, macOS, Windows, or GitHub Release package runners because signing secrets are not configured yet.

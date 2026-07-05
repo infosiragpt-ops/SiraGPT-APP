@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-05T04:49:21Z",
+  "updatedAt": "2026-07-05T05:04:59Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "latestQaRelease": {
@@ -24,18 +24,34 @@
   "latestVerifiedRuns": {
     "mobile": "28729582734",
     "desktop": "28729583294",
-    "readiness": "28729705627",
-    "ci": "28729705626",
+    "readiness": "28730040206",
+    "ci": "28730040205",
     "docker": "28728027742"
   },
   "latestTraceabilityCommit": {
-    "sha": "b78c076e8445020d1ad471c2ee635bb37a507aa8",
-    "message": "docs(native): record latest qa build runs",
-    "ci": "28729705626",
-    "readiness": "28729705627",
+    "sha": "5a7292a923df007828a18943a9b037a939c1a7be",
+    "message": "docs(native): clarify signing actions gate",
+    "ci": "28730040205",
+    "readiness": "28730040206",
     "mobile": "28729582734",
     "desktop": "28729583294",
     "docker": "28728027742"
+  },
+  "latestActionsDiagnostics": {
+    "checkedAt": "2026-07-05T05:04:59Z",
+    "repoVisibility": "PUBLIC",
+    "isPrivate": false,
+    "actionsEnabled": true,
+    "allowedActions": "all",
+    "shaPinningRequired": false,
+    "sourceCommands": [
+      "gh repo view infosiragpt-ops/SiraGPT-APP --json nameWithOwner,visibility,isPrivate,url",
+      "gh api repos/infosiragpt-ops/SiraGPT-APP/actions/permissions"
+    ],
+    "ciRun": "28730040205",
+    "readinessRun": "28730040206",
+    "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
+    "diagnosis": "Public repository Actions are enabled and running. Standard GitHub-hosted Actions for public repositories are free; signed native release packaging is gated by missing platform signing and store-upload secrets."
   },
   "latestOwnerPacket": {
     "sourceSha": "47bc24757c9167c747fce099e083325f8aea127e",
@@ -94,7 +110,7 @@
     "notes": "The signed release workflow ran on the current production-main SHA and stopped in the cheap preflight before launching Android, iOS, macOS, Windows, or GitHub Release package runners because native signing secrets are not configured."
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-05T04:49:21Z",
+    "checkedAt": "2026-07-05T05:04:59Z",
     "command": "bash scripts/audit-native-github-secrets.sh --repo=infosiragpt-ops/SiraGPT-APP --only-required",
     "status": "missing-native-signing-and-store-upload-secrets",
     "diagnosis": "Public repository Actions are running. Signed native release packaging is blocked by missing platform signing and store-upload secret names.",
