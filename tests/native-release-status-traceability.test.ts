@@ -63,6 +63,7 @@ describe("native release status traceability", () => {
       readFileSync("docs/store-submission/native-release-status.json", "utf8"),
     ) as NativeReleaseStatus
     const shortSha = status.latestTraceabilityCommit.sha.slice(0, 8)
+    const currentWrapperShortSha = status.latestCurrentProductionValidation.sourceSha.slice(0, 7)
 
     assert.equal(status.latestTraceabilityCommit.sha, status.latestTraceabilityCommit.validatedManagementSha)
     assert.equal(status.latestTraceabilityCommit.message, status.latestTraceabilityCommit.validatedManagementCommit)
@@ -90,6 +91,22 @@ describe("native release status traceability", () => {
       assert.ok(status.latestCurrentProductionValidation.platforms[key].expectedFiles.includes("native-release-manifest.md"))
       assert.ok(status.latestCurrentProductionValidation.platforms[key].expectedFiles.includes("SHA256SUMS.txt"))
     }
+
+    assert.ok(
+      status.latestCurrentProductionValidation.platforms.android.expectedFiles.includes(
+        `SiraGPT-${currentWrapperShortSha}-debug.apk`,
+      ),
+    )
+    assert.ok(
+      status.latestCurrentProductionValidation.platforms.android.expectedFiles.includes(
+        `SiraGPT-${currentWrapperShortSha}-unsigned-release.aab`,
+      ),
+    )
+    assert.ok(
+      status.latestCurrentProductionValidation.platforms.ios.expectedFiles.includes(
+        `SiraGPT-${currentWrapperShortSha}-ios-simulator-app.zip`,
+      ),
+    )
 
     assert.equal(status.latestQaRelease.assetCount, status.latestQaRelease.artifacts.length)
     assert.ok(status.latestQaRelease.artifacts.includes(status.latestOwnerPacket.zipName))
