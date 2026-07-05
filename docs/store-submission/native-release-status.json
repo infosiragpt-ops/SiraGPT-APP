@@ -144,8 +144,13 @@
   "latestTraceabilityCommit": {
     "sourceSha": "0601139e3b507b9733ad1fdd84290e3d8cf7a078",
     "sourceCommit": "fix(ci): run database backup through postgres container",
-    "managementSha": "1d937068b66facec31e752c37ad30760f7b86aa3",
-    "managementCommit": "docs(native): publish QA package for current production"
+    "validatedManagementSha": "1d937068b66facec31e752c37ad30760f7b86aa3",
+    "validatedManagementCommit": "docs(native): publish QA package for current production",
+    "validatedManagementRuns": {
+      "ci": "28732703286",
+      "readiness": "28732703296"
+    },
+    "note": "This snapshot records the last verified management commit before this status-file refresh. Check GitHub Actions for newer commits after the snapshot."
   },
   "latestActionsDiagnostics": {
     "checkedAt": "2026-07-05T07:09:54.000Z",

@@ -41,7 +41,8 @@
   - Native readiness report: `28732703296`
   - Native mobile builds: `28732348269`
   - Native desktop builds: `28732348253`
-- Management/traceability commit `1d937068b66facec31e752c37ad30760f7b86aa3`
+- Management/traceability commit validated before this document refresh
+  `1d937068b66facec31e752c37ad30760f7b86aa3`
   (`docs(native): publish QA package for current production`) is also green in
   CI run `28732703286` and Native readiness report run `28732703296`.
 - GitHub repository diagnostics:

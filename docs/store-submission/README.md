@@ -21,14 +21,14 @@ secrets. They must never be committed.
 - Category: Productivity
 - Latest public QA packet: `native-qa-v0.4.3-0601139`
   (`0601139e3b507b9733ad1fdd84290e3d8cf7a078`)
-- Latest verified native runs:
+- Last verified native QA runs:
   - Mobile: `28732348269`
   - Desktop: `28732348253`
   - Readiness report: `28732703296`
   - CI: `28732703286`
 - Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a078`
   (`fix(ci): run database backup through postgres container`)
-- Latest management/traceability SHA: `1d937068b66facec31e752c37ad30760f7b86aa3`
+- Management/traceability SHA validated before this packet refresh: `1d937068b66facec31e752c37ad30760f7b86aa3`
   (`docs(native): publish QA package for current production`)
 - Latest QA artifact manifest verification: mobile run `28732348269` and
   desktop run `28732348253` were downloaded and each Android, iOS simulator,
@@ -48,7 +48,7 @@ secrets. They must never be committed.
 - Latest secret-name audit: public repository Actions are running, but signed
   native release packaging is blocked by missing platform signing and
   store-upload secret names.
-- Latest GitHub Actions diagnostics: repository visibility is `PUBLIC`, Actions
+- GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`, Actions
   is enabled with `allowed_actions=all`, CI run `28732703286` and native
   readiness run `28732703296` are green. Standard GitHub-hosted Actions for
   public repositories are free; this is separate from native signing readiness.
