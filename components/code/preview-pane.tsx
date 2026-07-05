@@ -34,7 +34,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { CODE_OPEN_TOOL_EVENT, getActiveCodexProject, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, getActiveCodexProject, setActiveCodexProject, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { codexApi } from "@/lib/codex/codex-api"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
@@ -56,6 +56,49 @@ type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string
 
 // Cap how many times a single failing run can auto-hand its logs to the chat
 // agent for repair, so a fix that keeps failing can't spin an infinite loop.
+// The runner/backend speaks raw snake_case error codes (project_not_found,
+// not_ready, econnrefused…) — Replit never leaks those to the user. Map the
+// known ones to a friendly Spanish line; for anything unrecognised, keep a
+// real message but strip a bare snake_case token so the panel never shows a
+// naked code. A dev-server log tail (multi-line / has spaces+punctuation) is
+// passed through untouched — that IS the useful signal.
+const PREVIEW_ERROR_LABELS: Record<string, string> = {
+  project_not_found: "El proyecto ya no está en el servidor. Lo estoy recreando…",
+  run_not_found: "La sesión de ejecución expiró. Reiniciando…",
+  not_ready: "La app todavía se está preparando.",
+  forbidden: "Este entorno no tiene permitido ejecutar apps aquí.",
+  disabled: "El motor de ejecución está desactivado en este entorno.",
+  runner_unreachable: "No pude contactar al motor de ejecución. Reintenta en un momento.",
+  "runner unreachable": "No pude contactar al motor de ejecución. Reintenta en un momento.",
+  timeout: "El dev server tardó demasiado en arrancar.",
+}
+function humanizePreviewError(raw?: string | null): string {
+  const value = String(raw ?? "").trim()
+  if (!value) return "Algo salió mal al arrancar la app. Reintenta."
+  const key = value.toLowerCase()
+  if (PREVIEW_ERROR_LABELS[key]) return PREVIEW_ERROR_LABELS[key]
+  // A lone code token (single word, snake/kebab, no spaces) → generic message.
+  if (/^[a-z0-9]+([_-][a-z0-9]+)+$/i.test(value)) {
+    return "No pude arrancar la app (" + value.replace(/[_-]+/g, " ") + "). Reintenta."
+  }
+  return value
+}
+// A dead remote project/run: the codex mapping is stale (project wiped, or
+// created in another session). Self-heal by dropping the mapping and re-running
+// locally instead of showing a scary error.
+// Infrastructure / provisioning failures (runner down, project gone, env
+// disabled, forbidden) are NOT code bugs — handing them to the chat agent
+// wastes a repair cycle (it can't edit its way out of a missing runner). The
+// self-heal handles the recoverable ones; the rest are honest terminal states.
+function isInfraError(raw?: string | null): boolean {
+  return /project_not_found|run_not_found|not[_ ]?found|\b404\b|forbidden|disabled|runner[_ ]?unreachable|desactivado en este entorno|no pude contactar al motor/i.test(
+    String(raw ?? ""),
+  )
+}
+function isDeadCodexProject(raw?: string | null): boolean {
+  return /project_not_found|run_not_found|not[_ ]?found|404/i.test(String(raw ?? ""))
+}
+
 const AUTO_FIX_MAX = 3
 
 // Bump the runner's lastTouch (and catch a post-ready crash) while the app is
@@ -172,6 +215,9 @@ export function PreviewPane() {
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
   const modeRef = React.useRef<"host" | "github" | "codex">("host")
+  // Guards the codex self-heal so a genuinely-gone project can't loop forever:
+  // one transparent local re-run per manual/auto trigger, reset on success/idle.
+  const codexSelfHealedRef = React.useRef(false)
   const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
   )
@@ -243,9 +289,9 @@ export function PreviewPane() {
         const st = await statusFn()
         if (st.error) {
           clearPoll()
-          const note = st.error || "El dev server se cayó."
-          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || note
-          setLiveRun({ phase: "error", devUrl: "", note })
+          const rawNote = st.error || "El dev server se cayó."
+          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
+          setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
         }
         // A benign not-ready blip (HMR reload) is ignored — we only react to a
         // hard error; the mere status read already bumped lastTouch.
@@ -263,17 +309,18 @@ export function PreviewPane() {
         tries += 1
         const st = await statusFn()
         if (st.ready) {
+          codexSelfHealedRef.current = false
           setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
           startReadyHeartbeat(statusFn)
         } else if (st.error || tries > 80) {
           // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
           // framer-motion + lucide plus dev-server boot can be slow.
           clearPoll()
-          const note = st.error || "El dev server no arrancó a tiempo."
+          const rawNote = st.error || "El dev server no arrancó a tiempo."
           // Keep the full tail so the auto-repair effect hands the agent real
           // build/runtime output, not just the one-line summary.
-          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || note
-          setLiveRun({ phase: "error", devUrl: "", note })
+          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
+          setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
         } else {
           setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
         }
@@ -300,7 +347,7 @@ export function PreviewPane() {
       const started = await githubService.run(boundRepo, runtimeEnv).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
       if ("error" in started && started.error) {
         lastErrorLogRef.current = started.error
-        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+        setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
         return
       }
       pollUntilReady(
@@ -344,11 +391,29 @@ export function PreviewPane() {
         error: err instanceof Error ? err.message : "runner unreachable",
       }))
       if (started?.error) {
+        // Self-heal: a stale codex mapping (project wiped / another session)
+        // 404s here. Drop it and re-run locally ONCE so the preview just works
+        // (Replit never shows a dead project) instead of a scary raw code.
+        if (isDeadCodexProject(started.error) && !codexSelfHealedRef.current) {
+          codexSelfHealedRef.current = true
+          setActiveCodexProject(null)
+          // Static app (index.html, no dev server) → the built-in static
+          // preview renders it directly; go idle to reveal it. A dev-server
+          // project (Vite/Next) re-runs locally via the host runner.
+          if (!projectNeedsDevServer(files)) {
+            setLiveRun({ phase: "idle", devUrl: "", note: "" })
+            return
+          }
+          modeRef.current = "host"
+          setLiveRun({ phase: "starting", devUrl: "", note: "Recuperando el proyecto…" })
+          await runAppRef.current({ auto })
+          return
+        }
         // Unlike the host path, do NOT silently degrade on auto: the srcdoc
         // fallback cannot render a multi-file Vite workspace (black screen) —
         // an honest error banner beats a dead preview.
         lastErrorLogRef.current = String(started.error)
-        setLiveRun({ phase: "error", devUrl: "", note: String(started.error) })
+        setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
         return
       }
       pollUntilReady(codexStatus, toDevUrl(started?.previewStatus?.basePath || started?.basePath))
@@ -385,7 +450,7 @@ export function PreviewPane() {
         return
       }
       lastErrorLogRef.current = started.error
-      setLiveRun({ phase: "error", devUrl: "", note: started.error })
+      setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
       return
     }
     // Host run is live → the Shell tool can now exec real commands against it.
@@ -560,6 +625,9 @@ export function PreviewPane() {
     if (liveRun.phase !== "error") return
     const log = (lastErrorLogRef.current || liveRun.note || "").trim()
     if (!log) return
+    // Infrastructure errors aren't code bugs — never hand them to the agent
+    // (the self-heal already retried the recoverable ones).
+    if (isInfraError(log)) return
     // De-dupe on a NORMALIZED signature (line numbers / paths / hashes stripped)
     // so a fix that keeps producing "the same" error — even if a line moved —
     // doesn't re-arm the agent, and correctly counts toward the budget.
