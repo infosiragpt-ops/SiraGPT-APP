@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("fs")
+const path = require("path")
 
 const secretGroups = {
   android: [
@@ -56,6 +57,35 @@ function selectedGroups(platform) {
     default:
       return []
   }
+}
+
+function parseArgs(argv) {
+  const args = {
+    out: "",
+    jsonOut: "",
+    help: false,
+  }
+
+  for (const arg of argv) {
+    if (arg === "-h" || arg === "--help") {
+      args.help = true
+    } else if (arg.startsWith("--out=")) {
+      args.out = arg.slice("--out=".length)
+    } else if (arg.startsWith("--json-out=")) {
+      args.jsonOut = arg.slice("--json-out=".length)
+    } else {
+      throw new Error(`Unknown argument: ${arg}`)
+    }
+  }
+
+  return args
+}
+
+function usage() {
+  return `Usage: node scripts/native-release-preflight-summary.js [--out=path] [--json-out=path]
+
+Validates selected signed native release workflow inputs and secret presence.
+It writes secret names only and never prints secret values.`
 }
 
 function evaluatePreflight(env) {
@@ -188,10 +218,25 @@ function writeSummary(markdown) {
   fs.appendFileSync(summaryPath, markdown)
 }
 
+function writeFile(filePath, contents) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, contents)
+}
+
 function main() {
+  const args = parseArgs(process.argv.slice(2))
+  if (args.help) {
+    console.log(usage())
+    return
+  }
+
   const result = evaluatePreflight(process.env)
   const markdown = renderMarkdown(result)
+  const json = `${JSON.stringify(result, null, 2)}\n`
+
   writeSummary(markdown)
+  if (args.out) writeFile(args.out, markdown)
+  if (args.jsonOut) writeFile(args.jsonOut, json)
 
   console.log(`native-signed-preflight-status=${result.status}`)
   console.log(`native-signed-preflight-platform=${result.platform}`)

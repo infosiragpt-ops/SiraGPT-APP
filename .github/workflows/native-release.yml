@@ -109,7 +109,18 @@ jobs:
         run: |
           set -eu
           npm run native:version:check
-          npm run native:release:preflight
+          npm run native:release:preflight -- \
+            --out=output/native-release-preflight/preflight.md \
+            --json-out=output/native-release-preflight/preflight.json
+
+      - name: Upload signed release preflight packet
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-native-signed-release-preflight
+          path: output/native-release-preflight/*
+          retention-days: 30
+          if-no-files-found: error
 
   android:
     name: Android signed AAB

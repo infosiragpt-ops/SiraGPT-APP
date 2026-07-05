@@ -73,28 +73,63 @@ describe("native-release-preflight-summary", () => {
     assert.match(preflightStep, /RELEASE_TAG:\s*\$\{\{\s*inputs\.release_tag\s*\}\}/)
     assert.match(preflightStep, /npm run native:version:check/)
     assert.match(preflightStep, /npm run native:release:preflight/)
+    assert.match(preflightStep, /--out=output\/native-release-preflight\/preflight\.md/)
+    assert.match(preflightStep, /--json-out=output\/native-release-preflight\/preflight\.json/)
+    assert.match(workflow, /name: siragpt-native-signed-release-preflight/)
+    assert.match(workflow, /if:\s*\$\{\{\s*always\(\)\s*\}\}/)
     assert.doesNotMatch(preflightStep, /npm run native:readiness -- --require="\$groups"/)
   })
 
-  it("writes an actionable missing-secret summary without secret values", () => {
+  it("writes actionable missing-secret summary files without secret values", () => {
     const dir = mkdtempSync(join(tmpdir(), "siragpt-native-preflight-"))
     const summaryPath = join(dir, "summary.md")
+    const outPath = join(dir, "preflight.md")
+    const jsonOutPath = join(dir, "preflight.json")
 
     try {
-      const result = runPreflight(cleanNativeEnv({
-        GITHUB_STEP_SUMMARY: summaryPath,
-      }))
+      let result
+      try {
+        result = {
+          status: 0,
+          stdout: execFileSync("node", [
+            "scripts/native-release-preflight-summary.js",
+            `--out=${outPath}`,
+            `--json-out=${jsonOutPath}`,
+          ], {
+            encoding: "utf8",
+            env: cleanNativeEnv({
+              GITHUB_STEP_SUMMARY: summaryPath,
+            }),
+          }),
+        }
+      } catch (error) {
+        const execError = error as { status?: number; stdout?: Buffer | string }
+        result = {
+          status: execError.status ?? 1,
+          stdout: execError.stdout?.toString() || "",
+        }
+      }
       const summary = readFileSync(summaryPath, "utf8")
+      const outputSummary = readFileSync(outPath, "utf8")
+      const outputJson = JSON.parse(readFileSync(jsonOutPath, "utf8")) as {
+        status: string
+        missingSecrets: string[]
+      }
 
       assert.equal(result.status, 1)
       assert.match(result.stdout, /native-signed-preflight-status=blocked-missing-signing-secrets/)
       assert.match(summary, /Status: `blocked-missing-signing-secrets`/)
+      assert.match(outputSummary, /Status: `blocked-missing-signing-secrets`/)
       assert.match(summary, /GitHub Actions is running this workflow/)
       assert.match(summary, /`ANDROID_KEYSTORE_BASE64`/)
       assert.match(summary, /`IOS_SIGNING_CERTIFICATE_BASE64`/)
       assert.match(summary, /`MACOS_CERTIFICATE_BASE64`/)
       assert.match(summary, /`WINDOWS_CERTIFICATE_BASE64`/)
+      assert.equal(outputJson.status, "blocked-missing-signing-secrets")
+      assert.ok(outputJson.missingSecrets.includes("ANDROID_KEYSTORE_BASE64"))
       assert.doesNotMatch(summary, /DO_NOT_LEAK/)
+      assert.doesNotMatch(outputSummary, /DO_NOT_LEAK/)
+      assert.doesNotMatch(JSON.stringify(outputJson), /DO_NOT_LEAK/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

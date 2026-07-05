@@ -72,7 +72,7 @@
   still missing.
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-f2679e39.zip`
   (`sha256:c35ab55a5ec0b458f442bd3d0c7734f626f4405367e5d1ac7e66c3f7209ff179`).
-- Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
+- Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled. The signed release preflight also uploads `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`, even when the run intentionally stops because signing/upload secrets are missing.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
   `SHA256SUMS.txt` in each platform upload so the generated Android, iPhone
