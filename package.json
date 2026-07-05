@@ -49,6 +49,7 @@
     "native:github-secrets:audit": "bash scripts/audit-native-github-secrets.sh",
     "native:github-secrets:check": "bash scripts/audit-native-github-secrets.sh --require=all --only-required",
     "native:github-secrets:setup": "bash scripts/setup-native-github-secrets.sh",
+    "native:github-secrets:template": "node scripts/generate-native-github-secrets-template.js",
     "native:release:plan": "node scripts/native-release-plan.js",
     "native:release:plan:ci": "node scripts/native-release-plan.js --secret-source=env --out=output/native-release-plan.md --json-out=output/native-release-plan.json",
     "native:release:manifest": "node scripts/generate-native-release-manifest.js",

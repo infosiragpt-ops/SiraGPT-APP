@@ -147,6 +147,7 @@ npm run native:readiness:desktop
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
 ```
@@ -174,6 +175,7 @@ raw file paths for keystores, certificates, provisioning profiles, and API key
 files:
 
 ```bash
+npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:github-secrets:setup -- --platform=android
 npm run native:github-secrets:setup -- --platform=ios
@@ -193,6 +195,10 @@ npm run native:github-secrets:setup -- --platform=android
 
 The helper pipes values into `gh secret set`; it reports only secret names,
 source variable names, and readiness states.
+The template command writes a blank owner-only `.env` example with the exact
+file-path variables and secret names needed for the selected platform. It does
+not read or print secret values, and the generated file must not be committed
+after the owner fills it locally.
 
 Android signing secrets:
 
@@ -307,6 +313,7 @@ node -c apps/desktop/main.cjs
 node -c scripts/generate-native-store-assets.js
 node -c scripts/generate-native-store-packet.js
 node -c scripts/generate-native-store-owner-packet.js
+node -c scripts/generate-native-github-secrets-template.js
 node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
@@ -326,6 +333,7 @@ npm run native:readiness
 npm run native:readiness:desktop
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 npm run native:release:plan:ci
+npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check

@@ -140,6 +140,7 @@ npm run native:readiness
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
 npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
 npm run native:release:plan:ci
@@ -171,6 +172,10 @@ signing groups are configured.
 environment variables or local file paths, base64-encoding file credentials
 before piping them into `gh secret set`. Use `--dry-run` first; it prints only
 secret names and source variable names, never secret values.
+`native:github-secrets:template` writes a blank owner-only template for the
+selected platform, including the safer local `*_PATH` variables where a file can
+be base64-encoded locally before upload. The template is a convenience artifact
+for the account owner and must not be committed after values are filled.
 `native:release:plan` generates a non-secret Markdown/JSON management packet
 for the current repo, including missing GitHub secret names, per-platform
 account actions, and safe `gh secret set` commands.
