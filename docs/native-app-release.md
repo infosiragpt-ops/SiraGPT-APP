@@ -211,6 +211,12 @@ account actions, and safe upload commands, use:
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 ```
 
+The release plan includes a `Release Gate Summary` that lists ready platforms,
+blocked platforms, the signed-release workflow name, and the first safe
+workflow inputs for Android, iPhone, macOS, and Windows. Use that summary to
+avoid relaunching a signed package workflow before the required platform secret
+groups are present.
+
 GitHub Actions also exposes `Native readiness report`, which generates and
 uploads the same non-secret Markdown/JSON packet plus
 `native-github-secrets-report.md` and `native-github-secrets-report.json` as

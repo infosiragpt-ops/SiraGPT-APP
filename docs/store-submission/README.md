@@ -215,7 +215,9 @@ for the account owner and must not be committed after values are filled.
 for the current repo, including missing GitHub secret names, per-platform
 account actions, safe `gh secret set` commands, and the Actions-vs-signing
 diagnosis that separates public repository workflow availability from missing
-native signing material.
+native signing material. It also includes a release gate summary with ready and
+blocked platforms plus the first safe `Native signed release packages` inputs
+for Android, iPhone, macOS, and Windows.
 `native:release:handoff` generates the owner handoff packet for Apple, Google,
 macOS, and Windows account work. It includes the latest QA release link,
 verified workflow run IDs, account-owner actions, secret names, dry-run

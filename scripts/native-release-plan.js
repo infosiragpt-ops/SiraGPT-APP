@@ -50,6 +50,13 @@ const platforms = {
     artifact: "signed Google Play upload .aab",
     releaseGroups: ["android"],
     storeGroups: ["googleplay"],
+    signedWorkflowInputs: {
+      platform: "android",
+      create_github_release: "true",
+      upload_android_google_play: "true",
+      android_play_track: "qa",
+      android_release_status: "draft",
+    },
   },
   ios: {
     label: "iPhone / iOS",
@@ -58,6 +65,11 @@ const platforms = {
     artifact: "signed App Store .ipa",
     releaseGroups: ["ios"],
     storeGroups: ["appstore"],
+    signedWorkflowInputs: {
+      platform: "ios",
+      create_github_release: "true",
+      upload_ios_app_store_connect: "true",
+    },
   },
   macos: {
     label: "macOS",
@@ -66,6 +78,10 @@ const platforms = {
     artifact: "signed and notarized .dmg/.zip",
     releaseGroups: ["macos"],
     storeGroups: [],
+    signedWorkflowInputs: {
+      platform: "macos",
+      create_github_release: "true",
+    },
   },
   windows: {
     label: "Windows",
@@ -74,6 +90,10 @@ const platforms = {
     artifact: "signed NSIS installer and portable .exe",
     releaseGroups: ["windows"],
     storeGroups: [],
+    signedWorkflowInputs: {
+      platform: "windows",
+      create_github_release: "true",
+    },
   },
 }
 
@@ -255,11 +275,18 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
       storeUploadSecrets: secretStatus(storeSecrets, secrets.names, canAudit),
       allSecrets: secretStatus(allSecrets, secrets.names, canAudit),
       accountActions: metadataPlatform.requiredAccountActions || [],
+      signedWorkflowInputs: platform.signedWorkflowInputs,
     }
   })
 
   const missingSecrets = unique(platformPlans.flatMap((platform) => platform.allSecrets.missing))
   const ready = canAudit && missingSecrets.length === 0
+  const readyPlatforms = platformPlans
+    .filter((platform) => platform.allSecrets.ready)
+    .map((platform) => platform.key)
+  const blockedPlatforms = platformPlans
+    .filter((platform) => !platform.allSecrets.ready)
+    .map((platform) => platform.key)
   const statusReason = !canAudit
     ? "secret-audit-unavailable"
     : ready
@@ -274,6 +301,13 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
     repo,
     status: ready ? "ready" : "blocked",
     statusReason,
+    releaseGateSummary: {
+      status: ready ? "ready-to-run-signed-release" : "owner-action-required",
+      readyPlatforms,
+      blockedPlatforms,
+      workflow: "Native signed release packages",
+      firstSafeUploadMode: "create GitHub Release plus draft/internal store upload only after owner confirmation",
+    },
     actionsVsSigningDiagnosis: {
       publicRepoActionsGate: "separate-from-native-signing",
       signedReleaseStatus,
@@ -333,6 +367,14 @@ function renderMarkdown(plan) {
   lines.push(`- Diagnosis: ${plan.actionsVsSigningDiagnosis.message}`)
   lines.push(`- Next owner action: ${plan.actionsVsSigningDiagnosis.nextOwnerAction}`)
   lines.push("")
+  lines.push("## Release Gate Summary")
+  lines.push("")
+  lines.push(`- Gate status: \`${plan.releaseGateSummary.status}\``)
+  lines.push(`- Workflow: \`${plan.releaseGateSummary.workflow}\``)
+  lines.push(`- Ready platforms: ${plan.releaseGateSummary.readyPlatforms.length ? plan.releaseGateSummary.readyPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- Blocked platforms: ${plan.releaseGateSummary.blockedPlatforms.length ? plan.releaseGateSummary.blockedPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- First safe upload mode: ${plan.releaseGateSummary.firstSafeUploadMode}`)
+  lines.push("")
   lines.push("## Native Identity")
   lines.push("")
   lines.push(`- App name: \`${plan.app.name}\``)
@@ -378,6 +420,10 @@ function renderMarkdown(plan) {
     lines.push(`- Release secret groups: ${platform.releaseGroups.map((group) => `\`${group}\``).join(", ") || "none"}`)
     lines.push(`- Store upload secret groups: ${platform.storeGroups.map((group) => `\`${group}\``).join(", ") || "none"}`)
     lines.push(`- Missing secrets: ${platform.allSecrets.missing.length ? platform.allSecrets.missing.map((secret) => `\`${secret}\``).join(", ") : "none"}`)
+    lines.push("- First signed workflow inputs:")
+    for (const [name, value] of Object.entries(platform.signedWorkflowInputs)) {
+      lines.push(`  - \`${name}\`: \`${value}\``)
+    }
     lines.push("")
     lines.push("Account/store actions:")
     lines.push(formatList(platform.accountActions))

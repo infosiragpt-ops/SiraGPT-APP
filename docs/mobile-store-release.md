@@ -178,6 +178,9 @@ The generated files stay under ignored `output/` and may list missing secret
 names plus account-owner actions, but they must never contain secret values.
 The secret template and setup dry-run report only missing or ready secret names,
 file-path variable names, and source variable names. They do not print values.
+The release plan also reports a release gate summary so the first Android run
+can stay on the `qa` track with `draft` status and the first iPhone upload can
+be held until App Store Connect upload is explicitly approved.
 The GitHub Actions workflow `Native readiness report` publishes the same
 non-secret checklist, owner handoff packet, and asset readiness report as an artifact named
 `siragpt-native-readiness-report`.
