@@ -1143,7 +1143,7 @@ export function AICodeChatPanel() {
         text: string,
         sid: string,
         opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
-      ) => Promise<void>)
+      ) => Promise<void | "workspace_sync_failed">)
     | null
   >(null)
 
