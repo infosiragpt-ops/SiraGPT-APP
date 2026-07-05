@@ -61,6 +61,20 @@ const AUTO_FIX_MAX = 3
 // live so the idle reaper never kills an app the user is actively viewing.
 const READY_HEARTBEAT_MS = 60_000
 
+// Codex previews are served from a SIBLING origin (preview.<host>, a Caddy
+// vhost that exposes ONLY the tokenized preview proxy). The generated app then
+// runs with its own browser origin — full module loading and localStorage for
+// the app, zero access to siragpt.com cookies/storage/APIs — which lets the
+// live iframe drop the sandbox attribute (whose opaque origin broke Vite
+// module fetches AND localStorage). Replit's isolation model. Empty string in
+// dev/localhost → same-origin URL, sandbox stays on.
+function codexPreviewOrigin(): string {
+  if (typeof window === "undefined") return ""
+  const { protocol, hostname, host } = window.location
+  if (protocol !== "https:" || hostname === "localhost" || /^127\./.test(hostname)) return ""
+  return `${protocol}//preview.${host.replace(/^www\./, "")}`
+}
+
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "tablet" | "phone"
 type Orientation = "portrait" | "landscape"
@@ -302,12 +316,16 @@ export function PreviewPane() {
       return
     }
     // Codex-backed chat: the real workspace lives in the codex runner, so run
-    // it THERE and iframe the same-origin tokenized proxy. Pushing the local
-    // virtual FS to the host runner would boot a stale/partial copy (and the
-    // host runner is owner-gated anyway — this path works for every user).
+    // it THERE and iframe the tokenized proxy — from the SIBLING preview
+    // origin when available (see codexPreviewOrigin), so the app runs
+    // unsandboxed with its own origin/storage. Pushing the local virtual FS
+    // to the host runner would boot a stale/partial copy (and the host runner
+    // is owner-gated anyway — this path works for every user).
     const codexProjectId = getActiveCodexProject()
     if (codexProjectId) {
       modeRef.current = "codex"
+      const previewOrigin = codexPreviewOrigin()
+      const toDevUrl = (basePath?: string | null) => (basePath ? `${previewOrigin}${basePath}` : "")
       const codexStatus = async (): Promise<RunnerStatus> => {
         const st: any = await codexApi.previewStatus(codexProjectId).catch(() => null)
         const p = st?.previewStatus || st || {}
@@ -316,7 +334,7 @@ export function PreviewPane() {
           error: p.error || null,
           framework: p.framework || null,
           tail: p.tail,
-          devUrl: p.basePath || "",
+          devUrl: toDevUrl(p.basePath),
         }
       }
       const started: any = await codexApi.startPreview(codexProjectId).catch((err) => ({
@@ -330,7 +348,7 @@ export function PreviewPane() {
         setLiveRun({ phase: "error", devUrl: "", note: String(started.error) })
         return
       }
-      pollUntilReady(codexStatus, started?.previewStatus?.basePath || started?.basePath || "")
+      pollUntilReady(codexStatus, toDevUrl(started?.previewStatus?.basePath || started?.basePath))
       return
     }
     // Workspace files are CodeFile objects; the runner wants path -> content.
@@ -1143,13 +1161,22 @@ export function PreviewPane() {
               src={liveSrc}
               title="App en vivo (dev server)"
               onLoad={handlePreviewFrameLoad}
-              // El dev server se sirve same-origin (vía proxy /api/code-runner)
-              // pero ejecuta CÓDIGO GENERADO NO CONFIABLE: el sandbox SIN
-              // allow-same-origin lo aísla en un origen opaco para que no pueda
-              // leer el localStorage/cookies de SiraGPT ni llamar a sus APIs.
+              // CÓDIGO GENERADO NO CONFIABLE, dos regímenes de aislamiento:
+              //  · src CROSS-origin (preview.<host>, modo codex): el navegador
+              //    ya aísla por origen — la app tiene su PROPIO storage y no
+              //    puede tocar cookies/APIs de siragpt.com. Sin sandbox, porque
+              //    el origen opaco del sandbox rompía los módulos de Vite y el
+              //    localStorage que las apps generadas usan (pantalla en blanco).
+              //  · src same-origin (host runner/proxy local): sandbox SIN
+              //    allow-same-origin → origen opaco, no puede leer el
+              //    localStorage/cookies de SiraGPT ni llamar a sus APIs.
               // allow="clipboard-write" mantiene navigator.clipboard.writeText
               // (p.ej. el botón Copiar del componente «Invitar al proyecto»).
-              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
+              sandbox={
+                /^https?:\/\//.test(liveSrc || "") && typeof window !== "undefined" && !liveSrc.startsWith(window.location.origin)
+                  ? undefined
+                  : "allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
+              }
               allow="clipboard-write"
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             />

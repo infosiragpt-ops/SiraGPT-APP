@@ -32,6 +32,29 @@ api.siragpt.com {
 	reverse_proxy backend:5000
 }
 
+# ── Codex live previews — SEPARATE origin (Replit-style isolation) ──────
+# Generated apps run UNSANDBOXED inside an iframe on siragpt.com. Serving
+# them from preview.siragpt.com gives each app the browser's own origin
+# isolation: full module loading + localStorage for the app, zero access to
+# siragpt.com cookies/storage/APIs. Only the tokenized preview proxy is
+# exposed on this host — the token in the path is the sole credential, so
+# nothing cookie-authenticated is reachable here. frame-ancestors lets the
+# platform embed it; X-Frame-Options is dropped for the same reason.
+preview.siragpt.com {
+	encode zstd gzip
+
+	@preview path /api/codex/projects/*/preview/*
+	handle @preview {
+		reverse_proxy backend:5000 {
+			header_down -X-Frame-Options
+			header_down Content-Security-Policy "frame-ancestors https://siragpt.com https://www.siragpt.com"
+		}
+	}
+	handle {
+		respond "Not found" 404
+	}
+}
+
 # ── User-published full-stack Node apps (one site block per domain) ─────
 # Each container deploy drops a <domain>.caddy snippet here (reverse_proxy to
 # the app's container). These are EXPLICIT host matchers, so they win over the
