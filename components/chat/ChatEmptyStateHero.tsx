@@ -153,18 +153,15 @@ export function ChatEmptyStateHero({
       </p>
 
       <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-2 sm:grid-cols-3 px-2">
-        {prompts.map((item, index) => (
-          <motion.button
+        {/* Plain buttons on purpose: per-chip framer animations froze at
+            their initial state (opacity 0) when mounted inside the chat
+            canvas, leaving an invisible grid. The parent motion.div already
+            fades the whole hero in; the chips ride that entrance. */}
+        {prompts.map((item) => (
+          <button
             key={item.label}
             type="button"
             onClick={() => onSelectPrompt(item.prompt)}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{
-              duration: 0.4,
-              delay: 0.08 + index * 0.04,
-              ease: [0.22, 1, 0.36, 1],
-            }}
             className={cn(
               "group flex items-center gap-2 rounded-2xl border border-border/60 bg-card/60 px-3 py-2.5 text-left",
               "shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:shadow-none",
@@ -183,7 +180,7 @@ export function ChatEmptyStateHero({
             <span className="truncate text-[13px] font-medium text-foreground/85 group-hover:text-foreground">
               {item.label}
             </span>
-          </motion.button>
+          </button>
         ))}
       </div>
 
