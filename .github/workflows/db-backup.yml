@@ -52,6 +52,34 @@ jobs:
             DATABASE_URL="${DATABASE_URL//@db:5432/@127.0.0.1:5432}"
             export DATABASE_URL
 
+            if ! command -v pg_dump >/dev/null 2>&1; then
+              DB_CONTAINER="${POSTGRES_CONTAINER:-}"
+              if [[ -z "${DB_CONTAINER}" ]]; then
+                DB_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=db' --format '{{.Names}}' | head -n 1 || true)"
+              fi
+              if [[ -z "${DB_CONTAINER}" ]]; then
+                DB_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])db([-_]|$)|postgres' | head -n 1 || true)"
+              fi
+              if [[ -z "${DB_CONTAINER}" ]]; then
+                echo "::error::pg_dump is missing on the VPS and no Postgres Docker container was found." >&2
+                exit 1
+              fi
+              if ! docker exec "${DB_CONTAINER}" sh -lc 'command -v pg_dump >/dev/null 2>&1'; then
+                echo "::error::pg_dump is missing in detected Postgres container: ${DB_CONTAINER}" >&2
+                exit 1
+              fi
+
+              export SIRAGPT_DB_CONTAINER="${DB_CONTAINER}"
+              cat >/tmp/siragpt-pg-dump <<'EOF'
+            #!/usr/bin/env bash
+            set -euo pipefail
+            exec docker exec -i "${SIRAGPT_DB_CONTAINER:?}" pg_dump "$@"
+            EOF
+              chmod +x /tmp/siragpt-pg-dump
+              export PG_DUMP_BIN=/tmp/siragpt-pg-dump
+              echo "Using pg_dump from Docker container: ${DB_CONTAINER}"
+            fi
+
             # 1. Run the backup script. Produces a fresh .sql.gz under ./backups/.
             bash backend/scripts/backup-db.sh
 
