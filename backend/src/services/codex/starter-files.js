@@ -72,19 +72,10 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: {
-    // Sandboxed single-tenant container: the platform proxy and the browser
-    // verifier reach this dev server by container hostname, so Vite's default
-    // localhost-only host check must be disabled or they get 403 Blocked.
-    host: true,
-    allowedHosts: true,
-    // The SiraGPT live preview runs behind a tokenized proxy that does not
-    // carry the HMR WebSocket, so its client would spam red "failed to
-    // connect" errors in the console. Disable HMR there — the preview reloads
-    // on each build instead. A standalone \`vite\` run (e.g. after exporting
-    // the project) keeps full hot-reload.
-    hmr: process.env.SIRA_PREVIEW ? false : undefined,
-  },
+  // Sandboxed single-tenant container: the platform proxy and the browser
+  // verifier reach this dev server by container hostname, so Vite's default
+  // localhost-only host check must be disabled or they get 403 Blocked.
+  server: { host: true, allowedHosts: true },
 })
 `;
 

@@ -105,7 +105,7 @@ function appsFallbackFiles({ prompt, projectName }) {
       vite: '^7.0.0',
     },
   };
-  const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\n\n// allowedHosts: the proxy + browser verifier hit this by container hostname.\n// hmr disabled under the tokenized preview (no WS through the proxy) — keeps\n// the console clean; a standalone \`vite\` run keeps full hot-reload.\nexport default defineConfig({ plugins: [react(), tailwindcss()], server: { host: true, allowedHosts: true, hmr: process.env.SIRA_PREVIEW ? false : undefined } })\n`;
+  const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\n\n// server.allowedHosts: the proxy + browser verifier hit this by container hostname.\nexport default defineConfig({ plugins: [react(), tailwindcss()], server: { host: true, allowedHosts: true } })\n`;
   const tsconfig = {
     compilerOptions: {
       target: 'ES2020', useDefineForClassFields: true, lib: ['ES2020', 'DOM', 'DOM.Iterable'],
