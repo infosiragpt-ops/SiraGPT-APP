@@ -65,6 +65,12 @@ describe("generate-native-owner-handoff", () => {
         latestSignedPreflight: { run: string; sourceSha: string; status: string }
         latestSecretAudit: { status: string; diagnosis: string }
         latestVerifiedRuns: { docker?: string }
+        ownerAccount: {
+          email: string
+          status: string
+          requiredSecurityActions: string[]
+          storePortals: Array<{ platform: string; portal: string; requiredOutput: string }>
+        }
         platformPlans: Array<{ key: string; allSecrets: string[]; dryRunCommand: string }>
       }
       const markdown = readFileSync(mdOut, "utf8")
@@ -91,6 +97,11 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.latestSecretAudit.status, status.latestSecretAudit.status)
       assert.match(handoff.latestSecretAudit.diagnosis, /Native app signing|native signing|deployment secrets only/)
       assert.equal(handoff.latestVerifiedRuns.docker, status.latestVerifiedRuns.docker)
+      assert.equal(handoff.ownerAccount.email, "infosiragpt@gmail.com")
+      assert.equal(handoff.ownerAccount.status, "rotation-required-before-store-use")
+      assert.ok(handoff.ownerAccount.requiredSecurityActions.some((action) => action.includes("Rotate the mailbox password")))
+      assert.ok(handoff.ownerAccount.storePortals.some((portal) => portal.platform === "Android / Google Play"))
+      assert.ok(handoff.ownerAccount.storePortals.some((portal) => portal.platform === "iPhone / App Store Connect"))
       assert.deepEqual(handoff.platformPlans.map((plan) => plan.key), ["android", "ios"])
       assert.ok(handoff.platformPlans[0].allSecrets.includes("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64"))
       assert.ok(handoff.platformPlans[1].allSecrets.includes("APP_STORE_CONNECT_API_KEY_BASE64"))
@@ -99,7 +110,12 @@ describe("generate-native-owner-handoff", () => {
       for (const contents of [stdout, markdown, json]) {
         assert.doesNotMatch(contents, /BEGIN (RSA|OPENSSH|PRIVATE) KEY/)
         assert.doesNotMatch(contents, /sk-[A-Za-z0-9_-]{20,}/)
+        assert.doesNotMatch(contents, /Siragpt\d+/i)
       }
+      assert.match(markdown, /Store Owner Account/)
+      assert.match(markdown, /Owner mailbox: `infosiragpt@gmail.com`/)
+      assert.match(markdown, /Rotate the mailbox password before using it for store-console setup/)
+      assert.match(markdown, /mailbox password must never be copied into GitHub Actions secrets/)
       assert.match(markdown, /Do not use the normal mailbox password as native signing material/)
       assert.match(markdown, /Latest QA Artifact Manifest Verification/)
       assert.match(markdown, /Latest GitHub Actions Diagnostics/)

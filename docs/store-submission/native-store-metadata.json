@@ -20,6 +20,42 @@
       "windows": "com.siragpt.desktop"
     }
   },
+  "ownerAccount": {
+    "email": "infosiragpt@gmail.com",
+    "status": "rotation-required-before-store-use",
+    "requiredSecurityActions": [
+      "Rotate the mailbox password before using it for store-console setup",
+      "Enable MFA before enrolling Apple Developer, Google Play Console, or Microsoft Partner Center",
+      "Store recovery codes outside GitHub, chat logs, release packets, and screenshots",
+      "Use vendor-specific app passwords, API keys, certificates, provisioning profiles, and service accounts instead of the mailbox password"
+    ],
+    "storePortals": [
+      {
+        "platform": "Android / Google Play",
+        "portal": "Google Play Console",
+        "accountUse": "Owner/developer identity verification and Play app ownership",
+        "requiredOutput": "Verified developer account, package com.siragpt.app, Android Publisher service account JSON, and Android upload key material"
+      },
+      {
+        "platform": "iPhone / App Store Connect",
+        "portal": "Apple Developer and App Store Connect",
+        "accountUse": "Apple Developer Program membership, bundle registration, TestFlight, and App Review",
+        "requiredOutput": "Apple team ID, iOS distribution certificate, provisioning profile, and App Store Connect API key"
+      },
+      {
+        "platform": "macOS",
+        "portal": "Apple Developer",
+        "accountUse": "Developer ID distribution and notarization",
+        "requiredOutput": "Developer ID Application certificate, Apple ID, app-specific password, and Apple team ID"
+      },
+      {
+        "platform": "Windows",
+        "portal": "Microsoft Partner Center and certificate authority",
+        "accountUse": "Microsoft Store listing if needed and trusted Windows installer signing",
+        "requiredOutput": "Windows code-signing certificate and Microsoft Partner Center app reservation if store-distributed"
+      }
+    ]
+  },
   "storeCopy": {
     "shortDescription": "AI assistant for chat, documents, voice, search, and productivity workflows.",
     "subtitle": "AI chat, documents, voice, and productivity",

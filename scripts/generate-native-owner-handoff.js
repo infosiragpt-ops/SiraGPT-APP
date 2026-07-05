@@ -203,6 +203,12 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
       bundleIds: metadata.app?.bundleIds,
       category: metadata.app?.category,
     },
+    ownerAccount: metadata.ownerAccount || {
+      email: metadata.app?.supportEmail,
+      status: "owner-verification-required",
+      requiredSecurityActions: [],
+      storePortals: [],
+    },
     latestQaRelease: status.latestQaRelease,
     latestVerifiedRuns: status.latestVerifiedRuns,
     latestQaArtifactManifestRuns: status.latestQaArtifactManifestRuns,
@@ -243,6 +249,27 @@ function renderMarkdown(handoff) {
   lines.push(`- macOS bundle ID: \`${handoff.app.bundleIds?.macos}\``)
   lines.push(`- Windows app ID: \`${handoff.app.bundleIds?.windows}\``)
   lines.push("")
+  if (handoff.ownerAccount?.email) {
+    lines.push("## Store Owner Account")
+    lines.push("")
+    lines.push(`- Owner mailbox: \`${handoff.ownerAccount.email}\``)
+    lines.push(`- Status: \`${handoff.ownerAccount.status}\``)
+    lines.push("")
+    lines.push("Required security actions before store-console work:")
+    lines.push("")
+    lines.push(list(handoff.ownerAccount.requiredSecurityActions || []))
+    if (handoff.ownerAccount.storePortals?.length) {
+      lines.push("")
+      lines.push("Store portal outputs to collect:")
+      lines.push("")
+      for (const portal of handoff.ownerAccount.storePortals) {
+        lines.push(`- ${portal.platform}: ${portal.portal} -> ${portal.requiredOutput}`)
+      }
+    }
+    lines.push("")
+    lines.push("The mailbox password must never be copied into GitHub Actions secrets, release packets, issue comments, screenshots, or logs.")
+    lines.push("")
+  }
   lines.push("## Latest QA Download")
   lines.push("")
   lines.push(`- Release: \`${handoff.latestQaRelease.tag}\``)

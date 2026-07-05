@@ -61,6 +61,13 @@ commit and the branch was force-updated to remove it. Treat that mailbox
 password as exposed and rotate it outside GitHub. Do not use mailbox passwords
 as native signing material.
 
+Store owner account note: use `infosiragpt@gmail.com` only as the owner mailbox
+for Apple Developer, App Store Connect, Google Play Console, and Microsoft
+Partner Center setup. Rotate the mailbox password and enable MFA before using it
+in those portals. The mailbox password must never be added to GitHub Actions;
+native release automation requires vendor-specific API keys, app-specific
+passwords, upload keys, certificates, and provisioning profiles.
+
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest
 lives in `docs/store-submission/native-store-assets.json`.
