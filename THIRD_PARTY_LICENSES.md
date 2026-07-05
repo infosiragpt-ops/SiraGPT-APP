@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1531**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1555**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (213)
+## Apache-2.0 (216)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -77,6 +77,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@google/generative-ai` | 0.24.1 | Apache-2.0 | [link](https://github.com/google/generative-ai-js) |
 | `@grpc/grpc-js` | 1.14.4 | Apache-2.0 | [link](https://github.com/grpc/grpc-node.git#master) |
 | `@grpc/proto-loader` | 0.8.1 | Apache-2.0 | [link](https://github.com/grpc/grpc-node) |
+| `@huggingface/tokenizers` | 0.1.3 | Apache-2.0 | [link](https://github.com/huggingface/tokenizers.js) |
+| `@huggingface/transformers` | 4.2.0 | Apache-2.0 | [link](https://github.com/huggingface/transformers.js) |
 | `@mozilla/readability` | 0.6.0 | Apache-2.0 | [link](https://github.com/mozilla/readability) |
 | `@opentelemetry/api` | 1.9.0, 1.9.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/api-logs` | 0.214.0, 0.220.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
@@ -207,6 +209,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
 | `events-universal` | 1.0.1 | Apache-2.0 | [link](https://github.com/holepunchto/events-universal) |
 | `filelist` | 1.0.6 | Apache-2.0 | [link](https://github.com/mde/filelist) |
+| `flatbuffers` | 25.9.23 | Apache-2.0 | [link](https://github.com/google/flatbuffers) |
 | `gaxios` | 7.1.3 | Apache-2.0 | [link](https://github.com/googleapis/google-cloud-node-core) |
 | `gcp-metadata` | 8.1.2 | Apache-2.0 | [link](https://github.com/googleapis/google-cloud-node-core) |
 | `google-auth-library` | 10.5.0 | Apache-2.0 | [link](https://github.com/googleapis/google-auth-library-nodejs) |
@@ -242,7 +245,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `webdriver-bidi-protocol` | 0.3.8 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/webdriver-bidi-protocol) |
 | `xml-name-validator` | 5.0.0 | Apache-2.0 | [link](https://github.com/jsdom/xml-name-validator) |
 
-## BSD (61)
+## BSD (63)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -286,6 +289,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `esutils` | 2.0.3 | BSD-2-Clause | [link](https://github.com/estools/esutils) |
 | `extract-zip` | 2.0.1 | BSD-2-Clause | [link](https://github.com/maxogden/extract-zip) |
 | `fast-uri` | 3.1.2 | BSD-3-Clause | [link](https://github.com/fastify/fast-uri) |
+| `global-agent` | 3.0.0 | BSD-3-Clause | [link](https://github.com/gajus/global-agent) |
 | `highlight.js` | 10.7.3, 11.11.1 | BSD-3-Clause | [link](https://github.com/highlightjs/highlight.js) |
 | `ieee754` | 1.2.1 | BSD-3-Clause | [link](https://github.com/feross/ieee754) |
 | `intl-messageformat` | 11.2.6 | BSD-3-Clause | [link](https://github.com/formatjs/formatjs) |
@@ -296,13 +300,14 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `normalize-package-data` | 5.0.0 | BSD-2-Clause | [link](https://github.com/npm/normalize-package-data) |
 | `nth-check` | 2.1.1 | BSD-2-Clause | [link](https://github.com/fb55/nth-check) |
 | `option` | 0.2.4 | BSD-2-Clause | [link](https://github.com/mwilliamson/node-options) |
-| `protobufjs` | 7.6.4 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
+| `protobufjs` | 7.6.4, 7.6.5 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
 | `qs` | 6.15.2 | BSD-3-Clause | [link](https://github.com/ljharb/qs) |
+| `roarr` | 2.15.4 | BSD-3-Clause | [link](https://github.com/gajus/roarr) |
 | `robot3` | 0.4.1 | BSD-2-Clause | [link](https://github.com/matthewp/robot) |
 | `rw` | 1.3.3 | BSD-3-Clause | [link](https://github.com/mbostock/rw) |
 | `source-map` | 0.6.1 | BSD-3-Clause | [link](https://github.com/mozilla/source-map) |
 | `source-map-js` | 1.2.1 | BSD-3-Clause | [link](https://github.com/7rulnik/source-map-js) |
-| `sprintf-js` | 1.0.3 | BSD-3-Clause | [link](https://github.com/alexei/sprintf.js) |
+| `sprintf-js` | 1.0.3, 1.1.3 | BSD-3-Clause | [link](https://github.com/alexei/sprintf.js) |
 | `tough-cookie` | 5.1.2 | BSD-3-Clause | [link](https://github.com/salesforce/tough-cookie) |
 | `url-template` | 2.0.8 | BSD | [link](https://github.com/bramstein/url-template) |
 | `user-agents` | 2.1.42 | BSD-2-Clause | [link](https://github.com/intoli/user-agents) |
@@ -365,7 +370,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (89)
+## ISC (91)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -420,6 +425,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `glob` | 10.5.0, 7.2.3 | ISC | [link](https://github.com/isaacs/node-glob) |
 | `glob-parent` | 5.1.2, 6.0.2 | ISC | [link](https://github.com/gulpjs/glob-parent) |
 | `graceful-fs` | 4.2.11 | ISC | [link](https://github.com/isaacs/node-graceful-fs) |
+| `guid-typescript` | 1.0.9 | ISC | [link](https://github.com/NicolasDeveloper/guid-typescript) |
 | `hast-util-from-dom` | 5.0.1 | ISC | [link](https://github.com/syntax-tree/hast-util-from-dom) |
 | `hosted-git-info` | 6.1.3 | ISC | [link](https://github.com/npm/hosted-git-info) |
 | `https` | 1.0.0 | ISC |  |
@@ -428,6 +434,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ini` | 1.3.8 | ISC | [link](https://github.com/isaacs/ini) |
 | `internmap` | 1.0.1, 2.0.3 | ISC | [link](https://github.com/mbostock/internmap) |
 | `isexe` | 2.0.0 | ISC | [link](https://github.com/isaacs/isexe) |
+| `json-stringify-safe` | 5.0.1 | ISC | [link](https://github.com/isaacs/json-stringify-safe) |
 | `listenercount` | 1.0.1 | ISC | [link](https://github.com/jden/node-listenercount) |
 | `lru-cache` | 10.4.3, 6.0.0, 7.18.3 | ISC | [link](https://github.com/isaacs/node-lru-cache) |
 | `lucide-react` | 0.454.0 | ISC | [link](https://github.com/lucide-icons/lucide) |
@@ -459,7 +466,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1127)
+## MIT (1144)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -502,6 +509,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@hexagon/base64` | 1.1.28 | MIT | [link](https://github.com/hexagon/base64) |
 | `@hono/node-server` | 1.19.14 | MIT | [link](https://github.com/honojs/node-server) |
 | `@hookform/resolvers` | 3.10.0 | MIT | [link](https://github.com/react-hook-form/resolvers) |
+| `@huggingface/jinja` | 0.5.9 | MIT | [link](https://github.com/huggingface/huggingface.js) |
 | `@iconify/types` | 2.0.0 | MIT | [link](https://github.com/iconify/iconify) |
 | `@iconify/utils` | 3.1.1 | MIT | [link](https://github.com/iconify/iconify) |
 | `@img/colour` | 1.0.0, 1.1.0 | MIT | [link](https://github.com/lovell/colour) |
@@ -792,6 +800,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `accepts` | 1.3.8, 2.0.0 | MIT | [link](https://github.com/jshttp/accepts) |
 | `acorn` | 8.16.0 | MIT | [link](https://github.com/acornjs/acorn) |
 | `acorn-import-attributes` | 1.9.5 | MIT | [link](https://github.com/xtuc/acorn-import-attributes) |
+| `adm-zip` | 0.5.18 | MIT | [link](https://github.com/cthackers/adm-zip) |
 | `agent-base` | 6.0.2, 7.1.4 | MIT | [link](https://github.com/TooTallNate/node-agent-base) |
 | `ajv` | 8.20.0 | MIT | [link](https://github.com/ajv-validator/ajv) |
 | `ajv-formats` | 3.0.1 | MIT | [link](https://github.com/ajv-validator/ajv-formats) |
@@ -828,6 +837,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bluebird` | 3.4.7 | MIT | [link](https://github.com/petkaantonov/bluebird) |
 | `bmp-js` | 0.1.0 | MIT | [link](https://github.com/shaozilee/bmp-js) |
 | `body-parser` | 1.20.5, 2.2.2 | MIT | [link](https://github.com/expressjs/body-parser) |
+| `boolean` | 3.2.0 | MIT | [link](https://github.com/thenativeweb/boolean) |
 | `bottleneck` | 2.19.5 | MIT | [link](https://github.com/SGrondin/bottleneck) |
 | `bowser` | 2.14.1 | MIT | [link](https://github.com/bowser-js/bowser) |
 | `brace-expansion` | 1.1.14, 2.1.0, 2.1.1 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
@@ -919,6 +929,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `decompress-response` | 6.0.0 | MIT | [link](https://github.com/sindresorhus/decompress-response) |
 | `deep-extend` | 0.6.0 | MIT | [link](https://github.com/unclechu/node-deep-extend) |
 | `deepmerge` | 4.3.1 | MIT | [link](https://github.com/TehShrike/deepmerge) |
+| `define-data-property` | 1.1.4 | MIT | [link](https://github.com/ljharb/define-data-property) |
+| `define-properties` | 1.2.1 | MIT | [link](https://github.com/ljharb/define-properties) |
 | `defu` | 6.1.7 | MIT | [link](https://github.com/unjs/defu) |
 | `degenerator` | 5.0.1 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
 | `delayed-stream` | 1.0.0 | MIT | [link](https://github.com/felixge/node-delayed-stream) |
@@ -926,6 +938,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `dequal` | 2.0.3 | MIT | [link](https://github.com/lukeed/dequal) |
 | `destr` | 2.0.5 | MIT | [link](https://github.com/unjs/destr) |
 | `destroy` | 1.2.0 | MIT | [link](https://github.com/stream-utils/destroy) |
+| `detect-node` | 2.1.0 | MIT | [link](https://github.com/iliakan/detect-node) |
 | `detect-node-es` | 1.1.0 | MIT | [link](https://github.com/thekashey/detect-node) |
 | `devlop` | 1.1.0 | MIT | [link](https://github.com/wooorm/devlop) |
 | `dfa` | 1.2.0 | MIT | [link](https://github.com/devongovett/dfa) |
@@ -958,10 +971,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `es-object-atoms` | 1.1.1 | MIT | [link](https://github.com/ljharb/es-object-atoms) |
 | `es-set-tostringtag` | 2.1.0 | MIT | [link](https://github.com/es-shims/es-set-tostringtag) |
 | `es-toolkit` | 1.46.0 | MIT | [link](https://github.com/toss/es-toolkit) |
+| `es6-error` | 4.1.1 | MIT | [link](https://github.com/bjyoungblood/es6-error) |
 | `esbuild` | 0.25.12, 0.28.1 | MIT | [link](https://github.com/evanw/esbuild) |
 | `escalade` | 3.2.0 | MIT | [link](https://github.com/lukeed/escalade) |
 | `escape-html` | 1.0.3 | MIT | [link](https://github.com/component/escape-html) |
-| `escape-string-regexp` | 5.0.0 | MIT | [link](https://github.com/sindresorhus/escape-string-regexp) |
+| `escape-string-regexp` | 4.0.0, 5.0.0 | MIT | [link](https://github.com/sindresorhus/escape-string-regexp) |
 | `estree-util-is-identifier-name` | 3.0.0 | MIT | [link](https://github.com/syntax-tree/estree-util-is-identifier-name) |
 | `etag` | 1.8.1 | MIT | [link](https://github.com/jshttp/etag) |
 | `eventemitter3` | 4.0.7, 5.0.4 | MIT | [link](https://github.com/primus/eventemitter3) |
@@ -1016,10 +1030,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `get-uri` | 6.0.5 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
 | `giget` | 2.0.0 | MIT | [link](https://github.com/unjs/giget) |
 | `github-from-package` | 0.0.0 | MIT | [link](https://github.com/substack/github-from-package) |
+| `globalthis` | 1.0.4 | MIT | [link](https://github.com/ljharb/System.global) |
 | `gopd` | 1.2.0 | MIT | [link](https://github.com/ljharb/gopd) |
 | `gtoken` | 8.0.0 | MIT | [link](https://github.com/google/node-gtoken) |
 | `hachure-fill` | 0.5.2 | MIT | [link](https://github.com/pshihn/hachure-fill) |
 | `has-flag` | 4.0.0 | MIT | [link](https://github.com/sindresorhus/has-flag) |
+| `has-property-descriptors` | 1.0.2 | MIT | [link](https://github.com/inspect-js/has-property-descriptors) |
 | `has-symbols` | 1.1.0 | MIT | [link](https://github.com/inspect-js/has-symbols) |
 | `has-tostringtag` | 1.0.2 | MIT | [link](https://github.com/inspect-js/has-tostringtag) |
 | `hash.js` | 1.1.7 | MIT | [link](https://github.com/indutny/hash.js) |
@@ -1144,6 +1160,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `make-event-props` | 1.6.2 | MIT | [link](https://github.com/wojtekmaj/make-event-props) |
 | `markdown-table` | 3.0.4 | MIT | [link](https://github.com/wooorm/markdown-table) |
 | `marked` | 16.4.1, 16.4.2 | MIT | [link](https://github.com/markedjs/marked) |
+| `matcher` | 3.0.0 | MIT | [link](https://github.com/sindresorhus/matcher) |
 | `math-intrinsics` | 1.1.0 | MIT | [link](https://github.com/es-shims/math-intrinsics) |
 | `mdast-util-directive` | 3.1.0 | MIT | [link](https://github.com/syntax-tree/mdast-util-directive) |
 | `mdast-util-find-and-replace` | 3.0.2 | MIT | [link](https://github.com/syntax-tree/mdast-util-find-and-replace) |
@@ -1250,6 +1267,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `object-assign` | 4.1.1 | MIT | [link](https://github.com/sindresorhus/object-assign) |
 | `object-hash` | 2.2.0, 3.0.0 | MIT | [link](https://github.com/puleos/object-hash) |
 | `object-inspect` | 1.13.4 | MIT | [link](https://github.com/inspect-js/object-inspect) |
+| `object-keys` | 1.1.1 | MIT | [link](https://github.com/ljharb/object-keys) |
 | `octokit` | 5.0.5 | MIT | [link](https://github.com/octokit/octokit.js) |
 | `officeparser` | 6.1.1 | MIT | [link](https://github.com/harshankur/officeParser) |
 | `ohash` | 2.0.11 | MIT | [link](https://github.com/unjs/ohash) |
@@ -1258,6 +1276,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `on-finished` | 2.3.0, 2.4.1 | MIT | [link](https://github.com/jshttp/on-finished) |
 | `on-headers` | 1.1.0 | MIT | [link](https://github.com/jshttp/on-headers) |
 | `oniguruma-to-es` | 2.3.0 | MIT | [link](https://github.com/slevithan/oniguruma-to-es) |
+| `onnxruntime-common` | 1.24.0-dev.20251116-b39e144322, 1.24.3 | MIT | [link](https://github.com/Microsoft/onnxruntime) |
+| `onnxruntime-node` | 1.24.3 | MIT | [link](https://github.com/Microsoft/onnxruntime) |
+| `onnxruntime-web` | 1.26.0-dev.20260416-b7804b056c | MIT | [link](https://github.com/Microsoft/onnxruntime) |
 | `openapi-fetch` | 0.9.8 | MIT | [link](https://github.com/openapi-ts/openapi-typescript) |
 | `openapi-typescript-helpers` | 0.0.8 | MIT | [link](https://github.com/drwpow/openapi-typescript) |
 | `opencollective-postinstall` | 2.0.3 | MIT | [link](https://github.com/opencollective/opencollective-postinstall) |
@@ -1441,7 +1462,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `safer-buffer` | 2.1.2 | MIT | [link](https://github.com/ChALkeR/safer-buffer) |
 | `scheduler` | 0.23.2 | MIT | [link](https://github.com/facebook/react) |
 | `selderee` | 0.11.0 | MIT | [link](https://github.com/mxxii/selderee) |
+| `semver-compare` | 1.0.0 | MIT | [link](https://github.com/substack/semver-compare) |
 | `send` | 0.19.0, 1.2.1 | MIT | [link](https://github.com/pillarjs/send) |
+| `serialize-error` | 7.0.1 | MIT | [link](https://github.com/sindresorhus/serialize-error) |
 | `serve-static` | 1.16.2, 2.2.1 | MIT | [link](https://github.com/expressjs/serve-static) |
 | `setimmediate` | 1.0.5 | MIT | [link](https://github.com/YuzuJS/setImmediate) |
 | `shebang-command` | 2.0.0 | MIT | [link](https://github.com/kevva/shebang-command) |
@@ -1527,6 +1550,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ts-dedent` | 2.2.0 | MIT | [link](https://github.com/tamino-martinius/node-ts-dedent) |
 | `tsx` | 4.22.3 | MIT | [link](https://github.com/privatenumber/tsx) |
 | `turndown` | 7.2.4 | MIT | [link](https://github.com/mixmark-io/turndown) |
+| `type-fest` | 0.13.1 | MIT OR CC0-1.0 | [link](https://github.com/sindresorhus/type-fest) |
 | `type-is` | 1.6.18, 2.0.1 | MIT | [link](https://github.com/jshttp/type-is) |
 | `typed-query-selector` | 2.12.0 | MIT | [link](https://github.com/g-plane/typed-query-selector) |
 | `typedarray` | 0.0.6 | MIT | [link](https://github.com/substack/typedarray) |
