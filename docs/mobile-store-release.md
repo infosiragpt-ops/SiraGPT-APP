@@ -37,14 +37,17 @@
   `SHA256SUMS.txt`.
 - GitHub Actions `Native readiness report` run `28732348267` passed on the native artifact traceability SHA and produced the non-secret release plan/store packet.
 - Native artifact traceability commit `0601139e3b507b9733ad1fdd84290e3d8cf7a078` keeps the owner handoff packet aligned with the current signed preflight and is green in GitHub Actions:
-  - CI: `28732703286`
-  - Native readiness report: `28732703296`
-  - Native mobile builds: `28732348269`
-  - Native desktop builds: `28732348253`
-- Management/traceability commit validated before this document refresh
-  `1d937068b66facec31e752c37ad30760f7b86aa3`
-  (`docs(native): publish QA package for current production`) is also green in
-  CI run `28732703286` and Native readiness report run `28732703296`.
+  - CI: `28735031853`
+  - Native readiness report: `28735031854`
+  - Native mobile builds: `28735031841`
+  - Native desktop builds: `28735031849`
+  - Docker build images: `28735031878`
+- Management/traceability commit validated before this document refresh:
+  `8dd5b0c7b2710de39ac286b5a373ecdeee3e3869`
+  (`ci(native): report signing secrets status`) is green in CI run
+  `28735031853`, Native readiness report run `28735031854`, native mobile run
+  `28735031841`, native desktop run `28735031849`, and Docker run
+  `28735031878`.
 - GitHub repository diagnostics:
   - Repository visibility: `PUBLIC`
   - Actions enabled: `true`
@@ -54,8 +57,8 @@
   on SHA `10956297b606ee449c44707b956bbb7444eb3c94` and stopped before
   package runners because Android, iOS, macOS, and Windows signing secrets are
   still missing.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-10956297.zip`
-  (`sha256:094075810102f8c1a88bfd51308188719d64d4350cbedaaad8a52eae3e904292`).
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8dd5b0c7.zip`
+  (`sha256:4d7cd910671f71cbebf78224767eeb2c66fb597e0d9fe88adf8206e54329f033`).
 - Signed native GitHub Releases generated through `Native signed release packages` include `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` when `create_github_release` is enabled.
 - `Native mobile builds` and `Native desktop builds` QA artifacts also include
   `native-release-manifest.json`, `native-release-manifest.md`, and
@@ -92,6 +95,8 @@ inside the vendor store portals.
 Normal email/account passwords are not valid native signing credentials. Use
 dedicated upload keys, certificates, provisioning profiles, App Store Connect
 API keys, and Apple app-specific passwords for the signing workflow.
+If a mailbox password reached a public commit, rotate it outside GitHub and do
+not reuse it for signing or store automation.
 
 Latest secret-name audit:
 

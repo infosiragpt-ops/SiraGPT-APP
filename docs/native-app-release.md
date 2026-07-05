@@ -85,9 +85,12 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
 - Readiness workflow: `Native readiness report` run `28725476833`.
   - Non-secret release plan and store packet generation: passed.
 - Management/traceability workflow snapshot before this document refresh,
-  SHA `1d937068b66facec31e752c37ad30760f7b86aa3`:
-  - CI: `28734225656`.
-  - Native readiness report with owner handoff artifact: `28734225636`.
+  SHA `8dd5b0c7b2710de39ac286b5a373ecdeee3e3869`:
+  - CI: `28735031853`.
+  - Native readiness report with owner handoff artifact: `28735031854`.
+  - Native mobile builds: `28735031841`.
+  - Native desktop builds: `28735031849`.
+  - Docker build images: `28735031878`.
 - Current native QA artifact set remains tied to SHA `0601139e3b507b9733ad1fdd84290e3d8cf7a078`:
   - Native mobile builds: `28732348269`.
   - Native desktop builds: `28732348253`.
@@ -101,8 +104,11 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.
   - Allowed actions: `all`.
-  - Latest green CI: `28734225656`.
-  - Latest green native readiness report: `28734225636`.
+  - Latest green CI: `28735031853`.
+  - Latest green native readiness report: `28735031854`.
+  - Latest green native mobile builds: `28735031841`.
+  - Latest green native desktop builds: `28735031849`.
+  - Latest green Docker build images: `28735031878`.
   - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
 - Signed release preflight: `Native signed release packages` run `28733963853`.
   - Input: `platform=all`, `release_tag=native-v0.4.3-signing-preflight-1095629`.
@@ -111,9 +117,14 @@ Latest native artifact verification SHA: `0601139e3b507b9733ad1fdd84290e3d8cf7a0
   - Diagnosis: public repository Actions are running; signed native release
     packaging is blocked by missing signing and store-upload secrets, not by
     repository visibility.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-10956297.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-10956297.zip`.
-  - SHA-256: `094075810102f8c1a88bfd51308188719d64d4350cbedaaad8a52eae3e904292`.
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-8dd5b0c7.zip`.
+  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-0601139/SiraGPT-native-store-owner-packet-8dd5b0c7.zip`.
+  - SHA-256: `4d7cd910671f71cbebf78224767eeb2c66fb597e0d9fe88adf8206e54329f033`.
+
+Security note: a mailbox password literal reached a prior public management
+commit and the branch was force-updated to remove it. Rotate that password
+outside GitHub. Mailbox passwords are not native signing or store-upload
+credentials.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
 `native-qa-v0.4.3-0601139`:
