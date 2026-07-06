@@ -178,6 +178,7 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
           customGpt: {
             select: {
               id: true,
+              creatorId: true,
               name: true,
               description: true,
               iconUrl: true,
@@ -544,6 +545,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         customGpt: {
           select: {
             id: true,
+            creatorId: true,
             name: true,
             description: true,
             iconUrl: true,

@@ -538,6 +538,7 @@ interface Chat {
   } | null
   customGpt?: {
     id: string
+    creatorId?: string
     name: string
     description?: string
     iconUrl?: string
@@ -548,6 +549,11 @@ interface Chat {
     temperature?: number
     visibility?: string
     shareId?: string
+    creator?: {
+      id: string
+      name?: string | null
+      avatar?: string | null
+    }
     knowledgeFiles?: Array<{
       id: string
       originalName: string

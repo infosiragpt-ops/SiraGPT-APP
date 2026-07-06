@@ -87,7 +87,7 @@ interface GPTFormData {
 }
 
 export default function CreateGPTPage() {
-  const { user } = useAuth()
+  const { user, isLoading: isAuthLoading } = useAuth()
   const { availableModels } = useChat()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -150,13 +150,17 @@ export default function CreateGPTPage() {
   useEffect(() => {
     if (editId) {
       setIsEditMode(true)
+      if (isAuthLoading) {
+        setIsLoading(true)
+        return
+      }
       loadGPTForEdit(editId)
     }
     // loadGPTForEdit is defined below in the component body, so adding
     // it to deps would lint-loop. Intent: re-fetch only when the
-    // URL-bound editId changes.
+    // URL-bound editId or current authenticated user changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editId])
+  }, [editId, isAuthLoading, user?.id])
 
   useEffect(() => {
     if (!editId && categoryParam && !formData.category) {
@@ -168,6 +172,12 @@ export default function CreateGPTPage() {
     setIsLoading(true)
     try {
       const gpt = await gptsService.getGPT(gptId)
+      const ownerId = gpt.creator?.id || gpt.creatorId
+      if (!ownerId || ownerId !== user?.id) {
+        toast.error("Solo el creador puede configurar este GPT")
+        router.replace('/gpts')
+        return
+      }
 
       // Convert GPT data to form data
       setFormData({

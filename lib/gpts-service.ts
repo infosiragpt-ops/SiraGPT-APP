@@ -4,6 +4,7 @@ import { getNormalizedApiBaseUrl } from "./api-base-url"
 
 export interface CustomGPT {
   id: string
+  creatorId?: string
   name: string
   description: string
   iconUrl?: string

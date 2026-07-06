@@ -150,6 +150,7 @@ import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialA
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { safeUUID } from "@/lib/safe-uuid"
+import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
@@ -3394,6 +3395,8 @@ const getNavbarModelSelectorChatSignature = (chat: any) => [
   chat?.title,
   chat?.customGptId,
   chat?.customGpt?.id,
+  chat?.customGpt?.creatorId,
+  chat?.customGpt?.creator?.id,
   chat?.customGpt?.name,
   chat?.customGpt?.iconUrl,
   chat?.customGpt?.modelName,
@@ -3428,6 +3431,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   currentChat,
   setCurrentChat,
 }: any) {
+  const { user } = useAuth()
   const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   // Anti-flicker: hold the last model that actually matched `selectedModel`.
   // refreshModels (dropdown-open / window-focus / tab-visibility) replaces the
@@ -3992,28 +3996,35 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const customGpt = currentChat?.customGpt;
     const customGptName = customGpt?.name || String(currentChat?.title || "Custom GPT").replace(/^Chat with\s+/i, "");
     const customGptIcon = customGpt?.iconUrl;
+    const customGptCreatorId = customGpt?.creatorId || customGpt?.creator?.id;
+    const isCustomGptOwner = Boolean(user?.id && customGptCreatorId && customGptCreatorId === user.id);
+    const customGptIconSrc = resolveGptIconImageUrl(customGptIcon, {
+      token: typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null,
+      baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
+    });
+    const customGptTextIcon = String(customGptIcon || "").trim();
     const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
     const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
     const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
 
-    const GptIcon = () => customGptIcon ? (
-      customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
-        // eslint-disable-next-line @next/next/no-img-element
+    const GptIcon = () => customGptIconSrc ? (
+      <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-background ring-1 ring-border/60 shadow-sm">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={customGptIcon}
-          alt="GPT icon"
-          className="h-7 w-7 rounded-full object-cover"
+          src={customGptIconSrc}
+          alt={`${customGptName} icon`}
+          className="h-full w-full object-cover"
         />
-      ) : (
-        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-sm text-white">
-          {customGptIcon}
-        </div>
-      )
+      </span>
+    ) : customGptTextIcon && !/^https?:|data:|blob:/i.test(customGptTextIcon) && !customGptTextIcon.startsWith("/") ? (
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-indigo-600 text-sm text-white shadow-sm ring-1 ring-white/30">
+        {customGptTextIcon}
+      </span>
     ) : (
-      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-purple-100 text-purple-700 shadow-sm ring-1 ring-purple-200/70 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-400/20">
         <Bot className="h-4 w-4" />
-      </div>
+      </span>
     );
 
     return (
@@ -4102,15 +4113,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                       </div>
                     )}
                   </ScrollArea>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
-                    }}
-                    className="rounded-2xl px-3 py-3 text-[15px]"
-                  >
-                    Configurar GPT...
-                  </DropdownMenuItem>
+                  {isCustomGptOwner && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
+                        }}
+                        className="rounded-2xl px-3 py-3 text-[15px]"
+                      >
+                        Configurar GPT...
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuSubContent>
               </DropdownMenuPortal>
             </DropdownMenuSub>
@@ -4125,16 +4140,18 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               <Info className={gptMenuIconClass} />
               Acerca de
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
-              }}
-              className={gptMenuItemClass}
-            >
-              <Lock className={gptMenuIconClass} />
-              Privacidad
-            </DropdownMenuItem>
+            {isCustomGptOwner && (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
+                }}
+                className={gptMenuItemClass}
+              >
+                <Lock className={gptMenuIconClass} />
+                Configuración de privacidad
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className={gptMenuItemClass}>
               <Pin className={gptMenuIconClass} />
               {isGptPinned ? "Quitar de barra" : "Fijar en barra"}
@@ -4181,7 +4198,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setGptDialog(null)}>Cerrar</Button>
-                  {customGpt?.id && <Button onClick={() => { window.location.href = `/gpts/create?edit=${customGpt.id}` }}>Configurar</Button>}
+                  {isCustomGptOwner && customGpt?.id && <Button onClick={() => { window.location.href = `/gpts/create?edit=${customGpt.id}` }}>Configurar</Button>}
                 </DialogFooter>
               </>
             )}

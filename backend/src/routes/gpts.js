@@ -690,17 +690,19 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. This GPT is private.' });
     }
 
+    const hydratedGpt = await ensurePublicGptIcon(gpt);
+
     // Create a new chat with this GPT
     const chat = await prisma.chat.create({
       data: {
         userId,
-        title: `Chat with ${gpt.name}`,
-        model: gpt.modelName, // Use GPT's preferred model
+        title: `Chat with ${hydratedGpt.name}`,
+        model: hydratedGpt.modelName, // Use GPT's preferred model
         customGptId: id, // Link to the custom GPT
         messages: {
-          create: gpt.greetingMessage ? [{
+          create: hydratedGpt.greetingMessage ? [{
             role: 'ASSISTANT',
-            content: gpt.greetingMessage,
+            content: hydratedGpt.greetingMessage,
             timestamp: new Date().toISOString()
           }] : []
         }
@@ -710,13 +712,17 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
         customGpt: {
           select: {
             id: true,
+            creatorId: true,
             name: true,
+            description: true,
             iconUrl: true,
             instructions: true,
             greetingMessage: true,
             modelName: true,
             temperature: true,
-            conversationStarters: true
+            conversationStarters: true,
+            visibility: true,
+            shareId: true
           }
         }
       }
@@ -726,10 +732,10 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       chat,
       // Include GPT info for frontend
       gptInfo: {
-        name: gpt.name,
-        iconUrl: gpt.iconUrl,
-        instructions: gpt.instructions,
-        conversationStarters: gpt.conversationStarters
+        name: hydratedGpt.name,
+        iconUrl: hydratedGpt.iconUrl,
+        instructions: hydratedGpt.instructions,
+        conversationStarters: hydratedGpt.conversationStarters
       }
     });
   } catch (error) {
@@ -754,13 +760,17 @@ router.get('/chat/:chatId', authenticateToken, async (req, res) => {
         customGpt: {
           select: {
             id: true,
+            creatorId: true,
             name: true,
+            description: true,
             iconUrl: true,
             instructions: true,
             greetingMessage: true,
             modelName: true,
             temperature: true,
             conversationStarters: true,
+            visibility: true,
+            shareId: true,
             knowledgeFiles: {
               select: {
                 id: true,
