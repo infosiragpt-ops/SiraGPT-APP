@@ -481,9 +481,10 @@ export { Badge, type BadgeProps } from './badge'
 }
 
 /**
- * Full-stack starter: React+Vite frontend + Express API + SQLite (via
- * better-sqlite3) backend. The runner starts both with `concurrently` so
- * the preview shows a real app with persistent data — not just localStorage.
+ * Full-stack starter: React+Vite frontend + Express API + SQLite backend
+ * (built-in drivers via server/db.js — bun:sqlite in the runner, node:sqlite
+ * on an export; zero native deps). The runner starts both with `concurrently`
+ * so the preview shows a real app with persistent data — not just localStorage.
  *
  * Used when the skill `backend-real` triggers (user asks for "base de datos
  * real", "backend", "API", "que guarde de verdad"). The agent builds ON this
@@ -500,7 +501,10 @@ function fullStackStarterFiles({ projectName } = {}) {
     version: '0.0.1',
     type: 'module',
     scripts: {
-      dev: 'concurrently -n api,web -c blue,green "npm run dev:api" "npm run dev:web"',
+      // Direct commands (no `npm run` nesting): the preview runner is a Bun
+      // image without npm; its node shim handles `node --watch` fine and the
+      // same script works verbatim on real Node after an export.
+      dev: 'concurrently -n api,web -c blue,green "node --watch server/index.js" "vite"',
       'dev:api': 'node --watch server/index.js',
       'dev:web': 'vite',
       build: 'vite build',
@@ -515,7 +519,6 @@ function fullStackStarterFiles({ projectName } = {}) {
       clsx: '^2.1.1',
       express: '^4.21.0',
       cors: '^2.8.5',
-      'better-sqlite3': '^11.7.0',
     },
     devDependencies: {
       '@vitejs/plugin-react': '^4.5.2',
@@ -525,44 +528,92 @@ function fullStackStarterFiles({ projectName } = {}) {
       '@types/react-dom': '^18.3.0',
       '@types/express': '^4.17.21',
       '@types/cors': '^2.8.17',
-      '@types/better-sqlite3': '^7.6.12',
       concurrently: '^9.1.0',
       typescript: '^5.5.4',
       vite: '^7.0.0',
     },
   };
 
-  // Vite config with proxy to the Express API.
+  // Vite config with proxy to the Express API. The runner launches this
+  // project with `bun run dev` (concurrently: API + web) instead of the vite
+  // CLI, so port/base come from ENV, not flags. The proxy key is a REGEX so
+  // `/api` also matches under SiraGPT's tokenized preview base (the frontend
+  // calls `${import.meta.env.BASE_URL}api/...`); the rewrite strips the base
+  // back off before hitting Express. API port = web port + 1000 so several
+  // full-stack previews can run side by side without colliding on 3001.
   const viteConfigProxy = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+const port = Number(process.env.PORT) || 5173
+const apiPort = Number(process.env.API_PORT) || port + 1000
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base: process.env.VITE_BASE || '/',
   server: {
     host: true,
     allowedHosts: true,
+    port,
+    strictPort: true,
     proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
+      '^.*/api/': {
+        target: \`http://localhost:\${apiPort}\`,
         changeOrigin: true,
+        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),
       },
     },
   },
 })
 `;
 
+  // SQLite WITHOUT native dependencies: better-sqlite3's install script can't
+  // build inside the slim Bun runner image (exit 127), so the starter uses the
+  // runtimes' BUILT-IN drivers behind a tiny adapter — bun:sqlite in the
+  // preview runner, node:sqlite (Node 22+) after a standalone export. Same
+  // prepare/exec surface the agent already knows.
+  const serverDb = `// server/db.js — SQLite integrado, cero dependencias nativas.
+// Bun (runner del preview) → bun:sqlite · Node 22+ (export) → node:sqlite.
+// API mínima común: db.exec(sql) y db.prepare(sql).{all,get,run}(...params).
+let db
+
+if (typeof Bun !== 'undefined') {
+  const { Database } = await import('bun:sqlite')
+  const raw = new Database('server/data.db')
+  db = {
+    exec: (sql) => raw.exec(sql),
+    prepare: (sql) => {
+      const q = raw.query(sql)
+      return { all: (...p) => q.all(...p), get: (...p) => q.get(...p), run: (...p) => q.run(...p) }
+    },
+  }
+} else {
+  const { DatabaseSync } = await import('node:sqlite')
+  const raw = new DatabaseSync('server/data.db')
+  db = {
+    exec: (sql) => raw.exec(sql),
+    prepare: (sql) => {
+      const st = raw.prepare(sql)
+      return { all: (...p) => st.all(...p), get: (...p) => st.get(...p), run: (...p) => st.run(...p) }
+    },
+  }
+}
+
+export default db
+`;
+
   // Express server with SQLite — a working API the agent extends.
   const serverIndex = `import express from 'express'
 import cors from 'cors'
-import Database from 'better-sqlite3'
+import db from './db.js'
 
 const app = express()
-const PORT = process.env.API_PORT || 3001
-const db = new Database('server/data.db')
+// Mirrors vite.config: API port = web port + 1000, so multiple previews of
+// full-stack apps never fight over a fixed 3001.
+const PORT = Number(process.env.API_PORT) || (Number(process.env.PORT) ? Number(process.env.PORT) + 1000 : 3001)
 
-// Enable WAL for better concurrent read performance.
-db.pragma('journal_mode = WAL')
+// WAL for better concurrent read performance.
+db.exec('PRAGMA journal_mode = WAL')
 
 // Seed data on first boot — the agent adds more entities.
 db.exec(\`
@@ -611,8 +662,14 @@ app.listen(PORT, () => console.log(\`API on http://localhost:\${PORT}\`))
 `;
 
   // Frontend App that consumes the real API (replaces the placeholder shell).
+  // API calls go through import.meta.env.BASE_URL so they resolve under the
+  // tokenized preview base AND at '/' in a standalone `vite` run — a bare
+  // fetch('/api/...') escapes the base and 404s behind the preview proxy.
   const appWithApi = `import { useEffect, useState } from 'react'
 import { Button, Card, CardContent, Input, Badge } from './ui'
+
+// Prefija SIEMPRE las llamadas al backend con esta constante (ver vite.config).
+const API = import.meta.env.BASE_URL.replace(/\\/+$/, '') + '/api'
 
 type Item = { id: number; title: string; done: number }
 
@@ -625,7 +682,7 @@ export default function App() {
   const load = async () => {
     try {
       setError(null)
-      const res = await fetch('/api/items')
+      const res = await fetch(\`\${API}/items\`)
       if (!res.ok) throw new Error('Error al cargar')
       setItems(await res.json())
     } catch (e) {
@@ -639,7 +696,7 @@ export default function App() {
 
   const add = async () => {
     if (!title.trim()) return
-    const res = await fetch('/api/items', {
+    const res = await fetch(\`\${API}/items\`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
@@ -651,7 +708,7 @@ export default function App() {
   }
 
   const toggle = async (item: Item) => {
-    await fetch(\`/api/items/\${item.id}\`, {
+    await fetch(\`\${API}/items/\${item.id}\`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ done: !item.done }),
@@ -660,7 +717,7 @@ export default function App() {
   }
 
   const remove = async (id: number) => {
-    await fetch(\`/api/items/\${id}\`, { method: 'DELETE' })
+    await fetch(\`\${API}/items/\${id}\`, { method: 'DELETE' })
     load()
   }
 
@@ -715,6 +772,7 @@ export default function App() {
       { path: 'package.json', content: overrides.get('package.json') },
       { path: 'vite.config.ts', content: overrides.get('vite.config.ts') },
       { path: 'src/App.tsx', content: overrides.get('src/App.tsx') },
+      { path: 'server/db.js', content: serverDb },
       { path: 'server/index.js', content: serverIndex },
       { path: 'server/.gitignore', content: 'node_modules\n*.db\n*.db-wal\n*.db-shm\n' },
     ]);

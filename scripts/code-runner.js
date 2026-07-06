@@ -288,8 +288,14 @@ async function runDev(entry, projectId) {
   // Detect the framework for the right dev command + port flag.
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
   const isNext = !!deps.next;
-  const hasDevScript = pkg.scripts && pkg.scripts.dev;
-  entry.framework = isNext ? "next" : deps.vite ? "vite" : hasDevScript ? "custom" : "vite";
+  const devScript = String((pkg.scripts && pkg.scripts.dev) || "");
+  const hasDevScript = Boolean(devScript);
+  // A composite dev script (the full-stack starter: `concurrently "api" "web"`)
+  // must run AS-IS — forcing `bunx vite` here silently dropped the Express API,
+  // so "backend real" apps rendered but every /api call died. Port/base reach
+  // Vite through env (PORT/VITE_BASE, read by that starter's vite.config).
+  const isCompositeDev = /\bconcurrently\b/.test(devScript);
+  entry.framework = isNext ? "next" : isCompositeDev ? "custom" : deps.vite ? "vite" : hasDevScript ? "custom" : "vite";
 
   pushLog(entry, "$ bun install");
   const install = Bun.spawn(groupCmd(["bun", "install"]), { cwd, stdout: "pipe", stderr: "pipe" });
@@ -309,7 +315,11 @@ async function runDev(entry, projectId) {
   let cmd;
   if (isNext) {
     cmd = ["bunx", "next", "dev", "-H", "0.0.0.0", "-p", String(port)];
-  } else if (deps.vite || (hasDevScript && /vite/.test(pkg.scripts.dev || ""))) {
+  } else if (isCompositeDev) {
+    // Full-stack starter: concurrently boots API + web; flags can't reach the
+    // inner vite, so it reads PORT/VITE_BASE/API_PORT from the env below.
+    cmd = ["bun", "run", "dev"];
+  } else if (deps.vite || (hasDevScript && /vite/.test(devScript))) {
     cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
     if (entry.basePath) cmd.push("--base", entry.basePath);
   } else if (hasDevScript) {
@@ -336,6 +346,11 @@ async function runDev(entry, projectId) {
       // container hostname for ALL workspaces, including pre-existing ones
       // whose vite.config predates the allowedHosts fix in the starter.
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: process.env.VITE_EXTRA_ALLOWED_HOST || "runner",
+      // Composite (concurrently) projects can't take CLI flags, so the
+      // tokenized base + the derived API port travel via env instead. Plain
+      // vite starters ignore both — harmless.
+      VITE_BASE: entry.basePath || "/",
+      API_PORT: String(port + 1000),
     },
   });
   entry.proc = devProc;

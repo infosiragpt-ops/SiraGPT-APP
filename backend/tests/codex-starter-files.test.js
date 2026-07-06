@@ -83,6 +83,33 @@ test('project name is escaped everywhere (anti-injection)', () => {
   assert.equal(escapeHtml(`a&<>"'b`), 'a&amp;&lt;&gt;&quot;&#39;b');
 });
 
+test('full-stack starter runs on the Bun runner AND behind the tokenized base', () => {
+  const { fullStackStarterFiles } = require('../src/services/codex/starter-files');
+  const files = fullStackStarterFiles({ projectName: 'Demo FS' });
+  const by = (path) => files.find((f) => f.path === path);
+  const pkg = JSON.parse(by('package.json').content);
+  // No native deps (better-sqlite3's build script exits 127 in the slim Bun
+  // image) and no `npm run` nesting (the runner has no npm).
+  assert.equal(pkg.dependencies['better-sqlite3'], undefined);
+  assert.match(pkg.scripts.dev, /concurrently/);
+  assert.doesNotMatch(pkg.scripts.dev, /npm run/);
+  // Built-in sqlite drivers behind the adapter; server imports it.
+  const db = by('server/db.js').content;
+  assert.match(db, /bun:sqlite/);
+  assert.match(db, /node:sqlite/);
+  assert.match(by('server/index.js').content, /from '\.\/db\.js'/);
+  // Vite reads port/base from env (the runner launches `bun run dev`, no CLI
+  // flags reach the inner vite) and the /api proxy matches under ANY base.
+  const vite = by('vite.config.ts').content;
+  assert.match(vite, /process\.env\.PORT/);
+  assert.match(vite, /process\.env\.VITE_BASE/);
+  assert.match(vite, /\^\.\*\/api\//);
+  // Frontend prefixes API calls with BASE_URL — a bare /api escapes the base.
+  const app = by('src/App.tsx').content;
+  assert.match(app, /import\.meta\.env\.BASE_URL/);
+  assert.doesNotMatch(app, /fetch\('\/api\//);
+});
+
 test('empty or missing name falls back to a default', () => {
   const html = starterFiles({}).find((f) => f.path === 'index.html').content;
   assert.match(html, /Proyecto Codex/);
