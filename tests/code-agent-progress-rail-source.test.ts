@@ -167,6 +167,46 @@ describe("code-agent progress rail — sendPrompt inline wiring", () => {
   })
 })
 
+describe("code-agent progress rail — conversational turns stay chat-only", () => {
+  // The mobile screenshot bug: a bare "Hola" showed the full build pipeline
+  // ("Aplicando cambios al workspace" + Plan→…→Verificar rail) for a chat
+  // reply. Conversational turns must never drive the build rail.
+  it("sendPrompt derives the conversational flag from the override", () => {
+    assert.match(
+      sendPrompt(),
+      /const conversational = !!override\?\.conversational/,
+      "sendPrompt must read override.conversational to route chat turns away from the rail",
+    )
+  })
+
+  it("the apply-phase label is gated so chat turns never show 'Aplicando cambios'", () => {
+    const fn = sendPrompt()
+    const applyIdx = fn.indexOf('agentLabel: "Aplicando cambios al workspace"')
+    assert.notEqual(applyIdx, -1, "the apply label must still exist for real build turns")
+    const gate = fn.lastIndexOf("if (!conversational) {", applyIdx)
+    assert.ok(
+      gate !== -1 && applyIdx - gate < 400,
+      "the 'Aplicando cambios al workspace' patch must sit inside an if (!conversational) gate",
+    )
+  })
+
+  it("both conversational dispatch paths pass conversational: true", () => {
+    const matches = source.match(/conversational: true,/g) || []
+    assert.ok(
+      matches.length >= 2,
+      "the greeting and conversational dispatch paths must both mark the turn conversational",
+    )
+  })
+
+  it("the canned greeting only claims actions that really happened", () => {
+    assert.doesNotMatch(
+      source,
+      /Revisé el estado del proyecto|Preparé el plan de trabajo/,
+      "the no-model greeting must not fabricate project-review/plan actions",
+    )
+  })
+})
+
 describe("code-agent progress rail — render path", () => {
   it("computes liveAgentLabel from the turn's agentLabel", () => {
     assert.match(

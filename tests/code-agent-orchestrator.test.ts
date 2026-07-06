@@ -225,6 +225,15 @@ test("isBuildRequest / isBuildLog heuristics", () => {
   // …but a real build request that happens to be short is NOT a greeting.
   assert.equal(isQuickGreeting("hazme una app"), false)
   assert.equal(isQuickGreeting("crea un landing"), false)
+  // Greeting + short vocative tail is still a greeting (never a build run).
+  assert.equal(isQuickGreeting("hola amigo"), true)
+  assert.equal(isQuickGreeting("hola sira"), true)
+  assert.equal(isQuickGreeting("hey bro"), true)
+  assert.equal(isQuickGreeting("buenas equipo"), true)
+  assert.equal(isQuickGreeting("hola mi buen amigo"), false) // 3-word tail → not obviously social
+  // …but a tail that names app/data intent is a real request, not a greeting.
+  assert.equal(isQuickGreeting("hola inventario"), false)
+  assert.equal(isQuickGreeting("hola quiero una tienda"), false)
   assert.equal(isBuildLog("npm ERR! code ERESOLVE"), true)
   assert.equal(isBuildLog("buenas tardes"), false)
 })
