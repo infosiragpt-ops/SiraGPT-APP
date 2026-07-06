@@ -3,6 +3,46 @@
   "updatedAt": "2026-07-06T00:58:23.103Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
+  "distributionMilestone": {
+    "title": "Native Store Distribution v0.4.3",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1",
+    "status": "open",
+    "openIssues": 5,
+    "closedIssues": 0,
+    "issues": [
+      {
+        "number": 4,
+        "title": "Native distribution tracker: Mac, Windows, iPhone, Android",
+        "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
+        "scope": "parent-tracker"
+      },
+      {
+        "number": 5,
+        "title": "Android / Google Play publishing owner actions",
+        "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/5",
+        "scope": "android-googleplay"
+      },
+      {
+        "number": 6,
+        "title": "iPhone / App Store Connect signing and upload owner actions",
+        "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/6",
+        "scope": "ios-appstore"
+      },
+      {
+        "number": 7,
+        "title": "macOS Developer ID signing and notarization owner actions",
+        "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/7",
+        "scope": "macos"
+      },
+      {
+        "number": 8,
+        "title": "Windows code signing and Microsoft Store owner actions",
+        "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/8",
+        "scope": "windows"
+      }
+    ],
+    "note": "The native distribution tracker is split into platform-specific owner-action issues so Android, iPhone, macOS, and Windows signing/store blockers can be completed and verified independently."
+  },
   "latestQaRelease": {
     "tag": "native-qa-v0.4.3-bffcbf7",
     "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-bffcbf7",

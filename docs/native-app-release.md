@@ -94,6 +94,10 @@ Latest durable public QA release packet target SHA:
   `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-bffcbf7`.
   It contains `SiraGPT-bffcbf7.aab`, release manifests, `SHA256SUMS.txt`,
   preflight files, and the current owner handoff packet.
+- Native distribution milestone:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1`.
+  The milestone contains the parent tracker plus platform owner-action issues
+  for Android/Google Play, iPhone/App Store Connect, macOS, and Windows.
 - GitHub Actions diagnostics on `infosiragpt-ops/SiraGPT-APP`:
   - Repository visibility: `PUBLIC`.
   - Actions enabled: `true`.

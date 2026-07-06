@@ -11,6 +11,19 @@ type NativeReleaseStatus = {
   latestQaArtifactManifestRuns: {
     releaseAssets: string[]
   }
+  distributionMilestone: {
+    title: string
+    url: string
+    status: string
+    openIssues: number
+    closedIssues: number
+    issues: Array<{
+      number: number
+      title: string
+      url: string
+      scope: string
+    }>
+  }
   latestVerifiedRuns: {
     mobile: string
     desktop: string
@@ -110,6 +123,23 @@ describe("native release status traceability", () => {
 
     assert.equal(status.latestTraceabilityCommit.sha, status.latestTraceabilityCommit.validatedManagementSha)
     assert.equal(status.latestTraceabilityCommit.message, status.latestTraceabilityCommit.validatedManagementCommit)
+    assert.equal(status.distributionMilestone.title, "Native Store Distribution v0.4.3")
+    assert.match(status.distributionMilestone.url, /\/milestone\/1$/)
+    assert.equal(status.distributionMilestone.status, "open")
+    assert.equal(status.distributionMilestone.openIssues, 5)
+    assert.equal(status.distributionMilestone.closedIssues, 0)
+    assert.deepEqual(
+      status.distributionMilestone.issues.map((issue) => issue.number),
+      [4, 5, 6, 7, 8],
+    )
+    assert.deepEqual(
+      status.distributionMilestone.issues.map((issue) => issue.scope),
+      ["parent-tracker", "android-googleplay", "ios-appstore", "macos", "windows"],
+    )
+    for (const issue of status.distributionMilestone.issues) {
+      assert.match(issue.url, new RegExp(`/issues/${issue.number}$`))
+      assert.ok(issue.title.length > 0)
+    }
 
     assert.match(status.latestSignedAndroidRelease.tag, /^native-android-signed-/)
     assert.match(status.latestSignedAndroidRelease.url, /\/releases\/tag\/native-android-signed-/)

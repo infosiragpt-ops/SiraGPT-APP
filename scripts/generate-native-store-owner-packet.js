@@ -144,6 +144,7 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
     latestQaRelease: releaseStatus.latestQaRelease,
     latestVerifiedRuns: releaseStatus.latestVerifiedRuns,
     latestTraceabilityCommit: releaseStatus.latestTraceabilityCommit,
+    distributionMilestone: releaseStatus.distributionMilestone,
     latestOwnerPacket: ownerPacket,
     latestSignedPreflight: releaseStatus.latestSignedPreflight,
     outputDirectory: relative(outDir),
@@ -174,6 +175,7 @@ Generated: ${manifest.generatedAt}
 - QA binary target SHA: \`${manifest.qaBinaryTargetSha}\`
 - Latest owner packet: ${manifest.latestOwnerPacket?.zipUrl || "not recorded"}
 - Latest signed preflight: ${manifest.latestSignedPreflight?.url || "not recorded"}
+- Distribution milestone: ${manifest.distributionMilestone?.url || "not recorded"}
 
 This ZIP contains public store submission material and owner-action checklists for Android, iPhone, macOS, and Windows. It contains secret names only, not secret values. Do not add passwords, keystores, certificates, provisioning profiles, API private keys, cookies, recovery codes, or app-specific password values to this packet.
 

@@ -56,6 +56,12 @@ secrets. They must never be committed.
   (`sha256:5cc5c389e844b7f6bb303d7eeeb57dc92463fccf69bf0cd28e23b77de8758994`) preserves Android, iOS, macOS, and
   Windows folders plus original Windows filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
+- Distribution milestone: https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1
+- Platform owner-action issues:
+  - Android / Google Play: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/5
+  - iPhone / App Store Connect: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/6
+  - macOS Developer ID / notarization: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/7
+  - Windows signing / Microsoft Store: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/8
 - Latest owner handoff packet: `SiraGPT-native-store-owner-packet-bffcbf7.zip`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-bffcbf7/SiraGPT-native-store-owner-packet-bffcbf7.zip`)
   with SHA-256 `6b2e62e087483966c1a960d32aa1402cece5c5b3e19899870684ff443c61d8b2`.

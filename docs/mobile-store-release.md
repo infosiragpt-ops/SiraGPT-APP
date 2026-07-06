@@ -7,6 +7,10 @@
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-bffcbf7` contains QA packages for Android, iOS simulator, macOS, and Windows, plus a durable all-platform QA ZIP and the current owner handoff packet.
+- Native store distribution is tracked in milestone `Native Store Distribution v0.4.3`:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1`.
+  Platform owner-action issues are #5 Android/Google Play, #6 iPhone/App Store
+  Connect, #7 macOS, and #8 Windows.
 - The latest native artifact verification SHA is `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`; CI, CodeQL, native readiness, native mobile, native desktop, and Android signed release workflows are green for that native artifact set.
 - Android package signing is configured and verified by the signed AAB release
   `native-android-signed-v0.4.3-bffcbf7`.
