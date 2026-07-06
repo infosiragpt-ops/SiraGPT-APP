@@ -98,7 +98,15 @@ export function isQuickGreeting(text: string): boolean {
     "hola+|holi|holis|holas|ola|buenas|buenos dias|buen dia|buenas tardes|buenas noches|saludos|hey+|ey|hi|hello|hellow|yo|sup"
   const OPENER =
     "que tal|que onda|que hubo|que pasa|que mas|que haces|como estas|como esta|como vas|como va|como andas|como te va|todo bien|how are you|whats up|what s up"
-  return new RegExp(`^(?:(?:${GREET})(?: (?:${OPENER}))?|(?:${OPENER}))$`).test(t)
+  if (new RegExp(`^(?:(?:${GREET})(?: (?:${OPENER}))?|(?:${OPENER}))$`).test(t)) return true
+  // Greeting + short vocative tail ("hola amigo", "hola sira", "hey bro",
+  // "buenas equipo"): still a greeting, never a build. Without this, a social
+  // message that slips past the classifiers falls through to the build engine
+  // and spins a full run for a "hola". Tail is capped at 2 plain words and
+  // must not carry app/data intent ("hola inventario" stays a real request).
+  const vocative = t.match(new RegExp(`^(?:${GREET})((?: [a-z]{2,14}){1,2})$`))
+  if (vocative && !APP_GOAL_CUE.test(vocative[1])) return true
+  return false
 }
 
 /**
