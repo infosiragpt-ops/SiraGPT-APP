@@ -69,7 +69,7 @@ const BUILTIN_SKILLS = [
       '',
       '## Modelo',
       '- `src/types.ts`: interfaz por entidad con id (string), timestamps y campos tipados (nunca `any`).',
-      '- `src/store/<entidad>.ts`: estado con useState/useReducer en el componente raíz del módulo O un hook `use<Entidad>()` que encapsula CRUD + persistencia en localStorage (clave versionada `app:<entidad>:v1`).',
+      '- `src/store/<entidad>.ts`: estado con useState/useReducer en el componente raíz del módulo O un hook `use<Entidad>()` que encapsula CRUD + PERSISTENCIA REAL con `storage` de "../lib/storage" (`await storage.get`/`storage.set`, clave versionada `<entidad>:v1`) — sobrevive entre sesiones y dispositivos, no solo localStorage. Usa `storage.shared` si los datos son comunes a todos.',
       '- Datos de ejemplo realistas del dominio (5-8 filas) al primer arranque.',
       '',
       '## UI por entidad',

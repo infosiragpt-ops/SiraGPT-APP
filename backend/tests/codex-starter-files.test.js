@@ -23,7 +23,7 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   assert.deepEqual(paths, [
     'package.json', 'vite.config.ts', 'tsconfig.json', 'index.html',
     'src/main.tsx', 'src/App.tsx', 'src/index.css',
-    'src/lib/ai.ts',
+    'src/lib/ai.ts', 'src/lib/storage.ts',
     'src/ui/button.tsx', 'src/ui/card.tsx', 'src/ui/input.tsx', 'src/ui/badge.tsx', 'src/ui/index.ts',
     '.gitignore',
   ]);
@@ -45,6 +45,12 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   const app = files.find((f) => f.path === 'src/App.tsx').content;
   assert.match(app, /from '\.\/ui'/);
   assert.match(app, /Workspace listo/);
+  // Persistent KV storage helper: server-side persistence with personal +
+  // shared scopes (the apps' real data store, not just localStorage).
+  const storage = files.find((f) => f.path === 'src/lib/storage.ts').content;
+  assert.match(storage, /export const storage/);
+  assert.match(storage, /\/api\/apps-kv\//);
+  assert.match(storage, /shared:/);
   // index.html mounts the TSX entry into #root.
   const html = files.find((f) => f.path === 'index.html').content;
   assert.match(html, /<div id="root">/);

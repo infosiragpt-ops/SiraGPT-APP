@@ -57,6 +57,15 @@ preview.siragpt.com, preview-62-72-11-231.sslip.io {
 			header_down Content-Security-Policy "frame-ancestors https://siragpt.com https://www.siragpt.com"
 		}
 	}
+	# Public, cookie-less, rate-limited platform APIs the GENERATED apps call
+	# with relative fetches (the starter's src/lib helpers): the AI proxy and
+	# the artifact key-value store. Without these the apps 404 on this origin
+	# (askAI broke the moment previews moved off siragpt.com). Nothing here
+	# accepts cookie auth, so exposing them on the app origin adds no surface.
+	@appApis path /api/apps-ai/* /api/apps-kv/*
+	handle @appApis {
+		reverse_proxy backend:5000
+	}
 	handle {
 		respond "Not found" 404
 	}

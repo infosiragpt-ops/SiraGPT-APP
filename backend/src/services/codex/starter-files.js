@@ -217,6 +217,92 @@ export async function askAIStream(
 }
 `;
 
+  // Persistencia REAL sin backend propio: habla con el store KV de la
+  // plataforma (/api/apps-kv). Dos ámbitos: `storage` (personal, por
+  // dispositivo) y `storage.shared` (compartido entre todos los visitantes de
+  // la app). Cae a localStorage si el servicio no responde, así la app nunca
+  // se rompe. Ideal para trackers, diarios, tableros, ajustes guardados.
+  const storageHelperTs = `// Store KV persistente de SiraGPT (sin API key ni backend propio).
+type Json = unknown
+
+// namespace = identidad de la app. En el preview se deriva de la URL
+// (/api/codex/projects/<id>/preview/...); si no, un bucket estable por origen.
+function appNamespace(): string {
+  try {
+    const m = /\\/projects\\/([^/]+)\\/preview\\//.exec(location.pathname)
+    if (m) return m[1]
+    return 'app_' + btoa(location.host).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)
+  } catch {
+    return 'app_default'
+  }
+}
+
+// uid por dispositivo para el ámbito personal (persistido en localStorage).
+function deviceUid(): string {
+  try {
+    const k = 'sira-app-uid'
+    let v = localStorage.getItem(k)
+    if (!v) {
+      v = (crypto?.randomUUID?.() || String(Date.now()) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9-]/g, '')
+      localStorage.setItem(k, v)
+    }
+    return v
+  } catch {
+    return 'anon'
+  }
+}
+
+const NS = appNamespace()
+
+function makeScope(owner: string) {
+  const base = \`/api/apps-kv/\${encodeURIComponent(NS)}/\${encodeURIComponent(owner)}\`
+  const lkey = (key: string) => \`sira-kv:\${NS}:\${owner}:\${key}\`
+  return {
+    /** Lee un valor; null si no existe. Cae a localStorage si el servicio falla. */
+    async get<T = Json>(key: string): Promise<T | null> {
+      try {
+        const r = await fetch(\`\${base}/\${encodeURIComponent(key)}\`)
+        if (r.status === 404) return null
+        if (r.ok) return ((await r.json())?.value ?? null) as T | null
+      } catch { /* offline → fallback */ }
+      try {
+        const raw = localStorage.getItem(lkey(key))
+        return raw == null ? null : (JSON.parse(raw) as T)
+      } catch { return null }
+    },
+    /** Guarda un valor (cualquier JSON). Persiste también en localStorage como respaldo. */
+    async set(key: string, value: Json): Promise<void> {
+      try { localStorage.setItem(lkey(key), JSON.stringify(value)) } catch { /* quota */ }
+      try {
+        await fetch(\`\${base}/\${encodeURIComponent(key)}\`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        })
+      } catch { /* offline: queda el respaldo local */ }
+    },
+    /** Borra una clave. */
+    async remove(key: string): Promise<void> {
+      try { localStorage.removeItem(lkey(key)) } catch { /* ignore */ }
+      try { await fetch(\`\${base}/\${encodeURIComponent(key)}\`, { method: 'DELETE' }) } catch { /* offline */ }
+    },
+    /** Lista las claves guardadas (para trackers/listas). */
+    async keys(): Promise<string[]> {
+      try {
+        const r = await fetch(base)
+        if (r.ok) return (((await r.json())?.keys ?? []) as Array<{ key: string }>).map((k) => k.key)
+      } catch { /* offline */ }
+      return []
+    },
+  }
+}
+
+/** Ámbito PERSONAL (por dispositivo). \`storage.shared\` = ámbito COMPARTIDO. */
+export const storage = Object.assign(makeScope(deviceUid()), {
+  shared: makeScope('_shared'),
+})
+`;
+
   // Tailwind v4 entry + design tokens. Re-theme an app by editing the six
   // :root vars (light theme: flip color-scheme + the values); every class
   // like bg-surface / text-muted / border-line follows automatically.
@@ -384,6 +470,7 @@ export { Badge, type BadgeProps } from './badge'
     { path: 'src/App.tsx', content: appTsx },
     { path: 'src/index.css', content: indexCss },
     { path: 'src/lib/ai.ts', content: aiHelperTs },
+    { path: 'src/lib/storage.ts', content: storageHelperTs },
     { path: 'src/ui/button.tsx', content: uiButton },
     { path: 'src/ui/card.tsx', content: uiCard },
     { path: 'src/ui/input.tsx', content: uiInput },

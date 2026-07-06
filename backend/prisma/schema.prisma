@@ -2145,6 +2145,29 @@ model CodexProject {
   @@map("codex_projects")
 }
 
+// Persistent key-value store for GENERATED apps (SiraGPT Apps). Apps built by
+// the /code agent run unauthenticated in the preview and have no database of
+// their own; the starter's src/lib/storage.ts talks to /api/apps-kv so they
+// can persist real data (journals, trackers, leaderboards) with two scopes:
+//   · personal → ownerKey = a per-device uid the app stores in localStorage
+//   · shared   → ownerKey = '_shared' (all visitors of that app)
+// `namespace` isolates one app's data from another (derived from the preview
+// project id). No FK to codex_projects: the store is a loose, capped namespace
+// so an exported app keeps working even if the project record is gone.
+model AppKvEntry {
+  id        String   @id @default(cuid())
+  namespace String // app identity (project id, or a caller-declared bucket)
+  ownerKey  String // per-device uid for personal scope, or '_shared'
+  key       String
+  value     String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([namespace, ownerKey, key])
+  @@index([namespace, ownerKey])
+  @@map("app_kv_entries")
+}
+
 model CodexRun {
   id         String    @id @default(cuid())
   projectId  String
