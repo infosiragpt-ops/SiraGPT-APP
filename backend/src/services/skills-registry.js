@@ -395,6 +395,25 @@ function bootBuiltins() {
       ],
     },
     {
+      id: 'open_source_agent_radar',
+      label: 'Open Source Agent Radar',
+      category: 'agentic',
+      description: 'Compare trusted open-source agent, chat, workflow, and document projects, then translate their strongest ideas into SiraGPT-native contracts, validation gates, and guarded implementation plans.',
+      tools: ['source_research', 'license_audit', 'agent_capability_map', 'folder_capability_map', 'playbook_recommend', 'static_check'],
+      prerequisites: ['query_text'],
+      sideEffects: ['local_workspace_changes'],
+      idempotent: false,
+      clearance: 'enterprise',
+      outputKind: 'pair',
+      tags: ['opensource', 'open-source', 'agents', 'software-factory', 'benchmarks', 'architecture', 'rewrite-not-copy', 'no-vendoring'],
+      examples: [
+        {
+          when: 'user asks to find open-source projects to make SiraGPT more advanced',
+          call: 'build the OSS radar, recommend SiraGPT-native adaptations, enforce no-copy and validation gates',
+        },
+      ],
+    },
+    {
       id: 'data_analysis_viz',
       label: 'Data Analysis with Visualization',
       category: 'data',

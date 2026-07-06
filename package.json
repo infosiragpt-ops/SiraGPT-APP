@@ -116,6 +116,7 @@
     "skill:validate:agents": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts list --root .agents/skills --json",
     "agent:openclaw:map": "node backend/scripts/openclaw-playbook-map.js",
     "agent:openclaw:inventory": "node backend/scripts/openclaw-source-inventory.js",
+    "agent:opensource:map": "node backend/scripts/open-source-agent-radar.js",
     "agent:hermes:map": "node backend/scripts/hermes-playbook-map.js",
     "agent:platform:map": "node backend/scripts/platform-folder-map.js",
     "agent:platform:sync": "node backend/scripts/sync-platform-upstream.js",

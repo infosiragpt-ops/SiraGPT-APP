@@ -909,6 +909,16 @@ Este tracker registra lotes realmente implementados y validados en el estado act
 - Pruebas: se agregaron pruebas unitarias del modulo, pruebas de envelope y pruebas de integracion del controlador.
 - Verificacion: `node --test` focalizado, `npm test`, `bash scripts/verify-ui-lock.sh` y `git diff --check`.
 
+## Lote 125: radar open source para agentes avanzados
+
+- Estado: implementado y validado.
+- Mejora cubierta: convertir la investigacion de proyectos open source en contratos SiraGPT nativos, sin copiar runtime externo.
+- Cambio: se agrego `backend/src/services/agents/open-source-agent-radar.js` con matriz de referencias, roadmap P0/P1/P2, politica no-copy y comandos de validacion.
+- Cambio: se agrego `npm run agent:opensource:map` y la skill `open_source_agent_radar`.
+- Control: las referencias quedan en modo `reference_only`, con reglas de licencia, secretos y UI-lock antes de cualquier adopcion.
+- Pruebas: se agrego `tests/open-source-agent-radar.test.ts` para matriz, recomendaciones, Markdown y registro de skill.
+- Verificacion: `node -c`, prueba focalizada, scripts reales, `git diff --check`, `skill:validate:agents` y `check-secrets`.
+
 ## Siguientes lotes
 
-- Lote 125: agregar retencion configurable del historial diagnostico local.
+- Lote 126: agregar retencion configurable del historial diagnostico local.
