@@ -200,6 +200,16 @@ services:
       SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS: ${SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS:-600000}
       SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS: ${SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS:---max-old-space-size=4096}
       SIRAGPT_PROJECTS_DIR: ${SIRAGPT_PROJECTS_DIR:-/root/Desktop/sira-projects}
+      # Scientific search (/research over 16 open sources — OpenAlex, CrossRef,
+      # arXiv, PubMed, CORE, Semantic Scholar, DOAJ, DBLP, DataCite, SciELO,
+      # Redalyc, Scopus, WoS, bioRxiv, medRxiv, Europe PMC). The email enables
+      # the polite/higher-rate pool for OpenAlex/CrossRef/PubMed AND Unpaywall
+      # free-PDF backfill; the keys are OPTIONAL (search works key-less) and only
+      # lift rate limits. All read from .env; empty by default.
+      SIRAGPT_RESEARCH_EMAIL: ${SIRAGPT_RESEARCH_EMAIL:-}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+      NCBI_API_KEY: ${NCBI_API_KEY:-}
+      CORE_API_KEY: ${CORE_API_KEY:-}
       MAX_FILE_SIZE: ${MAX_FILE_SIZE:-50}
       UPLOAD_DIR: /app/uploads
       RATE_LIMIT_STORE: redis

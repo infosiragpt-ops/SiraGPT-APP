@@ -7561,20 +7561,55 @@ But first, you need to connect your Spotify account securely using the button be
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
-          // /research → one-shot POST
+          // /research → one-shot POST over 16 sources; ask for a rich set and
+          // free OA PDFs (Unpaywall, gated on SIRAGPT_RESEARCH_EMAIL server-side).
           const res = await fetch(url, {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-            body: JSON.stringify({ query }),
+            body: JSON.stringify({ query, limit: 25, unpaywall: true }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
-          toast.success(`📚 ${data.count || 0} papers · ${data.providers?.length || 0} sources`, {
-            id: toastId,
-            duration: 6000,
-            description: data.papers?.slice(0, 3).map((p: any) => `• ${p.title}`).join("\n") || "",
-          });
+          // Rank by citations (most-cited first) for the student; nulls last.
+          const ranked = Array.isArray(data.papers)
+            ? [...data.papers].sort(
+                (a: any, b: any) => (Number(b?.citations) || 0) - (Number(a?.citations) || 0),
+              )
+            : [];
+          const payload = {
+            query,
+            count: typeof data.count === "number" ? data.count : ranked.length,
+            providers: Array.isArray(data.providers) ? data.providers : [],
+            papers: ranked.slice(0, 25),
+          };
+          // Persist a rich, clear result card in the conversation instead of a
+          // vanishing toast: an assistant message carrying a ```scientific-papers```
+          // fenced block that MessageComponent renders as PapersResultCard.
+          if (ranked.length > 0 && currentChat?.id) {
+            const paperMsg = {
+              id: `msg-papers-${Date.now()}`,
+              chatId: currentChat.id,
+              role: "ASSISTANT" as const,
+              content:
+                "```scientific-papers\n" + JSON.stringify(payload) + "\n```",
+              timestamp: new Date().toISOString(),
+            };
+            setCurrentChat?.((prev: any) => {
+              if (!prev || prev.id !== currentChat.id) return prev;
+              return { ...prev, messages: [...(prev.messages || []), paperMsg] };
+            });
+            toast.success(`📚 ${payload.count} artículos · ${payload.providers.length} fuentes`, {
+              id: toastId,
+              duration: 4000,
+              description: "Ordenados por número de citas ↓",
+            });
+          } else {
+            toast.error(`Sin resultados para “${query}”. Prueba términos en inglés o más específicos.`, {
+              id: toastId,
+              duration: 6000,
+            });
+          }
         } else {
           // /goal → SSE stream the agent phases
           const res = await fetch(url, {

@@ -72,6 +72,7 @@ import { DocArtifactDisplay } from './doc/doc-artifact-display';
 import { InteractiveArtifactDisplay } from './artifact/interactive-artifact-display';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
+import { PapersResultCard } from "./papers-result-card"
 import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ExtractedDataDownload from "./ExtractedDataDownload"
@@ -1416,6 +1417,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     return null;
                 }
             }
+            if (language === 'scientific-papers') {
+                try {
+                    return <PapersResultCard data={JSON.parse(codeString)} />;
+                } catch {
+                    return null;
+                }
+            }
             if (isExecutableArtifact(language, codeString)) {
                 return <ArtifactCard code={codeString} language={language} />;
             }
@@ -1529,6 +1537,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         try {
                             const state = JSON.parse(codeString);
                             return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
+                        } catch {
+                            return null;
+                        }
+                    }
+                    if (lang === 'scientific-papers') {
+                        try {
+                            return <PapersResultCard data={JSON.parse(codeString)} />;
                         } catch {
                             return null;
                         }
