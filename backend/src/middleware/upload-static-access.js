@@ -43,6 +43,13 @@ function resolveConfinedPath(baseDir, relativePath) {
   return candidate;
 }
 
+// A GPT avatar upload — multer names it `icon-<timestamp>-<hash>.<ext>` (the
+// form fieldname is "icon"). It lives directly under the owner's dir but is
+// shown in the PUBLIC GPT store, so it must be readable without the owner's
+// token. The pattern is specific to GPT icon uploads; the files are
+// non-sensitive avatars.
+const GPT_ICON_FILE = /^icon-\d+-[0-9a-f]{6,}\.(png|jpe?g|gif|webp|svg|avif)$/i;
+
 function classifyUploadPath(relativePath) {
   const parts = String(relativePath || '').split('/').filter(Boolean);
   const first = parts[0];
@@ -57,6 +64,11 @@ function classifyUploadPath(relativePath) {
 
   if (first === 'documents') {
     return parts[1] ? { kind: 'owned', userId: parts[1] } : { kind: 'blocked' };
+  }
+
+  // Public GPT avatar: `<userId>/icon-<ts>-<hash>.<ext>` (exactly two segments).
+  if (parts.length === 2 && GPT_ICON_FILE.test(parts[1])) {
+    return { kind: 'public' };
   }
 
   return { kind: 'owned', userId: first };

@@ -80,21 +80,37 @@ function useDebounce<T>(value: T, delay: number): T {
 function resolveIconSrc(iconUrl?: string) {
   if (!iconUrl) return null
   if (/^(https?:|data:|blob:)/i.test(iconUrl)) return iconUrl
-  if (iconUrl.startsWith("/uploads") || iconUrl.startsWith("/upload")) {
-    const imageHost = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000"
-    return `${imageHost}${iconUrl}`
+  if (iconUrl.startsWith("/")) {
+    // Same-origin by default: the reverse proxy routes /uploads to the backend,
+    // so a relative path loads from siragpt.com. Only prepend an absolute image
+    // host when one is explicitly configured AND it isn't localhost (which is
+    // unreachable from the user's browser — the old default that broke icons).
+    const imageHost = process.env.NEXT_PUBLIC_IMAGE_URL || ""
+    if (imageHost && !/localhost|127\.0\.0\.1/i.test(imageHost)) {
+      return `${imageHost.replace(/\/$/, "")}${iconUrl}`
+    }
+    return iconUrl
   }
-  if (iconUrl.startsWith("/")) return iconUrl
   return null
 }
 
 function GPTIcon({ gpt }: { gpt: CustomGPT }) {
   const iconSrc = resolveIconSrc(gpt.iconUrl)
+  // A broken/unreachable icon URL must degrade to the Bot glyph — never the
+  // browser's ugly broken-image placeholder (the "?" box the user reported).
+  const [failed, setFailed] = useState(false)
 
-  if (iconSrc) {
+  if (iconSrc && !failed) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={iconSrc} alt={`${gpt.name} icon`} loading="lazy" decoding="async" className="h-full w-full rounded-full object-cover" />
+      <img
+        src={iconSrc}
+        alt={`${gpt.name} icon`}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className="h-full w-full rounded-full object-cover"
+      />
     )
   }
 

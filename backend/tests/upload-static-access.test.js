@@ -57,6 +57,12 @@ describe('static upload access guard', () => {
     assert.deepEqual(classifyUploadPath('images/generated.png'), { kind: 'public' });
     assert.deepEqual(classifyUploadPath('documents/user-a/report.txt'), { kind: 'owned', userId: 'user-a' });
     assert.deepEqual(classifyUploadPath('screenshots/session-1/shot.png'), { kind: 'blocked' });
+    // GPT avatars (icon-<ts>-<hash>.<ext>) are public — shown in the GPT store.
+    assert.deepEqual(classifyUploadPath('user-a/icon-1783372450408-bf21d362bb8d.png'), { kind: 'public' });
+    assert.deepEqual(classifyUploadPath('user-a/icon-1-abcdef123456.webp'), { kind: 'public' });
+    // A non-icon file under the same dir stays owned; a sub-nested icon too.
+    assert.deepEqual(classifyUploadPath('user-a/secret.pdf'), { kind: 'owned', userId: 'user-a' });
+    assert.deepEqual(classifyUploadPath('user-a/sub/icon-1-abcdef123456.png'), { kind: 'owned', userId: 'user-a' });
   });
 
   test('requires authentication for user-scoped uploads', async () => {
