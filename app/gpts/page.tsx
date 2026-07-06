@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTFilters } from "@/lib/gpts-service"
 import { useChat } from "@/lib/chat-context-integrated"
+import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 
 type VisibilityFilter = "all" | "mine" | "public"
 
@@ -77,21 +78,16 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue
 }
 
+function getUploadAuthToken() {
+  if (typeof window === "undefined") return null
+  return window.localStorage?.getItem("auth-token") || null
+}
+
 function resolveIconSrc(iconUrl?: string) {
-  if (!iconUrl) return null
-  if (/^(https?:|data:|blob:)/i.test(iconUrl)) return iconUrl
-  if (iconUrl.startsWith("/")) {
-    // Same-origin by default: the reverse proxy routes /uploads to the backend,
-    // so a relative path loads from siragpt.com. Only prepend an absolute image
-    // host when one is explicitly configured AND it isn't localhost (which is
-    // unreachable from the user's browser — the old default that broke icons).
-    const imageHost = process.env.NEXT_PUBLIC_IMAGE_URL || ""
-    if (imageHost && !/localhost|127\.0\.0\.1/i.test(imageHost)) {
-      return `${imageHost.replace(/\/$/, "")}${iconUrl}`
-    }
-    return iconUrl
-  }
-  return null
+  return resolveGptIconImageUrl(iconUrl, {
+    token: getUploadAuthToken(),
+    baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
+  })
 }
 
 function GPTIcon({ gpt }: { gpt: CustomGPT }) {
@@ -99,6 +95,7 @@ function GPTIcon({ gpt }: { gpt: CustomGPT }) {
   // A broken/unreachable icon URL must degrade to the Bot glyph — never the
   // browser's ugly broken-image placeholder (the "?" box the user reported).
   const [failed, setFailed] = useState(false)
+  const textIcon = String(gpt.iconUrl || "").trim()
 
   if (iconSrc && !failed) {
     return (
@@ -112,6 +109,10 @@ function GPTIcon({ gpt }: { gpt: CustomGPT }) {
         className="h-full w-full rounded-full object-cover"
       />
     )
+  }
+
+  if (textIcon && !/^https?:|data:|blob:/i.test(textIcon) && !textIcon.startsWith("/")) {
+    return <span className="text-2xl leading-none">{textIcon}</span>
   }
 
   return <Bot className="h-9 w-9 text-zinc-950" />

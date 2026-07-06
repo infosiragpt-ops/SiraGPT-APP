@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTKnowledgeFile } from "@/lib/gpts-service"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { GptActionsEditor, type GptAction } from "@/components/gpts/gpt-actions-editor"
@@ -50,6 +51,18 @@ const liquidField =
 
 const liquidGhost =
   "rounded-full border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl hover:bg-white/90 hover:text-zinc-950 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
+
+function getUploadAuthToken() {
+  if (typeof window === "undefined") return null
+  return window.localStorage?.getItem("auth-token") || null
+}
+
+function resolveIconPreviewUrl(iconUrl?: string | null) {
+  return resolveGptIconImageUrl(iconUrl, {
+    token: getUploadAuthToken(),
+    baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
+  })
+}
 
 interface GPTFormData {
   name: string
@@ -181,10 +194,7 @@ export default function CreateGPTPage() {
         }
       })
 
-      // If existing GPT has an icon URL, show it as preview
-      if (gpt.iconUrl && (gpt.iconUrl.startsWith('http') || gpt.iconUrl.startsWith('https') || gpt.iconUrl.startsWith('data:'))) {
-        setUploadedImage(gpt.iconUrl)
-      }
+      setUploadedImage(resolveIconPreviewUrl(gpt.iconUrl))
 
       // Load existing knowledge files (best-effort — a failure here must not
       // block editing the rest of the GPT).

@@ -27,6 +27,7 @@ describe('static upload access guard', () => {
     fs.mkdirSync(path.join(uploadDir, 'user-b'), { recursive: true });
     fs.mkdirSync(path.join(uploadDir, 'documents', 'user-a'), { recursive: true });
     fs.mkdirSync(path.join(uploadDir, 'documents', 'user-b'), { recursive: true });
+    fs.mkdirSync(path.join(uploadDir, 'gpt-icons'), { recursive: true });
     fs.mkdirSync(path.join(uploadDir, 'images'), { recursive: true });
     fs.mkdirSync(path.join(uploadDir, 'screenshots', 'session-1'), { recursive: true });
 
@@ -34,6 +35,7 @@ describe('static upload access guard', () => {
     fs.writeFileSync(path.join(uploadDir, 'user-b', 'private.txt'), 'private user b');
     fs.writeFileSync(path.join(uploadDir, 'documents', 'user-a', 'report.txt'), 'document user a');
     fs.writeFileSync(path.join(uploadDir, 'documents', 'user-b', 'report.txt'), 'document user b');
+    fs.writeFileSync(path.join(uploadDir, 'gpt-icons', 'assistant.png'), 'public gpt icon');
     fs.writeFileSync(path.join(uploadDir, 'images', 'public.txt'), 'public image asset');
     fs.writeFileSync(path.join(uploadDir, 'screenshots', 'session-1', 'shot.png'), 'internal screenshot');
   });
@@ -54,6 +56,7 @@ describe('static upload access guard', () => {
   test('classifies public, owned, and blocked upload paths', () => {
     assert.equal(normaliseUploadPath('/user-a/private.txt'), 'user-a/private.txt');
     assert.equal(normaliseUploadPath('/%2e%2e/private.txt'), null);
+    assert.deepEqual(classifyUploadPath('gpt-icons/assistant.png'), { kind: 'public' });
     assert.deepEqual(classifyUploadPath('images/generated.png'), { kind: 'public' });
     assert.deepEqual(classifyUploadPath('documents/user-a/report.txt'), { kind: 'owned', userId: 'user-a' });
     assert.deepEqual(classifyUploadPath('screenshots/session-1/shot.png'), { kind: 'blocked' });
@@ -117,6 +120,13 @@ describe('static upload access guard', () => {
 
     assert.equal(res.status, 200);
     assert.equal(res.text, 'public image asset');
+  });
+
+  test('serves GPT icons publicly for store listings', async () => {
+    const res = await request(buildApp()).get('/uploads/gpt-icons/assistant.png');
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.toString('utf8'), 'public gpt icon');
   });
 
   test('does not expose internal upload working directories through static hosting', async () => {

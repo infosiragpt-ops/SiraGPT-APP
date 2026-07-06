@@ -368,6 +368,7 @@ const intentRoutes = require('./src/routes/intent');
 const circuitAttributionRoutes = require('./src/routes/circuit-attribution');
 const attributionExplainerRoutes = require('./src/routes/attribution-explainer');
 const attributionToolkitRoutes = require('./src/routes/attribution-toolkit');
+const uploadMiddleware = require('./src/middleware/upload');
 const attributionStackRoutes = require('./src/routes/attribution-stack');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
@@ -824,7 +825,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // Static files + hardened presentation downloads
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = uploadMiddleware.uploadDir || path.join(__dirname, 'uploads');
 const presentationsDir = path.join(uploadsDir, 'presentations');
 
 app.get('/uploads/presentations/:filename/download', async (req, res) => {

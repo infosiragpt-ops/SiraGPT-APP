@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 
 const PUBLIC_UPLOAD_PREFIXES = new Set([
   'audio',
+  'gpt-icons',
   'images',
   'presentations',
 ]);
