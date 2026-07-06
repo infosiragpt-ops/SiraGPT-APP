@@ -1582,6 +1582,10 @@ export function AICodeChatPanel() {
         autoApply?: boolean
         /** Skip AGENT_STYLE_BLOCK (dashboard narration) — plain chat answers. */
         plainStyle?: boolean
+        /** Pure chat turn (greeting/question/meta): never show the 5-step
+         *  build rail nor "Aplicando cambios" — the agent is talking, not
+         *  building. Implies no file work in this turn. */
+        conversational?: boolean
         /** Phrasing for the spoken completion digest (default "patch");
          *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
         spokenKind?: "patch" | "debug"
@@ -1616,6 +1620,11 @@ export function AICodeChatPanel() {
       // prompt can be overridden per role (landing generator, SRE, …).
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
+      // A conversational turn (greeting/question/meta) is a CHAT, not a build:
+      // no 5-step rail, no "Aplicando cambios al workspace" — just a light
+      // thinking label while the reply streams. CodeAgentProgress renders null
+      // when agentPhases is absent, so the rail simply never appears.
+      const conversational = !!override?.conversational
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
@@ -1624,8 +1633,12 @@ export function AICodeChatPanel() {
           role: "assistant",
           content: "",
           streaming: true,
-          agentLabel: "Planificando el turno",
-          agentPhases: buildCodeAgentPhases("plan"),
+          ...(conversational
+            ? { agentLabel: "Pensando" }
+            : {
+                agentLabel: "Planificando el turno",
+                agentPhases: buildCodeAgentPhases("plan"),
+              }),
         },
       ])
       setInput("")
@@ -1658,17 +1671,19 @@ export function AICodeChatPanel() {
           ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
-      patchAssistant({
-        agentLabel: includeContext ? "Leyendo contexto del workspace" : "Preparando generación",
-        agentPhases: buildCodeAgentPhases("context", {
-          context: {
-            status: "running",
-            detail: includeContext
-              ? `${Object.keys(files).length} archivo(s) disponibles`
-              : "Sin contexto del workspace",
-          },
-        }),
-      })
+      if (!conversational) {
+        patchAssistant({
+          agentLabel: includeContext ? "Leyendo contexto del workspace" : "Preparando generación",
+          agentPhases: buildCodeAgentPhases("context", {
+            context: {
+              status: "running",
+              detail: includeContext
+                ? `${Object.keys(files).length} archivo(s) disponibles`
+                : "Sin contexto del workspace",
+            },
+          }),
+        })
+      }
 
       // Accumulate the streamed answer locally so onDone can auto-apply the
       // generated files without reading it back out of a setState updater
@@ -1680,12 +1695,16 @@ export function AICodeChatPanel() {
       let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
 
       try {
-        patchAssistant({
-          agentLabel: "Generando respuesta con el agente de código",
-          agentPhases: buildCodeAgentPhases("generate", {
-            context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
-          }),
-        })
+        if (conversational) {
+          patchAssistant({ agentLabel: "Respondiendo" })
+        } else {
+          patchAssistant({
+            agentLabel: "Generando respuesta con el agente de código",
+            agentPhases: buildCodeAgentPhases("generate", {
+              context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+            }),
+          })
+        }
         await apiClient.generateAIStream(
           {
             provider: activeProvider,
@@ -1724,13 +1743,15 @@ export function AICodeChatPanel() {
             // never apply. `applied` feeds the Worked-Summary/action-log metrics
             // on the turn (real numbers).
             let applied: Array<{ path: string; content: string }> = []
-            patchAssistant({
-              agentLabel: "Aplicando cambios al workspace",
-              agentPhases: buildCodeAgentPhases("apply", {
-                context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                generate: { status: "done", detail: "Stream completado" },
-              }),
-            })
+            if (!conversational) {
+              patchAssistant({
+                agentLabel: "Aplicando cambios al workspace",
+                agentPhases: buildCodeAgentPhases("apply", {
+                  context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                  generate: { status: "done", detail: "Stream completado" },
+                }),
+              })
+            }
             if (override?.autoApply ?? (composerMode === "app" || composerMode === "build")) {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
@@ -1778,17 +1799,22 @@ export function AICodeChatPanel() {
             setTurns((prev) =>
               prev.map((t) => {
                 if (t.id !== assistantId) return t
-                const base = {
-                  ...t,
-                  streaming: false,
-                  agentLabel: "Turno completado",
-                  agentPhases: buildCodeAgentPhases("verify", {
-                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                    generate: { status: "done", detail: "Respuesta generada" },
-                    apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
-                    verify: { status: "done", detail: verifyDetail },
-                  }),
-                }
+                // Conversational close: the turn ends quietly (no rail, no
+                // "Turno completado" banner) — like any chat answer. The token
+                // usage still attaches below so costs stay visible.
+                const base = conversational
+                  ? { ...t, streaming: false, agentLabel: undefined }
+                  : {
+                      ...t,
+                      streaming: false,
+                      agentLabel: "Turno completado",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                        generate: { status: "done", detail: "Respuesta generada" },
+                        apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                        verify: { status: "done", detail: verifyDetail },
+                      }),
+                    }
                 // Attach the Worked Summary when the turn did file work OR the
                 // stream reported real token usage (the Agent Usage figure).
                 if (applied.length > 0 || usage) {
@@ -1800,7 +1826,9 @@ export function AICodeChatPanel() {
                   // Even a no-file text answer shows an action row (the model
                   // reasoned + produced the reply).
                   const effectiveActions =
-                    actions.length > 0 ? actions : [{ kind: "reasoning" as const, label: "Genero la respuesta" }]
+                    actions.length > 0
+                      ? actions
+                      : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
                   const withUsage = usage
                     ? {
                         ...metrics,
@@ -1855,9 +1883,13 @@ export function AICodeChatPanel() {
                         ...t,
                         streaming: false,
                         agentLabel: "Generación detenida",
-                        agentPhases: buildCodeAgentPhases("generate", {
-                          generate: { status: "done", detail: "Detenida" },
-                        }),
+                        ...(conversational
+                          ? {}
+                          : {
+                              agentPhases: buildCodeAgentPhases("generate", {
+                                generate: { status: "done", detail: "Detenida" },
+                              }),
+                            }),
                         content: t.content
                           ? `${t.content}\n\n_Generación detenida._`
                           : "_Generación detenida — vuelve a enviar para reintentar._",
@@ -1866,9 +1898,13 @@ export function AICodeChatPanel() {
                         ...t,
                         streaming: false,
                         agentLabel: "Error en el turno",
-                        agentPhases: buildCodeAgentPhases("generate", {
-                          generate: { status: "error", detail: msg },
-                        }),
+                        ...(conversational
+                          ? {}
+                          : {
+                              agentPhases: buildCodeAgentPhases("generate", {
+                                generate: { status: "error", detail: msg },
+                              }),
+                            }),
                         content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
                       }
                   : t,
@@ -1890,9 +1926,13 @@ export function AICodeChatPanel() {
           patchAssistant({
             streaming: false,
             agentLabel: "Generación detenida",
-            agentPhases: buildCodeAgentPhases("generate", {
-              generate: { status: "done", detail: "Detenida" },
-            }),
+            ...(conversational
+              ? {}
+              : {
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "done", detail: "Detenida" },
+                  }),
+                }),
           })
         } else {
           // Claude Code parity: when the CHOSEN model produced nothing even
@@ -1924,9 +1964,13 @@ export function AICodeChatPanel() {
           patchAssistant({
             streaming: false,
             agentLabel: "Error en el turno",
-            agentPhases: buildCodeAgentPhases("generate", {
-              generate: { status: "error", detail: err?.message || "Error en el chat de código" },
-            }),
+            ...(conversational
+              ? {}
+              : {
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: err?.message || "Error en el chat de código" },
+                  }),
+                }),
           })
         }
         if (abortRef.current === controller) {
@@ -3214,6 +3258,7 @@ export function AICodeChatPanel() {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
             autoApply: false,
             plainStyle: true,
+            conversational: true,
             files: attachedFileIds,
           })
           patchAgentState(sid, (s) => ({ ...s, phase: s.phase === "intake" ? "idle" : s.phase }))
@@ -3231,13 +3276,10 @@ export function AICodeChatPanel() {
             role: "assistant",
             content: greeting,
             streaming: false,
-            // The action row for the greeting: honest, minimal steps the agent
-            // took (no fabricated file work). Renders the "N acciones" chip.
-            actions: [
-              { kind: "reasoning", label: "Entendí tu saludo" },
-              { kind: "reasoning", label: "Revisé el estado del proyecto" },
-              { kind: "reasoning", label: "Preparé el plan de trabajo" },
-            ],
+            // The action row for the greeting: only what REALLY happened (a
+            // greeting needs no project review nor plan — claiming so would
+            // fabricate work the agent never did).
+            actions: [{ kind: "reasoning", label: "Entendí tu saludo" }],
             // Voice the greeting with the BROWSER's built-in speech synthesis
             // (Web Speech API) — 100% local, no API key, no server/credit cost.
             // ChatBubble renders an inline voice player from this text.
@@ -3260,6 +3302,7 @@ export function AICodeChatPanel() {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
             autoApply: false,
             plainStyle: true,
+            conversational: true,
             files: attachedFileIds,
           })
         } else {

@@ -205,6 +205,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     status: "owner-action-required",
     repo: actualRepo,
     trackerUrl: status.distributionTrackerUrl,
+    distributionMilestone: status.distributionMilestone,
     app: {
       name: metadata.app?.name,
       supportEmail: metadata.app?.supportEmail,
@@ -247,6 +248,27 @@ function renderMarkdown(handoff) {
   lines.push(`Repository: \`${handoff.repo}\``)
   lines.push(`Tracker: ${handoff.trackerUrl}`)
   lines.push("")
+  if (handoff.distributionMilestone?.title) {
+    lines.push("## Distribution Work Queue")
+    lines.push("")
+    lines.push(`- Milestone: \`${handoff.distributionMilestone.title}\``)
+    lines.push(`- URL: ${handoff.distributionMilestone.url}`)
+    lines.push(`- Status: \`${handoff.distributionMilestone.status}\``)
+    lines.push(`- Open issues: ${handoff.distributionMilestone.openIssues}`)
+    lines.push(`- Closed issues: ${handoff.distributionMilestone.closedIssues}`)
+    if (handoff.distributionMilestone.note) {
+      lines.push(`- Note: ${handoff.distributionMilestone.note}`)
+    }
+    if (handoff.distributionMilestone.issues?.length) {
+      lines.push("")
+      lines.push("Platform issues:")
+      lines.push("")
+      for (const issue of handoff.distributionMilestone.issues) {
+        lines.push(`- #${issue.number} ${issue.title}: ${issue.url}`)
+      }
+    }
+    lines.push("")
+  }
   lines.push("This packet contains secret names and owner actions only. It must not contain passwords, certificates, keystores, provisioning profiles, API private keys, cookies, or recovery codes.")
   lines.push("")
   lines.push("## Current App Identity")

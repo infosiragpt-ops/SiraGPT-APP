@@ -19,51 +19,60 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
-- Latest public QA packet: `native-qa-v0.4.3-e6062026`
-  (`e6062026f64e1e29103fa3818d17cf6faef09734`)
+- Latest public QA packet: `native-qa-v0.4.3-bffcbf7`
+  (`bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`)
 - Last verified native QA runs:
-  - Mobile: `28751219114`
-  - Desktop: `28751220141`
-  - Readiness report: `28751218198`
-  - CI: `28750893663`
+  - Mobile: `28760576620`
+  - Desktop: `28760576641`
+  - Readiness report: `28760576640`
+  - CI: `28759688295`
+  - CodeQL: `28759689486`
+  - Android signed release packages: `28760576624`
   - Docker: `28735031878`
 - Current production-main wrapper validation: SHA
-  `e6062026f64e1e29103fa3818d17cf6faef09734`
-  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`) is green in CI, Native readiness report, Native mobile
-  builds, and Native desktop builds. These runs generated unsigned QA
-  artifacts for Android, iPhone simulator, macOS, and Windows with
+  `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`
+  (`chore(ui-lock): refresh code panel baseline`) is green in CI, CodeQL,
+  Native readiness report, Native mobile builds, Native desktop builds, and
+  Android signed release packages. These runs generated QA artifacts for
+  Android, iPhone simulator, macOS, and Windows with
   `native-release-manifest.json`, `native-release-manifest.md`, and
   `SHA256SUMS.txt`. The downloaded artifact contents include
-  `SiraGPT-e606202-debug.apk`,
-  `SiraGPT-e606202-unsigned-release.aab`,
-  `SiraGPT-e606202-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
+  `SiraGPT-bffcbf7-debug.apk`,
+  `SiraGPT-bffcbf7-signed-release.aab`,
+  `SiraGPT-bffcbf7-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
   `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
   `SiraGPT 0.4.3.exe`.
-- Latest native artifact verification SHA: `e6062026f64e1e29103fa3818d17cf6faef09734`
-  (`fix(codex): resumed runs actually restart — BullMQ jobId collision closed`)
+- Latest native artifact verification SHA: `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`
+  (`chore(ui-lock): refresh code panel baseline`)
 - Management/traceability SHA validated before this packet refresh:
-  `8101bb62c625c6980aebda2dfd0110e81d1be07e`
-  (`docs(native): publish current actions diagnostics`)
-- Latest QA artifact manifest verification: mobile run `28751219114` and
-  desktop run `28751220141` were downloaded and each Android, iOS
+  `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`
+  (`chore(ui-lock): refresh code panel baseline`)
+- Latest QA artifact manifest verification: mobile run `28760576620` and
+  desktop run `28760576641` were downloaded and each Android, iOS
   simulator, macOS, and Windows artifact upload includes
   `native-release-manifest.json`, `native-release-manifest.md`, and
   `SHA256SUMS.txt`.
-- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-e6062026.zip`
-  (`sha256:9e677f6cb8a8b7f09efb707fdaa8ca710d4aabf9ceb2e2cebe868af4ab0fe23c`) preserves Android, iOS, macOS, and
+- Durable QA ZIP: `SiraGPT-native-qa-v0.4.3-bffcbf7.zip`
+  (`sha256:5cc5c389e844b7f6bb303d7eeeb57dc92463fccf69bf0cd28e23b77de8758994`) preserves Android, iOS, macOS, and
   Windows folders plus original Windows filenames.
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-4a5e5f8e.zip`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-4a5e5f8/SiraGPT-native-store-owner-packet-4a5e5f8e.zip`)
-  with SHA-256 `da851aece87aa8427a37f9ab264237e31ea4cf259b9cc4c381f8512278f9b54b`.
+- Distribution milestone: https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1
+- Platform owner-action issues:
+  - Android / Google Play: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/5
+  - iPhone / App Store Connect: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/6
+  - macOS Developer ID / notarization: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/7
+  - Windows signing / Microsoft Store: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/8
+- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-bffcbf7.zip`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-bffcbf7/SiraGPT-native-store-owner-packet-bffcbf7.zip`)
+  with SHA-256 `6b2e62e087483966c1a960d32aa1402cece5c5b3e19899870684ff443c61d8b2`.
 - Latest signed release preflight: `28748232904`
   (`https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`) stopped before package runners because signing
   secrets are still missing, after uploading `siragpt-native-signed-release-preflight`
   with `preflight.md` and `preflight.json`.
-- Latest signed Android release: `native-android-signed-v0.4.3-4a5e5f8`
-  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-4a5e5f8`) produced
-  `SiraGPT-4a5e5f8.aab` from SHA
-  `4a5e5f8e024d6e4b9fdeb3f5e399d7558612da42`.
+- Latest signed Android release: `native-android-signed-v0.4.3-bffcbf7`
+  (`https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-bffcbf7`) produced
+  `SiraGPT-bffcbf7.aab` from SHA
+  `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`.
   The release checksum audit passed for `preflight.json`, `preflight.md`, and
   the signed `.aab`.
 - Latest secret-name audit: public repository Actions are running, Android
@@ -72,9 +81,10 @@ secrets. They must never be committed.
   code-signing secret names.
 - GitHub Actions diagnostics snapshot: repository visibility is `PUBLIC`,
   Actions is enabled with `allowed_actions=all`, CI
-  run `28751857678`, native readiness run `28751857663`, native mobile
-  run `28751219114`, native desktop run `28751220141`, and Docker
-  run `28735031878` are green. Standard GitHub-hosted Actions for public
+  run `28759688295`, CodeQL run `28759689486`, native readiness run
+  `28760576640`, native mobile run `28760576620`, native desktop run
+  `28760576641`, Android signed release run `28760576624`, and Docker run
+  `28735031878` are green. Standard GitHub-hosted Actions for public
   repositories are free; this is separate from native signing readiness.
 
 Security note: a mailbox password literal reached a prior public management
@@ -148,7 +158,7 @@ upload should target `android_play_track=qa` with
 Console before publishing.
 
 Android package signing itself is already configured and verified. The current
-signed `.aab` is attached to the `native-android-signed-v0.4.3-4a5e5f8`
+signed `.aab` is attached to the `native-android-signed-v0.4.3-bffcbf7`
 GitHub Release. The remaining Android owner action is Google Play Console
 verification plus `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` for automated
 Play uploads.
