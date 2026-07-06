@@ -12,6 +12,11 @@ describe("generate-native-store-owner-packet", () => {
       latestQaRelease: { tag: string; targetSha: string }
       latestOwnerPacket: { sourceSha: string; zipName: string }
       latestSignedPreflight: { run: string; sourceSha: string; status: string }
+      distributionMilestone: {
+        title: string
+        url: string
+        issues: Array<{ number: number; scope: string }>
+      }
     }
 
     try {
@@ -52,12 +57,24 @@ describe("generate-native-store-owner-packet", () => {
       const manifest = JSON.parse(readFileSync(join(outDir, "PACKET-MANIFEST.json"), "utf8")) as {
         releaseTag: string
         qaBinaryTargetSha: string
+        distributionMilestone: {
+          title: string
+          url: string
+          issues: Array<{ number: number; scope: string }>
+        }
         latestOwnerPacket: { sourceSha: string; zipName: string }
         latestSignedPreflight: { run: string; sourceSha: string }
         included: string[]
       }
       assert.equal(manifest.releaseTag, status.latestQaRelease.tag)
       assert.equal(manifest.qaBinaryTargetSha, status.latestQaRelease.targetSha)
+      assert.equal(manifest.distributionMilestone.title, status.distributionMilestone.title)
+      assert.equal(manifest.distributionMilestone.url, status.distributionMilestone.url)
+      assert.deepEqual(
+        manifest.distributionMilestone.issues.map((issue) => issue.number),
+        [4, 5, 6, 7, 8],
+      )
+      assert.ok(manifest.distributionMilestone.issues.some((issue) => issue.scope === "android-googleplay"))
       assert.equal(manifest.latestOwnerPacket.sourceSha, status.latestOwnerPacket.sourceSha)
       assert.equal(manifest.latestOwnerPacket.zipName, status.latestOwnerPacket.zipName)
       assert.equal(manifest.latestSignedPreflight.run, status.latestSignedPreflight.run)
@@ -73,6 +90,7 @@ describe("generate-native-store-owner-packet", () => {
       assert.ok(existsSync(join(outDir, "native-signing-templates", "ios.env.example")))
       assert.ok(existsSync(join(outDir, "native-signing-templates", "macos.env.example")))
       assert.ok(existsSync(join(outDir, "native-signing-templates", "windows.env.example")))
+      assert.match(readFileSync(join(outDir, "README.md"), "utf8"), /Distribution milestone: https:\/\/github\.com\/infosiragpt-ops\/SiraGPT-APP\/milestone\/1/)
       assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /ANDROID_KEYSTORE_PATH=/)
       assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /WINDOWS_CERTIFICATE_PATH=/)
       assert.doesNotMatch(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /NORMAL_MAILBOX_PASSWORD_SHOULD_NOT_APPEAR/)

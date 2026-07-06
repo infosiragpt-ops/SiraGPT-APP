@@ -14,6 +14,13 @@ describe("generate-native-owner-handoff", () => {
       latestSignedPreflight: { run: string; sourceSha: string; status: string }
       latestSignedAndroidRelease?: { tag: string; sourceSha: string; status: string }
       latestSecretAudit: { status: string; diagnosis: string }
+      distributionMilestone: {
+        title: string
+        url: string
+        openIssues: number
+        closedIssues: number
+        issues: Array<{ number: number; title: string; url: string; scope: string }>
+      }
       latestActionsDiagnostics: {
         repoVisibility: string
         isPrivate: boolean
@@ -66,6 +73,13 @@ describe("generate-native-owner-handoff", () => {
         latestSignedPreflight: { run: string; sourceSha: string; status: string }
         latestSignedAndroidRelease?: { tag: string; sourceSha: string; status: string }
         latestSecretAudit: { status: string; diagnosis: string }
+        distributionMilestone: {
+          title: string
+          url: string
+          openIssues: number
+          closedIssues: number
+          issues: Array<{ number: number; title: string; url: string; scope: string }>
+        }
         latestVerifiedRuns: { docker?: string }
         ownerAccount: {
           email: string
@@ -109,6 +123,18 @@ describe("generate-native-owner-handoff", () => {
       }
       assert.equal(handoff.latestSecretAudit.status, status.latestSecretAudit.status)
       assert.match(handoff.latestSecretAudit.diagnosis, /Android package signing|Native app signing|native signing|deployment secrets only/)
+      assert.equal(handoff.distributionMilestone.title, status.distributionMilestone.title)
+      assert.equal(handoff.distributionMilestone.url, status.distributionMilestone.url)
+      assert.equal(handoff.distributionMilestone.openIssues, 5)
+      assert.equal(handoff.distributionMilestone.closedIssues, 0)
+      assert.deepEqual(
+        handoff.distributionMilestone.issues.map((issue) => issue.number),
+        [4, 5, 6, 7, 8],
+      )
+      assert.ok(handoff.distributionMilestone.issues.some((issue) => issue.scope === "android-googleplay"))
+      assert.ok(handoff.distributionMilestone.issues.some((issue) => issue.scope === "ios-appstore"))
+      assert.ok(handoff.distributionMilestone.issues.some((issue) => issue.scope === "macos"))
+      assert.ok(handoff.distributionMilestone.issues.some((issue) => issue.scope === "windows"))
       assert.equal(handoff.latestVerifiedRuns.docker, status.latestVerifiedRuns.docker)
       assert.equal(handoff.ownerAccount.email, "infosiragpt@gmail.com")
       assert.equal(handoff.ownerAccount.status, "rotation-required-before-store-use")
@@ -137,6 +163,12 @@ describe("generate-native-owner-handoff", () => {
       assert.match(markdown, /Latest Signed Release Preflight/)
       assert.match(markdown, /Latest Signed Android Release/)
       assert.match(markdown, /Latest Secret-Name Audit/)
+      assert.match(markdown, /Distribution Work Queue/)
+      assert.match(markdown, /Native Store Distribution v0\.4\.3/)
+      assert.match(markdown, /#5 Android \/ Google Play publishing owner actions/)
+      assert.match(markdown, /#6 iPhone \/ App Store Connect signing and upload owner actions/)
+      assert.match(markdown, /#7 macOS Developer ID signing and notarization owner actions/)
+      assert.match(markdown, /#8 Windows code signing and Microsoft Store owner actions/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
