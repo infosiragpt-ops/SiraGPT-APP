@@ -102,9 +102,11 @@ describe("native release status traceability", () => {
     const status = JSON.parse(
       readFileSync("docs/store-submission/native-release-status.json", "utf8"),
     ) as NativeReleaseStatus
-    const ownerPacketShortSha = status.latestOwnerPacket.sourceSha.slice(0, 8)
     const signedAndroidShortSha = status.latestSignedAndroidRelease.sourceSha.slice(0, 7)
     const currentWrapperShortSha = status.latestCurrentProductionValidation.sourceSha.slice(0, 7)
+    const ownerPacketStem = status.latestOwnerPacket.zipName
+      .replace(/^SiraGPT-native-store-owner-packet-/, "")
+      .replace(/\.zip$/, "")
 
     assert.equal(status.latestTraceabilityCommit.sha, status.latestTraceabilityCommit.validatedManagementSha)
     assert.equal(status.latestTraceabilityCommit.message, status.latestTraceabilityCommit.validatedManagementCommit)
@@ -129,8 +131,10 @@ describe("native release status traceability", () => {
 
     assert.equal(status.latestOwnerPacket.sourceSha, status.latestSignedAndroidRelease.sourceSha)
     assert.equal(status.latestOwnerPacket.releaseTag, status.latestSignedAndroidRelease.tag)
-    assert.equal(status.latestOwnerPacket.zipName, `SiraGPT-native-store-owner-packet-${ownerPacketShortSha}.zip`)
-    assert.equal(status.latestOwnerPacket.checksumName, `SiraGPT-native-store-owner-packet-${ownerPacketShortSha}.zip.sha256`)
+    assert.match(ownerPacketStem, /^[a-f0-9]{7,8}$/)
+    assert.ok(status.latestOwnerPacket.sourceSha.startsWith(ownerPacketStem))
+    assert.equal(status.latestOwnerPacket.zipName, `SiraGPT-native-store-owner-packet-${ownerPacketStem}.zip`)
+    assert.equal(status.latestOwnerPacket.checksumName, `SiraGPT-native-store-owner-packet-${ownerPacketStem}.zip.sha256`)
     assert.match(status.latestOwnerPacket.zipUrl, new RegExp(`/releases/download/${status.latestOwnerPacket.releaseTag}/`))
     assert.match(status.latestOwnerPacket.checksumUrl, new RegExp(`/releases/download/${status.latestOwnerPacket.releaseTag}/`))
     assert.match(status.latestOwnerPacket.checksumSha256, /^[a-f0-9]{64}$/)
@@ -183,7 +187,10 @@ describe("native release status traceability", () => {
     assert.ok(
       status.latestCurrentProductionValidation.platforms.android.expectedFiles.includes(
         `SiraGPT-${currentWrapperShortSha}-unsigned-release.aab`,
-      ),
+      ) ||
+        status.latestCurrentProductionValidation.platforms.android.expectedFiles.includes(
+          `SiraGPT-${currentWrapperShortSha}-signed-release.aab`,
+        ),
     )
     assert.ok(
       status.latestCurrentProductionValidation.platforms.ios.expectedFiles.includes(
