@@ -10,7 +10,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ─── Stage 1: Build ──────────────────────────────────────────
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat
@@ -74,7 +74,7 @@ RUN npm run build
 # on the production BuildKit runner.
 
 # ─── Stage 2: Production runner ─────────────────────────────
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 RUN apk add --no-cache wget
