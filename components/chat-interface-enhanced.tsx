@@ -45,7 +45,11 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare, Disc3, Menu as MenuIcon} from "lucide-react"
+  MessageSquare,
+  Star,
+  Disc3,
+  Menu as MenuIcon,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -223,6 +227,17 @@ import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
+
+const GPT_RATING_OPTIONS = [
+  { value: 1, label: "Muy malo" },
+  { value: 2, label: "Regular" },
+  { value: 3, label: "Bueno" },
+  { value: 4, label: "Muy bueno" },
+  { value: 5, label: "Excelente" },
+] as const
+
+const getGptRatingLabel = (rating: number): string =>
+  GPT_RATING_OPTIONS.find((option) => option.value === rating)?.label || ""
 
 const resolveUploadFileId = (file: any): string | null => {
   if (!file) return null
@@ -3588,7 +3603,34 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   const [gptFeedback, setGptFeedback] = React.useState("");
   const [gptReport, setGptReport] = React.useState("");
   const [gptRating, setGptRating] = React.useState(0);
+  const [hoveredGptRating, setHoveredGptRating] = React.useState(0);
+  const [gptRatingNote, setGptRatingNote] = React.useState("");
+  const gptRatingButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const [isGptPinned, setIsGptPinned] = React.useState(false);
+
+  const displayGptRating = hoveredGptRating || gptRating;
+  const displayGptRatingLabel = getGptRatingLabel(displayGptRating);
+
+  const handleGptRatingKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, value: number) => {
+    let nextRating = value;
+
+    if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      nextRating = Math.min(GPT_RATING_OPTIONS.length, value + 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      nextRating = Math.max(1, value - 1);
+    } else if (event.key === "Home") {
+      nextRating = 1;
+    } else if (event.key === "End") {
+      nextRating = GPT_RATING_OPTIONS.length;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    setGptRating(nextRating);
+    setHoveredGptRating(nextRating);
+    gptRatingButtonRefs.current[nextRating - 1]?.focus();
+  }, []);
 
   React.useEffect(() => {
     const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
@@ -3642,7 +3684,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       chatId: currentChat?.id,
       kind,
       rating: kind === "rate" ? gptRating : undefined,
-      text: kind === "report" ? gptReport.trim() : gptFeedback.trim(),
+      text: kind === "report" ? gptReport.trim() : kind === "rate" ? gptRatingNote.trim() : gptFeedback.trim(),
       createdAt: new Date().toISOString(),
     };
     try {
@@ -3653,11 +3695,15 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       setGptDialog(null);
       setGptFeedback("");
       setGptReport("");
-      if (kind === "rate") setGptRating(0);
+      if (kind === "rate") {
+        setGptRating(0);
+        setHoveredGptRating(0);
+        setGptRatingNote("");
+      }
     } catch {
       toast.error("No se pudo guardar la acción");
     }
-  }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptReport]);
+  }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptRatingNote, gptReport]);
 
   const project = currentChat?.project;
   const projectName = project?.name || String(currentChat?.title || "Proyecto").replace(/^Chat in\s+/i, "");
@@ -4176,8 +4222,31 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Dialog open={gptDialog !== null} onOpenChange={(open) => !open && setGptDialog(null)}>
-          <DialogContent className="max-w-md rounded-3xl">
+        <Dialog
+          open={gptDialog !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setGptDialog(null);
+              setHoveredGptRating(0);
+            }
+          }}
+        >
+          <DialogContent
+            overlayClassName={gptDialog === "rate" ? "bg-black/60 backdrop-blur-sm" : undefined}
+            className={cn(
+              gptDialog === "rate"
+                ? "max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[460px] gap-0 overflow-hidden rounded-[20px] border border-border/70 bg-background/95 p-0 shadow-[0_24px_80px_rgba(15,23,42,0.28)] backdrop-blur-xl sm:rounded-[20px]"
+                : "max-w-md rounded-3xl",
+            )}
+            onOpenAutoFocus={(event) => {
+              if (gptDialog !== "rate") return;
+              event.preventDefault();
+              window.setTimeout(() => {
+                gptRatingButtonRefs.current[(gptRating || 1) - 1]?.focus();
+              }, 0);
+            }}
+            onEscapeKeyDown={() => setHoveredGptRating(0)}
+          >
             {gptDialog === "about" && (
               <>
                 <DialogHeader>
@@ -4219,29 +4288,116 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
             {gptDialog === "rate" && (
               <>
-                <DialogHeader>
-                  <DialogTitle>Valorar GPT</DialogTitle>
-                  <DialogDescription>Selecciona una valoración para este GPT.</DialogDescription>
-                </DialogHeader>
-                <div className="flex items-center justify-center gap-2 py-2">
-                  {[1, 2, 3, 4, 5].map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setGptRating(value)}
-                      className={cn(
-                        "flex h-11 w-11 items-center justify-center rounded-full border text-lg transition",
-                        gptRating >= value ? "border-amber-400 bg-amber-50 text-amber-600" : "border-border text-muted-foreground hover:bg-muted",
-                      )}
-                      aria-label={`${value} estrellas`}
-                    >
-                      ★
-                    </button>
-                  ))}
+                <div className="px-5 pb-5 pt-6 sm:px-7 sm:pb-7 sm:pt-7">
+                  <DialogHeader className="space-y-2 pr-8 text-left">
+                    <DialogTitle className="text-[1.35rem] font-semibold leading-7 tracking-normal sm:text-2xl">
+                      ¿Qué te pareció este GPT?
+                    </DialogTitle>
+                    <DialogDescription className="text-sm leading-6 text-muted-foreground">
+                      Tu valoración ayuda a mejorar la experiencia.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="mt-7 space-y-5">
+                    <div className="space-y-3">
+                      <div
+                        role="radiogroup"
+                        aria-label="Valoración del GPT"
+                        className="flex items-center justify-center gap-2.5 sm:gap-3"
+                        onMouseLeave={() => setHoveredGptRating(0)}
+                      >
+                        {GPT_RATING_OPTIONS.map((option) => {
+                          const { value, label } = option;
+                          const isPreviewed = displayGptRating >= value;
+                          const isSelected = gptRating >= value;
+
+                          return (
+                            <button
+                              key={value}
+                              ref={(node) => {
+                                gptRatingButtonRefs.current[value - 1] = node;
+                              }}
+                              type="button"
+                              role="radio"
+                              aria-checked={gptRating === value}
+                              aria-label={`Valorar con ${value} ${value === 1 ? "estrella" : "estrellas"}: ${label}`}
+                              tabIndex={gptRating === 0 ? (value === 1 ? 0 : -1) : (gptRating === value ? 0 : -1)}
+                              onClick={() => setGptRating(value)}
+                              onFocus={() => setHoveredGptRating(value)}
+                              onBlur={() => setHoveredGptRating(0)}
+                              onMouseEnter={() => setHoveredGptRating(value)}
+                              onKeyDown={(event) => handleGptRatingKeyDown(event, value)}
+                              className={cn(
+                                "group flex h-12 w-12 items-center justify-center rounded-full border shadow-sm transition-all duration-200 sm:h-14 sm:w-14",
+                                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                                "hover:-translate-y-0.5 hover:scale-105 active:translate-y-0 active:scale-100",
+                                isPreviewed
+                                  ? "border-amber-300 bg-amber-50 text-amber-500 shadow-[0_10px_24px_rgba(245,158,11,0.18)] dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300"
+                                  : "border-zinc-200 bg-white text-zinc-400 hover:border-amber-200 hover:bg-amber-50/70 hover:text-amber-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-500 dark:hover:border-amber-400/35 dark:hover:bg-amber-400/10 dark:hover:text-amber-300",
+                                isSelected && "ring-1 ring-amber-300/60 dark:ring-amber-400/35",
+                              )}
+                            >
+                              <Star
+                                aria-hidden="true"
+                                className={cn(
+                                  "h-6 w-6 transition-all duration-200 sm:h-7 sm:w-7",
+                                  isPreviewed && "fill-current drop-shadow-[0_2px_6px_rgba(245,158,11,0.25)]",
+                                )}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="min-h-7 text-center" aria-live="polite">
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full px-3 py-1 text-sm font-medium transition-colors",
+                            displayGptRatingLabel
+                              ? "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {displayGptRatingLabel || "Sin valoración aún"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label htmlFor="gpt-rating-note" className="text-sm font-medium text-foreground">
+                        Comentario opcional
+                      </label>
+                      <Textarea
+                        id="gpt-rating-note"
+                        value={gptRatingNote}
+                        onChange={(event) => setGptRatingNote(event.target.value)}
+                        placeholder="Cuéntanos qué podríamos mejorar…"
+                        aria-label="Comentario opcional para la valoración"
+                        rows={4}
+                        className="min-h-[104px] resize-none rounded-2xl border-border/70 bg-muted/30 px-4 py-3 text-sm leading-6 shadow-inner shadow-black/[0.02] transition focus-visible:ring-2 focus-visible:ring-zinc-400/50 focus-visible:ring-offset-0 dark:bg-white/[0.03]"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setGptDialog(null)}>Cancelar</Button>
-                  <Button onClick={() => submitGptFeedback("rate")} disabled={gptRating === 0}>Guardar valoración</Button>
+
+                <DialogFooter className="gap-2 border-t border-border/60 bg-muted/20 px-5 py-4 sm:flex-row sm:justify-end sm:space-x-0 sm:px-7 [&>button]:w-full sm:[&>button]:w-auto">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setGptDialog(null);
+                      setHoveredGptRating(0);
+                    }}
+                    className="h-11 rounded-xl border-border/70 bg-background px-5 text-foreground hover:bg-muted/70"
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    onClick={() => submitGptFeedback("rate")}
+                    disabled={gptRating === 0}
+                    className="h-11 rounded-xl bg-zinc-950 px-5 text-white shadow-sm hover:bg-zinc-800 disabled:bg-zinc-200 disabled:text-zinc-500 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-white/10 dark:disabled:text-white/35"
+                  >
+                    Guardar valoración
+                  </Button>
                 </DialogFooter>
               </>
             )}
