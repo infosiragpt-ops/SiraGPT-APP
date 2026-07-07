@@ -11191,7 +11191,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
                         "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
                         "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                        "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
+                        "focus-within:ring-[0.75px] focus-within:ring-[hsl(var(--accent-violet))]/30 focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)] dark:focus-within:ring-[0.75px] dark:focus-within:ring-[hsl(var(--accent-violet))]/30",
                     )}
                   >
                     {/* Chips zone — rendered ABOVE the input row, INSIDE
@@ -11771,7 +11771,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
                             "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
                             "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                            "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
+                            "focus-within:ring-[0.75px] focus-within:ring-[hsl(var(--accent-violet))]/30 focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)] dark:focus-within:ring-[0.75px] dark:focus-within:ring-[hsl(var(--accent-violet))]/30",
                         )}
                       >
                         <ActiveOptionsDisplay
