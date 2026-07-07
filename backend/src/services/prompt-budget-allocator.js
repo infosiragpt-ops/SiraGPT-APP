@@ -13,8 +13,8 @@
  * while preserving high-importance tiers.
  *
  * Tier rules:
- *   • Tier 0 (master-prompt, conversation-understanding, contract,
- *     enterprise-execution, pr5-grounding) — never trimmed.
+ *   • Tier 0 (master-prompt, header/rules, custom-gpt,
+ *     conversation-understanding, contract) — never trimmed.
  *   • Tier 1 (attribution + circuit + intent-attribution-graph +
  *     saliency-state) — preferred; min 60 % preserved.
  *   • Tier 2 (memory, orchestration-memory, cross-chat, feedback) —
@@ -38,6 +38,9 @@ const DISABLED = String(process.env.SIRAGPT_PROMPT_BUDGET_DISABLED || '').toLowe
 
 const TIER_BY_KIND = Object.freeze({
   'master-prompt': 0,
+  'header': 0,
+  'rules': 0,
+  'custom-gpt': 0,
   'conversation-understanding': 0,
   'universal-contract': 0,
 
