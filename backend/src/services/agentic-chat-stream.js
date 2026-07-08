@@ -541,6 +541,76 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
 
+    // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
+    // attached a document and asked to edit it, run the surgical
+    // source-preserving editor BEFORE the LLM loop. Without this, weak models
+    // answer in prose / call create_document and the user never gets an edited
+    // copy of THEIR file. Fail-open: any error falls through to the agentic
+    // loop (which still forces document_edit as initialToolChoice below).
+    const preloopFileIds = Array.isArray(toolContext.fileIds)
+      ? toolContext.fileIds.map(String).filter(Boolean)
+      : [];
+    if (
+      preloopFileIds.length > 0
+      && toolContext.prisma
+      && toolContext.userId
+      && isDocumentEditRequest(userQuery)
+    ) {
+      try {
+        const {
+          isSourcePreservingEditRequest,
+          tryGenerateSourcePreservingDocumentEdit,
+        } = require('./source-preserving-document-edit');
+        if (isSourcePreservingEditRequest(userQuery, preloopFileIds)) {
+          await writeSse(res, { type: 'stage', label: 'Editando documento original', tool: 'document_edit' });
+          const preserved = await tryGenerateSourcePreservingDocumentEdit({
+            prisma: toolContext.prisma,
+            userId: toolContext.userId,
+            chatId: toolContext.chatId || null,
+            fileIds: preloopFileIds,
+            prompt: userQuery,
+            displayPrompt: userQuery,
+            signal,
+          });
+          if (preserved?.clarification) {
+            await writeSse(res, {
+              replace: true,
+              content: String(preserved.content || '').trim(),
+            });
+            return {
+              finalAnswer: String(preserved.content || '').trim(),
+              stoppedReason: 'image_edit_clarification_needed',
+              artifacts: [],
+            };
+          }
+          if (preserved?.artifact?.id && preserved?.file) {
+            const artifactEvent = {
+              id: preserved.artifact.id,
+              filename: preserved.artifact.filename,
+              format: preserved.artifact.format,
+              mime: preserved.artifact.mime,
+              sizeBytes: preserved.artifact.sizeBytes,
+              downloadUrl: preserved.artifact.downloadUrl,
+              previewHtml: preserved.previewHtml || null,
+              validation: preserved.validation || null,
+            };
+            await writeSse(res, { type: 'file_artifact', artifact: artifactEvent });
+            const answer = String(preserved.content || 'Listo. Conservé el documento original y apliqué la edición solicitada.').trim();
+            await writeSse(res, { replace: true, content: answer });
+            return {
+              finalAnswer: answer,
+              stoppedReason: 'source_preserving_document_edit',
+              artifacts: [artifactEvent],
+            };
+          }
+        }
+      } catch (preErr) {
+        try {
+          console.warn('[agentic-chat] source-preserving pre-loop failed (falling through to agent):', preErr && preErr.message);
+        } catch (_) { /* noop */ }
+      }
+    }
+
     let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance, capabilities: customGptCapabilities });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
@@ -637,7 +707,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // Document merge ("combina estos 2 words en 1"): force document_edit as
     // the FIRST tool call — its deterministic merge fast-path produces the
     // fused .docx without depending on the model choosing the right tool.
+    // Single-file EDIT intents get the same treatment: without it, weak models
+    // answer in prose or call create_document and the user never gets an
+    // edited copy of THEIR attachment.
     let documentMergeIntent = false;
+    let documentEditIntent = false;
     const attachedFileCount = Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean).length : 0;
     if (!initialToolChoice && attachedFileCount >= 2 && availableToolNames.has('document_edit')) {
       try {
@@ -647,6 +721,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           initialToolChoice = 'document_edit';
         }
       } catch (_) { /* best-effort */ }
+    }
+    if (!initialToolChoice && attachedFileCount >= 1 && availableToolNames.has('document_edit')) {
+      try {
+        if (isDocumentEditRequest(userQuery)) {
+          documentEditIntent = true;
+          initialToolChoice = 'document_edit';
+        }
+      } catch (_) { /* best-effort */ }
+    }
+    // When the user is editing an attached document, create_document would
+    // regenerate a NEW file from scratch — the opposite of what they asked.
+    // Drop it from the effective tool set so the model can't take that path.
+    if ((documentEditIntent || documentMergeIntent) && Array.isArray(tools)) {
+      tools = tools.filter((t) => t && t.name !== 'create_document');
     }
     // Aggressive auto-search: when the question clearly needs fresh/live/factual
     // web data and no media tool was force-selected, force the FIRST step to be
@@ -749,6 +837,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',
       documentMergeIntent
         ? 'El usuario quiere FUSIONAR sus documentos adjuntos en UN solo archivo. Llama `document_edit` UNA vez con una instrucción completa tipo "fusiona todos los documentos adjuntos en un solo .docx, en el orden adjuntado, conservando el contenido y formato de cada uno" (más cualquier ajuste que pidió el usuario). La herramienta devuelve el archivo fusionado como tarjeta de descarga: menciónalo brevemente y finaliza. NO pegues el contenido de los documentos en tu respuesta.'
+        : '',
+      documentEditIntent
+        ? 'El usuario quiere EDITAR el documento que ADJUNTO (no crear uno nuevo). Llama `document_edit` UNA vez con una instrucción completa que liste TODOS los cambios pedidos. La herramienta edita el archivo original preservando formato/estructura y devuelve una copia editada como tarjeta de descarga. Menciónala brevemente y finaliza. PROHIBIDO inventar un documento nuevo, responder solo con sugerencias, o decir que no puedes editar el archivo adjunto.'
         : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
