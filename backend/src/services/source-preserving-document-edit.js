@@ -227,6 +227,12 @@ function supportedSourceEditLabel() {
 }
 
 function resolveStoredFilePath(row = {}, userId = '') {
+  // Production uploads live in R2 as `r2:uploads/...`. Those refs are NOT
+  // filesystem paths — accepting them here is what lets the surgical editor
+  // see the user's attachment at all. Callers that need bytes must go through
+  // readSourceBuffer() / objectStorage.toLocalTemp().
+  if (row.path && objectStorage.isRemote(row.path)) return row.path;
+
   const candidates = [];
   if (row.path) {
     candidates.push(row.path);
@@ -244,6 +250,33 @@ function resolveStoredFilePath(row = {}, userId = '') {
       return false;
     }
   }) || null;
+}
+
+/**
+ * Read the bytes of a source file that may live on disk OR in R2.
+ * Returns { buffer, cleanup } — always call cleanup() (best-effort) so R2
+ * temp materializations don't leak. Local paths get a no-op cleanup.
+ */
+async function readSourceBuffer(fileOrPath = {}) {
+  const ref = typeof fileOrPath === 'string'
+    ? fileOrPath
+    : (fileOrPath?.path || fileOrPath?.absolutePath || '');
+  if (!ref) throw new Error('No se encontró la ruta del archivo original.');
+  if (objectStorage.isRemote(ref)) {
+    const materialized = await objectStorage.toLocalTemp(ref);
+    try {
+      const buffer = await fs.promises.readFile(materialized.path);
+      return {
+        buffer,
+        cleanup: async () => { try { await materialized.cleanup(); } catch { /* best-effort */ } },
+      };
+    } catch (err) {
+      try { await materialized.cleanup(); } catch { /* best-effort */ }
+      throw err;
+    }
+  }
+  const buffer = await fs.promises.readFile(ref);
+  return { buffer, cleanup: async () => {} };
 }
 
 function normalizeFileIdList(fileIds = []) {
@@ -5794,8 +5827,11 @@ async function generateSourcePreservingDocumentEdit({
   const requestText = displayPrompt || prompt || '';
   const allSourceFiles = Array.isArray(sourceFiles) && sourceFiles.length ? sourceFiles : [sourceFile];
   const sourceText = await buildCombinedSourceText(allSourceFiles);
-  const input = await fs.promises.readFile(sourceFile.path);
-
+  // Source bytes may live in R2 (`r2:uploads/…`) — materialize via
+  // readSourceBuffer so production edits work the same as local-disk ones.
+  const sourceRead = await readSourceBuffer(sourceFile);
+  const input = sourceRead.buffer;
+  try {
   let format;
   let output;
   let suffix = 'con_anexos';
@@ -5821,6 +5857,7 @@ async function generateSourcePreservingDocumentEdit({
         assetFiles,
       });
       if (imageResult.clarification) {
+        await sourceRead.cleanup().catch(() => {});
         return buildImageEditClarificationResult({ message: imageResult.message, format });
       }
       output = imageResult.buffer;
@@ -5897,6 +5934,7 @@ async function generateSourcePreservingDocumentEdit({
       if (sheetEdit) {
         const xlsxResult = await runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile });
         if (xlsxResult.clarification) {
+          await sourceRead.cleanup().catch(() => {});
           return buildImageEditClarificationResult({ message: xlsxResult.message, format });
         }
         output = xlsxResult.buffer;
@@ -5955,6 +5993,7 @@ async function generateSourcePreservingDocumentEdit({
           ? await runPptxSurgicalEditFlow({ input, slideEdit, sourceFile })
           : await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles });
         if (pptxResult.clarification) {
+          await sourceRead.cleanup().catch(() => {});
           return buildImageEditClarificationResult({ message: pptxResult.message, format });
         }
         output = pptxResult.buffer;
@@ -6001,6 +6040,7 @@ async function generateSourcePreservingDocumentEdit({
       if (pdfEdit) {
         const pdfResult = await runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles, allSourceFiles });
         if (pdfResult.clarification) {
+          await sourceRead.cleanup().catch(() => {});
           return buildImageEditClarificationResult({ message: pdfResult.message, format });
         }
         output = pdfResult.buffer;
@@ -6122,6 +6162,9 @@ async function generateSourcePreservingDocumentEdit({
     format,
     orchestration,
   };
+  } finally {
+    await sourceRead.cleanup().catch(() => {});
+  }
 }
 
 async function tryGenerateSourcePreservingDocumentEdit({
@@ -6224,6 +6267,8 @@ module.exports = {
   parsePresentationEditRequest,
   parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
+  readSourceBuffer,
+  resolveStoredFilePath,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
     addSheetToXlsxBuffer,

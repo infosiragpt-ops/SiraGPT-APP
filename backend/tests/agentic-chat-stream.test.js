@@ -845,3 +845,174 @@ test('runAgenticChat caps iterations at maxSteps', async () => {
   // Loop ended without an explicit finalize → fallback final answer is set.
   assert.ok(typeof result.finalAnswer === 'string' && result.finalAnswer.length > 0);
 });
+
+test('runAgenticChat source-preserving pre-loop short-circuits edit turns before the LLM', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => ({
+          content: 'Listo. Conservé el DOCX original y cambié el título.',
+          artifact: {
+            id: 'art-preloop',
+            filename: 'informe_editado.docx',
+            format: 'docx',
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            sizeBytes: 1234,
+            downloadUrl: '/api/agent/artifact/art-preloop',
+          },
+          file: {
+            type: 'doc',
+            format: 'docx',
+            filename: 'informe_editado.docx',
+            url: '/api/agent/artifact/art-preloop',
+          },
+          validation: { passed: true },
+          previewHtml: null,
+        }),
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  // Re-require so the patched module is visible to the pre-loop require().
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita el documento: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: ['f1'],
+        prisma: {},
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.equal(llmCalls, 0, 'pre-loop must skip the LLM entirely on a successful surgical edit');
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+    assert.match(result.finalAnswer, /Conservé el DOCX original/);
+    assert.equal(result.artifacts[0].id, 'art-preloop');
+    const body = frames();
+    assert.ok(body.some((f) => f && f.type === 'file_artifact' && f.artifact && f.artifact.id === 'art-preloop'));
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat forces document_edit and drops create_document on attachment edit turns', async () => {
+  let firstArgs = null;
+  let calls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          calls += 1;
+          if (!firstArgs) firstArgs = args;
+          if (calls === 1) {
+            return toolCallMessage('document_edit', { instruction: 'cambia el título' }, 'call_edit');
+          }
+          return finalizeMessage('Listo, aquí está el archivo editado.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  // Bypass the pre-loop by making isSourcePreservingEditRequest return false
+  // while isDocumentEditRequest still matches (via the real detector on the
+  // userQuery). We stub the source-preserving module so the pre-loop no-ops.
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => false,
+        tryGenerateSourcePreservingDocumentEdit: async () => null,
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: ['f1'],
+        prisma: {},
+      },
+      toolsOverride: [
+        {
+          name: 'document_edit',
+          description: 'edit attached document',
+          parameters: {
+            type: 'object',
+            properties: { instruction: { type: 'string' } },
+            required: ['instruction'],
+          },
+          execute: async () => ({
+            ok: true,
+            engine: 'in-process',
+            edited: [{ filename: 'x.docx', downloadUrl: '/a', sizeBytes: 1, valid: true }],
+            summary: 'editado',
+          }),
+        },
+        {
+          name: 'create_document',
+          description: 'create a NEW document',
+          parameters: {
+            type: 'object',
+            properties: { filename: { type: 'string' } },
+          },
+          execute: async () => ({ ok: true }),
+        },
+      ],
+    });
+    assert.ok(firstArgs, 'the model must be called at least once when pre-loop no-ops');
+    assert.equal(
+      firstArgs.tool_choice?.function?.name,
+      'document_edit',
+      'first step must force document_edit for attachment edit turns',
+    );
+    const toolNames = (firstArgs.tools || []).map((t) => t.function?.name || t.name);
+    assert.ok(toolNames.includes('document_edit'));
+    assert.ok(
+      !toolNames.includes('create_document'),
+      'create_document must be dropped so the model cannot regenerate a new file',
+    );
+    const system = firstArgs.messages.find((m) => m.role === 'system')?.content || '';
+    assert.match(system, /EDITAR el documento que ADJUNTO/);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
