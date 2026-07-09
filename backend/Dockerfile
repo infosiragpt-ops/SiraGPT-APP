@@ -85,9 +85,16 @@ RUN mkdir -p /app/uploads && chown -R appuser:appgroup /app/uploads
 # Switch to non-root user
 USER appuser
 
+# Immutable release provenance is declared after expensive runtime layers so a
+# new commit does not invalidate the document-toolchain installation cache.
+ARG GIT_COMMIT=unknown
+ARG SIRAGPT_VERSION=unknown
+
 # Environment
 ENV NODE_ENV=production
 ENV PORT=5000
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV SIRAGPT_VERSION=${SIRAGPT_VERSION}
 # The /code verify-agent drives the system chromium (Alpine apk) via Playwright;
 # Playwright's own bundled browser doesn't run on musl, so point it at the apk
 # binary and skip the browser download.

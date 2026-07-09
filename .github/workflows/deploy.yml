@@ -18,6 +18,10 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   # ── Pre-deploy sanity checks (cycle 34) ─────────────────────
   # Lightweight gate that runs in the GH Actions runner BEFORE
@@ -27,10 +31,45 @@ jobs:
     name: Pre-deploy sanity checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_sha || github.sha }}
+          ref: production-main
+          fetch-depth: 0
+
+      - name: Resolve target and require green production CI
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.target_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TARGET_SHA="${REQUESTED_SHA:-${FALLBACK_SHA}}"
+          if [[ ! "${TARGET_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::target_sha must be a full 40-character Git commit SHA"
+            exit 1
+          fi
+
+          git fetch origin production-main
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          if ! git merge-base --is-ancestor "${TARGET_SHA}" origin/production-main; then
+            echo "::error::Target ${TARGET_SHA} is not part of production-main"
+            exit 1
+          fi
+
+          SUCCESSFUL_PUSH_RUNS="$(gh run list --workflow CI --commit "${TARGET_SHA}" --limit 20 \
+            --json status,conclusion,event \
+            --jq '[.[] | select(.status == "completed" and .conclusion == "success" and .event == "push")] | length')"
+          if [[ "${SUCCESSFUL_PUSH_RUNS}" -lt 1 ]]; then
+            echo "::error::Target ${TARGET_SHA} has no successful push CI run"
+            exit 1
+          fi
+
+          git checkout --detach "${TARGET_SHA}"
+          echo "sha=${TARGET_SHA}" >> "${GITHUB_OUTPUT}"
 
       - name: Migration safety check
         # Fails the pipeline on unsafe migrations unless the SQL
@@ -44,7 +83,7 @@ jobs:
         continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
-          DEPLOY_SHA: ${{ inputs.target_sha || github.sha }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
         run: |
           if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
             echo "::notice::SLACK_DEPLOY_WEBHOOK not set — skipping Slack ping"
@@ -59,6 +98,8 @@ jobs:
     needs: [pre-check]
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    env:
+      TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
 
     steps:
       - name: Deploy via SSH (with auto-rollback)
@@ -69,6 +110,7 @@ jobs:
           # point at a dead repo); every fetch below goes through this token
           # on the command line only, so nothing persists after the run.
           DEPLOY_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -83,13 +125,15 @@ jobs:
           # run. The heredoc below owns its error handling (set -Eeuo
           # pipefail + rollback trap), so let it.
           script_stop: false
-          envs: DEPLOY_GH_TOKEN
+          envs: DEPLOY_GH_TOKEN,TARGET_SHA
           script: |
             bash <<'SIRAGPT_DEPLOY'
             set -Eeuo pipefail
             APP_DIR="/opt/siragpt"
             COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env"
             READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
+            VERSION_URL="${VERSION_URL:-https://api.siragpt.com/api/version}"
+            FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com}"
 
             wait_ready() {
               local deadline status
@@ -105,6 +149,60 @@ jobs:
               return 1
             }
 
+            wait_version() {
+              local expected="$1" deadline payload
+              deadline=$(( $(date +%s) + 60 ))
+              while [[ $(date +%s) -lt "${deadline}" ]]; do
+                payload="$(curl -fsS --max-time 5 "${VERSION_URL}" || true)"
+                if [[ "${payload}" == *"\"commit\":\"${expected}\""* ]]; then
+                  return 0
+                fi
+                sleep 3
+              done
+              echo "[deploy-workflow] Version check failed: ${VERSION_URL} did not report commit ${expected}"
+              return 1
+            }
+
+            wait_frontend() {
+              local deadline status
+              deadline=$(( $(date +%s) + 60 ))
+              while [[ $(date +%s) -lt "${deadline}" ]]; do
+                status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "${FRONTEND_URL}" || true)"
+                if [[ "${status}" == "200" ]]; then
+                  return 0
+                fi
+                sleep 3
+              done
+              echo "[deploy-workflow] Frontend check failed: ${FRONTEND_URL} (last status: ${status:-none})"
+              return 1
+            }
+
+            verify_checkout() {
+              local expected="$1" actual
+              actual="$(git rev-parse HEAD)" || return 1
+              if [[ "${actual}" != "${expected}" ]]; then
+                echo "[deploy-workflow] Checkout mismatch: expected=${expected} actual=${actual}"
+                return 1
+              fi
+            }
+
+            set_release_metadata() {
+              local sha="$1" version
+              if [[ ! "${sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "[deploy-workflow] Invalid release commit: ${sha}"
+                return 1
+              fi
+              version="$(awk -F '"' '/"version"[[:space:]]*:/ { print $4; exit }' package.json)"
+              if [[ ! "${version}" =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$ ]]; then
+                echo "[deploy-workflow] Invalid release version in package.json"
+                return 1
+              fi
+              GIT_COMMIT="${sha}"
+              SIRAGPT_VERSION="${version}"
+              export GIT_COMMIT SIRAGPT_VERSION
+              echo "[deploy-workflow] Release metadata commit=${GIT_COMMIT} version=${SIRAGPT_VERSION}"
+            }
+
             cd "${APP_DIR}"
             PREV_SHA="$(git rev-parse HEAD)"
             printf '%s\n' "${PREV_SHA}" > .deploy-prev-sha
@@ -117,15 +215,32 @@ jobs:
 
               echo "[deploy-workflow] Deploy failed; rolling back to ${PREV_SHA}"
               set +e
-              git reset --hard "${PREV_SHA}"
-              ${COMPOSE} build backend frontend
-              ${COMPOSE} up -d --no-deps backend frontend
-              wait_ready
-              local rollback_status="$?"
+              if ! git reset --hard "${PREV_SHA}"; then
+                echo "[deploy-workflow] Rollback checkout failed"
+                exit "${status}"
+              fi
+              if ! verify_checkout "${PREV_SHA}"; then
+                echo "[deploy-workflow] Rollback checkout verification failed"
+                exit "${status}"
+              fi
+              if ! set_release_metadata "${PREV_SHA}"; then
+                echo "[deploy-workflow] Rollback metadata generation failed"
+                exit "${status}"
+              fi
+              if ! ${COMPOSE} build backend frontend; then
+                echo "[deploy-workflow] Rollback image build failed"
+                exit "${status}"
+              fi
+              if ! ${COMPOSE} up -d --no-deps backend frontend; then
+                echo "[deploy-workflow] Rollback container start failed"
+                exit "${status}"
+              fi
+              local rollback_status=0
+              wait_ready && wait_frontend && wait_version "${PREV_SHA}" || rollback_status="$?"
               if [[ "${rollback_status}" -ne 0 ]]; then
-                echo "[deploy-workflow] Rollback attempted but health check still failed"
+                echo "[deploy-workflow] Rollback attempted but verification still failed"
               else
-                echo "[deploy-workflow] Rollback health check passed"
+                echo "[deploy-workflow] Rollback health, frontend, and version checks passed"
               fi
               exit "${status}"
             }
@@ -135,7 +250,10 @@ jobs:
             df -h / /var/lib/docker 2>/dev/null || df -h / || true
             docker system df || true
             rm -f "${APP_DIR}/.git/index.lock"
-            TARGET_SHA="${{ inputs.target_sha || github.sha }}"
+            if [[ ! "${TARGET_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "[deploy-workflow] Refusing invalid TARGET_SHA"
+              exit 1
+            fi
             echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
             REPO_URL="https://x-access-token:${DEPLOY_GH_TOKEN}@github.com/${{ github.repository }}.git"
             # Keep the persisted origin URL credential-free and pointing at
@@ -150,6 +268,8 @@ jobs:
             # drone-ssh runner tears the script down before any else-branch
             # or trap can recover.
             git reset --hard "${TARGET_SHA}"
+            verify_checkout "${TARGET_SHA}"
+            set_release_metadata "${TARGET_SHA}"
             echo "[deploy-workflow] Checked out ${TARGET_SHA}"
             ${COMPOSE} config -q
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
@@ -157,10 +277,20 @@ jobs:
             echo "[deploy-workflow] Applying database migrations"
             # The production DB predates Prisma Migrate (schema managed via
             # `prisma db push`, no _prisma_migrations baseline), so migrate
-            # deploy exits P3005 there. Surface it loudly but keep deploying;
-            # once the DB is baselined this becomes a real gate again.
-            ${COMPOSE} run -T --rm backend npx prisma migrate deploy --schema prisma/schema.prisma </dev/null \
-              || echo "[deploy-workflow] WARNING: prisma migrate deploy failed (unbaselined DB?) — schema is managed out-of-band; continuing"
+            # deploy exits P3005 there. Tolerate only that known state; every
+            # other migration failure aborts and triggers rollback.
+            MIGRATION_STATUS=0
+            MIGRATION_OUTPUT="$(${COMPOSE} run -T --rm backend npx prisma migrate deploy --schema prisma/schema.prisma </dev/null 2>&1)" \
+              || MIGRATION_STATUS="$?"
+            printf '%s\n' "${MIGRATION_OUTPUT}"
+            if [[ "${MIGRATION_STATUS}" -ne 0 ]]; then
+              if [[ "${MIGRATION_OUTPUT}" == *"P3005"* ]]; then
+                echo "[deploy-workflow] WARNING: Prisma reports the known unbaselined database (P3005); continuing"
+              else
+                echo "[deploy-workflow] Database migration failed; aborting deploy"
+                exit "${MIGRATION_STATUS}"
+              fi
+            fi
             echo "[deploy-workflow] Ensuring production admin account"
             # Intentionally conditional: the reset script hard-fails unless
             # RESET_ADMIN_PASSWORD is explicitly configured in the VPS .env.
@@ -170,6 +300,10 @@ jobs:
             ${COMPOSE} up -d --no-deps backend frontend
             wait_ready
             echo "[deploy-workflow] Deploy health check passed: ${READY_URL}"
+            wait_frontend
+            echo "[deploy-workflow] Deploy frontend check passed: ${FRONTEND_URL}"
+            wait_version "${TARGET_SHA}"
+            echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA}"
             SIRAGPT_DEPLOY
 
       - name: Surface deploy result
@@ -225,7 +359,7 @@ jobs:
   # See docs/sentry-sourcemaps.md.
   sourcemaps:
     name: Upload source maps to Sentry
-    needs: [deploy]
+    needs: [pre-check, deploy]
     if: |
       always() &&
       needs.deploy.result == 'success' &&
@@ -237,7 +371,7 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ vars.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-      SENTRY_RELEASE: ${{ inputs.target_sha || github.sha }}
+      SENTRY_RELEASE: ${{ needs.pre-check.outputs.target_sha }}
     steps:
       - name: Guard — require SENTRY_AUTH_TOKEN
         run: |
@@ -249,7 +383,7 @@ jobs:
       - uses: actions/checkout@v4
         if: env.SENTRY_AUTH_TOKEN != ''
         with:
-          ref: ${{ inputs.target_sha || github.sha }}
+          ref: ${{ needs.pre-check.outputs.target_sha }}
 
       - name: Setup Node
         if: env.SENTRY_AUTH_TOKEN != ''
@@ -273,7 +407,7 @@ jobs:
 
   notify:
     name: Slack notification
-    needs: [deploy, post-check]
+    needs: [pre-check, deploy, post-check]
     if: always()
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -283,7 +417,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
           HEALTH_RESULT: ${{ needs.post-check.result }}
-          DEPLOY_SHA: ${{ inputs.target_sha || github.sha }}
+          DEPLOY_SHA: ${{ needs.pre-check.outputs.target_sha }}
         run: |
           if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
             echo "::notice::SLACK_DEPLOY_WEBHOOK not set — skipping Slack ping"

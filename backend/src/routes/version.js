@@ -50,6 +50,12 @@ function readJson(file) {
 }
 
 function resolveFrontendVersion() {
+  const fromEnv = process.env.SIRAGPT_VERSION;
+  if (fromEnv) {
+    const normalized = String(fromEnv).trim();
+    if (/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(normalized)) return normalized;
+  }
+
   // package.json lives at the repo root (one level above backend/).
   // Backend may be deployed standalone in containers, so a missing
   // file falls back to 'unknown' rather than throwing.
@@ -66,11 +72,16 @@ function resolveBackendVersion() {
 function resolveCommit() {
   // Prefer build-injected env vars (Docker / CI). These don't require
   // .git to be present in the runtime image.
-  const fromEnv = process.env.GIT_COMMIT
-    || process.env.SOURCE_COMMIT
-    || process.env.COMMIT_SHA
-    || process.env.VERCEL_GIT_COMMIT_SHA;
-  if (fromEnv) return String(fromEnv).trim().slice(0, 40);
+  const candidates = [
+    process.env.GIT_COMMIT,
+    process.env.SOURCE_COMMIT,
+    process.env.COMMIT_SHA,
+    process.env.VERCEL_GIT_COMMIT_SHA,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || '').trim();
+    if (/^[0-9a-f]{7,40}$/i.test(normalized)) return normalized;
+  }
 
   // Best-effort `git rev-parse` — wrapped in try/catch because the
   // production image usually doesn't ship `.git`. Short timeout so a

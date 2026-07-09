@@ -137,6 +137,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        SIRAGPT_VERSION: ${SIRAGPT_VERSION:-unknown}
       cache_from:
         - siragpt-backend:latest
     image: siragpt-backend:latest

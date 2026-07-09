@@ -276,6 +276,10 @@ jobs:
       - name: Prisma · push schema to Postgres service
         run: npx prisma db push --schema prisma/schema.prisma --accept-data-loss --skip-generate
 
+      - name: Release provenance contracts
+        if: matrix.shard == 1
+        run: npm run test:release-provenance
+
       # Shard execution — round-robin slice of the full backend suite.
       # Coverage is collected on shard 1 only as an lcov artifact. Global
       # thresholds require the full suite, so the sharded CI sample must not
