@@ -205,21 +205,47 @@ jobs:
               echo "[deploy-workflow] Release metadata commit=${GIT_COMMIT} version=${SIRAGPT_VERSION}"
             }
 
+            resolve_previous_release() {
+              local checkout_sha payload candidate_commit candidate_version
+              checkout_sha="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')" || return 1
+              payload="$(curl -fsS --max-time 5 "${VERSION_URL}" || true)"
+              PREV_SHA="${checkout_sha}"
+              PREV_APP_VERSION=""
+              PREV_PROVENANCE_VERIFIABLE=0
+
+              if [[ "${payload}" =~ \"commit\":\"([0-9a-f]{40})\" ]]; then
+                candidate_commit="${BASH_REMATCH[1]}"
+                if [[ "${payload}" =~ \"version\":\"([0-9]+\.[0-9]+\.[0-9]+[-+0-9A-Za-z.]*)\" ]]; then
+                  candidate_version="${BASH_REMATCH[1]}"
+                  if git cat-file -e "${candidate_commit}^{commit}" 2>/dev/null; then
+                    PREV_SHA="${candidate_commit}"
+                    PREV_APP_VERSION="${candidate_version}"
+                    PREV_PROVENANCE_VERIFIABLE=1
+                  fi
+                fi
+              fi
+
+              if [[ "${PREV_PROVENANCE_VERIFIABLE}" -eq 0 ]]; then
+                echo "[deploy-workflow] WARNING: live release has legacy/unknown provenance; using checkout ${PREV_SHA} for first migration"
+              else
+                echo "[deploy-workflow] Live release provenance commit=${PREV_SHA} version=${PREV_APP_VERSION}"
+              fi
+            }
+
             preserve_rollback_images() {
-              local current_backend_commit
-              set_release_metadata "${PREV_SHA}" || return 1
-              current_backend_commit="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' siragpt-backend:latest 2>/dev/null \
-                | awk -F= '$1 == "GIT_COMMIT" { print $2; exit }' || true)"
-              if [[ "${current_backend_commit}" != "${PREV_SHA}" ]]; then
-                echo "[deploy-workflow] Rebuilding previous backend once to seed verifiable rollback metadata"
-                ${COMPOSE} build backend || return 1
+              local backend_container frontend_container backend_image frontend_image
+              backend_container="$(${COMPOSE} ps -q backend)" || return 1
+              frontend_container="$(${COMPOSE} ps -q frontend)" || return 1
+              if [[ -z "${backend_container}" || -z "${frontend_container}" ]]; then
+                echo "[deploy-workflow] Running backend/frontend containers are required for rollback snapshot"
+                return 1
               fi
-              if ! docker image inspect siragpt-frontend:latest >/dev/null 2>&1; then
-                echo "[deploy-workflow] Building missing previous frontend rollback image"
-                ${COMPOSE} build frontend || return 1
-              fi
-              docker tag siragpt-backend:latest "${ROLLBACK_BACKEND_IMAGE}" || return 1
-              docker tag siragpt-frontend:latest "${ROLLBACK_FRONTEND_IMAGE}" || return 1
+              backend_image="$(docker inspect --format '{{.Image}}' "${backend_container}")" || return 1
+              frontend_image="$(docker inspect --format '{{.Image}}' "${frontend_container}")" || return 1
+              docker image inspect "${backend_image}" >/dev/null 2>&1 || return 1
+              docker image inspect "${frontend_image}" >/dev/null 2>&1 || return 1
+              docker tag "${backend_image}" "${ROLLBACK_BACKEND_IMAGE}" || return 1
+              docker tag "${frontend_image}" "${ROLLBACK_FRONTEND_IMAGE}" || return 1
             }
 
             restore_rollback_images() {
@@ -229,8 +255,21 @@ jobs:
               docker tag "${ROLLBACK_FRONTEND_IMAGE}" siragpt-frontend:latest || return 1
             }
 
+            cleanup_old_rollback_images() {
+              local image
+              while IFS= read -r image; do
+                case "${image}" in
+                  siragpt-backend:rollback-*|siragpt-frontend:rollback-*)
+                    if [[ "${image}" != "${ROLLBACK_BACKEND_IMAGE}" && "${image}" != "${ROLLBACK_FRONTEND_IMAGE}" ]]; then
+                      docker image rm "${image}" >/dev/null 2>&1 || true
+                    fi
+                    ;;
+                esac
+              done < <(docker image ls --format '{{.Repository}}:{{.Tag}}')
+            }
+
             cd "${APP_DIR}"
-            PREV_SHA="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+            resolve_previous_release
             ROLLBACK_BACKEND_IMAGE="siragpt-backend:rollback-${PREV_SHA}"
             ROLLBACK_FRONTEND_IMAGE="siragpt-frontend:rollback-${PREV_SHA}"
             printf '%s\n' "${PREV_SHA}" > .deploy-prev-sha
@@ -264,7 +303,12 @@ jobs:
                 exit "${status}"
               fi
               local rollback_status=0
-              wait_ready && wait_frontend && wait_version "${PREV_SHA}" "${SIRAGPT_VERSION}" || rollback_status="$?"
+              if [[ "${PREV_PROVENANCE_VERIFIABLE}" -eq 1 ]]; then
+                wait_ready && wait_frontend && wait_version "${PREV_SHA}" "${PREV_APP_VERSION}" || rollback_status="$?"
+              else
+                wait_ready && wait_frontend || rollback_status="$?"
+                echo "[deploy-workflow] Legacy rollback restored; exact version proof becomes available after the first successful provenance-aware release"
+              fi
               if [[ "${rollback_status}" -ne 0 ]]; then
                 echo "[deploy-workflow] Rollback attempted but verification still failed"
               else
@@ -341,6 +385,7 @@ jobs:
             echo "[deploy-workflow] Deploy frontend check passed: ${FRONTEND_URL}"
             wait_version "${TARGET_SHA}" "${SIRAGPT_VERSION}"
             echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA} version=${SIRAGPT_VERSION}"
+            cleanup_old_rollback_images
             SIRAGPT_DEPLOY
 
       - name: Surface deploy result

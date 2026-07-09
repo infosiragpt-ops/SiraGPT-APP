@@ -104,12 +104,16 @@ test('production deploy proves the exact commit and restores rollback provenance
   assert.match(workflow, /verify_checkout "\$\{TARGET_SHA\}"/);
   assert.match(workflow, /verify_checkout "\$\{PREV_SHA\}"/);
   assert.match(workflow, /wait_version "\$\{TARGET_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
-  assert.match(workflow, /wait_version "\$\{PREV_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
+  assert.match(workflow, /wait_version "\$\{PREV_SHA\}" "\$\{PREV_APP_VERSION\}"/);
   assert.match(workflow, /wait_frontend/);
   assert.match(workflow, /preserve_rollback_images/);
   assert.match(rollback[1], /restore_rollback_images/);
   assert.doesNotMatch(rollback[1], /\$\{COMPOSE\} build/);
   assert.match(workflow, /TARGET_SHA="\$\{TARGET_SHA,,\}"/);
+  assert.match(workflow, /resolve_previous_release/);
+  assert.match(workflow, /docker inspect --format '\{\{\.Image\}\}'/);
+  assert.match(workflow, /cleanup_old_rollback_images/);
+  assert.doesNotMatch(workflow, /PREV_SHA="\$\(git rev-parse HEAD/);
 });
 
 test('production deploy only tolerates the known unbaselined Prisma error', () => {
