@@ -48,6 +48,12 @@ test('/api/version reports an exact valid build-injected commit', () => {
   assert.equal(info.commit, commit);
 });
 
+test('/api/version rejects short commit identifiers', () => {
+  const info = loadVersionInfo({ GIT_COMMIT: 'a4f15ce' });
+  assert.notEqual(info.commit, 'a4f15ce');
+  assert.match(info.commit, /^(unknown|[0-9a-f]{40})$/i);
+});
+
 test('backend image receives immutable release provenance at build time', () => {
   const dockerfile = read('backend/Dockerfile');
   const compose = read('docker-compose.prod.yml');
@@ -68,6 +74,11 @@ test('backend Docker build context excludes local secrets and dependencies', () 
   assert.match(dockerignore, /^\*\.log$/m);
   assert.match(dockerignore, /^coverage$/m);
   assert.match(dockerignore, /^tests$/m);
+  assert.match(dockerignore, /^\*\.pem$/m);
+  assert.match(dockerignore, /^\.mcp\.json$/m);
+  assert.match(dockerignore, /^prisma\/\*\.db\*$/m);
+  assert.match(dockerignore, /^data$/m);
+  assert.match(dockerignore, /^deployments-backup\.json$/m);
 });
 
 test('production deploy accepts only a green production-main commit', () => {
@@ -77,27 +88,35 @@ test('production deploy accepts only a green production-main commit', () => {
   assert.ok(sshScript, 'expected to extract the VPS deployment script');
   assert.match(workflow, /actions:\s+read/);
   assert.match(workflow, /git merge-base --is-ancestor "\$\{TARGET_SHA\}" origin\/production-main/);
-  assert.match(workflow, /gh run list --workflow CI --commit "\$\{TARGET_SHA\}"/);
+  assert.match(workflow, /gh run list --workflow CI --branch production-main --commit "\$\{TARGET_SHA\}"/);
   assert.match(workflow, /envs: DEPLOY_GH_TOKEN,TARGET_SHA/);
   assert.doesNotMatch(sshScript[1], /\$\{\{\s*inputs\.target_sha/);
 });
 
 test('production deploy proves the exact commit and restores rollback provenance', () => {
   const workflow = read('.github/workflows/deploy.yml');
+  const rollback = workflow.match(/            rollback\(\) \{([\s\S]*?)\n            \}/);
 
+  assert.ok(rollback, 'expected to extract rollback function');
   assert.match(workflow, /export GIT_COMMIT SIRAGPT_VERSION/);
   assert.match(workflow, /set_release_metadata "\$\{TARGET_SHA\}"/);
   assert.match(workflow, /set_release_metadata "\$\{PREV_SHA\}"/);
   assert.match(workflow, /verify_checkout "\$\{TARGET_SHA\}"/);
   assert.match(workflow, /verify_checkout "\$\{PREV_SHA\}"/);
-  assert.match(workflow, /wait_version "\$\{TARGET_SHA\}"/);
-  assert.match(workflow, /wait_version "\$\{PREV_SHA\}"/);
+  assert.match(workflow, /wait_version "\$\{TARGET_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
+  assert.match(workflow, /wait_version "\$\{PREV_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
   assert.match(workflow, /wait_frontend/);
+  assert.match(workflow, /preserve_rollback_images/);
+  assert.match(rollback[1], /restore_rollback_images/);
+  assert.doesNotMatch(rollback[1], /\$\{COMPOSE\} build/);
+  assert.match(workflow, /TARGET_SHA="\$\{TARGET_SHA,,\}"/);
 });
 
 test('production deploy only tolerates the known unbaselined Prisma error', () => {
   const workflow = read('.github/workflows/deploy.yml');
 
   assert.match(workflow, /P3005/);
+  assert.match(workflow, /The database schema is not empty/);
+  assert.match(workflow, /OTHER_PRISMA_CODE/);
   assert.match(workflow, /Database migration failed; aborting deploy/);
 });

@@ -52,6 +52,7 @@ jobs:
             echo "::error::target_sha must be a full 40-character Git commit SHA"
             exit 1
           fi
+          TARGET_SHA="${TARGET_SHA,,}"
 
           git fetch origin production-main
           git cat-file -e "${TARGET_SHA}^{commit}"
@@ -60,7 +61,7 @@ jobs:
             exit 1
           fi
 
-          SUCCESSFUL_PUSH_RUNS="$(gh run list --workflow CI --commit "${TARGET_SHA}" --limit 20 \
+          SUCCESSFUL_PUSH_RUNS="$(gh run list --workflow CI --branch production-main --commit "${TARGET_SHA}" --limit 20 \
             --json status,conclusion,event \
             --jq '[.[] | select(.status == "completed" and .conclusion == "success" and .event == "push")] | length')"
           if [[ "${SUCCESSFUL_PUSH_RUNS}" -lt 1 ]]; then
@@ -150,16 +151,17 @@ jobs:
             }
 
             wait_version() {
-              local expected="$1" deadline payload
+              local expected_commit="$1" expected_version="$2" deadline payload
               deadline=$(( $(date +%s) + 60 ))
               while [[ $(date +%s) -lt "${deadline}" ]]; do
                 payload="$(curl -fsS --max-time 5 "${VERSION_URL}" || true)"
-                if [[ "${payload}" == *"\"commit\":\"${expected}\""* ]]; then
+                if [[ "${payload}" == *"\"commit\":\"${expected_commit}\""* ]] &&
+                   [[ "${payload}" == *"\"version\":\"${expected_version}\""* ]]; then
                   return 0
                 fi
                 sleep 3
               done
-              echo "[deploy-workflow] Version check failed: ${VERSION_URL} did not report commit ${expected}"
+              echo "[deploy-workflow] Version check failed: ${VERSION_URL} did not report commit=${expected_commit} version=${expected_version}"
               return 1
             }
 
@@ -188,12 +190,12 @@ jobs:
 
             set_release_metadata() {
               local sha="$1" version
-              if [[ ! "${sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
                 echo "[deploy-workflow] Invalid release commit: ${sha}"
                 return 1
               fi
               version="$(awk -F '"' '/"version"[[:space:]]*:/ { print $4; exit }' package.json)"
-              if [[ ! "${version}" =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$ ]]; then
+              if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
                 echo "[deploy-workflow] Invalid release version in package.json"
                 return 1
               fi
@@ -203,8 +205,34 @@ jobs:
               echo "[deploy-workflow] Release metadata commit=${GIT_COMMIT} version=${SIRAGPT_VERSION}"
             }
 
+            preserve_rollback_images() {
+              local current_backend_commit
+              set_release_metadata "${PREV_SHA}" || return 1
+              current_backend_commit="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' siragpt-backend:latest 2>/dev/null \
+                | awk -F= '$1 == "GIT_COMMIT" { print $2; exit }' || true)"
+              if [[ "${current_backend_commit}" != "${PREV_SHA}" ]]; then
+                echo "[deploy-workflow] Rebuilding previous backend once to seed verifiable rollback metadata"
+                ${COMPOSE} build backend || return 1
+              fi
+              if ! docker image inspect siragpt-frontend:latest >/dev/null 2>&1; then
+                echo "[deploy-workflow] Building missing previous frontend rollback image"
+                ${COMPOSE} build frontend || return 1
+              fi
+              docker tag siragpt-backend:latest "${ROLLBACK_BACKEND_IMAGE}" || return 1
+              docker tag siragpt-frontend:latest "${ROLLBACK_FRONTEND_IMAGE}" || return 1
+            }
+
+            restore_rollback_images() {
+              docker image inspect "${ROLLBACK_BACKEND_IMAGE}" >/dev/null 2>&1 || return 1
+              docker image inspect "${ROLLBACK_FRONTEND_IMAGE}" >/dev/null 2>&1 || return 1
+              docker tag "${ROLLBACK_BACKEND_IMAGE}" siragpt-backend:latest || return 1
+              docker tag "${ROLLBACK_FRONTEND_IMAGE}" siragpt-frontend:latest || return 1
+            }
+
             cd "${APP_DIR}"
-            PREV_SHA="$(git rev-parse HEAD)"
+            PREV_SHA="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+            ROLLBACK_BACKEND_IMAGE="siragpt-backend:rollback-${PREV_SHA}"
+            ROLLBACK_FRONTEND_IMAGE="siragpt-frontend:rollback-${PREV_SHA}"
             printf '%s\n' "${PREV_SHA}" > .deploy-prev-sha
 
             rollback() {
@@ -227,16 +255,16 @@ jobs:
                 echo "[deploy-workflow] Rollback metadata generation failed"
                 exit "${status}"
               fi
-              if ! ${COMPOSE} build backend frontend; then
-                echo "[deploy-workflow] Rollback image build failed"
+              if ! restore_rollback_images; then
+                echo "[deploy-workflow] Rollback image restoration failed"
                 exit "${status}"
               fi
-              if ! ${COMPOSE} up -d --no-deps backend frontend; then
+              if ! ${COMPOSE} up -d --no-deps --force-recreate backend frontend; then
                 echo "[deploy-workflow] Rollback container start failed"
                 exit "${status}"
               fi
               local rollback_status=0
-              wait_ready && wait_frontend && wait_version "${PREV_SHA}" || rollback_status="$?"
+              wait_ready && wait_frontend && wait_version "${PREV_SHA}" "${SIRAGPT_VERSION}" || rollback_status="$?"
               if [[ "${rollback_status}" -ne 0 ]]; then
                 echo "[deploy-workflow] Rollback attempted but verification still failed"
               else
@@ -244,7 +272,6 @@ jobs:
               fi
               exit "${status}"
             }
-            trap rollback EXIT
 
             echo "[deploy-workflow] Remote disk before deploy"
             df -h / /var/lib/docker 2>/dev/null || df -h / || true
@@ -254,6 +281,12 @@ jobs:
               echo "[deploy-workflow] Refusing invalid TARGET_SHA"
               exit 1
             fi
+            TARGET_SHA="${TARGET_SHA,,}"
+            if ! preserve_rollback_images; then
+              echo "[deploy-workflow] Could not preserve verified rollback images; refusing deploy"
+              exit 1
+            fi
+            trap rollback EXIT
             echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
             REPO_URL="https://x-access-token:${DEPLOY_GH_TOKEN}@github.com/${{ github.repository }}.git"
             # Keep the persisted origin URL credential-free and pointing at
@@ -284,7 +317,11 @@ jobs:
               || MIGRATION_STATUS="$?"
             printf '%s\n' "${MIGRATION_OUTPUT}"
             if [[ "${MIGRATION_STATUS}" -ne 0 ]]; then
-              if [[ "${MIGRATION_OUTPUT}" == *"P3005"* ]]; then
+              OTHER_PRISMA_CODE="$(printf '%s\n' "${MIGRATION_OUTPUT}" \
+                | awk 'match($0, /P[0-9][0-9][0-9][0-9]/) { code=substr($0, RSTART, RLENGTH); if (code != "P3005") { print code; exit } }')"
+              if [[ "${MIGRATION_OUTPUT}" == *"Error: P3005"* ]] &&
+                 [[ "${MIGRATION_OUTPUT}" == *"The database schema is not empty"* ]] &&
+                 [[ -z "${OTHER_PRISMA_CODE}" ]]; then
                 echo "[deploy-workflow] WARNING: Prisma reports the known unbaselined database (P3005); continuing"
               else
                 echo "[deploy-workflow] Database migration failed; aborting deploy"
@@ -302,8 +339,8 @@ jobs:
             echo "[deploy-workflow] Deploy health check passed: ${READY_URL}"
             wait_frontend
             echo "[deploy-workflow] Deploy frontend check passed: ${FRONTEND_URL}"
-            wait_version "${TARGET_SHA}"
-            echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA}"
+            wait_version "${TARGET_SHA}" "${SIRAGPT_VERSION}"
+            echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA} version=${SIRAGPT_VERSION}"
             SIRAGPT_DEPLOY
 
       - name: Surface deploy result

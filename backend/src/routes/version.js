@@ -53,7 +53,7 @@ function resolveFrontendVersion() {
   const fromEnv = process.env.SIRAGPT_VERSION;
   if (fromEnv) {
     const normalized = String(fromEnv).trim();
-    if (/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(normalized)) return normalized;
+    if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(normalized)) return normalized;
   }
 
   // package.json lives at the repo root (one level above backend/).
@@ -80,7 +80,7 @@ function resolveCommit() {
   ];
   for (const candidate of candidates) {
     const normalized = String(candidate || '').trim();
-    if (/^[0-9a-f]{7,40}$/i.test(normalized)) return normalized;
+    if (/^[0-9a-f]{40}$/i.test(normalized)) return normalized.toLowerCase();
   }
 
   // Best-effort `git rev-parse` — wrapped in try/catch because the
