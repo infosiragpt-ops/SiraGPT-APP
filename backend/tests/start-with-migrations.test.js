@@ -16,9 +16,11 @@ const {
   computeAdvisoryLockKeys,
   preflightDatabase,
   acquireMigrationLock,
+  forwardShutdownToBackend,
 } = require("../scripts/start-with-migrations");
 
 const wrapperSource = fs.readFileSync(path.join(__dirname, "..", "scripts", "start-with-migrations.js"), "utf8");
+const backendIndexSource = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
 const MIGRATIONS_DIR = path.join(__dirname, "..", "prisma", "migrations");
 
 test("only explicitly allowlisted migrations are safe to auto-rollback", () => {
@@ -250,4 +252,69 @@ test("boot wrapper exposes structured phase events and gated preflight/lock", ()
   assert.match(wrapperSource, /MIGRATION_ADVISORY_LOCK_DISABLED/);
   assert.match(wrapperSource, /MIGRATION_PREFLIGHT_DISABLED/);
   assert.match(wrapperSource, /pg_try_advisory_lock/);
+});
+
+test("Windows wrapper relays parent shutdown to backend over IPC without early taskkill", () => {
+  const child = {
+    connected: true,
+    messages: [],
+    signals: [],
+    send(message, callback) {
+      this.messages.push(message);
+      callback?.();
+    },
+    kill(signal) {
+      this.signals.push(signal);
+    },
+  };
+  const request = {
+    type: "siragpt:shutdown",
+    reason: "host:SIGTERM",
+    signal: "SIGTERM",
+    desiredExitCode: 0,
+  };
+
+  assert.equal(typeof forwardShutdownToBackend, "function");
+  assert.equal(forwardShutdownToBackend(child, request, { platform: "win32" }), true);
+  assert.deepEqual(child.messages, [request]);
+  assert.deepEqual(child.signals, []);
+});
+
+test("Unix wrapper also prefers IPC and does not duplicate it with SIGTERM", () => {
+  const child = {
+    connected: true,
+    messages: [],
+    signals: [],
+    send(message, callback) {
+      this.messages.push(message);
+      callback?.();
+    },
+    kill(signal) {
+      this.signals.push(signal);
+    },
+  };
+  const request = {
+    type: "siragpt:shutdown",
+    reason: "host:SIGTERM",
+    signal: "SIGTERM",
+    desiredExitCode: 0,
+  };
+
+  assert.equal(forwardShutdownToBackend(child, request, { platform: "linux" }), true);
+  assert.deepEqual(child.messages, [request]);
+  assert.deepEqual(child.signals, []);
+});
+
+test("wrapper and backend index form the IPC centralized-shutdown chain", () => {
+  assert.match(wrapperSource, /stdio:\s*\["inherit",\s*"inherit",\s*"inherit",\s*"ipc"\]/);
+  assert.match(wrapperSource, /process\.on\(["']message["']/);
+  assert.match(wrapperSource, /forwardShutdownToBackend\(child,/);
+  assert.match(backendIndexSource, /process\.on\(['"]message['"]/);
+  assert.match(backendIndexSource, /siragpt:shutdown/);
+  assert.match(backendIndexSource, /shutdownRegistry\.shutdown\(reason\)/);
+  assert.match(backendIndexSource, /process\.exit\(exitCode\)/);
+  assert.ok(
+    backendIndexSource.indexOf("process.on('message'") < backendIndexSource.indexOf("initAgentSystem();"),
+    "backend must buffer IPC shutdown before heavy startup begins",
+  );
 });

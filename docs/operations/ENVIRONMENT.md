@@ -74,6 +74,13 @@ recommendation. Label-free bounded gauges are exported from `GET /metrics`.
 Remote capacity omits those local estimates and recommendations. Datasource
 URLs and credentials are never included in pool logs.
 
+## 🛑 Runtime Lifecycle
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS` | Maximum time the single-container `start-all` parent waits for backend/frontend exit events after forwarding `SIGTERM` or `SIGINT`; clamped to 40000–120000 ms. On Windows the backend chain uses IPC, and `taskkill /T /F` is reserved for this deadline. | `50000` |
+| `SIRAGPT_WORKSPACE_RUN_STOP_GRACE_MS` | Per-workspace dev-runner grace before escalating from graceful termination to a forced process-tree kill. | `3000` |
+
 ## 🔒 Security
 
 | Variable | Description | Default |

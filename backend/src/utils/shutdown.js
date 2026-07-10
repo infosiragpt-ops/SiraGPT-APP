@@ -35,6 +35,7 @@ const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
   'scheduler_stop',
   'database_pool_autoscaler_stop',
   'system_cron_stop',
+  'workspace_runner_stop',
   'realtime_ws_close',
   'computer_use_ws_close',
   'http_server_close',

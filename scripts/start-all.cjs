@@ -23,6 +23,10 @@ const path = require("node:path");
 const {
   resolveCanonicalDatabaseUrl,
 } = require("../backend/src/config/database-url");
+const {
+  createShutdownCoordinator,
+  resolveParentShutdownTimeoutMs,
+} = require("./parent-shutdown");
 
 const ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
@@ -51,15 +55,30 @@ const BACKEND_PROXY_URL = USE_EXTERNAL_BACKEND ? EXTERNAL_BACKEND_URL : LOCAL_BA
 // "required port was never opened, expected port 3000".
 const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);
 const BACKEND_READY_TIMEOUT_MS = Number(process.env.BACKEND_READY_TIMEOUT_MS || 120_000);
+const PARENT_SHUTDOWN_TIMEOUT_MS = resolveParentShutdownTimeoutMs(
+  process.env.SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS,
+);
 
 let backend = null;
 let frontend = null;
-let shuttingDown = false;
+const shutdownController = new AbortController();
 
 function log(scope, msg, extra = {}) {
   const line = { ts: new Date().toISOString(), scope, msg, ...extra };
   process.stdout.write(JSON.stringify(line) + "\n");
 }
+
+const coordinator = createShutdownCoordinator({
+  timeoutMs: PARENT_SHUTDOWN_TIMEOUT_MS,
+  onShutdownStart: ({ reason, signal, desiredExitCode }) => {
+    log("start-all", "shutdown started", { reason, signal, desiredExitCode });
+    shutdownController.abort();
+  },
+  onSettled: ({ reason, exitCode, timedOut }) => {
+    log("start-all", "shutdown settled", { reason, exitCode, timedOut });
+    process.exitCode = exitCode;
+  },
+});
 
 function normalizeBackendUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
@@ -135,10 +154,14 @@ function spawnBackend() {
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {
     cwd: BACKEND_DIR,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    detached: process.platform !== "win32",
   });
   pipePrefixed(child, "[backend]");
-  child.on("exit", (code, signal) => onChildExit("backend", code, signal));
+  coordinator.registerChild("backend", child, {
+    ipc: true,
+    processGroup: process.platform !== "win32",
+  });
   return child;
 }
 
@@ -160,88 +183,97 @@ function spawnFrontend() {
         cwd: ROOT,
         env,
         stdio: ["ignore", "inherit", "inherit"],
+        detached: process.platform !== "win32",
       })
     : spawn("npx", ["next", "start", "-p", String(FRONTEND_PORT), "-H", "0.0.0.0"], {
         cwd: ROOT,
         env,
         stdio: ["ignore", "inherit", "inherit"],
+        detached: process.platform !== "win32",
       });
 
-  child.on("exit", (code, signal) => onChildExit("frontend", code, signal));
+  coordinator.registerChild("frontend", child, {
+    processGroup: process.platform !== "win32",
+  });
   return child;
 }
 
-function onChildExit(name, code, signal) {
-  if (shuttingDown) {
-    log("start-all", `${name} exited during shutdown`, { code, signal });
-    return;
-  }
-  // In a Replit deployment the health-check probes the FRONTEND (local port
-  // 3000 → external 80). Only the frontend dying means there is nothing left
-  // to serve, so that is the one case that should tear the whole container
-  // down. If the BACKEND exits (e.g. a transient boot/migration hiccup), keep
-  // the frontend online: the health-check still passes, the deployment can go
-  // live, and the backend failure becomes visible in production runtime logs
-  // instead of failing the entire promote with zero diagnostics. This mirrors
-  // the intent of the waitForPort() timeout path below. Outside deployments
-  // (a plain local `npm start`) we keep the strict teardown so a developer
-  // notices immediately when the backend dies.
-  if (name === "backend" && process.env.REPLIT_DEPLOYMENT === "1") {
-    log("start-all", "backend exited — keeping frontend online so the deploy health-check can still pass", { code, signal });
-    backend = null;
-    return;
-  }
-  log("start-all", `${name} exited unexpectedly — tearing down container`, { code, signal });
-  shuttingDown = true;
-  for (const c of [backend, frontend]) {
-    if (c && !c.killed && c.exitCode === null) {
-      try { c.kill("SIGTERM"); } catch { /* noop */ }
-    }
-  }
-  setTimeout(() => process.exit(code === 0 ? 1 : (code ?? 1)), 2000).unref();
-}
-
-function forwardSignal(sig) {
+function handleSignal(sig) {
   return () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log("start-all", "received signal — forwarding to children", { signal: sig });
-    for (const c of [backend, frontend]) {
-      if (c && !c.killed && c.exitCode === null) {
-        try { c.kill(sig); } catch { /* noop */ }
-      }
-    }
-    setTimeout(() => process.exit(0), 5000).unref();
+    void coordinator.shutdown({
+      reason: `host:${sig}`,
+      signal: sig,
+      desiredExitCode: 0,
+    });
   };
 }
 
-function waitForPort(host, port, timeoutMs) {
+function waitForPort(host, port, timeoutMs, signal) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
+    let activeSocket = null;
+    let retryTimer = null;
+    let finished = false;
+
+    const finish = (settle, value) => {
+      if (finished) return;
+      finished = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (activeSocket) {
+        activeSocket.removeAllListeners();
+        activeSocket.destroy();
+        activeSocket = null;
+      }
+      signal?.removeEventListener("abort", onAbort);
+      settle(value);
+    };
+    const onAbort = () => {
+      const error = new Error("Port readiness wait aborted during parent shutdown");
+      error.code = "ABORT_ERR";
+      finish(reject, error);
+    };
     const attempt = () => {
+      if (finished) return;
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
       const sock = net.connect({ host, port });
-      let settled = false;
+      activeSocket = sock;
+      let socketSettled = false;
       const cleanup = () => {
-        if (!settled) {
-          settled = true;
+        if (!socketSettled) {
+          socketSettled = true;
           sock.removeAllListeners();
           sock.destroy();
+          if (activeSocket === sock) activeSocket = null;
         }
       };
-      sock.once("connect", () => { cleanup(); resolve(); });
+      sock.once("connect", () => { cleanup(); finish(resolve); });
       sock.once("error", () => {
         cleanup();
-        if (Date.now() > deadline) return reject(new Error(`Backend did not open ${host}:${port} within ${timeoutMs}ms`));
-        setTimeout(attempt, 500);
+        if (Date.now() > deadline) {
+          finish(reject, new Error(`Backend did not open ${host}:${port} within ${timeoutMs}ms`));
+          return;
+        }
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          attempt();
+        }, 500);
       });
     };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
     attempt();
   });
 }
 
 async function main() {
-  process.on("SIGTERM", forwardSignal("SIGTERM"));
-  process.on("SIGINT", forwardSignal("SIGINT"));
+  process.on("SIGTERM", handleSignal("SIGTERM"));
+  process.on("SIGINT", handleSignal("SIGINT"));
 
   frontend = spawnFrontend();
   if (USE_EXTERNAL_BACKEND) {
@@ -267,13 +299,14 @@ async function main() {
     Number.isFinite(parsedFrontendTimeout) && parsedFrontendTimeout > 0
       ? parsedFrontendTimeout
       : 90_000;
-  await waitForPort("127.0.0.1", FRONTEND_PORT, frontendReadyTimeoutMs)
+  await waitForPort("127.0.0.1", FRONTEND_PORT, frontendReadyTimeoutMs, shutdownController.signal)
     .then(() => log("start-all", "frontend port open; starting backend", { port: FRONTEND_PORT }))
     .catch((err) => log("start-all", "frontend readiness wait timed out; starting backend anyway", { error: err?.message }));
+  if (coordinator.isShuttingDown()) return;
 
   backend = spawnBackend();
   const timeoutMs = Number(process.env.BACKEND_READY_TIMEOUT_MS || 300_000);
-  waitForPort(BACKEND_HOST, BACKEND_PORT, timeoutMs)
+  waitForPort(BACKEND_HOST, BACKEND_PORT, timeoutMs, shutdownController.signal)
     .then(() => {
       log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
     })
@@ -286,5 +319,9 @@ async function main() {
 
 main().catch((err) => {
   log("start-all", "fatal error", { error: err?.message, stack: err?.stack });
-  process.exit(1);
+  void coordinator.shutdown({
+    reason: "parent:fatal",
+    signal: "SIGTERM",
+    desiredExitCode: 1,
+  });
 });

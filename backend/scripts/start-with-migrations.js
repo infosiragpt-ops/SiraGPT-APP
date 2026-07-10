@@ -16,6 +16,7 @@ const {
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(BACKEND_DIR, "prisma", "migrations");
+const SHUTDOWN_MESSAGE_TYPE = "siragpt:shutdown";
 const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
   {
     pattern: /^\d{14}_reset_admin_password$/,
@@ -533,19 +534,91 @@ async function runMigrations() {
   return result.status ?? 1;
 }
 
+function normalizeShutdownRequest(message, fallbackSignal = "SIGTERM") {
+  if (!message || message.type !== SHUTDOWN_MESSAGE_TYPE) return null;
+  const requestedCode = Number(message.desiredExitCode);
+  return {
+    type: SHUTDOWN_MESSAGE_TYPE,
+    reason: String(message.reason || `host:${fallbackSignal}`),
+    signal: message.signal === "SIGINT" ? "SIGINT" : "SIGTERM",
+    desiredExitCode: Number.isInteger(requestedCode) && requestedCode >= 0
+      ? Math.min(requestedCode, 255)
+      : 1,
+  };
+}
+
+function forwardShutdownToBackend(child, message) {
+  const request = normalizeShutdownRequest(message);
+  if (!child || !request) return false;
+  let sentIpc = false;
+  if (child.connected && typeof child.send === "function") {
+    try {
+      child.send(request, () => {});
+      sentIpc = true;
+    } catch {
+      sentIpc = false;
+    }
+  }
+  if (!sentIpc) {
+    try { child.kill(request.signal); } catch { /* already gone */ }
+  }
+  return sentIpc;
+}
+
+let backendChild = null;
+let pendingShutdownRequest = null;
+let shutdownHandlersInstalled = false;
+
+function requestBackendShutdown(message) {
+  const request = normalizeShutdownRequest(message);
+  if (!request) return false;
+  pendingShutdownRequest = request;
+  if (backendChild) forwardShutdownToBackend(backendChild, request);
+  return true;
+}
+
+function installParentShutdownHandlers() {
+  if (shutdownHandlersInstalled) return;
+  shutdownHandlersInstalled = true;
+  const fromSignal = (signal) => () => {
+    requestBackendShutdown({
+      type: SHUTDOWN_MESSAGE_TYPE,
+      reason: `host:${signal}`,
+      signal,
+      desiredExitCode: 0,
+    });
+  };
+  process.on("SIGTERM", fromSignal("SIGTERM"));
+  process.on("SIGINT", fromSignal("SIGINT"));
+  process.on("message", (message) => {
+    requestBackendShutdown(message);
+  });
+}
+
+function finishPendingShutdownBeforeBackend() {
+  if (!pendingShutdownRequest || backendChild) return false;
+  log("shutdown requested before backend start", {
+    reason: pendingShutdownRequest.reason,
+    signal: pendingShutdownRequest.signal,
+  });
+  process.exitCode = pendingShutdownRequest.desiredExitCode;
+  if (process.connected && typeof process.disconnect === "function") {
+    try { process.disconnect(); } catch { /* parent already disconnected */ }
+  }
+  return true;
+}
+
 function startBackend() {
   log("starting backend (node index.js)");
   const child = spawn(process.execPath, ["index.js"], {
     cwd: BACKEND_DIR,
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env: process.env,
   });
-  const forward = (sig) => () => {
-    try { child.kill(sig); } catch { /* noop */ }
-  };
-  process.on("SIGTERM", forward("SIGTERM"));
-  process.on("SIGINT", forward("SIGINT"));
+  backendChild = child;
+  if (pendingShutdownRequest) forwardShutdownToBackend(child, pendingShutdownRequest);
   child.on("exit", (code, signal) => {
+    backendChild = null;
     log("backend exited", { code, signal });
     process.exit(code ?? (signal ? 1 : 0));
   });
@@ -711,14 +784,20 @@ async function logDbSnapshot(label) {
 }
 
 async function main() {
+  installParentShutdownHandlers();
   phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
   clearStalePortProcess();
   ensureSandboxPythonDeps();
 
   // Log DB fingerprint + user count BEFORE migrations to detect wrong-DB issues.
   const pre = await logDbSnapshot("pre_migrate");
+  if (finishPendingShutdownBeforeBackend()) return;
 
   const release = await maybePreflightAndLock();
+  if (finishPendingShutdownBeforeBackend()) {
+    await release().catch(() => {});
+    return;
+  }
 
   let migrationStatus;
   try {
@@ -728,6 +807,7 @@ async function main() {
   } finally {
     await release().catch(() => {});
   }
+  if (finishPendingShutdownBeforeBackend()) return;
 
   if (migrationStatus !== 0) {
     // Opt-in safety valve (default OFF — byte-identical to before when unset):
@@ -738,6 +818,7 @@ async function main() {
     if (process.env.MIGRATION_NONFATAL === "1") {
       log("migrations failed but MIGRATION_NONFATAL=1 — booting anyway (degraded)", { status: migrationStatus });
       phase("backend_start", { degraded: true });
+      if (finishPendingShutdownBeforeBackend()) return;
       startBackend();
       return;
     }
@@ -760,6 +841,7 @@ async function main() {
 
   // Seed the admin user into the production DB if env vars are configured.
   await seedAdminIfNeeded();
+  if (finishPendingShutdownBeforeBackend()) return;
 
   phase("backend_start", { degraded: false });
   startBackend();
@@ -785,4 +867,5 @@ module.exports = {
   computeAdvisoryLockKeys,
   preflightDatabase,
   acquireMigrationLock,
+  forwardShutdownToBackend,
 };

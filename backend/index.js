@@ -1,5 +1,36 @@
 require('./src/config/load-env').loadEnvFiles();
 
+// Install shutdown ownership before heavy startup so Windows IPC requests (and
+// Unix signals) cannot be lost while services are still being required.
+let earlyShutdownRequest = null;
+let dispatchShutdownRequest = null;
+function queueShutdownRequest({ reason, signal, desiredExitCode = 0 }) {
+    const request = {
+        reason: String(reason || signal || 'shutdown'),
+        signal: signal === 'SIGINT' ? 'SIGINT' : 'SIGTERM',
+        desiredExitCode,
+    };
+    if (dispatchShutdownRequest) {
+        dispatchShutdownRequest(request);
+    } else if (!earlyShutdownRequest) {
+        earlyShutdownRequest = request;
+    }
+}
+process.once('SIGTERM', () => {
+    queueShutdownRequest({ reason: 'SIGTERM', signal: 'SIGTERM', desiredExitCode: 0 });
+});
+process.once('SIGINT', () => {
+    queueShutdownRequest({ reason: 'SIGINT', signal: 'SIGINT', desiredExitCode: 0 });
+});
+process.on('message', (message) => {
+    if (!message || message.type !== 'siragpt:shutdown') return;
+    queueShutdownRequest({
+        reason: message.reason,
+        signal: message.signal,
+        desiredExitCode: message.desiredExitCode,
+    });
+});
+
 // ── EventTarget listener cap ───────────────────────────────
 // AbortSignals are shared across many concurrent operations
 // (per-attempt LLM retries, tool calls inside long agent runs,
@@ -395,6 +426,7 @@ const answerRoutes = require('./src/routes/answer');
 const builderRoutes = require('./src/routes/builder');
 const githubSearchRoutes = require('./src/routes/github-search');
 const githubRoutes = require('./src/routes/github');
+const workspaceRunner = require('./src/services/github/workspace-runner.service');
 const hostingRoutes = require('./src/routes/hosting');
 const xSearchRoutes = require('./src/routes/x-search');
 const accountingRoutes = require('./src/routes/accounting');
@@ -1488,6 +1520,10 @@ async function startServer() {
         5000,
     );
 
+    shutdownRegistry.register('workspace_runner_stop', async () => {
+        await workspaceRunner.stopAll();
+    }, 5000);
+
     // Close both WebSocket servers and their clients before HTTP shutdown.
     shutdownRegistry.register(
         'realtime_ws_close',
@@ -1558,18 +1594,33 @@ async function startServer() {
         } catch { }
     }, 5000);
 
-    async function shutdown(signal) {
-        logger.info({ signal }, 'shutdown_signal_received');
-        try {
-            await shutdownRegistry.shutdown(signal);
-        } catch (err) {
-            logger.error({ err: err && err.message }, 'shutdown_registry_failure');
-        }
-        process.exit(0);
+    let shutdownPromise = null;
+    function shutdown(reason, requestedExitCode = 0) {
+        if (shutdownPromise) return shutdownPromise;
+        const parsedExitCode = Number(requestedExitCode);
+        const exitCode = Number.isInteger(parsedExitCode) && parsedExitCode >= 0
+            ? Math.min(parsedExitCode, 255)
+            : 1;
+        shutdownPromise = (async () => {
+            logger.info({ reason, exitCode }, 'shutdown_signal_received');
+            try {
+                await shutdownRegistry.shutdown(reason);
+            } catch (err) {
+                logger.error({ err: err && err.message }, 'shutdown_registry_failure');
+            }
+            process.exit(exitCode);
+        })();
+        return shutdownPromise;
     }
 
-    process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
-    process.once('SIGINT', () => { void shutdown('SIGINT'); });
+    dispatchShutdownRequest = (request) => {
+        void shutdown(request.reason, request.desiredExitCode);
+    };
+    if (earlyShutdownRequest) {
+        const request = earlyShutdownRequest;
+        earlyShutdownRequest = null;
+        dispatchShutdownRequest(request);
+    }
 
     // ── Alerting configuration ─────────────────────────────────────
     alerting.configure({ logger });
