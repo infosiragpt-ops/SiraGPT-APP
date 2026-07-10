@@ -13,6 +13,10 @@
 // ──────────────────────────────────────────────────────────────
 
 const crypto = require('crypto');
+const {
+  DATABASE_URL_CONFLICT_CODE,
+  resolveCanonicalDatabaseUrl,
+} = require('../config/database-url');
 
 // Known placeholder patterns — matches both obvious examples and
 // common copy-paste defaults that should never reach production.
@@ -203,10 +207,24 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   checkEntropy('SESSION_SECRET', env.SESSION_SECRET, 'Session Secret');
 
   // ─── Database URL ──────────────────────────────────────
-  if (env.PRISMA_DATABASE_URL) {
-    if (!env.PRISMA_DATABASE_URL.startsWith('postgresql://') &&
-        !env.PRISMA_DATABASE_URL.startsWith('prisma+postgres://') &&
-        !env.PRISMA_DATABASE_URL.startsWith('postgres://')) {
+  let databaseUrl = null;
+  let databaseUrlConflict = false;
+  try {
+    databaseUrl = resolveCanonicalDatabaseUrl(env);
+  } catch (error) {
+    databaseUrlConflict = true;
+    issues.push({
+      key: 'PRISMA_DATABASE_URL',
+      code: error?.code || DATABASE_URL_CONFLICT_CODE,
+      label: 'Database URL',
+      severity: Severity.BLOCKING,
+      message: 'Conflicting database URL environment variables are configured. Refusing to choose between aliases.',
+    });
+  }
+  if (databaseUrl) {
+    if (!databaseUrl.startsWith('postgresql://') &&
+        !databaseUrl.startsWith('prisma+postgres://') &&
+        !databaseUrl.startsWith('postgres://')) {
       issues.push({
         key: 'PRISMA_DATABASE_URL',
         label: 'Database URL',
@@ -214,12 +232,12 @@ function validateStartupEnvironment(env = process.env, options = {}) {
         message: 'Database URL must start with postgresql://, postgres://, or prisma+postgres://',
       });
     }
-  } else {
+  } else if (!databaseUrlConflict) {
     issues.push({
       key: 'PRISMA_DATABASE_URL',
       label: 'Database URL',
       severity: Severity.BLOCKING,
-      message: 'PRISMA_DATABASE_URL is required but not set.',
+      message: 'PRISMA_DATABASE_URL (or DATABASE_URL fallback) is required but not set.',
     });
   }
 

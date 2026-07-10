@@ -35,7 +35,7 @@ const { createHealthRoutes } = require('../src/routes/health-routes');
 // suite never touches a real Postgres/Redis. OPENAI_API_KEY is set so the
 // model_providers check is healthy, isolating the overall status to the OAuth
 // signal under test.
-function buildApp() {
+function buildApp(overrides = {}) {
   const app = express();
   const healthRoutes = createHealthRoutes({
     prisma: { $queryRawUnsafe: async () => 1 },
@@ -49,6 +49,7 @@ function buildApp() {
     getLangfuseStatus: () => ({}),
     getPostHogStatus: () => ({}),
     startupEnv: { checked: true, issues: [] },
+    ...overrides,
   });
   healthRoutes.register(app);
   return { app, healthRoutes };
@@ -84,6 +85,40 @@ describe('GET /health — live OAuth health exposure (e2e)', () => {
     // A clean (unset) boot result is "skipped" — proving the route passes the
     // ACTUAL snapshot through rather than a hardcoded healthy/degraded value.
     assert.equal(check.status, 'skipped');
+  });
+
+  test('full health route threads the shared pool snapshot and advisory recommendation', async () => {
+    const { app } = buildApp({
+      poolMetrics: {
+        snapshot: () => ({
+          capacity: { observable: true, reason: 'direct_postgres_datasource' },
+          pool: { min: 2, max: 10, idleTimeoutMs: 60_000 },
+          estimated_connections_active: 6,
+          estimated_connections_idle: 4,
+          queries_in_flight: 6,
+          estimated_saturation_ratio: 0.6,
+          estimated_saturation: 'ok',
+        }),
+      },
+      getPoolAutoscalerState: () => ({
+        running: true,
+        mode: 'advisory',
+        currentLimit: 10,
+        recommendedLimit: 12,
+        lastRecommendation: 'scale_up',
+        lastRecommendationAt: 1234,
+        stats: { ticks: 1, recommendations: 1, applyErrors: 0 },
+      }),
+    });
+
+    const res = await request(app).get('/health');
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.databasePool.snapshot.pool.max, 10);
+    assert.equal(res.body.databasePool.recommendation.mode, 'advisory');
+    assert.equal(res.body.databasePool.recommendation.currentLimit, 10);
+    assert.equal(res.body.databasePool.recommendation.recommendedLimit, 12);
+    assert.ok(res.body.checks.find((check) => check.name === 'database_pool'));
   });
 
   test('boot result with issues → google_oauth + overall degraded, HTTP 200', async () => {

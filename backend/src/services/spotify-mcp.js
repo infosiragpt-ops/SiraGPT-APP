@@ -1,8 +1,7 @@
 const SpotifyWebApi = require('spotify-web-api-node');
-const { PrismaClient } = require('@prisma/client');
 const jwt = require('jsonwebtoken');
 const { encrypt, decrypt } = require('../utils/encryption');
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 
 // OAuth `state` must be a SIGNED token, not the bare userId — otherwise an
 // attacker who completes the consent flow can tamper `state` to a victim's id

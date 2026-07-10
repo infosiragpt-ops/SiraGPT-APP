@@ -25,6 +25,11 @@
 
 'use strict';
 
+const {
+  DATABASE_URL_CONFLICT_CODE,
+  resolveCanonicalDatabaseUrl,
+} = require('../config/database-url');
+
 // Per-environment required vars. Kept small & realistic — anything
 // the app cannot serve real traffic without. Optional integrations
 // live in RECOMMENDED.
@@ -81,10 +86,6 @@ function looksLikeLocalhost(value) {
   return LOCALHOST_PATTERNS.some((re) => re.test(value));
 }
 
-function resolveDatabaseUrl(env) {
-  return env.PRISMA_DATABASE_URL || env.DATABASE_URL || '';
-}
-
 function isCiEnvironment(env) {
   return String(env.CI || '').toLowerCase() === 'true' || String(env.GITHUB_ACTIONS || '').toLowerCase() === 'true';
 }
@@ -94,10 +95,11 @@ function shouldBlockLocalDatabaseUrl(env) {
   return policy === 'block' || String(env.REJECT_LOCAL_DATABASE_URL || '').toLowerCase() === 'true';
 }
 
-function checkRequired(env, envName, errors) {
+function checkRequired(env, envName, errors, databaseUrl, databaseUrlConflict) {
   const required = REQUIRED_BY_ENV[envName] || [];
   for (const key of required) {
-    const v = env[key];
+    if (key === 'PRISMA_DATABASE_URL' && databaseUrlConflict) continue;
+    const v = key === 'PRISMA_DATABASE_URL' ? databaseUrl : env[key];
     if (!v || String(v).trim() === '') {
       errors.push({
         key,
@@ -122,10 +124,11 @@ function checkRecommended(env, envName, warnings) {
   }
 }
 
-function checkCrossFieldMisconfig(env, envName, warnings, errors) {
+function checkCrossFieldMisconfig(env, envName, warnings, errors, databaseUrl) {
   // Prod DB pointing at localhost is almost certainly a mistake.
-  const databaseUrl = resolveDatabaseUrl(env);
-  const databaseKey = env.PRISMA_DATABASE_URL ? 'PRISMA_DATABASE_URL' : 'DATABASE_URL';
+  const databaseKey = String(env.PRISMA_DATABASE_URL || '').trim()
+    ? 'PRISMA_DATABASE_URL'
+    : 'DATABASE_URL';
 
   if (envName === 'production' && looksLikeLocalhost(databaseUrl) && shouldBlockLocalDatabaseUrl(env)) {
     errors.push({
@@ -188,10 +191,26 @@ function validateConfig(env = process.env, opts = {}) {
   const envName = opts.envName || resolveEnvName(env);
   const errors = [];
   const warnings = [];
+  let databaseUrl = null;
+  let databaseUrlConflict = false;
 
-  checkRequired(env, envName, errors);
+  try {
+    databaseUrl = resolveCanonicalDatabaseUrl(env);
+  } catch (error) {
+    databaseUrlConflict = error?.code === DATABASE_URL_CONFLICT_CODE;
+    errors.push({
+      key: 'PRISMA_DATABASE_URL',
+      code: error?.code || DATABASE_URL_CONFLICT_CODE,
+      envName,
+      message: 'Conflicting database URL environment variables are configured. Refusing to choose between aliases.',
+    });
+  }
+
+  checkRequired(env, envName, errors, databaseUrl, databaseUrlConflict);
   checkRecommended(env, envName, warnings);
-  checkCrossFieldMisconfig(env, envName, warnings, errors);
+  if (!databaseUrlConflict) {
+    checkCrossFieldMisconfig(env, envName, warnings, errors, databaseUrl);
+  }
 
   return {
     ok: errors.length === 0,
@@ -230,7 +249,6 @@ function validateConfigOrExit(env = process.env, opts = {}) {
         ? opts.failOnError
         : envName === 'production' || envName === 'staging';
     if (failOnError) {
-      // eslint-disable-next-line n/no-process-exit
       process.exit(1);
     }
   } else {
@@ -250,5 +268,5 @@ module.exports = {
   REQUIRED_BY_ENV,
   RECOMMENDED_BY_ENV,
   // exported for tests
-  _internal: { looksLikeLocalhost, resolveDatabaseUrl },
+  _internal: { looksLikeLocalhost, resolveDatabaseUrl: resolveCanonicalDatabaseUrl },
 };

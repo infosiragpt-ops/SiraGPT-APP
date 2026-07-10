@@ -1,6 +1,5 @@
-const { PrismaClient } = require("@prisma/client");
 const { encoding_for_model } = require("tiktoken"); // import tiktoken
-const prisma = new PrismaClient();
+const prisma = require("../config/database");
 
 const usageService = {
     /**

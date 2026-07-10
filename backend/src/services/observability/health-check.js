@@ -265,6 +265,104 @@ function checkProcess() {
   };
 }
 
+function finiteNonNegative(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function readPoolAutoscalerState(source) {
+  try {
+    if (typeof source === "function") return source() || null;
+    if (source && typeof source.getState === "function") return source.getState() || null;
+    return source && typeof source === "object" ? source : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Non-critical operational view of the shared Prisma pool. The instrumentation
+ * snapshot remains the source of truth for the live limit; autoscaler state is
+ * selected down to safe advisory fields so history and arbitrary errors do not
+ * leak through the public health response.
+ */
+function checkDatabasePool(poolMetrics, getPoolAutoscalerState) {
+  if (!poolMetrics || typeof poolMetrics.snapshot !== "function") {
+    return {
+      name: "database_pool",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_pool_instrumentation" },
+    };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const snapshot = poolMetrics.snapshot();
+    if (snapshot?.capacity?.observable === false) {
+      return {
+        name: "database_pool",
+        status: "skipped",
+        critical: false,
+        latency_ms: Date.now() - startedAt,
+        details: {
+          capacity: {
+            observable: false,
+            reason: snapshot.capacity.reason || "pool_capacity_unobservable",
+          },
+          reason: "pool_capacity_unobservable",
+        },
+      };
+    }
+    const state = readPoolAutoscalerState(getPoolAutoscalerState);
+    const actualLimit = finiteNonNegative(snapshot?.pool?.max, 0);
+    const stats = state?.stats || {};
+    const recommendation = {
+      enabled: Boolean(state),
+      running: Boolean(state?.running),
+      mode: "advisory",
+      currentLimit: actualLimit,
+      recommendedLimit: finiteNonNegative(state?.recommendedLimit, actualLimit),
+      lastRecommendation: typeof state?.lastRecommendation === "string"
+        ? state.lastRecommendation
+        : "hold",
+      lastRecommendationAt: state?.lastRecommendationAt ?? null,
+      stats: {
+        ticks: finiteNonNegative(stats.ticks, 0),
+        recommendations: finiteNonNegative(stats.recommendations, 0),
+        applyErrors: finiteNonNegative(stats.applyErrors, 0),
+      },
+    };
+
+    let status = "healthy";
+    // These are configured-limit estimates, not native Prisma pool counters.
+    // Both warning and critical estimates degrade the composite monotonically;
+    // estimated pressure alone must never trigger a readiness 503.
+    if (
+      snapshot?.estimated_saturation === "critical"
+      || snapshot?.estimated_saturation === "warn"
+    ) {
+      status = "degraded";
+    }
+    return {
+      name: "database_pool",
+      status,
+      critical: false,
+      latency_ms: Date.now() - startedAt,
+      details: { snapshot, recommendation },
+    };
+  } catch {
+    return {
+      name: "database_pool",
+      status: "degraded",
+      critical: false,
+      latency_ms: Date.now() - startedAt,
+      details: { reason: "pool_snapshot_unavailable" },
+    };
+  }
+}
+
 function checkModelProvidersConfigured(env = process.env) {
   // Informational only — environment configuration is an ops concern,
   // not a runtime invariant. Surfaces *which* providers are reachable
@@ -611,7 +709,22 @@ async function runReadinessCheck({ prisma, redis, queue, env = process.env } = {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv, env = process.env } = {}) {
+async function runFullHealthCheck({
+  prisma,
+  redis,
+  queue,
+  telemetry,
+  sentry,
+  langfuse,
+  posthog,
+  circuitBreakers,
+  coworkHealth,
+  googleOAuth,
+  startupEnv,
+  poolMetrics,
+  getPoolAutoscalerState,
+  env = process.env,
+} = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma, env),
     checkMigrations(prisma, env),
@@ -631,6 +744,12 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   checks.push(checkR2Storage(env));
   checks.push(checkPlaywright());
 
+  let databasePoolCheck = null;
+  if (poolMetrics) {
+    databasePoolCheck = checkDatabasePool(poolMetrics, getPoolAutoscalerState);
+    checks.push(databasePoolCheck);
+  }
+
   // OAuth boot-config health: pushed into the checks array so a stale
   // misconfiguration drives the composite status to `degraded`, and also
   // mirrored under a top-level `googleOAuth` key so monitoring probes can
@@ -648,6 +767,7 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   const report = composeStatus(checks);
   report.googleOAuth = googleOAuthCheck.details;
   report.startupEnv = startupEnvCheck.details;
+  if (databasePoolCheck) report.databasePool = databasePoolCheck.details;
   return report;
 }
 
@@ -689,6 +809,7 @@ module.exports = {
   checkRedis,
   checkQueue,
   checkProcess,
+  checkDatabasePool,
   checkModelProvidersConfigured,
   checkOpenTelemetry,
   checkSentry,

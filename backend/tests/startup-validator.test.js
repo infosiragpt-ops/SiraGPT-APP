@@ -319,6 +319,28 @@ describe('validateStartupEnvironment · PRISMA_DATABASE_URL', () => {
     assert.equal(db.severity, 'BLOCKING');
     assert.match(db.message, /postgresql:\/\/|postgres:\/\//);
   });
+
+  it('accepts DATABASE_URL as a fallback when the canonical variable is absent', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: undefined,
+      DATABASE_URL: '  postgres://fallback.internal/app  ',
+    }));
+    assert.equal(issues.some(i => i.key === 'PRISMA_DATABASE_URL'), false);
+  });
+
+  it('blocks divergent aliases without logging either database URL', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'postgres://canonical-user:canonical-secret@primary.internal/app',
+      DATABASE_URL: 'postgres://legacy-user:legacy-secret@legacy.internal/app',
+    }));
+    const db = issues.find(i => i.code === 'DATABASE_URL_CONFLICT');
+    assert.ok(db);
+    assert.equal(db.severity, 'BLOCKING');
+    assert.doesNotMatch(
+      JSON.stringify(db),
+      /canonical-user|canonical-secret|primary\.internal|legacy-user|legacy-secret|legacy\.internal/,
+    );
+  });
 });
 
 // ── Redis check ───────────────────────────────────────────────────

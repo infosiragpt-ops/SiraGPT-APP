@@ -49,6 +49,30 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `POSTGRES_USER` | PostgreSQL user | `postgres` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `postgres` |
 | `POSTGRES_DB` | PostgreSQL database name | `siragpt` |
+| `PRISMA_DATABASE_URL` | Canonical Prisma datasource URL | — |
+| `DATABASE_URL` | Legacy fallback used only when `PRISMA_DATABASE_URL` is empty | — |
+| `DATABASE_POOL_MIN` | Informational lower pool bound used by instrumentation; clamped to `1..DATABASE_POOL_MAX` | `2` |
+| `DATABASE_POOL_MAX` | Prisma v6 `connection_limit`; strictly parsed and clamped to `1..100` | `10` |
+| `DATABASE_POOL_TIMEOUT_MS` | Pool acquisition timeout in milliseconds, clamped to `1000..300000` and rounded up to Prisma `pool_timeout` seconds | `10000` |
+| `DATABASE_POOL_AUTOSCALE_ENABLED` | Start the advisory pool recommendation loop. It never replaces or resizes the live Prisma client. | `false` |
+| `DATABASE_POOL_AUTOSCALE_INTERVAL_MS` | Advisory sampling interval in milliseconds, clamped to `1000..3600000` | `30000` |
+| `DATABASE_POOL_AUTOSCALE_MIN` | Lowest limit the advisory policy may recommend, clamped to `1..100` | `2` |
+| `DATABASE_POOL_AUTOSCALE_MAX` | Highest limit the advisory policy may recommend, clamped to `1..100` and never below min | `50` |
+| `DATABASE_POOL_AUTOSCALE_COLD_SAMPLES` | Consecutive cold samples required before a scale-down recommendation, strictly parsed and clamped to `1..20` | `3` |
+
+`PRISMA_DATABASE_URL` takes precedence. If it and `DATABASE_URL` are both
+non-empty, their trimmed values must match; otherwise startup fails closed
+without including either value in the error. For direct `postgres:` and
+`postgresql:` URLs, the runtime builder preserves unrelated parameters such as
+`schema`, `sslmode`, and `pgbouncer`, while replacing only `connection_limit`
+and `pool_timeout`. It never rewrites `prisma+postgres:` remote/Accelerate
+URLs, whose local pool capacity is reported as unobservable.
+
+For observable direct connections, full `GET /health` reports estimated
+active/idle connections and estimated saturation plus any advisory
+recommendation. Label-free bounded gauges are exported from `GET /metrics`.
+Remote capacity omits those local estimates and recommendations. Datasource
+URLs and credentials are never included in pool logs.
 
 ## 🔒 Security
 

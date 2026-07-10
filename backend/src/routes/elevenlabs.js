@@ -7,7 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const FormData = require('form-data');
-const { PrismaClient } = require('@prisma/client');
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
 const {
   contentDispositionHeader,
@@ -15,7 +14,7 @@ const {
 } = require('../middleware/file-response-safety');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 const uploadRoot = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
   : path.resolve(__dirname, '../../uploads');

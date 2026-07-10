@@ -302,6 +302,47 @@ const passport = require('./src/config/passport');
 const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 
 const prisma = require('./src/config/database');
+const { createPoolAutoscaler } = require('./src/db/pool-autoscaler');
+let poolAutoscaler = null;
+
+function getPoolAutoscalerState() {
+    return poolAutoscaler ? poolAutoscaler.getState() : null;
+}
+
+function startDatabasePoolAutoscaler(env = process.env) {
+    const enabled = ['1', 'true', 'yes', 'on'].includes(
+        String(env.DATABASE_POOL_AUTOSCALE_ENABLED || '').trim().toLowerCase()
+    );
+    if (!enabled) return null;
+    const capacity = prisma.poolMetrics?.snapshot?.()?.capacity;
+    if (capacity?.observable === false) {
+        logger?.info?.(
+            { reason: capacity.reason || 'pool_capacity_unobservable' },
+            '[db.pool.autoscale] advisory loop disabled because pool capacity is unobservable'
+        );
+        return null;
+    }
+    if (!poolAutoscaler) {
+        poolAutoscaler = createPoolAutoscaler({
+            metrics: prisma.poolMetrics,
+            intervalMs: env.DATABASE_POOL_AUTOSCALE_INTERVAL_MS,
+            minLimit: env.DATABASE_POOL_AUTOSCALE_MIN,
+            maxLimit: env.DATABASE_POOL_AUTOSCALE_MAX,
+            coldSamplesRequired: env.DATABASE_POOL_AUTOSCALE_COLD_SAMPLES,
+            // Deliberately omit `apply`: Prisma cannot resize a live pool, so
+            // production runs this policy as a recommendation engine only.
+            logger: (level, message, meta) => {
+                try {
+                    const method = typeof logger?.[level] === 'function' ? logger[level] : logger?.info;
+                    method?.call(logger, meta || {}, message);
+                } catch { /* observability must never block lifecycle */ }
+            },
+        });
+    }
+    poolAutoscaler.start();
+    return poolAutoscaler;
+}
+
 const authRoutes = require('./src/routes/auth');
 const chatRoutes = require('./src/routes/chats');
 const fileRoutes = require('./src/routes/files');
@@ -914,6 +955,8 @@ const healthRoutes = createHealthRoutes({
     getSentryStatus,
     getLangfuseStatus,
     getPostHogStatus,
+    poolMetrics: prisma.poolMetrics,
+    getPoolAutoscalerState,
     startupEnv: startupEnvResult,
 });
 healthRoutes.register(app);
@@ -947,8 +990,13 @@ internalHealthSystem.mount(app);
 // cognitive, and Free-IA metrics. The exposition module owns all registry
 // registration so direct formatter calls and HTTP scrapes are identical.
 const {
+    configureDatabasePoolMetrics,
     metricsHandler,
 } = require('./src/services/observability/metrics-exposition');
+configureDatabasePoolMetrics({
+    snapshot: () => prisma.poolMetrics.snapshot(),
+    recommendation: getPoolAutoscalerState,
+});
 app.get('/metrics', metricsHandler);
 // Operator-facing alias under /internal/* — keeps the public surface
 // area predictable when ops only allow-list the internal path through
@@ -1298,6 +1346,7 @@ async function startServer() {
     // Sampling is a runtime lifecycle concern: never start timers merely by
     // importing index.js in tests or tooling.
     internalHealthSystem.startScheduler();
+    startDatabasePoolAutoscaler();
 
     recoverAgentTasksAfterBoot({ logger });
     recoverGoalRunsAfterBoot({ logger });
@@ -1396,6 +1445,10 @@ async function startServer() {
         logger,
         executionOrder: shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER,
     });
+
+    shutdownRegistry.register('database_pool_autoscaler_stop', () => {
+        poolAutoscaler?.stop();
+    }, 5000);
 
     // Stop accepting new HTTP connections before draining in-flight work.
     shutdownRegistry.register('http_server_close', () => new Promise((resolve) => {

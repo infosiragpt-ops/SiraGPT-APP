@@ -9,19 +9,26 @@
 // layer, so we approximate the pool state from observable signals:
 //
 //   queries_in_flight  — exact (we increment on $use, decrement after)
-//   connections_active — min(in_flight, pool_max)
-//   connections_idle   — max(0, pool_max - in_flight)
+//   estimated_connections_active — min(in_flight, configured pool_max)
+//   estimated_connections_idle   — max(0, configured pool_max - in_flight)
 //   wait_time_ms       — exponential moving average of P2024-classified
 //                        latency (queue waits) plus running sum/avg.
 //
-// The middleware is opt-in: `instrumentPool(prisma, { poolMax })`
-// returns a metrics object with `snapshot()` plus a `dispose()` hook.
+// Instrumentation is opt-in: `instrumentPool(prisma, { poolMax })`
+// returns a metrics object with `snapshot()`, a `dispose()` hook, and
+// `client`. On Prisma versions without the removed `$use` API, `client`
+// is a query-extension client that callers must use as their shared client.
 // ──────────────────────────────────────────────────────────────
 
 'use strict';
 
-const DEFAULT_POOL_MAX = parseInt(process.env.DATABASE_POOL_MAX || '10', 10);
-const DEFAULT_POOL_MIN = parseInt(process.env.DATABASE_POOL_MIN || '2', 10);
+const MIN_POOL_SIZE = 1;
+const MAX_POOL_SIZE = 100;
+const DEFAULT_POOL_MAX = normalizePoolSize(process.env.DATABASE_POOL_MAX, 10);
+const DEFAULT_POOL_MIN = Math.min(
+    normalizePoolSize(process.env.DATABASE_POOL_MIN, 2),
+    DEFAULT_POOL_MAX
+);
 const DEFAULT_IDLE_TIMEOUT_MS = parseInt(
     process.env.DATABASE_POOL_IDLE_TIMEOUT_MS || '60000',
     10
@@ -36,6 +43,12 @@ function nowMs() {
 function safeNumber(value, fallback) {
     const n = Number(value);
     return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function normalizePoolSize(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(MAX_POOL_SIZE, Math.max(MIN_POOL_SIZE, Math.floor(n)));
 }
 
 function createMetricsState(poolMax) {
@@ -61,6 +74,50 @@ function updateEma(prev, sample, weight = 0.125) {
     return prev + weight * (sample - prev);
 }
 
+function preserveEventSurface(client, prisma) {
+    if (
+        !client
+        || typeof client.$on === 'function'
+        || typeof prisma.$on !== 'function'
+    ) {
+        return client;
+    }
+    const delegatedOn = prisma.$on.bind(prisma);
+    try {
+        Object.defineProperty(client, '$on', {
+            configurable: true,
+            enumerable: false,
+            writable: false,
+            value: delegatedOn,
+        });
+        return client;
+    } catch {
+        // Prisma's extension client is a Proxy whose defineProperty trap
+        // rejects reserved client methods and exposes a non-configurable
+        // `$on: undefined` descriptor. Proxying that object directly would
+        // violate JavaScript Proxy invariants, so use an empty facade target
+        // and delegate reads/writes to the extension client.
+        const facade = Object.create(null);
+        return new Proxy(facade, {
+            get(target, property) {
+                if (property === '$on') return delegatedOn;
+                if (Reflect.has(target, property)) return Reflect.get(target, property);
+                return Reflect.get(client, property, client);
+            },
+            set(target, property, value) {
+                try {
+                    if (Reflect.set(client, property, value, client)) return true;
+                } catch { /* keep wrapper-local override */ }
+                return Reflect.set(target, property, value);
+            },
+            has(_target, property) {
+                if (property === '$on') return true;
+                return Reflect.has(facade, property) || Reflect.has(client, property);
+            },
+        });
+    }
+}
+
 /**
  * Wrap a PrismaClient with pool metrics middleware.
  *
@@ -82,14 +139,26 @@ function instrumentPool(prisma, opts = {}) {
         throw new TypeError('instrumentPool: prisma client is required');
     }
 
-    const poolMax = safeNumber(opts.poolMax, DEFAULT_POOL_MAX);
-    const poolMin = safeNumber(opts.poolMin, DEFAULT_POOL_MIN);
+    const poolMax = normalizePoolSize(opts.poolMax, DEFAULT_POOL_MAX);
+    const poolMin = Math.min(
+        normalizePoolSize(opts.poolMin, DEFAULT_POOL_MIN),
+        poolMax
+    );
     const idleTimeoutMs = safeNumber(opts.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS);
+    const capacityObservable = opts.capacityObservable !== false;
+    const capacityReason = typeof opts.capacityReason === 'string' && opts.capacityReason
+        ? opts.capacityReason
+        : capacityObservable
+            ? 'direct_postgres_datasource'
+            : 'pool_capacity_unobservable';
 
     const state = createMetricsState(poolMax);
     let installed = false;
+    let instrumentation = 'none';
+    let client = prisma;
 
-    async function middleware(params, next) {
+    async function trackOperation(params, execute) {
+        if (!installed) return execute();
         const t0 = nowMs();
         state.inFlight += 1;
         state.totalQueries += 1;
@@ -105,7 +174,7 @@ function instrumentPool(prisma, opts = {}) {
         const tStart = nowMs();
 
         try {
-            const result = await next(params);
+            const result = await execute();
             const ms = nowMs() - tStart;
             const wait = sawSaturation ? Math.max(0, tStart - t0) : 0;
             state.totalLatencyMs += ms;
@@ -150,9 +219,38 @@ function instrumentPool(prisma, opts = {}) {
         }
     }
 
+    async function middleware(params, next) {
+        return trackOperation(params, () => next(params));
+    }
+
+    async function queryExtensionOperation({ model, operation, args, query }) {
+        return trackOperation(
+            { model, action: operation },
+            () => query(args)
+        );
+    }
+
     if (typeof prisma.$use === 'function') {
         prisma.$use(middleware);
         installed = true;
+        instrumentation = 'middleware';
+    } else if (typeof prisma.$extends === 'function') {
+        try {
+            const extended = prisma.$extends({
+                name: 'siragpt-pool-instrumentation',
+                query: {
+                    $allOperations: queryExtensionOperation,
+                },
+            });
+            if (extended && (typeof extended === 'object' || typeof extended === 'function')) {
+                client = preserveEventSurface(extended, prisma);
+                installed = true;
+                instrumentation = 'query_extension';
+            }
+        } catch (_) {
+            // Fail open for unsupported/custom Prisma clients. The snapshot
+            // reports `installed:false` so health makes the limitation visible.
+        }
     }
 
     function snapshot() {
@@ -166,13 +264,19 @@ function instrumentPool(prisma, opts = {}) {
         else if (saturationRatio >= SATURATION_WARN_RATIO) saturation = 'warn';
 
         return {
-            pool: {
-                min: poolMin,
-                max: poolMax,
-                idleTimeoutMs,
+            capacity: {
+                observable: capacityObservable,
+                reason: capacityReason,
             },
-            connections_active: active,
-            connections_idle: idle,
+            pool: capacityObservable
+                ? {
+                    min: poolMin,
+                    max: poolMax,
+                    idleTimeoutMs,
+                }
+                : null,
+            estimated_connections_active: capacityObservable ? active : null,
+            estimated_connections_idle: capacityObservable ? idle : null,
             queries_in_flight: inFlight,
             peak_in_flight: state.peakInFlight,
             total_queries: state.totalQueries,
@@ -182,11 +286,14 @@ function instrumentPool(prisma, opts = {}) {
             avg_wait_ms: Math.round(state.avgWaitMs * 100) / 100,
             total_wait_ms: state.totalWaitMs,
             total_latency_ms: state.totalLatencyMs,
-            saturation_ratio: Math.round(saturationRatio * 1000) / 1000,
-            saturation,
+            estimated_saturation_ratio: capacityObservable
+                ? Math.round(saturationRatio * 1000) / 1000
+                : null,
+            estimated_saturation: capacityObservable ? saturation : 'unobservable',
             uptime_ms: nowMs() - state.startedAt,
             last_query_at: state.lastQueryAt || null,
             installed,
+            instrumentation,
         };
     }
 
@@ -204,9 +311,10 @@ function instrumentPool(prisma, opts = {}) {
     }
 
     function dispose() {
-        // $use middleware can't be removed in current Prisma versions.
-        // We mark installed=false so snapshot() reflects detached state.
+        // Prisma middleware/extensions cannot be removed. The wrapper checks
+        // this flag and becomes a pass-through after disposal.
         installed = false;
+        instrumentation = 'none';
     }
 
     /**
@@ -215,9 +323,21 @@ function instrumentPool(prisma, opts = {}) {
      */
     function toHealthCheck() {
         const snap = snapshot();
+        if (!snap.capacity.observable) {
+            return {
+                name: 'db.pool',
+                status: 'skipped',
+                critical: false,
+                latency_ms: 0,
+                details: {
+                    capacity: snap.capacity,
+                    reason: 'pool_capacity_unobservable',
+                },
+            };
+        }
         let status = 'healthy';
-        if (snap.saturation === 'critical') status = 'unhealthy';
-        else if (snap.saturation === 'warn') status = 'degraded';
+        if (snap.estimated_saturation === 'critical') status = 'degraded';
+        else if (snap.estimated_saturation === 'warn') status = 'degraded';
         return {
             name: 'db.pool',
             status,
@@ -228,6 +348,7 @@ function instrumentPool(prisma, opts = {}) {
     }
 
     return {
+        client,
         snapshot,
         reset,
         recordRetry,
@@ -241,6 +362,8 @@ module.exports = {
     instrumentPool,
     DEFAULT_POOL_MAX,
     DEFAULT_POOL_MIN,
+    MIN_POOL_SIZE,
+    MAX_POOL_SIZE,
     DEFAULT_IDLE_TIMEOUT_MS,
     SATURATION_WARN_RATIO,
     SATURATION_CRIT_RATIO,

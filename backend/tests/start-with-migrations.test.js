@@ -10,6 +10,7 @@ const {
   migrationSqlIsIdempotentAdditive,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
+  synchronizePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
   isDirectPostgresUrl,
   computeAdvisoryLockKeys,
@@ -61,18 +62,40 @@ test("static analysis rejects path traversal / unknown migration names", () => {
   assert.equal(migrationSqlIsIdempotentAdditive("", MIGRATIONS_DIR), false);
 });
 
-test("direct DATABASE_URL takes precedence over PRISMA_DATABASE_URL", () => {
-  // Since "Improve database connection logic for migration checks": the
-  // schema uses DATABASE_URL directly, so the migration preflight favours
-  // the direct PostgreSQL connection; PRISMA_DATABASE_URL (formerly Prisma
-  // Accelerate) is only a fallback.
+test("migration startup uses canonical PRISMA_DATABASE_URL with DATABASE_URL fallback", () => {
   assert.equal(resolvePrismaDatabaseUrl({
-    PRISMA_DATABASE_URL: "postgres://prisma.example/db",
-    DATABASE_URL: "postgres://generic.example/db",
-  }), "postgres://generic.example/db");
+    PRISMA_DATABASE_URL: "  postgres://canonical.example/db  ",
+  }), "postgres://canonical.example/db");
   assert.equal(resolvePrismaDatabaseUrl({
-    PRISMA_DATABASE_URL: "postgres://prisma.example/db",
-  }), "postgres://prisma.example/db");
+    DATABASE_URL: "  postgres://fallback.example/db  ",
+  }), "postgres://fallback.example/db");
+});
+
+test("migration startup rejects divergent aliases without exposing credentials", () => {
+  assert.throws(
+    () => resolvePrismaDatabaseUrl({
+      PRISMA_DATABASE_URL: "postgres://canonical-user:canonical-secret@canonical.example/db",
+      DATABASE_URL: "postgres://legacy-user:legacy-secret@legacy.example/db",
+    }),
+    (error) => {
+      assert.equal(error.code, "DATABASE_URL_CONFLICT");
+      assert.doesNotMatch(
+        `${error.message}\n${error.stack}`,
+        /canonical-user|canonical-secret|canonical\.example|legacy-user|legacy-secret|legacy\.example/,
+      );
+      return true;
+    },
+  );
+});
+
+test("migration startup synchronizes Prisma CLI's DATABASE_URL to the canonical value", () => {
+  assert.equal(typeof synchronizePrismaDatabaseUrl, "function");
+  const env = {
+    PRISMA_DATABASE_URL: "  postgres://canonical.example/db  ",
+  };
+  assert.equal(synchronizePrismaDatabaseUrl(env), "postgres://canonical.example/db");
+  assert.equal(env.PRISMA_DATABASE_URL, "postgres://canonical.example/db");
+  assert.equal(env.DATABASE_URL, "postgres://canonical.example/db");
 });
 
 test("boot wrapper loads backend/root .env files before migrations", () => {

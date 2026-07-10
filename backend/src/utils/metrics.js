@@ -36,13 +36,19 @@ function registerCounter(name, { help = '', labels = [], maxSeries } = {}) {
   });
 }
 
-function registerGauge(name, { help = '', labels = [], maxSeries } = {}) {
+function registerGauge(name, {
+  help = '',
+  labels = [],
+  maxSeries,
+  suppressWhenEmpty = false,
+} = {}) {
   if (registry.has(name)) return;
   registry.set(name, {
     type: 'gauge',
     help,
     labels,
     maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    suppressWhenEmpty: Boolean(suppressWhenEmpty),
     series: new Map(),
   });
 }
@@ -135,7 +141,7 @@ function _renderCounter(name, m) {
 function _renderGauge(name, m) {
   const out = [`# HELP ${name} ${m.help || ''}`, `# TYPE ${name} gauge`];
   if (m.series.size === 0) {
-    out.push(`${name} 0`);
+    if (!m.suppressWhenEmpty) out.push(`${name} 0`);
   } else {
     for (const [k, v] of m.series) {
       out.push(`${name}${_renderLabelString(m.labels, k)} ${v}`);

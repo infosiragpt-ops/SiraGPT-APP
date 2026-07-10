@@ -1,9 +1,8 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../middleware/auth');
 const { listArtifactsByOwner } = require('../services/agents/task-tools');
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 
 function parseAndFindFile(value, type) {
     if (!value) return null;

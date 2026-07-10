@@ -19,6 +19,9 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
+const {
+  resolveCanonicalDatabaseUrl,
+} = require("../backend/src/config/database-url");
 
 const ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
@@ -59,9 +62,9 @@ function pipePrefixed(child, prefix) {
 
 function buildDbUrl() {
   // Production containers cannot reach the dev-only 'helium' host.
-  // If DATABASE_URL still points to helium, reconstruct it from the
+  // If the canonical database URL still points to helium, reconstruct it from the
   // standard Replit Postgres secrets (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE).
-  const raw = process.env.DATABASE_URL || "";
+  const raw = resolveCanonicalDatabaseUrl(process.env) || "";
   if (raw && !raw.includes("helium")) return raw;
   const host = process.env.PGHOST;
   const port = process.env.PGPORT || "5432";

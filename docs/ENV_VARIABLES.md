@@ -132,10 +132,23 @@
 
 | Variable | Purpose |
 |----------|---------|
-| `PRISMA_DATABASE_URL` | PostgreSQL connection string used by Prisma |
-| `DATABASE_URL` | Optional legacy/adapter PostgreSQL connection string |
+| `PRISMA_DATABASE_URL` | Canonical Prisma datasource URL |
+| `DATABASE_URL` | Legacy fallback used only when `PRISMA_DATABASE_URL` is empty; conflicting non-empty aliases fail closed |
+| `DATABASE_POOL_MIN` | Instrumentation lower bound (default `2`, capped by max) |
+| `DATABASE_POOL_MAX` | Prisma v6 `connection_limit` (default `10`, clamp `1..100`) |
+| `DATABASE_POOL_TIMEOUT_MS` | Prisma acquire timeout in ms (default `10000`, clamp `1000..300000`, rounded up to `pool_timeout` seconds) |
+| `DATABASE_POOL_AUTOSCALE_ENABLED` | Enable advisory-only pool recommendations; never resizes live Prisma |
+| `DATABASE_POOL_AUTOSCALE_INTERVAL_MS` | Recommendation sampling interval (default `30000`, clamp `1000..3600000`) |
+| `DATABASE_POOL_AUTOSCALE_MIN` | Advisory recommendation floor (default `2`, clamp `1..100`) |
+| `DATABASE_POOL_AUTOSCALE_MAX` | Advisory recommendation ceiling (default `50`, clamp `1..100` and never below min) |
+| `DATABASE_POOL_AUTOSCALE_COLD_SAMPLES` | Consecutive cold samples before advisory scale-down (default `3`, clamp `1..20`) |
 | `REDIS_URL` | Redis connection string (sessions, queues, rate limits, cache) |
 | `SESSION_SECRET` | Express session signing secret |
+
+Local pool URL controls and estimated capacity telemetry apply only to direct
+`postgres:`/`postgresql:` datasources. `prisma+postgres:` remote/Accelerate
+URLs are not rewritten and expose capacity as unobservable, so local pool
+estimates and recommendations are omitted.
 
 ---
 

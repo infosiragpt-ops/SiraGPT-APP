@@ -20,6 +20,9 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
+const {
+  resolveCanonicalDatabaseUrl,
+} = require("../backend/src/config/database-url");
 
 const ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
@@ -104,10 +107,21 @@ function pipePrefixed(child, prefix) {
   child.stderr?.on("data", writeChunk(process.stderr));
 }
 
+function resolveBackendDatabaseEnvironment(env = process.env) {
+  const databaseUrl = resolveCanonicalDatabaseUrl(env);
+  return databaseUrl
+    ? {
+        PRISMA_DATABASE_URL: databaseUrl,
+        DATABASE_URL: databaseUrl,
+      }
+    : {};
+}
+
 function spawnBackend() {
   log("start-all", "spawning backend", { cwd: BACKEND_DIR, port: BACKEND_PORT });
   const env = {
     ...process.env,
+    ...resolveBackendDatabaseEnvironment(process.env),
     // Force NODE_ENV=production for the backend in deployments, or when
     // the operator hasn't explicitly set it. This ensures OAuth callback
     // URLs and other production-only paths are used in the deployed
@@ -116,7 +130,6 @@ function spawnBackend() {
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
-    PRISMA_DATABASE_URL: process.env.PRISMA_DATABASE_URL || process.env.DATABASE_URL,
     PRISMA_BASELINE_ON_P3005: process.env.PRISMA_BASELINE_ON_P3005 || "1",
   };
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {

@@ -75,4 +75,13 @@ describe('shutdown — introspection', () => {
   test('exposes TOTAL_SHUTDOWN_DEADLINE_MS = 30000', () => {
     assert.equal(shutdownReg.TOTAL_SHUTDOWN_DEADLINE_MS, 30_000);
   });
+
+  test('production order stops advisory pool sampling before Prisma disconnect', () => {
+    const order = shutdownReg.PRODUCTION_SHUTDOWN_ORDER;
+    const autoscaler = order.indexOf('database_pool_autoscaler_stop');
+    const prisma = order.indexOf('prisma_disconnect');
+    assert.ok(autoscaler >= 0);
+    assert.ok(prisma >= 0);
+    assert.ok(autoscaler < prisma);
+  });
 });

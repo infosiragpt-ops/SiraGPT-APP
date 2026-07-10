@@ -106,6 +106,96 @@ test('composes process, utility, agent, cognitive, and Free IA metric families',
   assert.deepEqual(findDuplicateMetricFamilies(text), []);
 });
 
+test('database pool estimate gauges are bounded, label-free, and include the advisory target', () => {
+  const subject = loadSubject();
+  const {
+    DATABASE_POOL_GAUGE_BOUNDS,
+    DATABASE_POOL_GAUGE_NAMES,
+    configureDatabasePoolMetrics,
+    formatMetricsExposition,
+  } = subject;
+  configureDatabasePoolMetrics({
+    snapshot: () => ({
+      capacity: { observable: true, reason: 'direct_postgres_datasource' },
+      pool: { max: 10 },
+      estimated_connections_active: Number.MAX_VALUE,
+      estimated_connections_idle: -5,
+      queries_in_flight: Number.POSITIVE_INFINITY,
+      estimated_saturation_ratio: Number.MAX_VALUE,
+    }),
+    recommendation: () => ({
+      running: true,
+      currentLimit: 10,
+      recommendedLimit: 9999,
+    }),
+  });
+
+  try {
+    const text = formatMetricsExposition();
+    const expected = {
+      [DATABASE_POOL_GAUGE_NAMES.capacityObservable]: 1,
+      [DATABASE_POOL_GAUGE_NAMES.estimatedConnectionsActive]: DATABASE_POOL_GAUGE_BOUNDS.estimateMax,
+      [DATABASE_POOL_GAUGE_NAMES.estimatedConnectionsIdle]: 0,
+      [DATABASE_POOL_GAUGE_NAMES.queriesInFlight]: 0,
+      [DATABASE_POOL_GAUGE_NAMES.estimatedSaturationRatio]: DATABASE_POOL_GAUGE_BOUNDS.ratioMax,
+      [DATABASE_POOL_GAUGE_NAMES.currentLimit]: 10,
+      [DATABASE_POOL_GAUGE_NAMES.recommendedLimit]: DATABASE_POOL_GAUGE_BOUNDS.limitMax,
+      [DATABASE_POOL_GAUGE_NAMES.autoscalerRunning]: 1,
+    };
+
+    for (const [name, value] of Object.entries(expected)) {
+      assert.match(text, new RegExp(`^# TYPE ${name} gauge$`, 'm'));
+      assert.match(text, new RegExp(`^${name} ${value}$`, 'm'));
+      const metric = require('../src/utils/metrics').registry.get(name);
+      assert.deepEqual(metric.labels, [], `${name} must remain low-cardinality`);
+      assert.ok(metric.series.size <= 1, `${name} emitted more than one series`);
+    }
+  } finally {
+    configureDatabasePoolMetrics();
+  }
+});
+
+test('unobservable remote capacity omits local estimates, limits, and recommendations', () => {
+  const subject = loadSubject();
+  const {
+    DATABASE_POOL_GAUGE_NAMES,
+    configureDatabasePoolMetrics,
+    formatMetricsExposition,
+  } = subject;
+  configureDatabasePoolMetrics({
+    snapshot: () => ({
+      capacity: { observable: false, reason: 'remote_prisma_datasource' },
+      pool: null,
+      estimated_connections_active: null,
+      estimated_connections_idle: null,
+      estimated_saturation_ratio: null,
+      queries_in_flight: 3,
+    }),
+    recommendation: () => ({
+      running: true,
+      recommendedLimit: 99,
+    }),
+  });
+
+  try {
+    const text = formatMetricsExposition();
+    assert.match(text, new RegExp(`^${DATABASE_POOL_GAUGE_NAMES.capacityObservable} 0$`, 'm'));
+    assert.match(text, new RegExp(`^${DATABASE_POOL_GAUGE_NAMES.queriesInFlight} 3$`, 'm'));
+    assert.match(text, new RegExp(`^${DATABASE_POOL_GAUGE_NAMES.autoscalerRunning} 0$`, 'm'));
+    for (const name of [
+      DATABASE_POOL_GAUGE_NAMES.estimatedConnectionsActive,
+      DATABASE_POOL_GAUGE_NAMES.estimatedConnectionsIdle,
+      DATABASE_POOL_GAUGE_NAMES.estimatedSaturationRatio,
+      DATABASE_POOL_GAUGE_NAMES.currentLimit,
+      DATABASE_POOL_GAUGE_NAMES.recommendedLimit,
+    ]) {
+      assert.doesNotMatch(text, new RegExp(`^${name} (?:[-+]?\\d|NaN)`, 'm'));
+    }
+  } finally {
+    configureDatabasePoolMetrics();
+  }
+});
+
 test('emits one HELP and TYPE declaration for every metric family', () => {
   const { formatMetricsExposition } = loadSubject();
   const text = formatMetricsExposition();

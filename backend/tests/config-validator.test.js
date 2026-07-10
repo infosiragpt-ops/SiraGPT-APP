@@ -14,7 +14,7 @@ test('resolveEnvName maps NODE_ENV variants', () => {
   assert.strictEqual(resolveEnvName({}), 'development');
 });
 
-test('production requires PRISMA_DATABASE_URL / SESSION_SECRET / JWT_SECRET', () => {
+test('production requires a database URL / SESSION_SECRET / JWT_SECRET', () => {
   const r = validateConfig({ NODE_ENV: 'production' });
   assert.strictEqual(r.ok, false);
   const keys = r.errors.map((e) => e.key);
@@ -85,6 +85,15 @@ test('development requires only PRISMA_DATABASE_URL', () => {
   assert.strictEqual(r.ok, true);
 });
 
+test('legacy DATABASE_URL remains a valid fallback when canonical URL is absent', () => {
+  const r = validateConfig({
+    NODE_ENV: 'development',
+    DATABASE_URL: '  postgres://localhost/fallback  ',
+  });
+  assert.strictEqual(r.ok, true);
+  assert.equal(r.errors.some((error) => error.key === 'PRISMA_DATABASE_URL'), false);
+});
+
 test('short SESSION_SECRET in production warns', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
@@ -95,14 +104,20 @@ test('short SESSION_SECRET in production warns', () => {
   assert.ok(r.warnings.some((w) => w.key === 'SESSION_SECRET'));
 });
 
-test('PRISMA_DATABASE_URL takes precedence over legacy DATABASE_URL diagnostics', () => {
+test('divergent database URL aliases fail closed without disclosing either value', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
-    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+    DATABASE_URL: 'postgres://legacy-user:legacy-secret@localhost:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://canonical-user:canonical-secret@db.internal:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
   });
-  assert.strictEqual(r.ok, true);
-  assert.equal(r.errors.length, 0);
+  assert.strictEqual(r.ok, false);
+  const conflict = r.errors.find((error) => error.code === 'DATABASE_URL_CONFLICT');
+  assert.ok(conflict);
+  assert.equal(conflict.key, 'PRISMA_DATABASE_URL');
+  assert.doesNotMatch(
+    JSON.stringify(conflict),
+    /legacy-user|legacy-secret|canonical-user|canonical-secret|db\.internal/,
+  );
 });

@@ -18,6 +18,137 @@ const {
 } = require('./operational-auth');
 
 const PROMETHEUS_CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8';
+const DATABASE_POOL_GAUGE_BOUNDS = Object.freeze({
+  countMax: 1_000_000,
+  estimateMax: 100,
+  ratioMax: 1_000,
+  limitMin: 1,
+  limitMax: 100,
+});
+const DATABASE_POOL_GAUGE_NAMES = Object.freeze({
+  capacityObservable: 'siragpt_database_pool_capacity_observable',
+  estimatedConnectionsActive: 'siragpt_database_pool_estimated_connections_active',
+  estimatedConnectionsIdle: 'siragpt_database_pool_estimated_connections_idle',
+  queriesInFlight: 'siragpt_database_pool_queries_in_flight',
+  estimatedSaturationRatio: 'siragpt_database_pool_estimated_saturation_ratio',
+  currentLimit: 'siragpt_database_pool_limit',
+  recommendedLimit: 'siragpt_database_pool_recommended_limit',
+  autoscalerRunning: 'siragpt_database_pool_autoscaler_running',
+});
+
+for (const [key, name] of Object.entries(DATABASE_POOL_GAUGE_NAMES)) {
+  utilityMetrics.registerGauge(name, {
+    help: `Prisma database pool ${key.replaceAll(/([A-Z])/g, ' $1').toLowerCase()}`,
+    labels: [],
+    maxSeries: 1,
+    suppressWhenEmpty: [
+      'estimatedConnectionsActive',
+      'estimatedConnectionsIdle',
+      'estimatedSaturationRatio',
+      'currentLimit',
+      'recommendedLimit',
+    ].includes(key),
+  });
+}
+
+let databasePoolMetricProviders = {
+  snapshot: null,
+  recommendation: null,
+};
+
+function configureDatabasePoolMetrics(providers = {}) {
+  databasePoolMetricProviders = {
+    snapshot: typeof providers.snapshot === 'function' ? providers.snapshot : null,
+    recommendation: typeof providers.recommendation === 'function'
+      ? providers.recommendation
+      : null,
+  };
+}
+
+function callPoolProvider(provider) {
+  try {
+    return typeof provider === 'function' ? provider() : null;
+  } catch {
+    return null;
+  }
+}
+
+function boundedValue(value, max, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(0, parsed));
+}
+
+function boundedPoolLimit(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(
+    DATABASE_POOL_GAUGE_BOUNDS.limitMax,
+    Math.max(DATABASE_POOL_GAUGE_BOUNDS.limitMin, Math.round(parsed)),
+  );
+}
+
+function collectDatabasePoolGaugeValues(providers = databasePoolMetricProviders) {
+  const snapshot = callPoolProvider(providers.snapshot) || {};
+  const recommendation = callPoolProvider(providers.recommendation) || {};
+  const capacityObservable = snapshot?.capacity?.observable !== false
+    && boundedPoolLimit(snapshot?.pool?.max, 0) > 0;
+  if (!capacityObservable) {
+    return {
+      capacityObservable: 0,
+      estimatedConnectionsActive: null,
+      estimatedConnectionsIdle: null,
+      queriesInFlight: boundedValue(
+        snapshot.queries_in_flight,
+        DATABASE_POOL_GAUGE_BOUNDS.countMax,
+      ),
+      estimatedSaturationRatio: null,
+      currentLimit: null,
+      recommendedLimit: null,
+      autoscalerRunning: 0,
+    };
+  }
+  // The instrumentation snapshot, not the recommendation engine, owns the
+  // actual live pool size.
+  const currentLimit = boundedPoolLimit(snapshot?.pool?.max, 0);
+  return {
+    capacityObservable: 1,
+    estimatedConnectionsActive: boundedValue(
+      snapshot.estimated_connections_active,
+      DATABASE_POOL_GAUGE_BOUNDS.estimateMax,
+    ),
+    estimatedConnectionsIdle: boundedValue(
+      snapshot.estimated_connections_idle,
+      DATABASE_POOL_GAUGE_BOUNDS.estimateMax,
+    ),
+    queriesInFlight: boundedValue(
+      snapshot.queries_in_flight,
+      DATABASE_POOL_GAUGE_BOUNDS.countMax,
+    ),
+    estimatedSaturationRatio: boundedValue(
+      snapshot.estimated_saturation_ratio,
+      DATABASE_POOL_GAUGE_BOUNDS.ratioMax,
+    ),
+    currentLimit,
+    recommendedLimit: boundedPoolLimit(
+      recommendation.recommendedLimit,
+      currentLimit,
+    ),
+    autoscalerRunning: recommendation.running ? 1 : 0,
+  };
+}
+
+function refreshDatabasePoolMetrics(providers = databasePoolMetricProviders) {
+  const values = collectDatabasePoolGaugeValues(providers);
+  for (const [key, name] of Object.entries(DATABASE_POOL_GAUGE_NAMES)) {
+    if (values[key] === null) {
+      utilityMetrics.registry.get(name)?.series.clear();
+    } else {
+      utilityMetrics.gauge(name, {}, values[key]);
+    }
+  }
+  return values;
+}
 
 function metricFamilyNames(text) {
   if (typeof text !== 'string') return [];
@@ -51,6 +182,7 @@ function composeExpositions(expositions) {
 
 function formatMetricsExposition() {
   utilityMetrics.refreshProcessMetrics();
+  refreshDatabasePoolMetrics();
   return composeExpositions([
     formatProcessMetricsExposition(),
     utilityMetrics.renderText(),
@@ -127,6 +259,11 @@ const metricsHandler = createMetricsHandler({ accessPolicy: metricsAccessPolicy 
 
 module.exports = {
   PROMETHEUS_CONTENT_TYPE,
+  DATABASE_POOL_GAUGE_BOUNDS,
+  DATABASE_POOL_GAUGE_NAMES,
+  configureDatabasePoolMetrics,
+  collectDatabasePoolGaugeValues,
+  refreshDatabasePoolMetrics,
   metricFamilyNames,
   findDuplicateMetricFamilies,
   composeExpositions,

@@ -2,7 +2,6 @@ const express = require('express');
 const fs = require('fs').promises;
 const { constants: fsConstants } = require('fs');
 const path = require('path');
-const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
@@ -14,7 +13,7 @@ const {
 const gptActions = require('../services/gpts/gpt-actions');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 const PUBLIC_GPT_ICON_PREFIX = 'gpt-icons';
 const PUBLIC_GPT_VISIBILITIES = new Set(['PUBLIC', 'UNLISTED']);
 

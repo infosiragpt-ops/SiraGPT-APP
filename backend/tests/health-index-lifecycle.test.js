@@ -41,6 +41,50 @@ test('internal probe scheduler starts only inside startServer', () => {
   assert.doesNotMatch(indexSource.slice(0, startServerAt), /internalHealthSystem\.startScheduler\(\)/);
 });
 
+test('shared Prisma pool instrumentation feeds full health and Prometheus metrics', () => {
+  const healthConstruction = indexSource.match(
+    /const\s+healthRoutes\s*=\s*createHealthRoutes\(\{([\s\S]*?)\}\);/,
+  );
+  assert.ok(healthConstruction, 'health routes must be constructed');
+  assert.match(healthConstruction[1], /poolMetrics:\s*prisma\.poolMetrics/);
+  assert.match(healthConstruction[1], /getPoolAutoscalerState/);
+  assert.match(indexSource, /configureDatabasePoolMetrics\(\{/);
+  assert.match(indexSource, /snapshot:\s*\(\)\s*=>\s*prisma\.poolMetrics\.snapshot\(\)/);
+  assert.match(indexSource, /recommendation:\s*getPoolAutoscalerState/);
+});
+
+test('advisory database pool autoscaler starts only in startServer and never receives apply', () => {
+  const startServerAt = indexSource.indexOf('async function startServer()');
+  const autoscalerStartAt = indexSource.indexOf('startDatabasePoolAutoscaler();');
+  assert.ok(startServerAt >= 0, 'startServer must exist');
+  assert.ok(autoscalerStartAt > startServerAt, 'autoscaler must start from startServer');
+  assert.doesNotMatch(indexSource.slice(0, startServerAt), /startDatabasePoolAutoscaler\(\);/);
+  assert.match(indexSource, /DATABASE_POOL_AUTOSCALE_ENABLED/);
+  assert.match(indexSource, /capacity\?\.observable\s*===\s*false/);
+  assert.match(
+    indexSource,
+    /createPoolAutoscaler\(\{\s*metrics:\s*prisma\.poolMetrics,/,
+  );
+  assert.doesNotMatch(
+    indexSource,
+    /createPoolAutoscaler\(\{[\s\S]{0,800}?\bapply\s*:/,
+    'production autoscaler must remain recommendation-only',
+  );
+});
+
+test('production shutdown stops the advisory pool autoscaler', () => {
+  assert.match(
+    indexSource,
+    /shutdownRegistry\.register\(\s*'database_pool_autoscaler_stop',[\s\S]*?poolAutoscaler\?\.stop\(\)/,
+  );
+  const order = require('../src/utils/shutdown').PRODUCTION_SHUTDOWN_ORDER;
+  assert.ok(order.includes('database_pool_autoscaler_stop'));
+  assert.ok(
+    order.indexOf('database_pool_autoscaler_stop') < order.indexOf('prisma_disconnect'),
+    'autoscaler must stop before Prisma disconnects',
+  );
+});
+
 test('first shutdown phase stops both schedulers before other teardown', () => {
   const hook = indexSource.match(
     /shutdownRegistry\.register\(\s*'scheduler_stop',\s*\(\)\s*=>\s*\{([\s\S]*?)\},\s*5000,?\s*\);/,
@@ -81,6 +125,14 @@ test('standard and production Docker backends pass through every operational con
     HEALTH_QUEUE_PROBE_TIMEOUT_MS: '1500',
     HEALTH_QUEUE_PROBE_CACHE_TTL_MS: '1000',
     HEALTH_CRITICAL_QUEUES: '',
+    DATABASE_POOL_MIN: '2',
+    DATABASE_POOL_MAX: '10',
+    DATABASE_POOL_TIMEOUT_MS: '10000',
+    DATABASE_POOL_AUTOSCALE_ENABLED: 'false',
+    DATABASE_POOL_AUTOSCALE_INTERVAL_MS: '30000',
+    DATABASE_POOL_AUTOSCALE_MIN: '2',
+    DATABASE_POOL_AUTOSCALE_MAX: '50',
+    DATABASE_POOL_AUTOSCALE_COLD_SAMPLES: '3',
   };
   const missing = [];
   for (const [composeName, compose] of [

@@ -23,6 +23,7 @@ const {
   checkLangfuse,
   checkPostHog,
   checkStartupEnvironment,
+  checkDatabasePool,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
@@ -282,6 +283,103 @@ describe("checkProcess", () => {
     assert.ok(r.details.rss_mb > 0);
     assert.ok(r.details.heap_used_mb > 0);
     assert.equal(r.details.pid, process.pid);
+  });
+});
+
+describe("checkDatabasePool", () => {
+  test("reports the bounded instrumentation snapshot and advisory recommendation", () => {
+    const poolMetrics = {
+      snapshot: () => ({
+        capacity: { observable: true, reason: "direct_postgres_datasource" },
+        pool: { min: 2, max: 10, idleTimeoutMs: 60_000 },
+        estimated_connections_active: 7,
+        estimated_connections_idle: 3,
+        queries_in_flight: 7,
+        estimated_saturation_ratio: 0.7,
+        estimated_saturation: "ok",
+      }),
+    };
+    const check = checkDatabasePool(poolMetrics, () => ({
+      running: true,
+      mode: "advisory",
+      currentLimit: 10,
+      recommendedLimit: 12,
+      lastRecommendation: "scale_up",
+      lastRecommendationAt: 1234,
+      stats: {
+        ticks: 3,
+        recommendations: 1,
+        applyErrors: 0,
+        lastError: "must not leak into health",
+      },
+      history: [{ reason: "bounded internally but not needed in health" }],
+    }));
+
+    assert.equal(check.name, "database_pool");
+    assert.equal(check.status, "healthy");
+    assert.equal(check.critical, false);
+    assert.equal(check.details.snapshot.pool.max, 10);
+    assert.equal(check.details.snapshot.estimated_connections_active, 7);
+    assert.equal(Object.hasOwn(check.details.snapshot, "connections_active"), false);
+    assert.equal(Object.hasOwn(check.details.snapshot, "saturation_ratio"), false);
+    assert.deepEqual(check.details.recommendation, {
+      enabled: true,
+      running: true,
+      mode: "advisory",
+      currentLimit: 10,
+      recommendedLimit: 12,
+      lastRecommendation: "scale_up",
+      lastRecommendationAt: 1234,
+      stats: {
+        ticks: 3,
+        recommendations: 1,
+        applyErrors: 0,
+      },
+    });
+    assert.equal(check.details.recommendation.history, undefined);
+    assert.equal(check.details.recommendation.stats.lastError, undefined);
+  });
+
+  test("falls back to an advisory hold when autoscaling is disabled", () => {
+    const check = checkDatabasePool({
+      snapshot: () => ({
+        capacity: { observable: true, reason: "direct_postgres_datasource" },
+        pool: { min: 2, max: 9 },
+        estimated_saturation_ratio: 0,
+        estimated_saturation: "ok",
+      }),
+    });
+
+    assert.equal(check.details.recommendation.enabled, false);
+    assert.equal(check.details.recommendation.running, false);
+    assert.equal(check.details.recommendation.currentLimit, 9);
+    assert.equal(check.details.recommendation.recommendedLimit, 9);
+    assert.equal(check.details.recommendation.lastRecommendation, "hold");
+  });
+
+  test("skips local pool health and recommendations when capacity is unobservable", () => {
+    const check = checkDatabasePool({
+      snapshot: () => ({
+        capacity: { observable: false, reason: "remote_prisma_datasource" },
+        pool: null,
+        estimated_connections_active: null,
+        estimated_connections_idle: null,
+        estimated_saturation_ratio: null,
+        estimated_saturation: "unobservable",
+        queries_in_flight: 2,
+      }),
+    }, () => ({
+      running: true,
+      recommendedLimit: 99,
+    }));
+
+    assert.equal(check.status, "skipped");
+    assert.deepEqual(check.details, {
+      capacity: { observable: false, reason: "remote_prisma_datasource" },
+      reason: "pool_capacity_unobservable",
+    });
+    assert.equal(Object.hasOwn(check.details, "snapshot"), false);
+    assert.equal(Object.hasOwn(check.details, "recommendation"), false);
   });
 });
 
@@ -560,6 +658,67 @@ describe("runFullHealthCheck", () => {
     assert.equal(check.status, "degraded");
     assert.deepEqual(r.startupEnv, check.details);
     // A startup-env warning drives the composite to degraded but never 503s.
+    assert.equal(r.status, "degraded");
+    assert.equal(reportToHttpStatus(r), 200);
+  });
+
+  test("surfaces database pool snapshot and recommendation without affecting readiness", async () => {
+    const poolMetrics = {
+      snapshot: () => ({
+        capacity: { observable: true, reason: "direct_postgres_datasource" },
+        pool: { min: 2, max: 10, idleTimeoutMs: 60_000 },
+        estimated_connections_active: 4,
+        estimated_connections_idle: 6,
+        queries_in_flight: 4,
+        estimated_saturation_ratio: 0.4,
+        estimated_saturation: "ok",
+      }),
+    };
+    const r = await runFullHealthCheck({
+      prisma: { $queryRawUnsafe: async () => 1 },
+      redis: { ping: async () => "PONG" },
+      env: { OPENAI_API_KEY: "test-only" },
+      poolMetrics,
+      getPoolAutoscalerState: () => ({
+        running: true,
+        mode: "advisory",
+        currentLimit: 10,
+        recommendedLimit: 12,
+        lastRecommendation: "scale_up",
+        lastRecommendationAt: 1234,
+        stats: { ticks: 2, recommendations: 1, applyErrors: 0 },
+      }),
+    });
+
+    const check = r.checks.find((item) => item.name === "database_pool");
+    assert.ok(check);
+    assert.equal(check.critical, false);
+    assert.deepEqual(r.databasePool, check.details);
+    assert.equal(r.databasePool.snapshot.pool.max, 10);
+    assert.equal(r.databasePool.recommendation.recommendedLimit, 12);
+  });
+
+  test("critical estimated saturation monotonically degrades composite health", async () => {
+    const r = await runFullHealthCheck({
+      prisma: { $queryRawUnsafe: async () => 1 },
+      redis: { ping: async () => "PONG" },
+      env: { OPENAI_API_KEY: "test-only" },
+      poolMetrics: {
+        snapshot: () => ({
+          capacity: { observable: true, reason: "direct_postgres_datasource" },
+          pool: { min: 2, max: 10 },
+          estimated_connections_active: 10,
+          estimated_connections_idle: 0,
+          queries_in_flight: 10,
+          estimated_saturation_ratio: 1,
+          estimated_saturation: "critical",
+        }),
+      },
+    });
+
+    const check = r.checks.find((item) => item.name === "database_pool");
+    assert.equal(check.status, "degraded");
+    assert.equal(check.critical, false);
     assert.equal(r.status, "degraded");
     assert.equal(reportToHttpStatus(r), 200);
   });

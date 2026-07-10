@@ -26,7 +26,7 @@ function injectFakeModule(requestPath, exportsValue) {
 function loadRouterWithUploadRoot(uploadRoot) {
   for (const p of [
     ROUTER_PATH,
-    resolveFrom('@prisma/client'),
+    resolveFrom('../config/database'),
     resolveFrom('../middleware/auth'),
     resolveFrom('../middleware/upload'),
     resolveFrom('../services/fileProcessor'),
@@ -36,15 +36,11 @@ function loadRouterWithUploadRoot(uploadRoot) {
     delete require.cache[p];
   }
 
-  injectFakeModule('@prisma/client', {
-    PrismaClient: function PrismaClient() {
-      return {
-        customGpt: {
-          async update() {
-            return {};
-          },
-        },
-      };
+  injectFakeModule('../config/database', {
+    customGpt: {
+      async update() {
+        return {};
+      },
     },
   });
   injectFakeModule('../middleware/auth', {

@@ -5,7 +5,7 @@
  *
  * Scheduling:
  *   Runs every 30 minutes (configurable via MEMORY_CONSOLIDATION_CRON).
- *   Default: "*/30 * * * *" (every 30 minutes).
+ *   Default schedule: every 30 minutes.
  *
  * Batching:
  *   Processes users in batches of MEMORY_CONSOLIDATION_BATCH (default 50)
@@ -24,19 +24,29 @@
  *   stop();
  */
 
-import pino from "pino";
+import type { PrismaClient } from "@prisma/client";
+import pino, { type Logger } from "pino";
 
 const DEFAULT_CRON = "*/30 * * * *";
 const DEFAULT_BATCH_SIZE = 50;
 const logger = pino({ name: "memory-consolidation-job", level: process.env.LOG_LEVEL || "info" });
 
+type MemoryPrismaClient = Pick<
+  PrismaClient,
+  "$executeRawUnsafe" | "$queryRawUnsafe"
+>;
+
 interface JobOptions {
-  logger?: typeof pino;
+  logger?: Logger;
   batchSize?: number;
   cronSchedule?: string;
   gateway?: any;
   maxAgeDays?: number;
+  db?: MemoryPrismaClient;
 }
+
+type ConsolidationPassOptions = Required<Omit<JobOptions, "db">> &
+  Pick<JobOptions, "db">;
 
 interface JobState {
   enabled: boolean;
@@ -54,12 +64,12 @@ function isEnabled(): boolean {
 }
 
 async function getUsersWithMemories(
-  getDb: () => any,
+  getDb: () => MemoryPrismaClient,
   offset: number,
   limit: number,
 ): Promise<string[]> {
   const prisma = getDb();
-  const rows = await prisma.$queryRawUnsafe(
+  const rows = await prisma.$queryRawUnsafe<Array<{ user_id: unknown }>>(
     `SELECT DISTINCT user_id
      FROM user_memories
      WHERE last_accessed_at > NOW() - INTERVAL '180 days'
@@ -68,27 +78,26 @@ async function getUsersWithMemories(
     limit,
     offset,
   );
-  return (rows || []).map((r: any) => String(r.user_id || ""));
+  return (rows || []).map((r) => String(r.user_id || ""));
 }
 
-async function getUserCount(getDb: () => any): Promise<number> {
+async function getUserCount(getDb: () => MemoryPrismaClient): Promise<number> {
   const prisma = getDb();
-  const rows = await prisma.$queryRawUnsafe(
+  const rows = await prisma.$queryRawUnsafe<Array<{ total: unknown }>>(
     `SELECT COUNT(DISTINCT user_id)::int AS total
      FROM user_memories
      WHERE last_accessed_at > NOW() - INTERVAL '180 days'`,
   );
-  return Number((rows[0] as any)?.total || 0);
+  return Number(rows[0]?.total || 0);
 }
 
-async function runConsolidationPass(opts: Required<JobOptions>): Promise<void> {
+async function runConsolidationPass(opts: ConsolidationPassOptions): Promise<void> {
   const { batchSize, maxAgeDays } = opts;
 
-  let prisma: any;
+  let prisma: MemoryPrismaClient;
   try {
-    const { PrismaClient } = require("@prisma/client");
-    prisma = new PrismaClient();
-  } catch (err: any) {
+    prisma = opts.db ?? (require("../config/database") as MemoryPrismaClient);
+  } catch (err: unknown) {
     logger.error({ err }, "Cannot create Prisma client for memory consolidation");
     return;
   }
@@ -159,7 +168,7 @@ async function runConsolidationPass(opts: Required<JobOptions>): Promise<void> {
           ).catch(() => null);
 
           try {
-            const mergeRows = await prisma.$queryRawUnsafe(
+            const mergeRows = await prisma.$queryRawUnsafe<Array<{ cnt: unknown }>>(
               `SELECT COUNT(*)::int AS cnt
                FROM user_memories a
                JOIN user_memories b
@@ -169,7 +178,7 @@ async function runConsolidationPass(opts: Required<JobOptions>): Promise<void> {
                WHERE 1 - (a.embedding <=> b.embedding) > 0.85`,
               userId,
             );
-            totalMerged += Number((mergeRows[0] as any)?.cnt || 0);
+            totalMerged += Number(mergeRows[0]?.cnt || 0);
           } catch {
             /* best-effort */
           }
@@ -218,12 +227,6 @@ async function runConsolidationPass(opts: Required<JobOptions>): Promise<void> {
     );
   } catch (err: any) {
     logger.error({ err }, "Memory consolidation sweep failed");
-  } finally {
-    try {
-      await prisma.$disconnect();
-    } catch {
-      /* ignore */
-    }
   }
 }
 
@@ -255,7 +258,14 @@ export function start(opts: JobOptions = {}): JobState {
     }
     running = true;
     try {
-      await runConsolidationPass({ batchSize, cronSchedule: cronStr, maxAgeDays, gateway: opts.gateway, logger } as Required<JobOptions>);
+      await runConsolidationPass({
+        batchSize,
+        cronSchedule: cronStr,
+        maxAgeDays,
+        gateway: opts.gateway,
+        logger,
+        db: opts.db,
+      });
     } catch (err: any) {
       logger.error({ err }, "Unhandled error in memory consolidation job");
     } finally {
@@ -289,7 +299,10 @@ export async function runOnce(opts: JobOptions = {}): Promise<void> {
     cronSchedule: "manual",
     maxAgeDays,
     gateway: opts.gateway,
-  } as Required<JobOptions>);
+    db: opts.db,
+  });
 }
 
-export default { start, stop, runOnce };
+const memoryConsolidationJob = { start, stop, runOnce };
+
+export default memoryConsolidationJob;

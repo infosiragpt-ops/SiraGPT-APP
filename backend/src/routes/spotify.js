@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const spotifyService = require('../services/spotify-mcp');
-const { PrismaClient } = require('@prisma/client');
 const { encrypt } = require('../utils/encryption');
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 
 // Route to get Spotify connection URL

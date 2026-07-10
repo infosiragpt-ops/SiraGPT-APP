@@ -4,7 +4,7 @@
 //   POST /api/gpts/preview-chat
 //
 // No real DB / network. The router top-level-requires several heavy deps
-// (@prisma/client, middleware/auth, middleware/upload, services/fileProcessor,
+// (shared config/database client, middleware/auth, middleware/upload, services/fileProcessor,
 // services/upload-security-policy, services/ai/cerebras-client); we inject
 // fakes for ALL of them into require.cache BEFORE requiring the router, then
 // drive the REAL route logic with supertest. The cerebras fake is controllable
@@ -43,7 +43,7 @@ function injectFakeModule(requestPath, exportsValue) {
 function buildApp() {
   for (const p of [
     ROUTER_PATH,
-    resolveFrom('@prisma/client'),
+    resolveFrom('../config/database'),
     resolveFrom('../middleware/auth'),
     resolveFrom('../middleware/upload'),
     resolveFrom('../services/fileProcessor'),
@@ -53,7 +53,7 @@ function buildApp() {
     delete require.cache[p];
   }
 
-  injectFakeModule('@prisma/client', { PrismaClient: function () { return {}; } });
+  injectFakeModule('../config/database', {});
 
   injectFakeModule('../middleware/auth', {
     authenticateToken: (req, _res, next) => {

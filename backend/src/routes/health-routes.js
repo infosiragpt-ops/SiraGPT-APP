@@ -48,6 +48,8 @@ const noopStatus = () => ({});
  * @param {Function} [deps.getSentryStatus]
  * @param {Function} [deps.getLangfuseStatus]
  * @param {Function} [deps.getPostHogStatus]
+ * @param {object} [deps.poolMetrics]       Shared Prisma pool instrumentation.
+ * @param {Function} [deps.getPoolAutoscalerState]
  * @param {{checked: boolean, issues: Array}} [deps.startupEnv]
  *        Boot-time startup-environment validation snapshot.
  * @param {number} [deps.cacheTtlMs]        Health-result cache TTL (ms).
@@ -66,6 +68,8 @@ function createHealthRoutes(deps = {}) {
     getSentryStatus = noopStatus,
     getLangfuseStatus = noopStatus,
     getPostHogStatus = noopStatus,
+    poolMetrics = null,
+    getPoolAutoscalerState = null,
     startupEnv = { checked: false, issues: [] },
     env = process.env,
   } = deps;
@@ -260,6 +264,8 @@ function createHealthRoutes(deps = {}) {
         coworkHealth,
         googleOAuth: oauthBootResult,
         startupEnv,
+        poolMetrics,
+        getPoolAutoscalerState,
         env,
       }));
       sendHealthReport(res, report);

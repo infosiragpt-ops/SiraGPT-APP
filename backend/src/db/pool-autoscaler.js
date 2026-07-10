@@ -11,12 +11,8 @@
 // a different DATABASE_URL query string. The autoscaler therefore
 // does not touch Prisma directly. Instead, it computes a target
 // limit and invokes a caller-supplied `apply(newLimit, ctx)`
-// callback. Callers can either:
-//
-//   - Reconnect Prisma with the new `?connection_limit=N` URL
-//   - Or use the convenience hook to mutate the in-memory pool
-//     metrics' `poolMax` so that saturation reporting reflects
-//     the new target until the next reconnect cycle.
+// callback. Without that callback the autoscaler is advisory-only:
+// it records a recommendation but never claims the live pool changed.
 //
 // The autoscaler has hard caps (min/max) sourced from env, a
 // cooldown to avoid flapping, and asymmetric scale-up/scale-down
@@ -25,17 +21,31 @@
 
 'use strict';
 
-const DEFAULT_INTERVAL_MS = parseInt(
-    process.env.DATABASE_POOL_AUTOSCALE_INTERVAL_MS || '30000',
-    10
+const AUTOSCALE_POOL_LIMIT_BOUNDS = Object.freeze({ min: 1, max: 100 });
+const AUTOSCALE_INTERVAL_MS_BOUNDS = Object.freeze({ min: 1_000, max: 3_600_000 });
+const AUTOSCALE_COLD_SAMPLE_BOUNDS = Object.freeze({ min: 1, max: 20 });
+const DEFAULT_INTERVAL_MS = parseStrictInteger(
+    process.env.DATABASE_POOL_AUTOSCALE_INTERVAL_MS,
+    30_000,
+    AUTOSCALE_INTERVAL_MS_BOUNDS
 );
-const DEFAULT_MIN_LIMIT = parseInt(
-    process.env.DATABASE_POOL_AUTOSCALE_MIN || '2',
-    10
+const DEFAULT_MIN_LIMIT = parseStrictInteger(
+    process.env.DATABASE_POOL_AUTOSCALE_MIN,
+    2,
+    AUTOSCALE_POOL_LIMIT_BOUNDS
 );
-const DEFAULT_MAX_LIMIT = parseInt(
-    process.env.DATABASE_POOL_AUTOSCALE_MAX || '50',
-    10
+const DEFAULT_MAX_LIMIT = Math.max(
+    DEFAULT_MIN_LIMIT,
+    parseStrictInteger(
+        process.env.DATABASE_POOL_AUTOSCALE_MAX,
+        50,
+        AUTOSCALE_POOL_LIMIT_BOUNDS
+    )
+);
+const DEFAULT_COLD_SAMPLES_REQUIRED = parseStrictInteger(
+    process.env.DATABASE_POOL_AUTOSCALE_COLD_SAMPLES,
+    3,
+    AUTOSCALE_COLD_SAMPLE_BOUNDS
 );
 const DEFAULT_SCALE_UP_RATIO = 0.8;
 const DEFAULT_SCALE_DOWN_RATIO = 0.3;
@@ -54,9 +64,26 @@ function clamp(n, lo, hi) {
     return Math.round(n);
 }
 
-function asPositiveInt(value, fallback) {
-    const n = parseInt(value, 10);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
+function parseStrictInteger(value, fallback, bounds) {
+    function parse(candidate) {
+        if (Number.isSafeInteger(candidate)) return candidate;
+        if (typeof candidate !== 'string') return null;
+        const text = candidate.trim();
+        if (!/^[+-]?\d+$/.test(text)) return null;
+        const parsed = Number(text);
+        return Number.isSafeInteger(parsed) ? parsed : null;
+    }
+
+    const parsed = parse(value);
+    const fallbackValue = parse(fallback);
+    const candidate = parsed === null ? fallbackValue : parsed;
+    const safe = candidate === null ? bounds.min : candidate;
+    return Math.min(bounds.max, Math.max(bounds.min, safe));
+}
+
+function readActualLimit(snapshot, fallback) {
+    const value = Number(snapshot && snapshot.pool && snapshot.pool.max);
+    return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 /**
@@ -72,14 +99,30 @@ function asPositiveInt(value, fallback) {
  *   { action: 'scale_down', from, to, reason }
  */
 function decide(snapshot, cfg) {
-    const current = clamp(
-        snapshot && snapshot.pool ? snapshot.pool.max : cfg.minLimit,
-        cfg.minLimit,
-        cfg.maxLimit
-    );
-    const ratio = Number(snapshot && snapshot.saturation_ratio) || 0;
+    const current = readActualLimit(snapshot, cfg.minLimit);
+    const ratio = Number(snapshot && snapshot.estimated_saturation_ratio) || 0;
     const wait = Number(snapshot && snapshot.avg_wait_ms) || 0;
     const inFlight = Number(snapshot && snapshot.queries_in_flight) || 0;
+
+    // Policy bounds constrain recommendations, never the observed live pool.
+    // If the datasource was configured outside this autoscaler's range, make
+    // that discrepancy explicit rather than rewriting `from` in telemetry.
+    if (current < cfg.minLimit) {
+        return {
+            action: 'scale_up',
+            from: current,
+            to: cfg.minLimit,
+            reason: `actual limit ${current} < policy minimum ${cfg.minLimit}`,
+        };
+    }
+    if (current > cfg.maxLimit) {
+        return {
+            action: 'scale_down',
+            from: current,
+            to: cfg.maxLimit,
+            reason: `actual limit ${current} > policy maximum ${cfg.maxLimit}`,
+        };
+    }
 
     // Strong signal: pool already topped out and queries are queueing.
     const queueingHard = wait >= cfg.waitMsThreshold;
@@ -109,6 +152,7 @@ function decide(snapshot, cfg) {
                 from: current,
                 to: target,
                 reason: `saturation ${ratio.toFixed(2)} ≤ ${cfg.scaleDownRatio}`,
+                cold: true,
             };
         }
     }
@@ -143,8 +187,21 @@ function createPoolAutoscaler(opts = {}) {
         throw new TypeError('createPoolAutoscaler: metrics.snapshot() is required');
     }
 
-    const minLimit = asPositiveInt(opts.minLimit, DEFAULT_MIN_LIMIT);
-    let maxLimit = asPositiveInt(opts.maxLimit, DEFAULT_MAX_LIMIT);
+    const initialSnapshot = opts.metrics.snapshot();
+    if (initialSnapshot?.capacity?.observable === false) {
+        throw new TypeError('createPoolAutoscaler: pool capacity is unobservable');
+    }
+
+    const minLimit = parseStrictInteger(
+        opts.minLimit,
+        DEFAULT_MIN_LIMIT,
+        AUTOSCALE_POOL_LIMIT_BOUNDS
+    );
+    let maxLimit = parseStrictInteger(
+        opts.maxLimit,
+        DEFAULT_MAX_LIMIT,
+        AUTOSCALE_POOL_LIMIT_BOUNDS
+    );
     if (maxLimit < minLimit) maxLimit = minLimit;
 
     const cfg = {
@@ -152,15 +209,27 @@ function createPoolAutoscaler(opts = {}) {
         maxLimit,
         scaleUpRatio: Number.isFinite(opts.scaleUpRatio) ? opts.scaleUpRatio : DEFAULT_SCALE_UP_RATIO,
         scaleDownRatio: Number.isFinite(opts.scaleDownRatio) ? opts.scaleDownRatio : DEFAULT_SCALE_DOWN_RATIO,
-        scaleUpStep: asPositiveInt(opts.scaleUpStep, DEFAULT_SCALE_UP_STEP),
-        scaleDownStep: asPositiveInt(opts.scaleDownStep, DEFAULT_SCALE_DOWN_STEP),
-        cooldownMs: Number.isFinite(opts.cooldownMs) ? opts.cooldownMs : DEFAULT_COOLDOWN_MS,
+        scaleUpStep: parseStrictInteger(opts.scaleUpStep, DEFAULT_SCALE_UP_STEP, AUTOSCALE_POOL_LIMIT_BOUNDS),
+        scaleDownStep: parseStrictInteger(opts.scaleDownStep, DEFAULT_SCALE_DOWN_STEP, AUTOSCALE_POOL_LIMIT_BOUNDS),
+        cooldownMs: parseStrictInteger(opts.cooldownMs, DEFAULT_COOLDOWN_MS, {
+            min: 0,
+            max: AUTOSCALE_INTERVAL_MS_BOUNDS.max,
+        }),
         waitMsThreshold: Number.isFinite(opts.waitMsThreshold)
             ? opts.waitMsThreshold
             : DEFAULT_WAIT_MS_THRESHOLD,
+        coldSamplesRequired: parseStrictInteger(
+            opts.coldSamplesRequired,
+            DEFAULT_COLD_SAMPLES_REQUIRED,
+            AUTOSCALE_COLD_SAMPLE_BOUNDS
+        ),
     };
 
-    const intervalMs = asPositiveInt(opts.intervalMs, DEFAULT_INTERVAL_MS);
+    const intervalMs = parseStrictInteger(
+        opts.intervalMs,
+        DEFAULT_INTERVAL_MS,
+        AUTOSCALE_INTERVAL_MS_BOUNDS
+    );
     const log = typeof opts.logger === 'function' ? opts.logger : noop;
     const now = typeof opts.now === 'function' ? opts.now : Date.now;
     const scheduler = opts.scheduler || { setInterval, clearInterval };
@@ -168,18 +237,23 @@ function createPoolAutoscaler(opts = {}) {
 
     let timer = null;
     let lastDecisionAt = 0;
+    let lastRecommendationAt = 0;
+    let lastAppliedAt = 0;
     let lastAction = 'hold';
-    let currentLimit = clamp(
-        opts.metrics.snapshot().pool && opts.metrics.snapshot().pool.max,
-        minLimit,
-        maxLimit
-    );
+    let lastRecommendation = 'hold';
+    let currentLimit = readActualLimit(initialSnapshot, minLimit);
+    let recommendedLimit = currentLimit;
+    let coldSamples = 0;
     const history = [];
     const stats = {
         ticks: 0,
         scaleUps: 0,
         scaleDowns: 0,
         holds: 0,
+        recommendations: 0,
+        recommendationUps: 0,
+        recommendationDowns: 0,
+        appliedChanges: 0,
         applyErrors: 0,
         lastError: null,
     };
@@ -192,44 +266,87 @@ function createPoolAutoscaler(opts = {}) {
     async function tick() {
         stats.ticks += 1;
         const snap = opts.metrics.snapshot();
-        const decision = decide(snap, cfg);
+        // In advisory mode the instrumentation snapshot is the sole source of
+        // truth for the actual live limit. Recommendations must never drift it.
+        if (!apply) {
+            currentLimit = readActualLimit(snap, currentLimit);
+        }
+        const rawDecision = decide(snap, cfg);
+        if (rawDecision.cold) coldSamples += 1;
+        else coldSamples = 0;
+
+        let decision = rawDecision;
+        if (rawDecision.cold && coldSamples < cfg.coldSamplesRequired) {
+            decision = {
+                action: 'hold',
+                reason: `cold sample ${coldSamples}/${cfg.coldSamplesRequired}`,
+                candidate: 'scale_down',
+            };
+        }
+        const tickAt = now();
+        lastDecisionAt = tickAt;
 
         const inCooldown =
             decision.action !== 'hold' &&
-            lastDecisionAt > 0 &&
-            now() - lastDecisionAt < cfg.cooldownMs;
+            lastRecommendationAt > 0 &&
+            tickAt - lastRecommendationAt < cfg.cooldownMs;
 
         const entry = {
-            t: now(),
-            saturation_ratio: snap.saturation_ratio,
+            t: tickAt,
+            estimated_saturation_ratio: snap.estimated_saturation_ratio,
             avg_wait_ms: snap.avg_wait_ms,
             queries_in_flight: snap.queries_in_flight,
             current: currentLimit,
             decision: decision.action,
             reason: decision.reason,
+            coldSamples,
             cooldown: inCooldown,
+            advisory: !apply,
+            applied: false,
         };
+        if (decision.candidate) entry.candidate = decision.candidate;
 
         if (decision.action === 'hold' || inCooldown) {
             stats.holds += 1;
-            lastAction = 'hold';
+            if (decision.action === 'hold' && !inCooldown) {
+                recommendedLimit = currentLimit;
+                lastRecommendation = 'hold';
+            }
+            entry.recommendedLimit = recommendedLimit;
             recordHistory(entry);
             return entry;
         }
 
         const target = decision.to;
+        recommendedLimit = target;
+        lastRecommendation = decision.action;
+        lastRecommendationAt = tickAt;
+        entry.recommendedLimit = target;
+        entry.to = target;
+        stats.recommendations += 1;
+        if (decision.action === 'scale_up') stats.recommendationUps += 1;
+        else stats.recommendationDowns += 1;
+
+        if (!apply) {
+            log(
+                'info',
+                `[db.pool.autoscale] recommend ${decision.action} `
+                + `${decision.from}→${target} (${decision.reason})`
+            );
+            recordHistory(entry);
+            return entry;
+        }
+
         try {
-            if (apply) {
-                await apply(target, { from: decision.from, reason: decision.reason, snapshot: snap });
-            }
+            await apply(target, { from: decision.from, reason: decision.reason, snapshot: snap });
             currentLimit = target;
-            lastDecisionAt = now();
+            lastAppliedAt = tickAt;
             lastAction = decision.action;
+            stats.appliedChanges += 1;
             if (decision.action === 'scale_up') stats.scaleUps += 1;
             else stats.scaleDowns += 1;
             log('info', `[db.pool.autoscale] ${decision.action} ${decision.from}→${target} (${decision.reason})`);
             entry.applied = true;
-            entry.to = target;
         } catch (err) {
             stats.applyErrors += 1;
             stats.lastError = err && err.message ? err.message : String(err);
@@ -260,12 +377,18 @@ function createPoolAutoscaler(opts = {}) {
     function getState() {
         return {
             running: !!timer,
+            mode: apply ? 'apply' : 'advisory',
             currentLimit,
+            recommendedLimit,
             minLimit: cfg.minLimit,
             maxLimit: cfg.maxLimit,
             intervalMs,
             lastAction,
+            lastRecommendation,
             lastDecisionAt: lastDecisionAt || null,
+            lastRecommendationAt: lastRecommendationAt || null,
+            lastAppliedAt: lastAppliedAt || null,
+            coldSamples,
             stats: { ...stats },
             history: history.slice(),
             config: { ...cfg },
@@ -278,6 +401,7 @@ function createPoolAutoscaler(opts = {}) {
         tick,
         getState,
         get currentLimit() { return currentLimit; },
+        get recommendedLimit() { return recommendedLimit; },
         get running() { return !!timer; },
     };
 }
@@ -294,4 +418,9 @@ module.exports = {
     DEFAULT_SCALE_DOWN_STEP,
     DEFAULT_COOLDOWN_MS,
     DEFAULT_WAIT_MS_THRESHOLD,
+    DEFAULT_COLD_SAMPLES_REQUIRED,
+    AUTOSCALE_POOL_LIMIT_BOUNDS,
+    AUTOSCALE_INTERVAL_MS_BOUNDS,
+    AUTOSCALE_COLD_SAMPLE_BOUNDS,
+    parseStrictInteger,
 };

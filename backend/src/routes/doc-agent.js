@@ -21,10 +21,9 @@ const path = require('path');
 const fs = require('fs/promises');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
-const { PrismaClient } = require('@prisma/client');
 const { runDocumentAgent, DEFAULT_MODEL } = require('../services/doc-agent');
 
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 const router = express.Router();
 
 const MIME_BY_EXT = {

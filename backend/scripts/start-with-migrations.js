@@ -10,6 +10,9 @@ const { spawnSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { loadEnvFiles } = require("../src/config/load-env");
+const {
+  resolveCanonicalDatabaseUrl,
+} = require("../src/config/database-url");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(BACKEND_DIR, "prisma", "migrations");
@@ -63,6 +66,7 @@ function pipeResult(result) {
 }
 
 function runPrisma(args) {
+  synchronizePrismaDatabaseUrl(process.env);
   const result = spawnSync("npx", ["prisma", ...args], {
     cwd: BACKEND_DIR,
     encoding: "utf8",
@@ -82,13 +86,17 @@ function loadDotenv() {
 }
 
 function resolvePrismaDatabaseUrl(env = process.env) {
-  // Prefer DATABASE_URL (direct PostgreSQL) over PRISMA_DATABASE_URL.
-  // PRISMA_DATABASE_URL used to point at Prisma Accelerate; the schema now
-  // uses DATABASE_URL directly, so always favour the direct connection here
-  // so the advisory-lock preflight and pg.Client work correctly.
-  const direct = env.DATABASE_URL || env.PRISMA_DATABASE_URL || "";
-  if (direct) return direct;
-  return env.PRISMA_DATABASE_URL || "";
+  return resolveCanonicalDatabaseUrl(env) || "";
+}
+
+function synchronizePrismaDatabaseUrl(env = process.env) {
+  const canonical = resolveCanonicalDatabaseUrl(env);
+  if (!canonical) return "";
+  // schema.prisma currently reads DATABASE_URL. Keep both aliases identical
+  // for Prisma CLI subprocesses after resolving the canonical value once.
+  env.PRISMA_DATABASE_URL = canonical;
+  env.DATABASE_URL = canonical;
+  return canonical;
 }
 
 function makePgClientOptions(url) {
@@ -771,6 +779,7 @@ module.exports = {
   migrationSqlIsIdempotentAdditive,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
+  synchronizePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
   isDirectPostgresUrl,
   computeAdvisoryLockKeys,
