@@ -32,6 +32,12 @@ jobs:
   # never even attempt a destructive prod deploy.
   pre-check:
     name: Pre-deploy sanity checks
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       github.event.created == true &&
+       github.event.deleted == false &&
+       github.event.forced == false)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

@@ -102,6 +102,10 @@ test('production deploy supports an explicit release tag without enabling branch
   assert.match(triggerBlock[1], /push:\s*\n\s+tags:\s*\n\s+- 'deploy-production-\*'/);
   assert.doesNotMatch(triggerBlock[1], /branches:/);
   assert.match(workflow, /FALLBACK_SHA:\s+\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /github\.event\.created == true/);
+  assert.match(workflow, /github\.event\.deleted == false/);
+  assert.match(workflow, /github\.event\.forced == false/);
 });
 
 test('production deploy proves the exact commit and restores rollback provenance', () => {
