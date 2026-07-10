@@ -341,3 +341,13 @@ test('orchestrator.pipeline: unknown recipe throws', async () => {
     /unknown recipe/,
   );
 });
+
+test('se-agents metrics compatibility path uses the shared protected handler', () => {
+  const router = require('../src/routes/se-agents');
+  const { metricsHandler } = require('../src/services/observability/metrics-exposition');
+  const layer = router.stack.find((entry) => entry.route?.path === '/metrics');
+
+  assert.ok(layer, 'expected GET /metrics compatibility route');
+  assert.equal(layer.route.methods.get, true);
+  assert.equal(layer.route.stack.at(-1).handle, metricsHandler);
+});

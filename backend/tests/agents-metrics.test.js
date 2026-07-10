@@ -180,6 +180,73 @@ describe('observe', () => {
   });
 });
 
+describe('per-family series cap', () => {
+  it('uses a finite bounded default', () => {
+    registerCounter('test_agent_default_series_cap', {
+      help: 'h',
+      labels: ['value'],
+    });
+    const family = registry.get('test_agent_default_series_cap');
+    assert.ok(Number.isInteger(family.maxSeries));
+    assert.ok(family.maxSeries >= 1 && family.maxSeries <= 10_000);
+  });
+
+  it('folds counter overflow into a deterministic __other__ series', () => {
+    registerCounter('test_agent_counter_cap', {
+      help: 'h',
+      labels: ['agent'],
+      maxSeries: 3,
+    });
+    for (const agent of ['a', 'b', 'c', 'd']) {
+      counter('test_agent_counter_cap', { agent });
+    }
+    counter('test_agent_counter_cap', { agent: 'a' }, 2);
+
+    const family = registry.get('test_agent_counter_cap');
+    assert.equal(family.series.size, 3);
+    assert.equal(family.series.get('agent=a'), 3);
+    assert.equal(family.series.get('agent=b'), 1);
+    assert.equal(family.series.get('agent=__other__'), 2);
+  });
+
+  it('folds histogram overflow into a deterministic __other__ series', () => {
+    registerHistogram('test_agent_histogram_cap', {
+      help: 'h',
+      labels: ['agent'],
+      buckets: [10],
+      maxSeries: 2,
+    });
+    observe('test_agent_histogram_cap', { agent: 'a' }, 1);
+    observe('test_agent_histogram_cap', { agent: 'b' }, 2);
+    observe('test_agent_histogram_cap', { agent: 'c' }, 3);
+
+    const family = registry.get('test_agent_histogram_cap');
+    assert.equal(family.series.size, 2);
+    assert.equal(family.series.get('agent=a').count, 1);
+    assert.equal(family.series.get('agent=__other__').count, 2);
+    assert.equal(family.series.get('agent=__other__').sum, 5);
+  });
+
+  it('bounds gauges by dropping later new label sets while allowing updates', () => {
+    registerGauge('test_agent_gauge_cap', {
+      help: 'h',
+      labels: ['collection'],
+      maxSeries: 2,
+    });
+    gauge('test_agent_gauge_cap', { collection: 'a' }, 1);
+    gauge('test_agent_gauge_cap', { collection: 'b' }, 2);
+    gauge('test_agent_gauge_cap', { collection: 'c' }, 3);
+    gauge('test_agent_gauge_cap', { collection: 'a' }, 4);
+
+    const family = registry.get('test_agent_gauge_cap');
+    assert.equal(family.series.size, 2);
+    assert.equal(family.series.get('collection=a'), 4);
+    assert.equal(family.series.get('collection=b'), 2);
+    assert.equal(family.series.has('collection=c'), false);
+    assert.equal(family.series.has('collection=__other__'), false);
+  });
+});
+
 // ── renderText ────────────────────────────────────────────────
 
 describe('renderText', () => {
@@ -215,14 +282,12 @@ describe('renderText', () => {
     assert.match(out, /se_agent_duration_ms_count\{.*\} 1/);
   });
 
-  it('sanitises problematic chars (\\, ", newline) at ingestion time', () => {
-    // labelKey() replaces backslash, double-quote, and newline with
-    // "_" BEFORE storing in the series map. So by the time renderText
-    // runs, there are no special chars left to escape — the render
-    // function sees the already-cleaned value.
-    counter('se_agent_errors_total', { agent: 'a"b\\c' });
+  it('escapes CR/LF, backslashes, and quotes without creating sample lines', () => {
+    counter('se_agent_errors_total', { agent: 'a\r\ninjected 1"\\c' });
     const out = renderText();
-    assert.match(out, /se_agent_errors_total\{agent="a_b_c"\} 1/);
+    assert.equal(out.includes('\r'), false);
+    assert.equal(out.split('\n').some((line) => line.startsWith('injected 1')), false);
+    assert.ok(out.includes('se_agent_errors_total{agent="a\\ninjected 1\\"\\\\c"} 1'));
   });
 
   it('ends with a newline', () => {

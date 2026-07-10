@@ -15,45 +15,64 @@
 
 'use strict';
 
+const {
+  decodeLabelKeyValue,
+  escapePrometheusLabelValue,
+  resolveMaxSeriesPerFamily,
+  selectSeriesKey,
+} = require('./prometheus-labels');
+
 // name → { type, help, labels, series: Map<labelKey, value|histogramRecord> [, buckets] }
 const registry = new Map();
 
-function _normalizeLabels(labels) {
-  if (!labels) return {};
-  if (typeof labels !== 'object') return {};
-  return labels;
-}
-
-function _labelKey(labelNames, labels) {
-  const norm = _normalizeLabels(labels);
-  return labelNames
-    .map((n) => `${n}=${String(norm[n] ?? '').replace(/[\\"\n,]/g, '_')}`)
-    .join(',');
-}
-
-function registerCounter(name, { help = '', labels = [] } = {}) {
+function registerCounter(name, { help = '', labels = [], maxSeries } = {}) {
   if (registry.has(name)) return;
-  registry.set(name, { type: 'counter', help, labels, series: new Map() });
+  registry.set(name, {
+    type: 'counter',
+    help,
+    labels,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
-function registerGauge(name, { help = '', labels = [] } = {}) {
+function registerGauge(name, { help = '', labels = [], maxSeries } = {}) {
   if (registry.has(name)) return;
-  registry.set(name, { type: 'gauge', help, labels, series: new Map() });
+  registry.set(name, {
+    type: 'gauge',
+    help,
+    labels,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
-function registerHistogram(name, { help = '', labels = [], buckets = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10] } = {}) {
+function registerHistogram(name, {
+  help = '',
+  labels = [],
+  buckets = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  maxSeries,
+} = {}) {
   if (registry.has(name)) return;
   // Defensive copy, sorted ascending
   const sortedBuckets = Array.from(new Set(buckets.map(Number).filter((n) => Number.isFinite(n))))
     .sort((a, b) => a - b);
-  registry.set(name, { type: 'histogram', help, labels, buckets: sortedBuckets, series: new Map() });
+  registry.set(name, {
+    type: 'histogram',
+    help,
+    labels,
+    buckets: sortedBuckets,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
 function counter(name, labels = {}, delta = 1) {
   const m = registry.get(name);
   if (!m || m.type !== 'counter') return;
   if (!Number.isFinite(delta) || delta < 0) return;
-  const k = _labelKey(m.labels, labels);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
   m.series.set(k, (m.series.get(k) || 0) + delta);
 }
 
@@ -61,14 +80,17 @@ function gauge(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'gauge') return;
   if (!Number.isFinite(value)) return;
-  m.series.set(_labelKey(m.labels, labels), value);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
+  m.series.set(k, value);
 }
 
 function observe(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'histogram') return;
   if (!Number.isFinite(value) || value < 0) return;
-  const k = _labelKey(m.labels, labels);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
   let rec = m.series.get(k);
   if (!rec) {
     rec = { count: 0, sum: 0, bucketCounts: new Array(m.buckets.length).fill(0) };
@@ -83,18 +105,15 @@ function observe(name, labels = {}, value = 0) {
 
 // ── Rendering ────────────────────────────────────────────────────────────
 
-function _escapeLabelValue(v) {
-  return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-}
-
 function _renderLabelString(labelNames, key, extra) {
   const parts = [];
   if (key) {
     const pieces = key.split(',');
     for (let i = 0; i < pieces.length; i += 1) {
       const eq = pieces[i].indexOf('=');
-      const value = eq >= 0 ? pieces[i].slice(eq + 1) : '';
-      parts.push(`${labelNames[i]}="${_escapeLabelValue(value)}"`);
+      const encodedValue = eq >= 0 ? pieces[i].slice(eq + 1) : '';
+      const value = decodeLabelKeyValue(encodedValue);
+      parts.push(`${labelNames[i]}="${escapePrometheusLabelValue(value)}"`);
     }
   }
   if (extra) parts.push(extra);

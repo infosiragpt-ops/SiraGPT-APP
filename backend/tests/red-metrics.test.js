@@ -19,8 +19,8 @@ const {
   RED_DURATION,
 } = require('../src/middleware/red-metrics');
 
-function makeReq({ method = 'GET', baseUrl = '', route } = {}) {
-  return { method, baseUrl, route };
+function makeReq({ method = 'GET', baseUrl = '', route, path, originalUrl } = {}) {
+  return { method, baseUrl, route, path, originalUrl };
 }
 
 function makeRes() {
@@ -139,5 +139,21 @@ describe('red-metrics middleware', () => {
 
     const series = findSeries(RED_REQUESTS_TOTAL, (k) => k.includes('route=unmatched'));
     assert.ok(series);
+  });
+
+  it('excludes every shared metrics alias from RED instrumentation', () => {
+    for (const path of ['/metrics', '/internal/metrics', '/api/se-agents/metrics']) {
+      const req = makeReq({ path, originalUrl: path, route: { path } });
+      const res = makeRes();
+      let nextCalled = false;
+
+      redMetricsMiddleware(req, res, () => { nextCalled = true; });
+      assert.equal(nextCalled, true);
+      assert.equal(res.listenerCount('finish'), 0, `${path} attached a finish listener`);
+      assert.equal(res.listenerCount('close'), 0, `${path} attached a close listener`);
+    }
+
+    assert.equal(findSeries(RED_REQUESTS_TOTAL, () => true), null);
+    assert.equal(findSeries(RED_DURATION, () => true), null);
   });
 });

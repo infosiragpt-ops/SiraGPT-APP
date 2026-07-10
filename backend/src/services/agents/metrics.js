@@ -15,22 +15,53 @@
  * are escaped per the Prometheus text-exposition spec.
  */
 
+const {
+  decodeLabelKeyValue,
+  escapePrometheusLabelValue,
+  resolveMaxSeriesPerFamily,
+  selectSeriesKey,
+} = require('../../utils/prometheus-labels');
+
 // name → { type, labels, description, series: Map<label-key, value> }
 // For histograms, series value is { count, sum, buckets: Map<upperBound, count> }
 const registry = new Map();
 
 const DEFAULT_BUCKETS_MS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000];
 
-function registerCounter(name, { help, labels = [] } = {}) {
-  registry.set(name, { type: 'counter', help, labels, series: new Map() });
+function registerCounter(name, { help, labels = [], maxSeries } = {}) {
+  registry.set(name, {
+    type: 'counter',
+    help,
+    labels,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
-function registerHistogram(name, { help, labels = [], buckets = DEFAULT_BUCKETS_MS } = {}) {
-  registry.set(name, { type: 'histogram', help, labels, buckets, series: new Map() });
+function registerHistogram(name, {
+  help,
+  labels = [],
+  buckets = DEFAULT_BUCKETS_MS,
+  maxSeries,
+} = {}) {
+  registry.set(name, {
+    type: 'histogram',
+    help,
+    labels,
+    buckets,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
-function registerGauge(name, { help, labels = [] } = {}) {
-  registry.set(name, { type: 'gauge', help, labels, series: new Map() });
+function registerGauge(name, { help, labels = [], maxSeries } = {}) {
+  registry.set(name, {
+    type: 'gauge',
+    help,
+    labels,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
 // Pre-register the metrics we emit from the SE agent framework.
@@ -92,28 +123,27 @@ registerHistogram('agent_task_duration_ms', {
   buckets: [1000, 5000, 15000, 30000, 60000, 300000, 900000, 1800000, 3600000, 7200000],
 });
 
-function labelKey(labelNames, labels) {
-  // Canonical label serialisation. Undefined/missing labels become ''.
-  return labelNames.map(n => `${n}=${String(labels?.[n] ?? '').replace(/[\\"\n]/g, '_')}`).join(',');
-}
-
 function counter(name, labels = {}, delta = 1) {
   const m = registry.get(name);
   if (!m || m.type !== 'counter') return;
-  const k = labelKey(m.labels, labels);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
   m.series.set(k, (m.series.get(k) || 0) + delta);
 }
 
 function gauge(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'gauge') return;
-  m.series.set(labelKey(m.labels, labels), value);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
+  m.series.set(k, value);
 }
 
 function observe(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'histogram') return;
-  const k = labelKey(m.labels, labels);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
   let rec = m.series.get(k);
   if (!rec) {
     rec = {
@@ -131,16 +161,14 @@ function observe(name, labels = {}, value = 0) {
 
 // ─── Prometheus text-format rendering ──────────────────────────────────────
 
-function escapeLabelValue(v) {
-  return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-}
-
 function kvToPromLabels(labelNames, key) {
   if (!key) return '';
   const parts = key.split(',');
   const rendered = parts.map((p, i) => {
-    const [_, value] = p.split('=');
-    return `${labelNames[i]}="${escapeLabelValue(value)}"`;
+    const equals = p.indexOf('=');
+    const encodedValue = equals >= 0 ? p.slice(equals + 1) : '';
+    const value = decodeLabelKeyValue(encodedValue);
+    return `${labelNames[i]}="${escapePrometheusLabelValue(value)}"`;
   });
   return `{${rendered.join(',')}}`;
 }

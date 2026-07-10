@@ -117,6 +117,90 @@ describe('metrics registry — histogram', () => {
   });
 });
 
+describe('metrics registry — per-family series cap', () => {
+  beforeEach(resetAll);
+
+  test('default cap is finite and bounded', () => {
+    metrics.registerCounter('test_default_series_cap', {
+      help: 'h',
+      labels: ['value'],
+    });
+    const family = metrics.registry.get('test_default_series_cap');
+    assert.ok(Number.isInteger(family.maxSeries));
+    assert.ok(family.maxSeries >= 1 && family.maxSeries <= 10_000);
+  });
+
+  test('configured cap is clamped to hard safety bounds', () => {
+    metrics.registerCounter('test_series_cap_low', {
+      help: 'h',
+      labels: ['value'],
+      maxSeries: -50,
+    });
+    metrics.registerCounter('test_series_cap_high', {
+      help: 'h',
+      labels: ['value'],
+      maxSeries: 1_000_000,
+    });
+    assert.equal(metrics.registry.get('test_series_cap_low').maxSeries, 1);
+    assert.equal(metrics.registry.get('test_series_cap_high').maxSeries, 10_000);
+  });
+
+  test('counter folds overflow label sets deterministically', () => {
+    metrics.registerCounter('test_counter_series_cap', {
+      help: 'h',
+      labels: ['route'],
+      maxSeries: 3,
+    });
+    for (const route of ['/a', '/b', '/c', '/d']) {
+      metrics.counter('test_counter_series_cap', { route });
+    }
+    metrics.counter('test_counter_series_cap', { route: '/a' }, 2);
+
+    const family = metrics.registry.get('test_counter_series_cap');
+    assert.equal(family.series.size, 3);
+    assert.equal(family.series.get('route=/a'), 3);
+    assert.equal(family.series.get('route=/b'), 1);
+    assert.equal(family.series.get('route=__other__'), 2);
+  });
+
+  test('histogram folds overflow observations into one bounded series', () => {
+    metrics.registerHistogram('test_histogram_series_cap', {
+      help: 'h',
+      labels: ['route'],
+      buckets: [10],
+      maxSeries: 2,
+    });
+    metrics.observe('test_histogram_series_cap', { route: '/a' }, 1);
+    metrics.observe('test_histogram_series_cap', { route: '/b' }, 2);
+    metrics.observe('test_histogram_series_cap', { route: '/c' }, 3);
+
+    const family = metrics.registry.get('test_histogram_series_cap');
+    assert.equal(family.series.size, 2);
+    assert.equal(family.series.get('route=/a').count, 1);
+    assert.equal(family.series.get('route=__other__').count, 2);
+    assert.equal(family.series.get('route=__other__').sum, 5);
+  });
+
+  test('gauge retains the first bounded label sets and drops later new sets', () => {
+    metrics.registerGauge('test_gauge_series_cap', {
+      help: 'h',
+      labels: ['worker'],
+      maxSeries: 2,
+    });
+    metrics.gauge('test_gauge_series_cap', { worker: 'a' }, 1);
+    metrics.gauge('test_gauge_series_cap', { worker: 'b' }, 2);
+    metrics.gauge('test_gauge_series_cap', { worker: 'c' }, 3);
+    metrics.gauge('test_gauge_series_cap', { worker: 'a' }, 4);
+
+    const family = metrics.registry.get('test_gauge_series_cap');
+    assert.equal(family.series.size, 2);
+    assert.equal(family.series.get('worker=a'), 4);
+    assert.equal(family.series.get('worker=b'), 2);
+    assert.equal(family.series.has('worker=c'), false);
+    assert.equal(family.series.has('worker=__other__'), false);
+  });
+});
+
 describe('metrics registry — text format', () => {
   beforeEach(resetAll);
 

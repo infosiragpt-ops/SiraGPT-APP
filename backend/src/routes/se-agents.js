@@ -31,6 +31,9 @@ const maintenanceAgent = require('../services/agents/maintenance-agent');
 const orchestrator = require('../services/agents/se-orchestrator');
 const budget = require('../services/agents/budget');
 const metrics = require('../services/agents/metrics');
+const {
+  metricsHandler: authenticatedMetricsHandler,
+} = require('../services/observability/metrics-exposition');
 const auditLog = require('../services/agents/audit-log');
 const injectionGuard = require('../services/agents/injection-guard');
 const alignmentJudge = require('../services/agents/alignment-judge');
@@ -1427,16 +1430,11 @@ router.post(
 );
 
 /**
- * GET /api/se-agents/metrics
- * Prometheus-compatible text format. No auth — metrics endpoints are
- * conventionally unauth'd and protected at the network layer (scrape
- * target allowlist). If you're exposing this to the internet, wrap it
- * in auth at the edge.
+ * Prometheus compatibility alias for GET /metrics and GET /internal/metrics.
+ * Shared access policy: socket-peer loopback, Bearer METRICS_TOKEN, or an
+ * authenticated session-backed super-admin JWT; API keys are denied.
  */
-router.get('/metrics', (req, res) => {
-  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-  res.send(metrics.renderText());
-});
+router.get('/metrics', authenticatedMetricsHandler);
 
 /**
  * GET /api/se-agents/usage

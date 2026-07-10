@@ -17,6 +17,14 @@
  *   reset()                             — testing helper
  */
 
+const {
+  escapePrometheusLabelValue,
+  normalizePrometheusLabelToken,
+} = require('../utils/prometheus-labels');
+
+const MAX_ERROR_CODE_LABELS = 20;
+const OTHER_ERROR_CODE_LABEL = '__other__';
+
 const state = {
   totalFallbacks: 0,
   totalCostBlocked: 0n,
@@ -80,10 +88,31 @@ function recordUpstreamSuccess() {
   return state.upstreamSuccess;
 }
 
+function normalizeErrorCodeLabel(code) {
+  return normalizePrometheusLabelToken(code, {
+    fallback: 'unknown',
+    maxLength: 64,
+  });
+}
+
+function boundedErrorCodeBucket(code) {
+  const normalized = normalizeErrorCodeLabel(code);
+  if (Object.prototype.hasOwnProperty.call(state.upstreamErrorsByCode, normalized)) {
+    return normalized;
+  }
+  const concreteCount = Object.keys(state.upstreamErrorsByCode)
+    .filter((label) => label !== OTHER_ERROR_CODE_LABEL)
+    .length;
+  const concreteLimit = Math.max(0, MAX_ERROR_CODE_LABELS - 1);
+  return concreteCount >= concreteLimit
+    ? OTHER_ERROR_CODE_LABEL
+    : normalized;
+}
+
 function recordUpstreamError({ code, message } = {}) {
   state.upstreamErrors += 1;
   state.lastUpstreamErrorAt = new Date().toISOString();
-  const codeStr = typeof code === 'string' ? code : (code != null ? String(code) : null);
+  const codeStr = code == null ? null : normalizeErrorCodeLabel(code);
   state.lastUpstreamErrorCode = codeStr;
   // Capture the last error message too — useful for a postmortem
   // banner without having to grep logs. Capped at 240 chars to keep
@@ -93,7 +122,7 @@ function recordUpstreamError({ code, message } = {}) {
   }
   // Bump per-code frequency map. `unknown` bucket catches errors that
   // didn't carry an identifiable code/status/name.
-  const bucket = codeStr || 'unknown';
+  const bucket = boundedErrorCodeBucket(codeStr);
   state.upstreamErrorsByCode[bucket] = (state.upstreamErrorsByCode[bucket] || 0) + 1;
   return state.upstreamErrors;
 }
@@ -181,7 +210,7 @@ function toPrometheusText() {
   lines.push('# TYPE sira_free_ia_fallback_cost_blocked_total counter');
   lines.push(`sira_free_ia_fallback_cost_blocked_total ${state.totalCostBlocked.toString()}`);
   for (const [k, v] of Object.entries(state.perFeature)) {
-    const escaped = String(k).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escaped = escapePrometheusLabelValue(k);
     lines.push(`sira_free_ia_fallback_total{feature="${escaped}"} ${v.count}`);
     lines.push(`sira_free_ia_fallback_cost_blocked_total{feature="${escaped}"} ${v.costBlocked.toString()}`);
   }
@@ -192,7 +221,7 @@ function toPrometheusText() {
   lines.push('# TYPE sira_free_ia_upstream_errors_total counter');
   lines.push(`sira_free_ia_upstream_errors_total ${state.upstreamErrors}`);
   for (const [code, count] of Object.entries(state.upstreamErrorsByCode)) {
-    const escaped = String(code).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escaped = escapePrometheusLabelValue(code);
     lines.push(`sira_free_ia_upstream_errors_total{code="${escaped}"} ${count}`);
   }
   return lines.join('\n') + '\n';
@@ -268,6 +297,9 @@ function reset() {
 }
 
 module.exports = {
+  MAX_ERROR_CODE_LABELS,
+  OTHER_ERROR_CODE_LABEL,
+  normalizeErrorCodeLabel,
   recordFallback,
   recordUpstreamSuccess,
   recordUpstreamError,

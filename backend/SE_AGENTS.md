@@ -232,9 +232,29 @@ Body: `{ mode, ... }` where mode ∈ `route | pipeline | collaborate | consensus
 
 ## Observability & ops endpoints
 
-### GET `/api/se-agents/metrics`
+### Prometheus metrics
 
-Prometheus text format. No auth (scrape endpoint). Metrics:
+`GET /metrics` is the canonical scrape endpoint. `GET /internal/metrics` and
+`GET /api/se-agents/metrics` are compatibility aliases; all three use the same
+handler, return the same Prometheus text payload, and preserve
+`Content-Type: text/plain; version=0.0.4; charset=utf-8`.
+
+Access is allowed when any one of these checks passes:
+1. The TCP socket peer is loopback (`req.socket.remoteAddress`). Forwarded
+   headers and `req.ip` never grant the local bypass.
+2. `Authorization: Bearer <METRICS_TOKEN>` matches the configured token using
+   constant-time comparison.
+3. The normal JWT middleware chain authenticates a super-admin and validates
+   its backing session. API-key authentication is not accepted for this
+   fallback, even when the API-key owner is a super-admin.
+
+External requests with a missing or invalid token receive `401`; an
+authenticated non-super-admin, sessionless JWT, or API key receives `403`.
+Leaving `METRICS_TOKEN` unset does not make the endpoint public.
+
+The combined exposition includes process, HTTP utility, Sira pipeline,
+cognitive-core, Free-IA, and SE-agent metric families. SE-agent families
+include:
 - `se_agent_invocations_total{agent, terminatedBy}`
 - `se_agent_errors_total{agent}`
 - `se_agent_tokens_total{agent}`
@@ -267,13 +287,17 @@ Liveness (200) or readiness failure (503 if OPENAI_API_KEY missing).
 | `USE_PG_STORE` | `0` | Switch to pgvector-backed RAG store (requires migration). |
 | `AUDIT_LOG_PATH` | — | If set, append audit records to this path instead of stderr. |
 | `OPENAI_LIVE_TESTS` | `0` | When `1`, enables `tests/e2e-live.test.js`. |
+| `METRICS_TOKEN` | — | Optional dedicated bearer credential for non-loopback Prometheus scrapers; session-backed super-admin JWTs are also accepted, but API keys are not. |
+| `SIRAGPT_METRICS_MAX_SERIES_PER_FAMILY` | `500` | Per-family in-memory series cap (`1..10000`); counter/histogram overflow folds into `__other__`, while gauges drop later unseen labels. |
+| `SIRAGPT_SLO_MAX_ROUTE_STATES` | `128` | In-process SLO route-state cap (`1..2000`); later unseen routes fold into the stable `__other__` aggregate. |
 
 ---
 
 ## Security
 
-- **Auth**: every endpoint except `/metrics` and `/health` uses the project's
-  `authenticateToken` middleware.
+- **Auth**: `/health` is the only unauthenticated exception. Metrics paths use
+  the shared loopback / `METRICS_TOKEN` / authenticated-super-admin policy;
+  other endpoints use the project's `authenticateToken` middleware.
 - **Rate-limiting**: per-user token budget (hour+day) and requests-per-minute
   cap; returns `429` with `Retry-After`.
 - **Prompt-injection guard**: pre-scans user-provided text for well-known

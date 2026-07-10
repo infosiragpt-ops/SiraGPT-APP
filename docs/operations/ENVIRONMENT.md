@@ -203,8 +203,23 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `METRICS_TOKEN` | Optional bearer token for `GET /metrics`. When unset the endpoint is open (typical in-VPC scrape). When set, `Authorization: Bearer <METRICS_TOKEN>` is required. | — |
+| `METRICS_TOKEN` | Optional dedicated bearer credential for non-loopback Prometheus scrapers. Compared in constant time and never written to logs. | — |
 | `METRICS_BIND` | (Future) Bind address for a dedicated metrics listener (e.g. `127.0.0.1:9090`). Today metrics ride on the main backend port (`5000`). | — |
+| `SIRAGPT_METRICS_MAX_SERIES_PER_FAMILY` | Per-process cap for label series in both in-memory registries, clamped to `1..10000`. Counters/histograms fold overflow into `__other__`; gauges drop later unseen labels. | `500` |
+| `SIRAGPT_SLO_MAX_ROUTE_STATES` | Cap for in-process SLO route aggregates, clamped to `1..2000`. Unseen routes beyond the cap fold into the stable `__other__` route. | `128` |
+
+The canonical scrape path is `GET /metrics`; `GET /internal/metrics` and
+`GET /api/se-agents/metrics` are compatibility aliases backed by the same
+handler and exposition. Access is granted only to a loopback socket peer
+(`req.socket.remoteAddress`, never `req.ip` or `X-Forwarded-For`), a matching
+`Authorization: Bearer <METRICS_TOKEN>`, or a session-backed super-admin JWT.
+API keys are denied on the super-admin fallback even when their owner is a
+super-admin; `METRICS_TOKEN` is the dedicated machine-scrape credential.
+If `METRICS_TOKEN` is unset, remote anonymous scraping remains disabled.
+Invalid remote credentials return `401`; authenticated non-super-admin users
+and API-key callers receive `403`.
+If any required exporter fails, the handler returns a non-2xx response rather
+than publishing a partial scrape; alert on scrape failures.
 
 ## 🚀 Frontend (NEXT_PUBLIC_*)
 

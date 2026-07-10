@@ -1,4 +1,5 @@
 const { resourceFromAttributes } = require("@opentelemetry/resources");
+const { isMetricsRequest } = require("./metrics-paths");
 
 const DEFAULT_SERVICE_NAME = "siragpt-backend";
 
@@ -193,8 +194,7 @@ function createInstrumentationConfig() {
       ignoreIncomingRequestHook: (req) => {
         const url = typeof req?.url === "string" ? req.url : "";
         return (
-          url === "/metrics" ||
-          url.startsWith("/internal/metrics") ||
+          isMetricsRequest(req) ||
           url.startsWith("/health")
         );
       },

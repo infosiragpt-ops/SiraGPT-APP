@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  escapePrometheusLabelValue,
+} = require('../utils/prometheus-labels');
+
 /**
  * cognitive-metrics.js — Phase 6 observability for the cognitive core.
  * ───────────────────────────────────────────────────────────────────────────
@@ -178,7 +182,7 @@ function toPrometheusText() {
   return `${lines.join('\n')}\n`;
 }
 
-function esc(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
+function esc(value) { return escapePrometheusLabelValue(value); }
 
 function reset() { state = freshState(); }
 

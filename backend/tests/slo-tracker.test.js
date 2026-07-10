@@ -1,12 +1,17 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { randomBytes, randomUUID } = require('node:crypto');
 const { describe, test, beforeEach } = require('node:test');
 
+const utilityMetrics = require('../src/utils/metrics');
 const sloTracker = require('../src/services/slo-tracker');
 
 beforeEach(() => {
   sloTracker.reset();
+  for (const [name, family] of utilityMetrics.registry) {
+    if (name.startsWith('siragpt_slo_')) family.series.clear();
+  }
 });
 
 describe('slo-tracker — targets', () => {
@@ -16,6 +21,19 @@ describe('slo-tracker — targets', () => {
     assert.equal(t.latency_p99_under_2s, 0.99);
     assert.equal(t.error_rate_max, 0.01);
     assert.equal(t.availability, 0.999);
+  });
+
+  test('route-state limit has a bounded configurable default', () => {
+    assert.equal(typeof sloTracker.resolveRouteStateLimit, 'function');
+    assert.equal(sloTracker.resolveRouteStateLimit(undefined), 128);
+    assert.equal(
+      sloTracker.SLO_ROUTE_STATE_LIMIT,
+      sloTracker.resolveRouteStateLimit(process.env.SIRAGPT_SLO_MAX_ROUTE_STATES),
+    );
+    assert.equal(sloTracker.resolveRouteStateLimit('invalid'), 128);
+    assert.equal(sloTracker.resolveRouteStateLimit(64), 64);
+    assert.equal(sloTracker.resolveRouteStateLimit(-50), 1);
+    assert.equal(sloTracker.resolveRouteStateLimit(50_000), 2_000);
   });
 });
 
@@ -67,13 +85,59 @@ describe('slo-tracker — record + stats', () => {
   test('unknown route returns null', () => {
     assert.equal(sloTracker.getEndpointStats('/never'), null);
   });
+
+  test('hundreds of opaque project IDs fold state and Prometheus series into __other__', () => {
+    const mw = sloTracker.middleware();
+    const requestCount = sloTracker.SLO_ROUTE_STATE_LIMIT + 272;
+
+    for (let i = 0; i < requestCount; i += 1) {
+      const finishHandlers = [];
+      const projectId = `project-${randomBytes(12).toString('base64url')}`;
+      mw(
+        {
+          baseUrl: `/api/projects/${projectId}`,
+          route: { path: '/runs/:runId' },
+        },
+        {
+          statusCode: 200,
+          on(event, handler) {
+            if (event === 'finish') finishHandlers.push(handler);
+          },
+        },
+        () => {},
+      );
+      finishHandlers.forEach((handler) => handler());
+    }
+
+    const stats = sloTracker.getEndpointStats();
+    assert.equal(stats.length, sloTracker.SLO_ROUTE_STATE_LIMIT);
+    const overflow = sloTracker.getEndpointStats('__other__');
+    assert.ok(overflow);
+    assert.equal(
+      overflow.total,
+      requestCount - (sloTracker.SLO_ROUTE_STATE_LIMIT - 1),
+    );
+
+    const totalFamily = utilityMetrics.registry.get('siragpt_slo_requests_total');
+    const gaugeFamily = utilityMetrics.registry.get('siragpt_slo_endpoint_meets_target');
+    assert.ok(totalFamily.series.size <= sloTracker.SLO_ROUTE_STATE_LIMIT);
+    assert.ok(gaugeFamily.series.size <= sloTracker.SLO_ROUTE_STATE_LIMIT * 4);
+    assert.equal(totalFamily.series.get('route=__other__'), overflow.total);
+
+    const exposition = utilityMetrics.renderText();
+    const totalSamples = exposition.match(/^siragpt_slo_requests_total\{/gm) || [];
+    const gaugeSamples = exposition.match(/^siragpt_slo_endpoint_meets_target\{/gm) || [];
+    assert.ok(totalSamples.length <= sloTracker.SLO_ROUTE_STATE_LIMIT);
+    assert.ok(gaugeSamples.length <= sloTracker.SLO_ROUTE_STATE_LIMIT * 4);
+    assert.match(exposition, /^siragpt_slo_requests_total\{route="__other__"\} \d+$/m);
+  });
 });
 
 describe('slo-tracker — middleware', () => {
-  test('records on response finish', async () => {
+  test('uses literal unmatched instead of raw req.path when no route matched', async () => {
     const mw = sloTracker.middleware();
     const finishHandlers = [];
-    const fakeReq = { path: '/api/foo', baseUrl: '', route: null };
+    const fakeReq = { path: '/api/users/user-123', baseUrl: '', route: null };
     const fakeRes = {
       statusCode: 200,
       on(evt, fn) { if (evt === 'finish') finishHandlers.push(fn); },
@@ -83,10 +147,87 @@ describe('slo-tracker — middleware', () => {
     assert.equal(nextCalled, true);
     // Trigger finish synchronously — duration will be ~0ms but still counted.
     finishHandlers.forEach((fn) => fn());
-    const s = sloTracker.getEndpointStats('/api/foo');
+    const s = sloTracker.getEndpointStats('unmatched');
     assert.equal(s.total, 1);
     assert.equal(s.errors, 0);
     assert.equal(s.fast, 1);
+    assert.equal(sloTracker.getEndpointStats('/api/users/user-123'), null);
+  });
+
+  test('uses the matched Express route template when available', () => {
+    const mw = sloTracker.middleware();
+    const finishHandlers = [];
+    const fakeReq = { path: '/api/users/user-123', baseUrl: '/api/users', route: { path: '/:id' } };
+    const fakeRes = {
+      statusCode: 200,
+      on(evt, fn) { if (evt === 'finish') finishHandlers.push(fn); },
+    };
+
+    mw(fakeReq, fakeRes, () => {});
+    finishHandlers.forEach((fn) => fn());
+    assert.equal(sloTracker.getEndpointStats('/api/users/:id').total, 1);
+    assert.equal(sloTracker.getEndpointStats('/api/users/user-123'), null);
+  });
+
+  test('hundreds of UUID project mounts collapse to one matched route label', () => {
+    const mw = sloTracker.middleware();
+    const requestCount = 300;
+
+    for (let i = 0; i < requestCount; i += 1) {
+      const finishHandlers = [];
+      mw(
+        {
+          baseUrl: `/api/projects/${randomUUID()}`,
+          route: { path: '/runs/:runId' },
+        },
+        {
+          statusCode: 200,
+          on(event, handler) {
+            if (event === 'finish') finishHandlers.push(handler);
+          },
+        },
+        () => {},
+      );
+      finishHandlers.forEach((handler) => handler());
+    }
+
+    const stats = sloTracker.getEndpointStats();
+    assert.equal(stats.length, 1);
+    assert.equal(
+      stats[0].route,
+      sloTracker.SLO_ROUTE_STATE_LIMIT === 1
+        ? sloTracker.SLO_OVERFLOW_ROUTE
+        : '/api/projects/:id/runs/:runId',
+    );
+    assert.equal(stats[0].total, requestCount);
+
+    const totalFamily = utilityMetrics.registry.get('siragpt_slo_requests_total');
+    const gaugeFamily = utilityMetrics.registry.get('siragpt_slo_endpoint_meets_target');
+    assert.equal(totalFamily.series.size, 1);
+    assert.equal(gaugeFamily.series.size, 4);
+  });
+
+  test('does not instrument any metrics alias, including query and trailing slash forms', () => {
+    const mw = sloTracker.middleware();
+    for (const url of [
+      '/metrics?source=prometheus',
+      '/internal/metrics/',
+      '/api/se-agents/metrics/?source=prometheus',
+    ]) {
+      const finishHandlers = [];
+      let nextCalled = false;
+      mw(
+        { url },
+        {
+          statusCode: 200,
+          on(evt, fn) { if (evt === 'finish') finishHandlers.push(fn); },
+        },
+        () => { nextCalled = true; },
+      );
+      assert.equal(nextCalled, true);
+      assert.equal(finishHandlers.length, 0, `${url} attached a finish listener`);
+    }
+    assert.deepEqual(sloTracker.getEndpointStats(), []);
   });
 
   test('middleware never throws on bad req', () => {

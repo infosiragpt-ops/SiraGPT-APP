@@ -323,7 +323,6 @@ const freeIaRoutes = require('./src/routes/free-ia');
 const rbacRoutes = require('./src/routes/rbac');
 const imagesRoutes = require('./src/routes/images');
 const videoProviderStatusRoutes = require('./src/routes/video-provider-status');
-const metricsRoutes = require('./src/routes/metrics');
 const userRoutes = require('./src/routes/users');
 const legalRoutes = require('./src/routes/legal');
 const publicRoutes = require('./src/routes/public');
@@ -416,7 +415,6 @@ const slackIntegrationRoutes = require('./src/routes/integrations/slack');
 const {
     authenticateToken,
     requireAdmin,
-    requireSuperAdmin,
     shutdownWriteBehindCache,
 } = require('./src/middleware/auth');
 const scheduler = require('./src/services/scheduler/scheduler');
@@ -655,17 +653,18 @@ app.use(requestLogger);
 
 // HTTP metrics middleware — records siragpt_http_requests_total and
 // siragpt_http_request_duration_seconds for every request except
-// /metrics itself (to avoid scrape-induced cardinality).
+// shared scrape paths (to avoid scrape-induced self-observation).
 const siraMetrics = require('./src/utils/metrics');
+const {
+    isMetricsRequest,
+    matchedRouteLabel,
+} = require('./src/services/observability/metrics-paths');
 app.use((req, res, next) => {
-    if (req.path === '/metrics') return next();
+    if (isMetricsRequest(req)) return next();
     const startNs = process.hrtime.bigint();
     res.on('finish', () => {
         try {
-            const route = (req.route && req.route.path)
-                || (req.baseUrl ? `${req.baseUrl}${req.route ? req.route.path : ''}` : '')
-                || req.path
-                || 'unmatched';
+            const route = matchedRouteLabel(req);
             const durSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
             siraMetrics.counter('siragpt_http_requests_total', {
                 method: req.method,
@@ -913,62 +912,17 @@ const healthRoutes = createHealthRoutes({
 healthRoutes.register(app);
 
 // ── Prometheus metrics ──────────────────────────────────────────
-// Single scrape endpoint for the entire process. Both SE-agent
-// counters (registered in services/agents/metrics.js) and Sira
-// pipeline counters (registered in services/sira/metrics.js — via
-// require side-effect below) export through one renderer.
-const observabilityMetrics = require('./src/services/agents/metrics');
-require('./src/services/sira/metrics');
-
-function isLocalMetricsCaller(req) {
-    const ip = (req.ip || (req.socket && req.socket.remoteAddress) || '').toString();
-    if (!ip) return false;
-    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
-    return ip.startsWith('::ffff:127.');
-}
-
-function runMiddlewareChain(req, res, middlewares) {
-    return new Promise((resolve, reject) => {
-        let index = 0;
-        const step = (err) => {
-            if (err) return reject(err);
-            if (res.headersSent) return resolve(false);
-            if (index >= middlewares.length) return resolve(true);
-            const middleware = middlewares[index++];
-            try {
-                middleware(req, res, step);
-            } catch (error) {
-                reject(error);
-            }
-        };
-        step();
-    });
-}
-
-async function guardMetricsAccess(req, res) {
-    if (isLocalMetricsCaller(req)) return true;
-    try {
-        const allowed = await runMiddlewareChain(req, res, [authenticateToken, requireAdmin, requireSuperAdmin]);
-        return Boolean(allowed) && !res.headersSent;
-    } catch (err) {
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'metrics auth failed', detail: err.message });
-        }
-        return false;
-    }
-}
-
-async function renderPromMetrics(req, res) {
-    const allowed = await guardMetricsAccess(req, res);
-    if (!allowed) return;
-    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-    res.send(observabilityMetrics.renderText());
-}
-app.get('/metrics', renderPromMetrics);
+// Single protected scrape handler for process, utility, SE-agent, Sira,
+// cognitive, and Free-IA metrics. The exposition module owns all registry
+// registration so direct formatter calls and HTTP scrapes are identical.
+const {
+    metricsHandler,
+} = require('./src/services/observability/metrics-exposition');
+app.get('/metrics', metricsHandler);
 // Operator-facing alias under /internal/* — keeps the public surface
 // area predictable when ops only allow-list the internal path through
 // the ingress (and blackholes /metrics from the edge).
-app.get('/internal/metrics', renderPromMetrics);
+app.get('/internal/metrics', metricsHandler);
 
 // ── Interactive API documentation ───────────────────────────────
 // Renders the OpenAPI 3.1 spec (built by services/contracts/
@@ -1026,7 +980,6 @@ app.use('/api/admin/rbac', rbacRoutes.adminRouter);
 app.use('/api/rbac', rbacRoutes);
 app.use('/api/images', imagesRoutes);
 app.use('/api/video/provider', videoProviderStatusRoutes);
-app.use('/metrics', metricsRoutes);
 app.use('/api/admin/security', adminSecurityRoutes);
 app.use('/api/admin/settings', adminSettingsRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   buildResourceAttributes,
+  createInstrumentationConfig,
   resolveOpenTelemetryConfig,
   resolveOtlpTraceEndpoint,
 } = require("../src/services/observability/otel");
@@ -94,6 +95,20 @@ describe("OpenTelemetry config", () => {
     assert.equal(attrs["service.version"], "1.2.3");
     assert.equal(attrs["deployment.environment"], "test");
     assert.ok(!Object.keys(attrs).some((key) => /key|token|secret/i.test(key)));
+  });
+
+  test("HTTP instrumentation ignores every metrics alias with query/trailing slash", () => {
+    const config = createInstrumentationConfig();
+    const ignore = config["@opentelemetry/instrumentation-http"].ignoreIncomingRequestHook;
+
+    for (const url of [
+      "/metrics?source=prometheus",
+      "/internal/metrics/",
+      "/api/se-agents/metrics/?source=prometheus",
+    ]) {
+      assert.equal(ignore({ url }), true, `expected OTel to ignore ${url}`);
+    }
+    assert.equal(ignore({ url: "/api/se-agents/metrics-extra" }), false);
   });
 });
 
