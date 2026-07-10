@@ -243,6 +243,7 @@ function createHealthRoutes(deps = {}) {
         prisma,
         redis: getHealthRedisClient(),
         queue: queueProbe,
+        env,
       }));
       sendHealthReport(res, report);
     });
@@ -259,6 +260,7 @@ function createHealthRoutes(deps = {}) {
         coworkHealth,
         googleOAuth: oauthBootResult,
         startupEnv,
+        env,
       }));
       sendHealthReport(res, report);
     });

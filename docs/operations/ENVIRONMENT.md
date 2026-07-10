@@ -82,6 +82,25 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `POSTHOG_API_KEY` | PostHog API key | (disabled) |
 | `POSTHOG_HOST` | PostHog host URL | (PostHog Cloud US) |
 | `HEALTH_CACHE_TTL_MS` | Health check cache TTL in ms | `5000` |
+| `HEALTH_DB_TIMEOUT_MS` | Timeout for public database and migration health queries, clamped to 100–10000 ms | `1500` |
+| `INTERNAL_HEALTH_TOKEN` | Dedicated bearer credential for remote `/internal/health/*` access. When unset, `METRICS_TOKEN` is the machine-token fallback. | — |
+| `INTERNAL_HEALTH_ALLOW_LOOPBACK` | Permit direct socket-loopback access to internal health in production. Ignored whenever `Forwarded` or `X-Forwarded-*` is present. | `false` |
+| `HEALTH_PROBE_INTERVAL_MS` | Internal health-history scheduler interval in ms, clamped to Node's safe timer range 1000–2147483647 | `30000` |
+| `HEALTH_PROVIDER_PROBES_ENABLED` | Register configured `provider-*` probes. Disabled by default to avoid exposing paid/rate-limited checks. | `false` |
+| `HEALTH_SCHEDULE_PROVIDER_PROBES` | Periodically poll registered `provider-*` probes. Effective only when `HEALTH_PROVIDER_PROBES_ENABLED=true`. | `false` |
+| `HEALTH_QUEUE_PROBE_TIMEOUT_MS` | Timeout for each dedicated BullMQ health operation, clamped to 100–10000 ms | `1500` |
+| `HEALTH_QUEUE_PROBE_CACHE_TTL_MS` | Dedicated queue-health result cache TTL, clamped to 0–5000 ms | `1000` |
+| `HEALTH_CRITICAL_QUEUES` | Comma-separated queue IDs/names whose probe failure makes readiness unhealthy. Known IDs: `agent-task`, `chat-run`, `codex-runs`, `document-collections`, `goal-runs`. | (none) |
+
+`GET /internal/health/live`, `/ready`, and `/history` return
+`Cache-Control: no-store`. In production, access requires an exact constant-time
+bearer match against `INTERNAL_HEALTH_TOKEN` (`METRICS_TOKEN` is used only when
+the dedicated token is unset) or a session-backed super-admin JWT. Direct
+socket-loopback bypass is enabled by default only outside production; production
+requires `INTERNAL_HEALTH_ALLOW_LOOPBACK=true`. Any `Forwarded` or
+`X-Forwarded-*` header disables loopback bypass in every environment, so a
+same-host reverse proxy cannot inherit localhost trust. API keys are denied even
+for super-admin owners.
 
 ## 💳 Payments
 
@@ -204,18 +223,22 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `METRICS_TOKEN` | Optional dedicated bearer credential for non-loopback Prometheus scrapers. Compared in constant time and never written to logs. | — |
+| `METRICS_ALLOW_LOOPBACK` | Permit direct socket-loopback metrics access in production. Ignored whenever `Forwarded` or `X-Forwarded-*` is present. | `false` |
 | `METRICS_BIND` | (Future) Bind address for a dedicated metrics listener (e.g. `127.0.0.1:9090`). Today metrics ride on the main backend port (`5000`). | — |
 | `SIRAGPT_METRICS_MAX_SERIES_PER_FAMILY` | Per-process cap for label series in both in-memory registries, clamped to `1..10000`. Counters/histograms fold overflow into `__other__`; gauges drop later unseen labels. | `500` |
 | `SIRAGPT_SLO_MAX_ROUTE_STATES` | Cap for in-process SLO route aggregates, clamped to `1..2000`. Unseen routes beyond the cap fold into the stable `__other__` route. | `128` |
 
 The canonical scrape path is `GET /metrics`; `GET /internal/metrics` and
 `GET /api/se-agents/metrics` are compatibility aliases backed by the same
-handler and exposition. Access is granted only to a loopback socket peer
-(`req.socket.remoteAddress`, never `req.ip` or `X-Forwarded-For`), a matching
-`Authorization: Bearer <METRICS_TOKEN>`, or a session-backed super-admin JWT.
-API keys are denied on the super-admin fallback even when their owner is a
-super-admin; `METRICS_TOKEN` is the dedicated machine-scrape credential.
-If `METRICS_TOKEN` is unset, remote anonymous scraping remains disabled.
+handler and exposition. A matching `Authorization: Bearer <METRICS_TOKEN>` or
+a session-backed super-admin JWT is always accepted. Direct socket-loopback
+bypass (`req.socket.remoteAddress`, never `req.ip`) is enabled by default only
+outside production; production requires `METRICS_ALLOW_LOOPBACK=true`. Any
+`Forwarded` or `X-Forwarded-*` header disables loopback bypass in every
+environment, preventing a same-host reverse proxy from inheriting localhost
+trust. API keys are denied on the super-admin fallback even when their owner is
+a super-admin; `METRICS_TOKEN` is the dedicated machine-scrape credential. If
+`METRICS_TOKEN` is unset, remote anonymous scraping remains disabled.
 Invalid remote credentials return `401`; authenticated non-super-admin users
 and API-key callers receive `403`.
 If any required exporter fails, the handler returns a non-2xx response rather

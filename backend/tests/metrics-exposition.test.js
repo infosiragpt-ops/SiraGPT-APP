@@ -36,11 +36,21 @@ function assertValidPrometheusText(text) {
   }
 }
 
-function fakeRequest({ remoteAddress = '203.0.113.10', authorization, ip = '203.0.113.10' } = {}) {
+function fakeRequest({
+  remoteAddress = '203.0.113.10',
+  authorization,
+  ip = '203.0.113.10',
+  headers = {},
+  rawHeaders,
+} = {}) {
   return {
     ip,
     socket: { remoteAddress },
-    headers: authorization ? { authorization } : {},
+    headers: {
+      ...headers,
+      ...(authorization ? { authorization } : {}),
+    },
+    rawHeaders,
     get(name) {
       return String(name).toLowerCase() === 'authorization' ? authorization : undefined;
     },
@@ -144,11 +154,85 @@ test('Bearer metrics token comparison accepts exact tokens and rejects mismatche
   assert.equal(constantTimeTokenEquals(undefined, 'scrape-secret'), false);
 });
 
+test('authorizeMetricsRequest requires credentials for production loopback unless explicitly enabled', async () => {
+  const { authorizeMetricsRequest } = loadSubject();
+  let authCalls = 0;
+  const authMiddlewares = [
+    (_req, res) => {
+      authCalls += 1;
+      return res.status(401).json({ error: 'Access token required' });
+    },
+  ];
+  const directLoopback = fakeRequest({ remoteAddress: '::1' });
+
+  const productionResponse = fakeResponse();
+  assert.equal(await authorizeMetricsRequest(directLoopback, productionResponse, {
+    env: { NODE_ENV: 'production' },
+    authMiddlewares,
+  }), false);
+  assert.equal(productionResponse.statusCode, 401);
+  assert.equal(authCalls, 1);
+
+  assert.equal(await authorizeMetricsRequest(directLoopback, fakeResponse(), {
+    env: {
+      NODE_ENV: 'production',
+      METRICS_ALLOW_LOOPBACK: 'true',
+    },
+    authMiddlewares,
+  }), true);
+  assert.equal(authCalls, 1);
+
+  assert.equal(await authorizeMetricsRequest(directLoopback, fakeResponse(), {
+    env: { NODE_ENV: 'test' },
+    authMiddlewares,
+  }), true);
+  assert.equal(authCalls, 1);
+});
+
+test('createMetricsAccessPolicy never grants proxy-marked loopback bypass', async () => {
+  const { createMetricsAccessPolicy } = loadSubject();
+  let authCalls = 0;
+  const policy = createMetricsAccessPolicy({
+    env: { NODE_ENV: 'test' },
+    authMiddlewares: [
+      (_req, res) => {
+        authCalls += 1;
+        return res.status(401).json({ error: 'Access token required' });
+      },
+    ],
+  });
+
+  for (const requestOptions of [
+    { headers: { forwarded: 'for=203.0.113.7' } },
+    { headers: { 'x-forwarded-for': '203.0.113.7' } },
+    { headers: { 'x-forwarded-host': 'api.example.test' } },
+    { headers: { 'X-Forwarded-Custom': 'present' } },
+    { rawHeaders: ['Forwarded', 'for=203.0.113.7'] },
+  ]) {
+    const res = fakeResponse();
+    let nextCalled = false;
+    await policy(
+      fakeRequest({ remoteAddress: '127.0.0.1', ...requestOptions }),
+      res,
+      (error) => {
+        if (error) throw error;
+        nextCalled = true;
+      },
+    );
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
+  }
+  assert.equal(authCalls, 5);
+});
+
 test('shared handler allows a valid metrics token without JWT middleware', async () => {
   const { createMetricsHandler } = loadSubject();
   let authCalls = 0;
   const handler = createMetricsHandler({
-    env: { METRICS_TOKEN: 'scrape-secret' },
+    env: {
+      NODE_ENV: 'production',
+      METRICS_TOKEN: 'scrape-secret',
+    },
     authMiddlewares: [
       (_req, _res, next) => {
         authCalls += 1;
@@ -160,7 +244,11 @@ test('shared handler allows a valid metrics token without JWT middleware', async
   const res = fakeResponse();
 
   await handler(
-    fakeRequest({ authorization: 'Bearer scrape-secret' }),
+    fakeRequest({
+      remoteAddress: '127.0.0.1',
+      authorization: 'Bearer scrape-secret',
+      headers: { 'x-forwarded-for': '203.0.113.7' },
+    }),
     res,
     (error) => { if (error) throw error; },
   );

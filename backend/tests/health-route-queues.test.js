@@ -75,6 +75,31 @@ test('canonical backend test script registers all queue health suites', () => {
   assert.match(backendPackage.scripts.test, /tests\/admin-queues-legacy\.test\.js/);
 });
 
+test('public readiness and full routes pass their injected env to DB probes', async (t) => {
+  const previous = process.env.HEALTH_DB_TIMEOUT_MS;
+  process.env.HEALTH_DB_TIMEOUT_MS = '300';
+  t.after(() => {
+    if (previous === undefined) delete process.env.HEALTH_DB_TIMEOUT_MS;
+    else process.env.HEALTH_DB_TIMEOUT_MS = previous;
+  });
+  const app = buildHealthApp(null, {
+    prisma: { $queryRawUnsafe: () => new Promise(() => {}) },
+    env: {
+      HEALTH_DB_TIMEOUT_MS: '100',
+      OPENAI_API_KEY: 'test-only',
+    },
+  });
+
+  for (const path of ['/health/ready', '/health']) {
+    const response = await request(app).get(path);
+    assert.equal(response.status, 503);
+    const database = response.body.checks.find((check) => check.name === 'database');
+    const migrations = response.body.checks.find((check) => check.name === 'migrations');
+    assert.match(database.error, /timed out after 100ms/i);
+    assert.match(migrations.error, /timed out after 100ms/i);
+  }
+});
+
 test('default registry lists physical queue names without loading producer modules', () => {
   for (const modulePath of QUEUE_MODULE_PATHS) {
     assert.equal(require.cache[modulePath], undefined);

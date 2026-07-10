@@ -1,7 +1,5 @@
 'use strict';
 
-const crypto = require('node:crypto');
-
 const utilityMetrics = require('../../utils/metrics');
 const agentMetrics = require('../agents/metrics');
 const {
@@ -12,26 +10,14 @@ const {
 // inventory as the HTTP handlers, without depending on index.js boot order.
 require('../sira/metrics');
 const {
-  authenticateToken,
-  requireAdmin,
-  requireSuperAdmin,
-} = require('../../middleware/auth');
+  isLoopbackPeer,
+  constantTimeTokenEquals,
+  requireSessionOperationalAuth: requireSessionMetricsAuth,
+  authorizeOperationalRequest,
+  createOperationalAccessPolicy,
+} = require('./operational-auth');
 
 const PROMETHEUS_CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8';
-
-function requireSessionMetricsAuth(req, res, next) {
-  if (req.authMethod === 'api_key' || !req.userSession) {
-    return res.status(403).json({ error: 'Super admin session required' });
-  }
-  return next();
-}
-
-const DEFAULT_AUTH_MIDDLEWARES = Object.freeze([
-  authenticateToken,
-  requireSessionMetricsAuth,
-  requireAdmin,
-  requireSuperAdmin,
-]);
 
 function metricFamilyNames(text) {
   if (typeof text !== 'string') return [];
@@ -72,107 +58,34 @@ function formatMetricsExposition() {
   ]);
 }
 
-function isIpv4Loopback(address) {
-  const octets = String(address).split('.');
-  if (octets.length !== 4) return false;
-  if (!octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)) {
-    return false;
-  }
-  return Number(octets[0]) === 127;
+function shouldAllowMetricsLoopback(env = process.env) {
+  const isProduction = String(env?.NODE_ENV || '').trim().toLowerCase() === 'production';
+  const explicitlyAllowed = String(env?.METRICS_ALLOW_LOOPBACK || '')
+    .trim()
+    .toLowerCase() === 'true';
+  return !isProduction || explicitlyAllowed;
 }
 
-function isLoopbackPeer(req) {
-  const rawAddress = req?.socket?.remoteAddress;
-  if (typeof rawAddress !== 'string' || !rawAddress) return false;
-  const address = rawAddress.toLowerCase().split('%', 1)[0];
-  if (address === '::1') return true;
-  if (isIpv4Loopback(address)) return true;
-  if (address.startsWith('::ffff:')) {
-    return isIpv4Loopback(address.slice('::ffff:'.length));
-  }
-  return false;
-}
-
-function constantTimeTokenEquals(candidate, expected) {
-  if (typeof candidate !== 'string' || typeof expected !== 'string' || expected.length === 0) {
-    return false;
-  }
-  const candidateDigest = crypto.createHash('sha256').update(candidate, 'utf8').digest();
-  const expectedDigest = crypto.createHash('sha256').update(expected, 'utf8').digest();
-  return crypto.timingSafeEqual(candidateDigest, expectedDigest);
-}
-
-function bearerToken(req) {
-  let header;
-  if (typeof req?.get === 'function') header = req.get('authorization');
-  if (header === undefined) header = req?.headers?.authorization;
-  if (Array.isArray(header)) return null;
-  const match = /^Bearer[ \t]+([^ \t]+)[ \t]*$/i.exec(String(header || ''));
-  return match ? match[1] : null;
-}
-
-function runMiddlewareChain(req, res, middlewares) {
-  return new Promise((resolve, reject) => {
-    let index = 0;
-    const step = (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      if (res.headersSent) {
-        resolve(false);
-        return;
-      }
-      if (index >= middlewares.length) {
-        resolve(true);
-        return;
-      }
-      const middleware = middlewares[index++];
-      try {
-        const pending = middleware(req, res, step);
-        if (pending && typeof pending.then === 'function') {
-          pending
-            .then(() => {
-              if (res.headersSent) resolve(false);
-            })
-            .catch(reject);
-        } else if (res.headersSent) {
-          resolve(false);
-        }
-      } catch (middlewareError) {
-        reject(middlewareError);
-      }
-    };
-    step();
+function authorizeMetricsRequest(req, res, options = {}) {
+  const env = options.env ?? process.env;
+  return authorizeOperationalRequest(req, res, {
+    ...options,
+    env,
+    tokenEnvNames: ['METRICS_TOKEN'],
+    allowLoopback: shouldAllowMetricsLoopback(env),
+    denyForwardedLoopback: true,
   });
 }
 
-async function authorizeMetricsRequest(req, res, {
-  env = process.env,
-  authMiddlewares = DEFAULT_AUTH_MIDDLEWARES,
-} = {}) {
-  if (isLoopbackPeer(req)) return true;
-
-  const configuredToken = env?.METRICS_TOKEN;
-  const suppliedToken = bearerToken(req);
-  if (constantTimeTokenEquals(suppliedToken, configuredToken)) return true;
-
-  const chain = Array.isArray(authMiddlewares) && authMiddlewares.length > 0
-    ? authMiddlewares
-    : DEFAULT_AUTH_MIDDLEWARES;
-  return runMiddlewareChain(req, res, chain);
-}
-
 function createMetricsAccessPolicy(options = {}) {
-  return async function metricsAccessPolicy(req, res, next) {
-    try {
-      const allowed = await authorizeMetricsRequest(req, res, options);
-      if (allowed && !res.headersSent) return next();
-      return undefined;
-    } catch (error) {
-      return next(error);
-    }
-  };
+  const env = options.env ?? process.env;
+  return createOperationalAccessPolicy({
+    ...options,
+    env,
+    tokenEnvNames: ['METRICS_TOKEN'],
+    allowLoopback: shouldAllowMetricsLoopback(env),
+    denyForwardedLoopback: true,
+  });
 }
 
 function createMetricsHandler({
@@ -218,6 +131,7 @@ module.exports = {
   findDuplicateMetricFamilies,
   composeExpositions,
   formatMetricsExposition,
+  shouldAllowMetricsLoopback,
   isLoopbackPeer,
   constantTimeTokenEquals,
   requireSessionMetricsAuth,

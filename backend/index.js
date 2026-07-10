@@ -918,6 +918,30 @@ const healthRoutes = createHealthRoutes({
 });
 healthRoutes.register(app);
 
+// Internal probe registry + rolling history. This is deliberately separate
+// from the public /health contract above: /internal/health/* uses the existing
+// Probe/ProbeScheduler system for operator history and SLO aggregation.
+// The Redis adapter delegates to healthRoutes' lazy client, so both health
+// surfaces share one connection instead of creating another IORedis instance.
+const { createHealthSystem } = require('./src/health/mount');
+const internalHealthSystem = createHealthSystem({
+    prisma,
+    redisClient: process.env.REDIS_URL
+        ? {
+            ping: async () => {
+                const client = healthRoutes.getHealthRedisClient();
+                if (!client || typeof client.ping !== 'function') {
+                    throw new Error('health Redis client is unavailable');
+                }
+                return client.ping();
+            },
+        }
+        : null,
+    logger,
+    env: process.env,
+});
+internalHealthSystem.mount(app);
+
 // ── Prometheus metrics ──────────────────────────────────────────
 // Single protected scrape handler for process, utility, SE-agent, Sira,
 // cognitive, and Free-IA metrics. The exposition module owns all registry
@@ -1271,6 +1295,10 @@ async function startServer() {
         }
     });
 
+    // Sampling is a runtime lifecycle concern: never start timers merely by
+    // importing index.js in tests or tooling.
+    internalHealthSystem.startScheduler();
+
     recoverAgentTasksAfterBoot({ logger });
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
@@ -1452,6 +1480,7 @@ async function startServer() {
 
     // Scheduler stop runs first so jobs cannot enqueue new work.
     shutdownRegistry.register('scheduler_stop', () => {
+        try { internalHealthSystem.stopScheduler(); } catch { }
         try { scheduler.stop?.(); } catch { }
         try {
             const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');

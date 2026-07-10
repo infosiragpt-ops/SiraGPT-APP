@@ -3,7 +3,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { ProbeScheduler } = require('../src/health/probe-scheduler');
+const {
+  ProbeScheduler,
+  MAX_TIMER_DELAY_MS,
+} = require('../src/health/probe-scheduler');
 const { Probe } = require('../src/health/probe');
 
 function makeProbe(name, behaviour) {
@@ -42,6 +45,11 @@ test('ProbeScheduler: starts not running, size 0', () => {
   assert.equal(s.size, 0);
 });
 
+test('ProbeScheduler: caps its default interval at the safe Node timer maximum', () => {
+  const s = new ProbeScheduler({ defaultIntervalMs: Number.MAX_SAFE_INTEGER });
+  assert.equal(s.snapshot().defaultIntervalMs, MAX_TIMER_DELAY_MS);
+});
+
 // ─── add / remove / list ─────────────────────────────────────────
 
 test('ProbeScheduler.add: rejects probes without run/name', () => {
@@ -71,6 +79,13 @@ test('ProbeScheduler.add: honours per-probe intervalMs', () => {
   const s = new ProbeScheduler();
   const entry = s.add(makeProbe('db'), { intervalMs: 10_000 });
   assert.equal(entry.baseIntervalMs, 10_000);
+});
+
+test('ProbeScheduler.add: caps per-probe intervals at the safe Node timer maximum', () => {
+  const s = new ProbeScheduler();
+  const entry = s.add(makeProbe('db'), { intervalMs: Number.MAX_SAFE_INTEGER });
+  assert.equal(entry.baseIntervalMs, MAX_TIMER_DELAY_MS);
+  assert.equal(entry.currentIntervalMs, MAX_TIMER_DELAY_MS);
 });
 
 test('ProbeScheduler.add: per-probe intervalMs < 1000 falls back to default', () => {
@@ -190,6 +205,25 @@ test('ProbeScheduler: backoff doubles up to cap', async () => {
   assert.equal(s.get('db').currentIntervalMs, 4000);
 });
 
+test('ProbeScheduler: backoff and jittered timer delays never exceed Node timer maximum', async () => {
+  const fakes = makeFakeTimers();
+  const s = new ProbeScheduler({
+    defaultIntervalMs: MAX_TIMER_DELAY_MS,
+    setTimeoutImpl: fakes.setTimeoutImpl,
+    clearTimeoutImpl: fakes.clearTimeoutImpl,
+    jitterRatio: 1,
+    random: () => 1,
+    backoffFactor: 10,
+    backoffCapRatio: 10,
+  });
+  s.add(makeProbe('db', () => { throw new Error('boom'); }));
+  await s.sampleOnce('db');
+  assert.equal(s.get('db').currentIntervalMs, MAX_TIMER_DELAY_MS);
+  s.start();
+  assert.equal([...fakes.pending.values()][0].delay, MAX_TIMER_DELAY_MS);
+  s.stop();
+});
+
 // ─── start / stop with fake timers ───────────────────────────────
 
 function makeFakeTimers() {
@@ -259,7 +293,7 @@ test('ProbeScheduler.start + tick: increments sampleCount on timer fire', async 
   s.stop();
 });
 
-test('ProbeScheduler: runImmediately fires once before scheduled tick', async () => {
+test('ProbeScheduler: runImmediately schedules recurring samples after the immediate run settles', async () => {
   const fakes = makeFakeTimers();
   const s = new ProbeScheduler({
     setTimeoutImpl: fakes.setTimeoutImpl,
@@ -271,7 +305,13 @@ test('ProbeScheduler: runImmediately fires once before scheduled tick', async ()
   // Microtask flush.
   await Promise.resolve();
   await new Promise((r) => setImmediate(r));
-  assert.ok(s.get('db').sampleCount >= 1);
+  assert.equal(s.get('db').sampleCount, 1);
+  assert.equal(fakes.pending.size, 1, 'immediate sample must arm the recurring timer');
+  fakes.fireAll();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(s.get('db').sampleCount, 2, 'first recurring timer must produce a second sample');
+  assert.equal(fakes.pending.size, 1, 'recurring sample must arm the next timer');
   s.stop();
 });
 

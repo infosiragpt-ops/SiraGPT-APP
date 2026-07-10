@@ -53,8 +53,9 @@ test('createConfiguredExternalProbes includeUnconfigured returns all', () => {
   assert.equal(probes.length, EXTERNAL_PROVIDERS.length);
 });
 
-test('createHealthSystem registers external probes when env keys present', () => {
+test('createHealthSystem registers external probes when the feature gate and keys are present', () => {
   const env = {
+    HEALTH_PROVIDER_PROBES_ENABLED: 'true',
     STRIPE_SECRET_KEY: 'sk_test',
     TAVILY_API_KEY: 'tv-x',
   };

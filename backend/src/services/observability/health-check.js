@@ -32,20 +32,54 @@
  */
 
 const PROCESS_BOOT_AT = Date.now();
+const {
+  MIGRATIONS_OPERATION,
+  coalescePrismaHealthOperation,
+  runCoalescedDatabasePing,
+} = require('../../health/db-operation-coalescer');
+const DEFAULT_HEALTH_DB_TIMEOUT_MS = 1500;
+const MIN_HEALTH_DB_TIMEOUT_MS = 100;
+const MAX_HEALTH_DB_TIMEOUT_MS = 10_000;
+
+function resolveHealthDbTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(env?.HEALTH_DB_TIMEOUT_MS, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_HEALTH_DB_TIMEOUT_MS;
+  return Math.min(MAX_HEALTH_DB_TIMEOUT_MS, Math.max(MIN_HEALTH_DB_TIMEOUT_MS, parsed));
+}
+
+function runDbOperationWithTimeout(operation, { timeoutMs, label }) {
+  let timer;
+  const operationPromise = Promise.resolve().then(operation);
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label} probe timed out after ${timeoutMs}ms`);
+      error.code = "HEALTH_DB_TIMEOUT";
+      reject(error);
+    }, timeoutMs);
+  });
+
+  // Promise.race installs a rejection handler on operationPromise immediately,
+  // so a Prisma call that rejects after the timeout cannot become unhandled.
+  return Promise.race([operationPromise, timeoutPromise])
+    .finally(() => clearTimeout(timer));
+}
 
 // ── Individual probes ──────────────────────────────────────────────
 
-async function checkDatabase(prisma) {
+async function checkDatabase(prisma, env = process.env) {
   if (!prisma || typeof prisma.$queryRawUnsafe !== "function") {
     return { name: "database", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_prisma_client_provided" } };
   }
   const start = Date.now();
   try {
     // `SELECT 1` is the cheapest possible round-trip; covers TCP +
-    // auth + a real query path. Timeout is enforced by the deps' own
-    // pool config — health-check itself doesn't race a timer because
-    // a slow DB IS the signal we want surfaced.
-    await prisma.$queryRawUnsafe("SELECT 1");
+    // auth + a real query path. Bound the operation independently of
+    // Prisma's pool timeout so readiness itself always responds.
+    const timeoutMs = resolveHealthDbTimeoutMs(env);
+    await runDbOperationWithTimeout(
+      () => runCoalescedDatabasePing(prisma),
+      { timeoutMs, label: "database" },
+    );
     return { name: "database", status: "healthy", critical: true, latency_ms: Date.now() - start };
   } catch (err) {
     return {
@@ -56,7 +90,7 @@ async function checkDatabase(prisma) {
   }
 }
 
-async function checkMigrations(prisma) {
+async function checkMigrations(prisma, env = process.env) {
   if (!prisma || typeof prisma.$queryRawUnsafe !== "function") {
     return { name: "migrations", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_prisma_client_provided" } };
   }
@@ -69,8 +103,16 @@ async function checkMigrations(prisma) {
     // stuck, not an in-flight migration. Surfacing it as a critical readiness
     // failure lets the load balancer drain a broken instance instead of routing
     // traffic into 500s.
-    const rows = await prisma.$queryRawUnsafe(
-      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+    const timeoutMs = resolveHealthDbTimeoutMs(env);
+    const rows = await runDbOperationWithTimeout(
+      () => coalescePrismaHealthOperation(
+        prisma,
+        MIGRATIONS_OPERATION,
+        () => prisma.$queryRawUnsafe(
+          'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+        ),
+      ),
+      { timeoutMs, label: "migrations" },
     );
     const failed = Array.isArray(rows) ? rows.map((r) => r && r.migration_name).filter(Boolean) : [];
     if (failed.length > 0) {
@@ -558,10 +600,10 @@ function runLivenessCheck() {
   };
 }
 
-async function runReadinessCheck({ prisma, redis, queue } = {}) {
+async function runReadinessCheck({ prisma, redis, queue, env = process.env } = {}) {
   const checks = await Promise.all([
-    checkDatabase(prisma),
-    checkMigrations(prisma),
+    checkDatabase(prisma, env),
+    checkMigrations(prisma, env),
     checkRedis(redis),
     checkQueue(queue),
   ]);
@@ -571,8 +613,8 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
 
 async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv, env = process.env } = {}) {
   const checks = await Promise.all([
-    checkDatabase(prisma),
-    checkMigrations(prisma),
+    checkDatabase(prisma, env),
+    checkMigrations(prisma, env),
     checkRedis(redis),
     checkQueue(queue),
   ]);
@@ -638,6 +680,10 @@ function reportToHttpStatus(report) {
 
 module.exports = {
   PROCESS_BOOT_AT,
+  DEFAULT_HEALTH_DB_TIMEOUT_MS,
+  MIN_HEALTH_DB_TIMEOUT_MS,
+  MAX_HEALTH_DB_TIMEOUT_MS,
+  resolveHealthDbTimeoutMs,
   checkDatabase,
   checkMigrations,
   checkRedis,
