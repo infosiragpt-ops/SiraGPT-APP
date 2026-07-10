@@ -27,6 +27,42 @@ fail() {
   exit 1
 }
 
+run_bounded_prisma() {
+  (
+    cd "${APP_DIR}/backend"
+    node -e '
+      const boot = require("./scripts/start-with-migrations");
+      boot.runPrisma(process.argv.slice(1))
+        .then((result) => {
+          process.exitCode = boot.prismaCommandExitStatus(result);
+        })
+        .catch((error) => {
+          process.stderr.write(`${error && error.code ? error.code : "MIGRATION_COMMAND_FAILED"}\n`);
+          process.exitCode = 1;
+        });
+    ' "$@"
+  )
+}
+
+run_bounded_prisma_with_stdin() {
+  (
+    cd "${APP_DIR}/backend"
+    node -e '
+      const fs = require("node:fs");
+      const boot = require("./scripts/start-with-migrations");
+      const input = fs.readFileSync(0);
+      boot.runPrisma(process.argv.slice(1), { input })
+        .then((result) => {
+          process.exitCode = boot.prismaCommandExitStatus(result);
+        })
+        .catch((error) => {
+          process.stderr.write(`${error && error.code ? error.code : "MIGRATION_COMMAND_FAILED"}\n`);
+          process.exitCode = 1;
+        });
+    ' "$@"
+  )
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
@@ -251,7 +287,7 @@ verify_auth_login_path() {
 resolve_prisma_migration_applied() {
   local migration_name="$1"
 
-  npx prisma migrate resolve --schema prisma/schema.prisma --applied "${migration_name}"
+  run_bounded_prisma migrate resolve --schema prisma/schema.prisma --applied "${migration_name}"
 }
 
 repair_model_sync_migration() {
@@ -261,7 +297,7 @@ repair_model_sync_migration() {
   log "Applying idempotent SQL for ${migration_name} before marking it applied"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 ALTER TABLE "ai_models"
   ADD COLUMN IF NOT EXISTS "lastSynced" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "syncSource" TEXT DEFAULT 'manual',
@@ -280,7 +316,7 @@ repair_init_baseline_migration() {
   log "Verifying baseline schema objects exist before marking ${migration_name} applied"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ProviderType') THEN
@@ -319,7 +355,7 @@ repair_stripe_integration_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 ALTER TABLE "payments"
   ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT,
   ADD COLUMN IF NOT EXISTS "stripePriceId" TEXT,
@@ -346,7 +382,7 @@ repair_stripe_enhancement_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "usage_alerts" (
   "id" TEXT NOT NULL,
   "userId" TEXT NOT NULL,
@@ -411,7 +447,7 @@ repair_monthly_limit_default_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 ALTER TABLE "users" ALTER COLUMN "monthlyLimit" SET DEFAULT 1000;
 SQL
     resolve_prisma_migration_applied "${migration_name}"
@@ -424,7 +460,7 @@ repair_gmail_integration_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "gmailTokens" TEXT;
 SQL
@@ -452,7 +488,7 @@ repair_user_memories_schema_migration() {
   log "Creating Prisma-compatible user memory tables with BYTEA embeddings"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "user_memories" (
   "id" TEXT NOT NULL,
   "user_id" TEXT NOT NULL,
@@ -505,7 +541,7 @@ repair_universal_search_brain_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "universal_search_cache" (
   "id" TEXT NOT NULL,
   "queryHash" TEXT NOT NULL,
@@ -562,7 +598,7 @@ repair_agentic_task_queue_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "agent_tasks" (
   "id" TEXT NOT NULL,
   "userId" TEXT NOT NULL,
@@ -659,7 +695,7 @@ repair_scheduler_jobs_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "scheduler_jobs" (
   "id" TEXT NOT NULL,
   "name" TEXT NOT NULL,
@@ -709,7 +745,7 @@ repair_audit_log_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "audit_log" (
   "id" TEXT NOT NULL,
   "actorType" TEXT NOT NULL,
@@ -745,7 +781,7 @@ repair_document_index_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "document_index" (
   "contentHash" TEXT NOT NULL,
   "version" INTEGER NOT NULL DEFAULT 1,
@@ -776,7 +812,7 @@ repair_document_nodes_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "document_nodes" (
   "id" TEXT NOT NULL,
   "fileId" TEXT NOT NULL,
@@ -829,7 +865,7 @@ repair_admin_connections_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 CREATE TABLE IF NOT EXISTS "admin_connections" (
   "id" TEXT NOT NULL,
   "url" TEXT NOT NULL,
@@ -864,7 +900,7 @@ repair_session_fingerprint_migration() {
   log "Repairing Prisma migration state: ${migration_name}"
   (
     cd backend
-    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+    run_bounded_prisma_with_stdin db execute --schema prisma/schema.prisma --stdin <<'SQL'
 ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "fingerprint" TEXT;
 SQL
     resolve_prisma_migration_applied "${migration_name}"
@@ -943,39 +979,12 @@ repair_known_prisma_migration() {
 }
 
 run_prisma_migrations() {
-  local migrate_output migrate_status migration_name
-
-  log "Generating Prisma client"
-  (cd backend && npx prisma generate --schema prisma/schema.prisma)
-
-  for attempt in $(seq 1 30); do
-    log "Applying pending Prisma migrations (attempt ${attempt}/30)"
-    set +e
-    migrate_output="$(
-      cd backend && npx prisma migrate deploy --schema prisma/schema.prisma 2>&1
-    )"
-    migrate_status=$?
-    set -e
-    printf '%s\n' "$migrate_output"
-
-    if [[ "$migrate_status" -eq 0 ]]; then
-      return 0
-    fi
-
-    migration_name="$(printf '%s\n' "$migrate_output" | extract_prisma_migration_name)"
-    if [[ -z "$migration_name" ]]; then
-      return "$migrate_status"
-    fi
-
-    if repair_known_prisma_migration "$migration_name"; then
-      log "Retrying Prisma migrations after repairing ${migration_name}"
-      continue
-    fi
-
-    return "$migrate_status"
-  done
-
-  fail "Prisma migrations did not converge after repair attempts"
+  log "Generating Prisma client and applying migrations through the bounded boot lifecycle"
+  (
+    cd backend
+    PRISMA_BASELINE_ON_P3005="${PRISMA_BASELINE_ON_P3005:-1}" \
+      node scripts/start-with-migrations.js --migrate-only
+  )
 }
 
 require_command git

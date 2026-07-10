@@ -106,6 +106,10 @@ misconfigurations:
   warning by default because same-host Postgres/sidecars are valid production
   topologies. Set `DATABASE_URL_LOCALHOST_POLICY=block` or
   `REJECT_LOCAL_DATABASE_URL=true` to fail closed.
+- `PRISMA_DATABASE_URL=prisma+postgres://…` without a direct
+  `DIRECT_DATABASE_URL` (or direct legacy fallback) → migration startup exits
+  with `DIRECT_DATABASE_URL_REQUIRED`; the remote runtime URL is never copied
+  into Prisma CLI's `DATABASE_URL`.
 - Short `SESSION_SECRET` / `JWT_SECRET` in production → warning.
 - `CORS_ORIGINS="*"` in production → warning.
 - `LOG_LEVEL=debug` in production → warning.

@@ -71,7 +71,23 @@ services:
     environment:
       PORT: 5000
       NODE_ENV: ${NODE_ENV:-production}
-      PRISMA_DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-siragpt}"
+      # Pass role URLs through without inventing a direct URL beside an explicit
+      # remote runtime. The pure resolver uses these POSTGRES_* values only when
+      # all three URL roles are absent.
+      PRISMA_DATABASE_URL: "${PRISMA_DATABASE_URL:-}"
+      DIRECT_DATABASE_URL: "${DIRECT_DATABASE_URL:-}"
+      DATABASE_URL: "${DATABASE_URL:-}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-db}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: "${POSTGRES_DB:-siragpt}"
+      MIGRATION_COMMAND_TIMEOUT_MS: "${MIGRATION_COMMAND_TIMEOUT_MS:-300000}"
+      BOOT_COMMAND_TIMEOUT_MS: "${BOOT_COMMAND_TIMEOUT_MS:-5000}"
+      MIGRATION_DB_CONNECT_TIMEOUT_MS: "${MIGRATION_DB_CONNECT_TIMEOUT_MS:-10000}"
+      MIGRATION_DB_QUERY_TIMEOUT_MS: "${MIGRATION_DB_QUERY_TIMEOUT_MS:-15000}"
+      MIGRATION_DB_STATEMENT_TIMEOUT_MS: "${MIGRATION_DB_STATEMENT_TIMEOUT_MS:-15000}"
+      MIGRATION_LOCK_TIMEOUT_MS: "${MIGRATION_LOCK_TIMEOUT_MS:-120000}"
       REDIS_URL: "redis://redis:6379"
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000}"
       JWT_SECRET: "${JWT_SECRET}"

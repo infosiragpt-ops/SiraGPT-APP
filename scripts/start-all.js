@@ -20,7 +20,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const {
-  resolveCanonicalDatabaseUrl,
+  resolveDatabaseUrls,
 } = require("../backend/src/config/database-url");
 const {
   createShutdownCoordinator,
@@ -79,19 +79,20 @@ function pipePrefixed(child, prefix) {
   child.stderr?.on("data", writeChunk(process.stderr));
 }
 
-function buildDbUrl() {
+function buildDirectDbUrl(env = process.env) {
   // Production containers cannot reach the dev-only 'helium' host.
-  // If the canonical database URL still points to helium, reconstruct it from the
-  // standard Replit Postgres secrets (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE).
-  const raw = resolveCanonicalDatabaseUrl(process.env) || "";
+  // If the direct migration URL still points to helium, reconstruct it from
+  // standard Replit Postgres secrets without replacing a remote runtime URL.
+  const { directMigrationUrl } = resolveDatabaseUrls(env);
+  const raw = directMigrationUrl || "";
   if (raw && !raw.includes("helium")) return raw;
-  const host = process.env.PGHOST;
-  const port = process.env.PGPORT || "5432";
-  const user = process.env.PGUSER;
-  const pass = process.env.PGPASSWORD;
-  const db = process.env.PGDATABASE || "siragpt";
+  const host = env.PGHOST;
+  const port = env.PGPORT || "5432";
+  const user = env.PGUSER;
+  const pass = env.PGPASSWORD;
+  const db = env.PGDATABASE || "siragpt";
   if (!host || !user || !pass) {
-    log("start-all", "WARNING: cannot build production DATABASE_URL — missing PGHOST/PGUSER/PGPASSWORD");
+    log("start-all", "WARNING: cannot build direct migration URL — missing PGHOST/PGUSER/PGPASSWORD");
     return raw;
   }
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`;
@@ -99,9 +100,24 @@ function buildDbUrl() {
 
 function spawnBackend() {
   log("start-all", "spawning backend", { cwd: BACKEND_DIR, port: BACKEND_PORT });
-  const dbUrl = buildDbUrl();
+  const { runtimeUrl } = resolveDatabaseUrls(process.env);
+  const directMigrationUrl = buildDirectDbUrl(process.env);
+  const effectiveRuntimeUrl = runtimeUrl && !runtimeUrl.includes("helium")
+    ? runtimeUrl
+    : directMigrationUrl || runtimeUrl;
+  const databaseOverrides = {};
+  if (effectiveRuntimeUrl) databaseOverrides.PRISMA_DATABASE_URL = effectiveRuntimeUrl;
+  if (directMigrationUrl) databaseOverrides.DIRECT_DATABASE_URL = directMigrationUrl;
+  if (
+    directMigrationUrl
+    && process.env.DATABASE_URL?.includes("helium")
+    && runtimeUrl === process.env.DATABASE_URL.trim()
+  ) {
+    databaseOverrides.DATABASE_URL = directMigrationUrl;
+  }
   const env = {
     ...process.env,
+    ...databaseOverrides,
     // Force NODE_ENV=production for the backend child unless the operator
     // explicitly overrode it. Without this the backend's global
     // unhandledRejection handler exits the process on transient Redis
@@ -111,8 +127,6 @@ function spawnBackend() {
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
-    DATABASE_URL: dbUrl,
-    PRISMA_DATABASE_URL: dbUrl,
   };
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {
     cwd: BACKEND_DIR,

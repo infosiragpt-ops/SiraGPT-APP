@@ -23,7 +23,7 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 |----------|-------------|---------|-------|
 | `JWT_SECRET` | JWT token signing key | — | Generate with `./scripts/generate-secrets.sh`. Min 32 chars. |
 | `SESSION_SECRET` | Session cookie encryption | — | Generate separately from JWT_SECRET. Min 32 chars. |
-| `PRISMA_DATABASE_URL` | PostgreSQL connection string | — | Format: `postgresql://user:pass@host:5432/db` |
+| `PRISMA_DATABASE_URL` | Runtime database connection | — | Direct `postgresql://…`/`postgres://…` or remote `prisma+postgres://…`. |
 
 ## 🔌 LLM Providers (at least one required)
 
@@ -46,11 +46,20 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
+| `POSTGRES_HOST` | PostgreSQL host for POSTGRES-only resolver fallback | `db` in Compose |
+| `POSTGRES_PORT` | PostgreSQL port for POSTGRES-only resolver fallback | `5432` |
 | `POSTGRES_USER` | PostgreSQL user | `postgres` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `postgres` |
 | `POSTGRES_DB` | PostgreSQL database name | `siragpt` |
-| `PRISMA_DATABASE_URL` | Canonical Prisma datasource URL | — |
-| `DATABASE_URL` | Legacy fallback used only when `PRISMA_DATABASE_URL` is empty | — |
+| `PRISMA_DATABASE_URL` | Runtime Prisma datasource URL; may be direct PostgreSQL or remote Accelerate | — |
+| `DIRECT_DATABASE_URL` | Direct PostgreSQL URL for migrations, boot preflight, and advisory locking | — |
+| `DATABASE_URL` | Legacy runtime fallback and direct-migration candidate | — |
+| `MIGRATION_COMMAND_TIMEOUT_MS` | Hard timeout for each asynchronous Prisma process tree | `300000` |
+| `BOOT_COMMAND_TIMEOUT_MS` | Hard timeout for auxiliary boot commands such as stale-port cleanup | `5000` |
+| `MIGRATION_DB_CONNECT_TIMEOUT_MS` | Boot-time `pg` connection deadline | `10000` |
+| `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot-time `pg` client query deadline | `15000` |
+| `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | PostgreSQL server statement timeout requested by boot-time `pg` clients | `15000` |
+| `MIGRATION_LOCK_TIMEOUT_MS` | Total advisory-lock acquisition deadline, including connect and lock queries | `120000` |
 | `DATABASE_POOL_MIN` | Informational lower pool bound used by instrumentation; clamped to `1..DATABASE_POOL_MAX` | `2` |
 | `DATABASE_POOL_MAX` | Prisma v6 `connection_limit`; strictly parsed and clamped to `1..100` | `10` |
 | `DATABASE_POOL_TIMEOUT_MS` | Pool acquisition timeout in milliseconds, clamped to `1000..300000` and rounded up to Prisma `pool_timeout` seconds | `10000` |
@@ -60,13 +69,30 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `DATABASE_POOL_AUTOSCALE_MAX` | Highest limit the advisory policy may recommend, clamped to `1..100` and never below min | `50` |
 | `DATABASE_POOL_AUTOSCALE_COLD_SAMPLES` | Consecutive cold samples required before a scale-down recommendation, strictly parsed and clamped to `1..20` | `3` |
 
-`PRISMA_DATABASE_URL` takes precedence. If it and `DATABASE_URL` are both
-non-empty, their trimmed values must match; otherwise startup fails closed
-without including either value in the error. For direct `postgres:` and
-`postgresql:` URLs, the runtime builder preserves unrelated parameters such as
-`schema`, `sslmode`, and `pgbouncer`, while replacing only `connection_limit`
-and `pool_timeout`. It never rewrites `prisma+postgres:` remote/Accelerate
-URLs, whose local pool capacity is reported as unobservable.
+Runtime resolution prefers `PRISMA_DATABASE_URL`, then `DATABASE_URL`. Migration
+resolution prefers `DIRECT_DATABASE_URL`, then a direct `DATABASE_URL`, then a
+direct `PRISMA_DATABASE_URL`. An Accelerate runtime may therefore coexist with
+a different direct migration URL. Divergent aliases that compete for the same
+role fail closed with role-specific codes and no values in logs.
+
+Standard and production Compose pass the URL roles through unchanged. Only
+when all three are empty does the shared pure resolver synthesize a local
+runtime/direct URL from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, and `POSTGRES_DB`. Any explicit runtime URL suppresses
+that fallback, preventing a remote runtime from silently migrating the local
+Compose database.
+
+Migration startup never copies a remote runtime URL into `DATABASE_URL`. When
+the runtime is remote and no direct candidate exists, startup exits non-zero
+with `DIRECT_DATABASE_URL_REQUIRED`. Each Prisma child command and every
+boot-time `pg` connect/query/statement is bounded by the timeout controls above;
+the advisory-lock deadline includes both connection and query time.
+
+For direct `postgres:` and `postgresql:` runtime URLs, the runtime builder
+preserves unrelated parameters such as `schema`, `sslmode`, and `pgbouncer`,
+while replacing only `connection_limit` and `pool_timeout`. It never rewrites
+`prisma+postgres:` remote/Accelerate URLs, whose local pool capacity is
+reported as unobservable.
 
 For observable direct connections, full `GET /health` reports estimated
 active/idle connections and estimated saturation plus any advisory

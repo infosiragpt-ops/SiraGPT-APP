@@ -16,7 +16,8 @@ const {
   DIRECT_POSTGRES_PROTOCOLS,
   REMOTE_PRISMA_PROTOCOL,
   classifyDatabasePoolCapacity,
-  resolveCanonicalDatabaseUrl,
+  redactDatabaseUrls,
+  resolveRuntimeDatabaseUrl,
 } = require('./database-url');
 
 const MAX_CONNECT_RETRIES = parseInt(process.env.DB_CONNECT_RETRIES || '5', 10);
@@ -106,7 +107,7 @@ function buildPrismaClientOptions(env = {}) {
   const options = {
     log: env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
   };
-  const databaseUrl = resolveCanonicalDatabaseUrl(env);
+  const databaseUrl = resolveRuntimeDatabaseUrl(env);
   if (databaseUrl) {
     options.datasources = {
       db: {
@@ -118,11 +119,7 @@ function buildPrismaClientOptions(env = {}) {
 }
 
 function sanitizeDatabaseErrorMessage(value) {
-  return String(value || 'unknown database error')
-    // Prefer over-redaction to preserving punctuation: quotes and query
-    // delimiters are valid credential characters and must not truncate the
-    // sensitive match. Database errors are single-line operational messages.
-    .replace(/\b(?:postgres(?:ql)?|prisma\+postgres):\/\/\S+/gi, '[REDACTED_DATABASE_URL]');
+  return redactDatabaseUrls(value || 'unknown database error');
 }
 
 // ── Prisma client ──────────────────────────────────────────
@@ -130,7 +127,7 @@ function sanitizeDatabaseErrorMessage(value) {
 // rewritten URL directly to PrismaClient guarantees the runtime client uses
 // the validated values even when the schema points at a differently named env.
 const databasePoolConfig = resolveDatabasePoolConfig(process.env);
-const resolvedDatabaseUrl = resolveCanonicalDatabaseUrl(process.env);
+const resolvedDatabaseUrl = resolveRuntimeDatabaseUrl(process.env);
 const databasePoolCapacity = classifyDatabasePoolCapacity(resolvedDatabaseUrl);
 const basePrisma = new PrismaClient(buildPrismaClientOptions(process.env));
 
@@ -247,8 +244,9 @@ module.exports.poolMetrics = poolMetrics;
 module.exports.databasePoolConfig = databasePoolConfig;
 module.exports.databasePoolCapacity = databasePoolCapacity;
 module.exports.resolveDatabasePoolConfig = resolveDatabasePoolConfig;
-module.exports.resolveCanonicalDatabaseUrl = resolveCanonicalDatabaseUrl;
-module.exports.resolveDatabaseUrl = resolveCanonicalDatabaseUrl;
+module.exports.resolveRuntimeDatabaseUrl = resolveRuntimeDatabaseUrl;
+module.exports.resolveCanonicalDatabaseUrl = resolveRuntimeDatabaseUrl;
+module.exports.resolveDatabaseUrl = resolveRuntimeDatabaseUrl;
 module.exports.classifyDatabasePoolCapacity = classifyDatabasePoolCapacity;
 module.exports.buildPrismaDatasourceUrl = buildPrismaDatasourceUrl;
 module.exports.buildPrismaClientOptions = buildPrismaClientOptions;

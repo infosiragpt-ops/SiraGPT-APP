@@ -26,8 +26,13 @@
 'use strict';
 
 const {
-  DATABASE_URL_CONFLICT_CODE,
-  resolveCanonicalDatabaseUrl,
+  DATABASE_RUNTIME_URL_CONFLICT_CODE,
+  DATABASE_DIRECT_URL_CONFLICT_CODE,
+  DIRECT_DATABASE_URL_INVALID_CODE,
+  isDirectPostgresUrl,
+  isRemotePrismaUrl,
+  resolveDirectMigrationDatabaseUrl,
+  resolveRuntimeDatabaseUrl,
 } = require('../config/database-url');
 
 // Per-environment required vars. Kept small & realistic — anything
@@ -192,23 +197,54 @@ function validateConfig(env = process.env, opts = {}) {
   const errors = [];
   const warnings = [];
   let databaseUrl = null;
-  let databaseUrlConflict = false;
+  let runtimeDatabaseUrlConflict = false;
 
   try {
-    databaseUrl = resolveCanonicalDatabaseUrl(env);
+    databaseUrl = resolveRuntimeDatabaseUrl(env);
   } catch (error) {
-    databaseUrlConflict = error?.code === DATABASE_URL_CONFLICT_CODE;
+    runtimeDatabaseUrlConflict = error?.code === DATABASE_RUNTIME_URL_CONFLICT_CODE;
     errors.push({
       key: 'PRISMA_DATABASE_URL',
-      code: error?.code || DATABASE_URL_CONFLICT_CODE,
+      code: DATABASE_RUNTIME_URL_CONFLICT_CODE,
       envName,
-      message: 'Conflicting database URL environment variables are configured. Refusing to choose between aliases.',
+      message: 'Conflicting runtime database URL aliases are configured. Refusing to choose between them.',
     });
   }
 
-  checkRequired(env, envName, errors, databaseUrl, databaseUrlConflict);
+  try {
+    resolveDirectMigrationDatabaseUrl(env);
+  } catch (error) {
+    const code = error?.code === DATABASE_DIRECT_URL_CONFLICT_CODE
+      ? DATABASE_DIRECT_URL_CONFLICT_CODE
+      : DIRECT_DATABASE_URL_INVALID_CODE;
+    errors.push({
+      key: 'DIRECT_DATABASE_URL',
+      code,
+      envName,
+      message: code === DATABASE_DIRECT_URL_CONFLICT_CODE
+        ? 'Conflicting direct migration database URL aliases are configured.'
+        : 'DIRECT_DATABASE_URL must use the postgres: or postgresql: protocol.',
+    });
+  }
+
+  if (
+    databaseUrl
+    && !isDirectPostgresUrl(databaseUrl)
+    && !isRemotePrismaUrl(databaseUrl)
+  ) {
+    errors.push({
+      key: String(env.PRISMA_DATABASE_URL || '').trim()
+        ? 'PRISMA_DATABASE_URL'
+        : 'DATABASE_URL',
+      code: 'RUNTIME_DATABASE_URL_INVALID',
+      envName,
+      message: 'Runtime database URL must use postgres:, postgresql:, or prisma+postgres:.',
+    });
+  }
+
+  checkRequired(env, envName, errors, databaseUrl, runtimeDatabaseUrlConflict);
   checkRecommended(env, envName, warnings);
-  if (!databaseUrlConflict) {
+  if (!runtimeDatabaseUrlConflict) {
     checkCrossFieldMisconfig(env, envName, warnings, errors, databaseUrl);
   }
 
@@ -268,5 +304,5 @@ module.exports = {
   REQUIRED_BY_ENV,
   RECOMMENDED_BY_ENV,
   // exported for tests
-  _internal: { looksLikeLocalhost, resolveDatabaseUrl: resolveCanonicalDatabaseUrl },
+  _internal: { looksLikeLocalhost, resolveDatabaseUrl: resolveRuntimeDatabaseUrl },
 };

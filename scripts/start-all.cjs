@@ -21,7 +21,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const {
-  resolveCanonicalDatabaseUrl,
+  resolveDatabaseUrls,
 } = require("../backend/src/config/database-url");
 const {
   createShutdownCoordinator,
@@ -127,13 +127,11 @@ function pipePrefixed(child, prefix) {
 }
 
 function resolveBackendDatabaseEnvironment(env = process.env) {
-  const databaseUrl = resolveCanonicalDatabaseUrl(env);
-  return databaseUrl
-    ? {
-        PRISMA_DATABASE_URL: databaseUrl,
-        DATABASE_URL: databaseUrl,
-      }
-    : {};
+  const { runtimeUrl, directMigrationUrl } = resolveDatabaseUrls(env);
+  const resolved = {};
+  if (runtimeUrl) resolved.PRISMA_DATABASE_URL = runtimeUrl;
+  if (directMigrationUrl) resolved.DIRECT_DATABASE_URL = directMigrationUrl;
+  return resolved;
 }
 
 function spawnBackend() {

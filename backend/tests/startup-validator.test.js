@@ -328,12 +328,55 @@ describe('validateStartupEnvironment · PRISMA_DATABASE_URL', () => {
     assert.equal(issues.some(i => i.key === 'PRISMA_DATABASE_URL'), false);
   });
 
+  it('accepts an Accelerate runtime URL with a separate direct migration URL', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=runtime-secret',
+      DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/app',
+      DATABASE_URL: undefined,
+    }));
+
+    assert.equal(issues.some(i => i.key === 'PRISMA_DATABASE_URL'), false);
+    assert.equal(issues.some(i => i.key === 'DIRECT_DATABASE_URL'), false);
+  });
+
+  it('blocks same-role runtime aliases without logging either value', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'prisma+postgres://runtime-a.invalid/?api_key=runtime-secret-a',
+      DATABASE_URL: 'prisma+postgres://runtime-b.invalid/?api_key=runtime-secret-b',
+      DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/app',
+    }));
+    const db = issues.find(i => i.code === 'DATABASE_RUNTIME_URL_CONFLICT');
+
+    assert.ok(db);
+    assert.equal(db.severity, 'BLOCKING');
+    assert.doesNotMatch(
+      JSON.stringify(db),
+      /runtime-a|runtime-b|runtime-secret|migration-user|migration-secret|db\.internal/,
+    );
+  });
+
+  it('blocks an invalid direct migration scheme without logging its value', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=runtime-secret',
+      DIRECT_DATABASE_URL: 'mysql://migration-user:migration-secret@db.internal/app',
+      DATABASE_URL: undefined,
+    }));
+    const db = issues.find(i => i.code === 'DIRECT_DATABASE_URL_INVALID');
+
+    assert.ok(db);
+    assert.equal(db.severity, 'BLOCKING');
+    assert.doesNotMatch(
+      JSON.stringify(db),
+      /runtime-secret|migration-user|migration-secret|db\.internal/,
+    );
+  });
+
   it('blocks divergent aliases without logging either database URL', () => {
     const issues = runValidator(happyEnv({
       PRISMA_DATABASE_URL: 'postgres://canonical-user:canonical-secret@primary.internal/app',
       DATABASE_URL: 'postgres://legacy-user:legacy-secret@legacy.internal/app',
     }));
-    const db = issues.find(i => i.code === 'DATABASE_URL_CONFLICT');
+    const db = issues.find(i => i.code === 'DATABASE_RUNTIME_URL_CONFLICT');
     assert.ok(db);
     assert.equal(db.severity, 'BLOCKING');
     assert.doesNotMatch(

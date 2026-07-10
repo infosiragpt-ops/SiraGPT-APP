@@ -132,8 +132,18 @@
 
 | Variable | Purpose |
 |----------|---------|
-| `PRISMA_DATABASE_URL` | Canonical Prisma datasource URL |
-| `DATABASE_URL` | Legacy fallback used only when `PRISMA_DATABASE_URL` is empty; conflicting non-empty aliases fail closed |
+| `PRISMA_DATABASE_URL` | Runtime Prisma datasource; direct PostgreSQL or remote `prisma+postgres:` |
+| `DIRECT_DATABASE_URL` | Direct PostgreSQL datasource for migrations, pg preflight, and advisory locking |
+| `DATABASE_URL` | Legacy runtime fallback and direct-migration candidate |
+| `POSTGRES_HOST` | Host used for the POSTGRES-only local compatibility fallback |
+| `POSTGRES_PORT` | Port used for the POSTGRES-only local compatibility fallback (default `5432`) |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials and database used by the POSTGRES-only fallback |
+| `MIGRATION_COMMAND_TIMEOUT_MS` | Per-Prisma-child hard deadline (default `300000`) |
+| `BOOT_COMMAND_TIMEOUT_MS` | Auxiliary boot-command deadline, including `fuser` cleanup (default `5000`) |
+| `MIGRATION_DB_CONNECT_TIMEOUT_MS` | Boot `pg` connection timeout (default `10000`) |
+| `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot `pg` query timeout (default `15000`) |
+| `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | Boot PostgreSQL statement timeout (default `15000`) |
+| `MIGRATION_LOCK_TIMEOUT_MS` | Total lock deadline including connect/query (default `120000`) |
 | `DATABASE_POOL_MIN` | Instrumentation lower bound (default `2`, capped by max) |
 | `DATABASE_POOL_MAX` | Prisma v6 `connection_limit` (default `10`, clamp `1..100`) |
 | `DATABASE_POOL_TIMEOUT_MS` | Prisma acquire timeout in ms (default `10000`, clamp `1000..300000`, rounded up to `pool_timeout` seconds) |
@@ -149,6 +159,19 @@ Local pool URL controls and estimated capacity telemetry apply only to direct
 `postgres:`/`postgresql:` datasources. `prisma+postgres:` remote/Accelerate
 URLs are not rewritten and expose capacity as unobservable, so local pool
 estimates and recommendations are omitted.
+
+Runtime resolution prefers `PRISMA_DATABASE_URL` and uses `DATABASE_URL` only
+as fallback. Direct migration resolution prefers `DIRECT_DATABASE_URL`, then a
+direct `DATABASE_URL`, then a direct `PRISMA_DATABASE_URL`. A remote runtime and
+different direct migration URL are valid; conflicting aliases for one role
+fail closed without logging values. Remote-only migration startup exits with
+`DIRECT_DATABASE_URL_REQUIRED` instead of copying the remote URL.
+
+When all three URL roles are empty, the pure resolver may synthesize one local
+runtime/direct URL from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, and `POSTGRES_DB`. Any explicit URL disables synthesis:
+a direct `PRISMA_DATABASE_URL` remains the migration fallback, while a remote
+`PRISMA_DATABASE_URL` without a direct URL fails closed.
 
 ---
 

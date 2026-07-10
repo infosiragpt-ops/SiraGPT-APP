@@ -14,8 +14,13 @@
 
 const crypto = require('crypto');
 const {
-  DATABASE_URL_CONFLICT_CODE,
-  resolveCanonicalDatabaseUrl,
+  DATABASE_RUNTIME_URL_CONFLICT_CODE,
+  DATABASE_DIRECT_URL_CONFLICT_CODE,
+  DIRECT_DATABASE_URL_INVALID_CODE,
+  isDirectPostgresUrl,
+  isRemotePrismaUrl,
+  resolveDirectMigrationDatabaseUrl,
+  resolveRuntimeDatabaseUrl,
 } = require('../config/database-url');
 
 // Known placeholder patterns — matches both obvious examples and
@@ -210,26 +215,41 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   let databaseUrl = null;
   let databaseUrlConflict = false;
   try {
-    databaseUrl = resolveCanonicalDatabaseUrl(env);
+    databaseUrl = resolveRuntimeDatabaseUrl(env);
   } catch (error) {
     databaseUrlConflict = true;
     issues.push({
       key: 'PRISMA_DATABASE_URL',
-      code: error?.code || DATABASE_URL_CONFLICT_CODE,
+      code: DATABASE_RUNTIME_URL_CONFLICT_CODE,
       label: 'Database URL',
       severity: Severity.BLOCKING,
-      message: 'Conflicting database URL environment variables are configured. Refusing to choose between aliases.',
+      message: 'Conflicting runtime database URL aliases are configured. Refusing to choose between them.',
+    });
+  }
+  try {
+    resolveDirectMigrationDatabaseUrl(env);
+  } catch (error) {
+    const code = error?.code === DATABASE_DIRECT_URL_CONFLICT_CODE
+      ? DATABASE_DIRECT_URL_CONFLICT_CODE
+      : DIRECT_DATABASE_URL_INVALID_CODE;
+    issues.push({
+      key: 'DIRECT_DATABASE_URL',
+      code,
+      label: 'Direct migration database URL',
+      severity: Severity.BLOCKING,
+      message: code === DATABASE_DIRECT_URL_CONFLICT_CODE
+        ? 'Conflicting direct migration database URL aliases are configured.'
+        : 'DIRECT_DATABASE_URL must use the postgres: or postgresql: protocol.',
     });
   }
   if (databaseUrl) {
-    if (!databaseUrl.startsWith('postgresql://') &&
-        !databaseUrl.startsWith('prisma+postgres://') &&
-        !databaseUrl.startsWith('postgres://')) {
+    if (!isDirectPostgresUrl(databaseUrl) && !isRemotePrismaUrl(databaseUrl)) {
       issues.push({
         key: 'PRISMA_DATABASE_URL',
+        code: 'RUNTIME_DATABASE_URL_INVALID',
         label: 'Database URL',
         severity: Severity.BLOCKING,
-        message: 'Database URL must start with postgresql://, postgres://, or prisma+postgres://',
+        message: 'Runtime database URL must start with postgresql://, postgres://, or prisma+postgres://',
       });
     }
   } else if (!databaseUrlConflict) {

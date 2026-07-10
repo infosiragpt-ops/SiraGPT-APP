@@ -361,25 +361,18 @@ jobs:
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
             echo "[deploy-workflow] Applying database migrations"
-            # The production DB predates Prisma Migrate (schema managed via
-            # `prisma db push`, no _prisma_migrations baseline), so migrate
-            # deploy exits P3005 there. Tolerate only that known state; every
-            # other migration failure aborts and triggers rollback.
+            # Use the same role resolver, advisory lock, redaction, and bounded
+            # process-tree runner as backend boot. The explicit baseline gate
+            # preserves the one-time path for the pre-Prisma production DB.
             MIGRATION_STATUS=0
-            MIGRATION_OUTPUT="$(${COMPOSE} run -T --rm backend npx prisma migrate deploy --schema prisma/schema.prisma </dev/null 2>&1)" \
+            MIGRATION_OUTPUT="$(${COMPOSE} run -T --rm \
+              -e PRISMA_BASELINE_ON_P3005=1 \
+              backend node scripts/start-with-migrations.js --migrate-only </dev/null 2>&1)" \
               || MIGRATION_STATUS="$?"
             printf '%s\n' "${MIGRATION_OUTPUT}"
             if [[ "${MIGRATION_STATUS}" -ne 0 ]]; then
-              OTHER_PRISMA_CODE="$(printf '%s\n' "${MIGRATION_OUTPUT}" \
-                | awk 'match($0, /P[0-9][0-9][0-9][0-9]/) { code=substr($0, RSTART, RLENGTH); if (code != "P3005") { print code; exit } }')"
-              if [[ "${MIGRATION_OUTPUT}" == *"Error: P3005"* ]] &&
-                 [[ "${MIGRATION_OUTPUT}" == *"The database schema is not empty"* ]] &&
-                 [[ -z "${OTHER_PRISMA_CODE}" ]]; then
-                echo "[deploy-workflow] WARNING: Prisma reports the known unbaselined database (P3005); continuing"
-              else
-                echo "[deploy-workflow] Database migration failed; aborting deploy"
-                exit "${MIGRATION_STATUS}"
-              fi
+              echo "[deploy-workflow] Database migration failed; aborting deploy"
+              exit "${MIGRATION_STATUS}"
             fi
             echo "[deploy-workflow] Ensuring production admin account"
             # Intentionally conditional: the reset script hard-fails unless

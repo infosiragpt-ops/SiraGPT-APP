@@ -94,6 +94,56 @@ test('legacy DATABASE_URL remains a valid fallback when canonical URL is absent'
   assert.equal(r.errors.some((error) => error.key === 'PRISMA_DATABASE_URL'), false);
 });
 
+test('Accelerate runtime and direct migration URLs validate as separate roles', () => {
+  const r = validateConfig({
+    NODE_ENV: 'production',
+    PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=runtime-secret',
+    DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  });
+
+  assert.strictEqual(r.ok, true);
+  assert.equal(r.errors.some((error) => /DATABASE_URL_CONFLICT/.test(error.code || '')), false);
+});
+
+test('config validation reports same-role runtime conflicts without disclosing values', () => {
+  const r = validateConfig({
+    NODE_ENV: 'production',
+    PRISMA_DATABASE_URL: 'prisma+postgres://runtime-a.invalid/?api_key=runtime-secret-a',
+    DATABASE_URL: 'prisma+postgres://runtime-b.invalid/?api_key=runtime-secret-b',
+    DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  });
+
+  assert.strictEqual(r.ok, false);
+  const conflict = r.errors.find((error) => error.code === 'DATABASE_RUNTIME_URL_CONFLICT');
+  assert.ok(conflict);
+  assert.doesNotMatch(
+    JSON.stringify(conflict),
+    /runtime-a|runtime-b|runtime-secret|migration-user|migration-secret|db\.internal/,
+  );
+});
+
+test('config validation rejects a non-Postgres direct migration URL', () => {
+  const r = validateConfig({
+    NODE_ENV: 'production',
+    PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=runtime-secret',
+    DIRECT_DATABASE_URL: 'mysql://migration-user:migration-secret@db.internal/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  });
+
+  assert.strictEqual(r.ok, false);
+  const invalid = r.errors.find((error) => error.code === 'DIRECT_DATABASE_URL_INVALID');
+  assert.ok(invalid);
+  assert.doesNotMatch(
+    JSON.stringify(invalid),
+    /runtime-secret|migration-user|migration-secret|db\.internal/,
+  );
+});
+
 test('short SESSION_SECRET in production warns', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
@@ -113,7 +163,7 @@ test('divergent database URL aliases fail closed without disclosing either value
     JWT_SECRET: 'b'.repeat(64),
   });
   assert.strictEqual(r.ok, false);
-  const conflict = r.errors.find((error) => error.code === 'DATABASE_URL_CONFLICT');
+  const conflict = r.errors.find((error) => error.code === 'DATABASE_RUNTIME_URL_CONFLICT');
   assert.ok(conflict);
   assert.equal(conflict.key, 'PRISMA_DATABASE_URL');
   assert.doesNotMatch(

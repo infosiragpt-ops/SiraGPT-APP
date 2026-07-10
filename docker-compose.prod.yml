@@ -154,7 +154,23 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
-      PRISMA_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-siragpt}
+      # Keep explicit runtime/direct roles untouched. POSTGRES-only deployments
+      # are synthesized by the shared pure resolver after all URL roles are
+      # confirmed absent, so a remote runtime can never silently target `db`.
+      PRISMA_DATABASE_URL: "${PRISMA_DATABASE_URL:-}"
+      DIRECT_DATABASE_URL: "${DIRECT_DATABASE_URL:-}"
+      DATABASE_URL: "${DATABASE_URL:-}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-db}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: "${POSTGRES_DB:-siragpt}"
+      MIGRATION_COMMAND_TIMEOUT_MS: "${MIGRATION_COMMAND_TIMEOUT_MS:-300000}"
+      BOOT_COMMAND_TIMEOUT_MS: "${BOOT_COMMAND_TIMEOUT_MS:-5000}"
+      MIGRATION_DB_CONNECT_TIMEOUT_MS: "${MIGRATION_DB_CONNECT_TIMEOUT_MS:-10000}"
+      MIGRATION_DB_QUERY_TIMEOUT_MS: "${MIGRATION_DB_QUERY_TIMEOUT_MS:-15000}"
+      MIGRATION_DB_STATEMENT_TIMEOUT_MS: "${MIGRATION_DB_STATEMENT_TIMEOUT_MS:-15000}"
+      MIGRATION_LOCK_TIMEOUT_MS: "${MIGRATION_LOCK_TIMEOUT_MS:-120000}"
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}

@@ -6,17 +6,40 @@
  * SKIP_MIGRATIONS=1 the migration step is skipped (useful during local
  * iteration when the schema is already up to date).
  */
-const { spawnSync, spawn } = require("node:child_process");
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { loadEnvFiles } = require("../src/config/load-env");
+const { runBoundedProcessTree } = require("../src/utils/bounded-process-tree");
 const {
-  resolveCanonicalDatabaseUrl,
+  DIRECT_DATABASE_URL_REQUIRED_CODE,
+  isDirectPostgresUrl: isDirectPostgresDatabaseUrl,
+  redactDatabaseUrls,
+  requireDirectMigrationDatabaseUrl,
+  resolveDatabaseUrls,
 } = require("../src/config/database-url");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(BACKEND_DIR, "prisma", "migrations");
 const SHUTDOWN_MESSAGE_TYPE = "siragpt:shutdown";
+const MIGRATION_COMMAND_TIMEOUT_CODE = "MIGRATION_COMMAND_TIMEOUT";
+const MIGRATION_COMMAND_ABORTED_CODE = "MIGRATION_COMMAND_ABORTED";
+const MIGRATION_COMMAND_OUTPUT_LIMIT_CODE = "MIGRATION_COMMAND_OUTPUT_LIMIT";
+const MIGRATION_PROCESS_TREE_NOT_TERMINATED_CODE = "MIGRATION_PROCESS_TREE_NOT_TERMINATED";
+const MIGRATION_DB_OPERATION_TIMEOUT_CODE = "MIGRATION_DB_OPERATION_TIMEOUT";
+const DEFAULT_MIGRATION_COMMAND_TIMEOUT_MS = 300_000;
+const DEFAULT_BOOT_COMMAND_TIMEOUT_MS = 5_000;
+const DEFAULT_MIGRATION_KILL_GRACE_MS = 250;
+const DEFAULT_MIGRATION_DB_CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_MIGRATION_DB_QUERY_TIMEOUT_MS = 15_000;
+const DEFAULT_MIGRATION_DB_STATEMENT_TIMEOUT_MS = 15_000;
+const DEFAULT_MIGRATION_DB_CLOSE_TIMEOUT_MS = 5_000;
+const MAX_BOOT_OPERATION_TIMEOUT_MS = 3_600_000;
+const MIGRATION_COMMAND_TIMEOUT_EXIT_STATUS = 124;
+const MIGRATION_COMMAND_ABORTED_EXIT_STATUS = 143;
+const MIGRATION_COMMAND_OUTPUT_LIMIT_EXIT_STATUS = 125;
+const MIGRATION_PROCESS_TREE_NOT_TERMINATED_EXIT_STATUS = 126;
+const MIGRATION_CONFIGURATION_EXIT_STATUS = 78;
 const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
   {
     pattern: /^\d{14}_reset_admin_password$/,
@@ -61,64 +84,230 @@ function phase(name, extra = {}) {
   }) + "\n");
 }
 
-function pipeResult(result) {
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+function parseBoundedTimeout(value, fallback, max = MAX_BOOT_OPERATION_TIMEOUT_MS) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const text = String(value).trim();
+  if (!/^\d+$/.test(text)) return fallback;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) return fallback;
+  return Math.min(max, Math.max(1, parsed));
 }
 
-function runPrisma(args) {
-  synchronizePrismaDatabaseUrl(process.env);
-  const result = spawnSync("npx", ["prisma", ...args], {
-    cwd: BACKEND_DIR,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
+function resolveMigrationCommandTimeoutMs(env = process.env) {
+  return parseBoundedTimeout(
+    env.MIGRATION_COMMAND_TIMEOUT_MS,
+    DEFAULT_MIGRATION_COMMAND_TIMEOUT_MS,
+  );
+}
+
+function resolveBootCommandTimeoutMs(env = process.env) {
+  return parseBoundedTimeout(
+    env.BOOT_COMMAND_TIMEOUT_MS,
+    DEFAULT_BOOT_COMMAND_TIMEOUT_MS,
+    60_000,
+  );
+}
+
+function resolveMigrationPgTimeoutConfig(env = process.env) {
+  return Object.freeze({
+    connectionTimeoutMs: parseBoundedTimeout(
+      env.MIGRATION_DB_CONNECT_TIMEOUT_MS,
+      DEFAULT_MIGRATION_DB_CONNECT_TIMEOUT_MS,
+    ),
+    queryTimeoutMs: parseBoundedTimeout(
+      env.MIGRATION_DB_QUERY_TIMEOUT_MS,
+      DEFAULT_MIGRATION_DB_QUERY_TIMEOUT_MS,
+    ),
+    statementTimeoutMs: parseBoundedTimeout(
+      env.MIGRATION_DB_STATEMENT_TIMEOUT_MS,
+      DEFAULT_MIGRATION_DB_STATEMENT_TIMEOUT_MS,
+    ),
   });
-  pipeResult(result);
-  return result;
+}
+
+function migrationErrorMessage(error, env = process.env) {
+  return redactDatabaseUrls(error?.message || error || "unknown migration error", env);
+}
+
+const PG_FAILURE_CODES = Object.freeze({
+  ENOTFOUND: "MIGRATION_DB_DNS_FAILED",
+  EAI_AGAIN: "MIGRATION_DB_DNS_FAILED",
+  ECONNREFUSED: "MIGRATION_DB_UNAVAILABLE",
+  ECONNRESET: "MIGRATION_DB_CONNECTION_RESET",
+  ETIMEDOUT: "MIGRATION_DB_TIMEOUT",
+  "28P01": "MIGRATION_DB_AUTH_FAILED",
+  "3D000": "MIGRATION_DB_NOT_FOUND",
+  "57P03": "MIGRATION_DB_STARTING",
+});
+
+function sanitizePgFailure(error, fallbackCode = "MIGRATION_DB_OPERATION_FAILED") {
+  const rawCode = String(error?.code || "").toUpperCase();
+  const code = [MIGRATION_DB_OPERATION_TIMEOUT_CODE, MIGRATION_COMMAND_ABORTED_CODE]
+    .includes(rawCode)
+    ? rawCode
+    : PG_FAILURE_CODES[rawCode] || fallbackCode;
+  return { code };
+}
+
+function safePgError(error, fallbackCode) {
+  const { code } = sanitizePgFailure(error, fallbackCode);
+  const safe = new Error(code);
+  safe.name = "MigrationDatabaseError";
+  safe.code = code;
+  return safe;
+}
+
+function pipeResult(result, options = {}) {
+  const {
+    env = process.env,
+    stdout = process.stdout,
+    stderr = process.stderr,
+  } = options;
+  if (result.stdout) stdout.write(redactDatabaseUrls(result.stdout, env));
+  if (result.stderr) stderr.write(redactDatabaseUrls(result.stderr, env));
+}
+
+function prismaCommandExitStatus(result) {
+  if (result?.migrationCode === MIGRATION_COMMAND_TIMEOUT_CODE) {
+    return MIGRATION_COMMAND_TIMEOUT_EXIT_STATUS;
+  }
+  if (result?.migrationCode === MIGRATION_COMMAND_ABORTED_CODE) {
+    return MIGRATION_COMMAND_ABORTED_EXIT_STATUS;
+  }
+  if (result?.migrationCode === MIGRATION_COMMAND_OUTPUT_LIMIT_CODE) {
+    return MIGRATION_COMMAND_OUTPUT_LIMIT_EXIT_STATUS;
+  }
+  if (result?.migrationCode === MIGRATION_PROCESS_TREE_NOT_TERMINATED_CODE) {
+    return MIGRATION_PROCESS_TREE_NOT_TERMINATED_EXIT_STATUS;
+  }
+  if (Number.isInteger(result?.status) && result.status >= 0) return result.status;
+  return 1;
+}
+
+function isTerminalMigrationCommandResult(result) {
+  const status = prismaCommandExitStatus(result);
+  return (
+    result?.timedOut === true
+    || result?.aborted === true
+    || result?.outputLimitExceeded === true
+    || result?.treeTerminated === false
+    || [
+      MIGRATION_COMMAND_TIMEOUT_CODE,
+      MIGRATION_COMMAND_ABORTED_CODE,
+      MIGRATION_COMMAND_OUTPUT_LIMIT_CODE,
+      MIGRATION_PROCESS_TREE_NOT_TERMINATED_CODE,
+    ].includes(result?.migrationCode)
+    || [
+      MIGRATION_COMMAND_TIMEOUT_EXIT_STATUS,
+      MIGRATION_COMMAND_ABORTED_EXIT_STATUS,
+      MIGRATION_COMMAND_OUTPUT_LIMIT_EXIT_STATUS,
+      MIGRATION_PROCESS_TREE_NOT_TERMINATED_EXIT_STATUS,
+    ].includes(status)
+  );
+}
+
+async function runPrisma(args, options = {}) {
+  const env = options.env || process.env;
+  if (env === process.env) loadDotenv();
+  const command = options.command || "npx";
+  const commandPrefix = options.commandPrefix || ["prisma"];
+  const cwd = options.cwd || BACKEND_DIR;
+  const pipe = options.pipe !== false;
+  const timeoutMs = options.timeoutMs ?? resolveMigrationCommandTimeoutMs(env);
+  const signal = options.signal || activeMigrationAbortController?.signal;
+  const childEnv = { ...env };
+  synchronizePrismaDatabaseUrl(childEnv);
+  const result = await (options.runProcessImpl || runBoundedProcessTree)(
+    command,
+    [...commandPrefix, ...args],
+    {
+      cwd,
+      env: childEnv,
+      signal,
+      timeoutMs: parseBoundedTimeout(timeoutMs, DEFAULT_MIGRATION_COMMAND_TIMEOUT_MS),
+      killGraceMs: parseBoundedTimeout(
+        options.killGraceMs,
+        DEFAULT_MIGRATION_KILL_GRACE_MS,
+        10_000,
+      ),
+      input: options.input,
+      maxOutputBytes: options.maxOutputBytes,
+      spawnImpl: options.spawnImpl,
+    },
+  );
+  let migrationCode;
+  if (result.timedOut) migrationCode = MIGRATION_COMMAND_TIMEOUT_CODE;
+  else if (result.aborted) migrationCode = MIGRATION_COMMAND_ABORTED_CODE;
+  else if (result.outputLimitExceeded) migrationCode = MIGRATION_COMMAND_OUTPUT_LIMIT_CODE;
+  else if (result.treeTerminated === false) {
+    migrationCode = MIGRATION_PROCESS_TREE_NOT_TERMINATED_CODE;
+  }
+  const outcome = migrationCode ? { ...result, migrationCode } : result;
+  if (pipe) pipeResult(outcome, { env: childEnv });
+  return outcome;
+}
+
+async function runBoundedBootCommand(command, args, options = {}) {
+  const env = options.env || process.env;
+  return (options.runProcessImpl || runBoundedProcessTree)(command, args, {
+    cwd: options.cwd || BACKEND_DIR,
+    env,
+    signal: options.signal || activeMigrationAbortController?.signal,
+    timeoutMs: options.timeoutMs ?? resolveBootCommandTimeoutMs(env),
+    killGraceMs: options.killGraceMs ?? DEFAULT_MIGRATION_KILL_GRACE_MS,
+    maxOutputBytes: options.maxOutputBytes,
+    spawnImpl: options.spawnImpl,
+  });
 }
 
 function loadDotenv() {
   try {
     loadEnvFiles();
   } catch (err) {
-    log("dotenv load skipped", { error: err?.message });
+    log("dotenv load skipped", { error: migrationErrorMessage(err) });
   }
 }
 
 function resolvePrismaDatabaseUrl(env = process.env) {
-  return resolveCanonicalDatabaseUrl(env) || "";
+  return requireDirectMigrationDatabaseUrl(env);
 }
 
 function synchronizePrismaDatabaseUrl(env = process.env) {
-  const canonical = resolveCanonicalDatabaseUrl(env);
-  if (!canonical) return "";
-  // schema.prisma currently reads DATABASE_URL. Keep both aliases identical
-  // for Prisma CLI subprocesses after resolving the canonical value once.
-  env.PRISMA_DATABASE_URL = canonical;
-  env.DATABASE_URL = canonical;
-  return canonical;
+  const { runtimeUrl, directMigrationUrl } = resolveDatabaseUrls(env);
+  if (!directMigrationUrl) {
+    return requireDirectMigrationDatabaseUrl(env);
+  }
+  // Prisma CLI reads DATABASE_URL from schema.prisma. Preserve the runtime URL
+  // in its own role and point only the CLI child environment at the direct URL.
+  if (runtimeUrl) env.PRISMA_DATABASE_URL = runtimeUrl;
+  env.DIRECT_DATABASE_URL = directMigrationUrl;
+  env.DATABASE_URL = directMigrationUrl;
+  return directMigrationUrl;
 }
 
-function makePgClientOptions(url) {
+function makePgClientOptions(url, env = process.env) {
   const needsSsl = /(?:neon|sslmode=require)/i.test(url);
+  const timeouts = resolveMigrationPgTimeoutConfig(env);
   return {
     connectionString: url,
     ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+    connectionTimeoutMillis: timeouts.connectionTimeoutMs,
+    query_timeout: timeouts.queryTimeoutMs,
+    statement_timeout: timeouts.statementTimeoutMs,
   };
 }
 
 // Only a direct postgres URL can be dialed by `pg` (and by `migrate deploy`).
-// A Prisma Accelerate / Data Proxy `prisma://` URL cannot, so preflight and the
+// A Prisma Accelerate `prisma+postgres://` URL cannot, so preflight and the
 // advisory lock must skip — fast — rather than retry a connection that can
 // never succeed.
 function isDirectPostgresUrl(url) {
-  return typeof url === "string" && /^postgres(?:ql)?:\/\//i.test(url.trim());
+  return isDirectPostgresDatabaseUrl(url);
 }
 
-function createPgClient(url = resolvePrismaDatabaseUrl()) {
+function createPgClient(url = resolvePrismaDatabaseUrl(), env = process.env) {
   const { Client } = require("pg");
-  return new Client(makePgClientOptions(url));
+  return new Client(makePgClientOptions(url, env));
 }
 
 function isSafeAutoRollbackMigration(migrationName) {
@@ -224,18 +413,23 @@ async function getActiveFailedMigrations() {
 
   const { Client } = require("pg");
   const client = new Client(makePgClientOptions(url));
-  await client.connect();
+  const timeouts = resolveMigrationPgTimeoutConfig(process.env);
   try {
-    const { rows } = await client.query(`
+    await withOperationTimeout(
+      () => client.connect(),
+      timeouts.connectionTimeoutMs,
+      "connection",
+    );
+    const { rows } = await withOperationTimeout(() => client.query(`
       SELECT migration_name
       FROM "_prisma_migrations"
       WHERE finished_at IS NULL
         AND rolled_back_at IS NULL
       ORDER BY started_at ASC
-    `);
+    `), timeouts.queryTimeoutMs, "failed migration query");
     return rows.map((row) => row.migration_name);
   } finally {
-    await client.end();
+    await closePgClient(client);
   }
 }
 
@@ -248,9 +442,14 @@ async function markSafeMigrationsRolledBack(migrationNames) {
 
   const { Client } = require("pg");
   const client = new Client(makePgClientOptions(url));
-  await client.connect();
+  const timeouts = resolveMigrationPgTimeoutConfig(process.env);
   try {
-    await client.query(`
+    await withOperationTimeout(
+      () => client.connect(),
+      timeouts.connectionTimeoutMs,
+      "connection",
+    );
+    await withOperationTimeout(() => client.query(`
       UPDATE "_prisma_migrations"
       SET rolled_back_at = COALESCE(rolled_back_at, NOW()),
           logs = CONCAT(
@@ -261,9 +460,9 @@ async function markSafeMigrationsRolledBack(migrationNames) {
       WHERE migration_name = ANY($1::text[])
         AND finished_at IS NULL
         AND rolled_back_at IS NULL
-    `, [migrationNames]);
+    `, [migrationNames]), timeouts.queryTimeoutMs, "migration rollback query");
   } finally {
-    await client.end();
+    await closePgClient(client);
   }
 }
 
@@ -272,7 +471,10 @@ async function rollbackSafeFailedMigrations() {
   try {
     failedMigrations = await getActiveFailedMigrations();
   } catch (err) {
-    log("could not inspect failed prisma migrations", { error: err?.message });
+    const failure = sanitizePgFailure(err, "MIGRATION_INSPECTION_FAILED");
+    log("could not inspect failed prisma migrations", {
+      code: failure.code,
+    });
     return false;
   }
 
@@ -292,7 +494,11 @@ async function rollbackSafeFailedMigrations() {
     log("auto-rolled back safe failed migrations", { failedMigrations });
     return true;
   } catch (err) {
-    log("failed to auto-rollback safe migrations", { error: err?.message, failedMigrations });
+    const failure = sanitizePgFailure(err, "MIGRATION_ROLLBACK_FAILED");
+    log("failed to auto-rollback safe migrations", {
+      code: failure.code,
+      failedMigrations,
+    });
     return false;
   }
 }
@@ -304,27 +510,121 @@ function migrationNames() {
     .sort();
 }
 
-function baselineExistingSchema() {
+async function baselineExistingSchema(options = {}) {
   log("baselining existing database schema with prisma migrate resolve");
   for (const name of migrationNames()) {
-    const result = runPrisma(["migrate", "resolve", "--applied", name]);
+    const result = await runPrisma(
+      ["migrate", "resolve", "--applied", name],
+      { signal: options.signal },
+    );
     if (result.error) {
-      log("prisma migrate resolve spawn error", { migration: name, error: result.error.message });
-      return 1;
+      log("prisma migrate resolve spawn error", {
+        migration: name,
+        code: result.migrationCode || result.error.code || "MIGRATION_COMMAND_FAILED",
+        error: migrationErrorMessage(result.error),
+      });
+      return prismaCommandExitStatus(result);
     }
-    if ((result.status ?? 1) !== 0) {
-      log("prisma migrate resolve failed", { migration: name, status: result.status ?? 1 });
-      return result.status ?? 1;
+    if (prismaCommandExitStatus(result) !== 0) {
+      log("prisma migrate resolve failed", {
+        migration: name,
+        status: prismaCommandExitStatus(result),
+      });
+      return prismaCommandExitStatus(result);
     }
   }
   return 0;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
+
+function migrationOperationTimeoutError(operation) {
+  const error = new Error(`Timed out while waiting for migration database ${operation}.`);
+  error.name = "MigrationDatabaseTimeoutError";
+  error.code = MIGRATION_DB_OPERATION_TIMEOUT_CODE;
+  return error;
+}
+
+function migrationOperationAbortedError(operation) {
+  const error = new Error(`Migration database ${operation} was aborted.`);
+  error.name = "MigrationDatabaseAbortError";
+  error.code = MIGRATION_COMMAND_ABORTED_CODE;
+  return error;
+}
+
+async function withOperationTimeout(operation, timeoutMs, label = "operation", signal) {
+  const boundedTimeoutMs = parseBoundedTimeout(
+    timeoutMs,
+    DEFAULT_MIGRATION_DB_QUERY_TIMEOUT_MS,
+  );
+  let timer;
+  let onAbort;
+  try {
+    if (signal?.aborted) throw migrationOperationAbortedError(label);
+    const racers = [
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(migrationOperationTimeoutError(label)),
+          boundedTimeoutMs,
+        );
+      }),
+    ];
+    if (signal) {
+      racers.push(new Promise((_, reject) => {
+        onAbort = () => reject(migrationOperationAbortedError(label));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }));
+    }
+    return await Promise.race(racers);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+function withDeadline(
+  operation,
+  deadline,
+  now,
+  label,
+  operationTimeoutMs = MAX_BOOT_OPERATION_TIMEOUT_MS,
+  signal,
+) {
+  const remainingMs = Math.max(
+    1,
+    Math.min(deadline - now(), parseBoundedTimeout(operationTimeoutMs, MAX_BOOT_OPERATION_TIMEOUT_MS)),
+  );
+  return withOperationTimeout(operation, remainingMs, label, signal);
+}
+
+async function closePgClient(client, timeoutMs = DEFAULT_MIGRATION_DB_CLOSE_TIMEOUT_MS) {
+  if (!client || typeof client.end !== "function") return;
+  try {
+    await withOperationTimeout(() => client.end(), timeoutMs, "client cleanup");
+  } catch {
+    // node-postgres may be stuck before its normal end path can settle. Destroy
+    // the underlying socket best-effort; never let cleanup extend boot forever.
+    try { client.connection?.stream?.destroy(); } catch { /* already closed */ }
+  }
 }
 
 function isTransientMigrationError(result) {
+  if (isTerminalMigrationCommandResult(result)) return false;
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   return (
     output.includes("P1011") ||
@@ -337,18 +637,57 @@ function isTransientMigrationError(result) {
   );
 }
 
-const MIGRATION_TRANSIENT_RETRIES = Number(process.env.MIGRATION_TRANSIENT_RETRIES ?? 6);
-const MIGRATION_RETRY_DELAY_MS = Number(process.env.MIGRATION_RETRY_DELAY_MS ?? 8000);
+const DEFAULT_MIGRATION_TRANSIENT_RETRIES = 6;
+const DEFAULT_MIGRATION_RETRY_DELAY_MS = 8_000;
+const DEFAULT_MIGRATION_PREFLIGHT_ATTEMPTS = 10;
+const DEFAULT_MIGRATION_PREFLIGHT_DELAY_MS = 3_000;
+const DEFAULT_MIGRATION_LOCK_TIMEOUT_MS = 120_000;
+const DEFAULT_MIGRATION_LOCK_POLL_MS = 1_500;
+
+function resolveMigrationRetryConfig(env = process.env) {
+  return Object.freeze({
+    attempts: parseBoundedTimeout(
+      env.MIGRATION_TRANSIENT_RETRIES,
+      DEFAULT_MIGRATION_TRANSIENT_RETRIES,
+      20,
+    ),
+    delayMs: parseBoundedTimeout(
+      env.MIGRATION_RETRY_DELAY_MS,
+      DEFAULT_MIGRATION_RETRY_DELAY_MS,
+      300_000,
+    ),
+  });
+}
+
+function resolveMigrationLifecycleConfig(env = process.env) {
+  return Object.freeze({
+    preflightAttempts: parseBoundedTimeout(
+      env.MIGRATION_PREFLIGHT_ATTEMPTS,
+      DEFAULT_MIGRATION_PREFLIGHT_ATTEMPTS,
+      100,
+    ),
+    preflightDelayMs: parseBoundedTimeout(
+      env.MIGRATION_PREFLIGHT_DELAY_MS,
+      DEFAULT_MIGRATION_PREFLIGHT_DELAY_MS,
+      300_000,
+    ),
+    lockTimeoutMs: parseBoundedTimeout(
+      env.MIGRATION_LOCK_TIMEOUT_MS,
+      DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
+    ),
+    lockPollMs: parseBoundedTimeout(
+      env.MIGRATION_LOCK_POLL_MS,
+      DEFAULT_MIGRATION_LOCK_POLL_MS,
+      60_000,
+    ),
+  });
+}
 
 // ── Boot v2: DB preflight + cross-instance migration advisory lock ──────────
 // All of this is best-effort and fail-safe: any error degrades to the prior
 // behaviour (proceed straight to `migrate deploy`). Nothing here can block boot
 // indefinitely or turn a healthy boot into a failed one.
 const MIGRATION_LOCK_NAME = "siragpt:prisma-migrate-deploy";
-const MIGRATION_PREFLIGHT_ATTEMPTS = Number(process.env.MIGRATION_PREFLIGHT_ATTEMPTS ?? 10);
-const MIGRATION_PREFLIGHT_DELAY_MS = Number(process.env.MIGRATION_PREFLIGHT_DELAY_MS ?? 3000);
-const MIGRATION_LOCK_TIMEOUT_MS = Number(process.env.MIGRATION_LOCK_TIMEOUT_MS ?? 120000);
-const MIGRATION_LOCK_POLL_MS = Number(process.env.MIGRATION_LOCK_POLL_MS ?? 1500);
 
 // Deterministic [int4, int4] key pair for pg_advisory_lock(int4, int4) derived
 // from a stable name via two differently-seeded FNV-1a passes. Same name ->
@@ -371,36 +710,83 @@ function computeAdvisoryLockKeys(name) {
 // deploy` doesn't fail immediately against a database that is still starting up
 // in an orchestrated deploy. Connection logic is injectable for tests.
 async function preflightDatabase(opts = {}) {
+  const env = opts.env || process.env;
+  const pgTimeouts = resolveMigrationPgTimeoutConfig(env);
+  const lifecycle = resolveMigrationLifecycleConfig(env);
   const {
-    attempts = MIGRATION_PREFLIGHT_ATTEMPTS,
-    delayMs = MIGRATION_PREFLIGHT_DELAY_MS,
-    connect = defaultPreflightConnect,
+    attempts = lifecycle.preflightAttempts,
+    delayMs = lifecycle.preflightDelayMs,
+    operationTimeoutMs = pgTimeouts.connectionTimeoutMs
+      + pgTimeouts.queryTimeoutMs
+      + DEFAULT_MIGRATION_DB_CLOSE_TIMEOUT_MS,
     sleepFn = sleep,
     logFn = phase,
+    signal,
   } = opts;
+  const connect = opts.connect || (() => defaultPreflightConnect({ env, signal }));
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      await connect();
+      await withOperationTimeout(
+        () => connect(),
+        operationTimeoutMs,
+        "preflight operation",
+        signal,
+      );
       logFn("db_preflight_ok", { attempt });
       return true;
     } catch (err) {
-      logFn("db_preflight_retry", { attempt, maxAttempts: attempts, error: err?.message });
-      if (attempt < attempts) await sleepFn(delayMs);
+      const failure = sanitizePgFailure(err, "MIGRATION_DB_PREFLIGHT_FAILED");
+      logFn("db_preflight_retry", {
+        attempt,
+        maxAttempts: attempts,
+        code: failure.code,
+      });
+      if (signal?.aborted) break;
+      if (attempt < attempts) {
+        await withOperationTimeout(
+          () => sleepFn(delayMs),
+          parseBoundedTimeout(delayMs, DEFAULT_MIGRATION_PREFLIGHT_DELAY_MS) + 1_000,
+          "preflight retry delay",
+          signal,
+        );
+      }
     }
   }
   logFn("db_preflight_exhausted", { attempts });
   return false;
 }
 
-async function defaultPreflightConnect() {
-  const url = resolvePrismaDatabaseUrl();
+async function defaultPreflightConnect(opts = {}) {
+  const {
+    env = process.env,
+    url = resolvePrismaDatabaseUrl(env),
+    clientFactory = (databaseUrl) => createPgClient(databaseUrl, env),
+    operationTimeoutMs,
+    closeTimeoutMs = DEFAULT_MIGRATION_DB_CLOSE_TIMEOUT_MS,
+    signal,
+  } = opts;
+  const timeouts = resolveMigrationPgTimeoutConfig(env);
   if (!url) throw new Error("no database url configured");
-  const client = createPgClient(url);
-  await client.connect();
+  const client = clientFactory(url);
   try {
-    await client.query("SELECT 1");
+    try {
+      await withOperationTimeout(
+        () => client.connect(),
+        operationTimeoutMs || timeouts.connectionTimeoutMs,
+        "connection",
+        signal,
+      );
+      await withOperationTimeout(
+        () => client.query("SELECT 1"),
+        operationTimeoutMs || timeouts.queryTimeoutMs,
+        "preflight query",
+        signal,
+      );
+    } catch (error) {
+      throw safePgError(error, "MIGRATION_DB_PREFLIGHT_FAILED");
+    }
   } finally {
-    await client.end().catch(() => {});
+    await closePgClient(client, closeTimeoutMs);
   }
 }
 
@@ -411,110 +797,194 @@ async function defaultPreflightConnect() {
 // no-op release and lets boot proceed (an un-serialised migrate is still better
 // than a hung boot).
 async function acquireMigrationLock(opts = {}) {
+  const env = opts.env || process.env;
+  const pgTimeouts = resolveMigrationPgTimeoutConfig(env);
+  const lifecycle = resolveMigrationLifecycleConfig(env);
   const {
     keys = computeAdvisoryLockKeys(MIGRATION_LOCK_NAME),
-    timeoutMs = MIGRATION_LOCK_TIMEOUT_MS,
-    pollMs = MIGRATION_LOCK_POLL_MS,
-    clientFactory = () => createPgClient(),
+    timeoutMs = lifecycle.lockTimeoutMs,
+    pollMs = lifecycle.lockPollMs,
+    clientFactory = () => createPgClient(resolvePrismaDatabaseUrl(env), env),
+    operationTimeoutMs = pgTimeouts.queryTimeoutMs,
+    connectionTimeoutMs = pgTimeouts.connectionTimeoutMs,
+    closeTimeoutMs = DEFAULT_MIGRATION_DB_CLOSE_TIMEOUT_MS,
     sleepFn = sleep,
     logFn = phase,
     now = Date.now,
+    signal,
   } = opts;
 
   const noop = async () => {};
+  const boundedTimeoutMs = parseBoundedTimeout(
+    timeoutMs,
+    DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
+  );
+  const deadline = now() + boundedTimeoutMs;
   let client;
   try {
     client = clientFactory();
-    await client.connect();
+    await withDeadline(
+      () => client.connect(),
+      deadline,
+      now,
+      "advisory lock connection",
+      connectionTimeoutMs,
+      signal,
+    );
   } catch (err) {
-    logFn("migration_lock_skipped", { reason: "connect_failed", error: err?.message });
-    if (client && client.end) await client.end().catch(() => {});
+    const failure = sanitizePgFailure(err, "MIGRATION_LOCK_CONNECT_FAILED");
+    logFn("migration_lock_skipped", {
+      reason: err?.code === MIGRATION_DB_OPERATION_TIMEOUT_CODE
+        ? "connect_timeout"
+        : "connect_failed",
+      code: failure.code,
+    });
+    await closePgClient(client, closeTimeoutMs);
     return noop;
   }
 
-  const deadline = now() + timeoutMs;
   let acquired = false;
   while (now() < deadline) {
     let res;
     try {
-      res = await client.query("SELECT pg_try_advisory_lock($1::int4, $2::int4) AS locked", keys);
+      res = await withDeadline(
+        () => client.query("SELECT pg_try_advisory_lock($1::int4, $2::int4) AS locked", keys),
+        deadline,
+        now,
+        "advisory lock query",
+        operationTimeoutMs,
+        signal,
+      );
     } catch (err) {
-      logFn("migration_lock_skipped", { reason: "query_failed", error: err?.message });
-      await client.end().catch(() => {});
+      const failure = sanitizePgFailure(err, "MIGRATION_LOCK_QUERY_FAILED");
+      logFn("migration_lock_skipped", {
+        reason: err?.code === MIGRATION_DB_OPERATION_TIMEOUT_CODE
+          ? "query_timeout"
+          : "query_failed",
+        code: failure.code,
+      });
+      await closePgClient(client, closeTimeoutMs);
       return noop;
     }
     const locked = res && res.rows && (res.rows[0]?.locked === true || res.rows[0]?.locked === "t");
     if (locked) { acquired = true; break; }
     logFn("migration_lock_waiting", { pollMs });
-    await sleepFn(pollMs);
+    try {
+      await withDeadline(
+        () => sleepFn(Math.min(pollMs, Math.max(1, deadline - now()))),
+        deadline,
+        now,
+        "advisory lock poll",
+        MAX_BOOT_OPERATION_TIMEOUT_MS,
+        signal,
+      );
+    } catch {
+      break;
+    }
   }
 
   if (!acquired) {
-    logFn("migration_lock_timeout", { timeoutMs });
-    await client.end().catch(() => {});
+    logFn("migration_lock_timeout", { timeoutMs: boundedTimeoutMs });
+    await closePgClient(client, closeTimeoutMs);
     return noop;
   }
 
   logFn("migration_lock_acquired", {});
   return async () => {
     try {
-      await client.query("SELECT pg_advisory_unlock($1::int4, $2::int4)", keys);
+      await withOperationTimeout(
+        () => client.query("SELECT pg_advisory_unlock($1::int4, $2::int4)", keys),
+        operationTimeoutMs,
+        "advisory unlock query",
+      );
       logFn("migration_lock_released", {});
     } catch (err) {
-      logFn("migration_lock_release_failed", { error: err?.message });
+      const failure = sanitizePgFailure(err, "MIGRATION_LOCK_RELEASE_FAILED");
+      logFn("migration_lock_release_failed", {
+        code: failure.code,
+      });
     } finally {
-      await client.end().catch(() => {});
+      await closePgClient(client, closeTimeoutMs);
     }
   };
 }
 
 async function runMigrations() {
   loadDotenv();
+  const retryConfig = resolveMigrationRetryConfig(process.env);
+  const signal = activeMigrationAbortController?.signal;
   if (process.env.SKIP_MIGRATIONS === "1") {
     log("skipping prisma migrate deploy (SKIP_MIGRATIONS=1)");
     return 0;
   }
+  try {
+    requireDirectMigrationDatabaseUrl(process.env);
+  } catch (error) {
+    log("migration database configuration rejected", {
+      code: error?.code || DIRECT_DATABASE_URL_REQUIRED_CODE,
+    });
+    return Number.isInteger(error?.exitStatus)
+      ? error.exitStatus
+      : MIGRATION_CONFIGURATION_EXIT_STATUS;
+  }
 
   let result;
-  for (let attempt = 1; attempt <= MIGRATION_TRANSIENT_RETRIES; attempt++) {
-    log("running prisma migrate deploy", { attempt, maxAttempts: MIGRATION_TRANSIENT_RETRIES });
-    result = runPrisma(["migrate", "deploy"]);
+  for (let attempt = 1; attempt <= retryConfig.attempts; attempt++) {
+    log("running prisma migrate deploy", { attempt, maxAttempts: retryConfig.attempts });
+    result = await runPrisma(["migrate", "deploy"], { signal });
     if (result.error) {
-      log("prisma migrate deploy spawn error", { error: result.error.message });
-      return 1;
+      log("prisma migrate deploy spawn error", {
+        code: result.migrationCode || result.error.code || "MIGRATION_COMMAND_FAILED",
+        error: migrationErrorMessage(result.error),
+      });
+      return prismaCommandExitStatus(result);
     }
-    if ((result.status ?? 1) === 0) break;
+    if (result.migrationCode === MIGRATION_COMMAND_ABORTED_CODE) {
+      return prismaCommandExitStatus(result);
+    }
+    if (prismaCommandExitStatus(result) === 0) break;
     if (!isTransientMigrationError(result)) break;
-    if (attempt < MIGRATION_TRANSIENT_RETRIES) {
-      log("transient migration error — retrying", { attempt, retryInMs: MIGRATION_RETRY_DELAY_MS });
-      await sleep(MIGRATION_RETRY_DELAY_MS);
+    if (attempt < retryConfig.attempts) {
+      log("transient migration error — retrying", { attempt, retryInMs: retryConfig.delayMs });
+      await sleep(retryConfig.delayMs, signal);
+      if (signal?.aborted) return MIGRATION_COMMAND_ABORTED_EXIT_STATUS;
     }
   }
 
-  if ((result.status ?? 1) !== 0 && process.env.PRISMA_BASELINE_ON_P3005 === "1") {
+  if (isTerminalMigrationCommandResult(result)) {
+    return prismaCommandExitStatus(result);
+  }
+
+  if (prismaCommandExitStatus(result) !== 0 && process.env.PRISMA_BASELINE_ON_P3005 === "1") {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     if (output.includes("P3005")) {
-      const baselineStatus = baselineExistingSchema();
+      const baselineStatus = await baselineExistingSchema({ signal });
       if (baselineStatus !== 0) return baselineStatus;
       log("retrying prisma migrate deploy after baseline");
-      const retry = runPrisma(["migrate", "deploy"]);
+      const retry = await runPrisma(["migrate", "deploy"], { signal });
       if (retry.error) {
-        log("prisma migrate deploy retry spawn error", { error: retry.error.message });
-        return 1;
+        log("prisma migrate deploy retry spawn error", {
+          code: retry.migrationCode || retry.error.code || "MIGRATION_COMMAND_FAILED",
+          error: migrationErrorMessage(retry.error),
+        });
+        return prismaCommandExitStatus(retry);
       }
-      return retry.status ?? 1;
+      return prismaCommandExitStatus(retry);
     }
   }
-  if ((result.status ?? 1) !== 0 && process.env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
+  if (prismaCommandExitStatus(result) !== 0 && process.env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     if (output.includes("P3009") && await rollbackSafeFailedMigrations()) {
       log("retrying prisma migrate deploy after safe failed migration rollback");
-      const retry = runPrisma(["migrate", "deploy"]);
+      const retry = await runPrisma(["migrate", "deploy"], { signal });
       if (retry.error) {
-        log("prisma migrate deploy retry spawn error", { error: retry.error.message });
-        return 1;
+        log("prisma migrate deploy retry spawn error", {
+          code: retry.migrationCode || retry.error.code || "MIGRATION_COMMAND_FAILED",
+          error: migrationErrorMessage(retry.error),
+        });
+        return prismaCommandExitStatus(retry);
       }
-      return retry.status ?? 1;
+      return prismaCommandExitStatus(retry);
     }
     if (shouldContinueAfterSafeP3009(output)) {
       log("continuing boot despite safe P3009 migration block", {
@@ -524,14 +994,14 @@ async function runMigrations() {
     }
   }
 
-  if ((result.status ?? 1) !== 0 && isTransientMigrationError(result)) {
+  if (prismaCommandExitStatus(result) !== 0 && isTransientMigrationError(result)) {
     log("migration failed after all retries due to transient network error — proceeding with boot (schema already applied)", {
       hint: "Set SKIP_MIGRATIONS=1 to bypass migrations entirely on future boots if this persists.",
     });
     return 0;
   }
 
-  return result.status ?? 1;
+  return prismaCommandExitStatus(result);
 }
 
 function normalizeShutdownRequest(message, fallbackSignal = "SIGTERM") {
@@ -568,11 +1038,15 @@ function forwardShutdownToBackend(child, message) {
 let backendChild = null;
 let pendingShutdownRequest = null;
 let shutdownHandlersInstalled = false;
+let activeMigrationAbortController = null;
 
 function requestBackendShutdown(message) {
   const request = normalizeShutdownRequest(message);
   if (!request) return false;
   pendingShutdownRequest = request;
+  if (activeMigrationAbortController && !activeMigrationAbortController.signal.aborted) {
+    activeMigrationAbortController.abort(request.signal);
+  }
   if (backendChild) forwardShutdownToBackend(backendChild, request);
   return true;
 }
@@ -627,12 +1101,23 @@ function startBackend() {
 // Run DB preflight + acquire the migration advisory lock when applicable.
 // Returns an async release() (a no-op when nothing was locked). Every branch is
 // gated by env and fail-safe: a bug here can never block boot or fail it.
-async function maybePreflightAndLock() {
+async function maybePreflightAndLock(options = {}) {
   const noop = async () => {};
-  if (process.env.SKIP_MIGRATIONS === "1") return noop;
+  const env = options.env || process.env;
+  if (env.SKIP_MIGRATIONS === "1") return noop;
 
-  loadDotenv();
-  const url = resolvePrismaDatabaseUrl();
+  if (env === process.env) loadDotenv();
+  const lifecycle = resolveMigrationLifecycleConfig(env);
+  let url;
+  try {
+    url = resolvePrismaDatabaseUrl(env);
+  } catch (error) {
+    phase("migration_preflight_skipped", {
+      reason: "direct_database_url_unavailable",
+      code: error?.code || DIRECT_DATABASE_URL_REQUIRED_CODE,
+    });
+    return noop;
+  }
   if (!isDirectPostgresUrl(url)) {
     // Accelerate/Data Proxy (prisma://) or no URL: pg can't dial it, so skip
     // fast instead of burning preflight retries that can never succeed.
@@ -640,19 +1125,35 @@ async function maybePreflightAndLock() {
     return noop;
   }
 
-  if (process.env.MIGRATION_PREFLIGHT_DISABLED !== "1") {
-    phase("db_preflight_start", { attempts: MIGRATION_PREFLIGHT_ATTEMPTS });
-    const ok = await preflightDatabase().catch((err) => {
-      phase("db_preflight_error", { error: err?.message });
+  if (env.MIGRATION_PREFLIGHT_DISABLED !== "1") {
+    phase("db_preflight_start", { attempts: lifecycle.preflightAttempts });
+    const ok = await preflightDatabase({
+      env,
+      signal: options.signal,
+      attempts: lifecycle.preflightAttempts,
+      delayMs: lifecycle.preflightDelayMs,
+    }).catch((err) => {
+      const failure = sanitizePgFailure(err, "MIGRATION_DB_PREFLIGHT_FAILED");
+      phase("db_preflight_error", {
+        code: failure.code,
+      });
       return true; // never block boot on a preflight bug
     });
     if (!ok) phase("db_preflight_giving_up", { note: "continuing to migrate anyway" });
   }
 
-  if (process.env.MIGRATION_ADVISORY_LOCK_DISABLED === "1") return noop;
+  if (env.MIGRATION_ADVISORY_LOCK_DISABLED === "1") return noop;
   phase("migration_lock_start", {});
-  return acquireMigrationLock().catch((err) => {
-    phase("migration_lock_error", { error: err?.message });
+  return acquireMigrationLock({
+    env,
+    signal: options.signal,
+    timeoutMs: lifecycle.lockTimeoutMs,
+    pollMs: lifecycle.lockPollMs,
+  }).catch((err) => {
+    const failure = sanitizePgFailure(err, "MIGRATION_LOCK_FAILED");
+    phase("migration_lock_error", {
+      code: failure.code,
+    });
     return noop;
   });
 }
@@ -680,11 +1181,19 @@ function ensureSandboxPythonDeps() {
  * restart triggered by adding secrets never hits EADDRINUSE.
  * Uses `fuser -k` which is always available on Linux/Nix. Non-fatal.
  */
-function clearStalePortProcess() {
-  const port = process.env.BACKEND_PORT || process.env.PORT || '5050';
+async function clearStalePortProcess(options = {}) {
+  const env = options.env || process.env;
+  const port = env.BACKEND_PORT || env.PORT || '5050';
   try {
-    spawnSync('fuser', ['-k', `${port}/tcp`], { stdio: 'ignore' });
-  } catch { /* non-critical — fuser may not exist on every OS */ }
+    return await runBoundedBootCommand('fuser', ['-k', `${port}/tcp`], {
+      env,
+      runProcessImpl: options.runProcessImpl,
+      timeoutMs: options.timeoutMs ?? resolveBootCommandTimeoutMs(env),
+      signal: options.signal,
+    });
+  } catch {
+    return { status: null, error: { code: "BOOT_COMMAND_FAILED" } };
+  }
 }
 
 /**
@@ -701,24 +1210,32 @@ async function seedAdminIfNeeded() {
   try {
     const { PrismaClient } = require("../node_modules/@prisma/client");
     const bcrypt = require("../node_modules/bcryptjs");
-    const prisma = new PrismaClient();
+    const directMigrationUrl = resolvePrismaDatabaseUrl();
+    const prisma = new PrismaClient({
+      datasources: { db: { url: directMigrationUrl } },
+    });
+    const queryTimeoutMs = resolveMigrationPgTimeoutConfig(process.env).queryTimeoutMs;
     try {
-      const existing = await prisma.user.findUnique({ where: { email } });
+      const existing = await withOperationTimeout(
+        () => prisma.user.findUnique({ where: { email } }),
+        queryTimeoutMs,
+        "admin lookup",
+      );
       if (existing) {
         // Update password so the seed password stays in sync on every deploy.
         const hash = await bcrypt.hash(rawPassword, 12);
-        await prisma.user.update({
+        await withOperationTimeout(() => prisma.user.update({
           where: { email },
           data: {
             password: hash,
             isAdmin: true,
             isSuperAdmin: true,
           },
-        });
+        }), queryTimeoutMs, "admin update");
         phase("seed_admin_updated", { email });
       } else {
         const hash = await bcrypt.hash(rawPassword, 12);
-        await prisma.user.create({
+        await withOperationTimeout(() => prisma.user.create({
           data: {
             email,
             name: "Admin",
@@ -726,48 +1243,76 @@ async function seedAdminIfNeeded() {
             isAdmin: true,
             isSuperAdmin: true,
           },
-        });
+        }), queryTimeoutMs, "admin creation");
         phase("seed_admin_created", { email });
       }
     } finally {
-      await prisma.$disconnect().catch(() => {});
+      await withOperationTimeout(
+        () => prisma.$disconnect(),
+        DEFAULT_MIGRATION_DB_CLOSE_TIMEOUT_MS,
+        "Prisma cleanup",
+      ).catch(() => {});
     }
   } catch (err) {
     // Never block boot on seed failure.
-    phase("seed_admin_error", { email, error: err?.message });
+    phase("seed_admin_error", {
+      email,
+      code: err?.code || "SEED_ADMIN_FAILED",
+      error: migrationErrorMessage(err),
+    });
   }
 }
 
 /**
- * Log a fingerprint of the database URL (host + db name only, never credentials)
- * and count existing users so we can detect if production points to a wrong or
- * empty database. Logged BEFORE migrations so mismatches are visible in boot logs.
+ * Log value-free database configuration state and count existing users so we
+ * can detect if production points to a wrong or empty database. Logged BEFORE
+ * migrations so mismatches remain visible without exposing URL-derived values.
  */
 async function logDbSnapshot(label) {
-  const url = resolvePrismaDatabaseUrl();
-  let dbFingerprint = "(unknown)";
-  if (isDirectPostgresUrl(url)) {
-    try {
-      const parsed = new URL(url);
-      // Only log host + pathname (db name), never user/password.
-      dbFingerprint = `${parsed.hostname}${parsed.pathname}`;
-    } catch { /* ignore parse errors */ }
+  let url = "";
+  try {
+    url = resolvePrismaDatabaseUrl();
+  } catch (error) {
+    phase("db_snapshot_skipped", {
+      label,
+      code: error?.code || DIRECT_DATABASE_URL_REQUIRED_CODE,
+    });
+    return { userCount: null, chatCount: null, dbFingerprint: "(unavailable)" };
   }
+  // Configuration state only. Host, database name, credentials, query
+  // parameters, and every other URL-derived value stay out of boot logs.
+  const dbFingerprint = isDirectPostgresUrl(url) ? "direct_postgres_configured" : "unavailable";
 
   let userCount = null;
   let chatCount = null;
+  let client;
   try {
     const { Client } = require("pg");
-    const client = new Client(makePgClientOptions(url));
-    await client.connect();
+    client = new Client(makePgClientOptions(url));
+    const timeouts = resolveMigrationPgTimeoutConfig(process.env);
+    await withOperationTimeout(
+      () => client.connect(),
+      timeouts.connectionTimeoutMs,
+      "snapshot connection",
+    );
     try {
-      const r = await client.query('SELECT COUNT(*) FROM "users"');
+      const r = await withOperationTimeout(
+        () => client.query('SELECT COUNT(*) FROM "users"'),
+        timeouts.queryTimeoutMs,
+        "user count query",
+      );
       userCount = parseInt(r.rows[0].count, 10);
-      const r2 = await client.query('SELECT COUNT(*) FROM "chats"');
+      const r2 = await withOperationTimeout(
+        () => client.query('SELECT COUNT(*) FROM "chats"'),
+        timeouts.queryTimeoutMs,
+        "chat count query",
+      );
       chatCount = parseInt(r2.rows[0].count, 10);
     } catch { /* table may not exist yet on first boot */ }
-    await client.end().catch(() => {});
   } catch { /* pg unavailable */ }
+  finally {
+    await closePgClient(client);
+  }
 
   phase("db_snapshot", { label, db: dbFingerprint, users: userCount, chats: chatCount });
 
@@ -783,29 +1328,107 @@ async function logDbSnapshot(label) {
   return { userCount, chatCount, dbFingerprint };
 }
 
+function shouldAllowNonfatalMigrationFailure(status, env = process.env) {
+  return (
+    env.MIGRATION_NONFATAL === "1"
+    && status !== MIGRATION_CONFIGURATION_EXIT_STATUS
+    && ![
+      MIGRATION_COMMAND_TIMEOUT_EXIT_STATUS,
+      MIGRATION_COMMAND_ABORTED_EXIT_STATUS,
+      MIGRATION_COMMAND_OUTPUT_LIMIT_EXIT_STATUS,
+      MIGRATION_PROCESS_TREE_NOT_TERMINATED_EXIT_STATUS,
+    ].includes(status)
+  );
+}
+
+async function runMigrationOnly(options = {}) {
+  const {
+    installSignalHandlers = true,
+    loadEnvFn = loadDotenv,
+    runGenerateImpl = ({ signal: generateSignal }) => runPrisma(
+      ["generate", "--schema=prisma/schema.prisma"],
+      { signal: generateSignal },
+    ),
+    maybePreflightAndLockImpl = maybePreflightAndLock,
+    runMigrationsImpl = runMigrations,
+    phaseFn = phase,
+    signal,
+  } = options;
+  if (installSignalHandlers) installParentShutdownHandlers();
+  loadEnvFn();
+
+  const previousController = activeMigrationAbortController;
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason || "external_abort");
+  if (signal?.aborted) forwardAbort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
+  activeMigrationAbortController = controller;
+  if (pendingShutdownRequest && !controller.signal.aborted) {
+    controller.abort(pendingShutdownRequest.signal);
+  }
+
+  let release = async () => {};
+  let status = 1;
+  try {
+    phaseFn("migration_only_start", {});
+    phaseFn("generate_start", { mode: "migration_only" });
+    try {
+      const generateResult = await runGenerateImpl({ signal: controller.signal });
+      status = Number.isInteger(generateResult)
+        ? generateResult
+        : prismaCommandExitStatus(generateResult);
+    } catch (error) {
+      status = Number.isInteger(error?.exitStatus)
+        ? error.exitStatus
+        : MIGRATION_CONFIGURATION_EXIT_STATUS;
+      phaseFn("generate_failed", {
+        mode: "migration_only",
+        status,
+        code: error?.code || "PRISMA_GENERATE_FAILED",
+      });
+      return status;
+    }
+    phaseFn("generate_done", { mode: "migration_only", status });
+    if (status !== 0) return status;
+
+    release = await maybePreflightAndLockImpl({ signal: controller.signal });
+    phaseFn("migrate_start", { mode: "migration_only" });
+    status = await runMigrationsImpl({ signal: controller.signal });
+    phaseFn("migrate_done", { mode: "migration_only", status });
+    return status;
+  } finally {
+    await Promise.resolve(release()).catch(() => {});
+    signal?.removeEventListener("abort", forwardAbort);
+    activeMigrationAbortController = previousController;
+    phaseFn("migration_only_done", { status });
+  }
+}
+
 async function main() {
   installParentShutdownHandlers();
+  loadDotenv();
   phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
-  clearStalePortProcess();
+  const previousController = activeMigrationAbortController;
+  const controller = new AbortController();
+  activeMigrationAbortController = controller;
+  if (pendingShutdownRequest) controller.abort(pendingShutdownRequest.signal);
+  await clearStalePortProcess({ signal: controller.signal });
   ensureSandboxPythonDeps();
 
   // Log DB fingerprint + user count BEFORE migrations to detect wrong-DB issues.
   const pre = await logDbSnapshot("pre_migrate");
-  if (finishPendingShutdownBeforeBackend()) return;
-
-  const release = await maybePreflightAndLock();
-  if (finishPendingShutdownBeforeBackend()) {
-    await release().catch(() => {});
-    return;
-  }
-
   let migrationStatus;
+  let release = async () => {};
   try {
+    if (finishPendingShutdownBeforeBackend()) return;
+    release = await maybePreflightAndLock({ signal: controller.signal });
+    if (finishPendingShutdownBeforeBackend()) return;
     phase("migrate_start", {});
     migrationStatus = await runMigrations();
     phase("migrate_done", { status: migrationStatus });
   } finally {
     await release().catch(() => {});
+    activeMigrationAbortController = previousController;
   }
   if (finishPendingShutdownBeforeBackend()) return;
 
@@ -815,7 +1438,9 @@ async function main() {
     // its port and serve traffic in a degraded state instead of leaving the
     // whole instance down (which surfaces as ECONNREFUSED on every /api call).
     // The operator must still fix the underlying DB/migration condition.
-    if (process.env.MIGRATION_NONFATAL === "1") {
+    // Configuration failures remain fatal so a remote runtime URL is never
+    // treated as a direct migration datasource.
+    if (shouldAllowNonfatalMigrationFailure(migrationStatus, process.env)) {
       log("migrations failed but MIGRATION_NONFATAL=1 — booting anyway (degraded)", { status: migrationStatus });
       phase("backend_start", { degraded: true });
       if (finishPendingShutdownBeforeBackend()) return;
@@ -847,9 +1472,26 @@ async function main() {
   startBackend();
 }
 
+function isMigrationOnlyMode(argv = process.argv.slice(2)) {
+  return argv.includes("--migrate-only");
+}
+
+async function cli(argv = process.argv.slice(2)) {
+  if (isMigrationOnlyMode(argv)) {
+    const status = await runMigrationOnly();
+    if (!finishPendingShutdownBeforeBackend()) process.exitCode = status;
+    return;
+  }
+  await main();
+}
+
 if (require.main === module) {
-  main().catch((err) => {
-    log("fatal boot wrapper error", { error: err?.message, stack: err?.stack });
+  cli().catch((err) => {
+    log("fatal boot wrapper error", {
+      code: err?.code || "BOOT_WRAPPER_FAILED",
+      error: migrationErrorMessage(err),
+      stack: redactDatabaseUrls(err?.stack || "", process.env),
+    });
     process.exit(1);
   });
 }
@@ -866,6 +1508,31 @@ module.exports = {
   isDirectPostgresUrl,
   computeAdvisoryLockKeys,
   preflightDatabase,
+  defaultPreflightConnect,
   acquireMigrationLock,
   forwardShutdownToBackend,
+  runPrisma,
+  isTerminalMigrationCommandResult,
+  isTransientMigrationError,
+  runBoundedBootCommand,
+  pipeResult,
+  prismaCommandExitStatus,
+  resolveMigrationCommandTimeoutMs,
+  resolveBootCommandTimeoutMs,
+  resolveMigrationPgTimeoutConfig,
+  resolveMigrationRetryConfig,
+  resolveMigrationLifecycleConfig,
+  closePgClient,
+  runMigrations,
+  runMigrationOnly,
+  isMigrationOnlyMode,
+  clearStalePortProcess,
+  sanitizePgFailure,
+  shouldAllowNonfatalMigrationFailure,
+  DIRECT_DATABASE_URL_REQUIRED_CODE,
+  MIGRATION_COMMAND_TIMEOUT_CODE,
+  MIGRATION_COMMAND_ABORTED_CODE,
+  MIGRATION_COMMAND_OUTPUT_LIMIT_CODE,
+  MIGRATION_PROCESS_TREE_NOT_TERMINATED_CODE,
+  MIGRATION_DB_OPERATION_TIMEOUT_CODE,
 };

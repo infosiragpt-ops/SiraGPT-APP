@@ -131,11 +131,30 @@ test('production deploy proves the exact commit and restores rollback provenance
   assert.doesNotMatch(workflow, /PREV_SHA="\$\(git rev-parse HEAD/);
 });
 
-test('production deploy only tolerates the known unbaselined Prisma error', () => {
+test('official production deploy paths use the bounded migration-only wrapper', () => {
   const workflow = read('.github/workflows/deploy.yml');
+  const deployScript = read('scripts/deploy-production.sh');
 
-  assert.match(workflow, /P3005/);
-  assert.match(workflow, /The database schema is not empty/);
-  assert.match(workflow, /OTHER_PRISMA_CODE/);
+  assert.match(
+    workflow,
+    /backend node scripts\/start-with-migrations\.js --migrate-only/,
+  );
+  assert.match(
+    deployScript,
+    /node scripts\/start-with-migrations\.js --migrate-only/,
+  );
+  assert.doesNotMatch(workflow, /\bnpx\s+prisma\b/);
+  assert.doesNotMatch(deployScript, /\bnpx\s+prisma\b/);
   assert.match(workflow, /Database migration failed; aborting deploy/);
+});
+
+test('backend vercel-build uses the bounded migration-only lifecycle', () => {
+  const backendPackage = JSON.parse(read('backend/package.json'));
+  const command = backendPackage.scripts['vercel-build'];
+
+  assert.match(
+    command,
+    /^node scripts\/start-with-migrations\.js --migrate-only$/,
+  );
+  assert.doesNotMatch(command, /(?:^|&&)\s*(?:npx\s+)?prisma\s+/);
 });
