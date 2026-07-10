@@ -6,125 +6,39 @@ const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
 const { authenticateToken, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const {
-  getAgentTaskQueue,
-  getQueueHealth,
   getQueueName,
 } = require('../services/agents/agent-task-queue');
+const {
+  createQueueHealthProbeRuntime,
+  defaultQueueHealthProbe: queueHealthProbe,
+  defaultQueueRegistry: queueRegistry,
+  probeQueueRegistry,
+} = require('../services/queues/queue-registry');
 
 const BOARD_BASE_PATH = '/api/admin/queues/board';
 
-// ── Queue registry (ratchet 45) ──────────────────────────────────────
-// Health snapshot endpoint enumerates every BullMQ queue registered in
-// this process. Today only the agent-task queue is wired; the registry
-// keeps the contract future-proof so new queues (e.g. webhook delivery,
-// background analyzer) can opt in with one registerQueue() call without
-// touching the route. Each entry carries a lazy `get()` so we never
-// instantiate Redis connections until the snapshot is actually polled.
-const _registeredQueues = new Map();
-
-function registerQueue(name, getter) {
-  if (!name || typeof getter !== 'function') return;
-  _registeredQueues.set(String(name), getter);
-}
-
-function _defaultRegistry() {
-  // Lazy-default: register the agent-task queue if no one has registered
-  // anything yet. We do this on first read so test harnesses can install
-  // their own registry without colliding.
-  if (_registeredQueues.size === 0) {
-    _registeredQueues.set(getQueueName(), () => getAgentTaskQueue());
+async function buildQueuesHealthSnapshot(options = {}) {
+  const env = options.env || process.env;
+  if (options.registry) {
+    return probeQueueRegistry({
+      registry: options.registry,
+      env,
+    });
   }
-  return _registeredQueues;
-}
-
-// lastError ring per queue — set whenever a snapshot probe fails so the
-// next read can surface "this queue was unreachable last time we tried"
-// without spamming Redis on every poll.
-const _lastErrorByQueue = new Map();
-
-async function _probeQueueHealth(name, getter) {
-  let queue;
-  try {
-    queue = getter();
-  } catch (err) {
-    _lastErrorByQueue.set(name, err?.message || String(err));
-    return {
-      name,
-      jobs: null,
-      isPaused: null,
-      lastError: _lastErrorByQueue.get(name),
-    };
-  }
-
-  // getJobCounts is the canonical BullMQ snapshot helper; we ask for
-  // every state the dashboard cares about plus `paused` (which BullMQ
-  // includes when the queue itself is paused so jobs accumulate).
-  try {
-    const counts = await queue.getJobCounts(
-      'waiting',
-      'active',
-      'completed',
-      'failed',
-      'delayed',
-      'paused',
-    );
-    let isPaused = false;
+  if (options.queueHealthProbe) return options.queueHealthProbe.probe();
+  if (Object.prototype.hasOwnProperty.call(options, 'env')) {
+    const runtime = createQueueHealthProbeRuntime({
+      registry: queueRegistry,
+      env,
+      cacheTtlMs: 0,
+    });
     try {
-      if (typeof queue.isPaused === 'function') isPaused = Boolean(await queue.isPaused());
-    } catch (_) {
-      // BullMQ versions where isPaused throws on a disconnected client —
-      // we treat that as "unknown" rather than failing the whole probe.
-      isPaused = false;
+      return await runtime.probe();
+    } finally {
+      await runtime.close();
     }
-    // Clear the lastError ring on a successful probe.
-    const prevErr = _lastErrorByQueue.get(name) || null;
-    _lastErrorByQueue.delete(name);
-    return {
-      name,
-      jobs: {
-        waiting: Number(counts.waiting) || 0,
-        active: Number(counts.active) || 0,
-        completed: Number(counts.completed) || 0,
-        failed: Number(counts.failed) || 0,
-        delayed: Number(counts.delayed) || 0,
-        paused: Number(counts.paused) || 0,
-      },
-      isPaused,
-      lastError: prevErr,
-    };
-  } catch (err) {
-    const message = err?.message || String(err);
-    _lastErrorByQueue.set(name, message);
-    return {
-      name,
-      jobs: null,
-      isPaused: null,
-      lastError: message,
-    };
   }
-}
-
-async function buildQueuesHealthSnapshot({
-  env = process.env,
-  registry = _defaultRegistry(),
-} = {}) {
-  if (!env.REDIS_URL) {
-    return {
-      status: 'disabled',
-      reason: 'REDIS_URL is not configured',
-      queues: [],
-    };
-  }
-  const queues = [];
-  for (const [name, getter] of registry) {
-    // eslint-disable-next-line no-await-in-loop
-    queues.push(await _probeQueueHealth(name, getter));
-  }
-  const anyError = queues.some((q) => q.lastError);
-  return {
-    status: anyError ? 'degraded' : 'ready',
-    queues,
-  };
+  return queueHealthProbe.probe();
 }
 
 let boardRuntime = null;
@@ -140,24 +54,22 @@ function resolveQueueBoardConfig(env = process.env) {
 
 async function buildQueueBoardStatus({
   env = process.env,
-  getHealth = getQueueHealth,
+  getSnapshot = null,
 } = {}) {
   const config = resolveQueueBoardConfig(env);
-  if (!config.redisUrlConfigured) {
-    return {
-      ...config,
-      status: 'disabled',
-      reason: 'REDIS_URL is not configured',
-      counts: null,
-    };
-  }
-
   try {
-    const health = await getHealth();
+    const snapshot = await (getSnapshot || (() => buildQueuesHealthSnapshot({ env })))();
+    const queues = Array.isArray(snapshot?.queues) ? snapshot.queues : [];
+    const agentQueue = queues.find((queue) => queue?.name === config.queue) || null;
+    const reason = snapshot?.reason
+      || queues.find((queue) => queue?.lastError)?.lastError
+      || null;
     return {
       ...config,
-      status: 'ready',
-      counts: health.counts || {},
+      status: snapshot?.status || 'degraded',
+      counts: agentQueue?.jobs || null,
+      queues,
+      ...(reason ? { reason } : {}),
     };
   } catch (error) {
     return {
@@ -165,33 +77,99 @@ async function buildQueueBoardStatus({
       status: 'degraded',
       reason: error?.message || 'Queue health check failed',
       counts: null,
+      queues: [],
     };
   }
 }
 
-function getBullBoardRuntime() {
-  if (boardRuntime) return boardRuntime;
-  const serverAdapter = new ExpressAdapter();
+function summariseQueueStatuses(queues) {
+  const summary = {
+    total: 0,
+    ready: 0,
+    degraded: 0,
+    unhealthy: 0,
+    skipped: 0,
+    criticalFailures: 0,
+  };
+  for (const queue of Array.isArray(queues) ? queues : []) {
+    summary.total += 1;
+    switch (queue?.status) {
+      case 'ready':
+      case 'degraded':
+      case 'unhealthy':
+      case 'skipped':
+        summary[queue.status] += 1;
+        break;
+      default:
+        break;
+    }
+    if (queue?.critical && queue?.status === 'unhealthy') {
+      summary.criticalFailures += 1;
+    }
+  }
+  return summary;
+}
+
+function publicQueueBoardStatus(status) {
+  return {
+    enabled: Boolean(status?.enabled),
+    redisUrlConfigured: Boolean(status?.redisUrlConfigured),
+    queue: String(status?.queue || ''),
+    basePath: String(status?.basePath || BOARD_BASE_PATH),
+    status: status?.status || 'degraded',
+    counts: status?.counts ?? null,
+    queueCounts: summariseQueueStatuses(status?.queues),
+  };
+}
+
+function createBullBoardRuntime({
+  registry = queueRegistry,
+  createBoard = createBullBoard,
+  BullMQAdapterClass = BullMQAdapter,
+  ExpressAdapterClass = ExpressAdapter,
+} = {}) {
+  const serverAdapter = new ExpressAdapterClass();
   serverAdapter.setBasePath(BOARD_BASE_PATH);
-  const queue = getAgentTaskQueue();
-  createBullBoard({
-    queues: [new BullMQAdapter(queue)],
+  const definitions = registry.list();
+  const queues = definitions.map((definition) => (
+    new BullMQAdapterClass(definition.getter())
+  ));
+  createBoard({
+    queues,
     serverAdapter,
   });
-  boardRuntime = {
+  return {
     serverAdapter,
     mountedAt: new Date().toISOString(),
+    queueNames: definitions.map((definition) => definition.name),
   };
+}
+
+function getBullBoardRuntime() {
+  if (boardRuntime) return boardRuntime;
+  boardRuntime = createBullBoardRuntime();
   return boardRuntime;
 }
 
-function createAdminQueuesRouter() {
+function createAdminQueuesRouter({
+  authenticateMiddleware = authenticateToken,
+  requireAdminMiddleware = requireAdmin,
+  requireSuperAdminMiddleware = requireSuperAdmin,
+  getHealthSnapshot = buildQueuesHealthSnapshot,
+  getBoardRuntime = getBullBoardRuntime,
+  env = process.env,
+} = {}) {
   const router = express.Router();
-  router.use(authenticateToken, requireAdmin);
+  router.use(authenticateMiddleware, requireAdminMiddleware);
 
   router.get('/status', async (_req, res) => {
-    const status = await buildQueueBoardStatus();
-    res.status(status.status === 'degraded' ? 503 : 200).json({ ok: status.status !== 'degraded', queueBoard: status });
+    const status = await buildQueueBoardStatus({
+      env,
+      getSnapshot: getHealthSnapshot,
+    });
+    const queueBoard = publicQueueBoardStatus(status);
+    const code = queueBoard.status === 'unhealthy' ? 503 : 200;
+    res.status(code).json({ ok: queueBoard.status !== 'unhealthy', queueBoard });
   });
 
   // Ratchet 45 — per-queue health snapshot for every BullMQ queue
@@ -200,16 +178,14 @@ function createAdminQueuesRouter() {
   // structure (per-queue { name, jobs, isPaused, lastError }) for the
   // SRE dashboard. Super-admin only because raw counts can leak tenant
   // signal (e.g. job spikes correlated to a customer rollout).
-  router.get('/health', requireSuperAdmin, async (_req, res) => {
-    const snapshot = await buildQueuesHealthSnapshot();
-    const code = snapshot.status === 'ready' ? 200
-      : snapshot.status === 'disabled' ? 503
-      : 503; // degraded
+  router.get('/health', requireSuperAdminMiddleware, async (_req, res) => {
+    const snapshot = await getHealthSnapshot();
+    const code = snapshot.status === 'unhealthy' ? 503 : 200;
     res.status(code).json({ ok: snapshot.status === 'ready', ...snapshot });
   });
 
-  router.use('/board', (req, res, next) => {
-    if (!process.env.REDIS_URL) {
+  router.use('/board', requireSuperAdminMiddleware, (req, res, next) => {
+    if (!env.REDIS_URL) {
       res.status(503).json({
         error: 'Queue dashboard is disabled because REDIS_URL is not configured',
         code: 'queue_dashboard_disabled',
@@ -218,7 +194,7 @@ function createAdminQueuesRouter() {
     }
 
     try {
-      const runtime = getBullBoardRuntime();
+      const runtime = getBoardRuntime();
       runtime.serverAdapter.getRouter()(req, res, next);
     } catch (error) {
       next(error);
@@ -233,9 +209,12 @@ module.exports.INTERNAL = {
   BOARD_BASE_PATH,
   buildQueueBoardStatus,
   buildQueuesHealthSnapshot,
+  createAdminQueuesRouter,
+  createBullBoardRuntime,
   getBullBoardRuntime,
-  registerQueue,
+  publicQueueBoardStatus,
+  queueHealthProbe,
+  queueRegistry,
   resolveQueueBoardConfig,
-  _registeredQueues,
-  _lastErrorByQueue,
+  summariseQueueStatuses,
 };

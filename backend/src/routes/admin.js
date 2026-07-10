@@ -22,6 +22,9 @@ const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
+const {
+  defaultQueueHealthProbe,
+} = require('../services/queues/queue-registry');
 
 // Mirror of the Prisma `Plan` enum — validated at the route boundary so an
 // unknown plan string surfaces a clean 400 instead of a Prisma enum 500.
@@ -2126,17 +2129,26 @@ router.get('/stats/agents', requireSuperAdmin, STATS_CACHE, (req, res) =>
 
 // ── Queue dashboard ─────────────────────────────────────────────────────────
 // The repo already exposes the BullMQ board at /api/admin/queues/board.
-// These JSON endpoints add ergonomic admin-only operations for monitoring
+// These JSON endpoints add ergonomic super-admin operations for monitoring
 // dashboards. Errors are surfaced as 503 when Redis is unconfigured so the
 // UI can render an empty-state instead of a 500.
-router.get('/queues', async (_req, res) => {
+router.get('/queues', requireSuperAdmin, async (_req, res) => {
   try {
-    const queueSvc = require('../services/agents/agent-task-queue');
-    if (!process.env.REDIS_URL) {
-      return res.status(503).json({ error: 'Queue subsystem disabled (REDIS_URL unset)', queues: [] });
-    }
-    const health = await queueSvc.getQueueHealth();
-    res.json({ queues: [{ name: health.queue, counts: health.counts }] });
+    const snapshot = await defaultQueueHealthProbe.probe();
+    const queues = (Array.isArray(snapshot?.queues) ? snapshot.queues : []).map((queue) => ({
+      ...queue,
+      // Legacy dashboards read `counts`; the shared snapshot calls this
+      // field `jobs`. Keep both during the migration.
+      counts: queue?.jobs || null,
+    }));
+    const disabled = snapshot?.status === 'disabled';
+    const code = disabled || snapshot?.status === 'unhealthy' ? 503 : 200;
+    res.status(code).json({
+      ...(disabled ? { error: 'Queue subsystem disabled (REDIS_URL unset)' } : {}),
+      status: snapshot?.status || 'degraded',
+      ...(snapshot?.reason ? { reason: snapshot.reason } : {}),
+      queues,
+    });
   } catch (err) {
     console.error('[admin/queues] failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to read queue counts' });

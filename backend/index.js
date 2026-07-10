@@ -422,6 +422,7 @@ const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
+const { closeChatRunQueue } = require('./src/services/chat-run-queue');
 const { startGoalWorker, closeGoalWorker } = require('./src/services/goal-worker');
 const { closeGoalQueue } = require('./src/services/goal-queue');
 const { recoverGoalRunsAfterBoot, stopGoalRecovery } = require('./src/services/goal-boot-recovery');
@@ -900,8 +901,14 @@ const startupEnvResult = {
 // without booting the whole server. `startServer` later calls
 // `healthRoutes.setOAuthBootResult(...)` to feed in the boot-time OAuth result.
 const { createHealthRoutes } = require('./src/routes/health-routes');
+const {
+    defaultQueueHealthProbe,
+    defaultQueueRegistry,
+} = require('./src/services/queues/queue-registry');
 const healthRoutes = createHealthRoutes({
     prisma,
+    queueRegistry: defaultQueueRegistry,
+    queueHealthProbe: defaultQueueHealthProbe,
     coworkHealth,
     getOpenTelemetryStatus,
     getSentryStatus,
@@ -1403,6 +1410,7 @@ async function startServer() {
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
+            closeChatRunQueue(),
             closeGoalWorker(),
             closeGoalQueue(),
             closeCodexWorker(),
@@ -1412,6 +1420,12 @@ async function startServer() {
         ]);
     }, 5000);
 
+    shutdownRegistry.register(
+        'queue_health_probe_close',
+        () => healthRoutes.closeQueueHealthProbe(),
+        5000,
+    );
+
     // Disconnect Prisma after write-behind and observability flushes.
     shutdownRegistry.register('prisma_disconnect', async () => {
         try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch { }
@@ -1419,10 +1433,7 @@ async function startServer() {
 
     // Disconnect Redis last (lazy health client + any others we own).
     shutdownRegistry.register('redis_disconnect', async () => {
-        const c = (typeof healthRoutes.getHealthRedisClient === 'function') ? healthRoutes.getHealthRedisClient() : null;
-        if (c && typeof c.quit === 'function') {
-            try { await c.quit(); } catch { }
-        }
+        try { await healthRoutes.closeHealthRedisClient(); } catch { }
     }, 5000);
 
     // Flush telemetry exporters before disconnecting persistence clients.

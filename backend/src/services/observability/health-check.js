@@ -122,11 +122,72 @@ async function checkRedis(redis) {
 }
 
 async function checkQueue(queue) {
-  if (!queue || typeof queue.getJobCounts !== "function") {
+  if (!queue) {
     // A degraded queue is still serviceable for synchronous chat;
     // mark non-critical so a stalled queue doesn't 503 the whole API.
     return { name: "queue", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_queue_provided" } };
   }
+
+  const registryProbe = typeof queue === "function"
+    ? queue
+    : (typeof queue.probe === "function" ? () => queue.probe() : null);
+  if (registryProbe) {
+    const start = Date.now();
+    try {
+      const snapshot = await registryProbe();
+      const queues = Array.isArray(snapshot?.queues) ? snapshot.queues : [];
+      const statusBySnapshot = {
+        ready: "healthy",
+        disabled: "skipped",
+        skipped: "skipped",
+        degraded: "degraded",
+        unhealthy: "unhealthy",
+      };
+      const criticalFailures = queues.filter(
+        (item) => item?.critical && item?.status === "unhealthy"
+      ).length;
+      let status = statusBySnapshot[snapshot?.status] || "degraded";
+      if (status === "unhealthy" && criticalFailures === 0) status = "degraded";
+      const details = {
+        status: snapshot?.status || "degraded",
+        total: queues.length,
+        ready: queues.filter((item) => item?.status === "ready").length,
+        degraded: queues.filter((item) => item?.status === "degraded").length,
+        unhealthy: queues.filter((item) => item?.status === "unhealthy").length,
+        skipped: queues.filter((item) => item?.status === "skipped").length,
+        criticalFailures,
+      };
+      return {
+        name: "queue",
+        status,
+        critical: criticalFailures > 0,
+        latency_ms: Date.now() - start,
+        details,
+      };
+    } catch {
+      // The shared registry catches individual queue errors. Reaching this
+      // branch means the aggregate probe itself failed, so criticality is
+      // unknown and must not drain an otherwise-serving instance.
+      return {
+        name: "queue", status: "degraded", critical: false,
+        latency_ms: Date.now() - start,
+        details: {
+          status: "degraded",
+          total: 0,
+          ready: 0,
+          degraded: 0,
+          unhealthy: 0,
+          skipped: 0,
+          criticalFailures: 0,
+        },
+      };
+    }
+  }
+
+  if (typeof queue.getJobCounts !== "function") {
+    return { name: "queue", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_queue_provided" } };
+  }
+
   const start = Date.now();
   try {
     const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");

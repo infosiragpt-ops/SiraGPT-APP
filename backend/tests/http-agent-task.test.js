@@ -249,6 +249,18 @@ describe('HTTP admin queue route', () => {
     assert.equal(res.body.ok, true);
     assert.equal(res.body.queueBoard.status, 'disabled');
     assert.equal(res.body.queueBoard.redisUrlConfigured, false);
+    assert.equal(res.body.queueBoard.counts, null);
+    assert.deepEqual(res.body.queueBoard.queueCounts, {
+      total: 5,
+      ready: 0,
+      degraded: 0,
+      unhealthy: 0,
+      skipped: 5,
+      criticalFailures: 0,
+    });
+    assert.equal(res.body.queueBoard.queues, undefined);
+    assert.equal(res.body.queueBoard.reason, undefined);
+    assert.doesNotMatch(JSON.stringify(res.body), /lastError/);
     assertContractResponse('admin.queues.status', 200, res.body);
   });
 });

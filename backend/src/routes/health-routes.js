@@ -30,6 +30,7 @@ const {
   runFullHealthCheck,
   reportToHttpStatus,
 } = require('../services/observability/health-check');
+const { probeQueueRegistry } = require('../services/queues/queue-registry');
 
 const noopStatus = () => ({});
 
@@ -38,6 +39,10 @@ const noopStatus = () => ({});
  *
  * @param {object} deps
  * @param {object} [deps.prisma]            Prisma client for the DB probe.
+ * @param {object|null} [deps.redis]         Optional injected Redis probe client.
+ * @param {object} [deps.queueRegistry]      Lazy shared queue registry.
+ * @param {object} [deps.queueHealthProbe]   Dedicated queue health runtime.
+ * @param {Function} [deps.queueProbe]       Optional queue probe override.
  * @param {object} [deps.coworkHealth]      Cowork subsystem health module.
  * @param {Function} [deps.getOpenTelemetryStatus]
  * @param {Function} [deps.getSentryStatus]
@@ -53,6 +58,9 @@ const noopStatus = () => ({});
 function createHealthRoutes(deps = {}) {
   const {
     prisma = null,
+    redis: injectedRedis = null,
+    queueRegistry = null,
+    queueHealthProbe = null,
     coworkHealth = null,
     getOpenTelemetryStatus = noopStatus,
     getSentryStatus = noopStatus,
@@ -61,6 +69,14 @@ function createHealthRoutes(deps = {}) {
     startupEnv = { checked: false, issues: [] },
     env = process.env,
   } = deps;
+  const hasInjectedRedis = Object.prototype.hasOwnProperty.call(deps, 'redis');
+  const queueProbe = typeof deps.queueProbe === 'function'
+    ? deps.queueProbe
+    : typeof queueHealthProbe?.probe === 'function'
+      ? () => queueHealthProbe.probe()
+      : queueRegistry
+        ? () => probeQueueRegistry({ registry: queueRegistry, env })
+        : null;
 
   const cacheTtlMs = typeof deps.cacheTtlMs === 'number'
     ? deps.cacheTtlMs
@@ -94,6 +110,7 @@ function createHealthRoutes(deps = {}) {
   // entries trigger a fresh probe. Liveness (/health/live) is NEVER cached —
   // it must always reflect the current process state.
   const healthCache = new Map();
+  const healthRefreshes = new Map();
 
   async function getCachedOrFresh(cacheKey, fetcher) {
     if (cacheTtlMs > 0) {
@@ -102,24 +119,43 @@ function createHealthRoutes(deps = {}) {
         return cached.report;
       }
     }
-    const report = await fetcher();
-    if (cacheTtlMs > 0) {
-      healthCache.set(cacheKey, { at: Date.now(), report });
-      // Prevent unbounded growth (should never exceed 2-3 entries in practice)
-      if (healthCache.size > 10) {
-        const now = Date.now();
-        for (const [key, entry] of healthCache) {
-          if ((now - entry.at) > cacheTtlMs * 2) healthCache.delete(key);
-        }
-      }
+    const existingRefresh = healthRefreshes.get(cacheKey);
+    if (existingRefresh) return existingRefresh;
+
+    let fetchPromise;
+    try {
+      fetchPromise = Promise.resolve(fetcher());
+    } catch (error) {
+      fetchPromise = Promise.reject(error);
     }
-    return report;
+    const refresh = fetchPromise
+      .then((report) => {
+        if (cacheTtlMs > 0) {
+          healthCache.set(cacheKey, { at: Date.now(), report });
+          // Prevent unbounded growth (should never exceed 2-3 entries in practice)
+          if (healthCache.size > 10) {
+            const now = Date.now();
+            for (const [key, entry] of healthCache) {
+              if ((now - entry.at) > cacheTtlMs * 2) healthCache.delete(key);
+            }
+          }
+        }
+        return report;
+      })
+      .finally(() => {
+        if (healthRefreshes.get(cacheKey) === refresh) {
+          healthRefreshes.delete(cacheKey);
+        }
+      });
+    healthRefreshes.set(cacheKey, refresh);
+    return refresh;
   }
 
   // A dedicated, lazy IORedis client is used only for the health probe so a
   // flaky Redis can't poison the live BullMQ queue connection.
   let _healthRedisClient = null;
   function getHealthRedisClient() {
+    if (hasInjectedRedis) return injectedRedis;
     if (!env.REDIS_URL) return null;
     if (_healthRedisClient) return _healthRedisClient;
     try {
@@ -139,6 +175,44 @@ function createHealthRoutes(deps = {}) {
     } catch (_e) {
       return null;
     }
+  }
+
+  let queueHealthClosePromise = null;
+  function closeQueueHealthProbe() {
+    if (queueHealthClosePromise) return queueHealthClosePromise;
+    queueHealthClosePromise = typeof queueHealthProbe?.close === 'function'
+      ? Promise.resolve().then(() => queueHealthProbe.close())
+      : Promise.resolve();
+    return queueHealthClosePromise;
+  }
+
+  let healthRedisClosePromise = null;
+  function closeHealthRedisClient() {
+    if (healthRedisClosePromise) return healthRedisClosePromise;
+    const client = _healthRedisClient;
+    _healthRedisClient = null;
+    healthRedisClosePromise = (async () => {
+      if (!client) return;
+      try {
+        if (typeof client.quit === 'function') await client.quit();
+        else if (typeof client.disconnect === 'function') client.disconnect();
+      } catch (_) {
+        try { client.disconnect?.(); } catch (_disconnectError) { /* noop */ }
+      }
+    })();
+    return healthRedisClosePromise;
+  }
+
+  let closePromise = null;
+  function close() {
+    if (!closePromise) {
+      healthCache.clear();
+      closePromise = Promise.allSettled([
+        closeQueueHealthProbe(),
+        closeHealthRedisClient(),
+      ]).then(() => undefined);
+    }
+    return closePromise;
   }
 
   function sendHealthReport(res, report) {
@@ -168,7 +242,7 @@ function createHealthRoutes(deps = {}) {
       const report = await getCachedOrFresh('ready', () => runReadinessCheck({
         prisma,
         redis: getHealthRedisClient(),
-        queue: null,
+        queue: queueProbe,
       }));
       sendHealthReport(res, report);
     });
@@ -177,7 +251,7 @@ function createHealthRoutes(deps = {}) {
       const report = await getCachedOrFresh('full', () => runFullHealthCheck({
         prisma,
         redis: getHealthRedisClient(),
-        queue: null,
+        queue: queueProbe,
         telemetry: getOpenTelemetryStatus(),
         sentry: getSentryStatus(),
         langfuse: getLangfuseStatus(),
@@ -197,6 +271,9 @@ function createHealthRoutes(deps = {}) {
     setOAuthBootResult,
     getOAuthBootResult,
     getHealthRedisClient,
+    close,
+    closeHealthRedisClient,
+    closeQueueHealthProbe,
     sendHealthReport,
     getCachedOrFresh,
   };

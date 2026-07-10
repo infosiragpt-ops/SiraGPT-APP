@@ -40,6 +40,7 @@ const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
   'drain_inflight_requests',
   'write_behind_cache_flush',
   'bullmq_workers_close',
+  'queue_health_probe_close',
   'observability_flush',
   'prisma_disconnect',
   'redis_disconnect',
