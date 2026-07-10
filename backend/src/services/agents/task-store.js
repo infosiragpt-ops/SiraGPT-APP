@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const taskStorePrismaSync = require('./task-store-prisma-sync');
+const agentMetrics = require('./metrics');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -76,6 +77,10 @@ function sanitizeTaskRecord(record = {}) {
     cancelledAt: record.cancelledAt || null,
     completedAt: record.completedAt || null,
     failedAt: record.failedAt || null,
+    terminalMetricRecorded: record.terminalMetricRecorded === true,
+    terminalMetricStatus: ['success', 'error', 'cancelled'].includes(record.terminalMetricStatus)
+      ? record.terminalMetricStatus
+      : null,
     maxSteps: record.maxSteps || null,
     maxRuntimeMs: record.maxRuntimeMs || null,
     streamState: record.streamState || { steps: [], artifacts: [], finalText: '', done: false },
@@ -237,7 +242,11 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
       next.artifacts = [...current, stamped.artifact];
     }
   }
-  const written = writeTaskSnapshot(next);
+  const written = persistTerminalMetricObservation({
+    current: existing,
+    observedStatus: terminalStatusObservedByEvent(stamped, snapshotLike.status),
+    persist: (markerPatch) => writeTaskSnapshot({ ...next, ...markerPatch }),
+  });
   taskStorePrismaSync.schedulePrismaSync(written, stamped);
   return written;
 }
@@ -246,9 +255,54 @@ function shouldCheckpoint(event) {
   return ['meta', 'queue_status', 'document_policy', 'framework_status', 'human_approval_required', 'human_approval_resolved', 'checkpoint', 'quality_gate', 'repair_attempt', 'step_start', 'step_done', 'file_artifact', 'final_text', 'done', 'error'].includes(event.type);
 }
 
-const TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'error', 'failed']);
+const TERMINAL_STATUS_TO_METRIC_STATUS = Object.freeze({
+  completed: 'success',
+  error: 'error',
+  failed: 'error',
+  cancelled: 'cancelled',
+});
+const TERMINAL_STATUSES = new Set(Object.keys(TERMINAL_STATUS_TO_METRIC_STATUS));
 const AUTO_COMPACT_EVENT_THRESHOLD = 400;
 const AUTO_COMPACT_KEEP_RECENT = 150;
+
+function terminalStatusObservedByEvent(event, snapshotStatus) {
+  if (TERMINAL_STATUSES.has(snapshotStatus)) return snapshotStatus;
+  if (event?.type === 'done') {
+    return event.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+  }
+  return null;
+}
+
+/**
+ * Persist a local terminal-observation marker and then increment the process
+ * counter once for this snapshot. This is deliberately not a durable/CAS
+ * guarantee: concurrent replicas and a crash between the local write and the
+ * counter update still require the U0 transactional outbox.
+ */
+function persistTerminalMetricObservation({
+  current,
+  observedStatus,
+  persist,
+}) {
+  const metricStatus = TERMINAL_STATUS_TO_METRIC_STATUS[observedStatus] || null;
+  const alreadyRecorded = current?.terminalMetricRecorded === true;
+  const markerPatch = metricStatus
+    ? {
+      terminalMetricRecorded: true,
+      terminalMetricStatus: current?.terminalMetricStatus || metricStatus,
+    }
+    : {};
+  const written = persist(markerPatch);
+
+  if (written && metricStatus && !alreadyRecorded) {
+    try {
+      agentMetrics.counter('agent_task_terminal_total', { status: metricStatus });
+    } catch {
+      // Best-effort process telemetry must never alter the task transition.
+    }
+  }
+  return written;
+}
 
 function markTaskStatus(taskLike, status, patch = {}) {
   if (!taskLike?.taskId || !taskLike?.userId) return null;
@@ -259,11 +313,18 @@ function markTaskStatus(taskLike, status, patch = {}) {
   if (status === 'completed' && statusPatch.runnerCheckpoint === undefined) statusPatch.runnerCheckpoint = null;
   if (status === 'completed') statusPatch.completedAt = patch.completedAt || stamp;
   if (status === 'cancelled') statusPatch.cancelledAt = patch.cancelledAt || stamp;
-  if (status === 'error') statusPatch.failedAt = patch.failedAt || stamp;
+  if (status === 'error' || status === 'failed') statusPatch.failedAt = patch.failedAt || stamp;
   const existing = getTaskSnapshotForUser(taskLike.taskId, taskLike.userId);
-  let result;
-  if (!existing) result = writeTaskSnapshot({ ...taskLike, ...statusPatch });
-  else result = updateTaskSnapshot(taskLike.taskId, taskLike.userId, statusPatch);
+  const current = existing || sanitizeTaskRecord(taskLike);
+  const result = persistTerminalMetricObservation({
+    current,
+    observedStatus: status,
+    persist: (markerPatch) => {
+      const nextPatch = { ...statusPatch, ...markerPatch };
+      if (!existing) return writeTaskSnapshot({ ...taskLike, ...nextPatch });
+      return updateTaskSnapshot(taskLike.taskId, taskLike.userId, nextPatch);
+    },
+  });
 
   // Auto-compact long traces when the task reaches a terminal state.
   // The compaction runs after the status write so a crash mid-compact
@@ -720,18 +781,14 @@ function recoverStaleRunningTasks({
       id: `${snapshot.taskId}:${seq}`,
     };
     const events = trimEvents([...(snapshot.events || []), recoveryEvent]);
-    const next = sanitizeTaskRecord({
-      ...snapshot,
-      status: markAs,
-      failedAt: markAs === 'error' ? stamp : snapshot.failedAt,
-      cancelledAt: markAs === 'cancelled' ? stamp : snapshot.cancelledAt,
-      updatedAt: stamp,
+    const next = markTaskStatus(snapshot, markAs, {
+      ...(markAs === 'error' || markAs === 'failed' ? { failedAt: stamp } : {}),
+      ...(markAs === 'cancelled' ? { cancelledAt: stamp } : {}),
       events,
       lastEventSeq: seq,
       streamState: { ...(snapshot.streamState || {}), done: true, error: reason },
     });
-    atomicWriteJson(snapshotPathFor(snapshot.taskId), next);
-    try { updateIndexForSnapshot(next); } catch { /* ignore */ }
+    if (!next) continue;
     recovered.push({ taskId: snapshot.taskId, userId: snapshot.userId, previousStatus: snapshot.status });
   }
   return { recovered, skipped, count: recovered.length, skippedCount: skipped.length };
@@ -1046,6 +1103,8 @@ function compressSnapshotBytes(rawBytes) {
       completedAt: parsed.completedAt,
       failedAt: parsed.failedAt,
       cancelledAt: parsed.cancelledAt,
+      terminalMetricRecorded: parsed.terminalMetricRecorded === true,
+      terminalMetricStatus: parsed.terminalMetricStatus || null,
       displayGoal: parsed.displayGoal,
       model: parsed.model,
       eventCount: Array.isArray(parsed.events) ? parsed.events.length : 0,

@@ -86,9 +86,9 @@ function overflowLabelKey(labelNames) {
 }
 
 /**
- * Pick a bounded series key. Counters and histograms reserve one slot for an
- * aggregate overflow series. Gauges retain the first N keys and drop later
- * new keys because folding unrelated point-in-time values is misleading.
+ * Pick a bounded series key in O(1). Counters and histograms reserve one slot
+ * for a single global overflow series. Gauges retain the first N keys and drop
+ * later new keys because folding unrelated point-in-time values is misleading.
  */
 function selectSeriesKey(metric, labels) {
   const key = createLabelKey(metric.labels, labels);

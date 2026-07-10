@@ -1,5 +1,7 @@
 'use strict';
 
+const { refreshQueueMetrics } = require('../../utils/metrics');
+
 const JOB_STATES = Object.freeze([
   'waiting',
   'active',
@@ -62,6 +64,9 @@ const MIN_QUEUE_PROBE_TIMEOUT_MS = 100;
 const MAX_QUEUE_PROBE_TIMEOUT_MS = 10000;
 const DEFAULT_QUEUE_PROBE_CACHE_TTL_MS = 1000;
 const MAX_QUEUE_PROBE_CACHE_TTL_MS = 5000;
+const DEFAULT_QUEUE_METRICS_REFRESH_INTERVAL_MS = 30_000;
+const MIN_QUEUE_METRICS_REFRESH_INTERVAL_MS = 1_000;
+const MAX_QUEUE_METRICS_REFRESH_INTERVAL_MS = 300_000;
 
 // Keep module loading lazy as well as Queue construction lazy. Listing this
 // registry is used on no-Redis deployments and must not pull queue modules (or
@@ -260,6 +265,7 @@ async function probeQueueRegistry({
   getQueue = (definition) => definition.getter(),
   onFailure = null,
   onTimeout = null,
+  now = Date.now,
 } = {}) {
   if (!registry || typeof registry.list !== 'function') {
     throw new TypeError('queue registry with list() is required');
@@ -269,7 +275,7 @@ async function probeQueueRegistry({
   if (!lastErrorsByRegistry.has(registry)) lastErrorsByRegistry.set(registry, errors);
 
   if (!env.REDIS_URL) {
-    return {
+    const snapshot = {
       status: 'disabled',
       reason: 'REDIS_URL is not configured',
       queues: definitions.map((definition) => emptyQueueSnapshot(definition, {
@@ -277,6 +283,8 @@ async function probeQueueRegistry({
         lastError: errors.get(definition.name) || null,
       })),
     };
+    refreshQueueMetrics(snapshot, { nowMs: now() });
+    return snapshot;
   }
 
   const timeoutMs = getQueueProbeTimeoutMs(env);
@@ -292,13 +300,26 @@ async function probeQueueRegistry({
   let status = 'ready';
   if (queues.some((queue) => queue.status === 'unhealthy')) status = 'unhealthy';
   else if (queues.some((queue) => queue.status === 'degraded')) status = 'degraded';
-  return { status, queues };
+  const snapshot = { status, queues };
+  refreshQueueMetrics(snapshot, { nowMs: now() });
+  return snapshot;
 }
 
 function getQueueProbeCacheTtlMs(env = process.env) {
   const parsed = Number.parseInt(env.HEALTH_QUEUE_PROBE_CACHE_TTL_MS, 10);
   if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_QUEUE_PROBE_CACHE_TTL_MS;
   return Math.min(MAX_QUEUE_PROBE_CACHE_TTL_MS, parsed);
+}
+
+function getQueueMetricsRefreshIntervalMs(env = process.env) {
+  const parsed = Number.parseInt(env.HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_QUEUE_METRICS_REFRESH_INTERVAL_MS;
+  }
+  return Math.min(
+    MAX_QUEUE_METRICS_REFRESH_INTERVAL_MS,
+    Math.max(MIN_QUEUE_METRICS_REFRESH_INTERVAL_MS, parsed),
+  );
 }
 
 function healthRedisConnectionOptions(env = process.env) {
@@ -353,9 +374,12 @@ function createQueueHealthProbeRuntime({
   registry = defaultQueueRegistry,
   env = process.env,
   cacheTtlMs = getQueueProbeCacheTtlMs(env),
+  metricsRefreshIntervalMs = getQueueMetricsRefreshIntervalMs(env),
   createConnection = defaultCreateHealthConnection,
   createQueue = defaultCreateHealthQueue,
   now = Date.now,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
 } = {}) {
   const instances = new Map();
   const boundedCacheTtlMs = Number.isFinite(cacheTtlMs)
@@ -365,6 +389,14 @@ function createQueueHealthProbeRuntime({
   let inFlight = null;
   let closePromise = null;
   let closed = false;
+  let refreshTimer = null;
+  let startPromise = null;
+  const boundedMetricsRefreshIntervalMs = Number.isFinite(metricsRefreshIntervalMs)
+    ? Math.min(
+      MAX_QUEUE_METRICS_REFRESH_INTERVAL_MS,
+      Math.max(MIN_QUEUE_METRICS_REFRESH_INTERVAL_MS, Math.trunc(metricsRefreshIntervalMs)),
+    )
+    : DEFAULT_QUEUE_METRICS_REFRESH_INTERVAL_MS;
 
   function instanceKey(definition) {
     return definition.id || definition.name;
@@ -433,6 +465,7 @@ function createQueueHealthProbeRuntime({
         env,
         getQueue: getHealthQueue,
         onFailure: resetHealthQueue,
+        now,
       }))
       .then((snapshot) => {
         if (!closed && boundedCacheTtlMs > 0) {
@@ -445,6 +478,30 @@ function createQueueHealthProbeRuntime({
       });
     inFlight = current;
     return current;
+  }
+
+  function runScheduledRefresh() {
+    return probe({ bypassCache: true }).catch(() => null);
+  }
+
+  function start() {
+    if (closed) return Promise.resolve(disabledSnapshot('queue health probe is closed'));
+    if (refreshTimer) {
+      return startPromise || Promise.resolve(cached?.snapshot || disabledSnapshot('queue refresh already started'));
+    }
+    refreshTimer = setIntervalFn(runScheduledRefresh, boundedMetricsRefreshIntervalMs);
+    if (typeof refreshTimer?.unref === 'function') refreshTimer.unref();
+    startPromise = runScheduledRefresh().finally(() => {
+      startPromise = null;
+    });
+    return startPromise;
+  }
+
+  function stop() {
+    if (!refreshTimer) return false;
+    clearIntervalFn(refreshTimer);
+    refreshTimer = null;
+    return true;
   }
 
   async function closeInstance(instance) {
@@ -466,6 +523,7 @@ function createQueueHealthProbeRuntime({
 
   function close() {
     if (closePromise) return closePromise;
+    stop();
     closed = true;
     cached = null;
     const activeProbe = inFlight;
@@ -480,6 +538,8 @@ function createQueueHealthProbeRuntime({
   }
 
   return Object.freeze({
+    start,
+    stop,
     probe,
     close,
   });
@@ -492,6 +552,7 @@ const defaultQueueHealthProbe = createQueueHealthProbeRuntime({
 
 module.exports = {
   DEFAULT_QUEUE_IDS,
+  DEFAULT_QUEUE_METRICS_REFRESH_INTERVAL_MS,
   DEFAULT_QUEUE_PROBE_CACHE_TTL_MS,
   DEFAULT_QUEUE_PROBE_TIMEOUT_MS,
   DEFAULT_QUEUE_DEFINITIONS,
@@ -499,15 +560,18 @@ module.exports = {
   DEFAULT_PHYSICAL_QUEUE_NAMES,
   JOB_STATES,
   MAX_CRITICAL_QUEUES_ENV_CHARS,
+  MAX_QUEUE_METRICS_REFRESH_INTERVAL_MS,
   MAX_QUEUE_PROBE_CACHE_TTL_MS,
   MAX_QUEUE_PROBE_TIMEOUT_MS,
   MIN_QUEUE_PROBE_TIMEOUT_MS,
+  MIN_QUEUE_METRICS_REFRESH_INTERVAL_MS,
   buildDefaultQueueDefinitions,
   createDefaultQueueRegistry,
   createQueueHealthProbeRuntime,
   createQueueRegistry,
   defaultQueueHealthProbe,
   defaultQueueRegistry,
+  getQueueMetricsRefreshIntervalMs,
   getQueueProbeCacheTtlMs,
   getQueueProbeTimeoutMs,
   healthRedisConnectionOptions,

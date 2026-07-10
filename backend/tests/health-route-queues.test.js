@@ -7,11 +7,14 @@ const express = require('express');
 const request = require('supertest');
 
 const backendPackage = require('../package.json');
+const utilityMetrics = require('../src/utils/metrics');
 const {
   DEFAULT_QUEUE_IDS,
+  JOB_STATES,
   createDefaultQueueRegistry,
   createQueueHealthProbeRuntime,
   createQueueRegistry,
+  getQueueMetricsRefreshIntervalMs,
   getQueueProbeTimeoutMs,
   probeQueueRegistry,
 } = require('../src/services/queues/queue-registry');
@@ -152,6 +155,13 @@ test('queue probe timeout defaults to 1500ms and clamps positive overrides', () 
   assert.equal(getQueueProbeTimeoutMs({ HEALTH_QUEUE_PROBE_TIMEOUT_MS: '1' }), 100);
   assert.equal(getQueueProbeTimeoutMs({ HEALTH_QUEUE_PROBE_TIMEOUT_MS: '425' }), 425);
   assert.equal(getQueueProbeTimeoutMs({ HEALTH_QUEUE_PROBE_TIMEOUT_MS: '20000' }), 10000);
+});
+
+test('scheduled queue metric refresh interval is bounded and configurable', () => {
+  assert.equal(getQueueMetricsRefreshIntervalMs({}), 30_000);
+  assert.equal(getQueueMetricsRefreshIntervalMs({ HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: '5' }), 1_000);
+  assert.equal(getQueueMetricsRefreshIntervalMs({ HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: '45000' }), 45_000);
+  assert.equal(getQueueMetricsRefreshIntervalMs({ HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: '999999' }), 300_000);
 });
 
 test('dedicated health runtime never calls producer getters and uses bounded Redis options', async () => {
@@ -349,6 +359,54 @@ test('dedicated health runtime close prevents a scheduled probe from creating cl
   assert.equal(connectionsCreated, 0);
 });
 
+test('dedicated health runtime starts one immediate scheduled refresh and stops its timer', async () => {
+  let countCalls = 0;
+  const schedules = [];
+  const cleared = [];
+  const runtime = createQueueHealthProbeRuntime({
+    registry: createQueueRegistry({
+      definitions: [{ name: 'physical-scheduled', getter: () => ({}) }],
+    }),
+    env: { REDIS_URL: 'redis://configured' },
+    cacheTtlMs: 5_000,
+    metricsRefreshIntervalMs: 12_345,
+    createConnection: () => ({ on() {}, disconnect() {}, async quit() {} }),
+    createQueue: () => ({
+      async getJobCounts() {
+        countCalls += 1;
+        return { waiting: countCalls };
+      },
+      async isPaused() { return false; },
+      async close() {},
+    }),
+    setIntervalFn(callback, intervalMs) {
+      const timer = { callback, intervalMs, unrefCalled: false, unref() { this.unrefCalled = true; } };
+      schedules.push(timer);
+      return timer;
+    },
+    clearIntervalFn(timer) {
+      cleared.push(timer);
+    },
+  });
+
+  const first = await runtime.start();
+  assert.equal(first.status, 'ready');
+  assert.equal(countCalls, 1);
+  assert.equal(schedules.length, 1);
+  assert.equal(schedules[0].intervalMs, 12_345);
+  assert.equal(schedules[0].unrefCalled, true);
+
+  await schedules[0].callback();
+  assert.equal(countCalls, 2, 'scheduled refresh must bypass the readiness cache');
+  await runtime.start();
+  assert.equal(schedules.length, 1, 'start must be idempotent');
+
+  assert.equal(runtime.stop(), true);
+  assert.equal(runtime.stop(), false);
+  assert.deepEqual(cleared, [schedules[0]]);
+  await runtime.close();
+});
+
 test('queue probe is disabled and lists skipped queues without Redis or getter calls', async () => {
   let getterCalls = 0;
   const registry = createQueueRegistry({
@@ -408,6 +466,152 @@ test('queue probe returns counts and ready when every queue succeeds', async () 
   });
   assert.equal(snapshot.queues[0].lastError, null);
   assert.equal(snapshot.queues[1].isPaused, true);
+});
+
+test('queue probe refreshes low-cardinality job, up, and status gauges', async () => {
+  utilityMetrics._reset();
+  const counts = {
+    waiting: 3,
+    active: 1,
+    completed: 7,
+    failed: 0,
+    delayed: 2,
+    paused: 0,
+  };
+  const registry = createQueueRegistry({
+    definitions: [{
+      name: 'physical-agent-tasks',
+      getter: () => ({
+        async getJobCounts() {
+          return { ...counts };
+        },
+        async isPaused() {
+          return false;
+        },
+      }),
+    }],
+  });
+
+  await probeQueueRegistry({
+    registry,
+    env: { REDIS_URL: 'redis://configured' },
+  });
+
+  const jobs = utilityMetrics.registry.get('siragpt_queue_jobs');
+  const up = utilityMetrics.registry.get('siragpt_queue_probe_up');
+  const status = utilityMetrics.registry.get('siragpt_queue_probe_status');
+  assert.deepEqual(jobs.labels, ['queue', 'state']);
+  assert.deepEqual(up.labels, ['queue']);
+  assert.deepEqual(status.labels, ['status']);
+  assert.ok(jobs.maxSeries <= 100);
+  assert.ok(up.maxSeries <= 20);
+  assert.ok(status.maxSeries <= 10);
+  assert.equal(jobs.series.size, JOB_STATES.length);
+  assert.equal(jobs.series.get('queue=physical-agent-tasks,state=waiting'), 3);
+  assert.equal(jobs.series.get('queue=physical-agent-tasks,state=failed'), 0);
+  assert.equal(up.series.get('queue=physical-agent-tasks'), 1);
+  assert.equal(status.series.get('status=ready'), 1);
+
+  counts.waiting = 1;
+  counts.failed = 4;
+  await probeQueueRegistry({
+    registry,
+    env: { REDIS_URL: 'redis://configured' },
+  });
+
+  assert.equal(jobs.series.size, JOB_STATES.length);
+  assert.equal(jobs.series.get('queue=physical-agent-tasks,state=waiting'), 1);
+  assert.equal(jobs.series.get('queue=physical-agent-tasks,state=failed'), 4);
+});
+
+test('queue probe retains last-success timestamps and advances staleness after failures', () => {
+  utilityMetrics._reset();
+  const ready = {
+    status: 'ready',
+    queues: [{
+      name: 'physical-agent-tasks',
+      status: 'ready',
+      jobs: Object.fromEntries(JOB_STATES.map((state) => [state, 0])),
+    }],
+  };
+  const failed = {
+    status: 'degraded',
+    queues: [{
+      name: 'physical-agent-tasks',
+      status: 'degraded',
+      jobs: null,
+    }],
+  };
+
+  utilityMetrics.refreshQueueMetrics(ready, { nowMs: 100_000 });
+  const lastSuccess = utilityMetrics.registry.get(
+    'siragpt_queue_probe_last_success_timestamp_seconds',
+  );
+  const staleness = utilityMetrics.registry.get('siragpt_queue_probe_staleness_seconds');
+  assert.deepEqual(lastSuccess.labels, ['queue']);
+  assert.deepEqual(staleness.labels, ['queue']);
+  assert.equal(lastSuccess.series.get('queue=physical-agent-tasks'), 100);
+  assert.equal(staleness.series.get('queue=physical-agent-tasks'), 0);
+
+  utilityMetrics.refreshQueueMetrics(failed, { nowMs: 130_000 });
+  assert.equal(
+    lastSuccess.series.get('queue=physical-agent-tasks'),
+    100,
+    'a failed observation must not erase the last known success',
+  );
+  assert.equal(staleness.series.get('queue=physical-agent-tasks'), 30);
+
+  utilityMetrics.refreshQueueStalenessMetrics(145_000);
+  assert.equal(staleness.series.get('queue=physical-agent-tasks'), 45);
+});
+
+test('queue probe clears stale job gauges and never exports probe errors', async () => {
+  utilityMetrics._reset();
+  const sensitiveError = 'redis auth failed for redis://user:secret@private.example';
+  let shouldFail = false;
+  const registry = createQueueRegistry({
+    definitions: [{
+      name: 'physical-chat-runs',
+      getter: () => ({
+        async getJobCounts() {
+          if (shouldFail) throw new Error(sensitiveError);
+          return { waiting: 9, failed: 2 };
+        },
+        async isPaused() {
+          return false;
+        },
+      }),
+    }],
+  });
+
+  await probeQueueRegistry({
+    registry,
+    env: { REDIS_URL: 'redis://configured' },
+  });
+  shouldFail = true;
+  const snapshot = await probeQueueRegistry({
+    registry,
+    env: { REDIS_URL: 'redis://configured' },
+  });
+
+  assert.equal(snapshot.status, 'degraded');
+  assert.match(snapshot.queues[0].lastError, /redis auth failed/);
+  assert.equal(utilityMetrics.registry.get('siragpt_queue_jobs').series.size, 0);
+  assert.equal(
+    utilityMetrics.registry
+      .get('siragpt_queue_probe_up')
+      .series
+      .get('queue=physical-chat-runs'),
+    0,
+  );
+  assert.equal(
+    utilityMetrics.registry
+      .get('siragpt_queue_probe_status')
+      .series
+      .get('status=degraded'),
+    1,
+  );
+  assert.doesNotMatch(utilityMetrics.renderText(), /secret|private\.example|auth failed/i);
 });
 
 test('queue probe degrades on a noncritical failure and is unhealthy on a critical failure', async () => {

@@ -112,10 +112,11 @@ The backend exposes Prometheus text format on two equivalent paths:
 - `GET /metrics` — public scrape path
 - `GET /internal/metrics` — alias intended for ingress allow-listing
 
-Both render from a single in-process registry
-(`services/agents/metrics.js`). New metric families are registered via
-`registerCounter` / `registerHistogram` / `registerGauge`. Reusing the
-shared registry means there's exactly one scrape endpoint per process.
+Both render one canonical exposition composed from the utility, agent,
+process, cognitive, and fallback registries by
+`services/observability/metrics-exposition.js`. New operational families
+should normally use `utils/metrics.js`; there is still exactly one scrape
+body per process.
 
 ### RED method (Rate / Errors / Duration) per endpoint
 
@@ -197,6 +198,7 @@ For metrics, hit `curl localhost:3001/internal/metrics`. For logs,
 | `backend/tests/sira-health-and-metrics.test.js`   | Sira pipeline metric families end-to-end     |
 | `backend/tests/sentry-observability.test.js`      | Sentry init + capture wiring                 |
 | `backend/tests/metrics-registry.test.js`          | `utils/metrics.js` counter/gauge/histogram + helpers |
+| `backend/tests/prometheus-rules-contract.test.js` | Unified inventory, ratio semantics, queue alerts, optional `promtool` fixture |
 | `backend/tests/request-logger.test.js`            | Structured request logger middleware         |
 
 ## Health + Prometheus endpoints
@@ -213,35 +215,84 @@ The backend now ships three top-level observability endpoints:
 
 | Family                                         | Type      | Labels                  | Source                                  |
 |------------------------------------------------|-----------|-------------------------|-----------------------------------------|
-| `siragpt_http_requests_total`                  | counter   | method, route, status   | HTTP middleware in `index.js`           |
-| `siragpt_http_request_duration_seconds_*`      | histogram | method, route + le      | HTTP middleware in `index.js`           |
+| `siragpt_http_requests_total`                  | counter   | method, route, status, request_class | HTTP middleware in `index.js` |
+| `siragpt_http_request_duration_seconds_*`      | histogram | method, route, request_class + le | HTTP middleware in `index.js` |
+| `siragpt_http_slo_requests_total`              | counter   | request_class, status_class | Low-cardinality HTTP SLO path in `index.js` |
+| `siragpt_http_slo_request_duration_seconds_*`  | histogram | request_class + le      | Low-cardinality HTTP SLO path in `index.js` |
 | `siragpt_circuit_breaker_state`                | gauge     | name                    | `utils/circuit-breaker.js` → `metrics.trackCircuitBreaker` (0=closed, 1=half_open, 2=open) |
+| `agent_task_terminal_total`                    | counter   | status                  | Best-effort in-process terminal observation (`success`, `error`, `cancelled`) |
+| `siragpt_queue_jobs`                           | gauge     | queue, state            | Shared bounded queue health probe       |
+| `siragpt_queue_probe_up`                       | gauge     | queue                   | Shared queue probe (1=ready, 0=failed)  |
+| `siragpt_queue_probe_status`                   | gauge     | status                  | Aggregate probe status                  |
+| `siragpt_queue_probe_last_success_timestamp_seconds` | gauge | queue              | Last successful queue observation       |
+| `siragpt_queue_probe_staleness_seconds`        | gauge     | queue                   | Age of the last successful observation  |
 | `siragpt_async_guards_active`                  | gauge     | —                       | `utils/async-guard.js` register/settle  |
 | `siragpt_analyzer_cache_hits_total`            | counter   | —                       | Delta-sampled from analyzer health snapshot on each `/metrics` scrape |
 | `siragpt_analyzer_cache_misses_total`          | counter   | —                       | Same                                    |
 | `siragpt_process_uptime_seconds`               | gauge     | —                       | `process.uptime()`                      |
 | `siragpt_nodejs_memory_bytes`                  | gauge     | type=rss/heapUsed/heapTotal/external | `process.memoryUsage()`        |
 
-Legacy series (`http_requests_total`, `agent_task_*`, `se_agent_*`) keep
-flowing through `services/agents/metrics.js` and remain exposed on
-`/internal/metrics` and `/api/se-agents/metrics`.
+Additional lifecycle and framework series (`agent_task_invocations_total`,
+`se_agent_*`) keep flowing through `services/agents/metrics.js` and
+remain exposed in the same canonical body. The invocation counter is
+diagnostic lifecycle telemetry; SLO rules use
+`agent_task_terminal_total`.
+
+The terminal counter uses a local snapshot marker to deduplicate event-first
+and status-first writes in one task store. It is not durable/CAS telemetry:
+a crash can lose an increment and concurrent replicas can race. Summing
+`rate()` across replicas assumes one execution owner per task; asymmetric
+duplicates or misses bias the success ratio. U0 must add a transactional
+outbox before this family becomes an authoritative completion ledger.
+
+`request_class` is deliberately bounded to `standard`, `streaming`, and
+`health`. Health-path matching takes precedence; otherwise an
+SSE `Content-Type: text/event-stream` response is `streaming`, and the
+remaining responses are `standard`. HTTP SLO rules select only
+`request_class="standard"` from the dedicated `siragpt_http_slo_*`
+families. Their only other dimension, `status_class`, is bounded to
+`1xx`, `2xx`, `3xx`, `4xx`, `5xx`, or `other`. Normal traffic can
+therefore create at most 18 SLO counter series and three SLO histogram
+series. Every request records both the detailed and SLO families.
+
+Detailed request and duration families retain route-level diagnostics.
+When either reaches `maxSeries`, all labels fold into one global
+`__other__` series using an O(1) lookup; no preserved-label tuple can
+create extra overflow series. SLO computations remain complete because
+they are isolated from detailed-family overflow.
+
+Queue metrics refresh on server startup and every 30 seconds, then stop
+during the scheduler shutdown phase. The interval is configurable with
+`HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS` (bounded to 1–300 seconds).
+Backlog alerts filter each instance's sample through
+`probe_up == 1` and `staleness_seconds <= 120` before aggregating by queue.
 
 ### Sample Grafana / PromQL queries
 
 ```promql
 # Request rate per route (5-minute window)
-sum by (route) (rate(siragpt_http_requests_total[5m]))
+sum by (route) (rate(siragpt_http_requests_total{request_class="standard"}[5m]))
 
-# Error rate (5xx) per route
-sum by (route) (rate(siragpt_http_requests_total{status=~"5.."}[5m]))
-  / sum by (route) (rate(siragpt_http_requests_total[5m]))
+# SLO error fraction (5xx, all standard business requests)
+sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[5m]))
+  / sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[5m]))
 
-# p95 latency per route
+# SLO p95 latency (all standard business requests)
 histogram_quantile(0.95,
-  sum by (route, le) (rate(siragpt_http_request_duration_seconds_bucket[5m])))
+  sum by (le) (rate(siragpt_http_slo_request_duration_seconds_bucket{request_class="standard"}[5m])))
+
+# Diagnostic p95 latency per route (best effort after detailed-series overflow)
+histogram_quantile(0.95,
+  sum by (route, le) (rate(siragpt_http_request_duration_seconds_bucket{request_class="standard"}[5m])))
 
 # Currently-open circuit breakers
 siragpt_circuit_breaker_state == 2
+
+# Waiting BullMQ jobs without multiplying replica observations
+max by (queue) (siragpt_queue_jobs{state="waiting"})
+
+# Queue observation age by physical queue
+max by (queue) (siragpt_queue_probe_staleness_seconds)
 
 # Analyzer cache hit ratio
 rate(siragpt_analyzer_cache_hits_total[5m])

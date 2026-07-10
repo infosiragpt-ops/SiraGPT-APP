@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const taskStore = require('../src/services/agents/task-store');
+const agentMetrics = require('../src/services/agents/metrics');
 
 test('agent task store: writes and reads a durable task snapshot', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-task-store-'));
@@ -109,6 +110,141 @@ test('agent task store: marks terminal status with timestamps and stats', () => 
   assert.equal(done.status, 'completed');
   assert.equal(done.stats.artifacts, 1);
   assert.ok(done.completedAt);
+});
+
+test('agent task store: records each terminal transition exactly once across execution paths', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-terminal-metric-'));
+  agentMetrics._reset();
+
+  const cases = [
+    { taskId: 'worker-path', terminal: 'completed', metricStatus: 'success' },
+    { taskId: 'direct-path', terminal: 'error', metricStatus: 'error' },
+    { taskId: 'fallback-path', terminal: 'cancelled', metricStatus: 'cancelled' },
+    { taskId: 'failed-alias-path', terminal: 'failed', metricStatus: 'error' },
+  ];
+  for (const entry of cases) {
+    const running = taskStore.writeTaskSnapshot({
+      taskId: entry.taskId,
+      userId: 'terminal-user',
+      status: 'running',
+    });
+    const first = taskStore.markTaskStatus(running, entry.terminal);
+    assert.equal(first.terminalMetricStatus, entry.metricStatus);
+    assert.equal(first.terminalMetricRecorded, true);
+
+    // Worker completion callbacks, direct-route finalizers, and fallback
+    // handlers can all repeat a terminal write. None may double-count.
+    taskStore.appendTaskEvent(
+      first,
+      entry.terminal === 'completed'
+        ? { type: 'done', stoppedReason: 'completed' }
+        : { type: 'error', message: entry.terminal },
+      { ...(first.streamState || {}), done: true },
+    );
+    taskStore.markTaskStatus(first, entry.terminal);
+    taskStore.markTaskStatus(first, entry.terminal === 'completed' ? 'error' : 'completed');
+  }
+
+  const metric = agentMetrics.registry.get('agent_task_terminal_total');
+  assert.ok(metric, 'shared terminal counter must be registered');
+  assert.deepEqual(metric.labels, ['status']);
+  assert.equal(metric.series.get('status=success'), 1);
+  assert.equal(metric.series.get('status=error'), 2);
+  assert.equal(metric.series.get('status=cancelled'), 1);
+  assert.equal(
+    Array.from(metric.series.values()).reduce((sum, value) => sum + value, 0),
+    cases.length,
+  );
+});
+
+test('agent task store: runner terminal events record before the later status mark exactly once', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-terminal-event-order-'));
+  agentMetrics._reset();
+
+  const cases = [
+    {
+      taskId: 'runner-error-first',
+      event: { type: 'error', message: 'provider failed' },
+      statusAtEmit: 'error',
+      terminalStatus: 'error',
+      metricStatus: 'error',
+    },
+    {
+      taskId: 'runner-done-first',
+      event: { type: 'done', stoppedReason: 'completed' },
+      statusAtEmit: 'running',
+      terminalStatus: 'completed',
+      metricStatus: 'success',
+    },
+    {
+      taskId: 'runner-aborted-done-first',
+      event: { type: 'done', stoppedReason: 'aborted' },
+      statusAtEmit: 'running',
+      terminalStatus: 'cancelled',
+      metricStatus: 'cancelled',
+    },
+  ];
+
+  for (const entry of cases) {
+    const task = taskStore.writeTaskSnapshot({
+      taskId: entry.taskId,
+      userId: 'runner-order-user',
+      status: 'running',
+      streamState: { steps: [], artifacts: [], finalText: '', done: false },
+    });
+    task.status = entry.statusAtEmit;
+
+    taskStore.appendTaskEvent(task, entry.event, {
+      ...task.streamState,
+      done: true,
+      error: entry.event.type === 'error' ? entry.event.message : null,
+    });
+
+    const afterEvent = taskStore.getTaskSnapshotForUser(entry.taskId, task.userId);
+    assert.equal(afterEvent.terminalMetricRecorded, true);
+    assert.equal(afterEvent.terminalMetricStatus, entry.metricStatus);
+
+    // The real runner mutates its local task after emit(done), then performs
+    // the authoritative status write. That second observation must dedupe.
+    task.status = entry.terminalStatus;
+    taskStore.markTaskStatus(task, entry.terminalStatus);
+  }
+
+  const metric = agentMetrics.registry.get('agent_task_terminal_total');
+  assert.equal(metric.series.get('status=success'), 1);
+  assert.equal(metric.series.get('status=error'), 1);
+  assert.equal(metric.series.get('status=cancelled'), 1);
+});
+
+test('agent task store: stale-task recovery uses the shared terminal transition metric', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-terminal-recovery-'));
+  agentMetrics._reset();
+  taskStore.writeTaskSnapshot({
+    taskId: 'stale-fallback',
+    userId: 'terminal-user',
+    status: 'running',
+    updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  const recovered = taskStore.recoverStaleRunningTasks({ staleAfterMs: 60_000 });
+  assert.equal(recovered.count, 1);
+  assert.equal(
+    agentMetrics.registry
+      .get('agent_task_terminal_total')
+      ?.series
+      .get('status=error'),
+    1,
+  );
+
+  // A second recovery scan sees no running task and cannot increment again.
+  assert.equal(taskStore.recoverStaleRunningTasks({ staleAfterMs: 60_000 }).count, 0);
+  assert.equal(
+    agentMetrics.registry
+      .get('agent_task_terminal_total')
+      ?.series
+      .get('status=error'),
+    1,
+  );
 });
 
 test('agent task store: trims event history to the configured limit', () => {

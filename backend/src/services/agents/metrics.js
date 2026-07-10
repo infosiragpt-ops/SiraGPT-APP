@@ -102,7 +102,11 @@ registerGauge('se_agent_rag_chunks', {
   labels: ['collection'],
 });
 registerCounter('agent_task_invocations_total', {
-  help: 'Total long-running chat agent tasks by terminal status',
+  help: 'Long-running chat agent lifecycle observations by invocation status',
+  labels: ['status'],
+});
+registerCounter('agent_task_terminal_total', {
+  help: 'Best-effort in-process task terminal observations by outcome (success, error, cancelled)',
   labels: ['status'],
 });
 registerCounter('agent_task_events_total', {

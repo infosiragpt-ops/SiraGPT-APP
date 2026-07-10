@@ -530,6 +530,8 @@ test('combined exposition safely escapes malicious labels from both registries',
 
 test('shared path classifier excludes all metrics aliases and only those aliases', () => {
   const {
+    classifyRequestClass,
+    classifyStatusClass,
     isMetricsRequest,
     matchedRouteLabel,
   } = require('../src/services/observability/metrics-paths');
@@ -549,6 +551,54 @@ test('shared path classifier excludes all metrics aliases and only those aliases
     matchedRouteLabel({ baseUrl: '/api/users', route: { path: '/:id' } }),
     '/api/users/:id',
   );
+
+  const jsonResponse = {
+    getHeader(name) {
+      return String(name).toLowerCase() === 'content-type'
+        ? 'application/json; charset=utf-8'
+        : undefined;
+    },
+  };
+  const sseResponse = {
+    getHeader(name) {
+      return String(name).toLowerCase() === 'content-type'
+        ? 'Text/Event-Stream; charset=utf-8'
+        : undefined;
+    },
+  };
+  assert.equal(classifyRequestClass({ path: '/api/chats' }, jsonResponse), 'standard');
+  assert.equal(classifyRequestClass({ path: '/api/ai/generate' }, sseResponse), 'streaming');
+  for (const healthPath of [
+    '/health',
+    '/health/ready',
+    '/api/health/live',
+    '/healthz',
+    '/livez',
+    '/readyz',
+    '/api/ready',
+    '/internal/health/history',
+  ]) {
+    assert.equal(
+      classifyRequestClass({ originalUrl: `${healthPath}?probe=1` }, sseResponse),
+      'health',
+      healthPath,
+    );
+  }
+  assert.equal(
+    classifyRequestClass({ path: '/api/provider/health-report' }, jsonResponse),
+    'standard',
+  );
+  for (const [status, expected] of [
+    [100, '1xx'],
+    [204, '2xx'],
+    [302, '3xx'],
+    [404, '4xx'],
+    [503, '5xx'],
+    [99, 'other'],
+    ['not-a-status', 'other'],
+  ]) {
+    assert.equal(classifyStatusClass(status), expected);
+  }
 });
 
 test('matched route labels normalize obvious dynamic base segments only', () => {

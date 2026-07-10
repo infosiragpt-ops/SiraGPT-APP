@@ -41,6 +41,22 @@ test('internal probe scheduler starts only inside startServer', () => {
   assert.doesNotMatch(indexSource.slice(0, startServerAt), /internalHealthSystem\.startScheduler\(\)/);
 });
 
+test('queue metric refresh scheduler starts and stops with the server lifecycle', () => {
+  const startServerAt = indexSource.indexOf('async function startServer()');
+  const queueRefreshStartAt = indexSource.indexOf('defaultQueueHealthProbe.start()');
+  assert.ok(queueRefreshStartAt > startServerAt, 'queue refresh must start only inside startServer');
+  assert.doesNotMatch(
+    indexSource.slice(0, startServerAt),
+    /defaultQueueHealthProbe\.start\(\)/,
+  );
+
+  const schedulerStop = indexSource.match(
+    /shutdownRegistry\.register\(\s*'scheduler_stop',\s*\(\)\s*=>\s*\{([\s\S]*?)\},\s*5000,?\s*\);/,
+  );
+  assert.ok(schedulerStop, 'scheduler_stop shutdown phase must remain registered');
+  assert.match(schedulerStop[1], /defaultQueueHealthProbe\.stop\(\)/);
+});
+
 test('shared Prisma pool instrumentation feeds full health and Prometheus metrics', () => {
   const healthConstruction = indexSource.match(
     /const\s+healthRoutes\s*=\s*createHealthRoutes\(\{([\s\S]*?)\}\);/,
@@ -124,6 +140,7 @@ test('standard and production Docker backends pass through every operational con
     HEALTH_SCHEDULE_PROVIDER_PROBES: 'false',
     HEALTH_QUEUE_PROBE_TIMEOUT_MS: '1500',
     HEALTH_QUEUE_PROBE_CACHE_TTL_MS: '1000',
+    HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: '30000',
     HEALTH_CRITICAL_QUEUES: '',
     DATABASE_POOL_MIN: '2',
     DATABASE_POOL_MAX: '10',

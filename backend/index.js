@@ -698,6 +698,8 @@ app.use(requestLogger);
 // shared scrape paths (to avoid scrape-induced self-observation).
 const siraMetrics = require('./src/utils/metrics');
 const {
+    classifyRequestClass,
+    classifyStatusClass,
     isMetricsRequest,
     matchedRouteLabel,
 } = require('./src/services/observability/metrics-paths');
@@ -707,15 +709,26 @@ app.use((req, res, next) => {
     res.on('finish', () => {
         try {
             const route = matchedRouteLabel(req);
+            const requestClass = classifyRequestClass(req, res);
+            const statusClass = classifyStatusClass(res.statusCode);
             const durSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
             siraMetrics.counter('siragpt_http_requests_total', {
                 method: req.method,
                 route,
                 status: String(res.statusCode),
+                request_class: requestClass,
+            });
+            siraMetrics.counter('siragpt_http_slo_requests_total', {
+                request_class: requestClass,
+                status_class: statusClass,
             });
             siraMetrics.observe('siragpt_http_request_duration_seconds', {
                 method: req.method,
                 route,
+                request_class: requestClass,
+            }, durSeconds);
+            siraMetrics.observe('siragpt_http_slo_request_duration_seconds', {
+                request_class: requestClass,
             }, durSeconds);
         } catch { /* never throw from instrumentation */ }
     });
@@ -1346,6 +1359,9 @@ async function startServer() {
     // Sampling is a runtime lifecycle concern: never start timers merely by
     // importing index.js in tests or tooling.
     internalHealthSystem.startScheduler();
+    defaultQueueHealthProbe.start().catch((err) => {
+        logger.warn({ err: err && err.message }, 'queue_metrics_refresh_start_failed');
+    });
     startDatabasePoolAutoscaler();
 
     recoverAgentTasksAfterBoot({ logger });
@@ -1534,6 +1550,7 @@ async function startServer() {
     // Scheduler stop runs first so jobs cannot enqueue new work.
     shutdownRegistry.register('scheduler_stop', () => {
         try { internalHealthSystem.stopScheduler(); } catch { }
+        try { defaultQueueHealthProbe.stop(); } catch { }
         try { scheduler.stop?.(); } catch { }
         try {
             const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');

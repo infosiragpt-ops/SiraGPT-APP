@@ -199,6 +199,126 @@ describe('metrics registry — per-family series cap', () => {
     assert.equal(family.series.has('worker=c'), false);
     assert.equal(family.series.has('worker=__other__'), false);
   });
+
+  test('counter and histogram stay at maxSeries after thousands of unique observations', () => {
+    metrics.registerCounter('test_counter_series_hard_cap', {
+      help: 'h',
+      labels: ['route', 'status'],
+      maxSeries: 7,
+    });
+    metrics.registerHistogram('test_histogram_series_hard_cap', {
+      help: 'h',
+      labels: ['method', 'route'],
+      buckets: [1],
+      maxSeries: 5,
+    });
+
+    for (let index = 0; index < 5_000; index += 1) {
+      metrics.counter('test_counter_series_hard_cap', {
+        route: `/unique/${index}`,
+        status: String(100 + (index % 500)),
+      });
+      metrics.observe('test_histogram_series_hard_cap', {
+        method: index % 2 === 0 ? 'GET' : 'POST',
+        route: `/unique/${index}`,
+      }, index % 2);
+    }
+
+    const counterFamily = metrics.registry.get('test_counter_series_hard_cap');
+    const histogramFamily = metrics.registry.get('test_histogram_series_hard_cap');
+    assert.equal(counterFamily.series.size, 7);
+    assert.equal(histogramFamily.series.size, 5);
+    assert.equal(counterFamily.series.get('route=__other__,status=__other__'), 4_994);
+    assert.equal(
+      histogramFamily.series.get('method=__other__,route=__other__').count,
+      4_996,
+    );
+  });
+
+  test('detailed HTTP families use one global overflow series and never exceed maxSeries', () => {
+    const requests = metrics.registry.get('siragpt_http_requests_total');
+    const duration = metrics.registry.get('siragpt_http_request_duration_seconds');
+    const originalRequestLimit = requests.maxSeries;
+    const originalDurationLimit = duration.maxSeries;
+
+    try {
+      requests.maxSeries = 4;
+      duration.maxSeries = 4;
+      requests.series.clear();
+      duration.series.clear();
+
+      const requestClasses = ['standard', 'streaming', 'health'];
+      for (let index = 0; index < 5_000; index += 1) {
+        const labels = {
+          method: index % 2 === 0 ? 'GET' : 'POST',
+          route: `/overflow/${index}`,
+          request_class: requestClasses[index % requestClasses.length],
+        };
+        metrics.counter('siragpt_http_requests_total', {
+          ...labels,
+          status: String(100 + (index % 500)),
+        });
+        metrics.observe('siragpt_http_request_duration_seconds', labels, 2);
+      }
+
+      const requestOverflow = 'method=__other__,route=__other__,status=__other__,request_class=__other__';
+      const durationOverflow = 'method=__other__,route=__other__,request_class=__other__';
+      assert.equal(requests.series.size, requests.maxSeries);
+      assert.equal(duration.series.size, duration.maxSeries);
+      assert.equal(requests.series.get(requestOverflow), 4_997);
+      assert.equal(duration.series.get(durationOverflow).count, 4_997);
+
+      const exposition = metrics.renderText();
+      assert.match(
+        exposition,
+        /siragpt_http_requests_total\{method="__other__",route="__other__",status="__other__",request_class="__other__"\} 4997/,
+      );
+      assert.match(
+        exposition,
+        /siragpt_http_request_duration_seconds_count\{method="__other__",route="__other__",request_class="__other__"\} 4997/,
+      );
+    } finally {
+      requests.maxSeries = originalRequestLimit;
+      duration.maxSeries = originalDurationLimit;
+      requests.series.clear();
+      duration.series.clear();
+    }
+  });
+
+  test('dedicated HTTP SLO families stay within their fixed domains under load', () => {
+    const requests = metrics.registry.get('siragpt_http_slo_requests_total');
+    const duration = metrics.registry.get('siragpt_http_slo_request_duration_seconds');
+    const requestClasses = ['standard', 'streaming', 'health'];
+    const statusClasses = ['1xx', '2xx', '3xx', '4xx', '5xx', 'other'];
+
+    assert.ok(requests);
+    assert.ok(duration);
+    for (let index = 0; index < 10_000; index += 1) {
+      const requestClass = requestClasses[
+        Math.floor(index / statusClasses.length) % requestClasses.length
+      ];
+      metrics.counter('siragpt_http_slo_requests_total', {
+        request_class: requestClass,
+        status_class: statusClasses[index % statusClasses.length],
+      });
+      metrics.observe('siragpt_http_slo_request_duration_seconds', {
+        request_class: requestClass,
+      }, index % 4);
+    }
+
+    assert.equal(requests.series.size, 18);
+    assert.equal(duration.series.size, 3);
+    assert.ok(requests.series.size <= requests.maxSeries);
+    assert.ok(duration.series.size <= duration.maxSeries);
+    assert.equal(
+      Array.from(requests.series.keys()).some((key) => key.includes('__other__')),
+      false,
+    );
+    assert.equal(
+      Array.from(duration.series.keys()).some((key) => key.includes('__other__')),
+      false,
+    );
+  });
 });
 
 describe('metrics registry — text format', () => {

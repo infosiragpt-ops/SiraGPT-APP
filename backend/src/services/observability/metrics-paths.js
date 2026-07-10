@@ -7,6 +7,17 @@ const METRICS_PATHS = Object.freeze([
 ]);
 
 const METRICS_PATH_SET = new Set(METRICS_PATHS);
+const HEALTH_ALIAS_PATH_SET = new Set([
+  '/health',
+  '/healthz',
+  '/livez',
+  '/readyz',
+  '/api/health',
+  '/api/healthz',
+  '/api/livez',
+  '/api/ready',
+  '/api/readyz',
+]);
 const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONG_HEX_SEGMENT = /^[0-9a-f]{16,}$/i;
 const NUMERIC_SEGMENT = /^\d+$/;
@@ -45,6 +56,43 @@ function isMetricsRequest(requestOrPath) {
   return METRICS_PATH_SET.has(normalizedRequestPath(requestOrPath));
 }
 
+function isHealthRequest(requestOrPath) {
+  const path = normalizedRequestPath(requestOrPath);
+  return HEALTH_ALIAS_PATH_SET.has(path)
+    || path.startsWith('/health/')
+    || path.startsWith('/api/health/')
+    || path === '/internal/health'
+    || path.startsWith('/internal/health/')
+    || path.endsWith('/health');
+}
+
+function classifyRequestClass(req, res) {
+  if (isHealthRequest(req)) return 'health';
+  let contentType = '';
+  try {
+    contentType = res?.getHeader?.('Content-Type')
+      ?? res?.getHeader?.('content-type')
+      ?? '';
+  } catch {
+    contentType = '';
+  }
+  const normalizedContentType = Array.isArray(contentType)
+    ? contentType.join(';')
+    : String(contentType || '');
+  if (/^\s*text\/event-stream(?:\s*;|$)/i.test(normalizedContentType)) {
+    return 'streaming';
+  }
+  return 'standard';
+}
+
+function classifyStatusClass(statusCode) {
+  const numericStatus = Number(statusCode);
+  if (!Number.isInteger(numericStatus) || numericStatus < 100 || numericStatus > 599) {
+    return 'other';
+  }
+  return `${Math.floor(numericStatus / 100)}xx`;
+}
+
 function matchedRouteLabel(req) {
   const matched = req?.route?.path;
   if (typeof matched !== 'string' || !matched) return 'unmatched';
@@ -54,6 +102,9 @@ function matchedRouteLabel(req) {
 
 module.exports = {
   METRICS_PATHS,
+  classifyRequestClass,
+  classifyStatusClass,
+  isHealthRequest,
   matchedRouteLabel,
   normalizedRequestPath,
   isMetricsRequest,
