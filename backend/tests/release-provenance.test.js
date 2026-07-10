@@ -93,6 +93,17 @@ test('production deploy accepts only a green production-main commit', () => {
   assert.doesNotMatch(sshScript[1], /\$\{\{\s*inputs\.target_sha/);
 });
 
+test('production deploy supports an explicit release tag without enabling branch auto-deploys', () => {
+  const workflow = read('.github/workflows/deploy.yml');
+  const triggerBlock = workflow.match(/^on:\n([\s\S]*?)\n# Production deploys/m);
+
+  assert.ok(triggerBlock, 'expected to extract workflow trigger block');
+  assert.match(triggerBlock[1], /workflow_dispatch:/);
+  assert.match(triggerBlock[1], /push:\s*\n\s+tags:\s*\n\s+- 'deploy-production-\*'/);
+  assert.doesNotMatch(triggerBlock[1], /branches:/);
+  assert.match(workflow, /FALLBACK_SHA:\s+\$\{\{ github\.sha \}\}/);
+});
+
 test('production deploy proves the exact commit and restores rollback provenance', () => {
   const workflow = read('.github/workflows/deploy.yml');
   const rollback = workflow.match(/            rollback\(\) \{([\s\S]*?)\n            \}/);

@@ -1,8 +1,8 @@
 name: Deploy to production
 
-# Production deploy is manual-only. Main can stay green in GitHub
-# without automatically touching the VPS. Trigger this workflow from
-# Actions only after CI is green and the release is explicitly approved.
+# Production deploy is explicit-only. Main can stay green in GitHub without
+# automatically touching the VPS. Release through Actions or by pushing a
+# deploy-production-* tag after production-main CI is green.
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +10,9 @@ on:
         description: 'Commit SHA to deploy; defaults to the selected branch SHA'
         required: false
         type: string
+  push:
+    tags:
+      - 'deploy-production-*'
 
 # Production deploys are serialized. cancel-in-progress is FALSE
 # so a second push during an in-flight deploy queues behind it
