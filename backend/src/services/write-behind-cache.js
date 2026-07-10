@@ -13,8 +13,9 @@
  *   - Per-flush groups by model and dispatches batched updates via
  *     `updateMany` when the where is a simple single-key filter, or
  *     per-item `update` otherwise.
- *   - SIGTERM-safe: `flushNow()` should be registered with the graceful
- *     shutdown registry so pending writes hit the DB before exit.
+ *   - SIGTERM-safe: `shutdown()` waits for any active flush, drains bounded
+ *     retries, and rejects if writes remain so the shutdown registry can
+ *     report data-loss risk before exit.
  *
  * Lost-update protection:
  *   - For monotonic timestamp fields (lastActiveAt), we only persist if
@@ -111,11 +112,18 @@ function createWriteBehindCache(opts = {}) {
   const maxRetries = Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
     ? Math.floor(opts.maxRetries)
     : 3;
+  const shutdownMaxDrainAttempts = Number.isFinite(opts.shutdownMaxDrainAttempts)
+    && opts.shutdownMaxDrainAttempts > 0
+    ? Math.floor(opts.shutdownMaxDrainAttempts)
+    : Math.max(1, maxRetries);
 
   /** @type {Map<string, {model:string, where:any, data:any, addedAt:number, retryCount:number}>} */
   const queue = new Map();
   let timer = null;
   let flushing = false;
+  let activeFlushPromise = null;
+  let shuttingDown = false;
+  let shutdownPromise = null;
   let totalFlushed = 0;
   let totalDropped = 0;
   let totalRetried = 0;
@@ -163,6 +171,11 @@ function createWriteBehindCache(opts = {}) {
   startTimer();
 
   function queueWrite(model, where, data) {
+    if (shuttingDown) {
+      const error = new Error('write-behind-cache is shutting down');
+      error.code = 'WRITE_BEHIND_SHUTTING_DOWN';
+      throw error;
+    }
     if (!model || typeof model !== 'string') throw new TypeError('queueWrite: model required');
     if (!where || typeof where !== 'object') throw new TypeError('queueWrite: where required');
     if (!data || typeof data !== 'object') throw new TypeError('queueWrite: data required');
@@ -187,8 +200,7 @@ function createWriteBehindCache(opts = {}) {
     return entry ? { ...entry.data } : null;
   }
 
-  async function flushNow() {
-    if (flushing) return { flushed: 0, batches: 0, retried: 0, dropped: 0, skipped: true };
+  async function runFlush() {
     if (queue.size === 0) return { flushed: 0, batches: 0, retried: 0, dropped: 0 };
     flushing = true;
     const snapshot = Array.from(queue.values());
@@ -234,7 +246,10 @@ function createWriteBehindCache(opts = {}) {
             }
             reportError('flush_update', err);
             const retryCount = (entry.retryCount || 0) + 1;
-            if (retryCount <= maxRetries) {
+            // During shutdown, retain even exhausted entries so bounded
+            // draining reports residual writes instead of silently dropping
+            // data just before process exit.
+            if (retryCount <= maxRetries || shuttingDown) {
               retried += 1;
               totalRetried += 1;
               mergeQueueEntry(fieldKey, { ...entry, retryCount }, { incomingWins: false });
@@ -258,6 +273,30 @@ function createWriteBehindCache(opts = {}) {
     } finally {
       flushing = false;
     }
+  }
+
+  function flushNow() {
+    if (activeFlushPromise || flushing) {
+      return Promise.resolve({
+        flushed: 0,
+        batches: 0,
+        retried: 0,
+        dropped: 0,
+        skipped: true,
+      });
+    }
+    if (queue.size === 0) {
+      return Promise.resolve({ flushed: 0, batches: 0, retried: 0, dropped: 0 });
+    }
+
+    let tracked;
+    tracked = Promise.resolve()
+      .then(() => runFlush())
+      .finally(() => {
+        if (activeFlushPromise === tracked) activeFlushPromise = null;
+      });
+    activeFlushPromise = tracked;
+    return tracked;
   }
 
   async function hydrateFromRedis() {
@@ -291,12 +330,51 @@ function createWriteBehindCache(opts = {}) {
       flushIntervalMs,
       flushThreshold,
       maxRetries,
+      shutdownMaxDrainAttempts,
+      shuttingDown,
     };
   }
 
-  async function shutdown() {
+  function addFlushResult(total, result) {
+    if (!result || result.skipped) return total;
+    total.flushed += Number(result.flushed) || 0;
+    total.batches += Number(result.batches) || 0;
+    total.retried += Number(result.retried) || 0;
+    total.dropped += Number(result.dropped) || 0;
+    return total;
+  }
+
+  async function drainForShutdown() {
+    const total = { flushed: 0, batches: 0, retried: 0, dropped: 0 };
+    const inFlight = activeFlushPromise;
+    if (inFlight) addFlushResult(total, await inFlight);
+
+    let attempts = 0;
+    while (queue.size > 0 && attempts < shutdownMaxDrainAttempts) {
+      attempts += 1;
+      // eslint-disable-next-line no-await-in-loop
+      addFlushResult(total, await flushNow());
+    }
+
+    if (queue.size > 0) {
+      const error = new Error(
+        `write-behind-cache shutdown incomplete: ${queue.size} pending entr${queue.size === 1 ? 'y' : 'ies'}`,
+      );
+      error.code = 'WRITE_BEHIND_SHUTDOWN_INCOMPLETE';
+      error.pending = queue.size;
+      error.attempts = attempts;
+      reportError('shutdown_incomplete', error);
+      throw error;
+    }
+    return total;
+  }
+
+  function shutdown() {
+    if (shutdownPromise) return shutdownPromise;
+    shuttingDown = true;
     stopTimer();
-    return flushNow();
+    shutdownPromise = drainForShutdown();
+    return shutdownPromise;
   }
 
   return {

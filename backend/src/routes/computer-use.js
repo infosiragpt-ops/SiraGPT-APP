@@ -607,8 +607,11 @@ async function completeDesktopBridgeSession(sessionId, session, options = {}) {
 
 // WebSocket server for real-time updates
 let wss = null;
+let wssClosePromise = null;
 
 const initializeWebSocketServer = (server) => {
+  if (wss) return wss;
+  wssClosePromise = null;
   wss = new WebSocket.Server({ server, path: '/ws/computer-use' });
 
   wss.on('connection', (ws, req) => {
@@ -666,7 +669,39 @@ const initializeWebSocketServer = (server) => {
       console.log('Computer Use WebSocket disconnected');
     });
   });
+  return wss;
 };
+
+function closeComputerUseWebSocketServer() {
+  if (wssClosePromise) return wssClosePromise;
+  if (!wss) {
+    wssClosePromise = Promise.resolve();
+    return wssClosePromise;
+  }
+
+  const server = wss;
+  let resolveClose;
+  let rejectClose;
+  wssClosePromise = new Promise((resolve, reject) => {
+    resolveClose = resolve;
+    rejectClose = reject;
+  });
+  const finish = (error) => {
+    if (wss === server) wss = null;
+    if (error) rejectClose(error);
+    else resolveClose();
+  };
+
+  try {
+    server.close(finish);
+    for (const client of server.clients) {
+      try { client.terminate(); } catch {}
+    }
+  } catch (error) {
+    finish(error);
+  }
+  return wssClosePromise;
+}
 
 async function handleComputerUseSocketCommand(ws, data) {
   const session = getSessionForUser(ws.sessionId, ws.userId);
@@ -2781,6 +2816,7 @@ router.post('/generate-html', async (req, res) => {
 module.exports = {
   router,
   initializeWebSocketServer,
+  closeComputerUseWebSocketServer,
   CustomComputerUseAgent,
   activeSessions
 };

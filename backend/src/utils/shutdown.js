@@ -8,23 +8,21 @@
  *
  *   - Per-step timeout budget (default 5s) so a hanging dependency
  *     can never block the global 30s deadline.
- *   - Reverse-LIFO ordering (last registered, first executed).
+ *   - Reverse-LIFO ordering (last registered, first executed) by default.
+ *   - Optional explicit execution order for dependency-sensitive production
+ *     hooks without changing legacy callers.
  *   - Structured logging of every step + total elapsed.
  *
  * Public API:
  *   register(name, fn, timeoutMs=5000)  → unregister()
+ *   configure({ logger, executionOrder })
  *   shutdown(reason)                    → { ok, errors, elapsedMs, steps }
  *   isShuttingDown()
  *   snapshot()
  *
- * Steps to register in order (from index.js):
- *   1. http_server_close          server.close()
- *   2. drain_inflight_requests    wait for in-flight to settle (30s cap)
- *   3. write_behind_cache_flush   cycle 31 cache
- *   4. realtime_ws_close          cycle 24
- *   5. bullmq_workers_close
- *   6. prisma_disconnect
- *   7. redis_disconnect
+ * Production execution order is declared in PRODUCTION_SHUTDOWN_ORDER:
+ * stop producers, stop accepting connections, drain/flush work, then close
+ * queues, telemetry, and persistence dependencies.
  *
  * The aggregate `shutdown()` enforces a 30s ceiling: if the sum of
  * per-step timeouts ever exceeds that, the registry will still abort
@@ -33,10 +31,24 @@
 
 const DEFAULT_STEP_TIMEOUT_MS = 5000;
 const TOTAL_SHUTDOWN_DEADLINE_MS = 30_000;
+const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
+  'scheduler_stop',
+  'system_cron_stop',
+  'realtime_ws_close',
+  'computer_use_ws_close',
+  'http_server_close',
+  'drain_inflight_requests',
+  'write_behind_cache_flush',
+  'bullmq_workers_close',
+  'observability_flush',
+  'prisma_disconnect',
+  'redis_disconnect',
+]);
 
 const _hooks = []; // { name, fn, timeoutMs }
 let _shuttingDown = false;
 let _logger = console;
+let _executionOrder = null;
 
 function _safeLog(level, payload, msg) {
   try {
@@ -46,8 +58,24 @@ function _safeLog(level, payload, msg) {
   } catch { /* never throw */ }
 }
 
-function configure({ logger } = {}) {
+function configure(options = {}) {
+  const { logger } = options;
   if (logger) _logger = logger;
+  if (Object.prototype.hasOwnProperty.call(options, 'executionOrder')) {
+    const { executionOrder } = options;
+    if (executionOrder == null) {
+      _executionOrder = null;
+    } else {
+      if (!Array.isArray(executionOrder)) {
+        throw new TypeError('shutdown.configure: executionOrder must be an array');
+      }
+      const names = executionOrder.map((name) => String(name || ''));
+      if (names.some((name) => !name) || new Set(names).size !== names.length) {
+        throw new TypeError('shutdown.configure: executionOrder requires unique non-empty names');
+      }
+      _executionOrder = names;
+    }
+  }
 }
 
 function register(name, fn, timeoutMs = DEFAULT_STEP_TIMEOUT_MS) {
@@ -100,7 +128,24 @@ async function shutdown(reason = 'manual') {
   const deadlineTimer = setTimeout(() => { deadlineHit = true; }, TOTAL_SHUTDOWN_DEADLINE_MS);
   if (typeof deadlineTimer.unref === 'function') deadlineTimer.unref();
 
-  const order = _hooks.slice().reverse();
+  const reverseLifo = _hooks.slice().reverse();
+  let order = reverseLifo;
+  if (_executionOrder) {
+    const positions = new Map(_executionOrder.map((name, index) => [name, index]));
+    order = reverseLifo
+      .map((entry, reverseIndex) => ({ entry, reverseIndex }))
+      .sort((a, b) => {
+        const aPosition = positions.has(a.entry.name)
+          ? positions.get(a.entry.name)
+          : Number.POSITIVE_INFINITY;
+        const bPosition = positions.has(b.entry.name)
+          ? positions.get(b.entry.name)
+          : Number.POSITIVE_INFINITY;
+        if (aPosition !== bPosition) return aPosition < bPosition ? -1 : 1;
+        return a.reverseIndex - b.reverseIndex;
+      })
+      .map(({ entry }) => entry);
+  }
   const steps = [];
   const errors = [];
   for (const entry of order) {
@@ -125,13 +170,18 @@ async function shutdown(reason = 'manual') {
 
 function isShuttingDown() { return _shuttingDown; }
 function snapshot() {
-  return { shuttingDown: _shuttingDown, hooks: _hooks.map((h) => ({ name: h.name, timeoutMs: h.timeoutMs })) };
+  return {
+    shuttingDown: _shuttingDown,
+    hooks: _hooks.map((h) => ({ name: h.name, timeoutMs: h.timeoutMs })),
+    executionOrder: _executionOrder ? [..._executionOrder] : null,
+  };
 }
 
 function _resetForTests() {
   _hooks.length = 0;
   _shuttingDown = false;
   _logger = console;
+  _executionOrder = null;
 }
 
 module.exports = {
@@ -142,5 +192,6 @@ module.exports = {
   snapshot,
   DEFAULT_STEP_TIMEOUT_MS,
   TOTAL_SHUTDOWN_DEADLINE_MS,
+  PRODUCTION_SHUTDOWN_ORDER,
   _resetForTests,
 };

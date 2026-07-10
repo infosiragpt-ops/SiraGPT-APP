@@ -16,6 +16,7 @@ const {
   broadcastToUser,
   broadcastToChat,
   broadcastToOrg,
+  getRealtimeState,
   CLOSE_CODE_AUTH_REQUIRED,
   CLOSE_CODE_AUTH_INVALID,
 } = require('../src/services/realtime/socket-server');
@@ -100,8 +101,8 @@ function waitClose(ws) {
 }
 
 async function teardown(server) {
-  closeRealtimeServer();
-  await new Promise((r) => server.close(r));
+  await closeRealtimeServer();
+  if (server.listening) await new Promise((r) => server.close(r));
   resetPresence();
   resetTyping();
 }
@@ -269,6 +270,37 @@ test('socket:broadcastToOrg targets org subscribers', async () => {
   assert.equal(m.channel, 'org:org1');
   ws.close();
   await teardown(server);
+});
+
+test('socket:shutdown terminates clients, awaits server close, and is idempotent', async (t) => {
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, {
+    verifyToken: fakeVerifier({ shutdown: { userId: 'shutdown-user' } }),
+  });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=shutdown`);
+  t.after(async () => {
+    try { ws.terminate(); } catch {}
+    try { await closeRealtimeServer(); } catch {}
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    resetPresence();
+    resetTyping();
+  });
+
+  await waitOpen(ws);
+  await waitMessage(ws, (message) => message.type === 'welcome');
+  const state = getRealtimeState();
+  const clientClosed = waitClose(ws);
+  const serverClosed = new Promise((resolve) => state.wss.once('close', resolve));
+
+  const first = closeRealtimeServer();
+  const second = closeRealtimeServer();
+
+  assert.ok(first instanceof Promise);
+  assert.strictEqual(second, first);
+  await Promise.all([first, clientClosed, serverClosed]);
+  assert.equal(state.wss.clients.size, 0);
+  assert.equal(getRealtimeState(), null);
+  assert.strictEqual(closeRealtimeServer(), first);
 });
 
 test('socket:broadcast helpers are no-ops when server not initialised', () => {

@@ -340,7 +340,11 @@ const apiProxyRoutes = require('./src/routes/api');
 const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
 const figmaRoutes = require('./src/routes/figma');
-const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/routes/computer-use');
+const {
+    router: computerUseRoutes,
+    initializeWebSocketServer,
+    closeComputerUseWebSocketServer,
+} = require('./src/routes/computer-use');
 const { initRealtimeServer, closeRealtimeServer } = require('./src/services/realtime/socket-server');
 const thesisRoutes = require('./src/routes/thesis');
 const thesisEngineRoutes = require('./src/routes/thesis-engine');
@@ -409,7 +413,12 @@ const orchestrationRoutes = require('./src/routes/orchestration');
 const hermesRoutes = require('./src/routes/hermes');
 const webhooksRoutes = require('./src/routes/webhooks');
 const slackIntegrationRoutes = require('./src/routes/integrations/slack');
-const { authenticateToken, requireAdmin, requireSuperAdmin } = require('./src/middleware/auth');
+const {
+    authenticateToken,
+    requireAdmin,
+    requireSuperAdmin,
+    shutdownWriteBehindCache,
+} = require('./src/middleware/auth');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
@@ -1393,17 +1402,19 @@ async function startServer() {
 
     // ── Centralized graceful shutdown ──────────────────────────────
     // Each step has its own 5s timeout budget; the overall registry
-    // enforces a 30s hard ceiling. Registration order matters: hooks
-    // execute in reverse-LIFO, so `http_server_close` (registered
-    // FIRST) runs LAST (after dependants are torn down).
-    shutdownRegistry.configure({ logger });
+    // enforces a 30s hard ceiling. Production uses an explicit dependency
+    // order; callers that do not configure one retain reverse-LIFO behavior.
+    shutdownRegistry.configure({
+        logger,
+        executionOrder: shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER,
+    });
 
-    // 7. Last to register → first to run: stop accepting new connections.
+    // Stop accepting new HTTP connections before draining in-flight work.
     shutdownRegistry.register('http_server_close', () => new Promise((resolve) => {
         try { server.close(() => resolve()); } catch { resolve(); }
     }), 5000);
 
-    // 6. Drain in-flight requests (best-effort, 5s budget per step;
+    // Drain in-flight requests (best-effort, 5s budget per step;
     //    requests still in flight after the global 30s deadline are
     //    abandoned by the parent timeout).
     shutdownRegistry.register('drain_inflight_requests', async () => {
@@ -1413,21 +1424,26 @@ async function startServer() {
         await new Promise((r) => setTimeout(r, 250));
     }, 5000);
 
-    // 5. Flush write-behind caches (cycle 31). Best-effort: tolerate
-    //    missing modules so a partial deploy doesn't hang shutdown.
-    shutdownRegistry.register('write_behind_cache_flush', async () => {
-        try {
-            const wb = require('./src/services/cache/write-behind');
-            if (wb && typeof wb.flushAll === 'function') await wb.flushAll();
-        } catch { /* module not present — skip */ }
-    }, 5000);
+    // Flush and stop the auth-owned write-behind cache, if it was used.
+    shutdownRegistry.register(
+        'write_behind_cache_flush',
+        () => shutdownWriteBehindCache(),
+        5000,
+    );
 
-    // 4. Close realtime WS server (cycle 24).
-    shutdownRegistry.register('realtime_ws_close', () => {
-        try { closeRealtimeServer(); } catch { }
-    }, 5000);
+    // Close both WebSocket servers and their clients before HTTP shutdown.
+    shutdownRegistry.register(
+        'realtime_ws_close',
+        () => closeRealtimeServer(),
+        5000,
+    );
+    shutdownRegistry.register(
+        'computer_use_ws_close',
+        () => closeComputerUseWebSocketServer(),
+        5000,
+    );
 
-    // 3. Close BullMQ workers + queue.
+    // Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
         try { stopGoalRecovery(); } catch { }
         try { stopGoalCleanup(); } catch { }
@@ -1443,12 +1459,12 @@ async function startServer() {
         ]);
     }, 5000);
 
-    // 2. Disconnect Prisma.
+    // Disconnect Prisma after write-behind and observability flushes.
     shutdownRegistry.register('prisma_disconnect', async () => {
         try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch { }
     }, 5000);
 
-    // 1. Disconnect Redis (lazy health client + any others we own).
+    // Disconnect Redis last (lazy health client + any others we own).
     shutdownRegistry.register('redis_disconnect', async () => {
         const c = (typeof healthRoutes.getHealthRedisClient === 'function') ? healthRoutes.getHealthRedisClient() : null;
         if (c && typeof c.quit === 'function') {
@@ -1456,8 +1472,7 @@ async function startServer() {
         }
     }, 5000);
 
-    // Observability flush (telemetry exporters) — runs alongside DB/Redis
-    // disconnect to recover any in-flight events.
+    // Flush telemetry exporters before disconnecting persistence clients.
     shutdownRegistry.register('observability_flush', async () => {
         const flushers = [
             shutdownOpenTelemetry(),
@@ -1471,8 +1486,7 @@ async function startServer() {
         await Promise.allSettled(flushers);
     }, 5000);
 
-    // Scheduler stop — registered last (first to run) so cron jobs
-    // can't enqueue new work during shutdown.
+    // Scheduler stop runs first so jobs cannot enqueue new work.
     shutdownRegistry.register('scheduler_stop', () => {
         try { scheduler.stop?.(); } catch { }
         try {

@@ -145,7 +145,10 @@ const sessionDedup = createQueryDedup({ ttlMs: 50, maxEntries: 5000 });
 // authenticated request (lastActiveAt). Singleton — wired once per
 // process. Disabled via WRITE_BEHIND_DISABLED for emergency rollback.
 let _writeBehind = null;
+let _writeBehindShutdownPromise = null;
+let _writeBehindShutdownStarted = false;
 function getWriteBehindCache() {
+  if (_writeBehindShutdownStarted) return null;
   if (_writeBehind) return _writeBehind;
   if (String(process.env.WRITE_BEHIND_DISABLED || '').toLowerCase() === 'true') return null;
   _writeBehind = createWriteBehindCache({
@@ -161,6 +164,21 @@ function getWriteBehindCache() {
     },
   });
   return _writeBehind;
+}
+
+function shutdownWriteBehindCache() {
+  if (_writeBehindShutdownPromise) return _writeBehindShutdownPromise;
+  _writeBehindShutdownStarted = true;
+  if (!_writeBehind) {
+    _writeBehindShutdownPromise = Promise.resolve(undefined);
+    return _writeBehindShutdownPromise;
+  }
+  try {
+    _writeBehindShutdownPromise = Promise.resolve(_writeBehind.shutdown());
+  } catch (error) {
+    _writeBehindShutdownPromise = Promise.reject(error);
+  }
+  return _writeBehindShutdownPromise;
 }
 
 /**
@@ -515,6 +533,7 @@ module.exports = {
   requireAdmin,
   requireSuperAdmin,
   // Exported for tests + graceful shutdown wiring.
+  shutdownWriteBehindCache,
   __sessionDedup: sessionDedup,
   __getWriteBehindCache: getWriteBehindCache,
   __tryAuthenticateApiKey: tryAuthenticateApiKey,

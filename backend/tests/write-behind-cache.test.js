@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const shutdownRegistry = require('../src/utils/shutdown');
 
 const {
   createWriteBehindCache,
@@ -10,6 +12,25 @@ const {
   keyFor,
   toPrismaData,
 } = require('../src/services/write-behind-cache');
+
+function loadFreshAuthWithWriteBehindFactory(factory) {
+  const authPath = require.resolve('../src/middleware/auth');
+  const writeBehindModule = require('../src/services/write-behind-cache');
+  const originalFactory = writeBehindModule.createWriteBehindCache;
+
+  writeBehindModule.createWriteBehindCache = factory;
+  delete require.cache[authPath];
+  try {
+    return {
+      auth: require(authPath),
+      cleanup() {
+        delete require.cache[authPath];
+      },
+    };
+  } finally {
+    writeBehindModule.createWriteBehindCache = originalFactory;
+  }
+}
 
 function fakePrisma() {
   const calls = [];
@@ -121,6 +142,115 @@ test('shutdown drains pending and stops timer', async () => {
   wbc.queueWrite('user', { id: 'z' }, { lastActiveAt: 99 });
   const r = await wbc.shutdown();
   assert.equal(r.flushed, 1);
+  assert.equal(wbc.size(), 0);
+});
+
+test('shutdown waits for an active flush before resolving', async (t) => {
+  let markStarted;
+  let releaseUpdate;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const updateReleased = new Promise((resolve) => { releaseUpdate = resolve; });
+  t.after(() => releaseUpdate());
+
+  const prisma = {
+    user: {
+      update: async ({ where, data }) => {
+        markStarted();
+        await updateReleased;
+        return { id: where.id, ...data };
+      },
+    },
+  };
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0 });
+  wbc.queueWrite('user', { id: 'active' }, { lastActiveAt: 1 });
+  const activeFlush = wbc.flushNow();
+  await started;
+
+  let shutdownSettled = false;
+  const stopping = wbc.shutdown().then((result) => {
+    shutdownSettled = true;
+    return result;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(shutdownSettled, false);
+  releaseUpdate();
+  const [flushResult, shutdownResult] = await Promise.all([activeFlush, stopping]);
+  assert.equal(flushResult.flushed, 1);
+  assert.equal(shutdownResult.flushed, 1);
+  assert.equal(wbc.size(), 0);
+});
+
+test('shutdown drains transient retries until pending writes succeed', async () => {
+  let calls = 0;
+  const prisma = {
+    user: {
+      update: async ({ where, data }) => {
+        calls += 1;
+        if (calls === 1) throw new Error('temporary database outage');
+        return { id: where.id, ...data };
+      },
+    },
+  };
+  const wbc = createWriteBehindCache({
+    prisma,
+    flushIntervalMs: 0,
+    maxRetries: 3,
+    shutdownMaxDrainAttempts: 3,
+  });
+  wbc.queueWrite('user', { id: 'retry-on-shutdown' }, { lastActiveAt: 2 });
+
+  const result = await wbc.shutdown();
+
+  assert.equal(result.flushed, 1);
+  assert.equal(result.retried, 1);
+  assert.equal(calls, 2);
+  assert.equal(wbc.size(), 0);
+});
+
+test('shutdown rejects and reports writes left after bounded drain attempts', async () => {
+  let calls = 0;
+  const errors = [];
+  const prisma = {
+    user: {
+      update: async () => {
+        calls += 1;
+        throw new Error('database remains unavailable');
+      },
+    },
+  };
+  const wbc = createWriteBehindCache({
+    prisma,
+    flushIntervalMs: 0,
+    maxRetries: 1,
+    shutdownMaxDrainAttempts: 2,
+    onError: (...args) => errors.push(args),
+  });
+  wbc.queueWrite('user', { id: 'still-pending' }, { lastActiveAt: 3 });
+
+  await assert.rejects(
+    wbc.shutdown(),
+    (error) => {
+      assert.equal(error.code, 'WRITE_BEHIND_SHUTDOWN_INCOMPLETE');
+      assert.equal(error.pending, 1);
+      return true;
+    },
+  );
+
+  assert.equal(calls, 2);
+  assert.equal(wbc.size(), 1);
+  assert.ok(errors.some(([stage]) => stage === 'shutdown_incomplete'));
+});
+
+test('shutdown rejects writes queued after shutdown begins', async () => {
+  const wbc = createWriteBehindCache({ prisma: fakePrisma(), flushIntervalMs: 0 });
+  const stopping = wbc.shutdown();
+
+  assert.throws(
+    () => wbc.queueWrite('user', { id: 'too-late' }, { lastActiveAt: 4 }),
+    /shutting down/,
+  );
+  await stopping;
   assert.equal(wbc.size(), 0);
 });
 
@@ -264,4 +394,172 @@ test('hydrateFromRedis merges duplicate pending entries with local queue safely'
     apiUsage: { __increment: 5 },
     lastActiveAt: 200,
   });
+});
+
+test('auth shutdown stops the existing write-behind singleton exactly once', async (t) => {
+  const previousDisabled = process.env.WRITE_BEHIND_DISABLED;
+  delete process.env.WRITE_BEHIND_DISABLED;
+
+  let creations = 0;
+  let shutdownCalls = 0;
+  const prisma = fakePrisma();
+  let singleton;
+  const loaded = loadFreshAuthWithWriteBehindFactory(() => {
+    creations += 1;
+    singleton = createWriteBehindCache({ prisma, flushIntervalMs: 0 });
+    const shutdown = singleton.shutdown;
+    singleton.shutdown = async () => {
+      shutdownCalls += 1;
+      return shutdown();
+    };
+    return singleton;
+  });
+  t.after(() => {
+    loaded.cleanup();
+    if (previousDisabled === undefined) delete process.env.WRITE_BEHIND_DISABLED;
+    else process.env.WRITE_BEHIND_DISABLED = previousDisabled;
+  });
+
+  const live = loaded.auth.__getWriteBehindCache();
+  assert.strictEqual(live, singleton);
+  assert.equal(creations, 1);
+  live.queueWrite('user', { id: 'shutdown-user' }, { lastActiveAt: 123 });
+
+  const first = await loaded.auth.shutdownWriteBehindCache();
+  const second = await loaded.auth.shutdownWriteBehindCache();
+
+  assert.deepEqual(first, { flushed: 1, batches: 1, retried: 0, dropped: 0 });
+  assert.deepEqual(second, first);
+  assert.equal(shutdownCalls, 1);
+  assert.equal(live.size(), 0);
+  assert.equal(prisma._calls.length, 1);
+});
+
+test('auth shutdown prevents later creation of an unused write-behind singleton', async (t) => {
+  const previousDisabled = process.env.WRITE_BEHIND_DISABLED;
+  delete process.env.WRITE_BEHIND_DISABLED;
+
+  let creations = 0;
+  const singleton = { shutdown: async () => ({ flushed: 0 }) };
+  const loaded = loadFreshAuthWithWriteBehindFactory(() => {
+    creations += 1;
+    return singleton;
+  });
+  t.after(() => {
+    loaded.cleanup();
+    if (previousDisabled === undefined) delete process.env.WRITE_BEHIND_DISABLED;
+    else process.env.WRITE_BEHIND_DISABLED = previousDisabled;
+  });
+
+  assert.equal(await loaded.auth.shutdownWriteBehindCache(), undefined);
+  assert.equal(creations, 0);
+  assert.equal(loaded.auth.__getWriteBehindCache(), null);
+  assert.equal(creations, 0);
+});
+
+test('auth shutdown is a no-op when write-behind caching is disabled', async (t) => {
+  const previousDisabled = process.env.WRITE_BEHIND_DISABLED;
+  process.env.WRITE_BEHIND_DISABLED = 'true';
+
+  let creations = 0;
+  const loaded = loadFreshAuthWithWriteBehindFactory(() => {
+    creations += 1;
+    return { shutdown: async () => ({ flushed: 0 }) };
+  });
+  t.after(() => {
+    loaded.cleanup();
+    if (previousDisabled === undefined) delete process.env.WRITE_BEHIND_DISABLED;
+    else process.env.WRITE_BEHIND_DISABLED = previousDisabled;
+  });
+
+  assert.equal(await loaded.auth.shutdownWriteBehindCache(), undefined);
+  assert.equal(loaded.auth.__getWriteBehindCache(), null);
+  assert.equal(creations, 0);
+});
+
+test('central shutdown invokes the auth-owned write-behind shutdown function', () => {
+  const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+  const hook = source.match(
+    /shutdownRegistry\.register\(\s*'write_behind_cache_flush',([\s\S]*?),\s*5000,?\s*\);/,
+  );
+
+  assert.ok(hook, 'write-behind shutdown hook must remain registered');
+  assert.match(
+    source,
+    /executionOrder:\s*shutdownRegistry\.PRODUCTION_SHUTDOWN_ORDER/,
+    'production shutdown must opt into the behaviorally tested explicit order',
+  );
+  assert.match(hook[1], /shutdownWriteBehindCache\(\)/);
+  assert.doesNotMatch(hook[1], /__getWriteBehindCache|services\/cache\/write-behind/);
+});
+
+test('central shutdown returns both websocket close promises to the registry', () => {
+  const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+
+  assert.match(
+    source,
+    /shutdownRegistry\.register\(\s*'realtime_ws_close',\s*\(\)\s*=>\s*closeRealtimeServer\(\)/,
+  );
+  assert.match(
+    source,
+    /shutdownRegistry\.register\(\s*'computer_use_ws_close',\s*\(\)\s*=>\s*closeComputerUseWebSocketServer\(\)/,
+  );
+});
+
+test('production shutdown hooks execute in explicit dependency-safe order', async (t) => {
+  const expected = [
+    'scheduler_stop',
+    'system_cron_stop',
+    'realtime_ws_close',
+    'computer_use_ws_close',
+    'http_server_close',
+    'drain_inflight_requests',
+    'write_behind_cache_flush',
+    'bullmq_workers_close',
+    'observability_flush',
+    'prisma_disconnect',
+    'redis_disconnect',
+  ];
+  const registrationOrder = [
+    'system_cron_stop',
+    'http_server_close',
+    'drain_inflight_requests',
+    'write_behind_cache_flush',
+    'realtime_ws_close',
+    'computer_use_ws_close',
+    'bullmq_workers_close',
+    'prisma_disconnect',
+    'redis_disconnect',
+    'observability_flush',
+    'scheduler_stop',
+  ];
+  const executed = [];
+  const closedWebSocketServers = new Set();
+  shutdownRegistry._resetForTests();
+  t.after(() => shutdownRegistry._resetForTests());
+
+  shutdownRegistry.configure({
+    executionOrder: shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER,
+  });
+  for (const name of registrationOrder) {
+    shutdownRegistry.register(name, async () => {
+      if (name === 'realtime_ws_close' || name === 'computer_use_ws_close') {
+        await new Promise((resolve) => setImmediate(resolve));
+        closedWebSocketServers.add(name);
+      }
+      if (name === 'http_server_close') {
+        assert.deepEqual(
+          [...closedWebSocketServers].sort(),
+          ['computer_use_ws_close', 'realtime_ws_close'],
+        );
+      }
+      executed.push(name);
+    });
+  }
+
+  const result = await shutdownRegistry.shutdown('production-order-test');
+
+  assert.deepEqual(executed, expected);
+  assert.deepEqual(shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER, expected);
+  assert.equal(result.ok, true);
 });

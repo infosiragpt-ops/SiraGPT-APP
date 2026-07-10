@@ -33,6 +33,7 @@ const CLOSE_CODE_AUTH_INVALID = 4403;
 const CLOSE_CODE_HEARTBEAT = 4408;
 
 let _state = null; // module singleton
+let _closePromise = null;
 
 /**
  * @typedef {object} SocketServerState
@@ -112,6 +113,7 @@ function _parseTokenFromReq(req) {
  */
 function initRealtimeServer(server, opts = {}) {
   if (_state) return _state; // idempotent
+  _closePromise = null;
 
   const verifyToken = opts.verifyToken || defaultVerifyToken;
   const path = opts.path || WS_PATH;
@@ -329,12 +331,38 @@ function broadcastToOrg(orgId, event) {
 function getRealtimeState() { return _state; }
 
 function closeRealtimeServer() {
-  if (!_state) return;
-  clearInterval(_state.heartbeatTimer);
-  try { _state.typing.off('stop', _state._onTypingStop); } catch {}
-  try { _state.cursor.dispose(); } catch {}
-  try { _state.wss.close(); } catch {}
-  _state = null;
+  if (_closePromise) return _closePromise;
+  if (!_state) {
+    _closePromise = Promise.resolve();
+    return _closePromise;
+  }
+
+  const state = _state;
+  clearInterval(state.heartbeatTimer);
+  try { state.typing.off('stop', state._onTypingStop); } catch {}
+  try { state.cursor.dispose(); } catch {}
+
+  let resolveClose;
+  let rejectClose;
+  _closePromise = new Promise((resolve, reject) => {
+    resolveClose = resolve;
+    rejectClose = reject;
+  });
+  const finish = (error) => {
+    if (_state === state) _state = null;
+    if (error) rejectClose(error);
+    else resolveClose();
+  };
+
+  try {
+    state.wss.close(finish);
+    for (const client of state.wss.clients) {
+      try { client.terminate(); } catch {}
+    }
+  } catch (error) {
+    finish(error);
+  }
+  return _closePromise;
 }
 
 module.exports = {

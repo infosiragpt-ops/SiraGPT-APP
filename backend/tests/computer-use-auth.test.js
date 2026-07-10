@@ -1,5 +1,7 @@
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
+const WebSocket = require('ws');
 const request = require('supertest');
 
 const prisma = require('../src/config/database');
@@ -139,4 +141,46 @@ describe('Computer Use HTTP route auth boundaries', () => {
     assert.equal(forwardedStartRequest.options.headers.Authorization, `Bearer ${auth.token}`);
     assert.equal(JSON.parse(forwardedStartRequest.options.body).userId, undefined);
   });
+});
+
+test('computer-use websocket shutdown terminates clients, awaits close, and is idempotent', async (t) => {
+  const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
+  const modulePath = require.resolve('../src/routes/computer-use');
+  delete require.cache[modulePath];
+  const computerUse = require(modulePath);
+  const server = http.createServer();
+  let client;
+
+  t.after(async () => {
+    try { client?.terminate(); } catch {}
+    try { await computerUse.closeComputerUseWebSocketServer?.(); } catch {}
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    delete require.cache[modulePath];
+    if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousOpenAiKey;
+  });
+
+  computerUse.initializeWebSocketServer(server);
+  const port = await new Promise((resolve) => {
+    server.listen(0, () => resolve(server.address().port));
+  });
+  client = new WebSocket(`ws://127.0.0.1:${port}/ws/computer-use`);
+  await new Promise((resolve, reject) => {
+    client.once('open', resolve);
+    client.once('error', reject);
+  });
+  assert.equal(server.listenerCount('upgrade'), 1);
+  const clientClosed = new Promise((resolve) => {
+    client.once('close', (code) => resolve(code));
+  });
+
+  const first = computerUse.closeComputerUseWebSocketServer();
+  const second = computerUse.closeComputerUseWebSocketServer();
+
+  assert.ok(first instanceof Promise);
+  assert.strictEqual(second, first);
+  await Promise.all([first, clientClosed]);
+  assert.equal(server.listenerCount('upgrade'), 0);
+  assert.strictEqual(computerUse.closeComputerUseWebSocketServer(), first);
 });
