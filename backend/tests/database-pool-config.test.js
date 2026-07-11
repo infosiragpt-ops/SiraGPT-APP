@@ -313,6 +313,20 @@ test('database URL redaction removes direct and remote values without logging al
   );
 });
 
+test('runtime and health callers share the central database error sanitizer', () => {
+  assert.equal(typeof databaseUrls.sanitizeDatabaseErrorMessage, 'function');
+  assert.equal(
+    database.sanitizeDatabaseErrorMessage,
+    databaseUrls.sanitizeDatabaseErrorMessage,
+  );
+  assert.equal(
+    databaseUrls.sanitizeDatabaseErrorMessage(
+      'connect postgresql://db-user:db-pass@db.private/sira',
+    ),
+    'connect [REDACTED_DATABASE_URL]',
+  );
+});
+
 test('client options fail closed without disclosing divergent database URLs', () => {
   assert.throws(
     () => database.buildPrismaClientOptions({

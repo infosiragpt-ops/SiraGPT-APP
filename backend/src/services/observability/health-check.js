@@ -37,9 +37,19 @@ const {
   coalescePrismaHealthOperation,
   runCoalescedDatabasePing,
 } = require('../../health/db-operation-coalescer');
+const {
+  sanitizeDatabaseErrorMessage,
+} = require('../../config/database-url');
 const DEFAULT_HEALTH_DB_TIMEOUT_MS = 1500;
 const MIN_HEALTH_DB_TIMEOUT_MS = 100;
 const MAX_HEALTH_DB_TIMEOUT_MS = 10_000;
+const DATABASE_HEALTH_ERROR_CODES = Object.freeze({
+  databaseFailed: 'DATABASE_PROBE_FAILED',
+  databaseTimeout: 'DATABASE_PROBE_TIMEOUT',
+  migrationsFailed: 'MIGRATIONS_FAILED',
+  migrationsProbeFailed: 'MIGRATIONS_PROBE_FAILED',
+  migrationsProbeTimeout: 'MIGRATIONS_PROBE_TIMEOUT',
+});
 
 function resolveHealthDbTimeoutMs(env = process.env) {
   const parsed = Number.parseInt(env?.HEALTH_DB_TIMEOUT_MS, 10);
@@ -64,6 +74,26 @@ function runDbOperationWithTimeout(operation, { timeoutMs, label }) {
     .finally(() => clearTimeout(timer));
 }
 
+function publicDatabaseProbeErrorCode(error, probe, env) {
+  // Classify only after the central sanitizer has removed configured and
+  // inline datasource URLs. The sanitized message is intentionally kept
+  // internal; public health responses expose a stable value-free code.
+  const safeMessage = sanitizeDatabaseErrorMessage(
+    error?.message || error || 'unknown database error',
+    env,
+  );
+  const timedOut = error?.code === 'HEALTH_DB_TIMEOUT'
+    || /\bprobe timed out\b/i.test(safeMessage);
+  if (probe === 'migrations') {
+    return timedOut
+      ? DATABASE_HEALTH_ERROR_CODES.migrationsProbeTimeout
+      : DATABASE_HEALTH_ERROR_CODES.migrationsProbeFailed;
+  }
+  return timedOut
+    ? DATABASE_HEALTH_ERROR_CODES.databaseTimeout
+    : DATABASE_HEALTH_ERROR_CODES.databaseFailed;
+}
+
 // ── Individual probes ──────────────────────────────────────────────
 
 async function checkDatabase(prisma, env = process.env) {
@@ -85,7 +115,7 @@ async function checkDatabase(prisma, env = process.env) {
     return {
       name: "database", status: "unhealthy", critical: true,
       latency_ms: Date.now() - start,
-      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+      error: publicDatabaseProbeErrorCode(err, "database", env),
     };
   }
 }
@@ -119,8 +149,8 @@ async function checkMigrations(prisma, env = process.env) {
       return {
         name: "migrations", status: "unhealthy", critical: true,
         latency_ms: Date.now() - start,
-        details: { failed_count: failed.length, failed: failed.slice(0, 20) },
-        error: "failed migration(s) present (P3009)",
+        details: { failed_count: failed.length },
+        error: DATABASE_HEALTH_ERROR_CODES.migrationsFailed,
       };
     }
     return { name: "migrations", status: "healthy", critical: true, latency_ms: Date.now() - start, details: { failed_count: 0 } };
@@ -132,7 +162,7 @@ async function checkMigrations(prisma, env = process.env) {
       name: "migrations", status: "skipped", critical: false,
       latency_ms: Date.now() - start,
       details: { reason: "migrations_table_unreadable" },
-      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+      error: publicDatabaseProbeErrorCode(err, "migrations", env),
     };
   }
 }
@@ -803,6 +833,7 @@ module.exports = {
   DEFAULT_HEALTH_DB_TIMEOUT_MS,
   MIN_HEALTH_DB_TIMEOUT_MS,
   MAX_HEALTH_DB_TIMEOUT_MS,
+  DATABASE_HEALTH_ERROR_CODES,
   resolveHealthDbTimeoutMs,
   checkDatabase,
   checkMigrations,

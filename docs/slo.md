@@ -130,9 +130,7 @@ multi-window burn-rate alerts.
 |------------|---------------------------|---------|---------|--------------|
 | SLO-API-1  | HTTP availability         | 99.9 %  | 30 d    | 43 m 49 s    |
 | SLO-API-2  | HTTP latency p99 < 1500 ms| 99.0 %  | 30 d    | 7 h 18 m     |
-| SLO-API-3  | HTTP latency p99 < 500 ms (read-only routes) | 99.0 % | 30 d | 7 h 18 m |
 | SLO-AGT-1  | Agent task success        | 99.0 %  | 30 d    | 7 h 18 m     |
-| SLO-AGT-2  | Agent task p99 < 60 s     | 95.0 %  | 30 d    | 1 d 12 h     |
 | SLO-LLM-1  | LLM cache hit rate ≥ 35 % | n/a     | 30 d    | informational|
 
 > **Why these numbers.** The 99.9 % target on availability matches the

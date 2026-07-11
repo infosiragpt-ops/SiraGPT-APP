@@ -98,8 +98,32 @@ test('public readiness and full routes pass their injected env to DB probes', as
     assert.equal(response.status, 503);
     const database = response.body.checks.find((check) => check.name === 'database');
     const migrations = response.body.checks.find((check) => check.name === 'migrations');
-    assert.match(database.error, /timed out after 100ms/i);
-    assert.match(migrations.error, /timed out after 100ms/i);
+    assert.equal(database.error, 'DATABASE_PROBE_TIMEOUT');
+    assert.equal(migrations.error, 'MIGRATIONS_PROBE_TIMEOUT');
+  }
+});
+
+test('public health routes never expose raw database connection values', async () => {
+  const databaseUrl = 'postgresql://health-user:health-password@health-db.private:5432/sira';
+  const app = buildHealthApp(null, {
+    prisma: {
+      $queryRawUnsafe: async () => {
+        throw new Error(`health-user failed against health-db.private using ${databaseUrl}`);
+      },
+    },
+    env: {
+      DATABASE_URL: databaseUrl,
+      OPENAI_API_KEY: 'test-only',
+    },
+  });
+
+  for (const path of ['/health/ready', '/health']) {
+    const response = await request(app).get(path);
+    assert.equal(response.status, 503);
+    assert.doesNotMatch(
+      JSON.stringify(response.body),
+      /health-user|health-password|health-db\.private|postgresql:\/\//i,
+    );
   }
 });
 
@@ -145,6 +169,34 @@ test('HEALTH_CRITICAL_QUEUES only marks known comma-separated queue names', () =
     registry.list().filter((definition) => definition.critical).map((definition) => definition.id),
     ['agent-task', 'goal-runs'],
   );
+});
+
+test('each production-default physical queue failure makes readiness return 503', async () => {
+  const criticalQueues = DEFAULT_QUEUE_IDS.join(',');
+  for (const failedId of DEFAULT_QUEUE_IDS) {
+    const definitions = DEFAULT_QUEUE_IDS.map((id) => ({
+      id,
+      name: id,
+      getter: () => {
+        if (id === failedId) throw new Error('queue unavailable');
+        return fakeQueue();
+      },
+    }));
+    const env = {
+      HEALTH_CRITICAL_QUEUES: criticalQueues,
+      REDIS_URL: 'redis://configured-for-contract.test:6379',
+      OPENAI_API_KEY: 'test-only',
+    };
+    const registry = createQueueRegistry({ definitions, env });
+    assert.ok(registry.list().every((definition) => definition.critical));
+
+    const response = await request(buildHealthApp(registry, { env })).get('/health/ready');
+    assert.equal(response.status, 503, `${failedId} failure must fail readiness`);
+    const queue = response.body.checks.find((check) => check.name === 'queue');
+    assert.equal(queue.status, 'unhealthy');
+    assert.equal(queue.critical, true);
+    assert.equal(queue.details.criticalFailures, 1);
+  }
 });
 
 test('queue probe timeout defaults to 1500ms and clamps positive overrides', () => {

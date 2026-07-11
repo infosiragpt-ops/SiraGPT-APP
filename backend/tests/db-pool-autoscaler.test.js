@@ -16,8 +16,9 @@ function makeMetrics(initial) {
             pool: { min: 1, max: snap.max, idleTimeoutMs: 60000 },
             capacity: { observable: true, reason: 'direct_postgres_datasource' },
             estimated_saturation_ratio: snap.estimated_saturation_ratio || 0,
-            avg_wait_ms: snap.avg_wait_ms || 0,
             queries_in_flight: snap.queries_in_flight || 0,
+            pool_timeout_count: snap.pool_timeout_count || 0,
+            last_pool_timeout_at: snap.last_pool_timeout_at || null,
         }),
         set(next) { snap = { ...snap, ...next }; },
     };
@@ -50,55 +51,69 @@ describe('pool-autoscaler / decide()', () => {
         scaleDownRatio: 0.3,
         scaleUpStep: 2,
         scaleDownStep: 1,
-        waitMsThreshold: 50,
         cooldownMs: 0,
     };
 
     it('holds when within band', () => {
-        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.5, avg_wait_ms: 0, queries_in_flight: 5 }, cfg);
+        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.5, queries_in_flight: 5 }, cfg);
         assert.equal(d.action, 'hold');
     });
 
     it('scales up on high saturation', () => {
-        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.85, avg_wait_ms: 0, queries_in_flight: 9 }, cfg);
+        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.85, queries_in_flight: 9 }, cfg);
         assert.equal(d.action, 'scale_up');
         assert.equal(d.from, 10);
         assert.equal(d.to, 12);
     });
 
-    it('scales up faster when wait time is high', () => {
-        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.6, avg_wait_ms: 120, queries_in_flight: 6 }, cfg);
+    it('scales up faster only when the sample contains new pool timeout events', () => {
+        const d = decide({
+            pool: { max: 10 },
+            estimated_saturation_ratio: 0.6,
+            queries_in_flight: 6,
+            new_pool_timeout_events: 1,
+        }, cfg);
         assert.equal(d.action, 'scale_up');
-        // queueing → step doubled
         assert.equal(d.to, 14);
+        assert.match(d.reason, /new pool timeout/i);
+    });
+
+    it('ignores legacy cumulative wait telemetry as a scale signal', () => {
+        const d = decide({
+            pool: { max: 10 },
+            estimated_saturation_ratio: 0.6,
+            avg_wait_ms: 9999,
+            queries_in_flight: 6,
+        }, cfg);
+        assert.deepEqual(d, { action: 'hold', reason: 'within_band' });
     });
 
     it('scales down on low saturation', () => {
-        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.1, avg_wait_ms: 0, queries_in_flight: 1 }, cfg);
+        const d = decide({ pool: { max: 10 }, estimated_saturation_ratio: 0.1, queries_in_flight: 1 }, cfg);
         assert.equal(d.action, 'scale_down');
         assert.equal(d.to, 9);
         assert.equal(d.cold, true);
     });
 
     it('does not scale below min', () => {
-        const d = decide({ pool: { max: 2 }, estimated_saturation_ratio: 0.0, avg_wait_ms: 0, queries_in_flight: 0 }, cfg);
+        const d = decide({ pool: { max: 2 }, estimated_saturation_ratio: 0.0, queries_in_flight: 0 }, cfg);
         assert.equal(d.action, 'hold');
     });
 
     it('does not scale above max', () => {
-        const d = decide({ pool: { max: 20 }, estimated_saturation_ratio: 1.0, avg_wait_ms: 200, queries_in_flight: 25 }, cfg);
+        const d = decide({ pool: { max: 20 }, estimated_saturation_ratio: 1.0, queries_in_flight: 25 }, cfg);
         assert.equal(d.action, 'hold');
     });
 
     it('caps scale_up to maxLimit', () => {
-        const d = decide({ pool: { max: 19 }, estimated_saturation_ratio: 0.95, avg_wait_ms: 0, queries_in_flight: 18 }, cfg);
+        const d = decide({ pool: { max: 19 }, estimated_saturation_ratio: 0.95, queries_in_flight: 18 }, cfg);
         assert.equal(d.action, 'scale_up');
         assert.equal(d.to, 20);
     });
 
     it('recommends the nearest hard bound when the actual pool is outside policy range', () => {
         const above = decide(
-            { pool: { max: 80 }, estimated_saturation_ratio: 0.5, avg_wait_ms: 0, queries_in_flight: 40 },
+            { pool: { max: 80 }, estimated_saturation_ratio: 0.5, queries_in_flight: 40 },
             cfg
         );
         assert.deepEqual(above, {
@@ -109,7 +124,7 @@ describe('pool-autoscaler / decide()', () => {
         });
 
         const below = decide(
-            { pool: { max: 1 }, estimated_saturation_ratio: 0.5, avg_wait_ms: 0, queries_in_flight: 1 },
+            { pool: { max: 1 }, estimated_saturation_ratio: 0.5, queries_in_flight: 1 },
             cfg
         );
         assert.deepEqual(below, {
@@ -221,6 +236,158 @@ describe('pool-autoscaler / runtime', () => {
         assert.equal(afterCooldown.recommendedLimit, 12);
         assert.equal(a.currentLimit, 10);
         assert.equal(a.getState().stats.recommendations, 2);
+    });
+
+    it('latches a timeout observed during advisory cooldown until a scale-up recommendation is recorded', async () => {
+        const metrics = makeMetrics({
+            max: 10,
+            estimated_saturation_ratio: 0.95,
+            queries_in_flight: 10,
+        });
+        let t = 1_000;
+        const a = createPoolAutoscaler({
+            metrics,
+            minLimit: 2,
+            maxLimit: 20,
+            cooldownMs: 5_000,
+            now: () => t,
+        });
+
+        await a.tick(); // Establish recommendation cooldown from saturation.
+        metrics.set({
+            estimated_saturation_ratio: 0.5,
+            queries_in_flight: 5,
+            pool_timeout_count: 1,
+            last_pool_timeout_at: 2_000,
+        });
+        t = 2_000;
+        const cooldown = await a.tick();
+
+        assert.equal(cooldown.cooldown, true);
+        assert.equal(cooldown.new_pool_timeout_events, 1);
+        const cooldownState = a.getState();
+
+        t = 6_000;
+        const afterCooldown = await a.tick();
+
+        assert.equal(afterCooldown.cooldown, false);
+        assert.equal(afterCooldown.decision, 'scale_up');
+        assert.equal(afterCooldown.new_pool_timeout_events, 1);
+        assert.equal(afterCooldown.recommendedLimit, 14);
+        assert.match(afterCooldown.reason, /new pool timeout/i);
+        assert.deepEqual(cooldownState.poolTimeoutEvents, {
+            seen: 1,
+            acknowledged: 0,
+            pending: 1,
+        });
+        assert.deepEqual(a.getState().poolTimeoutEvents, {
+            seen: 1,
+            acknowledged: 1,
+            pending: 0,
+        });
+    });
+
+    it('uses a cumulative P2024 counter only when a new timeout is observed', async () => {
+        const metrics = makeMetrics({
+            max: 10,
+            estimated_saturation_ratio: 0.5,
+            queries_in_flight: 5,
+            pool_timeout_count: 7,
+            last_pool_timeout_at: 1_000,
+        });
+        const a = createPoolAutoscaler({
+            metrics,
+            minLimit: 2,
+            maxLimit: 20,
+            cooldownMs: 0,
+        });
+
+        const baseline = await a.tick();
+        assert.equal(baseline.decision, 'hold');
+        assert.equal(baseline.new_pool_timeout_events, 0);
+
+        metrics.set({ pool_timeout_count: 8, last_pool_timeout_at: 2_000 });
+        const timeout = await a.tick();
+        assert.equal(timeout.decision, 'scale_up');
+        assert.equal(timeout.recommendedLimit, 14);
+        assert.equal(timeout.new_pool_timeout_events, 1);
+
+        const unchanged = await a.tick();
+        assert.equal(unchanged.decision, 'hold');
+        assert.equal(unchanged.new_pool_timeout_events, 0);
+        assert.equal(Object.hasOwn(unchanged, 'avg_wait_ms'), false);
+    });
+
+    it('detects a new timeout after the instrumentation counter resets', async () => {
+        const metrics = makeMetrics({
+            max: 10,
+            estimated_saturation_ratio: 0.5,
+            queries_in_flight: 5,
+            pool_timeout_count: 4,
+            last_pool_timeout_at: 1_000,
+        });
+        const a = createPoolAutoscaler({
+            metrics,
+            minLimit: 2,
+            maxLimit: 20,
+            cooldownMs: 0,
+        });
+
+        metrics.set({ pool_timeout_count: 0, last_pool_timeout_at: null });
+        assert.equal((await a.tick()).decision, 'hold');
+
+        metrics.set({ pool_timeout_count: 1, last_pool_timeout_at: 2_000 });
+        const timeout = await a.tick();
+        assert.equal(timeout.decision, 'scale_up');
+        assert.equal(timeout.new_pool_timeout_events, 1);
+    });
+
+    it('retries an unacknowledged timeout after apply failure and acknowledges it only after success', async () => {
+        const metrics = makeMetrics({
+            max: 10,
+            estimated_saturation_ratio: 0.5,
+            queries_in_flight: 5,
+        });
+        let attempts = 0;
+        const a = createPoolAutoscaler({
+            metrics,
+            apply: async () => {
+                attempts += 1;
+                if (attempts === 1) throw new Error('temporary resize failure');
+            },
+            minLimit: 2,
+            maxLimit: 20,
+            cooldownMs: 0,
+        });
+
+        metrics.set({
+            pool_timeout_count: 1,
+            last_pool_timeout_at: 2_000,
+        });
+        const failed = await a.tick();
+
+        assert.equal(failed.decision, 'scale_up');
+        assert.equal(failed.applied, false);
+        assert.equal(failed.new_pool_timeout_events, 1);
+        const failedState = a.getState();
+
+        const applied = await a.tick();
+
+        assert.equal(attempts, 2);
+        assert.equal(applied.decision, 'scale_up');
+        assert.equal(applied.applied, true);
+        assert.equal(applied.new_pool_timeout_events, 1);
+        assert.equal(a.currentLimit, 14);
+        assert.deepEqual(failedState.poolTimeoutEvents, {
+            seen: 1,
+            acknowledged: 0,
+            pending: 1,
+        });
+        assert.deepEqual(a.getState().poolTimeoutEvents, {
+            seen: 1,
+            acknowledged: 1,
+            pending: 0,
+        });
     });
 
     it('requires three consecutive cold samples by default before scale-down', async () => {
@@ -474,7 +641,7 @@ describe('pool-autoscaler / runtime', () => {
         await a.tick(); // hold
         metrics.set({ estimated_saturation_ratio: 0.9, queries_in_flight: 9 });
         await a.tick(); // up → max becomes 12 in metrics? No: caller updates externally.
-        metrics.set({ max: 12, estimated_saturation_ratio: 0.05, queries_in_flight: 0, avg_wait_ms: 0 });
+        metrics.set({ max: 12, estimated_saturation_ratio: 0.05, queries_in_flight: 0 });
         await a.tick(); // down
         const s = a.getState();
         assert.equal(s.stats.ticks, 3);

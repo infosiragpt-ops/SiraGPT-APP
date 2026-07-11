@@ -66,6 +66,10 @@ describe('pool-instrumentation', () => {
         assert.equal(snap.estimated_connections_idle, 4);
         assert.equal(Object.hasOwn(snap, 'connections_active'), false);
         assert.equal(Object.hasOwn(snap, 'connections_idle'), false);
+        assert.equal(Object.hasOwn(snap, 'avg_wait_ms'), false);
+        assert.equal(Object.hasOwn(snap, 'total_wait_ms'), false);
+        assert.equal(snap.pool_timeout_count, 0);
+        assert.equal(snap.last_pool_timeout_at, null);
         assert.equal(snap.pool.max, 4);
         assert.equal(snap.pool.min, 1);
     });
@@ -118,7 +122,7 @@ describe('pool-instrumentation', () => {
         assert.equal(ok.estimated_saturation, 'ok');
     });
 
-    it('counts errors and treats P2024 as wait time', async () => {
+    it('tracks P2024 pool timeout count and last occurrence without inventing wait time', async () => {
         const prisma = makeFakePrisma();
         const handle = instrumentPool(prisma, { poolMax: 2 });
 
@@ -136,7 +140,11 @@ describe('pool-instrumentation', () => {
         const snap = handle.snapshot();
         assert.equal(snap.total_errors, 2);
         assert.equal(snap.total_queries, 2);
-        assert.ok(snap.total_wait_ms >= 0);
+        assert.equal(snap.pool_timeout_count, 1);
+        assert.ok(Number.isFinite(snap.last_pool_timeout_at));
+        assert.ok(snap.last_pool_timeout_at > 0);
+        assert.equal(Object.hasOwn(snap, 'avg_wait_ms'), false);
+        assert.equal(Object.hasOwn(snap, 'total_wait_ms'), false);
         assert.equal(snap.queries_in_flight, 0);
     });
 
@@ -202,7 +210,9 @@ describe('pool-instrumentation', () => {
         );
         assert.equal(events.length, 2);
         assert.equal(events[0].error, null);
+        assert.equal(Object.hasOwn(events[0], 'wait'), false);
         assert.ok(events[1].error instanceof Error);
+        assert.equal(Object.hasOwn(events[1], 'wait'), false);
         handle.dispose();
         assert.equal(handle.installed, false);
     });

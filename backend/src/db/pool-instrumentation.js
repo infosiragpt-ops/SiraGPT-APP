@@ -11,8 +11,12 @@
 //   queries_in_flight  — exact (we increment on $use, decrement after)
 //   estimated_connections_active — min(in_flight, configured pool_max)
 //   estimated_connections_idle   — max(0, configured pool_max - in_flight)
-//   wait_time_ms       — exponential moving average of P2024-classified
-//                        latency (queue waits) plus running sum/avg.
+//   estimated_saturation_* — derived from in_flight / configured pool_max
+//   pool_timeout_*     — observed P2024 event count and last occurrence
+//
+// Prisma does not expose how long a successful query waited for a connection.
+// Operation latency is not queue wait, so this module deliberately publishes
+// no successful-query wait metric.
 //
 // Instrumentation is opt-in: `instrumentPool(prisma, { poolMax })`
 // returns a metrics object with `snapshot()`, a `dispose()` hook, and
@@ -60,10 +64,10 @@ function createMetricsState(poolMax) {
         totalErrors: 0,
         totalRetries: 0,
         totalLatencyMs: 0,
-        totalWaitMs: 0,
+        poolTimeoutCount: 0,
+        lastPoolTimeoutAt: 0,
         // EMA approximation: 1/8 weight on the new sample
         avgLatencyMs: 0,
-        avgWaitMs: 0,
         startedAt: nowMs(),
         lastQueryAt: 0,
     };
@@ -167,27 +171,19 @@ function instrumentPool(prisma, opts = {}) {
             state.peakInFlight = state.inFlight;
         }
 
-        // queries that enter while pool is saturated effectively wait.
-        // We attribute the difference between t0 and tStart to wait if
-        // in_flight already >= pool_max at entry (best-effort signal).
-        const sawSaturation = state.inFlight > poolMax;
         const tStart = nowMs();
 
         try {
             const result = await execute();
             const ms = nowMs() - tStart;
-            const wait = sawSaturation ? Math.max(0, tStart - t0) : 0;
             state.totalLatencyMs += ms;
-            state.totalWaitMs += wait;
             state.avgLatencyMs = updateEma(state.avgLatencyMs, ms);
-            state.avgWaitMs = updateEma(state.avgWaitMs, wait);
             if (typeof opts.onQuery === 'function') {
                 try {
                     opts.onQuery({
                         model: params.model,
                         action: params.action,
                         ms,
-                        wait,
                         error: null,
                     });
                 } catch (_) { /* user callback must not break the query */ }
@@ -198,9 +194,8 @@ function instrumentPool(prisma, opts = {}) {
             state.totalLatencyMs += ms;
             state.totalErrors += 1;
             if (err && err.code === 'P2024') {
-                // Pool timeout — treated as a wait sample
-                state.totalWaitMs += ms;
-                state.avgWaitMs = updateEma(state.avgWaitMs, ms);
+                state.poolTimeoutCount += 1;
+                state.lastPoolTimeoutAt = nowMs();
             }
             if (typeof opts.onQuery === 'function') {
                 try {
@@ -208,7 +203,6 @@ function instrumentPool(prisma, opts = {}) {
                         model: params.model,
                         action: params.action,
                         ms,
-                        wait: 0,
                         error: err,
                     });
                 } catch (_) { /* swallow */ }
@@ -283,8 +277,8 @@ function instrumentPool(prisma, opts = {}) {
             total_errors: state.totalErrors,
             total_retries: state.totalRetries,
             avg_latency_ms: Math.round(state.avgLatencyMs * 100) / 100,
-            avg_wait_ms: Math.round(state.avgWaitMs * 100) / 100,
-            total_wait_ms: state.totalWaitMs,
+            pool_timeout_count: state.poolTimeoutCount,
+            last_pool_timeout_at: state.lastPoolTimeoutAt || null,
             total_latency_ms: state.totalLatencyMs,
             estimated_saturation_ratio: capacityObservable
                 ? Math.round(saturationRatio * 1000) / 1000

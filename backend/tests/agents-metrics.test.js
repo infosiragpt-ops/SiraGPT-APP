@@ -64,6 +64,87 @@ describe('pre-registered metrics', () => {
   });
 });
 
+describe('registration schema', () => {
+  it('is idempotent for an identical counter schema without clearing samples', () => {
+    const name = 'test_agent_identical_counter_registration';
+    const schema = { help: 'identical schema', labels: ['agent'], maxSeries: 3 };
+    registerCounter(name, schema);
+    counter(name, { agent: 'planner' }, 2);
+
+    registerCounter(name, { ...schema, labels: [...schema.labels] });
+
+    const metric = registry.get(name);
+    assert.equal(metric.series.get('agent=planner'), 2);
+    assert.equal(metric.series.size, 1);
+  });
+
+  it('is idempotent for an identical histogram schema without clearing samples', () => {
+    const name = 'test_agent_identical_histogram_registration';
+    const schema = {
+      help: 'identical histogram',
+      labels: ['agent'],
+      buckets: [10, 20],
+      maxSeries: 4,
+    };
+    registerHistogram(name, schema);
+    observe(name, { agent: 'planner' }, 5);
+
+    registerHistogram(name, {
+      ...schema,
+      labels: [...schema.labels],
+      buckets: [...schema.buckets],
+    });
+
+    assert.equal(registry.get(name).series.get('agent=planner').count, 1);
+  });
+
+  it('rejects duplicate registration with a conflicting type or schema', () => {
+    const name = 'test_agent_conflicting_registration';
+    registerHistogram(name, {
+      help: 'duration',
+      labels: ['agent'],
+      buckets: [10, 20],
+      maxSeries: 4,
+    });
+
+    for (const registerConflict of [
+      () => registerCounter(name, { help: 'duration', labels: ['agent'], maxSeries: 4 }),
+      () => registerHistogram(name, {
+        help: 'different help',
+        labels: ['agent'],
+        buckets: [10, 20],
+        maxSeries: 4,
+      }),
+      () => registerHistogram(name, {
+        help: 'duration',
+        labels: ['tool'],
+        buckets: [10, 20],
+        maxSeries: 4,
+      }),
+      () => registerHistogram(name, {
+        help: 'duration',
+        labels: ['agent'],
+        buckets: [10, 30],
+        maxSeries: 4,
+      }),
+      () => registerHistogram(name, {
+        help: 'duration',
+        labels: ['agent'],
+        buckets: [10, 20],
+        maxSeries: 5,
+      }),
+    ]) {
+      assert.throws(registerConflict, /conflicting metric registration/i);
+    }
+
+    const metric = registry.get(name);
+    assert.equal(metric.type, 'histogram');
+    assert.deepEqual(metric.labels, ['agent']);
+    assert.deepEqual(metric.buckets, [10, 20]);
+    assert.equal(metric.maxSeries, 4);
+  });
+});
+
 // ── counter ───────────────────────────────────────────────────
 
 describe('counter', () => {
@@ -109,6 +190,18 @@ describe('counter', () => {
     const keys = [...m.series.keys()];
     assert.equal(keys[0], 'agent=a,terminatedBy=');
   });
+
+  it('rejects negative, non-finite, and non-numeric deltas', () => {
+    const name = 'test_agent_counter_invalid_values';
+    registerCounter(name, { help: 'invalid values', labels: ['agent'] });
+    for (const value of [-1, NaN, Infinity, -Infinity, '2']) {
+      counter(name, { agent: String(value) }, value);
+    }
+    assert.equal(registry.get(name).series.size, 0);
+
+    counter(name, { agent: 'valid' }, 2);
+    assert.equal(registry.get(name).series.get('agent=valid'), 2);
+  });
 });
 
 // ── gauge ─────────────────────────────────────────────────────
@@ -133,6 +226,18 @@ describe('gauge', () => {
     gauge('se_agent_errors_total', { agent: 'a' }, 42);
     const m = registry.get('se_agent_errors_total');
     assert.equal(m.series.size, 0);
+  });
+
+  it('rejects non-finite values while retaining finite negative gauges', () => {
+    const name = 'test_agent_gauge_invalid_values';
+    registerGauge(name, { help: 'invalid values', labels: ['collection'] });
+    for (const value of [NaN, Infinity, -Infinity, '2']) {
+      gauge(name, { collection: String(value) }, value);
+    }
+    assert.equal(registry.get(name).series.size, 0);
+
+    gauge(name, { collection: 'delta' }, -2);
+    assert.equal(registry.get(name).series.get('collection=delta'), -2);
   });
 });
 
@@ -177,6 +282,24 @@ describe('observe', () => {
   it('silently ignores unknown histogram name', () => {
     observe('nonexistent_histogram', { foo: 'bar' }, 50);
     // Should not throw.
+  });
+
+  it('rejects negative, non-finite, and non-numeric observations', () => {
+    const name = 'test_agent_histogram_invalid_values';
+    registerHistogram(name, {
+      help: 'invalid values',
+      labels: ['agent'],
+      buckets: [10],
+    });
+    for (const value of [-1, NaN, Infinity, -Infinity, '2']) {
+      observe(name, { agent: String(value) }, value);
+    }
+    assert.equal(registry.get(name).series.size, 0);
+
+    observe(name, { agent: 'valid' }, 2);
+    const record = registry.get(name).series.get('agent=valid');
+    assert.equal(record.count, 1);
+    assert.equal(record.sum, 2);
   });
 });
 

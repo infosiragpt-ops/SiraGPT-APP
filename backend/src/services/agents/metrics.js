@@ -28,13 +28,45 @@ const registry = new Map();
 
 const DEFAULT_BUCKETS_MS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000];
 
+function sameArray(left, right) {
+  return (
+    Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((value, index) => value === right[index])
+  );
+}
+
+function sameMetricSchema(left, right) {
+  return (
+    left.type === right.type
+    && left.help === right.help
+    && left.maxSeries === right.maxSeries
+    && sameArray(left.labels, right.labels)
+    && (
+      left.type !== 'histogram'
+      || sameArray(left.buckets, right.buckets)
+    )
+  );
+}
+
+function registerMetric(name, schema) {
+  const existing = registry.get(name);
+  if (existing) {
+    if (sameMetricSchema(existing, schema)) return existing;
+    throw new TypeError(`conflicting metric registration for "${name}"`);
+  }
+  const metric = { ...schema, series: new Map() };
+  registry.set(name, metric);
+  return metric;
+}
+
 function registerCounter(name, { help, labels = [], maxSeries } = {}) {
-  registry.set(name, {
+  return registerMetric(name, {
     type: 'counter',
-    help,
-    labels,
+    help: String(help || ''),
+    labels: Object.freeze(Array.from(labels, String)),
     maxSeries: resolveMaxSeriesPerFamily(maxSeries),
-    series: new Map(),
   });
 }
 
@@ -44,23 +76,21 @@ function registerHistogram(name, {
   buckets = DEFAULT_BUCKETS_MS,
   maxSeries,
 } = {}) {
-  registry.set(name, {
+  return registerMetric(name, {
     type: 'histogram',
-    help,
-    labels,
-    buckets,
+    help: String(help || ''),
+    labels: Object.freeze(Array.from(labels, String)),
+    buckets: Object.freeze(Array.from(buckets, Number)),
     maxSeries: resolveMaxSeriesPerFamily(maxSeries),
-    series: new Map(),
   });
 }
 
 function registerGauge(name, { help, labels = [], maxSeries } = {}) {
-  registry.set(name, {
+  return registerMetric(name, {
     type: 'gauge',
-    help,
-    labels,
+    help: String(help || ''),
+    labels: Object.freeze(Array.from(labels, String)),
     maxSeries: resolveMaxSeriesPerFamily(maxSeries),
-    series: new Map(),
   });
 }
 
@@ -130,6 +160,7 @@ registerHistogram('agent_task_duration_ms', {
 function counter(name, labels = {}, delta = 1) {
   const m = registry.get(name);
   if (!m || m.type !== 'counter') return;
+  if (!Number.isFinite(delta) || delta < 0) return;
   const k = selectSeriesKey(m, labels);
   if (k === null) return;
   m.series.set(k, (m.series.get(k) || 0) + delta);
@@ -138,6 +169,7 @@ function counter(name, labels = {}, delta = 1) {
 function gauge(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'gauge') return;
+  if (!Number.isFinite(value)) return;
   const k = selectSeriesKey(m, labels);
   if (k === null) return;
   m.series.set(k, value);
@@ -146,6 +178,7 @@ function gauge(name, labels = {}, value = 0) {
 function observe(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'histogram') return;
+  if (!Number.isFinite(value) || value < 0) return;
   const k = selectSeriesKey(m, labels);
   if (k === null) return;
   let rec = m.series.get(k);

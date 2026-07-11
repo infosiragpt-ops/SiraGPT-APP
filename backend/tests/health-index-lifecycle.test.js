@@ -15,6 +15,21 @@ const standardCompose = fs.readFileSync(
   path.resolve(__dirname, '../../docker-compose.yml'),
   'utf8',
 );
+const environmentDocs = fs.readFileSync(
+  path.resolve(__dirname, '../../docs/operations/ENVIRONMENT.md'),
+  'utf8',
+);
+const backendEnvExample = fs.readFileSync(
+  path.resolve(__dirname, '../.env.example'),
+  'utf8',
+);
+const PRODUCTION_CRITICAL_QUEUES = [
+  'agent-task',
+  'chat-run',
+  'codex-runs',
+  'document-collections',
+  'goal-runs',
+].join(',');
 
 test('index mounts internal health beside the unchanged public health routes', () => {
   assert.match(indexSource, /const\s+\{\s*createHealthSystem\s*\}\s*=\s*require\('\.\/src\/health\/mount'\)/);
@@ -141,7 +156,6 @@ test('standard and production Docker backends pass through every operational con
     HEALTH_QUEUE_PROBE_TIMEOUT_MS: '1500',
     HEALTH_QUEUE_PROBE_CACHE_TTL_MS: '1000',
     HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: '30000',
-    HEALTH_CRITICAL_QUEUES: '',
     DATABASE_POOL_MIN: '2',
     DATABASE_POOL_MAX: '10',
     DATABASE_POOL_TIMEOUT_MS: '10000',
@@ -167,4 +181,37 @@ test('standard and production Docker backends pass through every operational con
     }
   }
   assert.deepEqual(missing, []);
+});
+
+test('production Compose defaults every physical queue to readiness-critical', () => {
+  const productionBackend = productionCompose.match(/\n  backend:\n([\s\S]*?)(?=\n  frontend:\n)/);
+  const standardBackend = standardCompose.match(/\n  backend:\n([\s\S]*?)(?=\n  frontend:\n)/);
+  assert.ok(productionBackend);
+  assert.ok(standardBackend);
+
+  assert.match(
+    productionBackend[1],
+    new RegExp(
+      `HEALTH_CRITICAL_QUEUES:\\s+["']?\\$\\{HEALTH_CRITICAL_QUEUES:-${PRODUCTION_CRITICAL_QUEUES}\\}["']?`,
+    ),
+  );
+  assert.match(
+    standardBackend[1],
+    /HEALTH_CRITICAL_QUEUES:\s+["']?\$\{HEALTH_CRITICAL_QUEUES:-\}["']?/,
+  );
+});
+
+test('queue criticality docs distinguish production and standard Compose defaults', () => {
+  assert.match(
+    environmentDocs,
+    /production Compose defaults all five registered queues to critical/i,
+  );
+  assert.match(
+    environmentDocs,
+    /standard Compose keeps the default empty/i,
+  );
+  assert.match(
+    backendEnvExample,
+    /production Compose defaults all five registered queues to critical/i,
+  );
 });

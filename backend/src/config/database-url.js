@@ -203,6 +203,10 @@ function redactDatabaseUrls(value, env = {}) {
   );
 }
 
+function sanitizeDatabaseErrorMessage(value, env = {}) {
+  return redactDatabaseUrls(value || 'unknown database error', env);
+}
+
 function classifyDatabasePoolCapacity(databaseUrl) {
   const value = trimmedEnvironmentValue(databaseUrl);
   if (!value) {
@@ -262,6 +266,7 @@ module.exports = {
   isDirectPostgresUrl,
   isRemotePrismaUrl,
   redactDatabaseUrls,
+  sanitizeDatabaseErrorMessage,
   resolveDatabaseUrls,
   resolveRuntimeDatabaseUrl,
   resolveDirectMigrationDatabaseUrl,

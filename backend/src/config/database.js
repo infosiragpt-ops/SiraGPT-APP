@@ -16,8 +16,8 @@ const {
   DIRECT_POSTGRES_PROTOCOLS,
   REMOTE_PRISMA_PROTOCOL,
   classifyDatabasePoolCapacity,
-  redactDatabaseUrls,
   resolveRuntimeDatabaseUrl,
+  sanitizeDatabaseErrorMessage,
 } = require('./database-url');
 
 const MAX_CONNECT_RETRIES = parseInt(process.env.DB_CONNECT_RETRIES || '5', 10);
@@ -116,10 +116,6 @@ function buildPrismaClientOptions(env = {}) {
     };
   }
   return options;
-}
-
-function sanitizeDatabaseErrorMessage(value) {
-  return redactDatabaseUrls(value || 'unknown database error');
 }
 
 // ── Prisma client ──────────────────────────────────────────

@@ -61,7 +61,25 @@ describe("checkDatabase", () => {
     const r = await checkDatabase(fakePrisma);
     assert.equal(r.status, "unhealthy");
     assert.equal(r.critical, true);
-    assert.match(r.error, /ECONNREFUSED/);
+    assert.equal(r.error, "DATABASE_PROBE_FAILED");
+  });
+
+  test("database failures expose only a stable value-free code", async () => {
+    const secretUrl = "postgresql://private-user:private-password@db.private.internal:5432/sira";
+    const fakePrisma = {
+      $queryRawUnsafe: async () => {
+        const error = new Error(`connection for private-user at db.private.internal failed: ${secretUrl}`);
+        error.code = "P1001";
+        throw error;
+      },
+    };
+
+    const r = await checkDatabase(fakePrisma, { DATABASE_URL: secretUrl });
+    assert.equal(r.error, "DATABASE_PROBE_FAILED");
+    assert.doesNotMatch(
+      JSON.stringify(r),
+      /private-user|private-password|db\.private\.internal|postgresql:\/\//i,
+    );
   });
 
   test("skipped when no client passed", async () => {
@@ -83,7 +101,7 @@ describe("checkDatabase", () => {
     assert.notEqual(result, outerTimeout, "database probe exceeded its 100ms lower bound");
     assert.equal(result.status, "unhealthy");
     assert.equal(result.critical, true);
-    assert.match(result.error, /timed out after 100ms/i);
+    assert.equal(result.error, "DATABASE_PROBE_TIMEOUT");
   });
 
   test("public and internal DB probes share one unresolved Prisma operation", async () => {
@@ -141,7 +159,8 @@ describe("checkMigrations", () => {
     assert.equal(r.status, "unhealthy");
     assert.equal(r.critical, true);
     assert.equal(r.details.failed_count, 1);
-    assert.deepEqual(r.details.failed, ["20250919203030_add_model_sync_fields"]);
+    assert.equal(r.details.failed, undefined);
+    assert.equal(r.error, "MIGRATIONS_FAILED");
   });
 
   test("skipped (non-critical) when the migrations table is unreadable", async () => {
@@ -150,6 +169,23 @@ describe("checkMigrations", () => {
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
     assert.equal(r.details.reason, "migrations_table_unreadable");
+    assert.equal(r.error, "MIGRATIONS_PROBE_FAILED");
+  });
+
+  test("migration probe failures never expose database host, user, or URL values", async () => {
+    const secretUrl = "postgresql://migration-user:migration-password@migrations.private:5432/sira";
+    const fakePrisma = {
+      $queryRawUnsafe: async () => {
+        throw new Error(`migration-user cannot reach migrations.private via ${secretUrl}`);
+      },
+    };
+
+    const r = await checkMigrations(fakePrisma, { DIRECT_DATABASE_URL: secretUrl });
+    assert.equal(r.error, "MIGRATIONS_PROBE_FAILED");
+    assert.doesNotMatch(
+      JSON.stringify(r),
+      /migration-user|migration-password|migrations\.private|postgresql:\/\//i,
+    );
   });
 
   test("skipped when no client passed", async () => {
@@ -177,7 +213,7 @@ describe("checkMigrations", () => {
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
     assert.equal(r.details.reason, "migrations_table_unreadable");
-    assert.match(r.error, /timed out after 100ms/i);
+    assert.equal(r.error, "MIGRATIONS_PROBE_TIMEOUT");
     assert.deepEqual(unhandled, []);
   });
 
@@ -601,8 +637,8 @@ describe("runReadinessCheck", () => {
     const migrations = report.checks.find((check) => check.name === "migrations");
 
     assert.ok(elapsedMs < 500, `injected 100ms bound was ignored (${elapsedMs}ms)`);
-    assert.match(database.error, /timed out after 100ms/i);
-    assert.match(migrations.error, /timed out after 100ms/i);
+    assert.equal(database.error, "DATABASE_PROBE_TIMEOUT");
+    assert.equal(migrations.error, "MIGRATIONS_PROBE_TIMEOUT");
   });
 });
 
@@ -742,8 +778,8 @@ describe("runFullHealthCheck", () => {
     const migrations = report.checks.find((check) => check.name === "migrations");
 
     assert.ok(elapsedMs < 500, `injected 100ms bound was ignored (${elapsedMs}ms)`);
-    assert.match(database.error, /timed out after 100ms/i);
-    assert.match(migrations.error, /timed out after 100ms/i);
+    assert.equal(database.error, "DATABASE_PROBE_TIMEOUT");
+    assert.equal(migrations.error, "MIGRATIONS_PROBE_TIMEOUT");
   });
 });
 

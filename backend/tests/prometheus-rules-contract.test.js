@@ -17,8 +17,11 @@ const {
 const RULES_PATH = path.resolve(__dirname, '../../docs/prometheus-rules.yml');
 const RULE_TESTS_PATH = path.resolve(__dirname, '../../docs/prometheus-rules.test.yml');
 const SLO_PATH = path.resolve(__dirname, '../../docs/slo.md');
+const LEGACY_SLO_PATH = path.resolve(__dirname, '../../siraGPT/docs/slo.md');
+const LEGACY_RULES_PATH = path.resolve(__dirname, '../../siraGPT/docs/prometheus-rules.yml');
 const INDEX_SOURCE = fs.readFileSync(path.resolve(__dirname, '../index.js'), 'utf8');
 const RULE_SOURCE = fs.readFileSync(RULES_PATH, 'utf8');
+const SLO_SOURCE = fs.readFileSync(SLO_PATH, 'utf8');
 const RULE_DOCUMENT = yaml.load(RULE_SOURCE);
 const RATIO_WINDOWS = Object.freeze(['5m', '30m', '1h', '2h', '6h', '1d', '3d']);
 const SLI_RATIO_PREFIXES = Object.freeze([
@@ -175,6 +178,17 @@ test('canonical backend suite registers a syntactically valid Prometheus rule do
   for (const group of RULE_DOCUMENT.groups) {
     assert.equal(typeof group.name, 'string');
     assert.ok(Array.isArray(group.rules));
+  }
+});
+
+test('SLO documentation contains no stale unimplemented SLO identifiers', () => {
+  for (const [file, source] of [
+    [SLO_PATH, SLO_SOURCE],
+    [RULES_PATH, RULE_SOURCE],
+    [LEGACY_SLO_PATH, fs.readFileSync(LEGACY_SLO_PATH, 'utf8')],
+    [LEGACY_RULES_PATH, fs.readFileSync(LEGACY_RULES_PATH, 'utf8')],
+  ]) {
+    assert.doesNotMatch(source, /SLO-API-3|SLO-AGT-2/, `${file} names an unimplemented SLO`);
   }
 });
 

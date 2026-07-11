@@ -52,7 +52,6 @@ const DEFAULT_SCALE_DOWN_RATIO = 0.3;
 const DEFAULT_SCALE_UP_STEP = 2;
 const DEFAULT_SCALE_DOWN_STEP = 1;
 const DEFAULT_COOLDOWN_MS = 60_000;
-const DEFAULT_WAIT_MS_THRESHOLD = 50;
 const DEFAULT_HISTORY_LEN = 20;
 
 function noop() {}
@@ -86,6 +85,19 @@ function readActualLimit(snapshot, fallback) {
     return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
+function readPoolTimeoutCount(snapshot) {
+    const value = Number(snapshot && snapshot.pool_timeout_count);
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function readPoolTimeoutOccurrence(snapshot) {
+    const value = snapshot && snapshot.last_pool_timeout_at;
+    return (
+        (typeof value === 'number' && Number.isFinite(value) && value > 0)
+        || (typeof value === 'string' && value.length > 0)
+    ) ? value : null;
+}
+
 /**
  * Decide a new pool limit from a single metrics snapshot.
  *
@@ -101,8 +113,10 @@ function readActualLimit(snapshot, fallback) {
 function decide(snapshot, cfg) {
     const current = readActualLimit(snapshot, cfg.minLimit);
     const ratio = Number(snapshot && snapshot.estimated_saturation_ratio) || 0;
-    const wait = Number(snapshot && snapshot.avg_wait_ms) || 0;
     const inFlight = Number(snapshot && snapshot.queries_in_flight) || 0;
+    const pendingPoolTimeoutEvents = readPoolTimeoutCount({
+        pool_timeout_count: snapshot && snapshot.new_pool_timeout_events,
+    });
 
     // Policy bounds constrain recommendations, never the observed live pool.
     // If the datasource was configured outside this autoscaler's range, make
@@ -124,21 +138,23 @@ function decide(snapshot, cfg) {
         };
     }
 
-    // Strong signal: pool already topped out and queries are queueing.
-    const queueingHard = wait >= cfg.waitMsThreshold;
-    const hot = ratio >= cfg.scaleUpRatio || queueingHard;
-    const cold = ratio <= cfg.scaleDownRatio && wait < cfg.waitMsThreshold;
+    // Prisma does not expose successful-query pool wait. Scale up from the
+    // explicitly estimated saturation ratio or from new P2024 events that
+    // remain unacknowledged; never from the raw cumulative timeout counter.
+    const hasPendingPoolTimeouts = pendingPoolTimeoutEvents > 0;
+    const hot = ratio >= cfg.scaleUpRatio || hasPendingPoolTimeouts;
+    const cold = ratio <= cfg.scaleDownRatio && !hasPendingPoolTimeouts;
 
     if (hot && current < cfg.maxLimit) {
-        const step = queueingHard ? cfg.scaleUpStep * 2 : cfg.scaleUpStep;
+        const step = hasPendingPoolTimeouts ? cfg.scaleUpStep * 2 : cfg.scaleUpStep;
         const target = clamp(current + step, cfg.minLimit, cfg.maxLimit);
         if (target > current) {
             return {
                 action: 'scale_up',
                 from: current,
                 to: target,
-                reason: queueingHard
-                    ? `wait ${wait.toFixed(1)}ms ≥ ${cfg.waitMsThreshold}ms`
+                reason: hasPendingPoolTimeouts
+                    ? `${pendingPoolTimeoutEvents} new pool timeout event(s)`
                     : `saturation ${ratio.toFixed(2)} ≥ ${cfg.scaleUpRatio}`,
             };
         }
@@ -177,7 +193,6 @@ function decide(snapshot, cfg) {
  * @param {number} [opts.scaleUpStep]
  * @param {number} [opts.scaleDownStep]
  * @param {number} [opts.cooldownMs]
- * @param {number} [opts.waitMsThreshold]
  * @param {Function} [opts.logger]         (level, msg, meta) => void
  * @param {Function} [opts.now]            Clock (defaults to Date.now)
  * @param {object}   [opts.scheduler]      { setInterval, clearInterval } — for tests
@@ -215,9 +230,6 @@ function createPoolAutoscaler(opts = {}) {
             min: 0,
             max: AUTOSCALE_INTERVAL_MS_BOUNDS.max,
         }),
-        waitMsThreshold: Number.isFinite(opts.waitMsThreshold)
-            ? opts.waitMsThreshold
-            : DEFAULT_WAIT_MS_THRESHOLD,
         coldSamplesRequired: parseStrictInteger(
             opts.coldSamplesRequired,
             DEFAULT_COLD_SAMPLES_REQUIRED,
@@ -244,6 +256,10 @@ function createPoolAutoscaler(opts = {}) {
     let currentLimit = readActualLimit(initialSnapshot, minLimit);
     let recommendedLimit = currentLimit;
     let coldSamples = 0;
+    let lastObservedPoolTimeoutCount = readPoolTimeoutCount(initialSnapshot);
+    let lastObservedPoolTimeoutAt = readPoolTimeoutOccurrence(initialSnapshot);
+    let seenPoolTimeoutCount = lastObservedPoolTimeoutCount;
+    let acknowledgedPoolTimeoutCount = seenPoolTimeoutCount;
     const history = [];
     const stats = {
         ticks: 0,
@@ -263,6 +279,19 @@ function createPoolAutoscaler(opts = {}) {
         if (history.length > DEFAULT_HISTORY_LEN) history.shift();
     }
 
+    function pendingPoolTimeoutEvents() {
+        return Math.max(0, seenPoolTimeoutCount - acknowledgedPoolTimeoutCount);
+    }
+
+    function acknowledgePoolTimeoutEvents(entry) {
+        const acknowledged = pendingPoolTimeoutEvents();
+        if (acknowledged === 0) return;
+        acknowledgedPoolTimeoutCount = seenPoolTimeoutCount;
+        entry.pool_timeout_acknowledged_count = acknowledgedPoolTimeoutCount;
+        entry.pending_pool_timeout_events = 0;
+        entry.acknowledged_pool_timeout_events = acknowledged;
+    }
+
     async function tick() {
         stats.ticks += 1;
         const snap = opts.metrics.snapshot();
@@ -271,7 +300,30 @@ function createPoolAutoscaler(opts = {}) {
         if (!apply) {
             currentLimit = readActualLimit(snap, currentLimit);
         }
-        const rawDecision = decide(snap, cfg);
+        const poolTimeoutCount = readPoolTimeoutCount(snap);
+        const poolTimeoutAt = readPoolTimeoutOccurrence(snap);
+        let newlySeenPoolTimeoutEvents = poolTimeoutCount >= lastObservedPoolTimeoutCount
+            ? poolTimeoutCount - lastObservedPoolTimeoutCount
+            : 0;
+        if (
+            newlySeenPoolTimeoutEvents === 0
+            && poolTimeoutCount > 0
+            && poolTimeoutAt !== null
+            && poolTimeoutAt !== lastObservedPoolTimeoutAt
+        ) {
+            // A counter reset can make the numeric delta ambiguous. The
+            // independently tracked occurrence proves at least one new event.
+            newlySeenPoolTimeoutEvents = 1;
+        }
+        lastObservedPoolTimeoutCount = poolTimeoutCount;
+        lastObservedPoolTimeoutAt = poolTimeoutAt;
+        seenPoolTimeoutCount += newlySeenPoolTimeoutEvents;
+        const newPoolTimeoutEvents = pendingPoolTimeoutEvents();
+        const decisionSnapshot = {
+            ...snap,
+            new_pool_timeout_events: newPoolTimeoutEvents,
+        };
+        const rawDecision = decide(decisionSnapshot, cfg);
         if (rawDecision.cold) coldSamples += 1;
         else coldSamples = 0;
 
@@ -294,8 +346,14 @@ function createPoolAutoscaler(opts = {}) {
         const entry = {
             t: tickAt,
             estimated_saturation_ratio: snap.estimated_saturation_ratio,
-            avg_wait_ms: snap.avg_wait_ms,
             queries_in_flight: snap.queries_in_flight,
+            pool_timeout_count: poolTimeoutCount,
+            new_pool_timeout_events: newPoolTimeoutEvents,
+            observed_new_pool_timeout_events: newlySeenPoolTimeoutEvents,
+            pool_timeout_seen_count: seenPoolTimeoutCount,
+            pool_timeout_acknowledged_count: acknowledgedPoolTimeoutCount,
+            pending_pool_timeout_events: newPoolTimeoutEvents,
+            last_pool_timeout_at: poolTimeoutAt,
             current: currentLimit,
             decision: decision.action,
             reason: decision.reason,
@@ -334,11 +392,18 @@ function createPoolAutoscaler(opts = {}) {
                 + `${decision.from}→${target} (${decision.reason})`
             );
             recordHistory(entry);
+            if (decision.action === 'scale_up') {
+                acknowledgePoolTimeoutEvents(entry);
+            }
             return entry;
         }
 
         try {
-            await apply(target, { from: decision.from, reason: decision.reason, snapshot: snap });
+            await apply(target, {
+                from: decision.from,
+                reason: decision.reason,
+                snapshot: decisionSnapshot,
+            });
             currentLimit = target;
             lastAppliedAt = tickAt;
             lastAction = decision.action;
@@ -347,6 +412,9 @@ function createPoolAutoscaler(opts = {}) {
             else stats.scaleDowns += 1;
             log('info', `[db.pool.autoscale] ${decision.action} ${decision.from}→${target} (${decision.reason})`);
             entry.applied = true;
+            if (decision.action === 'scale_up') {
+                acknowledgePoolTimeoutEvents(entry);
+            }
         } catch (err) {
             stats.applyErrors += 1;
             stats.lastError = err && err.message ? err.message : String(err);
@@ -389,6 +457,11 @@ function createPoolAutoscaler(opts = {}) {
             lastRecommendationAt: lastRecommendationAt || null,
             lastAppliedAt: lastAppliedAt || null,
             coldSamples,
+            poolTimeoutEvents: {
+                seen: seenPoolTimeoutCount,
+                acknowledged: acknowledgedPoolTimeoutCount,
+                pending: pendingPoolTimeoutEvents(),
+            },
             stats: { ...stats },
             history: history.slice(),
             config: { ...cfg },
@@ -417,7 +490,6 @@ module.exports = {
     DEFAULT_SCALE_UP_STEP,
     DEFAULT_SCALE_DOWN_STEP,
     DEFAULT_COOLDOWN_MS,
-    DEFAULT_WAIT_MS_THRESHOLD,
     DEFAULT_COLD_SAMPLES_REQUIRED,
     AUTOSCALE_POOL_LIMIT_BOUNDS,
     AUTOSCALE_INTERVAL_MS_BOUNDS,

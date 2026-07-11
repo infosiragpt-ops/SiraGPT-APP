@@ -147,7 +147,12 @@ URLs and credentials are never included in pool logs.
 | `HEALTH_SCHEDULE_PROVIDER_PROBES` | Periodically poll registered `provider-*` probes. Effective only when `HEALTH_PROVIDER_PROBES_ENABLED=true`. | `false` |
 | `HEALTH_QUEUE_PROBE_TIMEOUT_MS` | Timeout for each dedicated BullMQ health operation, clamped to 100–10000 ms | `1500` |
 | `HEALTH_QUEUE_PROBE_CACHE_TTL_MS` | Dedicated queue-health result cache TTL, clamped to 0–5000 ms | `1000` |
-| `HEALTH_CRITICAL_QUEUES` | Comma-separated queue IDs/names whose probe failure makes readiness unhealthy. Known IDs: `agent-task`, `chat-run`, `codex-runs`, `document-collections`, `goal-runs`. | (none) |
+| `HEALTH_CRITICAL_QUEUES` | Comma-separated queue IDs/names whose probe failure makes readiness unhealthy. Known IDs: `agent-task`, `chat-run`, `codex-runs`, `document-collections`, `goal-runs`. | Production Compose: all five; standard Compose: none |
+
+Production Compose defaults all five registered queues to critical, so failure
+of any physical queue makes readiness return HTTP 503. Standard Compose keeps the default empty
+for local development, and both files allow an explicit `HEALTH_CRITICAL_QUEUES`
+override.
 
 `GET /internal/health/live`, `/ready`, and `/history` return
 `Cache-Control: no-store`. In production, access requires an exact constant-time
