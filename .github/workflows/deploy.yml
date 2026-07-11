@@ -110,6 +110,7 @@ jobs:
     timeout-minutes: 50
     env:
       TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
+      ALLOW_EQUIVALENT_UNBASELINED: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'deploy-production-equivalent-') && '1' || '0' }}
 
     steps:
       - name: Deploy via SSH (with auto-rollback)
@@ -121,6 +122,7 @@ jobs:
           # on the command line only, so nothing persists after the run.
           DEPLOY_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
+          ALLOW_EQUIVALENT_UNBASELINED: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'deploy-production-equivalent-') && '1' || '0' }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -135,7 +137,7 @@ jobs:
           # run. The heredoc below owns its error handling (set -Eeuo
           # pipefail + rollback trap), so let it.
           script_stop: false
-          envs: DEPLOY_GH_TOKEN,TARGET_SHA
+          envs: DEPLOY_GH_TOKEN,TARGET_SHA,ALLOW_EQUIVALENT_UNBASELINED
           script: |
             bash <<'SIRAGPT_DEPLOY'
             set -Eeuo pipefail
@@ -334,6 +336,10 @@ jobs:
               echo "[deploy-workflow] Refusing invalid TARGET_SHA"
               exit 1
             fi
+            if ! [[ "${ALLOW_EQUIVALENT_UNBASELINED}" =~ ^(0|1)$ ]]; then
+              echo "[deploy-workflow] Refusing invalid equivalent-schema compatibility flag"
+              exit 1
+            fi
             TARGET_SHA="${TARGET_SHA,,}"
             if ! preserve_rollback_images; then
               echo "[deploy-workflow] Could not preserve verified rollback images; refusing deploy"
@@ -368,6 +374,7 @@ jobs:
             MIGRATION_STATUS=0
             MIGRATION_OUTPUT="$(${COMPOSE} run -T --rm \
               -e SKIP_MIGRATIONS=0 \
+              -e MIGRATION_ALLOW_EQUIVALENT_UNBASELINED="${ALLOW_EQUIVALENT_UNBASELINED}" \
               backend node scripts/start-with-migrations.js --migrate-only </dev/null 2>&1)" \
               || MIGRATION_STATUS="$?"
             printf '%s\n' "${MIGRATION_OUTPUT}"
