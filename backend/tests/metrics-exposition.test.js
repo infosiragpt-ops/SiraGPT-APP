@@ -485,7 +485,7 @@ test('Free-IA exposition cannot be newline-poisoned through feature or error-cod
   const text = freeIaMetrics.toPrometheusText();
   assert.equal(text.includes('\r'), false);
   assert.equal(text.split('\n').some((line) => line.startsWith('injected_metric ')), false);
-  assert.ok(text.includes('feature="chat\\ninjected_metric 1\\"\\\\tail"'));
+  assert.ok(text.includes('feature="chat_injected_metric_1_tail"'));
 });
 
 test('Free-IA error-code labels are normalized and automatically capped', () => {
@@ -536,7 +536,12 @@ test('shared path classifier excludes all metrics aliases and only those aliases
     matchedRouteLabel,
   } = require('../src/services/observability/metrics-paths');
 
-  for (const path of ['/metrics', '/internal/metrics', '/api/se-agents/metrics']) {
+  for (const path of [
+    '/metrics',
+    '/internal/metrics',
+    '/api/se-agents/metrics',
+    '/api/free-ia/metrics.prom',
+  ]) {
     assert.equal(isMetricsRequest({ path }), true);
     assert.equal(isMetricsRequest({ originalUrl: `${path}?scrape=1` }), true);
     assert.equal(isMetricsRequest({ path: `${path}/` }), true);
@@ -641,6 +646,7 @@ const METRICS_PATHS = Object.freeze([
   '/metrics',
   '/internal/metrics',
   '/api/se-agents/metrics',
+  '/api/free-ia/metrics.prom',
 ]);
 
 function buildMetricsAliasApp({ render = () => '# HELP alias_metric test\n# TYPE alias_metric gauge\nalias_metric 1\n' } = {}) {

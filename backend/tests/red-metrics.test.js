@@ -142,7 +142,12 @@ describe('red-metrics middleware', () => {
   });
 
   it('excludes every shared metrics alias from RED instrumentation', () => {
-    for (const path of ['/metrics', '/internal/metrics', '/api/se-agents/metrics']) {
+    for (const path of [
+      '/metrics',
+      '/internal/metrics',
+      '/api/se-agents/metrics',
+      '/api/free-ia/metrics.prom',
+    ]) {
       const req = makeReq({ path, originalUrl: path, route: { path } });
       const res = makeRes();
       let nextCalled = false;

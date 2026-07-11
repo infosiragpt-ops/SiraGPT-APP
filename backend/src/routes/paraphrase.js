@@ -21,11 +21,28 @@
  *                                     20_000 chars, hard upper 100_000).
  */
 
+const { randomUUID } = require('node:crypto');
 const express = require('express');
 const { z } = require('zod');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const chargeCredits = require('../middleware/charge-credits');
-const { refundLastCharge } = chargeCredits;
+const {
+  cacheIdempotentResponse,
+  failIdempotentOperation,
+  refundLastCharge,
+  startIdempotencyLeaseHeartbeat,
+} = chargeCredits;
+const prisma = require('../config/database');
+const freeIaMetrics = require('../services/free-ia-metrics');
+const {
+  completeFallbackReservation,
+  failFallbackReservation,
+} = require('../services/free-ia-fallback-quota');
+const { runParaphrasePipeline } = require('../services/paraphrase-engine');
+const {
+  createParaphraseRewriteFn,
+  resolveParaphraseProvider,
+} = require('../services/paraphrase-provider');
 
 const router = express.Router();
 
@@ -42,6 +59,42 @@ const SUPPORTED_MODES = [
 ];
 
 const SUPPORTED_LANGUAGES = ['es', 'en', 'pt', 'fr', 'de', 'it'];
+const PARAPHRASE_CHARGE_OPTIONS = Object.freeze({
+  feature: 'paraphrase',
+  cost: paraphraseCost,
+  allowFreeIaFallback: true,
+});
+const DEFAULT_PROVIDER_TIMEOUT_MS = 15_000;
+const MIN_PROVIDER_TIMEOUT_MS = 10;
+const MAX_PROVIDER_TIMEOUT_MS = 60_000;
+const MAX_CUSTOM_INSTRUCTION_LENGTH = 300;
+const UNSAFE_CUSTOM_INSTRUCTION_PATTERNS = Object.freeze([
+  /(?:ignore|disregard|forget|override|bypass|ignora|olvida|anula|omite)[\s\S]{0,50}(?:instructions?|prompt|rules?|instrucciones|reglas)/i,
+  /\b(?:system|assistant|developer|tool|sistema|asistente|desarrollador|herramienta)\s*:/i,
+  /\b(?:act|behave|pretend|actua|actúa|comportate|compórtate)\s+(?:as|como)\b/i,
+  /(?:reveal|show|print|expose|revela|muestra|imprime)[\s\S]{0,50}(?:system prompt|instructions?|secrets?|prompt del sistema|instrucciones|secretos?)/i,
+  /<\|(?:system|assistant|developer|tool)[^>]*\|>/i,
+]);
+
+const CustomInstructionSchema = z.string()
+  .trim()
+  .min(1)
+  .max(MAX_CUSTOM_INSTRUCTION_LENGTH)
+  .superRefine((value, ctx) => {
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'customInstruction contains disallowed control characters',
+      });
+      return;
+    }
+    if (UNSAFE_CUSTOM_INSTRUCTION_PATTERNS.some((pattern) => pattern.test(value))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'customInstruction must contain rewrite preferences only',
+      });
+    }
+  });
 
 // Tolerant pre-parse: callers occasionally send "human", "scholarly",
 // "shorter", "paraphrase", etc. Apply the engine's alias map BEFORE
@@ -76,7 +129,7 @@ const ParaphraseSchema = z.object({
   text: z.string().min(1).max(MAX_TEXT_LENGTH),
   mode: z.enum(SUPPORTED_MODES).default('standard'),
   language: z.enum(SUPPORTED_LANGUAGES).default('es'),
-  customInstruction: z.string().max(1_000).optional(),
+  customInstruction: CustomInstructionSchema.optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
 });
 
@@ -209,135 +262,493 @@ router.post('/humanize', express.json({ limit: '512kb' }), (req, res) => {
   }
 });
 
-router.post(
-  '/',
-  (req, _res, next) => { normaliseModeOnBody(req.body); next(); },
-  authenticateToken,
-  chargeCredits({ feature: 'paraphrase', cost: paraphraseCost }),
-  async (req, res) => {
-    const parse = ParaphraseSchema.safeParse(req.body);
+function resolveProviderTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(env.PARAPHRASE_PROVIDER_TIMEOUT_MS || '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PROVIDER_TIMEOUT_MS;
+  return Math.min(MAX_PROVIDER_TIMEOUT_MS, Math.max(MIN_PROVIDER_TIMEOUT_MS, parsed));
+}
+
+function fallbackBusinessRequestKey(req) {
+  if (req?._freeIaBusinessRequestKey) return req._freeIaBusinessRequestKey;
+  const explicit = req?._chargedCredits?.idempotencyKeyHash
+    || req?._chargedCredits?.txn?.idempotencyKey
+    || req?._chargedCredits?.txn?.id
+    || req?.id
+    || randomUUID();
+  const key = `${req?.user?.id || 'unknown'}:${explicit}`;
+  if (req) req._freeIaBusinessRequestKey = key;
+  return key;
+}
+
+function fallbackReservationFromCharge(charge) {
+  if (charge?.reservation?.transaction) return charge.reservation;
+  if (!charge?.txn) return null;
+  return {
+    transaction: charge.txn,
+    transactionId: charge.txn.id,
+    userId: charge.txn.userId,
+    feature: charge.feature || charge.txn.metadata?.feature,
+    requestHash: charge.requestHash || charge.txn.metadata?.requestHash,
+    requestedAmount: charge.txn.metadata?.requestedAmount,
+    idempotencyKeyHash: charge.txn.idempotencyKey,
+  };
+}
+
+function recordFallbackMetric(metrics, method, payload) {
+  try {
+    if (typeof metrics?.[method] === 'function') metrics[method](payload);
+  } catch {
+    // Business telemetry must not alter request outcomes.
+  }
+}
+
+function setFallbackHeaders(req, res) {
+  if (typeof res?.setHeader !== 'function' || res.headersSent) return;
+  res.setHeader('x-sira-fallback', 'free-ia');
+  res.setHeader('x-sira-fallback-feature', req?._chargedCredits?.feature || 'paraphrase');
+  res.setHeader('x-sira-fallback-cost', String(req?._chargedCredits?.amount || 0));
+}
+
+async function refundTransactionalCharge(req, reason, refund = refundLastCharge) {
+  const charge = req?._chargedCredits;
+  if (!charge?.txn || charge.replay || charge.fallback) return null;
+  const result = await refund(req, reason, { strict: true });
+  if (!result || result.ok !== true) {
+    const error = new Error('transactional credit refund failed');
+    error.code = 'REFUND_FAILED';
+    throw error;
+  }
+  return result;
+}
+
+function refundFailureResponse(req, res) {
+  const transactionId = req?._chargedCredits?.txn?.id || null;
+  return res.status(503).json({
+    error: 'credit refund failed',
+    code: 'REFUND_FAILED',
+    retryable: true,
+    audit: {
+      chargeTransactionId: transactionId,
+      refundKey: transactionId ? `refund:${transactionId}` : null,
+    },
+  });
+}
+
+function createRequestAbortContext(req, res, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutError = new Error('paraphrase provider timed out');
+  timeoutError.code = 'PARAPHRASE_TIMEOUT';
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  timer.unref?.();
+  const abortForDisconnect = () => {
+    if (controller.signal.aborted) return;
+    const error = new Error('client disconnected');
+    error.code = 'REQUEST_ABORTED';
+    controller.abort(error);
+  };
+  const onRequestAborted = () => {
+    abortForDisconnect();
+  };
+  const onResponseClose = () => {
+    if (!res?.writableEnded) abortForDisconnect();
+  };
+  req?.once?.('aborted', onRequestAborted);
+  res?.once?.('close', onResponseClose);
+  if (req?.aborted) onRequestAborted();
+  return {
+    controller,
+    cleanup() {
+      clearTimeout(timer);
+      req?.off?.('aborted', onRequestAborted);
+      res?.off?.('close', onResponseClose);
+    },
+  };
+}
+
+function buildParaphraseResponse(req, { raw, mode, language }) {
+  const wantHumanize = mode === 'humanize'
+    || String(req.query?.humanize || '').trim() === '1';
+  let stealth = null;
+  let finalText = raw;
+  if (wantHumanize && typeof raw === 'string' && raw.trim()) {
+    try {
+      // eslint-disable-next-line global-require
+      const { humanizeText, humanizeChunked } = require('../services/paraphrase-humanizer');
+      const intensity = String(req.query?.intensity || 'medium').toLowerCase();
+      const safeIntensity = ['low', 'medium', 'high'].includes(intensity)
+        ? intensity
+        : 'medium';
+      const runner = raw.length > 8000 ? humanizeChunked : humanizeText;
+      const humanized = runner({
+        text: raw,
+        language,
+        intensity: safeIntensity,
+      });
+      finalText = humanized.text;
+      stealth = {
+        aiScoreBefore: humanized.aiScoreBefore,
+        aiScoreAfter: humanized.aiScoreAfter,
+        deltaScore: humanized.deltaScore,
+        transformations: humanized.applied.length,
+        intensity: humanized.intensity,
+        chunked: !!humanized.chunked,
+        chunkCount: humanized.chunkCount || 1,
+      };
+    } catch (humanizeErr) {
+      if (req.log?.warn) req.log.warn({ err: humanizeErr }, 'paraphrase humanizer failed');
+    }
+  }
+
+  let tellsBefore = null;
+  if (String(req.query?.showTells || '').trim() === '1' && typeof raw === 'string' && raw.trim()) {
+    try {
+      // eslint-disable-next-line global-require
+      const { topAITellsFound } = require('../services/paraphrase-humanizer');
+      tellsBefore = topAITellsFound(raw, { limit: 10 });
+    } catch { /* best-effort */ }
+  }
+
+  const txn = req._chargedCredits?.fallback
+    ? null
+    : req._chargedCredits?.txn;
+  return {
+    output: finalText,
+    mode,
+    language,
+    stealth,
+    tellsBefore,
+    charge: txn
+      ? {
+          amount: String(req._chargedCredits.amount),
+          transactionId: txn.id,
+          replay: !!req._chargedCredits.replay,
+        }
+      : null,
+  };
+}
+
+function validateParaphraseRequest(req, res, next) {
+  const parse = ParaphraseSchema.safeParse(req.body);
+  if (!parse.success) {
+    return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });
+  }
+  req._validatedParaphrase = parse.data;
+  return next();
+}
+
+function createParaphraseHandler({
+  env = process.env,
+  runPipeline = runParaphrasePipeline,
+  resolveProvider = resolveParaphraseProvider,
+  createRewriteFn = createParaphraseRewriteFn,
+  refundLastCharge: refund = refundLastCharge,
+  cacheIdempotentResponse: cacheResponse = cacheIdempotentResponse,
+  failIdempotentOperation: failOperation = failIdempotentOperation,
+  completeFallbackReservation: completeFallback = completeFallbackReservation,
+  failFallbackReservation: failFallback = failFallbackReservation,
+  fallbackMetrics = freeIaMetrics,
+  prismaClient = prisma,
+  OpenAICtor,
+  createInstrumentedCerebrasClient,
+  startLeaseHeartbeat = ({
+    request,
+    abortController,
+    prismaClient: heartbeatPrisma,
+  }) => startIdempotencyLeaseHeartbeat(request, {
+    abortController,
+    prismaClient: heartbeatPrisma,
+  }),
+} = {}) {
+  return async function paraphraseHandler(req, res) {
+    const parse = req._validatedParaphrase
+      ? { success: true, data: req._validatedParaphrase }
+      : ParaphraseSchema.safeParse(req.body);
     if (!parse.success) {
-      await refundLastCharge(req, 'invalid_payload');
-      return res
-        .status(400)
-        .json({ error: 'invalid payload', issues: parse.error.issues });
+      return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });
     }
     const { text, mode, language, customInstruction } = parse.data;
+    const isFallback = Boolean(req._fallbackToFreeIA);
+    const metricKey = isFallback ? fallbackBusinessRequestKey(req) : null;
+    const fallbackMetricWinner = isFallback
+      && req?._chargedCredits?.durableWinner === true;
+    const reservation = isFallback
+      ? fallbackReservationFromCharge(req?._chargedCredits)
+      : null;
 
-    // Lazy-require so unit tests can run without the heavy paraphrase
-    // engine (which depends on DeepSeek/OpenAI clients).
-    let runParaphrasePipeline;
-    try {
-      ({ runParaphrasePipeline } = require('../services/paraphrase-engine'));
-    } catch (err) {
-      await refundLastCharge(req, 'engine_unavailable');
-      return res.status(503).json({ error: 'paraphrase engine unavailable' });
+    if (isFallback) {
+      if (!reservation) {
+        return res.status(503).json({
+          error: 'Free IA fallback reservation unavailable',
+          code: 'FALLBACK_QUOTA_UNAVAILABLE',
+          retryable: true,
+        });
+      }
+      setFallbackHeaders(req, res);
+      if (fallbackMetricWinner) {
+        // The durable zero-amount ledger row already committed in middleware.
+        // A process crash in this narrow gap can under-count one in-memory
+        // attempt; the ledger remains the reconciliation source of truth.
+        recordFallbackMetric(fallbackMetrics, 'recordFallbackAttempt', {
+          feature: req._chargedCredits?.feature || 'paraphrase',
+          amount: req._chargedCredits?.amount || 0,
+          requestKey: metricKey,
+        });
+      }
     }
+
+    const abortContext = createRequestAbortContext(req, res, resolveProviderTimeoutMs(env));
+    let leaseHeartbeat = { async stop() {} };
+    let refundAttempted = false;
+    const performRefund = async (reason) => {
+      refundAttempted = true;
+      try {
+        return await refundTransactionalCharge(req, reason, refund);
+      } catch (error) {
+        const wrapped = new Error('transactional credit refund failed');
+        wrapped.code = 'REFUND_FAILED';
+        wrapped.cause = error;
+        throw wrapped;
+      }
+    };
+    const markRefundPending = async () => failOperation(req, {
+      code: 'REFUND_FAILED',
+      statusCode: 503,
+      state: 'refund_pending',
+    }, prismaClient);
+
     try {
-      const output = await runParaphrasePipeline({
-        text,
+      leaseHeartbeat = startLeaseHeartbeat({
+        request: req,
+        abortController: abortContext.controller,
+        prismaClient,
+        env,
+      }) || leaseHeartbeat;
+      const selectedProvider = resolveProvider({
+        forceFreeIa: isFallback,
+        fallback: req._fallbackToFreeIA,
+        env,
+        OpenAICtor,
+        createInstrumentedCerebrasClient,
+      });
+      if (!selectedProvider) {
+        const error = new Error('paraphrase provider unavailable');
+        error.code = 'PROVIDER_UNAVAILABLE';
+        throw error;
+      }
+      req._paraphraseProvider = selectedProvider.metadata;
+      const rewriteFn = createRewriteFn(selectedProvider, {
+        signal: abortContext.controller.signal,
+        timeoutMs: resolveProviderTimeoutMs(env),
+        maxRetries: 0,
+      });
+      const output = await runPipeline({
+        source: text,
+        rewriteFn,
         mode,
         language,
         customInstruction,
-        userId: req.user.id,
+        signal: abortContext.controller.signal,
       });
+
+      if (output && typeof output === 'object' && output.ok === false) {
+        const rejectionBody = {
+          error: 'paraphrase output remained too similar',
+          code: 'PARAPHRASE_SIMILARITY_REJECTED',
+          similarity: output.similarity,
+          maxSimilarity: output.maxSimilarity,
+        };
+        if (isFallback) {
+          const failed = await failFallback({
+            prismaClient,
+            reservation,
+            code: rejectionBody.code,
+            statusCode: 422,
+          });
+          if (!failed?.ok) {
+            const error = new Error('fallback failure state persistence failed');
+            error.code = failed?.code || 'FALLBACK_CACHE_UNAVAILABLE';
+            throw error;
+          }
+          if (fallbackMetricWinner) {
+            recordFallbackMetric(fallbackMetrics, 'recordFallbackError', { requestKey: metricKey });
+          }
+        } else {
+          await performRefund('similarity_gate');
+        }
+        return res.status(422).json(rejectionBody);
+      }
       if (!output || (typeof output === 'object' && !output.text && !output.output)) {
-        await refundLastCharge(req, 'empty_output');
-        return res
-          .status(502)
-          .json({ error: 'paraphrase engine returned empty output' });
+        const error = new Error('paraphrase engine returned empty output');
+        error.code = 'EMPTY_OUTPUT';
+        throw error;
       }
       const raw = typeof output === 'string'
         ? output
         : output.text || output.output || output;
+      const responseBody = buildParaphraseResponse(req, { raw, mode, language });
 
-      // Anti-AI-detection humanization: applied automatically for the
-      // 'humanize' mode and as an opt-in for other modes via the
-      // `?humanize=1` query param. Reports an aiScore (0..1) so the UI
-      // can render a "stealth" gauge. Free IA fallback users get this
-      // too — the layer is pure JS and runs after the LLM pass.
-      const wantHumanize = mode === 'humanize'
-        || String(req.query?.humanize || '').trim() === '1';
-      let stealth = null;
-      let finalText = raw;
-      if (wantHumanize && typeof raw === 'string' && raw.trim()) {
+      if (isFallback) {
+        const completed = await completeFallback({
+          prismaClient,
+          reservation,
+          statusCode: 200,
+          body: responseBody,
+        });
+        if (!completed?.ok) {
+          const error = new Error('fallback response persistence failed');
+          error.code = completed?.code || 'FALLBACK_CACHE_UNAVAILABLE';
+          throw error;
+        }
+        if (fallbackMetricWinner) {
+          recordFallbackMetric(fallbackMetrics, 'recordFallbackSuccess', { requestKey: metricKey });
+        }
+      } else {
+        const cached = await cacheResponse(req, {
+          statusCode: 200,
+          body: responseBody,
+        });
+        if (cached && cached.ok === false) {
+          const error = new Error('idempotent response cache failed');
+          error.code = 'IDEMPOTENCY_CACHE_FAILED';
+          throw error;
+        }
+      }
+      return res.status(200).json(responseBody);
+    } catch (err) {
+      const abortCode = abortContext.controller.signal.aborted
+        ? abortContext.controller.signal.reason?.code
+        : null;
+      let outcomeStatus = 500;
+      let outcomeCode = err?.code || 'PARAPHRASE_FAILED';
+      if (abortCode === 'REQUEST_ABORTED') {
+        outcomeStatus = 499;
+        outcomeCode = abortCode;
+      } else if (abortCode === 'PARAPHRASE_TIMEOUT') {
+        outcomeStatus = 504;
+        outcomeCode = abortCode;
+      } else if (abortCode === 'LEASE_LOST' || err?.code === 'LEASE_LOST') {
+        outcomeStatus = 409;
+        outcomeCode = 'LEASE_LOST';
+      } else if (err?.code === 'PROVIDER_UNAVAILABLE') {
+        outcomeStatus = 503;
+      } else if (
+        err?.code === 'FALLBACK_CACHE_UNAVAILABLE'
+        || err?.code === 'IDEMPOTENCY_CACHE_FAILED'
+        || err?.code === 'IDEMPOTENCY_RESPONSE_TOO_LARGE'
+      ) {
+        outcomeStatus = 503;
+      } else if (err?.upstream || err?.code === 'EMPTY_OUTPUT') {
+        outcomeStatus = 502;
+      }
+
+      if (outcomeCode === 'LEASE_LOST') {
+        return res.status(409).json({
+          error: 'idempotency lease ownership lost',
+          code: 'LEASE_LOST',
+          retryable: true,
+        });
+      }
+      if (!isFallback && !refundAttempted) {
         try {
-          // eslint-disable-next-line global-require
-          const { humanizeText, humanizeChunked } = require('../services/paraphrase-humanizer');
-          const intensity = String(req.query?.intensity || 'medium')
-            .toLowerCase();
-          const safeIntensity = ['low', 'medium', 'high'].includes(intensity)
-            ? intensity
-            : 'medium';
-          // Use the chunked variant for long inputs (>8000 chars) so a
-          // single big paste doesn't pay the full regex cost in one
-          // pass and the response stays responsive.
-          const useChunked = typeof raw === 'string' && raw.length > 8000;
-          const runner = useChunked ? humanizeChunked : humanizeText;
-          const humanized = runner({
-            text: raw,
-            language,
-            intensity: safeIntensity,
-          });
-          finalText = humanized.text;
-          stealth = {
-            aiScoreBefore: humanized.aiScoreBefore,
-            aiScoreAfter: humanized.aiScoreAfter,
-            deltaScore: humanized.deltaScore,
-            transformations: humanized.applied.length,
-            intensity: humanized.intensity,
-            chunked: !!humanized.chunked,
-            chunkCount: humanized.chunkCount || 1,
-          };
-        } catch (humanizeErr) {
-          // Humanizer is best-effort: a failure must not break the
-          // paraphrase response (the LLM output is still valid).
-          if (req.log?.warn) {
-            req.log.warn({ err: humanizeErr }, 'paraphrase humanizer failed');
+          await performRefund(`engine_error:${err?.code || 'unknown'}`);
+        } catch (refundError) {
+          try {
+            await markRefundPending();
+          } catch {
+            // The retryable response below carries the transaction ID so
+            // operators can reconcile if the database itself is unavailable.
           }
+          return refundFailureResponse(req, res);
+        }
+      }
+      if (!isFallback && err?.code === 'REFUND_FAILED') {
+        try {
+          await markRefundPending();
+        } catch {
+          // Keep the explicit retryable/auditable response even if persistence
+          // itself is unavailable; replay reconciliation will retry the refund.
+        }
+        return refundFailureResponse(req, res);
+      }
+      if (isFallback) {
+        try {
+          const failed = await failFallback({
+            prismaClient,
+            reservation,
+            code: outcomeCode,
+            statusCode: outcomeStatus,
+          });
+          if (!failed?.ok) {
+            return res.status(503).json({
+              error: 'paraphrase failure state persistence failed',
+              code: failed?.code || 'FALLBACK_CACHE_UNAVAILABLE',
+              retryable: true,
+            });
+          }
+        } catch {
+          return res.status(503).json({
+            error: 'paraphrase failure state persistence failed',
+            code: 'FALLBACK_CACHE_UNAVAILABLE',
+            retryable: true,
+          });
+        }
+        if (fallbackMetricWinner) {
+          recordFallbackMetric(fallbackMetrics, 'recordFallbackError', { requestKey: metricKey });
         }
       }
 
-      // Optional debug field: list the top AI-tells that were present
-      // in the LLM output before the humanizer ran. Opt-in via
-      // `?showTells=1` so the response stays lean by default.
-      let tellsBefore = null;
-      if (String(req.query?.showTells || '').trim() === '1' && typeof raw === 'string' && raw.trim()) {
-        try {
-          // eslint-disable-next-line global-require
-          const { topAITellsFound } = require('../services/paraphrase-humanizer');
-          tellsBefore = topAITellsFound(raw, { limit: 10 });
-        } catch { /* best-effort */ }
+      if (abortCode === 'REQUEST_ABORTED') {
+        if (res?.destroyed) return undefined;
+        return res.status(499).json({
+          error: 'request aborted',
+          code: 'REQUEST_ABORTED',
+          retryable: true,
+        });
       }
-
-      const txn = req._chargedCredits?.txn;
-      res.json({
-        output: finalText,
-        mode,
-        language,
-        stealth,
-        tellsBefore,
-        charge: txn
-          ? {
-              amount: String(req._chargedCredits.amount),
-              transactionId: txn.id,
-              replay: !!req._chargedCredits.replay,
-            }
-          : null,
-      });
-    } catch (err) {
-      await refundLastCharge(req, `engine_error:${err && err.code ? err.code : 'unknown'}`);
-      // Surface 502 for upstream LLM failures; 500 only for real bugs.
-      const status = err && err.upstream ? 502 : 500;
-      res.status(status).json({
+      if (abortCode === 'PARAPHRASE_TIMEOUT') {
+        return res.status(504).json({
+          error: 'paraphrase provider timed out',
+          code: 'PARAPHRASE_TIMEOUT',
+          retryable: true,
+        });
+      }
+      if (err?.code === 'PROVIDER_UNAVAILABLE') {
+        return res.status(503).json({
+          error: 'paraphrase provider unavailable',
+          code: 'PROVIDER_UNAVAILABLE',
+          retryable: true,
+        });
+      }
+      if (
+        err?.code === 'FALLBACK_CACHE_UNAVAILABLE'
+        || err?.code === 'IDEMPOTENCY_CACHE_FAILED'
+        || err?.code === 'IDEMPOTENCY_RESPONSE_TOO_LARGE'
+      ) {
+        return res.status(503).json({
+          error: 'paraphrase response persistence failed',
+          code: err.code,
+          retryable: true,
+        });
+      }
+      const status = err?.upstream || err?.code === 'EMPTY_OUTPUT' ? 502 : 500;
+      return res.status(status).json({
         error: 'paraphrase failed',
-        message:
-          process.env.NODE_ENV === 'production'
-            ? undefined
-            : err && err.message,
+        message: env.NODE_ENV === 'production' ? undefined : err?.message,
       });
+    } finally {
+      await leaseHeartbeat.stop?.();
+      abortContext.cleanup();
     }
-  },
+  };
+}
+
+router.post(
+  '/',
+  (req, _res, next) => { normaliseModeOnBody(req.body); next(); },
+  authenticateToken,
+  validateParaphraseRequest,
+  chargeCredits(PARAPHRASE_CHARGE_OPTIONS),
+  createParaphraseHandler(),
 );
 
 // Explicit endpoint inventory — kept here so the surface stays
@@ -389,3 +800,7 @@ module.exports.MAX_TEXT_LENGTH = MAX_TEXT_LENGTH;
 module.exports.ENDPOINT_INVENTORY = ENDPOINT_INVENTORY;
 module.exports.SURFACE_VERSION = SURFACE_VERSION;
 module.exports.apiSurfaceFingerprint = apiSurfaceFingerprint;
+module.exports.createParaphraseHandler = createParaphraseHandler;
+module.exports.createParaphraseRewriteFn = createParaphraseRewriteFn;
+module.exports.refundTransactionalCharge = refundTransactionalCharge;
+module.exports.resolveParaphraseProvider = resolveParaphraseProvider;

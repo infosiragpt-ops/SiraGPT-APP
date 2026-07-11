@@ -611,12 +611,14 @@ Wiring:
     - `GET  /configured`       — boolean
     - `GET  /brand`            — brand constants (no Cerebras dep)
     - `GET  /health`           — k8s liveness/readiness (503 when degraded)
-    - `GET  /metrics`          — JSON snapshot
+    - `GET  /metrics`          — redacted public JSON summary
     - `GET  /metrics/summary`  — one-line digest (`?format=text` for plain)
-    - `GET  /metrics.prom`     — Prometheus text exposition
+    - `GET  /metrics.prom`     — protected alias of the unified Prometheus exposition
     - `GET  /info`             — single-call aggregator for picker first paint
     - `POST /metrics/reset`    — admin-only counter reset
-  All read endpoints public, no auth. API key NEVER leaked in any payload.
+  Read endpoints are public except `/metrics.prom`, which uses the shared
+  operational metrics policy (`METRICS_TOKEN`, validated super-admin session,
+  or explicitly enabled direct loopback). API keys are NEVER leaked.
 - **Provider routing** in `ai.js` `createProviderClient('Cerebras')` and
   helper `inferProviderFromModelId` so a `llama-3.1-*` model id always
   routes to Cerebras.
@@ -628,10 +630,12 @@ Wiring:
   `paraphrase-route.test.js` (14).
 - **Observability**: `backend/src/services/free-ia-metrics.js` — tiny
   in-memory counter for fallback events (`recordFallback`, `snapshot`,
-  `toPrometheusText`). Wired into `chargeCredits` so every silent
-  fallback increments `sira_free_ia_fallback_total` + per-feature
-  labels. Exposed via `GET /api/free-ia/metrics` (JSON) and
-  `GET /api/free-ia/metrics.prom` (Prometheus text exposition).
+  `toPrometheusText`). Business attempt/success/error counters are emitted
+  by the validated paraphrase handler; instrumented Cerebras calls keep
+  provider outcomes separate. Per-feature labels are normalized and capped
+  with `__other__`. Exposed via
+  `GET /api/free-ia/metrics` (JSON); `GET /api/free-ia/metrics.prom` delegates
+  to the protected unified Prometheus handler.
 - **Provider routing helper**: `backend/src/services/ai/provider-inference.js`
   — extracted out of `routes/ai.js` for proper coverage. Adds bare-id
   mappings for Anthropic (`claude-*`), Groq (`-versatile`), Mistral

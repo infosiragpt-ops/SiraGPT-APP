@@ -30,7 +30,15 @@ const { z } = require('zod');
 const { authenticateToken } = require('../middleware/auth');
 const chargeCredits = require('../middleware/charge-credits');
 const requirePaidPlan = require('../middleware/require-paid-plan');
-const { refundLastCharge } = chargeCredits;
+const {
+  attachIdempotentResource,
+  cacheIdempotentResponse,
+  completeIdempotentResponseUnavailable,
+  failIdempotentOperation,
+  refundLastCharge,
+  startIdempotencyLeaseHeartbeat,
+  verifyIdempotentLeaseOwnership,
+} = chargeCredits;
 const imageProvider = require('../services/image-provider');
 const objectStorage = require('../services/object-storage');
 const crypto = require('crypto');
@@ -95,6 +103,20 @@ function imageCost() {
   return Math.max(1, Number(process.env.CREDITS_IMAGE_BASE || 5));
 }
 
+function validateImagePayload(schema) {
+  return function imagePayloadValidator(req, res, next) {
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'invalid payload',
+        issues: parsed.error.issues,
+      });
+    }
+    req._validatedImageData = parsed.data;
+    return next();
+  };
+}
+
 function serializeImage(row) {
   if (!row) return null;
   return {
@@ -123,24 +145,308 @@ function serializeImage(row) {
   };
 }
 
-async function runGenerationAndPersist(req, dbRow, spec) {
-  // Mark RUNNING, hit provider, persist READY/FAILED/MODERATED.
+const RECOVERABLE_IMAGE_STATUSES = new Set(['READY', 'MODERATED', 'FAILED']);
+
+function imageResponseBody(req, row, { includeCharge = false } = {}) {
+  const body = { image: serializeImage(row) };
+  if (includeCharge) {
+    const charge = req?._chargedCredits;
+    body.charge = charge
+      ? { amount: String(charge.amount), transactionId: charge.txn?.id }
+      : null;
+  }
+  return body;
+}
+
+function imageLeaseLostResponse(res) {
+  return res.status(409).json({
+    error: 'idempotency lease ownership lost',
+    code: 'LEASE_LOST',
+    retryable: true,
+  });
+}
+
+function imageRecoveryUnavailableResponse(res) {
+  return res.status(503).json({
+    error: 'generated image idempotency recovery unavailable',
+    code: 'IMAGE_IDEMPOTENCY_RECOVERY_UNAVAILABLE',
+    retryable: true,
+  });
+}
+
+function imageRecoveryUnavailableError(cause) {
+  const error = new Error('generated image idempotency recovery unavailable');
+  error.code = 'IMAGE_IDEMPOTENCY_RECOVERY_UNAVAILABLE';
+  error.retryable = true;
+  error.cause = cause;
+  return error;
+}
+
+function createImageLeaseContext(req) {
+  const abortController = new AbortController();
+  const heartbeat = startIdempotencyLeaseHeartbeat(req, { abortController });
+  return {
+    signal: abortController.signal,
+    async stop() {
+      await heartbeat.stop?.();
+    },
+  };
+}
+
+async function readAttachedImage(req) {
+  const resourceId = req?._chargedCredits?.txn?.metadata?.resourceId;
+  if (!resourceId) return null;
+  const row = await prisma.generatedImage.findUnique({ where: { id: resourceId } });
+  if (!row || row.userId !== req.user.id) {
+    throw imageRecoveryUnavailableError(new Error('attached generated image not found'));
+  }
+  return row;
+}
+
+async function persistSuccessfulChargeResponse(
+  req,
+  statusCode,
+  body,
+  { includeCharge = false } = {},
+) {
+  if (!req?._chargedCredits?.txn) return { ok: true, skipped: true };
+  let failureCode = 'IDEMPOTENCY_CACHE_FAILED';
   try {
+    const cached = await cacheIdempotentResponse(req, { statusCode, body });
+    if (cached?.ok) return cached;
+    failureCode = cached?.code || failureCode;
+  } catch (error) {
+    failureCode = error?.code || failureCode;
+  }
+
+  // The provider result and READY artifact already exist. Cache failure is
+  // therefore an idempotency replay limitation, never a generation failure:
+  // do not refund the successful charge or downgrade the accessible artifact.
+  let markerOk = false;
+  if (failureCode !== 'LEASE_LOST') {
+    try {
+      const marked = await completeIdempotentResponseUnavailable(req, {
+        code: failureCode,
+      });
+      markerOk = marked?.ok === true;
+    } catch (error) {
+      req.log?.warn?.(
+        { err: error, chargeTransactionId: req._chargedCredits.txn.id },
+        'image response-unavailable marker persistence failed',
+      );
+    }
+  }
+  let recoveredBody = null;
+  try {
+    const row = await readAttachedImage(req);
+    if (row && RECOVERABLE_IMAGE_STATUSES.has(row.status)) {
+      recoveredBody = imageResponseBody(req, row, { includeCharge });
+    }
+  } catch {
+    // The durable response-unavailable marker remains sufficient when it won.
+  }
+  if (!markerOk && !recoveredBody) {
+    throw imageRecoveryUnavailableError(new Error(failureCode));
+  }
+  return {
+    ok: true,
+    responseUnavailable: true,
+    code: failureCode,
+    body: recoveredBody || body,
+  };
+}
+
+function refundPendingError(cause) {
+  const error = new Error('image credit refund pending');
+  error.code = 'REFUND_PENDING';
+  error.retryable = true;
+  error.cause = cause;
+  return error;
+}
+
+async function markImageRefundPending(req) {
+  return failIdempotentOperation(req, {
+    code: 'REFUND_FAILED',
+    statusCode: 503,
+    state: 'refund_pending',
+  });
+}
+
+async function strictRefundImageCharge(req, reason) {
+  let failure;
+  try {
+    const result = await refundLastCharge(req, reason, { strict: true });
+    if (result?.ok === true) return result;
+    failure = new Error(result?.code || 'credit refund failed');
+    failure.code = result?.code || 'REFUND_FAILED';
+  } catch (error) {
+    failure = error;
+  }
+  if (failure?.code === 'LEASE_LOST') throw failure;
+  try {
+    const marked = await markImageRefundPending(req);
+    if (marked?.code === 'LEASE_LOST') {
+      const error = new Error('idempotency lease ownership lost');
+      error.code = 'LEASE_LOST';
+      throw error;
+    }
+  } catch (stateError) {
+    if (stateError?.code === 'LEASE_LOST') throw stateError;
+    if (!failure) failure = stateError;
+  }
+  throw refundPendingError(failure);
+}
+
+function sendImageRefundPending(req, res) {
+  return res.status(503).json({
+    error: 'credit refund pending',
+    code: 'REFUND_PENDING',
+    retryable: true,
+    audit: {
+      chargeTransactionId: req?._chargedCredits?.txn?.id || null,
+    },
+  });
+}
+
+function imageProviderSpec(row, durableSpec) {
+  const spec = durableSpec && typeof durableSpec === 'object' && !Array.isArray(durableSpec)
+    ? durableSpec
+    : {};
+  const n = Number(spec.n ?? row.n ?? 1);
+  const seed = spec.seed ?? row.seed ?? null;
+  return {
+    prompt: String(spec.prompt ?? row.prompt ?? ''),
+    negativePrompt: spec.negativePrompt == null
+      ? (row.negativePrompt ?? null)
+      : String(spec.negativePrompt),
+    provider: String(spec.provider ?? row.provider ?? imageProvider.DEFAULT_PROVIDER),
+    model: String(spec.model ?? row.model ?? 'mock-v1'),
+    size: String(spec.size ?? row.size ?? '1024x1024'),
+    n: Number.isInteger(n) && n > 0 ? n : 1,
+    seed: seed == null ? null : String(seed),
+    quality: spec.quality == null ? (row.quality ?? null) : String(spec.quality),
+    style: spec.style == null ? (row.style ?? null) : String(spec.style),
+  };
+}
+
+async function attachGeneratedImage(req, row, spec) {
+  const resourceSpec = imageProviderSpec(row, spec);
+  const attached = await attachIdempotentResource(req, {
+    resourceId: row.id,
+    resourceType: 'generatedImage',
+    resourceSpec,
+  });
+  if (attached?.ok) return attached;
+  const error = new Error('generated image idempotency attachment failed');
+  error.code = attached?.code || 'IMAGE_RESOURCE_ATTACH_FAILED';
+  throw error;
+}
+
+async function respondFromAttachedImage(req, res, {
+  includeCharge = false,
+  signal,
+} = {}) {
+  if (!req?._chargedCredits?.txn?.metadata?.resourceId) return false;
+  let row;
+  try {
+    row = await readAttachedImage(req);
+  } catch (error) {
+    return imageRecoveryUnavailableResponse(res);
+  }
+  if (!RECOVERABLE_IMAGE_STATUSES.has(row.status)) {
+    const charge = req._chargedCredits;
+    if (
+      !['PENDING', 'RUNNING'].includes(row.status)
+      || charge?.recovered !== true
+      || charge?.ownsLease !== true
+    ) {
+      return res.status(409).json({
+        error: 'generated image resource is still in progress',
+        code: 'IMAGE_RESOURCE_IN_PROGRESS',
+        retryable: true,
+        resourceId: row.id,
+      });
+    }
+    const durableSpec = charge.txn.metadata?.resourceSpec;
+    const { row: resumedRow, refunded } = await runGenerationAndPersist(
+      req,
+      row,
+      imageProviderSpec(row, durableSpec),
+      { signal },
+    );
+    let resumedBody = imageResponseBody(req, resumedRow, { includeCharge });
+    if (!refunded) {
+      const persisted = await persistSuccessfulChargeResponse(
+        req,
+        201,
+        resumedBody,
+        { includeCharge },
+      );
+      resumedBody = persisted?.body || resumedBody;
+    }
+    res.status(201).json(resumedBody);
+    return true;
+  }
+  let body = imageResponseBody(req, row, { includeCharge });
+  if (row.status === 'READY') {
+    try {
+      const persisted = await persistSuccessfulChargeResponse(
+        req,
+        201,
+        body,
+        { includeCharge },
+      );
+      body = persisted?.body || body;
+    } catch (error) {
+      return imageRecoveryUnavailableResponse(res);
+    }
+  } else {
+    try {
+      await strictRefundImageCharge(req, `recover_resource:${row.status.toLowerCase()}`);
+    } catch (error) {
+      if (error?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+      return sendImageRefundPending(req, res);
+    }
+  }
+  res.status(201).json(body);
+  return true;
+}
+
+function leaseLostError() {
+  const error = new Error('idempotency lease ownership lost');
+  error.code = 'LEASE_LOST';
+  error.retryable = true;
+  return error;
+}
+
+async function requireImageLeaseOwnership(req) {
+  const ownership = await verifyIdempotentLeaseOwnership(req);
+  if (ownership?.ok !== true) throw leaseLostError();
+  return ownership;
+}
+
+async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
+  // Mark RUNNING, hit provider, then fence all provider-result persistence.
+  try {
+    await requireImageLeaseOwnership(req);
     await prisma.generatedImage.update({
       where: { id: dbRow.id },
       data: { status: 'RUNNING' },
     });
-    const result = await imageProvider.generate(spec);
+    const result = await imageProvider.generate({ ...spec, signal });
+    if (signal?.aborted) throw signal.reason;
+    await requireImageLeaseOwnership(req);
     if (!result.ok) {
       const status = result.code === 'MODERATED' ? 'MODERATED' : 'FAILED';
       const row = await prisma.generatedImage.update({
         where: { id: dbRow.id },
         data: { status, errorMessage: result.reason || result.code },
       });
-      await refundLastCharge(req, `provider:${result.code}`);
+      await strictRefundImageCharge(req, `provider:${result.code}`);
       return { row, refunded: true, providerResult: result };
     }
     const assetUrls = await persistAssetsToR2(dbRow.userId, result.assets || []);
+    await requireImageLeaseOwnership(req);
     const row = await prisma.generatedImage.update({
       where: { id: dbRow.id },
       data: {
@@ -151,11 +457,25 @@ async function runGenerationAndPersist(req, dbRow, spec) {
     });
     return { row, refunded: false, providerResult: result };
   } catch (err) {
-    const row = await prisma.generatedImage.update({
-      where: { id: dbRow.id },
-      data: { status: 'FAILED', errorMessage: err && err.message },
-    });
-    await refundLastCharge(req, 'provider_throw');
+    if (err?.code === 'LEASE_LOST' || signal?.reason?.code === 'LEASE_LOST') {
+      throw signal?.reason || err;
+    }
+    if (err?.code === 'REFUND_PENDING') throw err;
+    await requireImageLeaseOwnership(req);
+    let row;
+    try {
+      row = await prisma.generatedImage.update({
+        where: { id: dbRow.id },
+        data: { status: 'FAILED', errorMessage: err && err.message },
+      });
+    } catch {
+      row = {
+        ...dbRow,
+        status: 'FAILED',
+        errorMessage: err && err.message,
+      };
+    }
+    await strictRefundImageCharge(req, 'provider_throw');
     return { row, refunded: true, providerResult: { ok: false, code: 'PROVIDER_ERROR', reason: err.message } };
   }
 }
@@ -165,20 +485,22 @@ router.post(
   '/jobs',
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
+  validateImagePayload(GenerateSchema),
   chargeCredits({ feature: 'image_generation', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
-    const parse = GenerateSchema.safeParse(req.body);
-    if (!parse.success) {
-      await refundLastCharge(req, 'invalid_payload');
-      return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });
-    }
-    const data = parse.data;
+    const data = req._validatedImageData;
     const charge = req._chargedCredits;
+    const lease = createImageLeaseContext(req);
     // Refund the already-charged credits if persistence/generation throws before
     // a row exists (DB error), then re-throw to preserve the existing 500. The
     // happy path never throws, and runGenerationAndPersist only refunds on its
     // normal-return paths, so this can't double-refund.
     try {
+      const recovered = await respondFromAttachedImage(req, res, {
+        includeCharge: true,
+        signal: lease.signal,
+      });
+      if (recovered) return recovered;
       const dbRow = await prisma.generatedImage.create({
         data: {
           userId: req.user.id,
@@ -198,12 +520,43 @@ router.post(
           kind: 'original',
         },
       });
+      const providerSpec = imageProviderSpec(dbRow);
+      await attachGeneratedImage(req, dbRow, providerSpec);
       // Drive the provider call inline. For real prod we'd push to BullMQ.
-      const { row } = await runGenerationAndPersist(req, dbRow, data);
-      res.status(201).json({ image: serializeImage(row), charge: charge ? { amount: String(charge.amount), transactionId: charge.txn?.id } : null });
+      const { row, refunded } = await runGenerationAndPersist(
+        req,
+        dbRow,
+        providerSpec,
+        { signal: lease.signal },
+      );
+      let responseBody = imageResponseBody(req, row, { includeCharge: true });
+      if (!refunded) {
+        const persisted = await persistSuccessfulChargeResponse(
+          req,
+          201,
+          responseBody,
+          { includeCharge: true },
+        );
+        responseBody = persisted?.body || responseBody;
+      }
+      return res.status(201).json(responseBody);
     } catch (err) {
-      await refundLastCharge(req, 'persist_error');
+      if (err?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+      if (err?.code === 'IMAGE_IDEMPOTENCY_RECOVERY_UNAVAILABLE') {
+        return imageRecoveryUnavailableResponse(res);
+      }
+      if (err?.code === 'REFUND_PENDING') return sendImageRefundPending(req, res);
+      try {
+        await strictRefundImageCharge(req, 'persist_error');
+      } catch (refundError) {
+        if (refundError?.code === 'REFUND_PENDING') {
+          return sendImageRefundPending(req, res);
+        }
+        throw refundError;
+      }
       throw err;
+    } finally {
+      await lease.stop();
     }
   },
 );
@@ -248,47 +601,78 @@ router.post(
   '/:id/variations',
   authenticateToken,
   requirePaidPlan({ feature: 'image_variation' }),
+  validateImagePayload(VariationsSchema),
   chargeCredits({ feature: 'image_variation', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
-    const parse = VariationsSchema.safeParse(req.body);
-    if (!parse.success) {
-      await refundLastCharge(req, 'invalid_payload');
-      return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });
-    }
-    const parent = await prisma.generatedImage.findUnique({ where: { id: req.params.id } });
-    if (!parent || parent.userId !== req.user.id) {
-      await refundLastCharge(req, 'parent_not_found');
-      return res.status(404).json({ error: 'parent image not found' });
-    }
-    const charge = req._chargedCredits;
-    // Refund the already-charged credits if persistence/generation throws (see /jobs).
+    const data = req._validatedImageData;
+    const lease = createImageLeaseContext(req);
     try {
-      const dbRow = await prisma.generatedImage.create({
-        data: {
-          userId: req.user.id,
-          chatId: parent.chatId,
-          prompt: parent.prompt,
-          provider: parent.provider,
-          model: parent.model,
-          size: parent.size,
-          n: parse.data.n,
-          status: 'PENDING',
-          costCredits: charge ? BigInt(charge.amount) : BigInt(0),
-          kind: 'variation',
-          parentImageId: parent.id,
-        },
+      const recovered = await respondFromAttachedImage(req, res, {
+        signal: lease.signal,
       });
-      const { row } = await runGenerationAndPersist(req, dbRow, {
-        prompt: parent.prompt,
-        n: parse.data.n,
-        size: parent.size,
-        provider: parent.provider,
-        model: parent.model,
-      });
-      res.status(201).json({ image: serializeImage(row) });
-    } catch (err) {
-      await refundLastCharge(req, 'persist_error');
-      throw err;
+      if (recovered) return recovered;
+      const parent = await prisma.generatedImage.findUnique({ where: { id: req.params.id } });
+      if (!parent || parent.userId !== req.user.id) {
+        try {
+          await strictRefundImageCharge(req, 'parent_not_found');
+        } catch (err) {
+          if (err?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+          if (err?.code === 'REFUND_PENDING') return sendImageRefundPending(req, res);
+          throw err;
+        }
+        return res.status(404).json({ error: 'parent image not found' });
+      }
+      const charge = req._chargedCredits;
+      // Refund the already-charged credits if persistence/generation throws (see /jobs).
+      try {
+        const dbRow = await prisma.generatedImage.create({
+          data: {
+            userId: req.user.id,
+            chatId: parent.chatId,
+            prompt: parent.prompt,
+            provider: parent.provider,
+            model: parent.model,
+            size: parent.size,
+            n: data.n,
+            status: 'PENDING',
+            costCredits: charge ? BigInt(charge.amount) : BigInt(0),
+            kind: 'variation',
+            parentImageId: parent.id,
+          },
+        });
+        const providerSpec = imageProviderSpec(dbRow);
+        await attachGeneratedImage(req, dbRow, providerSpec);
+        const { row, refunded } = await runGenerationAndPersist(
+          req,
+          dbRow,
+          providerSpec,
+          { signal: lease.signal },
+        );
+        let responseBody = imageResponseBody(req, row);
+        if (!refunded) {
+          const persisted = await persistSuccessfulChargeResponse(req, 201, responseBody);
+          responseBody = persisted?.body || responseBody;
+        }
+        return res.status(201).json(responseBody);
+      } catch (err) {
+        if (err?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+        if (err?.code === 'IMAGE_IDEMPOTENCY_RECOVERY_UNAVAILABLE') {
+          return imageRecoveryUnavailableResponse(res);
+        }
+        if (err?.code === 'REFUND_PENDING') return sendImageRefundPending(req, res);
+        try {
+          await strictRefundImageCharge(req, 'persist_error');
+        } catch (refundError) {
+          if (refundError?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+          if (refundError?.code === 'REFUND_PENDING') {
+            return sendImageRefundPending(req, res);
+          }
+          throw refundError;
+        }
+        throw err;
+      }
+    } finally {
+      await lease.stop();
     }
   },
 );
@@ -298,52 +682,83 @@ router.post(
   '/:id/upscale',
   authenticateToken,
   requirePaidPlan({ feature: 'image_upscale' }),
+  validateImagePayload(UpscaleSchema),
   chargeCredits({ feature: 'image_upscale', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
-    const parse = UpscaleSchema.safeParse(req.body);
-    if (!parse.success) {
-      await refundLastCharge(req, 'invalid_payload');
-      return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });
-    }
-    const parent = await prisma.generatedImage.findUnique({ where: { id: req.params.id } });
-    if (!parent || parent.userId !== req.user.id) {
-      await refundLastCharge(req, 'parent_not_found');
-      return res.status(404).json({ error: 'parent image not found' });
-    }
-    const factor = parse.data.factor;
-    const sizeMatch = (parent.size || '1024x1024').match(SIZE_RE);
-    const newSize = sizeMatch
-      ? `${Number(sizeMatch[1]) * factor}x${Number(sizeMatch[2]) * factor}`
-      : parent.size;
-    const charge = req._chargedCredits;
-    // Refund the already-charged credits if persistence/generation throws (see /jobs).
+    const data = req._validatedImageData;
+    const lease = createImageLeaseContext(req);
     try {
-      const dbRow = await prisma.generatedImage.create({
-        data: {
-          userId: req.user.id,
-          chatId: parent.chatId,
-          prompt: parent.prompt,
-          provider: parent.provider,
-          model: parent.model,
-          size: newSize,
-          n: 1,
-          status: 'PENDING',
-          costCredits: charge ? BigInt(charge.amount) : BigInt(0),
-          kind: 'upscale',
-          parentImageId: parent.id,
-        },
+      const recovered = await respondFromAttachedImage(req, res, {
+        signal: lease.signal,
       });
-      const { row } = await runGenerationAndPersist(req, dbRow, {
-        prompt: parent.prompt,
-        n: 1,
-        size: newSize,
-        provider: parent.provider,
-        model: parent.model,
-      });
-      res.status(201).json({ image: serializeImage(row) });
-    } catch (err) {
-      await refundLastCharge(req, 'persist_error');
-      throw err;
+      if (recovered) return recovered;
+      const parent = await prisma.generatedImage.findUnique({ where: { id: req.params.id } });
+      if (!parent || parent.userId !== req.user.id) {
+        try {
+          await strictRefundImageCharge(req, 'parent_not_found');
+        } catch (err) {
+          if (err?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+          if (err?.code === 'REFUND_PENDING') return sendImageRefundPending(req, res);
+          throw err;
+        }
+        return res.status(404).json({ error: 'parent image not found' });
+      }
+      const factor = data.factor;
+      const sizeMatch = (parent.size || '1024x1024').match(SIZE_RE);
+      const newSize = sizeMatch
+        ? `${Number(sizeMatch[1]) * factor}x${Number(sizeMatch[2]) * factor}`
+        : parent.size;
+      const charge = req._chargedCredits;
+      // Refund the already-charged credits if persistence/generation throws (see /jobs).
+      try {
+        const dbRow = await prisma.generatedImage.create({
+          data: {
+            userId: req.user.id,
+            chatId: parent.chatId,
+            prompt: parent.prompt,
+            provider: parent.provider,
+            model: parent.model,
+            size: newSize,
+            n: 1,
+            status: 'PENDING',
+            costCredits: charge ? BigInt(charge.amount) : BigInt(0),
+            kind: 'upscale',
+            parentImageId: parent.id,
+          },
+        });
+        const providerSpec = imageProviderSpec(dbRow);
+        await attachGeneratedImage(req, dbRow, providerSpec);
+        const { row, refunded } = await runGenerationAndPersist(
+          req,
+          dbRow,
+          providerSpec,
+          { signal: lease.signal },
+        );
+        let responseBody = imageResponseBody(req, row);
+        if (!refunded) {
+          const persisted = await persistSuccessfulChargeResponse(req, 201, responseBody);
+          responseBody = persisted?.body || responseBody;
+        }
+        return res.status(201).json(responseBody);
+      } catch (err) {
+        if (err?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+        if (err?.code === 'IMAGE_IDEMPOTENCY_RECOVERY_UNAVAILABLE') {
+          return imageRecoveryUnavailableResponse(res);
+        }
+        if (err?.code === 'REFUND_PENDING') return sendImageRefundPending(req, res);
+        try {
+          await strictRefundImageCharge(req, 'persist_error');
+        } catch (refundError) {
+          if (refundError?.code === 'LEASE_LOST') return imageLeaseLostResponse(res);
+          if (refundError?.code === 'REFUND_PENDING') {
+            return sendImageRefundPending(req, res);
+          }
+          throw refundError;
+        }
+        throw err;
+      }
+    } finally {
+      await lease.stop();
     }
   },
 );
@@ -371,3 +786,5 @@ module.exports.VariationsSchema = VariationsSchema;
 module.exports.UpscaleSchema = UpscaleSchema;
 module.exports.serializeImage = serializeImage;
 module.exports.imageCost = imageCost;
+module.exports.imageProviderSpec = imageProviderSpec;
+module.exports.runGenerationAndPersist = runGenerationAndPersist;

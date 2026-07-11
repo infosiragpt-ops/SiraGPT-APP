@@ -93,7 +93,7 @@ test('GET /api/free-ia/info: endpoints inventory is well-formed + lists all know
     for (const e of body.endpoints) {
       assert.ok(['GET', 'POST', 'PUT', 'DELETE'].includes(e.method));
       assert.ok(e.path.startsWith('/api/free-ia/'));
-      assert.ok(['public', 'admin', 'user'].includes(e.auth));
+      assert.ok(['public', 'admin', 'user', 'ops'].includes(e.auth));
       assert.ok(typeof e.returns === 'string' && e.returns.length > 0);
     }
     // Smoke-check that the inventory includes the admin reset
@@ -101,6 +101,9 @@ test('GET /api/free-ia/info: endpoints inventory is well-formed + lists all know
     assert.ok(reset, 'inventory must include the admin reset endpoint');
     assert.equal(reset.method, 'POST');
     assert.equal(reset.auth, 'admin');
+    const prometheus = body.endpoints.find((e) => e.path === '/api/free-ia/metrics.prom');
+    assert.ok(prometheus, 'inventory must include the protected Prometheus alias');
+    assert.equal(prometheus.auth, 'ops');
   } finally {
     server.close();
     if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
@@ -209,6 +212,30 @@ test('GET /api/free-ia/metrics returns a JSON snapshot of the fallback counter',
     assert.equal(body.perFeature.paraphrase.count, 1);
     assert.equal(body.perFeature.generate.count, 1);
     assert.ok(body.lastEventAt);
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
+test('GET /api/free-ia/metrics redacts raw upstream error messages and internal URLs', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordUpstreamError({
+    code: 'ECONNREFUSED',
+    message: 'connect failed at https://private-provider.internal/v1 with diagnostic detail',
+  });
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/metrics`);
+    assert.equal(status, 200);
+    assert.equal(body.upstream.lastErrorMessage, undefined);
+    assert.equal(body.baseURL, undefined);
+    assert.equal(body.upstream.baseURL, undefined);
+    assert.equal(
+      JSON.stringify(body).includes('private-provider.internal'),
+      false,
+    );
   } finally {
     server.close();
     metrics.reset();
@@ -442,4 +469,14 @@ test('GET /api/free-ia/metrics.prom returns Prometheus text format', async () =>
     server.close();
     metrics.reset();
   }
+});
+
+test('GET /api/free-ia/metrics.prom delegates to the shared protected unified handler', () => {
+  const { metricsHandler } = require('../src/services/observability/metrics-exposition');
+  const layer = freeIaRoutes.stack.find((entry) => (
+    entry.route?.path === '/metrics.prom'
+    && entry.route?.methods?.get
+  ));
+  assert.ok(layer, 'metrics.prom route must exist');
+  assert.equal(layer.route.stack.at(-1).handle, metricsHandler);
 });

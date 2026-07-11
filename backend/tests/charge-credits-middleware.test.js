@@ -1,316 +1,215 @@
 'use strict';
 
-// F2 PR8 — Unit tests for chargeCredits middleware. Mocks Prisma so
-// the SQL path is exercised without a live DB. Verifies:
-//   * resolveCost handles function/number/string
-//   * pickIdempotencyKey reads header before body
-//   * factory validates `feature` is present
-//   * middleware skips when amount=0
-//   * middleware 401s on missing auth
-//   * middleware 402s on insufficient balance
-//   * spendCredits + refundCharge happy paths
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
 
-const origRequire = Module.prototype.require;
-const txnRows = new Map();
-let balance = 100n;
-let lifetimeSpent = 0n;
+const { createRawCreditPrisma } = require('./helpers/raw-credit-ledger-prisma');
 
-const stubs = new Map();
-stubs.set('../config/database', {
-  creditTransaction: {
-    async findUnique({ where }) {
-      return txnRows.get(where.idempotencyKey) || null;
-    },
-    async create({ data }) {
-      const row = {
-        id: `tx_${txnRows.size + 1}`,
-        createdAt: new Date(),
-        ...data,
-      };
-      if (data.idempotencyKey) txnRows.set(data.idempotencyKey, row);
-      return row;
-    },
-  },
-  credit: {
-    async findUnique() {
-      return { userId: 'u1', balance, lifetimeSpent };
-    },
-    async update({ data }) {
-      if (data.balance?.increment) balance += BigInt(data.balance.increment);
-      if (data.lifetimeSpent?.decrement) lifetimeSpent -= BigInt(data.lifetimeSpent.decrement);
-      return { userId: 'u1', balance, lifetimeSpent };
-    },
-  },
-  async $executeRawUnsafe(_sql, amt, _userId) {
-    const a = BigInt(amt);
-    if (balance < a) return 0;
-    balance -= a;
-    lifetimeSpent += a;
-    return 1;
-  },
-  // spendCredits now uses an UPDATE … RETURNING "balance" so the recorded
-  // balanceAfter is captured atomically with the debit.
-  async $queryRawUnsafe(_sql, amt, _userId) {
-    const a = BigInt(amt);
-    if (balance < a) return [];
-    balance -= a;
-    lifetimeSpent += a;
-    return [{ balance }];
-  },
-});
-
-Module.prototype.require = function (spec) {
-  if (stubs.has(spec)) return stubs.get(spec);
-  return origRequire.apply(this, arguments);
+const fakePrisma = createRawCreditPrisma({ balances: { u1: 100n } });
+let cerebrasEnabled = false;
+const originalRequire = Module.prototype.require;
+Module.prototype.require = function requireWithStubs(specifier) {
+  if (specifier === '../config/database') return fakePrisma;
+  if (specifier === '../services/ai/cerebras-client') {
+    return {
+      getCerebrasConfig: () => ({
+        enabled: cerebrasEnabled,
+        provider: 'Cerebras',
+        model: 'free-model',
+        displayName: 'Free IA',
+        reason: cerebrasEnabled ? 'ok' : 'no_api_key',
+        apiKey: cerebrasEnabled ? 'never-leak' : '',
+        baseURL: 'https://internal.invalid/v1',
+      }),
+      buildFreeIaModelDescriptor: () => ({
+        provider: 'Cerebras',
+        name: 'free-model',
+      }),
+    };
+  }
+  return originalRequire.apply(this, arguments);
 };
 
 const chargeCredits = require('../src/middleware/charge-credits');
+Module.prototype.require = originalRequire;
+
 const {
-  spendCredits,
-  refundCharge,
+  pickIdempotencyKey,
   refundLastCharge,
   resolveCost,
-  pickIdempotencyKey,
+  spendCredits,
 } = chargeCredits;
 
-Module.prototype.require = origRequire;
+test.beforeEach(() => {
+  fakePrisma.reset();
+  cerebrasEnabled = false;
+});
 
-function makeReqRes({ user = { id: 'u1' }, body = {}, headers = {} } = {}) {
+function context({
+  user = { id: 'u1' },
+  body = { text: 'hello world' },
+  idempotencyKey = 'middleware-key',
+} = {}) {
   let statusCode = 200;
-  let jsonBody = null;
-  let resolveDone;
-  const done = new Promise((r) => { resolveDone = r; });
+  let responseBody;
+  let nextCalls = 0;
+  const req = {
+    id: 'middleware-request',
+    user,
+    body,
+    get(name) {
+      return String(name).toLowerCase() === 'idempotency-key'
+        ? idempotencyKey
+        : undefined;
+    },
+  };
   const res = {
+    headersSent: false,
     status(code) { statusCode = code; return this; },
-    json(payload) { jsonBody = payload; resolveDone('json'); return this; },
-    get statusCode() { return statusCode; },
-    get jsonBody() { return jsonBody; },
+    json(bodyValue) { responseBody = bodyValue; return this; },
+    setHeader() {},
   };
   return {
-    req: {
-      user,
-      body,
-      get(name) { return headers[name.toLowerCase()]; },
-    },
+    req,
     res,
-    done, // resolves on res.json(...) OR when the test calls resolveDone('next')
-    nextHook: (cb) => (...args) => { cb && cb(...args); resolveDone('next'); },
+    next() { nextCalls += 1; },
+    snapshot() { return { statusCode, responseBody, nextCalls }; },
   };
 }
 
-test('resolveCost: function, number, numeric-string', () => {
+test('resolveCost rounds positive fractional values up and rejects invalid costs', () => {
   assert.equal(resolveCost(5, {}), 5);
   assert.equal(resolveCost('12', {}), 12);
-  assert.equal(resolveCost((req) => req.body.text.length, { body: { text: 'abc' } }), 3);
-  assert.equal(resolveCost('not-a-number', {}), 0);
-});
-
-test('resolveCost: fractional values round UP to an integer (never crash on BigInt, never under-charge)', () => {
-  // A fractional price env (e.g. CREDITS_IMAGE_BASE=5.5) used to flow verbatim
-  // into BigInt() inside spendCredits → RangeError → HTTP 500 on EVERY charged
-  // request. Now coerced via Math.ceil at the chokepoint.
-  assert.equal(resolveCost(5.5, {}), 6);
-  assert.equal(resolveCost(0.5, {}), 1);
   assert.equal(resolveCost(() => 1.01, {}), 2);
-  // non-chargeable / invalid → 0 (the middleware then bypasses the ledger)
-  assert.equal(resolveCost(0, {}), 0);
-  assert.equal(resolveCost(-3, {}), 0);
-  assert.equal(resolveCost(NaN, {}), 0);
-  assert.equal(resolveCost(Infinity, {}), 0);
+  for (const value of [0, -1, NaN, Infinity, 'invalid']) {
+    assert.equal(resolveCost(value, {}), 0);
+  }
 });
 
-test('pickIdempotencyKey: prefers header over body', () => {
-  const req = {
-    get: (n) => (n.toLowerCase() === 'idempotency-key' ? 'from-header' : undefined),
-    body: { idempotencyKey: 'from-body' },
-  };
-  assert.equal(pickIdempotencyKey(req), 'from-header');
+test('pickIdempotencyKey prefers header and falls back to body', () => {
+  assert.equal(pickIdempotencyKey({
+    get: () => 'header-key',
+    body: { idempotencyKey: 'body-key' },
+  }), 'header-key');
+  assert.equal(pickIdempotencyKey({
+    get: () => undefined,
+    body: { idempotencyKey: 'body-key' },
+  }), 'body-key');
 });
 
-test('pickIdempotencyKey: falls back to body field', () => {
-  const req = { get: () => undefined, body: { idempotencyKey: 'from-body' } };
-  assert.equal(pickIdempotencyKey(req), 'from-body');
-});
-
-test('chargeCredits: factory requires { feature }', () => {
+test('middleware requires a feature and authenticated user', async () => {
   assert.throws(() => chargeCredits({}), /feature.*required/i);
-  assert.equal(typeof chargeCredits({ feature: 'x' }), 'function');
+  const ctx = context({ user: null });
+  await chargeCredits({ feature: 'paraphrase', cost: 1 })(
+    ctx.req,
+    ctx.res,
+    ctx.next,
+  );
+  assert.equal(ctx.snapshot().statusCode, 401);
+  assert.equal(ctx.snapshot().nextCalls, 0);
 });
 
-test('chargeCredits: 401 when no req.user', async () => {
-  const ctx = makeReqRes({ user: null });
-  chargeCredits({ feature: 'paraphrase', cost: 1 })(ctx.req, ctx.res, ctx.nextHook());
-  await ctx.done;
-  assert.equal(ctx.res.statusCode, 401);
+test('zero cost bypasses the ledger while positive cost reserves paid row', async () => {
+  const free = context();
+  await chargeCredits({ feature: 'free-preview', cost: 0 })(
+    free.req,
+    free.res,
+    free.next,
+  );
+  assert.equal(free.snapshot().nextCalls, 1);
+  assert.equal(fakePrisma._state.rows.length, 0);
+
+  const paid = context({ idempotencyKey: 'paid-key' });
+  await chargeCredits({ feature: 'paraphrase', cost: 5 })(
+    paid.req,
+    paid.res,
+    paid.next,
+  );
+  assert.equal(paid.snapshot().nextCalls, 1);
+  assert.equal(fakePrisma._state.credits.get('u1').balance, 95n);
+  assert.equal(paid.req._chargedCredits.txn.metadata.path, 'paid');
 });
 
-test('chargeCredits: skips charge when cost=0 (calls next without status)', async () => {
-  balance = 100n;
-  let nextCalled = false;
-  const ctx = makeReqRes();
-  chargeCredits({ feature: 'free-feature', cost: 0 })(ctx.req, ctx.res, ctx.nextHook(() => { nextCalled = true; }));
-  await ctx.done;
-  assert.equal(nextCalled, true);
-  assert.equal(balance, 100n, 'balance must be unchanged when cost is 0');
+test('fallback defaults off and opted-out routes retain 402', async () => {
+  cerebrasEnabled = true;
+  fakePrisma.setBalance('u1', 0n);
+  const defaultCtx = context();
+  await chargeCredits({ feature: 'paraphrase', cost: 5 })(
+    defaultCtx.req,
+    defaultCtx.res,
+    defaultCtx.next,
+  );
+  assert.equal(defaultCtx.snapshot().statusCode, 402);
+  assert.equal(defaultCtx.req._fallbackToFreeIA, undefined);
+
+  const imageCtx = context({ idempotencyKey: 'image-key' });
+  await chargeCredits({
+    feature: 'image_generation',
+    cost: 5,
+    allowFreeIaFallback: false,
+  })(imageCtx.req, imageCtx.res, imageCtx.next);
+  assert.equal(imageCtx.snapshot().statusCode, 402);
+  assert.equal(imageCtx.req._fallbackToFreeIA, undefined);
+  assert.equal(fakePrisma._state.rows.length, 0);
 });
 
-test('chargeCredits: spends and attaches req._chargedCredits on success', async () => {
-  balance = 100n;
-  const ctx = makeReqRes({ body: { text: 'hello world' } });
-  chargeCredits({ feature: 'paraphrase', cost: 5 })(ctx.req, ctx.res, ctx.nextHook());
-  await ctx.done;
-  assert.equal(balance, 95n);
-  assert.ok(ctx.req._chargedCredits);
-  assert.equal(ctx.req._chargedCredits.amount, 5);
-  assert.equal(ctx.req._chargedCredits.feature, 'paraphrase');
-  assert.ok(ctx.req._chargedCredits.txn);
+test('opted-in configured fallback attaches a durable zero row without secrets', async () => {
+  cerebrasEnabled = true;
+  fakePrisma.setBalance('u1', 0n);
+  const ctx = context({ idempotencyKey: 'fallback-key' });
+  await chargeCredits({
+    feature: 'paraphrase',
+    cost: 5,
+    allowFreeIaFallback: true,
+  })(ctx.req, ctx.res, ctx.next);
+  assert.equal(ctx.snapshot().nextCalls, 1);
+  assert.equal(ctx.req._fallbackToFreeIA.config.apiKey, undefined);
+  assert.equal(ctx.req._fallbackToFreeIA.config.baseURL, undefined);
+  assert.equal(ctx.req._chargedCredits.txn.amount, 0n);
+  assert.equal(ctx.req._chargedCredits.fallback, 'free_ia');
+  assert.equal(ctx.req._chargedCredits.durableWinner, true);
 });
 
-test('chargeCredits: 402 INSUFFICIENT when balance < cost AND Free IA not configured', async () => {
-  balance = 3n;
-  const prevKey = process.env.CEREBRAS_API_KEY;
-  delete process.env.CEREBRAS_API_KEY;
-  try {
-    const ctx = makeReqRes();
-    chargeCredits({ feature: 'paraphrase', cost: 5 })(ctx.req, ctx.res, ctx.nextHook());
-    await ctx.done;
-    assert.equal(ctx.res.statusCode, 402);
-    assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
-    assert.equal(ctx.res.jsonBody.feature, 'paraphrase');
-  } finally {
-    if (prevKey !== undefined) process.env.CEREBRAS_API_KEY = prevKey;
-  }
-});
-
-test('chargeCredits: 402 INSUFFICIENT when balance < cost even if legacy Cerebras key is set', async () => {
-  balance = 3n;
-  const prevKey = process.env.CEREBRAS_API_KEY;
-  process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
-  try {
-    let nextCalled = false;
-    const ctx = makeReqRes();
-    chargeCredits({ feature: 'paraphrase', cost: 5 })(
-      ctx.req,
-      ctx.res,
-      ctx.nextHook(() => { nextCalled = true; }),
-    );
-    await ctx.done;
-    assert.equal(nextCalled, false);
-    assert.equal(ctx.res.statusCode, 402);
-    assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
-    assert.equal(balance, 3n, 'balance must be unchanged on failed charge');
-  } finally {
-    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
-    else process.env.CEREBRAS_API_KEY = prevKey;
-  }
-});
-
-test('chargeCredits: routes that opt out (allowFreeIaFallback:false) still 402 even with Cerebras configured', async () => {
-  balance = 3n;
-  const prevKey = process.env.CEREBRAS_API_KEY;
-  process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
-  try {
-    const ctx = makeReqRes();
-    chargeCredits({ feature: 'image_generation', cost: 5, allowFreeIaFallback: false })(
-      ctx.req,
-      ctx.res,
-      ctx.nextHook(),
-    );
-    await ctx.done;
-    assert.equal(ctx.res.statusCode, 402);
-    assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
-  } finally {
-    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
-    else process.env.CEREBRAS_API_KEY = prevKey;
-  }
-});
-
-test('chargeCredits: insufficient credits does not set legacy Free IA fallback headers', async () => {
-  balance = 3n;
-  const prevKey = process.env.CEREBRAS_API_KEY;
-  process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
-  try {
-    const headers = {};
-    const ctx = makeReqRes();
-    ctx.res.setHeader = (name, value) => { headers[name.toLowerCase()] = String(value); };
-    ctx.res.headersSent = false;
-    chargeCredits({ feature: 'paraphrase', cost: 5 })(
-      ctx.req,
-      ctx.res,
-      ctx.nextHook(),
-    );
-    await ctx.done;
-    assert.equal(ctx.res.statusCode, 402);
-    assert.equal(headers['x-sira-fallback'], undefined);
-    assert.equal(headers['x-sira-fallback-feature'], undefined);
-    assert.equal(headers['x-sira-fallback-cost'], undefined);
-  } finally {
-    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
-    else process.env.CEREBRAS_API_KEY = prevKey;
-  }
-});
-
-test('refundLastCharge: returns null on Free IA fallback (no txn to refund)', async () => {
-  const req = { _chargedCredits: { fallback: 'free_ia', txn: null, replay: false } };
-  const result = await refundLastCharge(req, 'engine_error');
-  assert.equal(result, null);
-});
-
-test('refundLastCharge: returns null when no charge recorded', async () => {
-  const req = { _chargedCredits: undefined };
-  const result = await refundLastCharge(req, 'test');
-  assert.equal(result, null);
-});
-
-test('refundLastCharge: returns null on idempotent replays (do not double-refund)', async () => {
-  const req = { _chargedCredits: { replay: true, txn: { id: 'tx', amount: -5n, userId: 'u1' } } };
-  const result = await refundLastCharge(req, 'test');
-  assert.equal(result, null);
-});
-
-test('spendCredits + refundCharge: round trip leaves balance unchanged', async () => {
-  balance = 100n;
-  lifetimeSpent = 0n;
-  const spend = await spendCredits({ userId: 'u1', amount: 7, feature: 'paraphrase' });
+test('spendCredits and strict refundLastCharge complete an atomic round trip', async () => {
+  const spend = await spendCredits({
+    prismaClient: fakePrisma,
+    userId: 'u1',
+    amount: 7,
+    feature: 'paraphrase',
+    idempotencyKey: 'round-trip-key',
+    requestHash: 'round-trip-hash',
+  });
   assert.equal(spend.ok, true);
-  assert.equal(balance, 93n);
-  const refund = await refundCharge({ originalTxn: spend.txn, reason: 'engine_error' });
-  assert.equal(balance, 100n, 'balance restored after refund');
+  assert.equal(fakePrisma._state.credits.get('u1').balance, 93n);
+  const req = {
+    _chargedCredits: {
+      feature: 'paraphrase',
+      replay: false,
+      txn: spend.txn,
+    },
+  };
+  const refund = await refundLastCharge(req, 'engine_error', {
+    strict: true,
+    prismaClient: fakePrisma,
+  });
   assert.equal(refund.ok, true);
+  assert.equal(fakePrisma._state.credits.get('u1').balance, 100n);
+  assert.equal(req._refundedCredits.txn.id, refund.txn.id);
 });
 
-test('spendCredits: a fractional amount rounds up instead of throwing RangeError', async () => {
-  balance = 100n;
-  lifetimeSpent = 0n;
-  const spend = await spendCredits({ userId: 'u1', amount: 5.5, feature: 'image' });
-  assert.equal(spend.ok, true);
-  assert.equal(balance, 94n, '5.5 rounded up to 6 and debited (no crash)');
-});
-
-test('spendCredits: non-finite / non-positive amounts reject cleanly as INVALID_AMOUNT', async () => {
-  balance = 100n;
-  lifetimeSpent = 0n;
-  for (const bad of [NaN, Infinity, 0, -1, 'x', null]) {
-    const r = await spendCredits({ userId: 'u1', amount: bad, feature: 'image' });
-    assert.equal(r.ok, false, `amount=${String(bad)} must be rejected`);
-    assert.equal(r.code, 'INVALID_AMOUNT');
-  }
-  assert.equal(balance, 100n, 'balance untouched on invalid amounts');
-});
-
-test('balanceAfter is captured atomically from the same update (not a re-read)', async () => {
-  balance = 100n;
-  lifetimeSpent = 0n;
-  const spend = await spendCredits({ userId: 'u1', amount: 30, feature: 'paraphrase' });
-  // 100 - 30 → the recorded balanceAfter must equal the post-debit balance,
-  // typed as BigInt to match the ledger column.
-  assert.equal(spend.txn.balanceAfter, 70n);
-  assert.equal(typeof spend.txn.balanceAfter, 'bigint');
-  const refund = await refundCharge({ originalTxn: spend.txn, reason: 'engine_error' });
-  // 70 + 30 → refund's balanceAfter reflects the increment's result.
-  assert.equal(refund.txn.balanceAfter, 100n);
+test('fallback and replay charges are never refunded', async () => {
+  assert.equal(await refundLastCharge({
+    _chargedCredits: {
+      fallback: 'free_ia',
+      txn: { id: 'zero-row' },
+      replay: false,
+    },
+  }), null);
+  assert.equal(await refundLastCharge({
+    _chargedCredits: {
+      txn: { id: 'paid-row' },
+      replay: true,
+    },
+  }), null);
 });

@@ -29,6 +29,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_PROVIDER = process.env.IMAGE_PROVIDER || 'openai';
+const DEFAULT_IMAGE_TIMEOUT_MS = 120_000;
+const MAX_IMAGE_TIMEOUT_MS = 3_570_000;
+
+function resolveImageTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(env.IMAGE_GEN_TIMEOUT_MS || '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_TIMEOUT_MS;
+  return Math.min(MAX_IMAGE_TIMEOUT_MS, Math.max(1_000, parsed));
+}
 
 function pickProvider(spec) {
   if (spec && spec.provider) return spec.provider;
@@ -49,6 +57,7 @@ function buildMockSvg(prompt) {
 }
 
 async function generateMock(spec) {
+  if (spec?.signal?.aborted) throw spec.signal.reason;
   const { prompt, n = 1 } = spec;
   const assets = [];
   for (let i = 0; i < Math.min(n, 4); i += 1) {
@@ -63,6 +72,7 @@ async function generateMock(spec) {
 }
 
 async function generateOpenAI(spec) {
+  if (spec?.signal?.aborted) throw spec.signal.reason;
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return { ok: false, code: 'PROVIDER_DOWN', reason: 'OPENAI_API_KEY missing', providerUsed: 'openai' };
@@ -88,7 +98,7 @@ async function generateOpenAI(spec) {
     // Bound the provider call: a hung image request would otherwise block
     // the image job until an outer timeout (or never). Per-request timeout
     // via the OpenAI SDK (default 120s, env-overridable).
-    const imageTimeoutMs = Number(process.env.IMAGE_GEN_TIMEOUT_MS) || 120_000;
+    const imageTimeoutMs = resolveImageTimeoutMs();
     const result = await client.images.generate({
       // dall-e-3 was removed from this account (400 model does not exist);
       // gpt-image-2 is the replacement. This call already omits
@@ -97,13 +107,14 @@ async function generateOpenAI(spec) {
       prompt: String(spec.prompt || '').slice(0, 4000),
       size,
       n,
-    }, { timeout: imageTimeoutMs });
+    }, { timeout: imageTimeoutMs, signal: spec.signal });
     const assets = (result?.data || []).map((d) => ({
       url: d.url || (d.b64_json ? `data:image/png;base64,${d.b64_json}` : ''),
       format: d.url ? 'url' : 'png',
     }));
     return { ok: true, assets, providerUsed: 'openai' };
   } catch (err) {
+    if (spec?.signal?.aborted) throw spec.signal.reason || err;
     const moderated =
       err && err.code === 'content_policy_violation' ||
       (err && err.message && /content policy|moderation/i.test(err.message));
@@ -121,6 +132,7 @@ async function generateNone() {
 }
 
 async function generate(spec) {
+  if (spec?.signal?.aborted) throw spec.signal.reason;
   const provider = pickProvider(spec);
   switch (provider) {
     case 'mock':   return generateMock(spec);
@@ -131,4 +143,9 @@ async function generate(spec) {
   }
 }
 
-module.exports = { generate, pickProvider, DEFAULT_PROVIDER };
+module.exports = {
+  DEFAULT_PROVIDER,
+  generate,
+  pickProvider,
+  resolveImageTimeoutMs,
+};

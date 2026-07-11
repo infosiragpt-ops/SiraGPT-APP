@@ -4,6 +4,7 @@ const METRICS_PATHS = Object.freeze([
   '/metrics',
   '/internal/metrics',
   '/api/se-agents/metrics',
+  '/api/free-ia/metrics.prom',
 ]);
 
 const METRICS_PATH_SET = new Set(METRICS_PATHS);

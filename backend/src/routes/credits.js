@@ -29,6 +29,17 @@ const express = require('express');
 const { z } = require('zod');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
+const {
+  completeLedgerTransaction,
+  ensureCreditBalanceRow,
+  getCreditBalanceRow,
+  getLedgerTransaction,
+  listLedgerTransactions,
+  refundLedgerTransaction,
+  reserveCreditGrant,
+  reservePaidCharge,
+} = require('../services/credit-ledger');
+const { sha256Hex } = require('../utils/canonical-json');
 
 const meRouter = express.Router();
 const adminRouter = express.Router();
@@ -66,10 +77,6 @@ const RefundSchema = z.object({
 });
 
 // ── Helpers ────────────────────────────────────────────────────────
-function toBigInt(value) {
-  return typeof value === 'bigint' ? value : BigInt(value);
-}
-
 function bigToStr(value) {
   if (value === null || value === undefined) return '0';
   return typeof value === 'bigint' ? value.toString() : String(value);
@@ -122,104 +129,119 @@ function requireSuperAdmin(req, res) {
   return true;
 }
 
-async function findByIdempotency(idempotencyKey) {
-  if (!idempotencyKey) return null;
-  return prisma.creditTransaction.findUnique({
-    where: { idempotencyKey },
+function deriveWriteRequestHash(body) {
+  const source = body && typeof body === 'object' && !Array.isArray(body)
+    ? body
+    : {};
+  const payload = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key !== 'idempotencyKey') payload[key] = value;
+  }
+  return sha256Hex(payload);
+}
+
+async function ensureCreditRow(userId, prismaClient = prisma) {
+  return ensureCreditBalanceRow({
+    prismaClient,
+    userId,
   });
 }
 
-async function ensureCreditRow(userId) {
-  let row = await prisma.credit.findUnique({ where: { userId } });
-  if (row) return row;
-  row = await prisma.credit.create({
-    data: {
-      userId,
-      balance: BigInt(0),
-      reservedBalance: BigInt(0),
-      lifetimeGranted: BigInt(0),
-      lifetimeSpent: BigInt(0),
-    },
+async function getCreditRow(userId, prismaClient = prisma) {
+  return getCreditBalanceRow({
+    prismaClient,
+    userId,
   });
-  return row;
 }
 
 // Atomic spend. Returns either { ok: true, balanceAfter, txn } or
 // { ok: false, code: 'INSUFFICIENT' }.
-async function atomicSpend({ userId, amount, feature, reason, metadata, idempotencyKey }) {
-  const amt = toBigInt(amount);
-
-  // Idempotent replay short-circuit.
-  if (idempotencyKey) {
-    const existing = await findByIdempotency(idempotencyKey);
-    if (existing) {
-      return { ok: true, replay: true, txn: existing };
-    }
-  }
-
-  // Atomic guarded UPDATE — only succeeds if balance is sufficient. Capture the
-  // post-debit balance in the SAME statement via RETURNING so the ledger's
-  // balanceAfter reflects exactly this transaction (a separate findUnique could
-  // observe a concurrent spend/grant and record a balance that never matched
-  // this debit). Mirrors middleware/charge-credits.js.
-  const rows = await prisma.$queryRawUnsafe(
-    `UPDATE "credits"
-       SET "balance" = "balance" - $1::BIGINT,
-           "lifetimeSpent" = "lifetimeSpent" + $1::BIGINT,
-           "updatedAt" = CURRENT_TIMESTAMP
-     WHERE "userId" = $2
-       AND "balance" >= $1::BIGINT
-     RETURNING "balance"`,
-    amt.toString(),
+async function atomicSpend({
+  prismaClient = prisma,
+  userId,
+  amount,
+  feature,
+  reason,
+  metadata,
+  idempotencyKey,
+  requestId,
+  requestHash,
+}) {
+  return reservePaidCharge({
+    prismaClient,
     userId,
-  );
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return { ok: false, code: 'INSUFFICIENT' };
-  }
-  const balanceAfter = BigInt(rows[0].balance);
-  const txn = await prisma.creditTransaction.create({
-    data: {
-      userId,
-      type: 'SPEND',
-      amount: -amt, // ledger convention: negative for debits
-      balanceAfter,
-      reason: reason || `spend(${feature})`,
-      metadata: { feature, ...(metadata || {}) },
-      idempotencyKey: idempotencyKey || null,
-    },
+    amount,
+    feature,
+    reason,
+    metadata,
+    idempotencyKey,
+    requestId,
+    requestHash,
   });
-  return { ok: true, balanceAfter, txn };
 }
 
-async function atomicGrant({ userId, amount, type, reason, metadata, idempotencyKey }) {
-  const amt = toBigInt(amount);
-  if (idempotencyKey) {
-    const existing = await findByIdempotency(idempotencyKey);
-    if (existing) return { replay: true, txn: existing };
+async function atomicGrant({
+  prismaClient = prisma,
+  userId,
+  amount,
+  type,
+  reason,
+  metadata,
+  idempotencyKey,
+  requestId,
+  requestHash,
+}) {
+  return reserveCreditGrant({
+    prismaClient,
+    userId,
+    amount,
+    type,
+    reason,
+    metadata,
+    idempotencyKey,
+    requestId,
+    requestHash,
+  });
+}
+
+function sendWriteFailure(res, result) {
+  if (result?.code === 'INSUFFICIENT') {
+    return res.status(402).json({ error: 'insufficient credits' });
   }
-  await ensureCreditRow(userId);
-  // Use the row returned by the atomic increment as balanceAfter rather than a
-  // follow-up findUnique that a concurrent write could race.
-  const updated = await prisma.credit.update({
-    where: { userId },
-    data: {
-      balance: { increment: amt },
-      lifetimeGranted: { increment: amt },
-    },
+  if (
+    String(result?.code || '').startsWith('IDEMPOTENCY_')
+    || result?.code === 'LEASE_LOST'
+  ) {
+    return res.status(409).json({
+      error: 'idempotency conflict',
+      code: result.code,
+      retryable: result.retryable === true,
+    });
+  }
+  return res.status(400).json({
+    error: 'invalid credit operation',
+    code: result?.code || 'INVALID_CREDIT_OPERATION',
   });
-  const balanceAfter = updated.balance;
-  const txn = await prisma.creditTransaction.create({
-    data: {
-      userId,
-      type,
-      amount: amt,
-      balanceAfter,
-      reason,
-      metadata: metadata || {},
-      idempotencyKey: idempotencyKey || null,
-    },
+}
+
+async function persistWriteResponse(
+  result,
+  statusCode,
+  body,
+  prismaClient = prisma,
+) {
+  if (!result?.ownsLease || !result?.txn) return;
+  const completed = await completeLedgerTransaction({
+    prismaClient,
+    transaction: result.txn,
+    statusCode,
+    body,
   });
-  return { balanceAfter, txn };
+  if (!completed?.ok) {
+    const error = new Error('credit response persistence failed');
+    error.code = completed?.code || 'IDEMPOTENCY_CACHE_FAILED';
+    throw error;
+  }
 }
 
 // ── User-facing routes ─────────────────────────────────────────────
@@ -235,13 +257,12 @@ meRouter.get('/me', authenticateToken, async (req, res, next) => {
 meRouter.get('/me/transactions', authenticateToken, async (req, res, next) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
-    const cursor = req.query.cursor ? { id: String(req.query.cursor) } : undefined;
-    const typeFilter = req.query.type ? { type: String(req.query.type) } : {};
-    const items = await prisma.creditTransaction.findMany({
-      where: { userId: req.user.id, ...typeFilter },
-      orderBy: { createdAt: 'desc' },
-      take: limit + 1,
-      ...(cursor && { skip: 1, cursor }),
+    const items = await listLedgerTransactions({
+      prismaClient: prisma,
+      userId: req.user.id,
+      type: req.query.type ? String(req.query.type) : null,
+      cursor: req.query.cursor ? String(req.query.cursor) : null,
+      limit: limit + 1,
     });
     const hasMore = items.length > limit;
     const sliced = hasMore ? items.slice(0, limit) : items;
@@ -263,18 +284,27 @@ meRouter.post('/spend', authenticateToken, async (req, res, next) => {
     }
     const data = parse.data;
     const idempotencyKey = pickIdempotencyKey(req, data.idempotencyKey);
-    const result = await atomicSpend({ ...data, idempotencyKey });
-    if (!result.ok) {
-      return res.status(402).json({ error: 'insufficient credits' });
-    }
-    res.status(result.replay ? 200 : 201).json({
-      transaction: serializeTransaction(result.txn),
-      replay: !!result.replay,
+    const result = await atomicSpend({
+      ...data,
+      idempotencyKey,
+      requestId: req.id,
+      requestHash: deriveWriteRequestHash(req.body),
     });
-  } catch (err) {
-    if (err && err.code === 'P2002') {
-      return res.status(200).json({ error: 'replay', code: 'idempotency_conflict' });
+    if (!result.ok) {
+      return sendWriteFailure(res, result);
     }
+    if (result.replay && result.cachedResponse) {
+      return res
+        .status(result.cachedResponse.statusCode)
+        .json(result.cachedResponse.body);
+    }
+    const responseBody = {
+      transaction: serializeTransaction(result.txn),
+      replay: false,
+    };
+    await persistWriteResponse(result, 201, responseBody);
+    return res.status(201).json(responseBody);
+  } catch (err) {
     next(err);
   }
 });
@@ -293,11 +323,21 @@ adminRouter.post('/grant', authenticateToken, async (req, res, next) => {
       ...data,
       type: 'ADMIN_ADJUSTMENT',
       idempotencyKey,
+      requestId: req.id,
+      requestHash: deriveWriteRequestHash(req.body),
     });
-    res.status(result.replay ? 200 : 201).json({
+    if (!result.ok) return sendWriteFailure(res, result);
+    if (result.replay && result.cachedResponse) {
+      return res
+        .status(result.cachedResponse.statusCode)
+        .json(result.cachedResponse.body);
+    }
+    const responseBody = {
       transaction: serializeTransaction(result.txn),
-      replay: !!result.replay,
-    });
+      replay: false,
+    };
+    await persistWriteResponse(result, 201, responseBody);
+    return res.status(201).json(responseBody);
   } catch (err) {
     next(err);
   }
@@ -312,15 +352,12 @@ adminRouter.post('/refund', authenticateToken, async (req, res, next) => {
     }
     const data = parse.data;
     const idempotencyKey = pickIdempotencyKey(req, data.idempotencyKey);
-    // Refund amount: explicit if provided, otherwise pull from the
-    // referenced transaction (must exist + must be a SPEND).
-    let amount = data.amount;
-    if (!amount) {
-      if (!data.transactionId) {
-        return res.status(400).json({ error: 'amount or transactionId required' });
-      }
-      const original = await prisma.creditTransaction.findUnique({
-        where: { id: data.transactionId },
+    let result;
+    if (data.transactionId) {
+      const original = await getLedgerTransaction({
+        prismaClient: prisma,
+        id: data.transactionId,
+        userId: data.userId,
       });
       if (!original || original.userId !== data.userId) {
         return res.status(404).json({ error: 'transaction not found for user' });
@@ -328,20 +365,41 @@ adminRouter.post('/refund', authenticateToken, async (req, res, next) => {
       if (original.type !== 'SPEND') {
         return res.status(400).json({ error: 'can only refund SPEND transactions' });
       }
-      amount = (-original.amount).toString();
+      result = await refundLedgerTransaction({
+        prismaClient: prisma,
+        originalTransaction: original,
+        reason: data.reason,
+        metadata: data.metadata,
+      });
+    } else if (data.amount) {
+      result = await atomicGrant({
+        userId: data.userId,
+        amount: data.amount,
+        type: 'REFUND',
+        reason: data.reason,
+        metadata: data.metadata,
+        idempotencyKey,
+        requestId: req.id,
+        requestHash: deriveWriteRequestHash(req.body),
+      });
+    } else {
+      return res.status(400).json({ error: 'amount or transactionId required' });
     }
-    const result = await atomicGrant({
-      userId: data.userId,
-      amount,
-      type: 'REFUND',
-      reason: data.reason,
-      metadata: { transactionId: data.transactionId, ...(data.metadata || {}) },
-      idempotencyKey,
-    });
-    res.status(result.replay ? 200 : 201).json({
+    if (!result.ok) return sendWriteFailure(res, result);
+    if (result.replay && result.cachedResponse) {
+      return res
+        .status(result.cachedResponse.statusCode)
+        .json(result.cachedResponse.body);
+    }
+    const statusCode = result.replay ? 200 : 201;
+    const responseBody = {
       transaction: serializeTransaction(result.txn),
       replay: !!result.replay,
-    });
+    };
+    if (!data.transactionId) {
+      await persistWriteResponse(result, statusCode, responseBody);
+    }
+    return res.status(statusCode).json(responseBody);
   } catch (err) {
     next(err);
   }
@@ -350,7 +408,7 @@ adminRouter.post('/refund', authenticateToken, async (req, res, next) => {
 adminRouter.get('/users/:userId', authenticateToken, async (req, res, next) => {
   try {
     if (!requireSuperAdmin(req, res)) return;
-    const row = await prisma.credit.findUnique({ where: { userId: req.params.userId } });
+    const row = await getCreditRow(req.params.userId);
     res.json({ credits: serializeCredits(row) });
   } catch (err) {
     next(err);
@@ -362,5 +420,10 @@ module.exports.adminRouter = adminRouter;
 module.exports.SpendSchema = SpendSchema;
 module.exports.GrantSchema = GrantSchema;
 module.exports.RefundSchema = RefundSchema;
+module.exports.atomicGrant = atomicGrant;
+module.exports.atomicSpend = atomicSpend;
+module.exports.ensureCreditRow = ensureCreditRow;
+module.exports.getCreditRow = getCreditRow;
+module.exports.persistWriteResponse = persistWriteResponse;
 module.exports.serializeCredits = serializeCredits;
 module.exports.serializeTransaction = serializeTransaction;

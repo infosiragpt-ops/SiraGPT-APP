@@ -28,6 +28,11 @@ Module.prototype.require = function (spec) {
 const credits = require('../src/routes/credits');
 const {
   adminRouter,
+  atomicGrant,
+  atomicSpend,
+  ensureCreditRow,
+  getCreditRow,
+  persistWriteResponse,
   SpendSchema,
   GrantSchema,
   RefundSchema,
@@ -141,4 +146,104 @@ test('serializeTransaction: BigInt amount + balanceAfter become strings', () => 
   assert.equal(out.amount, '-10');
   assert.equal(out.balanceAfter, '490');
   assert.equal(out.metadata.feature, 'paraphrase');
+});
+
+test('credits route helpers operate on the raw-SQL surface without Prisma delegates', async () => {
+  const { createRawCreditPrisma } = require('./helpers/raw-credit-ledger-prisma');
+  const prismaClient = createRawCreditPrisma({ balances: { u1: 20n } });
+  assert.equal(typeof ensureCreditRow, 'function');
+  assert.equal(typeof getCreditRow, 'function');
+  assert.equal(typeof atomicSpend, 'function');
+  assert.equal(typeof atomicGrant, 'function');
+
+  const before = await getCreditRow('u1', prismaClient);
+  assert.equal(before.balance, 20n);
+  const spend = await atomicSpend({
+    prismaClient,
+    userId: 'u1',
+    amount: 5,
+    feature: 'paraphrase',
+    idempotencyKey: 'route-spend-key',
+    requestHash: 'route-spend-hash',
+  });
+  assert.equal(spend.ok, true);
+  assert.equal(spend.txn.balanceAfter, 15n);
+
+  const grant = await atomicGrant({
+    prismaClient,
+    userId: 'u1',
+    amount: 7,
+    type: 'ADMIN_ADJUSTMENT',
+    reason: 'test grant',
+    idempotencyKey: 'route-grant-key',
+    requestHash: 'route-grant-hash',
+  });
+  assert.equal(grant.ok, true);
+  assert.equal(grant.txn.balanceAfter, 22n);
+  assert.equal(prismaClient._telemetry.rootRawCalls, 0);
+});
+
+test('ensureCreditRow safely creates a missing raw-table balance row', async () => {
+  const { createRawCreditPrisma } = require('./helpers/raw-credit-ledger-prisma');
+  const prismaClient = createRawCreditPrisma({ balances: {} });
+  const row = await ensureCreditRow('new-user', prismaClient);
+  assert.equal(row.userId, 'new-user');
+  assert.equal(row.balance, 0n);
+  assert.equal(row.lifetimeGranted, 0n);
+  assert.equal(row.lifetimeSpent, 0n);
+});
+
+test('recovered spend and grant claims persist completion without repeating balance changes', async () => {
+  const { createRawCreditPrisma } = require('./helpers/raw-credit-ledger-prisma');
+  const prismaClient = createRawCreditPrisma({ balances: { u1: 20n } });
+
+  const spendInput = {
+    prismaClient,
+    userId: 'u1',
+    amount: 5,
+    feature: 'paraphrase',
+    idempotencyKey: 'recovered-spend-key',
+    requestHash: 'recovered-spend-hash',
+  };
+  await atomicSpend(spendInput);
+  prismaClient._state.rows[0].metadata.idempotency.leaseUntil = '2000-01-01T00:00:00.000Z';
+  const recoveredSpend = await atomicSpend(spendInput);
+  assert.equal(recoveredSpend.winner, false);
+  assert.equal(recoveredSpend.ownsLease, true);
+  await persistWriteResponse(
+    recoveredSpend,
+    201,
+    { transaction: { id: recoveredSpend.txn.id }, replay: false },
+    prismaClient,
+  );
+  const spendReplay = await atomicSpend(spendInput);
+  assert.equal(spendReplay.replay, true);
+  assert.equal(prismaClient._state.credits.get('u1').balance, 15n);
+
+  const grantInput = {
+    prismaClient,
+    userId: 'u1',
+    amount: 7,
+    type: 'ADMIN_ADJUSTMENT',
+    reason: 'recovered grant',
+    idempotencyKey: 'recovered-grant-key',
+    requestHash: 'recovered-grant-hash',
+  };
+  await atomicGrant(grantInput);
+  const grantRow = prismaClient._state.rows.find(
+    (row) => row.metadata.feature === 'credits:admin_adjustment',
+  );
+  grantRow.metadata.idempotency.leaseUntil = '2000-01-01T00:00:00.000Z';
+  const recoveredGrant = await atomicGrant(grantInput);
+  assert.equal(recoveredGrant.winner, false);
+  assert.equal(recoveredGrant.ownsLease, true);
+  await persistWriteResponse(
+    recoveredGrant,
+    201,
+    { transaction: { id: recoveredGrant.txn.id }, replay: false },
+    prismaClient,
+  );
+  const grantReplay = await atomicGrant(grantInput);
+  assert.equal(grantReplay.replay, true);
+  assert.equal(prismaClient._state.credits.get('u1').balance, 22n);
 });

@@ -12,7 +12,7 @@ alert without a context switch.
 |------------|----------------------------------------|--------------------------------------------|
 | Tracing    | `@opentelemetry/sdk-node` + auto-instr | OTLP/HTTP exporter                         |
 | Logging    | `pino` + `pino-http`                   | stdout JSON, redacted at write time        |
-| Metrics    | In-process Prometheus registry         | `/metrics` and `/internal/metrics` (alias) |
+| Metrics    | In-process Prometheus registry         | `/metrics`, `/internal/metrics`, `/api/se-agents/metrics`, `/api/free-ia/metrics.prom` |
 | Errors     | Sentry (optional)                      | configured in `services/observability/sentry.js` |
 | LLM cost   | Langfuse + custom recorder             | `services/observability/llm-cost.js`       |
 
@@ -68,8 +68,10 @@ Auto-instrumentation is configured in `createInstrumentationConfig()`:
 - `pino` — on (auto-injects `trace_id`/`span_id` into log records)
 - `fs`, `dns` — off (too noisy)
 
-The `/metrics`, `/internal/metrics`, and `/health/*` paths are excluded
-from incoming HTTP spans so scrape traffic doesn't dilute the dataset.
+The four metrics aliases (`/metrics`, `/internal/metrics`,
+`/api/se-agents/metrics`, and `/api/free-ia/metrics.prom`) plus
+`/health/*` are excluded from incoming HTTP spans so scrape traffic
+doesn't dilute the dataset.
 
 ### Manual spans
 
@@ -107,16 +109,33 @@ in addition to `trace_id`.
 
 ## Metrics
 
-The backend exposes Prometheus text format on two equivalent paths:
+The backend exposes one protected Prometheus body on four equivalent paths:
 
-- `GET /metrics` — public scrape path
+- `GET /metrics` — canonical scrape path
 - `GET /internal/metrics` — alias intended for ingress allow-listing
+- `GET /api/se-agents/metrics` — compatibility alias
+- `GET /api/free-ia/metrics.prom` — Free-IA compatibility alias
 
-Both render one canonical exposition composed from the utility, agent,
+All four delegate to the same access policy and render one canonical
+exposition composed from the utility, agent,
 process, cognitive, and fallback registries by
 `services/observability/metrics-exposition.js`. New operational families
 should normally use `utils/metrics.js`; there is still exactly one scrape
 body per process.
+
+Free-IA request-level attempt/success/error counters are emitted only by the
+request that wins creation of the durable, user-scoped
+`credit_transactions` reservation. Replays and quota losers do not increment
+them. The ledger commit deliberately precedes the in-memory counter; a process
+crash in that narrow interval can under-count one attempt, while the durable
+ledger remains authoritative for reconciliation. Provider-call metrics are
+separate and may count individual rewrite passes.
+
+Remote scrapers authenticate with `Authorization: Bearer $METRICS_TOKEN`.
+A validated super-admin session is also accepted. Socket-loopback bypass is
+development-only by default; production requires
+`METRICS_ALLOW_LOOPBACK=true`, and forwarded requests never receive that
+bypass.
 
 ### RED method (Rate / Errors / Duration) per endpoint
 
@@ -209,7 +228,7 @@ The backend now ships three top-level observability endpoints:
 |-----------------------------------|-----------------------------------|-------------------------------------------------------------------------|
 | `GET /api/admin/analyzer/health`  | admin token                       | Snapshot of the document analyzer pipeline (open breakers, degraded analyzers, in-process cache hit/miss stats, config) — see `services/document-professional-analyzer.js#getAnalyzerHealthSnapshot`. |
 | `GET /api/admin/health/services`  | super-admin token                 | Liveness probe of external dependencies (Postgres, Redis, Stripe, SMTP, AI providers). Each probe is bounded at 2 s so one dead dependency does not mask the rest. |
-| `GET /metrics`                    | localhost OR super-admin token    | Prometheus text-exposition exporter. Localhost callers (Prometheus sidecar) bypass auth; remote callers must present a super-admin token. The handler lives in `routes/admin.js#metricsHandler` and is mounted at the top level from `index.js`. |
+| `GET /metrics` (plus three aliases above) | `METRICS_TOKEN`, validated super-admin session, or explicitly enabled direct loopback | Unified Prometheus text-exposition exporter owned by `services/observability/metrics-exposition.js`. |
 
 ### `/metrics` series
 

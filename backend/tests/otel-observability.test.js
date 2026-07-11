@@ -105,6 +105,7 @@ describe("OpenTelemetry config", () => {
       "/metrics?source=prometheus",
       "/internal/metrics/",
       "/api/se-agents/metrics/?source=prometheus",
+      "/api/free-ia/metrics.prom?source=prometheus",
     ]) {
       assert.equal(ignore({ url }), true, `expected OTel to ignore ${url}`);
     }
