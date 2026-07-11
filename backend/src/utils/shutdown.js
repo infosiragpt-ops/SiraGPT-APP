@@ -34,6 +34,7 @@ const DEFAULT_STEP_TIMEOUT_MS = 5000;
 const TOTAL_SHUTDOWN_DEADLINE_MS = 30_000;
 const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
   'scheduler_stop',
+  'stripe_webhook_recovery_stop',
   'database_pool_autoscaler_stop',
   'system_cron_stop',
   'workspace_runner_stop',

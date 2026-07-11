@@ -236,12 +236,41 @@ for super-admin owners.
 | `STRIPE_SECRET_KEY` | Stripe secret or restricted key (`sk_live_...`, `rk_live_...`, or test equivalent) |
 | `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
+| `STRIPE_WEBHOOK_RETRIEVE_SUBSCRIPTION_STATE` | Opt-in (`true`/`1`/`on`) remote subscription snapshot retrieval during invoice-success handling; disabled by default so webhook decisions remain local and deterministic |
+| `STRIPE_WEBHOOK_RECOVERY_DISABLED` | Emergency switch that disables the autonomous durable webhook recovery loop (`true`/`1` disables it) |
+| `STRIPE_WEBHOOK_RECOVERY_INTERVAL_MS` | Interval between bounded recovery scans; clamped to 1 second–1 hour (default `60000`) |
+| `STRIPE_WEBHOOK_RECOVERY_BATCH_SIZE` | Maximum pending outbox rows and unresolved mappings scanned per pass; clamped to 1–100 (default `25`) |
+| `STRIPE_WEBHOOK_RECOVERY_LEASE_MS` | Leader and unresolved-record lease duration; clamped to 5 seconds–15 minutes (default `120000`) |
+| `STRIPE_WEBHOOK_RECOVERY_BACKOFF_BASE_MS` | Initial exponential retry delay; clamped to 1 second–1 hour (default `30000`) |
+| `STRIPE_WEBHOOK_RECOVERY_BACKOFF_MAX_MS` | Maximum exponential retry delay; never below the configured base (default `3600000`) |
+| `STRIPE_WEBHOOK_RECOVERY_MAX_ATTEMPTS` | Attempt cap for poison outbox effects and unresolved mappings; clamped to 1–25 (default `8`) |
 | `STRIPE_PRICE_PRO` | Stripe monthly Price ID for the `PRO` / Go tier |
 | `STRIPE_PRICE_PRO_MAX` | Stripe monthly Price ID for the `PRO_MAX` / Plus tier |
 | `STRIPE_PRICE_ENTERPRISE` | Stripe monthly Price ID for the `ENTERPRISE` / Pro tier |
 | `PAYPAL_CLIENT_ID` | PayPal client ID |
 | `PAYPAL_CLIENT_SECRET` | PayPal client secret |
 | `MERCADOPAGO_ACCESS_TOKEN` | Mercado Pago access token |
+
+Paid-feature compatibility is intentionally narrow: a paid-plan user whose
+`stripeSubscriptionId`, `subscriptionStatus`, and `subscriptionEndDate` are all
+absent is treated as a legacy account and remains authorized. Once any
+subscription field exists, paid-feature access requires `subscriptionStatus`
+to be `active`, `trialing`, or `canceling` with a future
+`subscriptionEndDate`;
+unknown, canceled, past-due, expired-canceling, and other states fail closed.
+Super-admin bypass behavior is unchanged.
+
+Checkout terminal fencing is correlation-scoped: only lifecycle state for the
+same Stripe subscription (or checkout session when no subscription ID exists)
+can suppress a grant. A canceled or past-due subscription never blocks a
+customer-validated replacement subscription.
+
+Webhook recovery starts only after the database and HTTP server boot, uses a
+PostgreSQL advisory lock plus a renewable `SystemSettings` lease so one replica
+scans at a time, and stops before Prisma disconnects. It retries committed
+`SubscriptionEvent.eventData` outbox effects and the redacted minimal unresolved
+events under `stripe:webhook:unresolved:*`; it never stores the original Stripe
+payload in the recovery record.
 
 ## 📧 Email (SMTP)
 

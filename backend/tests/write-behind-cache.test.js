@@ -509,6 +509,7 @@ test('central shutdown returns both websocket close promises to the registry', (
 test('production shutdown hooks execute in explicit dependency-safe order', async (t) => {
   const expected = [
     'scheduler_stop',
+    'stripe_webhook_recovery_stop',
     'database_pool_autoscaler_stop',
     'system_cron_stop',
     'workspace_runner_stop',
@@ -525,6 +526,7 @@ test('production shutdown hooks execute in explicit dependency-safe order', asyn
   ];
   const registrationOrder = [
     'system_cron_stop',
+    'stripe_webhook_recovery_stop',
     'database_pool_autoscaler_stop',
     'http_server_close',
     'drain_inflight_requests',

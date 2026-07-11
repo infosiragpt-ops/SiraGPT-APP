@@ -334,7 +334,11 @@ const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 
 const prisma = require('./src/config/database');
 const { createPoolAutoscaler } = require('./src/db/pool-autoscaler');
+const {
+    createStripeWebhookRecovery,
+} = require('./src/services/stripe-webhook-recovery');
 let poolAutoscaler = null;
+let stripeWebhookRecovery = null;
 
 function getPoolAutoscalerState() {
     return poolAutoscaler ? poolAutoscaler.getState() : null;
@@ -788,7 +792,11 @@ app.use(compression({
 // Mounted early so oversized spam never reaches downstream handlers.
 const validatePayloadSize = require('./src/middleware/validate-payload-size');
 app.use(validatePayloadSize({ jsonBytes: 1 * 1024 * 1024, multipartBytes: 250 * 1024 * 1024 }));
-app.use('/api/payments/stripe/webhook', express.raw({ type: 'application/json' }));
+const {
+    createPaymentsCsrfMiddleware,
+    createStripeWebhookRawBodyMiddleware,
+} = require('./src/middleware/stripe-webhook-ingress');
+app.use(createStripeWebhookRawBodyMiddleware());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
@@ -867,7 +875,7 @@ app.use('/api/appshots/pair', requireCsrf);
 // model as /pair, so it gets the same CSRF gate. /capture stays exempt.
 app.use('/api/appshots/sessions', requireCsrf);
 app.use('/api/projects', requireCsrf);
-app.use('/api/payments', requireCsrf);
+app.use('/api/payments', createPaymentsCsrfMiddleware(requireCsrf));
 app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);
 app.use('/api/library', requireCsrf);
@@ -1530,6 +1538,25 @@ async function startServer() {
         logger,
         executionOrder: shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER,
     });
+
+    stripeWebhookRecovery = createStripeWebhookRecovery({
+        prisma,
+        processEvent: paymentRoutes.INTERNAL.processStripeWebhookEvent,
+        drainOutbox: paymentRoutes.INTERNAL.drainStripeWebhookEffects,
+        env: process.env,
+        logger,
+    });
+    stripeWebhookRecovery.start().catch((err) => {
+        logger.warn(
+            { err: err && err.message },
+            'stripe_webhook_recovery_initial_scan_failed',
+        );
+    });
+    shutdownRegistry.register(
+        'stripe_webhook_recovery_stop',
+        () => stripeWebhookRecovery.stop(),
+        5000,
+    );
 
     shutdownRegistry.register(
         'rbac_permission_cache_close',

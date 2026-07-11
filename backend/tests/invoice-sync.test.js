@@ -8,18 +8,42 @@ const {
   toDateFromUnix,
   toInt,
   compactLines,
+  stripeInvoiceSubscriptionId,
   syncInvoiceFromStripe,
   listInvoicesForUser,
 } = require('../src/services/invoice-sync');
 
-function makeFakePrisma() {
+function makeFakePrisma({ synchronizeLegacyUpserts = false } = {}) {
   const invoices = new Map();
   const users = new Map();
-  return {
+  const calls = {
+    invoiceFindUnique: 0,
+    invoiceUpsert: 0,
+    rawInvoiceUpsert: 0,
+  };
+  let legacyUpsertArrivals = 0;
+  let releaseLegacyUpserts;
+  const legacyUpsertGate = synchronizeLegacyUpserts
+    ? new Promise((resolve) => { releaseLegacyUpserts = resolve; })
+    : null;
+  let rawTail = Promise.resolve();
+
+  const prisma = {
     _invoices: invoices,
     _users: users,
+    _calls: calls,
     invoice: {
+      async findUnique({ where: { stripeInvoiceId } }) {
+        calls.invoiceFindUnique += 1;
+        return invoices.get(stripeInvoiceId) || null;
+      },
       async upsert({ where: { stripeInvoiceId }, create, update }) {
+        calls.invoiceUpsert += 1;
+        if (legacyUpsertGate) {
+          legacyUpsertArrivals += 1;
+          if (legacyUpsertArrivals === 2) releaseLegacyUpserts();
+          await legacyUpsertGate;
+        }
         const existing = invoices.get(stripeInvoiceId);
         if (existing) {
           const merged = { ...existing, ...update, updatedAt: new Date() };
@@ -54,13 +78,80 @@ function makeFakePrisma() {
       },
     },
   };
+
+  prisma.$queryRawUnsafe = (sql, ...params) => {
+    calls.rawInvoiceUpsert += 1;
+    assert.match(sql, /ON\s+CONFLICT/iu);
+    assert.match(sql, /PAID/iu);
+    const operation = rawTail.then(async () => {
+      const [
+        id,
+        userId,
+        stripeInvoiceId,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        number,
+        status,
+        amountDueCents,
+        amountPaidCents,
+        amountRemainingCents,
+        subtotalCents,
+        totalCents,
+        currency,
+        periodStart,
+        periodEnd,
+        hostedInvoiceUrl,
+        invoicePdfUrl,
+        linesJson,
+        issuedAt,
+        paidAt,
+        dueDate,
+      ] = params;
+      const existing = invoices.get(stripeInvoiceId);
+      if (existing?.status === 'PAID' && status !== 'PAID') return [];
+      const now = new Date();
+      const row = {
+        ...(existing || { id, createdAt: now }),
+        userId,
+        stripeInvoiceId,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        number,
+        status,
+        amountDueCents,
+        amountPaidCents,
+        amountRemainingCents,
+        subtotalCents,
+        totalCents,
+        currency,
+        periodStart,
+        periodEnd,
+        hostedInvoiceUrl,
+        invoicePdfUrl,
+        lines: typeof linesJson === 'string' ? JSON.parse(linesJson) : linesJson,
+        issuedAt,
+        paidAt,
+        dueDate,
+        updatedAt: now,
+      };
+      invoices.set(stripeInvoiceId, row);
+      return [{ id: row.id, status: row.status }];
+    });
+    rawTail = operation.catch(() => {});
+    return operation;
+  };
+
+  return prisma;
 }
 
 function makeStripeInvoice(overrides = {}) {
   return {
     id: 'in_test_1',
     customer: 'cus_test_1',
-    subscription: 'sub_test_1',
+    parent: {
+      type: 'subscription_details',
+      subscription_details: { subscription: 'sub_test_1' },
+    },
     number: 'SIRA-001',
     status: 'paid',
     amount_due: 1999,
@@ -132,6 +223,26 @@ test('compactLines extracts essentials and returns null for missing data', () =>
   assert.equal(compactLines(null), null);
 });
 
+test('stripeInvoiceSubscriptionId supports the current parent path and legacy fallback', () => {
+  assert.equal(stripeInvoiceSubscriptionId(makeStripeInvoice()), 'sub_test_1');
+  assert.equal(
+    stripeInvoiceSubscriptionId(makeStripeInvoice({
+      parent: null,
+      subscription: 'sub_legacy',
+    })),
+    'sub_legacy',
+  );
+  assert.equal(
+    stripeInvoiceSubscriptionId(makeStripeInvoice({
+      parent: {
+        type: 'subscription_details',
+        subscription_details: { subscription: { id: 'sub_expanded' } },
+      },
+    })),
+    'sub_expanded',
+  );
+});
+
 test('syncInvoiceFromStripe returns reason when prisma missing model', async () => {
   const r = await syncInvoiceFromStripe({}, makeStripeInvoice());
   assert.equal(r.ok, false);
@@ -152,6 +263,28 @@ test('syncInvoiceFromStripe looks up user by stripeCustomerId when not passed', 
   assert.equal(r.ok, true);
   const row = prisma._invoices.get('in_test_1');
   assert.equal(row.userId, 'u1');
+});
+
+test('syncInvoiceFromStripe normalizes expanded customer and subscription objects to IDs', async () => {
+  const prisma = makeFakePrisma();
+  prisma._users.set('u1', { id: 'u1', stripeCustomerId: 'cus_test_1' });
+
+  const result = await syncInvoiceFromStripe(prisma, makeStripeInvoice({
+    customer: { id: 'cus_test_1', email: 'must-not-be-persisted@example.com' },
+    parent: {
+      type: 'subscription_details',
+      subscription_details: {
+        subscription: { id: 'sub_expanded', status: 'active' },
+      },
+    },
+  }));
+
+  assert.equal(result.ok, true);
+  const row = prisma._invoices.get('in_test_1');
+  assert.equal(row.stripeCustomerId, 'cus_test_1');
+  assert.equal(row.stripeSubscriptionId, 'sub_expanded');
+  assert.equal(typeof row.stripeCustomerId, 'string');
+  assert.equal(typeof row.stripeSubscriptionId, 'string');
 });
 
 test('syncInvoiceFromStripe returns user_not_found when no customer match', async () => {
@@ -177,19 +310,82 @@ test('syncInvoiceFromStripe persists all fields correctly', async () => {
   assert.ok(row.issuedAt instanceof Date);
   assert.equal(row.hostedInvoiceUrl, 'https://invoice.stripe.com/i/abc');
   assert.equal(row.invoicePdfUrl, 'https://stripe.com/pdf/abc');
+  assert.equal(row.stripeSubscriptionId, 'sub_test_1');
   assert.equal(row.lines.length, 1);
+});
+
+test('syncInvoiceFromStripe still persists a legacy top-level subscription', async () => {
+  const prisma = makeFakePrisma();
+  const user = { id: 'u-legacy', stripeCustomerId: 'cus_test_1' };
+  await syncInvoiceFromStripe(prisma, makeStripeInvoice({
+    parent: null,
+    subscription: 'sub_legacy',
+  }), { user });
+  assert.equal(prisma._invoices.get('in_test_1').stripeSubscriptionId, 'sub_legacy');
 });
 
 test('syncInvoiceFromStripe is idempotent (upsert)', async () => {
   const prisma = makeFakePrisma();
   const user = { id: 'u1', stripeCustomerId: 'cus_test_1' };
-  await syncInvoiceFromStripe(prisma, makeStripeInvoice(), { user });
+  await syncInvoiceFromStripe(prisma, makeStripeInvoice({
+    status: 'open',
+    amount_paid: 0,
+  }), { user });
   await syncInvoiceFromStripe(prisma, makeStripeInvoice({ status: 'void', amount_paid: 0 }), { user });
   const row = prisma._invoices.get('in_test_1');
   assert.equal(row.status, 'VOID');
   assert.equal(row.amountPaidCents, 0);
   // Only one row exists despite double sync.
   assert.equal(prisma._invoices.size, 1);
+});
+
+test('syncInvoiceFromStripe never regresses an existing PAID invoice', async () => {
+  const prisma = makeFakePrisma();
+  const user = { id: 'u1', stripeCustomerId: 'cus_test_1' };
+  await syncInvoiceFromStripe(prisma, makeStripeInvoice(), { user });
+
+  const result = await syncInvoiceFromStripe(prisma, makeStripeInvoice({
+    status: 'open',
+    amount_paid: 0,
+    amount_remaining: 1999,
+  }), { user });
+
+  const row = prisma._invoices.get('in_test_1');
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'invoice_status_regression');
+  assert.equal(result.authoritativeStatus, 'PAID');
+  assert.equal(row.status, 'PAID');
+  assert.equal(row.amountPaidCents, 1999);
+  assert.equal(row.amountRemainingCents, 0);
+  assert.ok(row.paidAt instanceof Date);
+});
+
+test('concurrent payment success and failure cannot regress a PAID invoice', async () => {
+  const prisma = makeFakePrisma({ synchronizeLegacyUpserts: true });
+  const user = { id: 'u1', stripeCustomerId: 'cus_test_1' };
+  const paid = makeStripeInvoice({
+    status: 'paid',
+    amount_paid: 1999,
+    amount_remaining: 0,
+  });
+  const failed = makeStripeInvoice({
+    status: 'open',
+    amount_paid: 0,
+    amount_remaining: 1999,
+  });
+
+  await Promise.all([
+    syncInvoiceFromStripe(prisma, paid, { user }),
+    syncInvoiceFromStripe(prisma, failed, { user }),
+  ]);
+
+  const row = prisma._invoices.get('in_test_1');
+  assert.equal(row.status, 'PAID');
+  assert.equal(row.amountPaidCents, 1999);
+  assert.equal(row.amountRemainingCents, 0);
+  assert.equal(prisma._calls.invoiceFindUnique, 0, 'no racy find-then-upsert precheck');
+  assert.equal(prisma._calls.rawInvoiceUpsert, 2, 'both outcomes use one atomic SQL upsert');
 });
 
 test('syncInvoiceFromStripe sets paidAt to null for non-paid invoices', async () => {

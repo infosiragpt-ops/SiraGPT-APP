@@ -20,8 +20,9 @@
  *     The middleware detects bearer auth via `Authorization: Bearer …`
  *     and short-circuits.
  *
- *   - Webhooks (Stripe, etc.) are exempt by NOT being mounted under
- *     `requireCsrf`. Callers wire this only on cookie-auth routers.
+ *   - Webhooks are exempt only through exact-path selectors at the mount
+ *     point (Stripe uses `stripe-webhook-ingress.js`); sibling cookie-auth
+ *     routes remain under `requireCsrf`.
  *
  * Threat model assumptions:
  *   - Attacker can make the victim's browser issue a same-cookies POST

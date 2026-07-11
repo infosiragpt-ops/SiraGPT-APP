@@ -129,6 +129,7 @@ describe('legacy /api/admin/queues HTTP compatibility', () => {
     }));
     restores.push(mockResolvedModule(require.resolve('../src/utils/audit-log'), {
       writeAuditLog: async () => {},
+      writeAuditLogStrict: async () => {},
     }));
     restoreModules = () => {
       for (const restore of restores.reverse()) restore();
