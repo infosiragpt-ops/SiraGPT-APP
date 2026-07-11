@@ -2,9 +2,15 @@ const express = require('express');
 const { chromium } = require('playwright');
 const OpenAI = require('openai');
 const WebSocket = require('ws');
-const jwt = require('jsonwebtoken');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const {
+  createActiveSessionRevalidator,
+  validateActiveSession,
+} = require('../services/active-session-validator');
+const {
+  onUserSessionsRevoked,
+} = require('../services/auth/user-session-revocation-events');
 const {
   computerUseRateLimiter
 } = require('../middleware/computer-use-safety');
@@ -608,16 +614,78 @@ async function completeDesktopBridgeSession(sessionId, session, options = {}) {
 // WebSocket server for real-time updates
 let wss = null;
 let wssClosePromise = null;
+let unsubscribeWsRevocations = null;
+let computerUseRevalidationTimer = null;
 
-const initializeWebSocketServer = (server) => {
+const initializeWebSocketServer = (server, opts = {}) => {
   if (wss) return wss;
   wssClosePromise = null;
   wss = new WebSocket.Server({ server, path: '/ws/computer-use' });
+  const prismaClient = opts.prismaClient || prisma;
+  const jwtSecret = opts.jwtSecret || process.env.JWT_SECRET;
+  const userIndex = new Map();
+  const sessionRevalidator = opts.sessionRevalidator || createActiveSessionRevalidator({
+    prismaClient,
+    jwtSecret,
+  });
+  const addToUserIndex = (userId, socket) => {
+    const key = String(userId);
+    if (!userIndex.has(key)) userIndex.set(key, new Set());
+    userIndex.get(key).add(socket);
+  };
+  const removeFromUserIndex = (userId, socket) => {
+    if (!userId) return;
+    const key = String(userId);
+    const sockets = userIndex.get(key);
+    if (!sockets) return;
+    sockets.delete(socket);
+    if (sockets.size === 0) userIndex.delete(key);
+  };
+  unsubscribeWsRevocations = onUserSessionsRevoked(({ userId, reason }) => {
+    sessionRevalidator.invalidateUser(userId);
+    for (const client of [...(userIndex.get(String(userId)) || [])]) {
+      try {
+        client.close(1008, String(reason || 'sessions_revoked').slice(0, 123));
+      } catch {}
+    }
+  });
+
+  let revalidationRun = null;
+  async function revalidateAuthenticatedSockets() {
+    if (revalidationRun) return revalidationRun;
+    revalidationRun = Promise.allSettled(
+      [...wss.clients]
+        .filter((client) => client.userId && client.authToken)
+        .map(async (client) => {
+          try {
+            await sessionRevalidator.validate({
+              token: client.authToken,
+              request: client.authRequest,
+            }, { force: true });
+          } catch {
+            try { client.close(1008, 'Authentication revoked'); } catch {}
+          }
+        }),
+    ).finally(() => {
+      revalidationRun = null;
+    });
+    return revalidationRun;
+  }
+  wss.userIndex = userIndex;
+  wss.sessionRevalidator = sessionRevalidator;
+  wss.revalidateAuthenticatedSockets = revalidateAuthenticatedSockets;
+  const revalidationIntervalMs = Number.isFinite(Number(opts.revalidationIntervalMs))
+    ? Math.max(1_000, Number(opts.revalidationIntervalMs))
+    : 30_000;
+  computerUseRevalidationTimer = setInterval(() => {
+    void revalidateAuthenticatedSockets();
+  }, revalidationIntervalMs);
+  computerUseRevalidationTimer.unref?.();
 
   wss.on('connection', (ws, req) => {
     console.log('Computer Use WebSocket connected');
 
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
       try {
         const data = JSON.parse(message);
         if (data.type === 'join-session') {
@@ -625,15 +693,36 @@ const initializeWebSocketServer = (server) => {
             ws.close(1008, 'Authentication required');
             return;
           }
-          let decoded;
+          let validated;
           try {
-            decoded = jwt.verify(data.token, process.env.JWT_SECRET);
+            validated = await validateActiveSession({
+              token: data.token,
+              request: req,
+              prismaClient,
+              jwtSecret,
+            });
           } catch (_err) {
             ws.close(1008, 'Invalid authentication');
             return;
           }
+          removeFromUserIndex(ws.userId, ws);
+          ws.userId = validated.userId;
+          ws.authToken = data.token;
+          ws.authRequest = req;
+          ws.authenticatedSessionId = validated.session.id;
+          ws.authenticatedAt = Date.now();
+          addToUserIndex(ws.userId, ws);
+          try {
+            await sessionRevalidator.validate({
+              token: data.token,
+              request: req,
+            }, { force: true });
+          } catch (_err) {
+            removeFromUserIndex(ws.userId, ws);
+            ws.close(1008, 'Invalid authentication');
+            return;
+          }
           ws.sessionId = data.sessionId;
-          ws.userId = decoded.userId || decoded.id;
           console.log(`Client joined session: ${data.sessionId}`);
           const session = getSessionForUser(data.sessionId, ws.userId);
           if (session && Array.isArray(session.events)) {
@@ -666,6 +755,7 @@ const initializeWebSocketServer = (server) => {
     });
 
     ws.on('close', () => {
+      removeFromUserIndex(ws.userId, ws);
       console.log('Computer Use WebSocket disconnected');
     });
   });
@@ -680,6 +770,10 @@ function closeComputerUseWebSocketServer() {
   }
 
   const server = wss;
+  clearInterval(computerUseRevalidationTimer);
+  computerUseRevalidationTimer = null;
+  try { unsubscribeWsRevocations?.(); } catch {}
+  unsubscribeWsRevocations = null;
   let resolveClose;
   let rejectClose;
   wssClosePromise = new Promise((resolve, reject) => {

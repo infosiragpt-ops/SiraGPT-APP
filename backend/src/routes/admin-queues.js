@@ -4,7 +4,8 @@ const express = require('express');
 const { createBullBoard } = require('@bull-board/api');
 const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
-const { authenticateToken, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const {
   getQueueName,
 } = require('../services/agents/agent-task-queue');
@@ -153,7 +154,7 @@ function getBullBoardRuntime() {
 
 function createAdminQueuesRouter({
   authenticateMiddleware = authenticateToken,
-  requireAdminMiddleware = requireAdmin,
+  requireAdminMiddleware = requireAdminRoutePermission,
   requireSuperAdminMiddleware = requireSuperAdmin,
   getHealthSnapshot = buildQueuesHealthSnapshot,
   getBoardRuntime = getBullBoardRuntime,

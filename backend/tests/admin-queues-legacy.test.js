@@ -92,6 +92,12 @@ describe('legacy /api/admin/queues HTTP compatibility', () => {
       requireAdmin: requireAdminRole,
       requireSuperAdmin: requireSuperAdminRole,
     }));
+    // This suite isolates legacy queue-handler compatibility. Declarative
+    // policy behavior is covered by admin-route-permissions.test.js.
+    restores.push(mockResolvedModule(
+      require.resolve('../src/services/admin-route-policy'),
+      requireAdminRole,
+    ));
     restores.push(mockResolvedModule(require.resolve('../src/services/queues/queue-registry'), {
       defaultQueueHealthProbe: {
         async probe() {

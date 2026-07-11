@@ -18,13 +18,25 @@ function makeRes() {
 }
 
 function makePrisma(extra = {}) {
-  return {
+  const sessionCreates = [];
+  const sessionDeletes = [];
+  const db = {
     user: {
       findUnique: async () => null,
       create: async ({ data }) => ({ id: 'u-new', ...data }),
       ...(extra.user || {}),
     },
-    session: { create: async () => ({}) },
+    session: {
+      create: async ({ data }) => {
+        sessionCreates.push(data);
+        return { id: `session-${sessionCreates.length}`, ...data };
+      },
+      deleteMany: async ({ where }) => {
+        sessionDeletes.push(where);
+        return { count: 1 };
+      },
+      ...(extra.session || {}),
+    },
     orgMembership: {
       findUnique: async () => null,
       upsert: async () => ({}),
@@ -33,7 +45,16 @@ function makePrisma(extra = {}) {
     orgInvitation: extra.orgInvitation,
     sSOIdentity: extra.sSOIdentity,
     organization: { findUnique: async () => null },
+    async $queryRawUnsafe(sql, ...params) {
+      if (/set_config/i.test(sql)) return [{ lock_timeout: params[0] || '0' }];
+      if (/pg_advisory_xact_lock/i.test(sql)) return [{ locked: true }];
+      return [];
+    },
   };
+  db.$transaction = extra.$transaction || (async (fn) => fn(db));
+  db._sessionCreates = sessionCreates;
+  db._sessionDeletes = sessionDeletes;
+  return db;
 }
 
 const fixedOrg = {
@@ -49,6 +70,11 @@ function makeSvc(over = {}) {
     oidcHandler: over.oidcHandler || { verifyOidcCode: async () => ({ ok: true, email: 'a@x.com', displayName: 'A', nameId: 'sub-1' }) },
     resolveOrg: over.resolveOrg || (async () => fixedOrg),
     signSessionToken: over.signSessionToken || (() => 'TOKEN'),
+    rbacAssignments: over.rbacAssignments || {
+      syncLegacyAdminAssignment: async () => ({ denied: false }),
+      syncOrgRoleAssignment: async () => ({ denied: false }),
+      invalidateUser: async () => {},
+    },
     hashPassword: over.hashPassword || (async () => 'HASH'),
     now: over.now || (() => new Date('2026-01-01T00:00:00Z')),
     logger: silentLogger,
@@ -216,4 +242,245 @@ test('handle: success body shape matches legacy contract (ok, token, user{id,ema
   assert.deepEqual(Object.keys(res._body.user).sort(), ['email', 'id', 'name'].sort());
   assert.equal(res._body.ok, true);
   assert.equal(res._body.policy, 'jit_create');
+});
+
+test('handle: soft-deleted SSO user is denied and all existing sessions are revoked', async () => {
+  const existing = {
+    id: 'deleted-sso-user',
+    email: 'a@x.com',
+    name: 'Deleted',
+    isAdmin: false,
+    isSuperAdmin: false,
+    deletedAt: new Date('2026-06-01T00:00:00Z'),
+  };
+  const prisma = makePrisma({
+    user: { findUnique: async () => existing },
+    orgMembership: {
+      findUnique: async () => ({
+        orgId: fixedOrg.id,
+        userId: existing.id,
+        role: 'MEMBER',
+      }),
+    },
+  });
+  const svc = makeSvc({ prisma });
+  const res = makeRes();
+
+  await svc.handle(
+    { params: { orgSlug: 'acme' }, body: { SAMLResponse: 'x' } },
+    res,
+  );
+
+  assert.equal(res._status, 403);
+  assert.equal(res._body.error, 'sso_user_inactive');
+  assert.deepEqual(prisma._sessionDeletes, [{ userId: existing.id }]);
+  assert.equal(prisma._sessionCreates.length, 0);
+});
+
+test('handle: inactive RBAC synchronization result is authoritative and prevents SSO session minting', async () => {
+  const existing = {
+    id: 'sso-user',
+    email: 'a@x.com',
+    name: 'A',
+    isAdmin: false,
+    isSuperAdmin: false,
+    deletedAt: null,
+  };
+  const prisma = makePrisma({
+    user: { findUnique: async () => existing },
+    orgMembership: {
+      findUnique: async () => ({
+        orgId: fixedOrg.id,
+        userId: existing.id,
+        role: 'MEMBER',
+      }),
+      upsert: async () => ({
+        orgId: fixedOrg.id,
+        userId: existing.id,
+        role: 'MEMBER',
+      }),
+    },
+  });
+  const svc = makeSvc({
+    prisma,
+    rbacAssignments: {
+      syncLegacyAdminAssignment: async () => ({ denied: false }),
+      syncOrgRoleAssignment: async () => ({
+        denied: true,
+        reason: 'inactive_user',
+      }),
+      invalidateUser: async () => {},
+    },
+  });
+  const res = makeRes();
+
+  await svc.handle(
+    { params: { orgSlug: 'acme' }, body: { SAMLResponse: 'x' } },
+    res,
+  );
+
+  assert.equal(res._status, 403);
+  assert.equal(res._body.error, 'sso_user_inactive');
+  assert.deepEqual(prisma._sessionDeletes, [{ userId: existing.id }]);
+  assert.equal(prisma._sessionCreates.length, 0);
+});
+
+test('handle: IdP verification precedes one locked transaction containing every local SSO write', async () => {
+  const events = [];
+  let lockHeld = false;
+  const assertLockedWrite = (name) => {
+    assert.equal(lockHeld, true, `${name} must not write before the global RBAC lock`);
+    events.push(name);
+  };
+  const tx = {
+    async $queryRawUnsafe(sql, ...params) {
+      if (/pg_advisory_xact_lock/i.test(sql)) {
+        events.push('lock');
+        lockHeld = true;
+        return [{ locked: true }];
+      }
+      if (/set_config/i.test(sql)) {
+        const resetting = params.length === 0 || String(params[0]) === '0';
+        events.push(resetting ? 'lock-timeout-reset' : 'lock-timeout');
+        return [{ lock_timeout: resetting ? '0' : params[0] }];
+      }
+      return [];
+    },
+    user: {
+      async findUnique() {
+        assert.equal(lockHeld, true, 'user source of truth must be read after lock');
+        events.push('tx-user-read');
+        return null;
+      },
+      async create({ data }) {
+        assertLockedWrite('user-create');
+        return { id: 'u-locked', deletedAt: null, ...data };
+      },
+    },
+    orgMembership: {
+      async findUnique() {
+        assert.equal(lockHeld, true);
+        events.push('membership-read');
+        return null;
+      },
+      async upsert({ create }) {
+        assertLockedWrite('membership-upsert');
+        return create;
+      },
+    },
+    sSOIdentity: {
+      async findUnique() {
+        assert.equal(lockHeld, true);
+        return null;
+      },
+      async create({ data }) {
+        assertLockedWrite('identity-create');
+        return { id: 'identity-1', ...data };
+      },
+    },
+    session: {
+      async create({ data }) {
+        assertLockedWrite('session-create');
+        return { id: 'session-1', ...data };
+      },
+      async deleteMany() {
+        assertLockedWrite('session-delete');
+        return { count: 0 };
+      },
+    },
+  };
+  const prisma = {
+    user: {
+      async findUnique() {
+        events.push('root-user-read');
+        return null;
+      },
+      async create() {
+        assert.fail('root user writer must not run outside the transaction');
+      },
+    },
+    orgMembership: {
+      async upsert() {
+        assert.fail('root membership writer must not run outside the transaction');
+      },
+    },
+    sSOIdentity: {
+      async findUnique() {
+        assert.fail('identity lookup must use the locked transaction');
+      },
+      async create() {
+        assert.fail('identity writer must use the locked transaction');
+      },
+    },
+    session: {
+      async create() {
+        assert.fail('session writer must use the locked transaction');
+      },
+    },
+    async $transaction(fn) {
+      events.push('transaction');
+      return fn(tx);
+    },
+  };
+  const rbacAssignments = {
+    async syncLegacyAdminAssignment(args) {
+      assert.equal(args.prismaClient, tx);
+      assert.equal(args.lockAlreadyHeld, true);
+      assertLockedWrite('rbac-global-sync');
+      return { denied: false };
+    },
+    async syncOrgRoleAssignment(args) {
+      assert.equal(args.prismaClient, tx);
+      assert.equal(args.lockAlreadyHeld, true);
+      assertLockedWrite('rbac-org-sync');
+      return { denied: false };
+    },
+    async invalidateUser() {
+      events.push('cache-invalidate');
+    },
+  };
+  const svc = makeSvc({
+    prisma,
+    rbacAssignments,
+    samlHandler: {
+      async verifySamlResponse() {
+        events.push('idp-verify');
+        return {
+          ok: true,
+          email: 'a@x.com',
+          displayName: 'A',
+          nameId: 'sub-1',
+        };
+      },
+    },
+  });
+  const res = makeRes();
+
+  await svc.handle(
+    { params: { orgSlug: 'acme' }, body: { SAMLResponse: 'x' } },
+    res,
+  );
+
+  assert.equal(res._status, 200);
+  assert.ok(events.indexOf('idp-verify') < events.indexOf('transaction'));
+  assert.deepEqual(
+    events.filter((event) => [
+      'lock',
+      'user-create',
+      'membership-upsert',
+      'rbac-global-sync',
+      'rbac-org-sync',
+      'identity-create',
+      'session-create',
+    ].includes(event)),
+    [
+      'lock',
+      'user-create',
+      'rbac-global-sync',
+      'membership-upsert',
+      'rbac-org-sync',
+      'identity-create',
+      'session-create',
+    ],
+  );
 });

@@ -48,6 +48,50 @@ test('create: writes fingerprint when supplied', async () => {
   });
 });
 
+test('create: locks the user and re-reads active state inside the session transaction', async () => {
+  const calls = [];
+  const tx = {
+    async $queryRawUnsafe(sql) {
+      calls.push(/pg_advisory_xact_lock/i.test(sql) ? 'lock' : 'timeout');
+      return [{ locked: true }];
+    },
+    user: {
+      async findUnique() {
+        calls.push('user.read');
+        return { id: 'u1', deletedAt: null };
+      },
+    },
+    session: {
+      async create({ data }) {
+        calls.push('session.create');
+        return { id: 's1', ...data };
+      },
+    },
+  };
+  const prisma = {
+    user: { findUnique() {} },
+    session: { create() {} },
+    async $queryRawUnsafe() {},
+    async $transaction(callback) {
+      calls.push('transaction.begin');
+      const result = await callback(tx);
+      calls.push('transaction.commit');
+      return result;
+    },
+  };
+  const repo = new SessionRepository({
+    prisma,
+    withRetry: passthroughRetry,
+    logger: silentLogger,
+  });
+
+  await repo.create({ userId: 'u1', token: 'tok', expiresAt: new Date(0) });
+
+  assert.ok(calls.indexOf('lock') < calls.indexOf('user.read'));
+  assert.ok(calls.indexOf('user.read') < calls.indexOf('session.create'));
+  assert.ok(calls.indexOf('session.create') < calls.indexOf('transaction.commit'));
+});
+
 test('create: omits fingerprint key when not supplied (does not insert null)', async () => {
   const prisma = makePrismaSpy();
   const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
@@ -107,6 +151,13 @@ test('deleteByToken: forwards token to deleteMany (idempotent)', async () => {
   const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
   await repo.deleteByToken('tok');
   assert.deepEqual(prisma._calls.deleteMany[0], { where: { token: 'tok' } });
+});
+
+test('deleteAllForUser: revokes every existing session for an inactive account', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
+  await repo.deleteAllForUser('deleted-user');
+  assert.deepEqual(prisma._calls.deleteMany[0], { where: { userId: 'deleted-user' } });
 });
 
 test('updateByToken: writes new token + fingerprint', async () => {

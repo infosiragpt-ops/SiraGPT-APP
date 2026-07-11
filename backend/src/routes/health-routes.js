@@ -64,6 +64,7 @@ function healthRedisConnectionOptions(env = process.env) {
  * @param {Function} [deps.getPostHogStatus]
  * @param {object} [deps.poolMetrics]       Shared Prisma pool instrumentation.
  * @param {Function} [deps.getPoolAutoscalerState]
+ * @param {Function} [deps.getRbacBootstrapStatus]
  * @param {{checked: boolean, issues: Array}} [deps.startupEnv]
  *        Boot-time startup-environment validation snapshot.
  * @param {number} [deps.cacheTtlMs]        Health-result cache TTL (ms).
@@ -84,6 +85,7 @@ function createHealthRoutes(deps = {}) {
     getPostHogStatus = noopStatus,
     poolMetrics = null,
     getPoolAutoscalerState = null,
+    getRbacBootstrapStatus = null,
     startupEnv = { checked: false, issues: [] },
     env = process.env,
   } = deps;
@@ -233,6 +235,20 @@ function createHealthRoutes(deps = {}) {
     res.status(reportToHttpStatus(report)).json(report);
   }
 
+  function readRbacBootstrapStatus() {
+    if (typeof getRbacBootstrapStatus !== 'function') return undefined;
+    try {
+      return getRbacBootstrapStatus();
+    } catch {
+      return {
+        state: 'failed',
+        ready: false,
+        mode: env.NODE_ENV === 'production' ? 'enforce' : 'shadow',
+        errorCode: 'RBAC_STATUS_UNAVAILABLE',
+      };
+    }
+  }
+
   /**
    * Register the three health endpoints on an Express app/router.
    *
@@ -257,6 +273,7 @@ function createHealthRoutes(deps = {}) {
         prisma,
         redis: getHealthRedisClient(),
         queue: queueProbe,
+        rbac: readRbacBootstrapStatus(),
         env,
       }));
       sendHealthReport(res, report);
@@ -274,6 +291,7 @@ function createHealthRoutes(deps = {}) {
         coworkHealth,
         googleOAuth: oauthBootResult,
         startupEnv,
+        rbac: readRbacBootstrapStatus(),
         poolMetrics,
         getPoolAutoscalerState,
         env,

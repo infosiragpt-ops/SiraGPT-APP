@@ -21,7 +21,8 @@
 
 const express = require('express');
 const { body, query, param, validationResult } = require('express-validator');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const goalQueue = require('../services/goal-queue');
 const goalEvents = require('../services/goal-events');
 const goalRecovery = require('../services/goal-boot-recovery');
@@ -32,6 +33,7 @@ const prisma = (() => {
 
 const router = express.Router();
 const adminRouter = express.Router();
+adminRouter.use(authenticateToken, requireAdminRoutePermission);
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
@@ -581,7 +583,7 @@ async function collectQueueHealth() {
   }
 }
 
-adminRouter.get('/health', authenticateToken, requireAdmin, async (req, res) => {
+adminRouter.get('/health', async (req, res) => {
   const config = goalRecovery.readConfig();
   const fallbackQueue = {
     name: goalQueue.getQueueName(),

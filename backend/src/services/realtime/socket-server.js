@@ -17,8 +17,15 @@
  */
 
 const WebSocket = require('ws');
-const jwt = require('jsonwebtoken');
 
+const prisma = require('../../config/database');
+const {
+  createActiveSessionRevalidator,
+  validateActiveSession,
+} = require('../active-session-validator');
+const {
+  onUserSessionsRevoked,
+} = require('../auth/user-session-revocation-events');
 const { getPresenceTracker } = require('./presence');
 const { getTypingIndicator } = require('./typing-indicator');
 const { CursorThrottler } = require('./cursor-sharing');
@@ -48,15 +55,19 @@ let _closePromise = null;
  * @property {CursorThrottler} cursor
  */
 
-/** Default verifier — uses JWT_SECRET. */
-async function defaultVerifyToken(token) {
-  if (!token) throw new Error('missing token');
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error('JWT_SECRET not configured');
-  const decoded = jwt.verify(token, secret);
-  const userId = decoded?.userId || decoded?.id || decoded?.sub;
-  if (!userId) throw new Error('token has no userId');
-  return { userId: String(userId), orgId: decoded?.orgId ? String(decoded.orgId) : undefined };
+/** Default verifier — validates the complete persisted application session. */
+async function defaultVerifyToken(token, request, opts = {}) {
+  const validated = await validateActiveSession({
+    token,
+    request,
+    prismaClient: opts.prismaClient || prisma,
+    jwtSecret: opts.jwtSecret || process.env.JWT_SECRET,
+  });
+  return {
+    userId: validated.userId,
+    orgId: validated.decoded?.orgId ? String(validated.decoded.orgId) : undefined,
+    sessionId: validated.session.id,
+  };
 }
 
 function _addToIndex(index, key, ws) {
@@ -115,7 +126,16 @@ function initRealtimeServer(server, opts = {}) {
   if (_state) return _state; // idempotent
   _closePromise = null;
 
-  const verifyToken = opts.verifyToken || defaultVerifyToken;
+  const verifyToken = opts.verifyToken
+    || ((token, request) => defaultVerifyToken(token, request, opts));
+  const sessionRevalidator = opts.sessionRevalidator || (
+    opts.verifyToken
+      ? null
+      : createActiveSessionRevalidator({
+          prismaClient: opts.prismaClient || prisma,
+          jwtSecret: opts.jwtSecret || process.env.JWT_SECRET,
+        })
+  );
   const path = opts.path || WS_PATH;
   const logger = opts.logger || { info() {}, warn() {}, error() {} };
 
@@ -132,6 +152,16 @@ function initRealtimeServer(server, opts = {}) {
       _broadcast(set, { channel: `chat:${payload.chatId}`, ...payload });
     },
   });
+  const unsubscribeRevocations = onUserSessionsRevoked(({ userId, reason }) => {
+    sessionRevalidator?.invalidateUser(userId);
+    const sockets = userIndex.get(String(userId));
+    if (!sockets) return;
+    for (const socket of [...sockets]) {
+      try {
+        socket.close(CLOSE_CODE_AUTH_INVALID, String(reason || 'sessions_revoked').slice(0, 123));
+      } catch {}
+    }
+  });
 
   wss.on('connection', async (ws, req) => {
     ws.isAlive = true;
@@ -147,7 +177,7 @@ function initRealtimeServer(server, opts = {}) {
 
     let auth;
     try {
-      auth = await verifyToken(token);
+      auth = await verifyToken(token, req);
     } catch (err) {
       _send(ws, { type: 'error', code: 'auth_invalid', message: err.message });
       try { ws.close(CLOSE_CODE_AUTH_INVALID, 'auth_invalid'); } catch {}
@@ -156,11 +186,28 @@ function initRealtimeServer(server, opts = {}) {
 
     ws.userId = auth.userId;
     ws.orgId = auth.orgId;
+    ws.authToken = token;
+    ws.authRequest = req;
+    ws.authenticatedSessionId = auth.sessionId || null;
+    ws.authenticatedAt = Date.now();
 
     _addToIndex(userIndex, ws.userId, ws);
     if (ws.orgId) {
       _addToIndex(orgIndex, ws.orgId, ws);
       ws.subscribedOrgs.add(ws.orgId);
+    }
+    if (sessionRevalidator) {
+      try {
+        await sessionRevalidator.validate({ token, request: req }, { force: true });
+      } catch {
+        _removeFromIndex(userIndex, ws.userId, ws);
+        if (ws.orgId) {
+          _removeFromIndex(orgIndex, ws.orgId, ws);
+          ws.subscribedOrgs.delete(ws.orgId);
+        }
+        try { ws.close(CLOSE_CODE_AUTH_INVALID, 'auth_invalid'); } catch {}
+        return;
+      }
     }
     try { await presence.heartbeat(ws.userId); } catch (e) { logger.warn({ err: e.message }, 'presence_heartbeat_failed'); }
 
@@ -278,8 +325,34 @@ function initRealtimeServer(server, opts = {}) {
   };
   typing.on('stop', onTypingStop);
 
+  let revalidationRun = null;
+  async function revalidateAuthenticatedSockets() {
+    if (!sessionRevalidator) return;
+    if (revalidationRun) return revalidationRun;
+    revalidationRun = Promise.allSettled(
+      [...wss.clients]
+        .filter((socket) => socket.userId && socket.authToken)
+        .map(async (socket) => {
+          try {
+            await sessionRevalidator.validate({
+              token: socket.authToken,
+              request: socket.authRequest,
+            }, { force: true });
+          } catch {
+            try {
+              socket.close(CLOSE_CODE_AUTH_INVALID, 'auth_revalidation_failed');
+            } catch {}
+          }
+        }),
+    ).finally(() => {
+      revalidationRun = null;
+    });
+    return revalidationRun;
+  }
+
   // Heartbeat loop — terminate sockets that didn't pong since last tick.
   const heartbeatTimer = setInterval(() => {
+    void revalidateAuthenticatedSockets();
     for (const ws of wss.clients) {
       if (ws.isAlive === false) {
         try { ws.close(CLOSE_CODE_HEARTBEAT, 'heartbeat_timeout'); } catch {}
@@ -302,7 +375,10 @@ function initRealtimeServer(server, opts = {}) {
     presence,
     typing,
     cursor,
+    sessionRevalidator,
+    revalidateAuthenticatedSockets,
     _onTypingStop: onTypingStop,
+    _unsubscribeRevocations: unsubscribeRevocations,
   };
   return _state;
 }
@@ -341,6 +417,7 @@ function closeRealtimeServer() {
   clearInterval(state.heartbeatTimer);
   try { state.typing.off('stop', state._onTypingStop); } catch {}
   try { state.cursor.dispose(); } catch {}
+  try { state._unsubscribeRevocations?.(); } catch {}
 
   let resolveClose;
   let rejectClose;

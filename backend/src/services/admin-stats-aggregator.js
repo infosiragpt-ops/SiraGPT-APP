@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  excludeRbacSystemPrincipalsWhere,
+} = require('./rbac-system-assignments');
+
 /**
  * admin-stats-aggregator — pure aggregation helpers for the admin metrics
  * dashboard. Each function takes a Prisma-like client + a date range and
@@ -173,17 +177,31 @@ async function aggregateUserStats(prisma, range) {
   const [newUsers, activeUsers, churnedUsers, activeSubs, planBreakdown, signupRows] =
     await Promise.all([
       prisma.user.count({
-        where: { createdAt: { gte: from, lte: to }, isSuperAdmin: false },
+        where: excludeRbacSystemPrincipalsWhere({
+          createdAt: { gte: from, lte: to },
+          isSuperAdmin: false,
+        }),
       }),
       prisma.user.count({
-        where: { updatedAt: { gte: from, lte: to }, isSuperAdmin: false, deletedAt: null },
+        where: excludeRbacSystemPrincipalsWhere({
+          updatedAt: { gte: from, lte: to },
+          isSuperAdmin: false,
+          deletedAt: null,
+        }),
       }),
       prisma.user.count({
-        where: { deletedAt: { gte: from, lte: to }, isSuperAdmin: false },
+        where: excludeRbacSystemPrincipalsWhere({
+          deletedAt: { gte: from, lte: to },
+          isSuperAdmin: false,
+        }),
       }),
       prisma.user.groupBy({
         by: ['plan'],
-        where: { subscriptionStatus: 'active', isSuperAdmin: false, deletedAt: null },
+        where: excludeRbacSystemPrincipalsWhere({
+          subscriptionStatus: 'active',
+          isSuperAdmin: false,
+          deletedAt: null,
+        }),
         _count: { plan: true },
       }),
       // Per-plan headcount across *all* non-deleted users (not just
@@ -191,11 +209,17 @@ async function aggregateUserStats(prisma, range) {
       // total user base is distributed between tiers, including FREE.
       prisma.user.groupBy({
         by: ['plan'],
-        where: { isSuperAdmin: false, deletedAt: null },
+        where: excludeRbacSystemPrincipalsWhere({
+          isSuperAdmin: false,
+          deletedAt: null,
+        }),
         _count: { plan: true },
       }),
       prisma.user.findMany({
-        where: { createdAt: { gte: trendFrom }, isSuperAdmin: false },
+        where: excludeRbacSystemPrincipalsWhere({
+          createdAt: { gte: trendFrom },
+          isSuperAdmin: false,
+        }),
         select: { createdAt: true },
         // Defensive cap — even on a 1k-signups/day product we'd only get
         // 7k rows, but keep the safety net so we never page admin DB.
@@ -226,7 +250,10 @@ async function aggregateUserStats(prisma, range) {
 
   // Total headcount for the status page (full base, not range-bound).
   const totalUsers = await prisma.user.count({
-    where: { isSuperAdmin: false, deletedAt: null },
+    where: excludeRbacSystemPrincipalsWhere({
+      isSuperAdmin: false,
+      deletedAt: null,
+    }),
   });
 
   const mrrRounded = Math.round(mrrProxy * 100) / 100;

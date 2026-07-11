@@ -8,11 +8,10 @@
  * for the authenticated user, with a small in-memory cache (TTL 60s
  * by default) so the hot path stays cheap.
  *
- * Shadow mode (default until F5): when RBAC_SHADOW_MODE !== 'false',
- * the legacy `req.user.isSuperAdmin` flag is accepted EVEN IF the
- * declarative permission check would reject. The discrepancy is logged
- * as `kind: 'rbac.shadow.diff'` so we can confirm zero diffs before
- * the F5 PR23 hard cutover.
+ * `RBAC_ENFORCEMENT_MODE=shadow|enforce` controls legacy compatibility.
+ * Production defaults to enforce; other environments default to shadow.
+ * In shadow mode callers can provide the legacy predicate whose decision is
+ * observed and logged while declarative assignments are being backfilled.
  *
  *   router.delete('/users/:id',
  *     authenticateToken,
@@ -25,30 +24,52 @@
  */
 
 const prisma = require('../config/database');
+const {
+  MODES,
+  resolveRbacEnforcementMode,
+} = require('../services/rbac-enforcement-mode');
+const {
+  createRbacPermissionCache,
+} = require('../services/rbac-permission-cache');
+const {
+  readRbacPermissionVersion,
+} = require('../services/rbac-permission-version');
 
-const DEV_ADMIN_EMAIL = 'carrerajorge874@gmail.com';
-function isDevAdmin(user) {
-  return process.env.NODE_ENV === 'development' && user && user.email === DEV_ADMIN_EMAIL;
+const permissionCache = createRbacPermissionCache({
+  env: process.env,
+  readVersion: () => (
+    resolveRbacEnforcementMode(process.env) === MODES.ENFORCE
+      ? readRbacPermissionVersion(prisma)
+      : '0'
+  ),
+});
+const cache = permissionCache._entriesForTests;
+
+function enforcementMode() {
+  return resolveRbacEnforcementMode(process.env);
 }
-
-const DEFAULT_TTL_MS = Number(process.env.RBAC_CACHE_TTL_MS || 60_000);
-const cache = new Map(); // userId -> { perms: Set<string>, expiresAt: number }
 
 function shadowEnabled() {
-  // Default: shadow ON; flip to 'false' at sunset (F5 PR23).
-  return process.env.RBAC_SHADOW_MODE !== 'false';
+  return enforcementMode() === MODES.SHADOW;
 }
 
-function now() {
-  return Date.now();
-}
-
-async function loadUserPermissions(userId) {
+async function loadUserPermissions(userId, options = {}) {
+  const { globalOnly = false, scopeId = null } = options;
   // Pull every active role assignment for the user (GLOBAL + ORG) and
   // collect the union of their permission codes. Inactive / soft-deleted
   // roles are excluded by the schema's CASCADE behaviour on user_roles.
+  const where = { userId };
+  if (globalOnly) {
+    where.scope = 'GLOBAL';
+    where.scopeId = null;
+  } else if (scopeId) {
+    where.OR = [
+      { scope: 'GLOBAL', scopeId: null },
+      { scope: 'ORG', scopeId },
+    ];
+  }
   const assignments = await prisma.userRole.findMany({
-    where: { userId },
+    where,
     include: {
       role: {
         include: {
@@ -67,30 +88,68 @@ async function loadUserPermissions(userId) {
   return perms;
 }
 
-async function getUserPermissions(userId) {
+function permissionCacheKey(userId, options = {}) {
+  if (options.globalOnly) return `${userId}\u0000GLOBAL`;
+  if (options.scopeId) return `${userId}\u0000ORG:${options.scopeId}`;
+  return userId;
+}
+
+async function getUserPermissions(userId, options = {}) {
   if (!userId) return new Set();
-  const cached = cache.get(userId);
-  if (cached && cached.expiresAt > now()) return cached.perms;
-  const perms = await loadUserPermissions(userId);
-  cache.set(userId, { perms, expiresAt: now() + DEFAULT_TTL_MS });
-  return perms;
+  const key = permissionCacheKey(userId, options);
+  return permissionCache.get(key, () => loadUserPermissions(userId, options));
 }
 
 function invalidatePermissionsCache(userId) {
-  if (!userId) {
-    cache.clear();
-    return;
-  }
-  cache.delete(userId);
+  return permissionCache.invalidate(userId || null);
 }
 
-function logShadowDiff({ userId, permissionCode, isSuperAdmin, hasPermission, req }) {
+function initializePermissionsCache() {
+  return permissionCache.init();
+}
+
+function closePermissionsCache() {
+  return permissionCache.close();
+}
+
+function apiKeyHasPermissionScope(scopes, permissionCode) {
+  if (!Array.isArray(scopes) || !permissionCode) return false;
+  if (scopes.includes('*') || scopes.includes(permissionCode)) return true;
+  const dot = permissionCode.indexOf('.');
+  if (dot > 0 && scopes.includes(`${permissionCode.slice(0, dot)}.*`)) return true;
+  return false;
+}
+
+function logShadowDiff({
+  userId,
+  permissionCode,
+  isSuperAdmin,
+  hasPermission,
+  legacyAllowed,
+  permissionLookupError = false,
+  req,
+}) {
   const payload = {
     kind: 'rbac.shadow.diff',
     userId,
     permissionCode,
     isSuperAdmin,
     hasPermission,
+    legacyAllowed,
+    direction: permissionLookupError
+      ? (
+        legacyAllowed
+          ? 'legacy_allow_rbac_error'
+          : 'legacy_deny_rbac_error'
+      )
+      : (
+        legacyAllowed
+          ? 'legacy_allow_rbac_deny'
+          : 'legacy_deny_rbac_allow'
+      ),
+    ...(permissionLookupError
+      ? { errorCode: 'RBAC_PERMISSION_LOOKUP_FAILED' }
+      : {}),
     route: req?.originalUrl,
     method: req?.method,
     ts: new Date().toISOString(),
@@ -110,51 +169,102 @@ function logShadowDiff({ userId, permissionCode, isSuperAdmin, hasPermission, re
  * @param {string|((req)=>string)} permissionCode
  * @param {object} [options]
  * @param {boolean} [options.requireUser=true]  Reject if no req.user.
+ * @param {(user: object, req: object) => boolean} [options.legacyPredicate]
+ * @param {boolean} [options.allowOrgApiKey=true]
  * @returns {import('express').RequestHandler}
  */
 function requirePermission(permissionCode, options = {}) {
   if (!permissionCode) {
     throw new Error('requirePermission: permissionCode is required');
   }
-  const { requireUser = true } = options;
+  const {
+    requireUser = true,
+    legacyPredicate = null,
+    allowOrgApiKey = true,
+    globalOnly = false,
+  } = options;
   return async function requirePermissionMiddleware(req, res, next) {
     try {
       if (requireUser && (!req.user || !req.user.id)) {
         return res.status(401).json({ error: 'auth required' });
       }
-      if (isDevAdmin(req.user)) {
-        req.user.isSuperAdmin = true;
-        return next();
-      }
       const code =
         typeof permissionCode === 'function'
           ? permissionCode(req)
           : permissionCode;
-      const perms = await getUserPermissions(req.user.id);
-      const hasPermission = perms.has(code);
+      if (
+        req.authMethod === 'api_key'
+        && req.apiKey?.organizationId
+        && !allowOrgApiKey
+      ) {
+        return res.status(403).json({
+          error: 'forbidden',
+          code: 'api_key_role_boundary',
+          missingPermission: code,
+        });
+      }
       const isSuperAdmin = !!req.user.isSuperAdmin;
-      const allowed = hasPermission || (shadowEnabled() && isSuperAdmin);
+      const hasLegacyGate = typeof legacyPredicate === 'function';
+      const legacyAllowed = hasLegacyGate
+        ? Boolean(legacyPredicate(req.user, req))
+        : null;
+      const mode = enforcementMode();
+      const legacyShadowDecision = mode === MODES.SHADOW && hasLegacyGate;
+      let hasPermission;
+      let permissionLookupError = false;
+      try {
+        const perms = await getUserPermissions(req.user.id, { globalOnly });
+        hasPermission = perms.has(code);
+      } catch (error) {
+        if (!legacyShadowDecision) throw error;
+        hasPermission = null;
+        permissionLookupError = true;
+      }
+      const roleAllowed = legacyShadowDecision ? legacyAllowed : hasPermission;
+      const apiKeyScopeAllowed = req.authMethod !== 'api_key'
+        || apiKeyHasPermissionScope(req.apiKey?.scopes, code);
+      const allowed = roleAllowed && apiKeyScopeAllowed;
 
-      // Always log the diff in shadow mode if isSuperAdmin gates open
-      // while the declarative check would have closed — those are the
-      // assignments we still need to backfill in F2 PR4 + F5 PR23.
-      if (shadowEnabled() && isSuperAdmin && !hasPermission) {
+      // Replacement gates are observe-only in shadow mode: the legacy
+      // predicate remains authoritative while we record discrepancies in
+      // either direction. Generic RBAC-only routes never enter this branch.
+      if (
+        legacyShadowDecision
+        && (permissionLookupError || legacyAllowed !== hasPermission)
+      ) {
         logShadowDiff({
           userId: req.user.id,
           permissionCode: code,
           isSuperAdmin,
           hasPermission,
+          legacyAllowed,
+          permissionLookupError,
           req,
         });
       }
 
       if (!allowed) {
+        if (!apiKeyScopeAllowed) {
+          return res.status(403).json({
+            error: 'forbidden',
+            code: 'insufficient_api_key_scope',
+            missingPermission: code,
+          });
+        }
         return res
           .status(403)
           .json({ error: 'forbidden', missingPermission: code });
       }
       // Stash the resolved permission for downstream handlers.
-      req._rbacAllowed = { code, hasPermission, isSuperAdmin };
+      req._rbacAllowed = {
+        code,
+        hasPermission,
+        isSuperAdmin,
+        legacyAllowed,
+        decisionSource: permissionLookupError
+          ? 'legacy_shadow_error'
+          : (legacyShadowDecision ? 'legacy_shadow' : 'rbac'),
+      };
       next();
     } catch (err) {
       next(err);
@@ -167,5 +277,10 @@ module.exports.requirePermission = requirePermission;
 module.exports.getUserPermissions = getUserPermissions;
 module.exports.loadUserPermissions = loadUserPermissions;
 module.exports.invalidatePermissionsCache = invalidatePermissionsCache;
+module.exports.initializePermissionsCache = initializePermissionsCache;
+module.exports.closePermissionsCache = closePermissionsCache;
+module.exports.permissionsCacheStatus = () => permissionCache.status();
+module.exports.apiKeyHasPermissionScope = apiKeyHasPermissionScope;
+module.exports.enforcementMode = enforcementMode;
 module.exports.shadowEnabled = shadowEnabled;
 module.exports._cacheForTests = cache;

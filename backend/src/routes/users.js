@@ -7,6 +7,16 @@ const bcrypt = require('bcryptjs');
 const archiver = require('archiver');
 const { cascadeSoftDeleteForUser } = require('../utils/prisma-soft-delete');
 const { writeAuditLog } = require('../utils/audit-log');
+const {
+  hardDeleteUser,
+  softDeleteUser,
+} = require('../services/rbac-assignment-sync');
+const {
+  sendRbacMutationBusyResponse,
+} = require('../services/rbac-mutation-http');
+const {
+  publishUserSessionsRevoked,
+} = require('../services/auth/user-session-revocation-events');
 const { parseUA } = require('../utils/session-info');
 const rateLimitStore = require('../middleware/rate-limit-store');
 
@@ -659,13 +669,15 @@ router.get('/usage', authenticateToken, async (req, res) => {
 router.delete('/account', authenticateToken, async (req, res) => {
   try {
     // Delete user and all related data (cascading deletes handled by Prisma)
-    await prisma.user.delete({
-      where: { id: req.user.id }
+    await hardDeleteUser({
+      userId: req.user.id,
+      actorId: req.user.id,
     });
 
     res.json({ message: 'Account deleted successfully' });
   } catch (error) {
     console.error('Delete account error:', error);
+    if (sendRbacMutationBusyResponse(res, error)) return;
     res.status(500).json({ error: 'Failed to delete account' });
   }
 });
@@ -929,6 +941,12 @@ router.post('/sessions/revoke-others', authenticateToken, async (req, res) => {
     const result = await prisma.session.deleteMany({
       where: { userId: req.user.id, NOT: { token: currentToken } },
     });
+    if (result.count > 0) {
+      await publishUserSessionsRevoked({
+        userId: req.user.id,
+        reason: 'sessions_revoked',
+      });
+    }
 
     void _notifyAppshotsAutoRevoked(preDelete, req.user, 'admin_revoked');
 
@@ -1393,7 +1411,11 @@ router.post(
       }
 
       const deletedAt = new Date();
-      await prisma.user.update({ where: { id: userId }, data: { deletedAt } });
+      await softDeleteUser({
+        userId,
+        actorId: userId,
+        deletedAt,
+      });
       const cascade = await cascadeSoftDeleteForUser(prisma, userId);
 
       // Revoke active sessions so the soft-deleted user is immediately
@@ -1455,6 +1477,7 @@ router.post(
       res.json({ ok: true, deletedAt, cascade });
     } catch (error) {
       console.error('GDPR delete error:', error);
+      if (sendRbacMutationBusyResponse(res, error)) return;
       res.status(500).json({ error: 'Failed to delete account' });
     }
   },

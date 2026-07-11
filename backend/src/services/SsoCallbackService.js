@@ -1,6 +1,12 @@
 'use strict';
 
 const bcrypt = require('bcryptjs');
+const {
+  sendRbacMutationBusyResponse,
+} = require('./rbac-mutation-http');
+const {
+  acquireRbacMutationLock,
+} = require('./rbac-system-assignments');
 
 /**
  * SsoCallbackService — orchestrates the SAML/OIDC callback pipeline
@@ -34,6 +40,7 @@ class SsoCallbackService {
     oidcHandler,
     resolveOrg,
     signSessionToken,
+    rbacAssignments = null,
     hashPassword,
     now = () => new Date(),
     logger = console,
@@ -54,6 +61,7 @@ class SsoCallbackService {
     this.oidcHandler = oidcHandler;
     this.resolveOrg = resolveOrg;
     this.signSessionToken = signSessionToken;
+    this.rbacAssignments = rbacAssignments;
     this.hashPassword = hashPassword || ((plain) => bcrypt.hash(plain, 12));
     this.now = now;
     this.logger = logger;
@@ -100,7 +108,14 @@ class SsoCallbackService {
     }
 
     try {
-      const provisioned = await this._provisionUser({ verified, org, policy, req });
+      const provisioned = await this._provisionUser({
+        verified,
+        org,
+        policy,
+        req,
+        isOidc,
+        completeLogin: true,
+      });
       if (provisioned.denied) {
         this._fireAudit(req, {
           action: 'sso_login_denied',
@@ -109,6 +124,13 @@ class SsoCallbackService {
           actorName: verified.email,
           metadata: { orgSlug: org.slug, policy, reason: provisioned.reason },
         });
+        if (provisioned.reason === 'inactive_user') {
+          return res.status(403).json({
+            ok: false,
+            error: 'sso_user_inactive',
+            orgSlug: org.slug,
+          });
+        }
         return res.status(403).json({
           ok: false,
           error: 'sso_provisioning_denied',
@@ -116,10 +138,13 @@ class SsoCallbackService {
           orgSlug: org.slug,
         });
       }
-      const { user, createdUser, acceptedInvitationId } = provisioned;
-
-      const ssoIdentityId = await this._linkSsoIdentity({ verified, user, org, isOidc });
-      const { token } = await this._mintSession(user);
+      const {
+        user,
+        createdUser,
+        acceptedInvitationId,
+        ssoIdentityId,
+        token,
+      } = provisioned;
 
       this._fireAudit(req, {
         action: 'sso_login_success',
@@ -149,6 +174,7 @@ class SsoCallbackService {
       this.logger.error?.(
         '[auth/sso] saml login failed:', err && err.message ? err.message : err
       );
+      if (sendRbacMutationBusyResponse(res, err)) return undefined;
       return res.status(500).json({ ok: false, error: 'sso_login_failed' });
     }
   }
@@ -186,35 +212,89 @@ class SsoCallbackService {
    * gated by the org's provisioning policy. Returns either
    * `{denied:true, reason, hint}` or `{user, createdUser, acceptedInvitationId}`.
    */
-  async _provisionUser({ verified, org, policy, req: _req }) {
+  async _provisionUser({
+    verified,
+    org,
+    policy,
+    req: _req,
+    isOidc = false,
+    completeLogin = false,
+  }) {
     const db = this.prisma;
-    let user = await db.user.findUnique({ where: { email: verified.email } });
-
-    // Check pre-existing membership for the `manual` and invite policies.
-    let isMember = false;
-    if (user && db.orgMembership && typeof db.orgMembership.findUnique === 'function') {
-      try {
-        const m = await db.orgMembership.findUnique({
-          where: { orgId_userId: { orgId: org.id, userId: user.id } },
-        });
-        isMember = !!m;
-      } catch (_e) { /* non-fatal */ }
+    if (typeof db?.$transaction !== 'function'
+        || typeof this.rbacAssignments?.syncLegacyAdminAssignment !== 'function'
+        || typeof this.rbacAssignments?.syncOrgRoleAssignment !== 'function') {
+      const error = new Error('SSO_RBAC_TRANSACTION_REQUIRED');
+      error.code = 'SSO_RBAC_TRANSACTION_REQUIRED';
+      throw error;
     }
 
-    if (policy === 'manual' && !isMember) {
-      return {
-        denied: true,
-        reason: 'not_a_member',
-        hint: 'manual provisioning: user is not a member of this organization',
+    // Password hashing is intentionally outside the transaction/global lock.
+    // It is CPU-bound and the generated credential is unusable for SSO login;
+    // computing it eagerly keeps the serialized RBAC section short.
+    const randomPassword = `sso:${verified.email}:${Date.now()}:${Math.random()}`;
+    const passwordHash = await this.hashPassword(randomPassword);
+
+    const result = await db.$transaction(async (transactionClient) => {
+      await acquireRbacMutationLock(transactionClient);
+
+      // User, membership, and invitation state are authoritative only after
+      // the global RBAC lock. No local identity mutation occurs before this.
+      let provisionedUser = await transactionClient.user.findUnique({
+        where: { email: verified.email },
+      });
+
+      const revokeSessions = async (userId) => {
+        if (userId && typeof transactionClient.session?.deleteMany === 'function') {
+          await transactionClient.session.deleteMany({ where: { userId } });
+        }
       };
-    }
 
-    let acceptedInvitationId = null;
-    if (policy === 'jit_require_invite' && !isMember) {
-      let pending = null;
-      if (db.orgInvitation && typeof db.orgInvitation.findFirst === 'function') {
-        try {
-          pending = await db.orgInvitation.findFirst({
+      if (provisionedUser?.deletedAt != null) {
+        const syncResult = await this.rbacAssignments.syncLegacyAdminAssignment({
+          prismaClient: transactionClient,
+          userId: provisionedUser.id,
+          actorId: null,
+          invalidateAfter: false,
+          lockAlreadyHeld: true,
+        });
+        await revokeSessions(provisionedUser.id);
+        return {
+          denied: true,
+          reason: syncResult?.reason || 'inactive_user',
+          hint: 'account is inactive',
+          userId: provisionedUser.id,
+        };
+      }
+
+      let membership = null;
+      if (provisionedUser
+          && typeof transactionClient.orgMembership?.findUnique === 'function') {
+        membership = await transactionClient.orgMembership.findUnique({
+          where: {
+            orgId_userId: {
+              orgId: org.id,
+              userId: provisionedUser.id,
+            },
+          },
+        });
+      }
+      const isMember = Boolean(membership);
+
+      if (policy === 'manual' && !isMember) {
+        return {
+          denied: true,
+          reason: 'not_a_member',
+          hint: 'manual provisioning: user is not a member of this organization',
+        };
+      }
+
+      let acceptedInvitationId = null;
+      let invitationRole = membership?.role || 'MEMBER';
+      if (policy === 'jit_require_invite' && !isMember) {
+        let pending = null;
+        if (typeof transactionClient.orgInvitation?.findFirst === 'function') {
+          pending = await transactionClient.orgInvitation.findFirst({
             where: {
               orgId: org.id,
               email: verified.email,
@@ -222,62 +302,129 @@ class SsoCallbackService {
               expiresAt: { gt: this.now() },
             },
           });
-        } catch (_e) { /* non-fatal */ }
+        }
+        if (!pending) {
+          return {
+            denied: true,
+            reason: 'no_pending_invite',
+            hint: 'jit_require_invite: no pending invitation for this email',
+          };
+        }
+        acceptedInvitationId = pending.id;
+        invitationRole = pending.role || 'MEMBER';
       }
-      if (!pending) {
+
+      let createdUser = false;
+      if (!provisionedUser) {
+        provisionedUser = await transactionClient.user.create({
+          data: {
+            name: verified.displayName || verified.email.split('@')[0],
+            email: verified.email,
+            // SSO users get an unguessable password they'll never use.
+            password: passwordHash,
+            plan: 'FREE',
+            isAdmin: false,
+            isSuperAdmin: false,
+            apiUsage: 0,
+            monthlyCallLimit: 3,
+            monthlyLimit: 10000,
+          },
+        });
+        createdUser = true;
+      }
+
+      const globalSync = await this.rbacAssignments.syncLegacyAdminAssignment({
+        prismaClient: transactionClient,
+        userId: provisionedUser.id,
+        isAdmin: false,
+        isSuperAdmin: false,
+        actorId: null,
+        invalidateAfter: false,
+        lockAlreadyHeld: true,
+      });
+      if (globalSync?.denied) {
+        await revokeSessions(provisionedUser.id);
         return {
           denied: true,
-          reason: 'no_pending_invite',
-          hint: 'jit_require_invite: no pending invitation for this email',
+          reason: globalSync.reason || 'rbac_sync_denied',
+          hint: 'RBAC user synchronization denied',
+          userId: provisionedUser.id,
         };
       }
-      acceptedInvitationId = pending.id;
-    }
 
-    let createdUser = false;
-    if (!user) {
-      const randomPassword = `sso:${verified.email}:${Date.now()}:${Math.random()}`;
-      user = await db.user.create({
-        data: {
-          name: verified.displayName || verified.email.split('@')[0],
-          email: verified.email,
-          // SSO users get an unguessable password they'll never use
-          // (the SSO domain lock-out in /login bounces them back here).
-          password: await this.hashPassword(randomPassword),
-          plan: 'FREE',
-          isAdmin: false,
-          apiUsage: 0,
-          monthlyCallLimit: 3,
-          monthlyLimit: 10000,
+      if (typeof transactionClient.orgMembership?.upsert !== 'function') {
+        const error = new Error('SSO_MEMBERSHIP_WRITER_REQUIRED');
+        error.code = 'SSO_MEMBERSHIP_WRITER_REQUIRED';
+        throw error;
+      }
+      membership = await transactionClient.orgMembership.upsert({
+        where: { orgId_userId: { orgId: org.id, userId: provisionedUser.id } },
+        update: {},
+        create: {
+          orgId: org.id,
+          userId: provisionedUser.id,
+          role: invitationRole,
         },
       });
-      createdUser = true;
-    }
 
-    // Ensure they're a member (best-effort — orgMembership model
-    // may not exist in every test harness).
-    if (db.orgMembership && typeof db.orgMembership.upsert === 'function') {
-      try {
-        await db.orgMembership.upsert({
-          where: { orgId_userId: { orgId: org.id, userId: user.id } },
-          update: {},
-          create: { orgId: org.id, userId: user.id, role: 'MEMBER' },
-        });
-      } catch (_e) { /* non-fatal */ }
-    }
+      const orgSync = await this.rbacAssignments.syncOrgRoleAssignment({
+        prismaClient: transactionClient,
+        userId: provisionedUser.id,
+        orgId: org.id,
+        orgRole: membership?.role || invitationRole,
+        actorId: null,
+        invalidateAfter: false,
+        lockAlreadyHeld: true,
+      });
+      if (orgSync?.denied) {
+        await revokeSessions(provisionedUser.id);
+        return {
+          denied: true,
+          reason: orgSync.reason || 'rbac_sync_denied',
+          hint: 'RBAC organization synchronization denied',
+          userId: provisionedUser.id,
+        };
+      }
 
-    // Mark the invitation accepted once membership is in place.
-    if (acceptedInvitationId
-      && db.orgInvitation && typeof db.orgInvitation.update === 'function') {
-      try {
-        await db.orgInvitation.update({
+      if (acceptedInvitationId
+          && typeof transactionClient.orgInvitation?.update === 'function') {
+        await transactionClient.orgInvitation.update({
           where: { id: acceptedInvitationId },
           data: { acceptedAt: this.now() },
         });
-      } catch (_e) { /* non-fatal */ }
-    }
+      }
 
-    return { user, createdUser, acceptedInvitationId };
+      let ssoIdentityId = null;
+      let token = null;
+      let expiresAt = null;
+      if (completeLogin) {
+        ssoIdentityId = await this._linkSsoIdentity({
+          verified,
+          user: provisionedUser,
+          org,
+          isOidc,
+          db: transactionClient,
+        });
+        ({ token, expiresAt } = await this._mintSession(
+          provisionedUser,
+          transactionClient,
+        ));
+      }
+
+      return {
+        user: provisionedUser,
+        createdUser,
+        acceptedInvitationId,
+        ssoIdentityId,
+        token,
+        expiresAt,
+      };
+    });
+
+    if (result.user?.id || result.userId) {
+      await this.rbacAssignments.invalidateUser?.(result.user?.id || result.userId);
+    }
+    return result;
   }
 
   /** Find-or-create SSOIdentity by (provider, externalId). External
@@ -285,8 +432,7 @@ class SsoCallbackService {
    * to email so we still get a row to update on subsequent logins.
    * All branches are best-effort — the identity link is metadata,
    * not gating. */
-  async _linkSsoIdentity({ verified, user, org, isOidc }) {
-    const db = this.prisma;
+  async _linkSsoIdentity({ verified, user, org, isOidc, db = this.prisma }) {
     const externalId = (verified.nameId && String(verified.nameId)) || verified.email;
     const providerKey = isOidc ? 'oidc' : 'saml';
     if (!db.sSOIdentity || typeof db.sSOIdentity.findUnique !== 'function') return null;
@@ -315,18 +461,19 @@ class SsoCallbackService {
     return null;
   }
 
-  async _mintSession(user) {
+  async _mintSession(user, db = this.prisma) {
     const token = this.signSessionToken({
       userId: user.id,
       isAdmin: Boolean(user.isAdmin),
       isSuperAdmin: Boolean(user.isSuperAdmin),
     });
     const expiresAt = new Date(this.now().getTime() + 7 * 24 * 60 * 60 * 1000);
-    if (this.prisma.session && typeof this.prisma.session.create === 'function') {
-      try {
-        await this.prisma.session.create({ data: { userId: user.id, token, expiresAt } });
-      } catch (_e) { /* non-fatal in test harnesses */ }
+    if (!db.session || typeof db.session.create !== 'function') {
+      const error = new Error('SSO_SESSION_WRITER_REQUIRED');
+      error.code = 'SSO_SESSION_WRITER_REQUIRED';
+      throw error;
     }
+    await db.session.create({ data: { userId: user.id, token, expiresAt } });
     return { token, expiresAt };
   }
 }

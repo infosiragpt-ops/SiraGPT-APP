@@ -9,6 +9,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 const WebSocket = require('ws');
+const jwt = require('jsonwebtoken');
 
 const {
   initRealtimeServer,
@@ -22,6 +23,11 @@ const {
 } = require('../src/services/realtime/socket-server');
 const { _resetForTests: resetPresence } = require('../src/services/realtime/presence');
 const { _resetForTests: resetTyping } = require('../src/services/realtime/typing-indicator');
+const {
+  emitUserSessionsRevoked,
+} = require('../src/services/auth/user-session-revocation-events');
+
+const ACTIVE_SESSION_SECRET = 'realtime-active-session-secret-at-least-32-characters';
 
 function startHttp() {
   return new Promise((resolve) => {
@@ -100,6 +106,16 @@ function waitClose(ws) {
   });
 }
 
+function waitCloseWithin(ws, timeoutMs = 750) {
+  return Promise.race([
+    waitClose(ws),
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('timeout waiting for socket close')), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+}
+
 async function teardown(server) {
   await closeRealtimeServer();
   if (server.listening) await new Promise((r) => server.close(r));
@@ -125,6 +141,202 @@ test('socket:rejects connection with bad token', async () => {
   const closed = await waitClose(ws);
   assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
   await teardown(server);
+});
+
+test('socket:default auth rejects a signed JWT whose persisted session was revoked', async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = ACTIVE_SESSION_SECRET;
+  const token = jwt.sign({ userId: 'revoked-user' }, ACTIVE_SESSION_SECRET, { expiresIn: '1h' });
+  let lookups = 0;
+  const prismaClient = {
+    session: {
+      async findUnique() {
+        lookups += 1;
+        return null;
+      },
+      async deleteMany() {
+        return { count: 0 };
+      },
+    },
+  };
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, { prismaClient, jwtSecret: ACTIVE_SESSION_SECRET });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=${token}`);
+  t.after(async () => {
+    try { ws.terminate(); } catch {}
+    await teardown(server);
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+  const closed = await waitCloseWithin(ws);
+  assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
+  assert.equal(lookups, 1);
+});
+
+test('socket:default auth rejects a user deleted after JWT issuance', async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = ACTIVE_SESSION_SECRET;
+  const token = jwt.sign({ userId: 'deleted-user' }, ACTIVE_SESSION_SECRET, { expiresIn: '1h' });
+  const deletes = [];
+  const prismaClient = {
+    session: {
+      async findUnique() {
+        return {
+          id: 'deleted-session',
+          token,
+          userId: 'deleted-user',
+          expiresAt: new Date(Date.now() + 60_000),
+          fingerprint: null,
+          user: { id: 'deleted-user', deletedAt: new Date() },
+        };
+      },
+      async deleteMany({ where }) {
+        deletes.push(where);
+        return { count: 1 };
+      },
+    },
+  };
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, { prismaClient, jwtSecret: ACTIVE_SESSION_SECRET });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=${token}`);
+  t.after(async () => {
+    try { ws.terminate(); } catch {}
+    await teardown(server);
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+  const closed = await waitCloseWithin(ws);
+  assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
+  assert.deepEqual(deletes, [{ userId: 'deleted-user' }]);
+});
+
+test('socket:post-index validation closes a handshake that raced session revocation', async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = ACTIVE_SESSION_SECRET;
+  const token = jwt.sign({ userId: 'racing-user' }, ACTIVE_SESSION_SECRET, { expiresIn: '1h' });
+  let lookups = 0;
+  const prismaClient = {
+    session: {
+      async findUnique() {
+        lookups += 1;
+        if (lookups > 1) return null;
+        return {
+          id: 'racing-session',
+          token,
+          userId: 'racing-user',
+          expiresAt: new Date(Date.now() + 60_000),
+          fingerprint: null,
+          user: { id: 'racing-user', deletedAt: null },
+        };
+      },
+      async deleteMany() {
+        return { count: 0 };
+      },
+    },
+  };
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, { prismaClient, jwtSecret: ACTIVE_SESSION_SECRET });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=${token}`);
+  t.after(async () => {
+    try { ws.terminate(); } catch {}
+    await teardown(server);
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+
+  const closed = await waitCloseWithin(ws);
+  assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
+  assert.equal(lookups, 2);
+  assert.equal(getRealtimeState().userIndex.has('racing-user'), false);
+});
+
+test('socket:active session is checked once at handshake, not once per message', async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = ACTIVE_SESSION_SECRET;
+  const token = jwt.sign({ userId: 'active-user' }, ACTIVE_SESSION_SECRET, { expiresIn: '1h' });
+  let lookups = 0;
+  const prismaClient = {
+    session: {
+      async findUnique() {
+        lookups += 1;
+        return {
+          id: 'active-session',
+          token,
+          userId: 'active-user',
+          expiresAt: new Date(Date.now() + 60_000),
+          fingerprint: null,
+          user: { id: 'active-user', deletedAt: null },
+        };
+      },
+      async deleteMany() {
+        return { count: 0 };
+      },
+    },
+  };
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, { prismaClient, jwtSecret: ACTIVE_SESSION_SECRET });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=${token}`);
+  t.after(async () => {
+    try { ws.terminate(); } catch {}
+    await teardown(server);
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+  await waitOpen(ws);
+  await waitMessage(ws, (message) => message.type === 'welcome');
+  ws.send(JSON.stringify({ type: 'ping' }));
+  ws.send(JSON.stringify({ type: 'ping' }));
+  await waitMessage(ws, (message) => message.type === 'pong');
+  await waitMessage(ws, (message) => message.type === 'pong');
+  assert.equal(lookups, 2);
+});
+
+test('socket:periodic revalidation closes a session when a revocation event was missed', async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = ACTIVE_SESSION_SECRET;
+  const token = jwt.sign({ userId: 'missed-user' }, ACTIVE_SESSION_SECRET, { expiresIn: '1h' });
+  let persisted = true;
+  let lookups = 0;
+  const prismaClient = {
+    session: {
+      async findUnique() {
+        lookups += 1;
+        if (!persisted) return null;
+        return {
+          id: 'missed-session',
+          token,
+          userId: 'missed-user',
+          expiresAt: new Date(Date.now() + 60_000),
+          fingerprint: null,
+          user: { id: 'missed-user', deletedAt: null },
+        };
+      },
+      async deleteMany() {
+        return { count: 0 };
+      },
+    },
+  };
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, { prismaClient, jwtSecret: ACTIVE_SESSION_SECRET });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=${token}`);
+  t.after(async () => {
+    try { ws.terminate(); } catch {}
+    await teardown(server);
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+  await waitOpen(ws);
+  await waitMessage(ws, (message) => message.type === 'welcome');
+  assert.equal(lookups, 2);
+
+  persisted = false;
+  const closing = waitCloseWithin(ws);
+  assert.equal(typeof getRealtimeState().revalidateAuthenticatedSockets, 'function');
+  await getRealtimeState().revalidateAuthenticatedSockets();
+  const closed = await closing;
+
+  assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
+  assert.equal(lookups, 3);
 });
 
 test('socket:authenticated client receives welcome with user channel', async () => {
@@ -158,6 +370,27 @@ test('socket:broadcastToUser delivers event to user sockets', async () => {
   assert.equal(msg.text, 'hello');
   assert.equal(msg.channel, 'user:bob');
   ws.close();
+  await teardown(server);
+});
+
+test('socket:user-deletion broadcast immediately closes authenticated user sockets', async () => {
+  const { server, port } = await startHttp();
+  initRealtimeServer(server, {
+    verifyToken: fakeVerifier({ active: { userId: 'soon-deleted' } }),
+  });
+  const ws = new WebSocket(`ws://localhost:${port}/ws/realtime?token=active`);
+  await waitOpen(ws);
+  await waitMessage(ws, (message) => message.type === 'welcome');
+
+  const closing = waitCloseWithin(ws);
+  emitUserSessionsRevoked({
+    userId: 'soon-deleted',
+    reason: 'account_deleted',
+  });
+  const closed = await closing;
+
+  assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
+  assert.equal(closed.reason, 'account_deleted');
   await teardown(server);
 });
 

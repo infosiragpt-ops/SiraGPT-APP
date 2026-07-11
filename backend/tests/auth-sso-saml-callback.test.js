@@ -44,17 +44,29 @@ const validOrg = {
 };
 
 function makePrisma({ user = null, orgs = { acme: validOrg } } = {}) {
-  return {
+  const db = {
     user: {
       findUnique: async ({ where }) => (user && where.email === user.email ? user : null),
       create: async ({ data }) => ({ id: 'u-new', ...data }),
     },
-    session: { create: async () => ({}) },
+    session: {
+      create: async () => ({}),
+      deleteMany: async () => ({ count: 0 }),
+    },
     organization: {
       findUnique: async ({ where }) => orgs[where.slug] || null,
     },
-    orgMembership: { upsert: async () => ({}) },
+    orgMembership: {
+      findUnique: async () => null,
+      upsert: async ({ create }) => create,
+    },
+    async $queryRawUnsafe(sql, ...params) {
+      if (/set_config/i.test(sql)) return [{ lock_timeout: params[0] }];
+      return [{ locked: true }];
+    },
   };
+  db.$transaction = async (fn) => fn(db);
+  return db;
 }
 
 function makeDeps(overrides = {}) {
@@ -64,6 +76,11 @@ function makeDeps(overrides = {}) {
     writeAuditLog: overrides.writeAuditLog || (() => {}),
     resolveOrgForSso: async (slug) => prisma.organization.findUnique({ where: { slug } }),
     samlHandler: overrides.samlHandler,
+    rbacAssignments: overrides.rbacAssignments || {
+      syncLegacyAdminAssignment: async () => ({ denied: false }),
+      syncOrgRoleAssignment: async () => ({ denied: false }),
+      invalidateUser: async () => {},
+    },
   };
 }
 

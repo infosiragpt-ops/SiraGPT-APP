@@ -12,7 +12,8 @@
  */
 
 const express = require('express');
-const { authenticateToken, requireAdmin } = require('../../middleware/auth');
+const { authenticateToken } = require('../../middleware/auth');
+const requireAdminRoutePermission = require('../../services/admin-route-policy');
 
 const MAX_RANGE_DAYS = 92;
 
@@ -160,7 +161,7 @@ const BUILDERS = {
 
 function createRouter({ prismaClient }) {
   const router = express.Router();
-  router.use(authenticateToken, requireAdmin);
+  router.use(authenticateToken, requireAdminRoutePermission);
 
   router.get('/', (_req, res) => {
     res.json({ types: REPORT_TYPES });

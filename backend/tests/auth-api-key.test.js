@@ -26,6 +26,7 @@ const apiKeysService = require('../src/services/api-keys-service');
 const prismaState = {
   apiKey: null, // single row used by findFirst
   sessions: [],
+  sessionDeletes: [],
 };
 
 const prismaMock = {
@@ -39,7 +40,16 @@ const prismaMock = {
   },
   session: {
     findUnique: async ({ where }) => prismaState.sessions.find((s) => s.token === where.token) || null,
-    deleteMany: async () => ({ count: 0 }),
+    deleteMany: async ({ where }) => {
+      prismaState.sessionDeletes.push(where);
+      const before = prismaState.sessions.length;
+      prismaState.sessions = prismaState.sessions.filter((session) => {
+        if (where.token) return session.token !== where.token;
+        if (where.userId) return session.userId !== where.userId;
+        return false;
+      });
+      return { count: before - prismaState.sessions.length };
+    },
   },
   user: { update: async () => ({}) },
 };
@@ -88,6 +98,7 @@ describe('authenticateToken · API key path', () => {
   beforeEach(() => {
     prismaState.apiKey = null;
     prismaState.sessions = [];
+    prismaState.sessionDeletes = [];
   });
 
   test('accepts a valid sk_ token and populates req.user + req.organization', async () => {
@@ -259,6 +270,47 @@ describe('authenticateToken · API key path', () => {
     assert.equal(res.statusCode, 401);
     assert.equal(res.body.ok, false);
     assert.equal(res.body.code, 'unsupported_authorization_scheme');
+  });
+
+  test('rejects a valid JWT owned by a soft-deleted user and revokes every user session', async () => {
+    const token = jwt.sign(
+      { userId: 'deleted-user' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' },
+    );
+    const deletedUser = {
+      id: 'deleted-user',
+      email: 'deleted@example.com',
+      deletedAt: new Date('2026-07-01T00:00:00Z'),
+    };
+    prismaState.sessions = [
+      {
+        id: 'session-presented',
+        userId: deletedUser.id,
+        token,
+        expiresAt: new Date(Date.now() + 60_000),
+        user: deletedUser,
+      },
+      {
+        id: 'session-other',
+        userId: deletedUser.id,
+        token: 'another-token',
+        expiresAt: new Date(Date.now() + 60_000),
+        user: deletedUser,
+      },
+    ];
+    const { req, res } = buildReqRes(token);
+    let called = false;
+
+    await authenticateToken(req, res, () => {
+      called = true;
+    });
+
+    assert.equal(called, false);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.code, 'account_inactive');
+    assert.deepEqual(prismaState.sessionDeletes, [{ userId: deletedUser.id }]);
+    assert.equal(prismaState.sessions.length, 0);
   });
 });
 

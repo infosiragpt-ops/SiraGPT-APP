@@ -278,6 +278,7 @@ function errorToResponse(err, req, { exposeStack = false } = {}) {
     ...(err?.code || (classified && classified.code) ? { code: err?.code || classified.code } : {}),
     ...(Array.isArray(err?.errors) ? { errors: sanitizeValidationErrors(err.errors) } : {}),
     ...(err?.details ? { details: sanitizeErrorDetails(err.details) } : {}),
+    ...(err?.retryable === true ? { retryable: true } : {}),
     ...(reqId ? { requestId: reqId, reqId } : {}),
     ...(exposeStack && err?.stack ? { stack: truncateStack(err.stack) } : {}),
   };
@@ -347,6 +348,10 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
       });
     }
 
+    const retryAfterSeconds = Number(err?.retryAfterSeconds);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      res.setHeader('Retry-After', String(Math.ceil(retryAfterSeconds)));
+    }
     res.status(statusCode).json(body);
   };
 }

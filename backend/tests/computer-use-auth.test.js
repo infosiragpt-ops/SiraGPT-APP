@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const WebSocket = require('ws');
 const request = require('supertest');
+const jwt = require('jsonwebtoken');
 
 const prisma = require('../src/config/database');
 const {
@@ -10,6 +11,45 @@ const {
   installAuthSessionMock,
   reloadModule,
 } = require('./http-test-utils');
+const {
+  emitUserSessionsRevoked,
+} = require('../src/services/auth/user-session-revocation-events');
+
+const COMPUTER_WS_SECRET = 'computer-use-ws-session-secret-at-least-32-characters';
+
+function waitWsMessage(client, predicate, timeoutMs = 1000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      client.off('message', onMessage);
+      reject(new Error('timeout waiting for websocket message'));
+    }, timeoutMs);
+    timer.unref?.();
+    function onMessage(raw) {
+      let parsed;
+      try { parsed = JSON.parse(String(raw)); } catch { return; }
+      if (!predicate || predicate(parsed)) {
+        clearTimeout(timer);
+        client.off('message', onMessage);
+        resolve(parsed);
+      }
+    }
+    client.on('message', onMessage);
+  });
+}
+
+function waitWsClose(client, timeoutMs = 750) {
+  return Promise.race([
+    new Promise((resolve) => {
+      client.once('close', (code, reason) => {
+        resolve({ code, reason: String(reason || '') });
+      });
+    }),
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('timeout waiting for websocket close')), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+}
 
 describe('Computer Use HTTP route auth boundaries', () => {
   let auth;
@@ -183,4 +223,237 @@ test('computer-use websocket shutdown terminates clients, awaits close, and is i
   await Promise.all([first, clientClosed]);
   assert.equal(server.listenerCount('upgrade'), 0);
   assert.strictEqual(computerUse.closeComputerUseWebSocketServer(), first);
+});
+
+describe('Computer Use WebSocket active-session authentication', { concurrency: false }, () => {
+  async function startSocketHarness({ sessionRow }) {
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousSecret = process.env.JWT_SECRET;
+    process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
+    process.env.JWT_SECRET = COMPUTER_WS_SECRET;
+    const computerUse = reloadModule('../src/routes/computer-use');
+    const token = jwt.sign({ userId: 'computer-user' }, COMPUTER_WS_SECRET, { expiresIn: '1h' });
+    let lookups = 0;
+    const deletes = [];
+    const prismaClient = {
+      session: {
+        async findUnique() {
+          lookups += 1;
+          return typeof sessionRow === 'function' ? sessionRow(token) : sessionRow;
+        },
+        async deleteMany({ where }) {
+          deletes.push(where);
+          return { count: 1 };
+        },
+      },
+    };
+    const server = http.createServer();
+    const socketServer = computerUse.initializeWebSocketServer(server, {
+      prismaClient,
+      jwtSecret: COMPUTER_WS_SECRET,
+    });
+    const port = await new Promise((resolve) => {
+      server.listen(0, () => resolve(server.address().port));
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/computer-use`);
+    await new Promise((resolve, reject) => {
+      client.once('open', resolve);
+      client.once('error', reject);
+    });
+    return {
+      computerUse,
+      token,
+      client,
+      server,
+      socketServer,
+      deletes,
+      get lookups() { return lookups; },
+      async close() {
+        try { client.terminate(); } catch {}
+        try { await computerUse.closeComputerUseWebSocketServer(); } catch {}
+        if (server.listening) await new Promise((resolve) => server.close(resolve));
+        if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousOpenAiKey;
+        if (previousSecret === undefined) delete process.env.JWT_SECRET;
+        else process.env.JWT_SECRET = previousSecret;
+      },
+    };
+  }
+
+  test('rejects a signed JWT when its persisted session is missing or revoked', async (t) => {
+    const harness = await startSocketHarness({ sessionRow: null });
+    t.after(() => harness.close());
+
+    harness.client.send(JSON.stringify({
+      type: 'join-session',
+      sessionId: 'computer-session',
+      token: harness.token,
+    }));
+    const closed = await waitWsClose(harness.client);
+
+    assert.equal(closed.code, 1008);
+    assert.equal(harness.lookups, 1);
+  });
+
+  test('rejects a user deleted after JWT issuance and revokes the session family', async (t) => {
+    const harness = await startSocketHarness({
+      sessionRow: (token) => ({
+        id: 'deleted-session',
+        token,
+        userId: 'computer-user',
+        expiresAt: new Date(Date.now() + 60_000),
+        fingerprint: null,
+        user: { id: 'computer-user', deletedAt: new Date() },
+      }),
+    });
+    t.after(() => harness.close());
+
+    harness.client.send(JSON.stringify({
+      type: 'join-session',
+      sessionId: 'computer-session',
+      token: harness.token,
+    }));
+    const closed = await waitWsClose(harness.client);
+
+    assert.equal(closed.code, 1008);
+    assert.equal(harness.lookups, 1);
+    assert.deepEqual(harness.deletes, [{ userId: 'computer-user' }]);
+  });
+
+  test('post-index validation closes a join that raced persisted-session revocation', async (t) => {
+    let reads = 0;
+    const harness = await startSocketHarness({
+      sessionRow: (token) => {
+        reads += 1;
+        if (reads > 1) return null;
+        return {
+          id: 'racing-session',
+          token,
+          userId: 'computer-user',
+          expiresAt: new Date(Date.now() + 60_000),
+          fingerprint: null,
+          user: { id: 'computer-user', deletedAt: null },
+        };
+      },
+    });
+    t.after(() => harness.close());
+
+    const closing = waitWsClose(harness.client);
+    harness.client.send(JSON.stringify({
+      type: 'join-session',
+      sessionId: 'computer-session',
+      token: harness.token,
+    }));
+    const closed = await closing;
+
+    assert.equal(closed.code, 1008);
+    assert.equal(harness.lookups, 2);
+    assert.equal(harness.socketServer.userIndex?.has('computer-user'), false);
+  });
+
+  test('validates an active session once and reuses socket auth for later commands', async (t) => {
+    const harness = await startSocketHarness({
+      sessionRow: (token) => ({
+        id: 'active-session',
+        token,
+        userId: 'computer-user',
+        expiresAt: new Date(Date.now() + 60_000),
+        fingerprint: null,
+        user: { id: 'computer-user', deletedAt: null },
+      }),
+    });
+    t.after(() => harness.close());
+    harness.computerUse.activeSessions.set('computer-session', {
+      userId: 'computer-user',
+      status: 'running',
+      events: [{ type: 'session-started', data: { sessionId: 'computer-session' } }],
+    });
+
+    const replay = waitWsMessage(harness.client, (message) => message.type === 'session-started');
+    harness.client.send(JSON.stringify({
+      type: 'join-session',
+      sessionId: 'computer-session',
+      token: harness.token,
+    }));
+    await replay;
+
+    const paused = waitWsMessage(harness.client, (message) => message.type === 'takeover-state');
+    harness.client.send(JSON.stringify({ type: 'pause-session' }));
+    await paused;
+    assert.equal(harness.lookups, 2);
+  });
+
+  test('periodic revalidation closes an authenticated socket after a missed revocation event', async (t) => {
+    let persisted = true;
+    const harness = await startSocketHarness({
+      sessionRow: (token) => (persisted ? {
+        id: 'active-session',
+        token,
+        userId: 'computer-user',
+        expiresAt: new Date(Date.now() + 60_000),
+        fingerprint: null,
+        user: { id: 'computer-user', deletedAt: null },
+      } : null),
+    });
+    t.after(() => harness.close());
+    harness.computerUse.activeSessions.set('computer-session', {
+      userId: 'computer-user',
+      status: 'running',
+      events: [{ type: 'session-started', data: { sessionId: 'computer-session' } }],
+    });
+
+    const replay = waitWsMessage(harness.client, (message) => message.type === 'session-started');
+    harness.client.send(JSON.stringify({
+      type: 'join-session',
+      sessionId: 'computer-session',
+      token: harness.token,
+    }));
+    await replay;
+    assert.equal(harness.lookups, 2);
+
+    persisted = false;
+    const closing = waitWsClose(harness.client);
+    assert.equal(typeof harness.socketServer.revalidateAuthenticatedSockets, 'function');
+    await harness.socketServer.revalidateAuthenticatedSockets();
+    const closed = await closing;
+
+    assert.equal(closed.code, 1008);
+    assert.equal(harness.lookups, 3);
+  });
+
+  test('user-deletion broadcast closes an authenticated computer-use socket', async (t) => {
+    const harness = await startSocketHarness({
+      sessionRow: (token) => ({
+        id: 'active-session',
+        token,
+        userId: 'computer-user',
+        expiresAt: new Date(Date.now() + 60_000),
+        fingerprint: null,
+        user: { id: 'computer-user', deletedAt: null },
+      }),
+    });
+    t.after(() => harness.close());
+    harness.computerUse.activeSessions.set('computer-session', {
+      userId: 'computer-user',
+      status: 'running',
+      events: [{ type: 'session-started', data: { sessionId: 'computer-session' } }],
+    });
+
+    const replay = waitWsMessage(harness.client, (message) => message.type === 'session-started');
+    harness.client.send(JSON.stringify({
+      type: 'join-session',
+      sessionId: 'computer-session',
+      token: harness.token,
+    }));
+    await replay;
+
+    const closing = waitWsClose(harness.client);
+    emitUserSessionsRevoked({
+      userId: 'computer-user',
+      reason: 'account_deleted',
+    });
+    const closed = await closing;
+    assert.equal(closed.code, 1008);
+    assert.equal(closed.reason, 'account_deleted');
+  });
 });

@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  runAuthUserTransaction,
+} = require('../services/auth/auth-user-lock');
+
 /**
  * PartialSessionRepository — single-responsibility data access for the
  * `partial_sessions` table. A partial session is a short-lived token
@@ -43,9 +47,22 @@ class PartialSessionRepository {
    */
   create({ token, userId, expiresAt }) {
     return this.withRetry(
-      () => this.prisma.partialSession.create({
-        data: { token, userId, expiresAt },
-      }),
+      () => {
+        const data = { token, userId, expiresAt };
+        const supportsAuthTransaction = (
+          typeof this.prisma.$transaction === 'function'
+          && typeof this.prisma.$queryRawUnsafe === 'function'
+          && typeof this.prisma.user?.findUnique === 'function'
+        );
+        if (!supportsAuthTransaction) {
+          return this.prisma.partialSession.create({ data });
+        }
+        return runAuthUserTransaction(
+          this.prisma,
+          userId,
+          (tx) => tx.partialSession.create({ data }),
+        );
+      },
       { label: 'partial-session-repo.create' }
     );
   }

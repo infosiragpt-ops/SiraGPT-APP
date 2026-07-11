@@ -22,8 +22,13 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const jwt = require('jsonwebtoken');
 
 const { optionalAuth } = require('../src/middleware/auth');
+const { createOptionalAuth } = require('../src/middleware/optionalAuth');
+const { computeFingerprint } = require('../src/utils/session-fingerprint');
+
+const LEGACY_SECRET = 'legacy-optional-auth-test-secret-at-least-32-characters';
 
 function makeReq(overrides = {}) {
   return {
@@ -181,4 +186,80 @@ test('optionalAuth: extremely long token → next() anonymous (length-cap path)'
   assert.equal(nextCalledWith, null);
   assert.equal(req.user, undefined);
   assert.equal(res.__calls.json.length, 0);
+});
+
+function makeLegacyHarness({ deletedAt = null, sessionPresent = true } = {}) {
+  const req = makeReq({
+    headers: {
+      authorization: '',
+      'x-forwarded-for': '203.0.113.25',
+      'user-agent': 'Legacy Optional Auth Test',
+    },
+    socket: { remoteAddress: '203.0.113.25' },
+  });
+  const token = jwt.sign({ userId: 'legacy-user' }, LEGACY_SECRET, { expiresIn: '1h' });
+  req.headers.authorization = `Bearer ${token}`;
+  const session = sessionPresent
+    ? {
+        id: 'legacy-session',
+        userId: 'legacy-user',
+        token,
+        expiresAt: new Date(Date.now() + 60_000),
+        fingerprint: computeFingerprint(req),
+        user: {
+          id: 'legacy-user',
+          email: 'legacy@example.test',
+          deletedAt,
+        },
+      }
+    : null;
+  const deletes = [];
+  const prismaClient = {
+    session: {
+      async findUnique() {
+        return session;
+      },
+      async deleteMany({ where }) {
+        deletes.push(where);
+        return { count: 1 };
+      },
+    },
+  };
+  return { req, token, prismaClient, deletes };
+}
+
+async function runLegacyOptional(harness) {
+  const middleware = createOptionalAuth({
+    prismaClient: harness.prismaClient,
+    jwtSecret: LEGACY_SECRET,
+  });
+  return new Promise((resolve) => {
+    middleware(harness.req, makeRes(), () => resolve());
+  });
+}
+
+test('legacy optionalAuth attaches only a persisted active session user', async () => {
+  const harness = makeLegacyHarness();
+  await runLegacyOptional(harness);
+
+  assert.equal(harness.req.user.id, 'legacy-user');
+  assert.equal(harness.req.userSession.id, 'legacy-session');
+  assert.equal(harness.req.token, harness.token);
+});
+
+test('legacy optionalAuth treats a user deleted after JWT issuance as anonymous and revokes sessions', async () => {
+  const harness = makeLegacyHarness({ deletedAt: new Date() });
+  await runLegacyOptional(harness);
+
+  assert.equal(harness.req.user, undefined);
+  assert.equal(harness.req.userSession, undefined);
+  assert.deepEqual(harness.deletes, [{ userId: 'legacy-user' }]);
+});
+
+test('legacy optionalAuth treats a signed JWT with a missing or revoked session as anonymous', async () => {
+  const harness = makeLegacyHarness({ sessionPresent: false });
+  await runLegacyOptional(harness);
+
+  assert.equal(harness.req.user, undefined);
+  assert.equal(harness.req.userSession, undefined);
 });

@@ -3,6 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { UserRepository } = require('../src/repositories/UserRepository');
+const {
+  SYSTEM_ASSIGNMENT_TAG,
+} = require('../src/services/rbac-system-assignments');
 
 const passthroughRetry = (fn) => fn();
 
@@ -15,6 +18,12 @@ function makePrismaSpy(returnValue = { id: 'u1' }) {
       create: (arg) => { calls.create.push(arg); return Promise.resolve({ ...returnValue, ...arg.data }); },
     },
     _calls: calls,
+  };
+}
+
+function rbacAssignmentsFor(prisma) {
+  return {
+    createLegacyAdminUser: ({ data }) => prisma.user.create({ data }),
   };
 }
 
@@ -70,7 +79,11 @@ test('UserRepository.clearGmailTokens: nulls gmailTokens', async () => {
 
 test('UserRepository.createOAuthUser: applies sensible defaults', async () => {
   const prisma = makePrismaSpy();
-  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  const repo = new UserRepository({
+    prisma,
+    withRetry: passthroughRetry,
+    rbacAssignments: rbacAssignmentsFor(prisma),
+  });
   await repo.createOAuthUser({
     googleId: 'g1',
     name: 'Sira',
@@ -109,7 +122,11 @@ test('UserRepository: routes calls through withRetry wrapper', async () => {
 
 test('UserRepository.createPasswordUser: defaults + omits google fields', async () => {
   const prisma = makePrismaSpy();
-  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  const repo = new UserRepository({
+    prisma,
+    withRetry: passthroughRetry,
+    rbacAssignments: rbacAssignmentsFor(prisma),
+  });
   await repo.createPasswordUser({ name: 'Sira', email: 'a@b.com', passwordHash: 'hash' });
   const arg = prisma._calls.create[0];
   assert.equal(arg.data.plan, 'FREE');
@@ -125,7 +142,11 @@ test('UserRepository.createPasswordUser: defaults + omits google fields', async 
 
 test('UserRepository.createPasswordUser: caller overrides take precedence', async () => {
   const prisma = makePrismaSpy();
-  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  const repo = new UserRepository({
+    prisma,
+    withRetry: passthroughRetry,
+    rbacAssignments: rbacAssignmentsFor(prisma),
+  });
   await repo.createPasswordUser({
     name: 'Sira',
     email: 'a@b.com',
@@ -170,6 +191,7 @@ test('UserRepository: new methods route through withRetry with stable labels', a
   const repo = new UserRepository({
     prisma,
     withRetry: (fn, opts) => { labels.push(opts?.label); return fn(); },
+    rbacAssignments: rbacAssignmentsFor(prisma),
   });
   await repo.createPasswordUser({ name: 'x', email: 'x@y', passwordHash: 'h' });
   await repo.updateRecoveryCodes('u1', []);
@@ -228,4 +250,27 @@ test('UserRepository: token-vault-facing methods route through withRetry with st
     'user-repo.updateGoogleServicesTokens',
     'user-repo.clearGoogleServicesTokens',
   ]);
+});
+
+test('UserRepository blocks every update method for the RBAC system principal', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  const attempts = [
+    () => repo.updateGoogleIdentity(SYSTEM_ASSIGNMENT_TAG, {
+      googleId: 'forbidden',
+      gmailTokens: null,
+      googleServicesTokens: null,
+    }),
+    () => repo.clearGmailTokens(SYSTEM_ASSIGNMENT_TAG),
+    () => repo.updateGmailTokens(SYSTEM_ASSIGNMENT_TAG, 'forbidden'),
+    () => repo.updateGoogleServicesTokens(SYSTEM_ASSIGNMENT_TAG, 'forbidden'),
+    () => repo.clearGoogleServicesTokens(SYSTEM_ASSIGNMENT_TAG),
+    () => repo.updateRecoveryCodes(SYSTEM_ASSIGNMENT_TAG, []),
+    () => repo.updateWebauthnCredentials(SYSTEM_ASSIGNMENT_TAG, []),
+  ];
+
+  for (const attempt of attempts) {
+    assert.throws(attempt, { code: 'RBAC_SYSTEM_PRINCIPAL_PROTECTED' });
+  }
+  assert.equal(prisma._calls.update.length, 0);
 });

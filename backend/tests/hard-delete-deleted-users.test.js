@@ -11,6 +11,9 @@
 
 const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const {
+  SYSTEM_ASSIGNMENT_TAG_PREFIX,
+} = require('../src/services/rbac-system-assignments');
 
 const JOB_PATH = '../src/jobs/hard-delete-deleted-users';
 const SILENT = { info() {}, warn() {}, error() {} };
@@ -74,5 +77,19 @@ describe('hard-delete-deleted-users · grace period safety', () => {
     const res = await run({ prisma, now: new Date('2026-06-25T00:00:00.000Z'), logger: SILENT });
     assert.notEqual(res.error, 'invalid_cutoff');
     assert.ok(prisma.calls.findWhere, 'a valid run reaches the candidate query');
+  });
+
+  test('candidate query excludes every RBAC system-principal version', async () => {
+    const { run } = freshJob();
+    const prisma = fakePrisma();
+    await run({
+      prisma,
+      now: new Date('2026-06-25T00:00:00.000Z'),
+      logger: SILENT,
+    });
+
+    assert.deepEqual(prisma.calls.findWhere.NOT, {
+      id: { startsWith: SYSTEM_ASSIGNMENT_TAG_PREFIX },
+    });
   });
 });

@@ -43,10 +43,12 @@ const state = {
       phoneVerifiedAt: new Date(),
       isAdmin: false,
       isSuperAdmin: false,
+      deletedAt: null,
     },
   ],
   rows: [], // TwoFAChallenge rows
   sessions: [],
+  userReadsBeforeDelete: null,
 };
 
 const authMock = {
@@ -57,7 +59,16 @@ const prismaMock = {
   user: {
     findUnique: async ({ where }) => {
       if (where.email) return state.users.find((u) => u.email === where.email) || null;
-      if (where.id) return state.users.find((u) => u.id === where.id) || null;
+      if (where.id) {
+        if (Number.isInteger(state.userReadsBeforeDelete)) {
+          state.userReadsBeforeDelete -= 1;
+          if (state.userReadsBeforeDelete <= 0) {
+            state.users[0].deletedAt = new Date();
+            state.userReadsBeforeDelete = null;
+          }
+        }
+        return state.users.find((u) => u.id === where.id) || null;
+      }
       return null;
     },
     findFirst: async ({ where }) => {
@@ -88,7 +99,8 @@ const prismaMock = {
       let n = 0;
       for (const r of state.rows) {
         if (
-          r.userId === where.userId
+          (where.id === undefined || r.id === where.id)
+          && (where.userId === undefined || r.userId === where.userId)
           && (where.consumedAt === null ? r.consumedAt === null : true)
         ) {
           Object.assign(r, data);
@@ -104,12 +116,29 @@ const prismaMock = {
       state.sessions.push(row);
       return row;
     },
+    deleteMany: async ({ where }) => {
+      const before = state.sessions.length;
+      for (let i = state.sessions.length - 1; i >= 0; i -= 1) {
+        if (!where.userId || state.sessions[i].userId === where.userId) {
+          state.sessions.splice(i, 1);
+        }
+      }
+      return { count: before - state.sessions.length };
+    },
+  },
+  async $queryRawUnsafe() {
+    return [{ locked: true }];
+  },
+  async $transaction(callbackOrOperations) {
+    if (Array.isArray(callbackOrOperations)) return Promise.all(callbackOrOperations);
+    return callbackOrOperations(prismaMock);
   },
 };
 
 const auditMock = {
   _calls: [],
   writeAuditLog: (_db, payload) => { auditMock._calls.push(payload); },
+  writeAuditLogStrict: async (_db, payload) => { auditMock._calls.push(payload); },
 };
 
 const emailMock = {
@@ -170,6 +199,8 @@ function resetState() {
   state.sessions.length = 0;
   auditMock._calls.length = 0;
   state.users[0].phone = '+14155551234';
+  state.users[0].deletedAt = null;
+  state.userReadsBeforeDelete = null;
 }
 
 describe('two-fa-sms service helpers', () => {
@@ -260,6 +291,35 @@ describe('POST /api/auth/2fa/sms/challenge', () => {
     assert.equal(state.rows.length, 0);
   });
 
+  test('does not issue an SMS challenge for a soft-deleted user', async () => {
+    state.users[0].deletedAt = new Date();
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/2fa/sms/challenge',
+      body: { email: 'a@example.com' },
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.smsSent, false);
+    assert.equal(res.body.smsSkippedReason, 'unknown-contact');
+    assert.equal(state.rows.length, 0);
+  });
+
+  test('does not issue a challenge when deletion wins the challenge-creation lock', async () => {
+    state.userReadsBeforeDelete = 1;
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/2fa/sms/challenge',
+      body: { email: 'a@example.com' },
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.smsSent, false);
+    assert.equal(res.body.smsSkippedReason, 'unknown-contact');
+    assert.equal(state.rows.length, 0);
+  });
+
   test('invalidates prior unconsumed rows on re-challenge', async () => {
     await callRoute({
       method: 'POST',
@@ -318,6 +378,45 @@ describe('POST /api/auth/2fa/sms/verify', () => {
     assert.equal(state.sessions.length, 1);
     assert.ok(state.rows[state.rows.length - 1].consumedAt instanceof Date);
     assert.ok(auditMock._calls.some((c) => c.action === '2fa_sms_verified'));
+  });
+
+  test('rejects redemption when the user was deleted after challenge issuance', async () => {
+    const { challengeId, code } = await twoFASms.createSmsChallenge(
+      prismaMock,
+      state.users[0],
+      '+14155551234',
+    );
+    state.users[0].deletedAt = new Date();
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/2fa/sms/verify',
+      body: { challengeId, code },
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'account_inactive');
+    assert.equal(state.sessions.length, 0);
+    assert.ok(state.rows[0].consumedAt instanceof Date);
+  });
+
+  test('rejects redemption when deletion wins the session-issuance lock', async () => {
+    const { challengeId, code } = await twoFASms.createSmsChallenge(
+      prismaMock,
+      state.users[0],
+      '+14155551234',
+    );
+    state.userReadsBeforeDelete = 2;
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/2fa/sms/verify',
+      body: { challengeId, code },
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'account_inactive');
+    assert.equal(state.sessions.length, 0);
   });
 
   test('400 invalid_code increments attempts', async () => {

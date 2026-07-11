@@ -63,8 +63,55 @@ const rateLimitStore = require('../middleware/rate-limit-store');
 const costTracker = require('../services/ai/cost-tracker');
 const { parseOrgSettingsPatch } = require('../schemas/orgs');
 const metrics = require('../utils/metrics');
+const {
+  syncOrgRoleAssignment: syncOrgRoleAssignmentService,
+  removeOrgRoleAssignment: removeOrgRoleAssignmentService,
+} = require('../services/rbac-assignment-sync');
+const {
+  acquireRbacMutationLock,
+} = require('../services/rbac-system-assignments');
+const {
+  invalidatePermissionsCache,
+} = require('../middleware/require-permission');
+const {
+  sendRbacMutationBusyResponse,
+} = require('../services/rbac-mutation-http');
 
 const router = express.Router();
+
+function supportsRbacAssignmentWrites(prismaClient) {
+  return Boolean(
+    prismaClient?.user?.findUnique
+    && prismaClient?.orgMembership?.findUnique
+    && prismaClient?.role?.findUnique
+    && prismaClient?.userRole?.findFirst
+    && prismaClient?.userRole?.create
+    && prismaClient?.userRole?.update
+    && prismaClient?.userRole?.deleteMany
+    && prismaClient?.auditLog?.create
+    && typeof prismaClient?.$queryRawUnsafe === 'function',
+  );
+}
+
+async function acquireRbacMutationLockIfSupported(prismaClient) {
+  if (!supportsRbacAssignmentWrites(prismaClient)) return false;
+  await acquireRbacMutationLock(prismaClient);
+  return true;
+}
+
+async function syncOrgRoleAssignment(options) {
+  if (!supportsRbacAssignmentWrites(options?.prismaClient)) {
+    return { skipped: true, reason: 'rbac_delegates_unavailable' };
+  }
+  return syncOrgRoleAssignmentService(options);
+}
+
+async function removeOrgRoleAssignment(options) {
+  if (!supportsRbacAssignmentWrites(options?.prismaClient)) {
+    return { skipped: true, reason: 'rbac_delegates_unavailable' };
+  }
+  return removeOrgRoleAssignmentService(options);
+}
 
 // Response cache for the onboarding-progress endpoint (cycle 10 wiring).
 // Dashboard widgets refresh frequently; the underlying handler issues 7+
@@ -213,6 +260,7 @@ router.post('/', authenticateToken, async (req, res) => {
     const slug = await uniqueSlug(prisma, slugBase);
 
     const org = await prisma.$transaction(async (tx) => {
+      const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
       const created = await tx.organization.create({
         data: {
           name,
@@ -223,8 +271,18 @@ router.post('/', authenticateToken, async (req, res) => {
       await tx.orgMembership.create({
         data: { orgId: created.id, userId, role: 'OWNER' },
       });
+      await syncOrgRoleAssignment({
+        prismaClient: tx,
+        userId,
+        orgId: created.id,
+        orgRole: 'OWNER',
+        actorId: userId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
       return created;
     });
+    await invalidatePermissionsCache(userId);
 
     void writeAuditLog(prisma, {
       action: 'org_create',
@@ -246,6 +304,7 @@ router.post('/', authenticateToken, async (req, res) => {
     payload.onboardingSteps = defaultSteps();
     res.status(201).json(payload);
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     console.error('[orgs] create failed:', err.message);
     res.status(500).json({ error: 'failed to create organization' });
   }
@@ -396,10 +455,22 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
     }
 
     const membership = await prisma.$transaction(async (tx) => {
+      const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
       const existing = await tx.orgMembership.findUnique({
         where: { orgId_userId: { orgId: invite.orgId, userId } },
       });
-      if (existing) return existing;
+      if (existing) {
+        await syncOrgRoleAssignment({
+          prismaClient: tx,
+          userId,
+          orgId: invite.orgId,
+          orgRole: existing.role,
+          actorId: userId,
+          invalidateAfter: false,
+          lockAlreadyHeld: rbacLockHeld,
+        });
+        return existing;
+      }
       const created = await tx.orgMembership.create({
         data: { orgId: invite.orgId, userId, role: invite.role },
       });
@@ -407,8 +478,18 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
         where: { id: invite.id },
         data: { acceptedAt: new Date() },
       });
+      await syncOrgRoleAssignment({
+        prismaClient: tx,
+        userId,
+        orgId: invite.orgId,
+        orgRole: created.role,
+        actorId: userId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
       return created;
     });
+    await invalidatePermissionsCache(userId);
 
     // Fire-and-forget welcome email. No-op when SMTP is unconfigured
     // or when the user has opted out of `invitations` notifications.
@@ -476,6 +557,7 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       role: membership.role,
     });
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     console.error('[orgs] accept-invite failed:', err.message);
     res.status(500).json({ error: 'failed to accept invitation' });
   }
@@ -1069,10 +1151,24 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
     // notification email and audit-log change record below.
     const previousRole = target.role;
 
-    const updated = await prisma.orgMembership.update({
-      where: { orgId_userId: { orgId, userId: targetUserId } },
-      data: { role: newRole },
+    const updated = await prisma.$transaction(async (tx) => {
+      const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
+      const membership = await tx.orgMembership.update({
+        where: { orgId_userId: { orgId, userId: targetUserId } },
+        data: { role: newRole },
+      });
+      await syncOrgRoleAssignment({
+        prismaClient: tx,
+        userId: targetUserId,
+        orgId,
+        orgRole: newRole,
+        actorId: callerId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
+      return membership;
     });
+    await invalidatePermissionsCache(targetUserId);
 
     // Fire-and-forget role-change notification. Only attempts to send
     // when SMTP is configured AND the role actually changed. Resolves
@@ -1141,6 +1237,7 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
 
     res.json({ id: updated.id, role: updated.role });
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] role change failed:', err.message);
     res.status(500).json({ error: 'failed to change role' });
@@ -1182,6 +1279,7 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
     const previousTargetRole = target.role;
 
     const result = await db.$transaction(async (tx) => {
+      const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
       // Demote current owner to ADMIN first so the unique role
       // semantics (single OWNER per org) are never violated mid-tx.
       const demoted = await tx.orgMembership.update({
@@ -1196,8 +1294,30 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
         where: { id: orgId },
         data: { ownerId: newOwnerId },
       });
+      await syncOrgRoleAssignment({
+        prismaClient: tx,
+        userId: callerId,
+        orgId,
+        orgRole: 'ADMIN',
+        actorId: callerId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
+      await syncOrgRoleAssignment({
+        prismaClient: tx,
+        userId: newOwnerId,
+        orgId,
+        orgRole: 'OWNER',
+        actorId: callerId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
       return { demoted, promoted, updatedOrg };
     });
+    await Promise.all([
+      invalidatePermissionsCache(callerId),
+      invalidatePermissionsCache(newOwnerId),
+    ]);
 
     // Fire-and-forget ownership-transfer notifications. Sends one
     // email to the demoted previous owner and one to the promoted
@@ -1277,6 +1397,7 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
       previousTargetRole,
     });
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] transfer-ownership failed:', err.message);
     res.status(500).json({ error: 'failed to transfer ownership' });
@@ -1321,6 +1442,7 @@ router.post('/:id/transfer-ownership', authenticateToken, (req, res) => transfer
  * Does NOT enforce role checks — the caller is responsible for that.
  */
 async function performOwnershipSwap(tx, { orgId, fromOwnerId, toOwnerId }) {
+  const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
   const demoted = await tx.orgMembership.update({
     where: { orgId_userId: { orgId, userId: fromOwnerId } },
     data: { role: 'ADMIN' },
@@ -1332,6 +1454,24 @@ async function performOwnershipSwap(tx, { orgId, fromOwnerId, toOwnerId }) {
   const updatedOrg = await tx.organization.update({
     where: { id: orgId },
     data: { ownerId: toOwnerId },
+  });
+  await syncOrgRoleAssignment({
+    prismaClient: tx,
+    userId: fromOwnerId,
+    orgId,
+    orgRole: 'ADMIN',
+    actorId: toOwnerId,
+    invalidateAfter: false,
+    lockAlreadyHeld: rbacLockHeld,
+  });
+  await syncOrgRoleAssignment({
+    prismaClient: tx,
+    userId: toOwnerId,
+    orgId,
+    orgRole: 'OWNER',
+    actorId: toOwnerId,
+    invalidateAfter: false,
+    lockAlreadyHeld: rbacLockHeld,
   });
   return { demoted, promoted, updatedOrg };
 }
@@ -1513,6 +1653,10 @@ async function acceptTransferHandler(req, res, deps = { prisma, writeAuditLog })
       });
       return { ...swap, stamped };
     });
+    await Promise.all([
+      invalidatePermissionsCache(pending.fromOwnerId),
+      invalidatePermissionsCache(pending.toOwnerId),
+    ]);
 
     void audit(db, {
       action: 'org_ownership_transfer',
@@ -1539,6 +1683,7 @@ async function acceptTransferHandler(req, res, deps = { prisma, writeAuditLog })
       acceptedAt: result.stamped.acceptedAt instanceof Date ? result.stamped.acceptedAt.toISOString() : result.stamped.acceptedAt,
     });
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] transfer-requests/accept failed:', err.message);
     res.status(500).json({ error: 'failed to accept ownership transfer' });
@@ -1679,9 +1824,22 @@ async function leaveOrgHandler(req, res, deps = { prisma, writeAuditLog }) {
       }
     }
 
-    await db.orgMembership.delete({
-      where: { orgId_userId: { orgId, userId } },
+    await db.$transaction(async (tx) => {
+      const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
+      await tx.orgMembership.delete({
+        where: { orgId_userId: { orgId, userId } },
+      });
+      await removeOrgRoleAssignment({
+        prismaClient: tx,
+        userId,
+        orgId,
+        orgRole: membership.role,
+        actorId: userId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
     });
+    await invalidatePermissionsCache(userId);
 
     void audit(db, {
       action: 'org_member_leave',
@@ -1698,6 +1856,7 @@ async function leaveOrgHandler(req, res, deps = { prisma, writeAuditLog }) {
 
     res.json({ ok: true });
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] leave failed:', err.message);
     res.status(500).json({ error: 'failed to leave organization' });
@@ -1739,9 +1898,22 @@ router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'only OWNER can remove OWNER' });
     }
 
-    await prisma.orgMembership.delete({
-      where: { orgId_userId: { orgId, userId: targetUserId } },
+    await prisma.$transaction(async (tx) => {
+      const rbacLockHeld = await acquireRbacMutationLockIfSupported(tx);
+      await tx.orgMembership.delete({
+        where: { orgId_userId: { orgId, userId: targetUserId } },
+      });
+      await removeOrgRoleAssignment({
+        prismaClient: tx,
+        userId: targetUserId,
+        orgId,
+        orgRole: target.role,
+        actorId: callerId,
+        invalidateAfter: false,
+        lockAlreadyHeld: rbacLockHeld,
+      });
     });
+    await invalidatePermissionsCache(targetUserId);
 
     // Fire-and-forget removal notification — only emitted for admin
     // removals (not self-leave) and when SMTP is configured. Resolves
@@ -1804,6 +1976,7 @@ router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
+    if (sendRbacMutationBusyResponse(res, err)) return;
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] remove member failed:', err.message);
     res.status(500).json({ error: 'failed to remove member' });

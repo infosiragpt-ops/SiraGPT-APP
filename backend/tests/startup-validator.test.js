@@ -89,6 +89,14 @@ describe('validateStartupEnvironment · happy path', () => {
     assert.deepEqual(issues, [], `unexpected issues: ${JSON.stringify(issues, null, 2)}`);
   });
 
+  it('defaults RBAC enforcement to shadow outside production', () => {
+    const issues = runValidator(happyEnv({ RBAC_ENFORCEMENT_MODE: undefined }));
+    assert.equal(
+      issues.some((issue) => issue.key === 'RBAC_ENFORCEMENT_MODE'),
+      false,
+    );
+  });
+
   it('accepts postgres:// (no -ql suffix) for database URL', () => {
     const issues = runValidator(happyEnv({
       PRISMA_DATABASE_URL: 'postgres://user@host/db',
@@ -101,6 +109,31 @@ describe('validateStartupEnvironment · happy path', () => {
       PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=xxx',
     }));
     assert.equal(issues.filter(i => i.key === 'PRISMA_DATABASE_URL').length, 0);
+  });
+});
+
+describe('validateStartupEnvironment · RBAC enforcement mode', () => {
+  it('accepts explicit shadow and enforce modes', () => {
+    for (const mode of ['shadow', 'enforce']) {
+      const issues = runValidator(happyEnv({ RBAC_ENFORCEMENT_MODE: mode }));
+      assert.equal(
+        issues.some((issue) => issue.key === 'RBAC_ENFORCEMENT_MODE'),
+        false,
+        `unexpected RBAC issue for ${mode}`,
+      );
+    }
+  });
+
+  it('treats an invalid production mode as a blocking boot failure', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RBAC_ENFORCEMENT_MODE: 'permissive',
+    }));
+    const issue = result.find((entry) => entry.key === 'RBAC_ENFORCEMENT_MODE');
+    assert.ok(issue);
+    assert.equal(issue.code, 'RBAC_ENFORCEMENT_MODE_INVALID');
+    assert.equal(issue.severity, 'BLOCKING');
+    assert.doesNotMatch(issue.message, /permissive/);
   });
 });
 

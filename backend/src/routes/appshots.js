@@ -37,6 +37,9 @@ const emailService = require('../services/email');
 const { extractIp, extractUa, reduceIp } = require('../utils/session-fingerprint');
 const { resolveGeoHint, classifyGeoHint } = require('../utils/geo-lookup');
 const emailPrefs = require('../services/email-preferences');
+const {
+  publishUserSessionsRevoked,
+} = require('../services/auth/user-session-revocation-events');
 
 const router = express.Router();
 
@@ -423,6 +426,10 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'not an appshots session' });
     }
     await prisma.session.delete({ where: { id } });
+    await publishUserSessionsRevoked({
+      userId: req.user.id,
+      reason: 'session_revoked',
+    });
     auditLog.audit({
       event: 'appshots_revoked',
       userId: req.user.id,

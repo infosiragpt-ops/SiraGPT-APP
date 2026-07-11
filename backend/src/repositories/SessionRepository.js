@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  runAuthUserTransaction,
+} = require('../services/auth/auth-user-lock');
+
 /**
  * SessionRepository — single-responsibility data access for the
  * `session` table. Owns every prisma.session.* call used by the auth
@@ -57,16 +61,34 @@ class SessionRepository {
   async create({ userId, token, expiresAt, fingerprint }) {
     const baseData = { userId, token, expiresAt };
     const dataWithFp = fingerprint != null ? { ...baseData, fingerprint } : baseData;
+    const supportsAuthTransaction = (
+      typeof this.prisma.$transaction === 'function'
+      && typeof this.prisma.$queryRawUnsafe === 'function'
+      && typeof this.prisma.user?.findUnique === 'function'
+    );
+    const createForActiveUser = (data) => {
+      if (!supportsAuthTransaction) {
+        // Narrow unit-test doubles and legacy repository consumers may expose
+        // only `session.create`. The production Prisma client always takes the
+        // serialized active-user transaction path above.
+        return this.prisma.session.create({ data });
+      }
+      return runAuthUserTransaction(
+        this.prisma,
+        userId,
+        (tx) => tx.session.create({ data }),
+      );
+    };
 
     return this.withRetry(async () => {
       try {
-        return await this.prisma.session.create({ data: dataWithFp });
+        return await createForActiveUser(dataWithFp);
       } catch (err) {
         if (fingerprint != null && SessionRepository._isFingerprintColumnMissing(err)) {
           this.logger.warn?.(
             '[session-repo] fingerprint column missing on create; retrying without it'
           );
-          return this.prisma.session.create({ data: baseData });
+          return createForActiveUser(baseData);
         }
         throw err;
       }
@@ -83,6 +105,18 @@ class SessionRepository {
     return this.withRetry(
       () => this.prisma.session.deleteMany({ where: { token } }),
       { label: 'session-repo.deleteByToken' }
+    );
+  }
+
+  /**
+   * Revoke the complete session family for a user. Authentication paths use
+   * this when an account is found soft-deleted so another still-valid token
+   * cannot keep the account active.
+   */
+  deleteAllForUser(userId) {
+    return this.withRetry(
+      () => this.prisma.session.deleteMany({ where: { userId } }),
+      { label: 'session-repo.deleteAllForUser' }
     );
   }
 

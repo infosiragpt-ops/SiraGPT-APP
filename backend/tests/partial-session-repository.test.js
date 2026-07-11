@@ -32,6 +32,45 @@ test('PartialSessionRepository.create: writes token/userId/expiresAt', async () 
   assert.deepEqual(prisma._calls.create[0], { data: { token: 'abc', userId: 'u1', expiresAt: exp } });
 });
 
+test('PartialSessionRepository.create: serializes active-user check and partial issuance', async () => {
+  const calls = [];
+  const tx = {
+    async $queryRawUnsafe(sql) {
+      calls.push(/pg_advisory_xact_lock/i.test(sql) ? 'lock' : 'timeout');
+      return [{ locked: true }];
+    },
+    user: {
+      async findUnique() {
+        calls.push('user.read');
+        return { id: 'u1', deletedAt: null };
+      },
+    },
+    partialSession: {
+      async create({ data }) {
+        calls.push('partial.create');
+        return { id: 'p1', ...data };
+      },
+    },
+  };
+  const prisma = {
+    user: { findUnique() {} },
+    partialSession: { create() {} },
+    async $queryRawUnsafe() {},
+    async $transaction(callback) {
+      const result = await callback(tx);
+      calls.push('transaction.commit');
+      return result;
+    },
+  };
+  const repo = new PartialSessionRepository({ prisma, withRetry: passthroughRetry });
+
+  await repo.create({ token: 'abc', userId: 'u1', expiresAt: new Date(0) });
+
+  assert.ok(calls.indexOf('lock') < calls.indexOf('user.read'));
+  assert.ok(calls.indexOf('user.read') < calls.indexOf('partial.create'));
+  assert.ok(calls.indexOf('partial.create') < calls.indexOf('transaction.commit'));
+});
+
 test('PartialSessionRepository.findByToken: forwards token in where', async () => {
   const prisma = makePrismaSpy();
   const repo = new PartialSessionRepository({ prisma, withRetry: passthroughRetry });

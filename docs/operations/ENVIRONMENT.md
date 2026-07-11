@@ -164,6 +164,24 @@ below the parent coordinator's 40-second minimum and 50-second default.
 | `SIRAGPT_REDACT_EXTRA_QUERY_KEYS` | Optional comma-separated query parameter names to redact from logs/traces in addition to the built-in deny list | (empty) |
 | `PLAN_QUOTAS_ENFORCED` | Enforce plan-based token quotas | `true` |
 
+### Authentication revocation and deletion races
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AUTH_USER_LOCK_TIMEOUT_MS` | Maximum PostgreSQL wait for the per-user transactional auth lock shared by session/challenge issuance and deletion; clamped to 25–5000 ms. | `500` |
+| `AUTH_REVOCATION_REDIS_CONNECT_TIMEOUT_MS` | Connect/subscribe deadline for the non-offline Redis revocation bridge; clamped to 10–2000 ms. | `500` |
+| `AUTH_REVOCATION_REDIS_COMMAND_TIMEOUT_MS` | Publish deadline for distributed user/session revocation; clamped to 10–2000 ms. | `500` |
+| `AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS` | Positive-result cache TTL for long-lived socket session checks; clamped to 100–30000 ms. | `5000` |
+| `AUTH_SOCKET_REVALIDATION_TIMEOUT_MS` | Database deadline for each socket session revalidation; clamped to 10–10000 ms. | `2000` |
+| `AUTH_SOCKET_REVALIDATION_CACHE_MAX` | Maximum positive socket-validation cache entries; clamped to 10–20000. | `2000` |
+
+The revocation bridge subscribes before the HTTP listener binds and uses Redis
+only to shorten revocation latency across replicas. It disables offline
+command queues and degrades to local events plus periodic persisted-session
+validation when Redis is absent or unavailable. Realtime and computer-use
+sockets revalidate immediately after indexing and on their heartbeat, so a
+handshake race or missed pub/sub message cannot preserve access indefinitely.
+
 ## 📊 Observability
 
 | Variable | Description | Default |
@@ -308,8 +326,27 @@ for super-admin owners.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `RBAC_CACHE_TTL_MS` | TTL (ms) for the in-memory `requirePermission()` permission cache. Lower = fresher, higher = cheaper. | `60000` |
-| `RBAC_SHADOW_MODE` | When `true`, `requirePermission()` allows `req.user.isSuperAdmin` to bypass the declarative check (and logs `kind: 'rbac.shadow.diff'`). Flip to `false` in F5 PR23 sunset once logs show zero diffs for ≥ 7 days. | `true` |
+| `RBAC_CACHE_TTL_MS` | TTL (ms) for the `requirePermission()` cache. Enforce mode caps the non-Redis fallback at 5 seconds; every hit also verifies the durable permission version. | `60000` |
+| `RBAC_ENFORCEMENT_MODE` | Explicit rollout mode: `shadow` permits the route-specific legacy admin predicate while logging RBAC differences; `enforce` requires a declarative global grant. Invalid values block production startup. | `enforce` in production; `shadow` otherwise |
+| `RBAC_MUTATION_LOCK_TIMEOUT_MS` | Maximum PostgreSQL wait for the single cluster-wide transactional RBAC mutation lock (clamped to 25–5000 ms). Contention beyond this bound returns retryable HTTP 503 instead of waiting indefinitely. | `500` |
+| `RBAC_REDIS_CONNECT_TIMEOUT_MS` | Bounded Redis socket-connect timeout for RBAC invalidation clients (clamped to 50–2000 ms). Offline queues are disabled. | `500` |
+| `RBAC_REDIS_STARTUP_TIMEOUT_MS` | Maximum wait for RBAC Redis connect/subscribe during startup (clamped to 10–2000 ms). Failure degrades to a 5-second local cache and never blocks server boot. | `500` |
+| `RBAC_REDIS_COMMAND_TIMEOUT_MS` | Maximum wait for Redis invalidation publication (clamped to 10–2000 ms). Timeout degrades to local invalidation so RBAC mutations cannot hang. | `500` |
+
+Startup seeds the canonical roles, permissions, mappings, legacy/global, and
+organization assignments idempotently. In `enforce`, the server binds no port
+unless every legacy admin has the expected global assignment and `SUPERADMIN`
+owns every system permission. `/health` and `/health/ready` expose only the
+value-free RBAC state/error code. RBAC mutations atomically increment a
+`SystemSettings` permission-version row; cache entries must match that durable
+version as well as their in-process generation before reuse.
+
+All RBAC writers share one stable PostgreSQL transaction-level advisory lock
+key (`RBAC_MUTATION_LOCK_KEY` in `rbac-system-assignments.js`). Bootstrap,
+dual-write, cleanup, lifecycle deletion, and control-plane grants/revocations
+acquire it before rereading user and membership state. Bootstrap performs one
+lock acquisition, set-based reconciliation, readiness verification, and marker
+write in that order within one transaction.
 
 ## 🖼️ Image / 🎬 Video providers (F4)
 

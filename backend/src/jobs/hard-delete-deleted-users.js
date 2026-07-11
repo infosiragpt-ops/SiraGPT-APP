@@ -21,6 +21,10 @@
 
 'use strict';
 
+const {
+  SYSTEM_ASSIGNMENT_TAG_PREFIX,
+} = require('../services/rbac-system-assignments');
+
 // Resilient to a non-numeric env (e.g. "30d", "thirty", ""): Number("abc") is
 // NaN, which would propagate into the cutoff date and make the purge filter
 // invalid. Fall back to 30 days whenever the env isn't a finite, non-negative
@@ -36,6 +40,8 @@ const DEFAULT_GRACE_DAYS = (() => {
 async function run(opts = {}) {
   const logger = opts.logger || console;
   const prisma = opts.prisma || require('../config/database');
+  const hardDeleteUser = opts.hardDeleteUser
+    || require('../services/rbac-assignment-sync').hardDeleteUser;
   // A negative grace would push the cutoff into the future and purge
   // recently-deleted users — reject it along with non-finite values.
   const graceDays = Number.isFinite(opts.graceDays) && opts.graceDays >= 0
@@ -60,7 +66,10 @@ async function run(opts = {}) {
   // Find candidate user ids first so we can audit-log them before the
   // delete. Limit to ids only — the rest of the row is going away.
   const candidates = await prisma.user.findMany({
-    where: { deletedAt: { lt: cutoff, not: null } },
+    where: {
+      deletedAt: { lt: cutoff, not: null },
+      NOT: { id: { startsWith: SYSTEM_ASSIGNMENT_TAG_PREFIX } },
+    },
     select: { id: true, email: true, deletedAt: true },
   });
 
@@ -96,7 +105,7 @@ async function run(opts = {}) {
           metadata: { email: c.email, deletedAt: c.deletedAt },
         });
       }
-      await prisma.user.delete({ where: { id: c.id } });
+      await hardDeleteUser({ userId: c.id, actorId: null });
       deleted += 1;
     } catch (err) {
       logger.error(`[hard-delete] purge failed id=${c.id}: ${err?.message || err}`);

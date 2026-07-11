@@ -51,15 +51,17 @@ test('aggregateUserStats computes counts + MRR proxy', async () => {
   const prisma = {
     user: {
       count: async ({ where }) => {
-        if (where.createdAt) return 12;
-        if (where.deletedAt) return 3;
-        if (where.updatedAt) return 50;
+        const metricWhere = where.AND?.[0] || where;
+        if (metricWhere.createdAt) return 12;
+        if (metricWhere.deletedAt) return 3;
+        if (metricWhere.updatedAt) return 50;
         return 0;
       },
       groupBy: async ({ where }) => {
         groupByCalls += 1;
+        const metricWhere = where.AND?.[0] || where;
         // Active-subscriptions call uses subscriptionStatus filter
-        if (where.subscriptionStatus === 'active') {
+        if (metricWhere.subscriptionStatus === 'active') {
           return [
             { plan: 'PRO', _count: { plan: 4 } },
             { plan: 'PRO_MAX', _count: { plan: 2 } },
@@ -110,7 +112,8 @@ test('aggregateUserStats fills empty plans with zero counts', async () => {
     user: {
       count: async () => 0,
       groupBy: async ({ where }) => {
-        if (where.subscriptionStatus === 'active') return [];
+        const metricWhere = where.AND?.[0] || where;
+        if (metricWhere.subscriptionStatus === 'active') return [];
         // only FREE has users → PRO/PRO_MAX/ENTERPRISE must default to 0
         return [{ plan: 'FREE', _count: { plan: 5 } }];
       },
@@ -123,6 +126,36 @@ test('aggregateUserStats fills empty plans with zero counts', async () => {
   });
   assert.equal(stats.signupTrend.length, 7);
   assert.ok(stats.signupTrend.every((r) => r.count === 0));
+});
+
+test('aggregateUserStats excludes RBAC system principals from every user metric query', async () => {
+  const calls = [];
+  const prisma = {
+    user: {
+      async count(args) {
+        calls.push(args);
+        return 0;
+      },
+      async groupBy(args) {
+        calls.push(args);
+        return [];
+      },
+      async findMany(args) {
+        calls.push(args);
+        return [];
+      },
+    },
+  };
+
+  await aggregateUserStats(prisma, {
+    from: '2026-07-01T00:00:00.000Z',
+    to: '2026-07-11T00:00:00.000Z',
+  });
+
+  assert.ok(calls.length > 0);
+  for (const call of calls) {
+    assert.match(JSON.stringify(call.where), /rbac-system:v/);
+  }
 });
 
 // ── usage stats ────────────────────────────────────────────────────────────

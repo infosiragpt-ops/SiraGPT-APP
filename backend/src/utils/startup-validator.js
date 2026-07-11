@@ -211,6 +211,22 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   checkEntropy('JWT_SECRET', env.JWT_SECRET, 'JWT Secret');
   checkEntropy('SESSION_SECRET', env.SESSION_SECRET, 'Session Secret');
 
+  // ─── RBAC rollout mode ─────────────────────────────────
+  // Production defaults to enforce when omitted. An explicit value must use
+  // the two-state contract; never echo the supplied value into diagnostics.
+  if (
+    env.RBAC_ENFORCEMENT_MODE != null
+    && !['shadow', 'enforce'].includes(String(env.RBAC_ENFORCEMENT_MODE).trim().toLowerCase())
+  ) {
+    issues.push({
+      key: 'RBAC_ENFORCEMENT_MODE',
+      code: 'RBAC_ENFORCEMENT_MODE_INVALID',
+      label: 'RBAC enforcement mode',
+      severity: env.NODE_ENV === 'production' ? Severity.BLOCKING : Severity.WARNING,
+      message: 'RBAC_ENFORCEMENT_MODE must be either shadow or enforce.',
+    });
+  }
+
   // ─── Database URL ──────────────────────────────────────
   let databaseUrl = null;
   let databaseUrlConflict = false;

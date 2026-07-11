@@ -417,6 +417,10 @@ const {
     closeComputerUseWebSocketServer,
 } = require('./src/routes/computer-use');
 const { initRealtimeServer, closeRealtimeServer } = require('./src/services/realtime/socket-server');
+const {
+    closeUserSessionRevocationBus,
+    initializeUserSessionRevocationBus,
+} = require('./src/services/auth/user-session-revocation-events');
 const thesisRoutes = require('./src/routes/thesis');
 const thesisEngineRoutes = require('./src/routes/thesis-engine');
 const voiceGrokRoutes = require('./src/routes/voice-grok');
@@ -991,6 +995,20 @@ const {
     defaultQueueHealthProbe,
     defaultQueueRegistry,
 } = require('./src/services/queues/queue-registry');
+const { createRbacBootstrapService } = require('./src/services/rbac-bootstrap');
+const {
+    closePermissionsCache,
+    initializePermissionsCache,
+    invalidatePermissionsCache,
+} = require('./src/middleware/require-permission');
+const { writeAuditLog: writeRbacAuditLog } = require('./src/utils/audit-log');
+const rbacBootstrap = createRbacBootstrapService({
+    prisma,
+    env: process.env,
+    invalidatePermissionsCache,
+    writeAuditLog: writeRbacAuditLog,
+    logger,
+});
 const healthRoutes = createHealthRoutes({
     prisma,
     queueRegistry: defaultQueueRegistry,
@@ -1002,6 +1020,7 @@ const healthRoutes = createHealthRoutes({
     getPostHogStatus,
     poolMetrics: prisma.poolMetrics,
     getPoolAutoscalerState,
+    getRbacBootstrapStatus: rbacBootstrap.getStatus,
     startupEnv: startupEnvResult,
 });
 healthRoutes.register(app);
@@ -1307,6 +1326,24 @@ async function startServer() {
     // and connectDatabase still process.exit(1)s if all retries are exhausted).
     await prisma.connectDatabase();
 
+    // Distributed permission-cache invalidation must be subscribed before any
+    // authorization decision can be served. Enforce mode automatically keeps
+    // caching disabled when Redis is unavailable.
+    await initializePermissionsCache();
+
+    // Subscribe before accepting WebSocket or HTTP traffic so deletion/logout
+    // events from another replica can close this replica's indexed sockets.
+    // Initialization is bounded and fail-open to periodic DB revalidation.
+    await initializeUserSessionRevocationBus({
+        env: process.env,
+        logger,
+    });
+
+    // Seed and verify the runtime RBAC catalog before accepting traffic.
+    // Enforce mode rejects startup on any legacy-admin or permission gap;
+    // shadow mode remains observable through the health endpoints.
+    await rbacBootstrap.bootstrap();
+
     // Forensic trail: now that the DB is up, audit every agent-tool
     // permission decision (allow / deny / always-allow / timeout). Non-fatal.
     try {
@@ -1493,6 +1530,17 @@ async function startServer() {
         logger,
         executionOrder: shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER,
     });
+
+    shutdownRegistry.register(
+        'rbac_permission_cache_close',
+        () => closePermissionsCache(),
+        5000,
+    );
+    shutdownRegistry.register(
+        'auth_revocation_bus_close',
+        () => closeUserSessionRevocationBus(),
+        5000,
+    );
 
     shutdownRegistry.register('database_pool_autoscaler_stop', () => {
         poolAutoscaler?.stop();

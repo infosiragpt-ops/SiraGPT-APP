@@ -1,5 +1,6 @@
 const express = require('express');
-const { authenticateToken, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const { body, validationResult } = require('express-validator');
@@ -25,6 +26,21 @@ const {
 const {
   defaultQueueHealthProbe,
 } = require('../services/queues/queue-registry');
+const {
+  createRbacAssignmentSyncService,
+} = require('../services/rbac-assignment-sync');
+const {
+  createLegacyAdminUser,
+  hardDeleteUser,
+  updateLegacyAdminUser,
+} = createRbacAssignmentSyncService({ prisma });
+const {
+  excludeRbacSystemPrincipalsWhere,
+  isRbacSystemPrincipalId,
+} = require('../services/rbac-system-assignments');
+const {
+  sendRbacMutationBusyResponse,
+} = require('../services/rbac-mutation-http');
 
 // Mirror of the Prisma `Plan` enum — validated at the route boundary so an
 // unknown plan string surfaces a clean 400 instead of a Prisma enum 500.
@@ -67,8 +83,32 @@ function sendStripeError(res, req, error, operation) {
   return res.status(response.statusCode).json(response.body);
 }
 
-// Apply admin middleware to all routes
-router.use(authenticateToken, requireAdmin);
+function sendRbacLifecycleError(res, error) {
+  if (sendRbacMutationBusyResponse(res, error)) return true;
+  if (error?.code === 'rbac_assignment_target_inactive') {
+    res.status(409).json({
+      error: 'RBAC assignment target is inactive',
+      code: error.code,
+    });
+    return true;
+  }
+  return false;
+}
+
+// Every method+path below must exist in ADMIN_ROUTE_POLICIES. The policy
+// middleware fails closed for an unmapped route before its handler can run.
+router.use(authenticateToken);
+router.use('/users/:id', (req, res, next) => {
+  if (!isRbacSystemPrincipalId(req.params.id)) return next();
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  return res.status(409).json({
+    error: 'RBAC system principal is protected',
+    code: 'rbac_system_principal_protected',
+  });
+});
+router.use(requireAdminRoutePermission);
 
 
 router.get('/providers', async (req, res) => {
@@ -452,7 +492,7 @@ router.get('/users', async (req, res) => {
     const { search = '', plan = '' } = req.query;
     const skip = (page - 1) * limit;
 
-    const where = {
+    const where = excludeRbacSystemPrincipalsWhere({
       AND: [
         search ? {
           OR: [
@@ -466,7 +506,7 @@ router.get('/users', async (req, res) => {
         // Soft-deleted accounts must not resurface in the panel list
         { deletedAt: null }
       ]
-    };
+    });
 
     const [users, total] = await Promise.all([
       prisma.user.findMany({
@@ -518,7 +558,12 @@ router.get('/analytics', async (req, res) => {
       totalPayments,
       totalApiUsage
     ] = await Promise.all([
-      prisma.user.count({ where: { isSuperAdmin: false } }), // Exclude super admins
+      prisma.user.count({
+        where: excludeRbacSystemPrincipalsWhere({
+          isSuperAdmin: false,
+          deletedAt: null,
+        }),
+      }), // Exclude super admins and internal principals
       prisma.chat.count(),
       prisma.message.count(),
       prisma.payment.count(),
@@ -528,10 +573,11 @@ router.get('/analytics', async (req, res) => {
     // Get active users (last 7 days) - exclude super admins
     const lastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const activeUsers = await prisma.user.count({
-      where: {
+      where: excludeRbacSystemPrincipalsWhere({
         updatedAt: { gte: lastWeek },
-        isSuperAdmin: false
-      }
+        isSuperAdmin: false,
+        deletedAt: null,
+      }),
     });
 
     // Get revenue
@@ -543,7 +589,10 @@ router.get('/analytics', async (req, res) => {
     // Get users by plan - exclude super admins
     const usersByPlan = await prisma.user.groupBy({
       by: ['plan'],
-      where: { isSuperAdmin: false },
+      where: excludeRbacSystemPrincipalsWhere({
+        isSuperAdmin: false,
+        deletedAt: null,
+      }),
       _count: { plan: true }
     });
 
@@ -690,8 +739,8 @@ router.put(
         }
       }
 
-      const user = await prisma.user.update({
-        where: { id: req.params.id },
+      const user = await updateLegacyAdminUser({
+        userId: req.params.id,
         data: updateData,
         select: {
           id: true,
@@ -703,13 +752,15 @@ router.put(
           monthlyLimit: true,
           createdAt: true,
           updatedAt: true
-        }
+        },
+        actorId: req.user.id,
       })
 
       const serializedUser = serializeUser(user);
       res.json({ user: serializedUser })
     } catch (error) {
       console.error('Update user error:', error)
+      if (sendRbacLifecycleError(res, error)) return;
       // Prisma-specific unique constraint error handling (optional)
       if (error && error.code === 'P2002') {
         return res.status(400).json({ error: 'Email already exists' })
@@ -742,8 +793,9 @@ router.delete('/users/:id', async (req, res) => {
       preDeleteSessions = [];
     }
 
-    await prisma.user.delete({
-      where: { id: req.params.id }
+    await hardDeleteUser({
+      userId: req.params.id,
+      actorId: req.user.id,
     });
 
     // Emit one audit row per revoked session. actorId points at the
@@ -777,6 +829,7 @@ router.delete('/users/:id', async (req, res) => {
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);
+    if (sendRbacLifecycleError(res, error)) return;
     if (error.code === 'P2025') {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -808,7 +861,7 @@ router.post(
 
       const hashed = await bcrypt.hash(password, 12);
 
-      const user = await prisma.user.create({
+      const user = await createLegacyAdminUser({
         data: {
           name,
           email,
@@ -831,12 +884,14 @@ router.post(
           monthlyLimit: true,
           createdAt: true,
           updatedAt: true
-        }
+        },
+        actorId: req.user.id,
       });
 
       return res.status(201).json({ user });
     } catch (err) {
       console.error('Admin create user error:', err);
+      if (sendRbacLifecycleError(res, err)) return;
       return res.status(500).json({ error: 'Failed to create user' });
     }
   }
@@ -864,7 +919,9 @@ router.get('/stats', async (req, res) => {
       emailVerifiedUsers,
       storageTotalSize,
     ] = await Promise.all([
-      prisma.user.count(),
+      prisma.user.count({
+        where: excludeRbacSystemPrincipalsWhere({ deletedAt: null }),
+      }),
       prisma.chat.count(),
       prisma.message.count(),
       prisma.file.count(),
@@ -2035,7 +2092,7 @@ router.get('/users/idle', requireSuperAdmin, async (_req, res) => {
 // callers must present a super-admin token.
 //
 // We deliberately do not put this on the `adminRoutes` router (which
-// applies `authenticateToken, requireAdmin` to everything) — a local
+// applies authentication plus declarative route policy to everything) — a local
 // scraper has no token to present.
 const _siraMetrics = require('../utils/metrics');
 let _analyzerCachePrev = { hits: 0, misses: 0 };
@@ -2051,7 +2108,7 @@ function _isLocalhost(req) {
 async function metricsHandler(req, res) {
   // Auth gate: localhost OR super-admin via existing middleware chain.
   if (!_isLocalhost(req)) {
-    // Replay the auth+admin chain manually so the gate is the same as
+    // Replay the auth+super-admin chain manually so the gate is the same as
     // /api/admin/health/services. Each middleware short-circuits with
     // its own res.status() on failure.
     const _runChain = (mws) => new Promise((resolve, reject) => {
@@ -2066,7 +2123,7 @@ async function metricsHandler(req, res) {
       step();
     });
     try {
-      const ok = await _runChain([authenticateToken, requireAdmin, requireSuperAdmin]);
+      const ok = await _runChain([authenticateToken, requireSuperAdmin]);
       if (!ok || res.headersSent) return;
     } catch (err) {
       if (!res.headersSent) {
@@ -2223,7 +2280,7 @@ router.get('/users/search', requireSuperAdmin, async (req, res) => {
     if (!q) return res.json({ users: [], q, limit });
 
     const users = await prisma.user.findMany({
-      where: {
+      where: excludeRbacSystemPrincipalsWhere({
         AND: [
           { isSuperAdmin: false },
           {
@@ -2233,7 +2290,7 @@ router.get('/users/search', requireSuperAdmin, async (req, res) => {
             ],
           },
         ],
-      },
+      }),
       select: {
         id: true, email: true, name: true, plan: true, isAdmin: true,
         createdAt: true, deletedAt: true, subscriptionStatus: true,

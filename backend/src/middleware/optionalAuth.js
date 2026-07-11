@@ -1,31 +1,42 @@
-const jwt = require('jsonwebtoken');
 const prisma = require('../config/database');
+const { validateActiveSession } = require('../services/active-session-validator');
 
-async function optionalAuth(req, res, next) {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = (authHeader && authHeader.split(' ')[1]) || req.cookies?.token;
-    if (!token) return next();
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    const session = await prisma.session.findUnique({
-      where: { token },
-      include: { user: true }
-    });
-
-    if (!session || session.expiresAt < new Date()) {
-      if (session) await prisma.session.delete({ where: { id: session.id } });
-      return next(); // Treat as anonymous silently
-    }
-
-    req.user = session.user;
-    req.token = token;
-    return next();
-  } catch {
-    // Ignore errors; proceed as anonymous
-    return next();
-  }
+function extractToken(req) {
+  const authHeader = req?.headers?.authorization;
+  const match = typeof authHeader === 'string'
+    ? authHeader.match(/^\s*Bearer\s+([^\s]+)\s*$/i)
+    : null;
+  return match?.[1] || req?.cookies?.token || null;
 }
 
-module.exports = { optionalAuth };
+function createOptionalAuth({
+  prismaClient = prisma,
+  jwtSecret = process.env.JWT_SECRET,
+  validateSession = validateActiveSession,
+} = {}) {
+  return async function optionalAuthMiddleware(req, _res, next) {
+    try {
+      const token = extractToken(req);
+      if (!token) return next();
+
+      const validated = await validateSession({
+        token,
+        request: req,
+        prismaClient,
+        jwtSecret,
+      });
+      req.user = validated.user;
+      req.token = token;
+      req.userSession = validated.session;
+      return next();
+    } catch {
+      // Optional authentication deliberately degrades to anonymous, but the
+      // centralized validator still revokes expired/compromised/inactive rows.
+      return next();
+    }
+  };
+}
+
+const optionalAuth = createOptionalAuth();
+
+module.exports = { optionalAuth, createOptionalAuth, extractToken };

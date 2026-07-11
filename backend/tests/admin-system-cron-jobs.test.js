@@ -16,6 +16,7 @@ const express = require('express');
 const request = require('supertest');
 
 const { mockResolvedModule } = require('./http-test-utils');
+const prisma = require('../src/config/database');
 
 // Stub the auth middleware module BEFORE admin routes load it. We need
 // per-request overrides so each test can flip `isSuperAdmin` — wire that
@@ -59,8 +60,17 @@ function buildApp(userOverrides = {}) {
 
 describe('GET /api/admin/system-cron/jobs', () => {
   let restoreCron;
+  let restoreUserRoles;
 
   before(() => {
+    const originalFindMany = prisma.userRole.findMany;
+    prisma.userRole.findMany = async () => [{
+      role: {
+        permissions: [{ permission: { code: 'admin.system.read' } }],
+      },
+    }];
+    restoreUserRoles = () => { prisma.userRole.findMany = originalFindMany; };
+
     // Stub system-cron via require.cache before admin routes load it
     // lazily inside the handler.
     const cronPath = require.resolve('../src/jobs/system-cron');
@@ -99,6 +109,7 @@ describe('GET /api/admin/system-cron/jobs', () => {
 
   after(() => {
     if (typeof restoreCron === 'function') restoreCron();
+    if (typeof restoreUserRoles === 'function') restoreUserRoles();
     if (typeof restoreAuth === 'function') restoreAuth();
   });
 

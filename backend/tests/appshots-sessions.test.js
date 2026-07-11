@@ -26,6 +26,9 @@ const prisma = require('../src/config/database');
 const { buildRouteTestApp, installAuthSessionMock } = require('./http-test-utils');
 const appshotsRouter = require('../src/routes/appshots');
 const { authenticateToken } = require('../src/middleware/auth');
+const {
+  onUserSessionsRevoked,
+} = require('../src/services/auth/user-session-revocation-events');
 
 function makeAppshotsToken(userId) {
   return jwt.sign(
@@ -661,7 +664,10 @@ describe('DELETE /api/appshots/sessions/:id', () => {
     };
   });
 
-  it('revokes own appshots session', async () => {
+  it('revokes own appshots session and publishes the revocation', async (t) => {
+    const events = [];
+    const unsubscribe = onUserSessionsRevoked((event) => events.push(event));
+    t.after(unsubscribe);
     const app = buildRouteTestApp('/api/appshots', appshotsRouter);
     const res = await request(app)
       .delete('/api/appshots/sessions/sess-appshots-1')
@@ -671,6 +677,10 @@ describe('DELETE /api/appshots/sessions/:id', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.ok, true);
     assert.ok(!remaining.includes('sess-appshots-1'));
+    assert.deepEqual(events, [{
+      userId: 'task8-user',
+      reason: 'session_revoked',
+    }]);
   });
 
   it('refuses to revoke a session that belongs to someone else (404)', async () => {

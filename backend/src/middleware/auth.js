@@ -4,6 +4,7 @@ const { computeFingerprint, compareFingerprints } = require('../utils/session-fi
 const { writeAuditLog } = require('../utils/audit-log');
 const { createQueryDedup } = require('../utils/query-dedup');
 const { createWriteBehindCache } = require('../services/write-behind-cache');
+const { validateActiveSession } = require('../services/active-session-validator');
 const { getRequestId } = require('./request-id');
 const apiKeysService = require('../services/api-keys-service');
 // Lazy require to keep the auth module's import graph cheap for tests that
@@ -141,6 +142,20 @@ function extractRawTokenForLogging(req) {
 // fires several concurrent authenticated calls.
 const sessionDedup = createQueryDedup({ ttlMs: 50, maxEntries: 5000 });
 
+async function revokeInactiveUserSessions(userId) {
+  if (!userId || typeof prisma?.session?.deleteMany !== 'function') return;
+  try {
+    await prisma.session.deleteMany({ where: { userId } });
+  } catch (_) {
+    // Authentication still fails closed when cleanup is temporarily
+    // unavailable. A later request/deletion sweep can retry the revocation.
+  } finally {
+    // Do not let the 50ms coalescing window repopulate auth from a session
+    // result obtained immediately before the account tombstone was observed.
+    sessionDedup.clear();
+  }
+}
+
 // Write-behind queue for high-cardinality writes that fire on every
 // authenticated request (lastActiveAt). Singleton — wired once per
 // process. Disabled via WRITE_BEHIND_DISABLED for emergency rollback.
@@ -224,6 +239,11 @@ async function tryAuthenticateApiKey(req, res, rawToken) {
     if (!row.user) {
       // Owner was deleted — defence in depth; FK cascade should make this rare.
       sendAuthError(req, res, 401, 'invalid_api_key', 'Invalid API key');
+      return true;
+    }
+    if (row.user.deletedAt != null) {
+      await revokeInactiveUserSessions(row.user.id);
+      sendAuthError(req, res, 401, 'account_inactive', 'Invalid credentials');
       return true;
     }
 
@@ -318,6 +338,31 @@ const authenticateToken = async (req, res, next) => {
 
     if (!session) {
       return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    if (!session.user || session.user.deletedAt != null) {
+      if (session.user?.id || session.userId) {
+        await revokeInactiveUserSessions(session.user?.id || session.userId);
+      } else {
+        try {
+          await prisma.session.deleteMany({ where: { token } });
+        } catch (_) { /* best-effort orphan cleanup */ }
+        sessionDedup.clear();
+      }
+      void writeAuditLog(prisma, {
+        req,
+        action: 'session_revoked_inactive_user',
+        resource: 'session',
+        resourceId: session.id,
+        userId: session.userId || session.user?.id || null,
+        metadata: { revoked: true },
+      });
+      return sendAuthError(
+        req,
+        res,
+        401,
+        'account_inactive',
+        'Invalid or expired token',
+      );
     }
     if (session.expiresAt < new Date()) {
       // Best-effort: clean up the expired row and emit an audit event
@@ -486,29 +531,23 @@ const optionalAuth = async (req, res, next) => {
       return next();
     }
 
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-      return next();
-    }
-    if (decoded && typeof decoded === 'object' && decoded.scope) {
+    const validated = await validateActiveSession({
+      token,
+      request: req,
+      prismaClient: prisma,
+    });
+    if (validated.decoded && typeof validated.decoded === 'object' && validated.decoded.scope) {
       // Scoped tokens (e.g. Appshots) must NOT silently elevate a
       // generic optional-auth route — drop to anonymous instead.
       return next();
     }
 
-    const session = await prisma.session.findUnique({
-      where: { token },
-      include: { user: true },
-    }).catch(() => null);
-    if (session && session.expiresAt > new Date() && session.user) {
-      req.user = session.user;
-      req.token = token;
-      req.userSession = session;
-    }
+    req.user = validated.user;
+    req.token = token;
+    req.userSession = validated.session;
     return next();
   } catch {
+    sessionDedup.clear();
     return next();
   }
 };

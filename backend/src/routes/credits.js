@@ -28,6 +28,7 @@
 const express = require('express');
 const { z } = require('zod');
 const { authenticateToken } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const prisma = require('../config/database');
 const {
   completeLedgerTransaction,
@@ -43,6 +44,7 @@ const { sha256Hex } = require('../utils/canonical-json');
 
 const meRouter = express.Router();
 const adminRouter = express.Router();
+adminRouter.use(authenticateToken, requireAdminRoutePermission);
 
 const CreditAmountSchema = z.union([
   z.number().int().positive().max(1_000_000_000),
@@ -310,7 +312,7 @@ meRouter.post('/spend', authenticateToken, async (req, res, next) => {
 });
 
 // ── Admin routes ───────────────────────────────────────────────────
-adminRouter.post('/grant', authenticateToken, async (req, res, next) => {
+adminRouter.post('/grant', async (req, res, next) => {
   try {
     if (!requireSuperAdmin(req, res)) return;
     const parse = GrantSchema.safeParse(req.body);
@@ -343,7 +345,7 @@ adminRouter.post('/grant', authenticateToken, async (req, res, next) => {
   }
 });
 
-adminRouter.post('/refund', authenticateToken, async (req, res, next) => {
+adminRouter.post('/refund', async (req, res, next) => {
   try {
     if (!requireSuperAdmin(req, res)) return;
     const parse = RefundSchema.safeParse(req.body);
@@ -405,7 +407,7 @@ adminRouter.post('/refund', authenticateToken, async (req, res, next) => {
   }
 });
 
-adminRouter.get('/users/:userId', authenticateToken, async (req, res, next) => {
+adminRouter.get('/users/:userId', async (req, res, next) => {
   try {
     if (!requireSuperAdmin(req, res)) return;
     const row = await getCreditRow(req.params.userId);

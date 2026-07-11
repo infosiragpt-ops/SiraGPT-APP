@@ -14,16 +14,58 @@ const { SsoCallbackService } = require('../services/SsoCallbackService');
 const { RegistrationService } = require('../services/RegistrationService');
 const { LoginService } = require('../services/LoginService');
 const { SessionService } = require('../services/SessionService');
+const {
+  createRbacAssignmentSyncService,
+} = require('../services/rbac-assignment-sync');
+const {
+  sendRbacMutationBusyResponse,
+} = require('../services/rbac-mutation-http');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
 // Accelerate retry, token envelope crypto, fire-and-forget audit
 // writes) live inside them so handlers stay focused on policy.
 const sessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
-const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
+const rbacAssignments = createRbacAssignmentSyncService({ prisma });
+const users = new UserRepository({
+  prisma,
+  withRetry: withAccelerateRetry,
+  rbacAssignments,
+});
 const partialSessions = new PartialSessionRepository({ prisma, withRetry: withAccelerateRetry });
 const auditLogs = new AuditLogRepository({ prisma, withRetry: withAccelerateRetry });
 const tokenVault = new TokenVault({ encrypt: encryptToken, decrypt: decryptToken });
+const {
+  publishUserSessionsRevoked,
+} = require('../services/auth/user-session-revocation-events');
+
+async function revokeInactiveAuthenticationState(userId) {
+  if (!userId) return;
+  const tasks = [];
+  if (typeof sessions.deleteAllForUser === 'function') {
+    tasks.push(sessions.deleteAllForUser(userId));
+  } else if (typeof prisma.session?.deleteMany === 'function') {
+    tasks.push(prisma.session.deleteMany({ where: { userId } }));
+  }
+  if (
+    typeof partialSessions.deleteMany === 'function'
+    && typeof prisma.partialSession?.deleteMany === 'function'
+  ) {
+    tasks.push(partialSessions.deleteMany({ userId }));
+  }
+  if (typeof prisma.twoFAChallenge?.deleteMany === 'function') {
+    tasks.push(prisma.twoFAChallenge.deleteMany({ where: { userId } }));
+  }
+  await Promise.all(tasks);
+  await publishUserSessionsRevoked({ userId, reason: 'account_inactive' });
+}
+
+function inactiveAccountResponse(res) {
+  return res.status(403).json({
+    error: 'Account is inactive',
+    code: 'account_inactive',
+  });
+}
 // RegistrationService is wired here even though `resolveOrgBySsoDomain`
 // and `signSessionToken` are declared further down: both are hoisted
 // (async function declaration + module-level import respectively) so
@@ -568,6 +610,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     });
   } catch (error) {
     console.error('Registration error:', error);
+    if (sendRbacMutationBusyResponse(res, error)) return;
     res.status(500).json({ error: 'Registration failed' });
   }
 });
@@ -1066,6 +1109,10 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
     }
 
     await sessions.deleteById(id);
+    await publishUserSessionsRevoked({
+      userId: req.user.id,
+      reason: 'session_revoked',
+    });
     void writeAuditLog(prisma, {
       req,
       action: 'session_revoked',
@@ -1092,6 +1139,12 @@ router.post('/sessions/revoke-all', authenticateToken, async (req, res) => {
   try {
     const result = await sessions.deleteAllForUserExceptToken(req.user.id, req.token);
     const count = (result && typeof result.count === 'number') ? result.count : 0;
+    if (count > 0) {
+      await publishUserSessionsRevoked({
+        userId: req.user.id,
+        reason: 'sessions_revoked',
+      });
+    }
 
     void writeAuditLog(prisma, {
       req,
@@ -1204,6 +1257,10 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
     oidcHandler: deps.oidcHandler || require('../services/oidc-handler'),
     resolveOrg: deps.resolveOrgForSso || resolveOrgForSso,
     signSessionToken,
+    // Injected narrow Prisma adapters used by callback contract tests do not
+    // expose the RBAC transaction surface. Production (no override) always
+    // receives the strict lifecycle service.
+    rbacAssignments: deps.rbacAssignments || (deps.prisma ? null : rbacAssignments),
   });
   return svc.handle(req, res);
 }
@@ -1515,7 +1572,10 @@ router.post(
       // fails — opaque expiresAt + opaque challengeId — so an
       // attacker can't enumerate "is this email registered?" by
       // poking the endpoint. We DO NOT mint a row in that case.
-      if (!user || !user.phone || !twoFASms.isValidPhone(user.phone)) {
+      if (user?.deletedAt != null) {
+        await revokeInactiveAuthenticationState(user.id);
+      }
+      if (!user || user.deletedAt != null || !user.phone || !twoFASms.isValidPhone(user.phone)) {
         // Audit the miss without leaking which contact field tripped.
         void writeAuditLog(prisma, {
           req,
@@ -1564,6 +1624,16 @@ router.post(
       }
       return res.json(body);
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        if (error.userId) await revokeInactiveAuthenticationState(error.userId);
+        return res.json({
+          ok: true,
+          challengeId: twoFASms.mintChallengeId(),
+          expiresAt: new Date(Date.now() + twoFASms.ttlMs()).toISOString(),
+          smsSent: false,
+          smsSkippedReason: 'unknown-contact',
+        });
+      }
       if (error?.code === 'invalid_phone' || error?.code === 'unknown_contact') {
         return res.status(400).json({ error: 'invalid contact for 2FA' });
       }
@@ -1628,6 +1698,10 @@ router.post(
         // The row's user disappeared between challenge mint and verify.
         return res.status(404).json({ error: 'User no longer exists' });
       }
+      if (user.deletedAt != null) {
+        await revokeInactiveAuthenticationState(user.id);
+        return inactiveAccountResponse(res);
+      }
 
       const token = signSessionToken({
         userId: user.id,
@@ -1660,6 +1734,10 @@ router.post(
         csrfToken,
       });
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        if (error.userId) await revokeInactiveAuthenticationState(error.userId);
+        return inactiveAccountResponse(res);
+      }
       console.error('[auth/2fa/sms/verify] failed:', error?.message || error);
       return res.status(500).json({ error: 'Failed to verify 2FA challenge' });
     }
@@ -1675,6 +1753,15 @@ router.post(
 const PARTIAL_SESSION_TTL_MS = 5 * 60 * 1000;
 
 async function mintPartialSession(userId) {
+  const user = await users.findById(userId, {
+    select: { id: true, deletedAt: true },
+  });
+  if (!user || user.deletedAt != null) {
+    if (user?.id) await revokeInactiveAuthenticationState(user.id);
+    const error = new Error('Account is inactive');
+    error.code = 'ACCOUNT_INACTIVE';
+    throw error;
+  }
   const { randomBytes } = require('node:crypto');
   const token = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + PARTIAL_SESSION_TTL_MS);
@@ -1724,6 +1811,10 @@ router.post(
       }
 
       const user = await users.findById(row.userId);
+      if (user?.deletedAt != null) {
+        await revokeInactiveAuthenticationState(user.id);
+        return inactiveAccountResponse(res);
+      }
       if (!user || !user.totpSecret || !user.totpEnabled) {
         return res.status(400).json({ error: 'TOTP not enabled for user' });
       }
@@ -1801,17 +1892,27 @@ router.post(
         }
       }
 
+      // Re-read immediately before minting: account deletion may have raced
+      // the TOTP/recovery-code verification work above.
+      const activeUser = await users.findById(user.id);
+      if (!activeUser || activeUser.deletedAt != null) {
+        if (activeUser?.id || user.id) {
+          await revokeInactiveAuthenticationState(activeUser?.id || user.id);
+        }
+        return inactiveAccountResponse(res);
+      }
+
       // Mint the full session JWT — mirrors the email/password path.
       const token = signSessionToken({
-        userId: user.id,
-        isAdmin: Boolean(user.isAdmin),
-        isSuperAdmin: Boolean(user.isSuperAdmin),
+        userId: activeUser.id,
+        isAdmin: Boolean(activeUser.isAdmin),
+        isSuperAdmin: Boolean(activeUser.isSuperAdmin),
       });
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const fingerprint = computeFingerprint(req);
-      await sessions.create({ userId: user.id, token, expiresAt, fingerprint });
+      await sessions.create({ userId: activeUser.id, token, expiresAt, fingerprint });
 
-      const { password: _pw, ...userWithoutPassword } = user;
+      const { password: _pw, ...userWithoutPassword } = activeUser;
       const serializedUser = serializeUser(userWithoutPassword);
 
       void writeAuditLog(prisma, {
@@ -1834,6 +1935,10 @@ router.post(
         csrfToken,
       });
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        if (error.userId) await revokeInactiveAuthenticationState(error.userId);
+        return inactiveAccountResponse(res);
+      }
       console.error('[auth/2fa/totp/verify] failed:', error?.message || error);
       return res.status(500).json({ error: 'Failed to verify TOTP code' });
     }

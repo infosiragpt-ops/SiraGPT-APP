@@ -734,6 +734,40 @@ function checkStartupEnvironment(startupEnvResult) {
   };
 }
 
+function checkRbacBootstrap(rbacStatus) {
+  if (!rbacStatus || typeof rbacStatus !== "object") {
+    return {
+      name: "rbac_bootstrap",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: {
+        state: "not_started",
+        ready: false,
+        mode: null,
+        errorCode: null,
+      },
+    };
+  }
+
+  const mode = rbacStatus.mode === "enforce" ? "enforce" : "shadow";
+  const ready = rbacStatus.ready === true;
+  const details = {
+    state: typeof rbacStatus.state === "string" ? rbacStatus.state : "unknown",
+    ready,
+    mode,
+    errorCode: typeof rbacStatus.errorCode === "string" ? rbacStatus.errorCode : null,
+  };
+  return {
+    name: "rbac_bootstrap",
+    status: ready ? "healthy" : (mode === "enforce" ? "unhealthy" : "degraded"),
+    critical: mode === "enforce",
+    latency_ms: 0,
+    details,
+    ...(details.errorCode ? { error: details.errorCode } : {}),
+  };
+}
+
 function checkCoworkSubsystem(coworkHealth) {
   if (!coworkHealth || typeof coworkHealth.runLivenessCheck !== "function") {
     return { name: "cowork", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_cowork_health_module" } };
@@ -767,7 +801,7 @@ function runLivenessCheck() {
   };
 }
 
-async function runReadinessCheck({ prisma, redis, queue, env = process.env } = {}) {
+async function runReadinessCheck({ prisma, redis, queue, rbac, env = process.env } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma, env),
     checkMigrations(prisma, env),
@@ -775,7 +809,14 @@ async function runReadinessCheck({ prisma, redis, queue, env = process.env } = {
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
-  return composeStatus(checks);
+  let rbacCheck = null;
+  if (rbac !== undefined) {
+    rbacCheck = checkRbacBootstrap(rbac);
+    checks.push(rbacCheck);
+  }
+  const report = composeStatus(checks);
+  if (rbacCheck) report.rbac = rbacCheck.details;
+  return report;
 }
 
 async function runFullHealthCheck({
@@ -790,6 +831,7 @@ async function runFullHealthCheck({
   coworkHealth,
   googleOAuth,
   startupEnv,
+  rbac,
   poolMetrics,
   getPoolAutoscalerState,
   env = process.env,
@@ -833,9 +875,16 @@ async function runFullHealthCheck({
   const startupEnvCheck = checkStartupEnvironment(startupEnv);
   checks.push(startupEnvCheck);
 
+  let rbacCheck = null;
+  if (rbac !== undefined) {
+    rbacCheck = checkRbacBootstrap(rbac);
+    checks.push(rbacCheck);
+  }
+
   const report = composeStatus(checks);
   report.googleOAuth = googleOAuthCheck.details;
   report.startupEnv = startupEnvCheck.details;
+  if (rbacCheck) report.rbac = rbacCheck.details;
   if (databasePoolCheck) report.databasePool = databasePoolCheck.details;
   return report;
 }
@@ -893,6 +942,7 @@ module.exports = {
   checkCircuitBreakers,
   checkGoogleOAuth,
   checkStartupEnvironment,
+  checkRbacBootstrap,
   checkCoworkSubsystem,
   checkR2Storage,
   checkPlaywright,
