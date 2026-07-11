@@ -18,7 +18,10 @@ const {
   getQueueProbeTimeoutMs,
   probeQueueRegistry,
 } = require('../src/services/queues/queue-registry');
-const { createHealthRoutes } = require('../src/routes/health-routes');
+const {
+  createHealthRoutes,
+  healthRedisConnectionOptions,
+} = require('../src/routes/health-routes');
 
 const QUEUE_MODULE_PATHS = [
   '../src/services/agents/agent-task-queue',
@@ -100,6 +103,35 @@ test('public readiness and full routes pass their injected env to DB probes', as
     const migrations = response.body.checks.find((check) => check.name === 'migrations');
     assert.equal(database.error, 'DATABASE_PROBE_TIMEOUT');
     assert.equal(migrations.error, 'MIGRATIONS_PROBE_TIMEOUT');
+  }
+});
+
+test('public readiness and full routes pass their injected env to Redis probes', async (t) => {
+  const previous = process.env.HEALTH_REDIS_TIMEOUT_MS;
+  process.env.HEALTH_REDIS_TIMEOUT_MS = '1000';
+  t.after(() => {
+    if (previous === undefined) delete process.env.HEALTH_REDIS_TIMEOUT_MS;
+    else process.env.HEALTH_REDIS_TIMEOUT_MS = previous;
+  });
+  const app = buildHealthApp(null, {
+    redis: {
+      ping: () => new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error('late Redis failure')), 180);
+      }),
+    },
+    env: {
+      HEALTH_REDIS_TIMEOUT_MS: '1',
+      OPENAI_API_KEY: 'test-only',
+    },
+  });
+
+  for (const path of ['/health/ready', '/health']) {
+    const response = await request(app).get(path);
+    assert.equal(response.status, 503);
+    const redis = response.body.checks.find((check) => check.name === 'redis');
+    assert.equal(redis.status, 'unhealthy');
+    assert.equal(redis.critical, true);
+    assert.equal(redis.error, 'REDIS_PROBE_TIMEOUT');
   }
 });
 
@@ -207,6 +239,26 @@ test('queue probe timeout defaults to 1500ms and clamps positive overrides', () 
   assert.equal(getQueueProbeTimeoutMs({ HEALTH_QUEUE_PROBE_TIMEOUT_MS: '1' }), 100);
   assert.equal(getQueueProbeTimeoutMs({ HEALTH_QUEUE_PROBE_TIMEOUT_MS: '425' }), 425);
   assert.equal(getQueueProbeTimeoutMs({ HEALTH_QUEUE_PROBE_TIMEOUT_MS: '20000' }), 10000);
+});
+
+test('dedicated operational health Redis options use the bounded ping timeout', () => {
+  assert.equal(healthRedisConnectionOptions({}).commandTimeout, 1000);
+  assert.equal(
+    healthRedisConnectionOptions({ HEALTH_REDIS_TIMEOUT_MS: '1' }).commandTimeout,
+    100,
+  );
+  assert.equal(
+    healthRedisConnectionOptions({ HEALTH_REDIS_TIMEOUT_MS: '425' }).commandTimeout,
+    425,
+  );
+  assert.equal(
+    healthRedisConnectionOptions({ HEALTH_REDIS_TIMEOUT_MS: '20000' }).commandTimeout,
+    10_000,
+  );
+  assert.equal(
+    healthRedisConnectionOptions({ HEALTH_REDIS_TIMEOUT_MS: '425' }).connectTimeout,
+    425,
+  );
 });
 
 test('scheduled queue metric refresh interval is bounded and configurable', () => {

@@ -14,6 +14,7 @@ const {
   checkDatabase,
   checkMigrations,
   resolveHealthDbTimeoutMs,
+  resolveHealthRedisTimeoutMs,
   checkRedis,
   checkQueue,
   checkProcess,
@@ -259,8 +260,19 @@ describe("checkMigrations", () => {
 // ── checkRedis ─────────────────────────────────────────────────────
 
 describe("checkRedis", () => {
+  test("HEALTH_REDIS_TIMEOUT_MS defaults to 1000ms and clamps to 100-10000ms", () => {
+    assert.equal(resolveHealthRedisTimeoutMs({}), 1000);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "garbage" }), 1000);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "1" }), 100);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "425" }), 425);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "99999" }), 10_000);
+  });
+
   test("healthy on PONG", async () => {
-    const r = await checkRedis({ ping: async () => "PONG" });
+    const r = await checkRedis(
+      { ping: async () => "PONG" },
+      { HEALTH_REDIS_TIMEOUT_MS: "100" },
+    );
     assert.equal(r.status, "healthy");
     assert.equal(r.critical, true);
   });
@@ -268,7 +280,7 @@ describe("checkRedis", () => {
   test("unhealthy when ping rejects", async () => {
     const r = await checkRedis({ ping: async () => { throw new Error("EHOSTUNREACH"); } });
     assert.equal(r.status, "unhealthy");
-    assert.match(r.error, /EHOSTUNREACH/);
+    assert.equal(r.error, "REDIS_PROBE_FAILED");
   });
 
   test("unhealthy when ping returns unexpected reply", async () => {
@@ -280,6 +292,44 @@ describe("checkRedis", () => {
     const r = await checkRedis(null);
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
+  });
+
+  test("a never-settling ping becomes critically unhealthy within the configured bound", async () => {
+    const outerTimeout = Symbol("outer-timeout");
+    const result = await Promise.race([
+      checkRedis(
+        { ping: () => new Promise(() => {}) },
+        { HEALTH_REDIS_TIMEOUT_MS: "1" },
+      ),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(result, outerTimeout, "Redis probe exceeded its 100ms lower bound");
+    assert.equal(result.status, "unhealthy");
+    assert.equal(result.critical, true);
+    assert.equal(result.error, "REDIS_PROBE_TIMEOUT");
+  });
+
+  test("a timed-out ping absorbs a late rejection", async (t) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    t.after(() => process.removeListener("unhandledRejection", onUnhandled));
+
+    const result = await checkRedis(
+      {
+        ping: () => new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("late Redis rejection")), 180);
+        }),
+      },
+      { HEALTH_REDIS_TIMEOUT_MS: "1" },
+    );
+
+    await delay(120);
+    assert.equal(result.status, "unhealthy");
+    assert.equal(result.critical, true);
+    assert.equal(result.error, "REDIS_PROBE_TIMEOUT");
+    assert.deepEqual(unhandled, []);
   });
 });
 
@@ -640,6 +690,33 @@ describe("runReadinessCheck", () => {
     assert.equal(database.error, "DATABASE_PROBE_TIMEOUT");
     assert.equal(migrations.error, "MIGRATIONS_PROBE_TIMEOUT");
   });
+
+  test("uses its injected env so a never-settling Redis ping cannot leave readiness pending", async (t) => {
+    const previous = process.env.HEALTH_REDIS_TIMEOUT_MS;
+    process.env.HEALTH_REDIS_TIMEOUT_MS = "1000";
+    t.after(() => {
+      if (previous === undefined) delete process.env.HEALTH_REDIS_TIMEOUT_MS;
+      else process.env.HEALTH_REDIS_TIMEOUT_MS = previous;
+    });
+
+    const outerTimeout = Symbol("outer-timeout");
+    const report = await Promise.race([
+      runReadinessCheck({
+        prisma: { $queryRawUnsafe: async () => [] },
+        redis: { ping: () => new Promise(() => {}) },
+        env: { HEALTH_REDIS_TIMEOUT_MS: "1" },
+      }),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(report, outerTimeout, "readiness remained pending on Redis");
+    assert.equal(report.status, "unhealthy");
+    assert.equal(reportToHttpStatus(report), 503);
+    const redis = report.checks.find((check) => check.name === "redis");
+    assert.equal(redis.status, "unhealthy");
+    assert.equal(redis.critical, true);
+    assert.equal(redis.error, "REDIS_PROBE_TIMEOUT");
+  });
 });
 
 describe("checkStartupEnvironment", () => {
@@ -780,6 +857,33 @@ describe("runFullHealthCheck", () => {
     assert.ok(elapsedMs < 500, `injected 100ms bound was ignored (${elapsedMs}ms)`);
     assert.equal(database.error, "DATABASE_PROBE_TIMEOUT");
     assert.equal(migrations.error, "MIGRATIONS_PROBE_TIMEOUT");
+  });
+
+  test("uses its injected env for the bounded Redis probe", async (t) => {
+    const previous = process.env.HEALTH_REDIS_TIMEOUT_MS;
+    process.env.HEALTH_REDIS_TIMEOUT_MS = "1000";
+    t.after(() => {
+      if (previous === undefined) delete process.env.HEALTH_REDIS_TIMEOUT_MS;
+      else process.env.HEALTH_REDIS_TIMEOUT_MS = previous;
+    });
+
+    const outerTimeout = Symbol("outer-timeout");
+    const report = await Promise.race([
+      runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => [] },
+        redis: { ping: () => new Promise(() => {}) },
+        env: {
+          HEALTH_REDIS_TIMEOUT_MS: "1",
+          OPENAI_API_KEY: "test-only",
+        },
+      }),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(report, outerTimeout, "full health remained pending on Redis");
+    assert.equal(report.status, "unhealthy");
+    const redis = report.checks.find((check) => check.name === "redis");
+    assert.equal(redis.error, "REDIS_PROBE_TIMEOUT");
   });
 });
 

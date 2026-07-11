@@ -136,6 +136,7 @@ test('canonical backend scripts explicitly register every focused health suite',
       'tests/probe-scheduler.test.js',
       'tests/health-mount.test.js',
       'tests/health-index-lifecycle.test.js',
+      'tests/health-route-queues.test.js',
     ]) {
       assert.match(command, new RegExp(`(?:^|\\s)${file.replaceAll('.', '\\.')}(?:\\s|$)`));
     }
@@ -150,6 +151,7 @@ test('standard and production Docker backends pass through every operational con
     METRICS_ALLOW_LOOPBACK: 'false',
     HEALTH_CACHE_TTL_MS: '5000',
     HEALTH_DB_TIMEOUT_MS: '1500',
+    HEALTH_REDIS_TIMEOUT_MS: '1000',
     HEALTH_PROBE_INTERVAL_MS: '30000',
     HEALTH_PROVIDER_PROBES_ENABLED: 'false',
     HEALTH_SCHEDULE_PROVIDER_PROBES: 'false',
@@ -213,5 +215,16 @@ test('queue criticality docs distinguish production and standard Compose default
   assert.match(
     backendEnvExample,
     /production Compose defaults all five registered queues to critical/i,
+  );
+});
+
+test('Redis health timeout is documented with its bounded default', () => {
+  assert.match(
+    environmentDocs,
+    /\| `HEALTH_REDIS_TIMEOUT_MS` \|[^|]*clamped to 100[–-]10000 ms[^|]*\| `1000` \|/i,
+  );
+  assert.match(
+    backendEnvExample,
+    /Values are clamped to 100-10000ms\.\s*HEALTH_REDIS_TIMEOUT_MS=1000/i,
   );
 });

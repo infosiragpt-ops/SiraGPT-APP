@@ -29,10 +29,24 @@ const {
   runReadinessCheck,
   runFullHealthCheck,
   reportToHttpStatus,
+  resolveHealthRedisTimeoutMs,
 } = require('../services/observability/health-check');
 const { probeQueueRegistry } = require('../services/queues/queue-registry');
 
 const noopStatus = () => ({});
+
+function healthRedisConnectionOptions(env = process.env) {
+  const timeoutMs = resolveHealthRedisTimeoutMs(env);
+  return {
+    lazyConnect: true,
+    // Health check ping should not retry — a stuck Redis IS the signal we
+    // want to surface. One attempt, fail fast.
+    maxRetriesPerRequest: 1,
+    enableReadyCheck: false,
+    connectTimeout: timeoutMs,
+    commandTimeout: timeoutMs,
+  };
+}
 
 /**
  * Build the health routes with their dependencies injected.
@@ -164,14 +178,10 @@ function createHealthRoutes(deps = {}) {
     if (_healthRedisClient) return _healthRedisClient;
     try {
       const IORedis = require('ioredis');
-      _healthRedisClient = new IORedis(env.REDIS_URL, {
-        lazyConnect: true,
-        // Health check ping should not retry — a stuck Redis IS the signal we
-        // want to surface. One attempt, fail fast.
-        maxRetriesPerRequest: 1,
-        enableReadyCheck: false,
-        connectTimeout: 2000,
-      });
+      _healthRedisClient = new IORedis(
+        env.REDIS_URL,
+        healthRedisConnectionOptions(env),
+      );
       // Swallow background errors. The health probe will still observe the
       // connection state on the next ping().
       _healthRedisClient.on('error', () => {});
@@ -287,4 +297,7 @@ function createHealthRoutes(deps = {}) {
   };
 }
 
-module.exports = { createHealthRoutes };
+module.exports = {
+  createHealthRoutes,
+  healthRedisConnectionOptions,
+};

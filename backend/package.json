@@ -7,7 +7,7 @@
     "dev": "nodemon index.js",
     "start": "node  index.js",
     "build": "echo 'Build complete'",
-    "test:health": "node --test tests/sira-health-and-metrics.test.js tests/probe-scheduler.test.js tests/health-mount.test.js tests/health-index-lifecycle.test.js",
+    "test:health": "node --test tests/sira-health-and-metrics.test.js tests/probe-scheduler.test.js tests/health-mount.test.js tests/health-index-lifecycle.test.js tests/health-route-queues.test.js",
     "test:release-provenance": "node --test tests/version-route.test.js tests/release-provenance.test.js",
     "test:security-documents": "node --test tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js",
     "test:shard": "bash scripts/test-shard.sh",

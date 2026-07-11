@@ -180,6 +180,7 @@ below the parent coordinator's 40-second minimum and 50-second default.
 | `POSTHOG_HOST` | PostHog host URL | (PostHog Cloud US) |
 | `HEALTH_CACHE_TTL_MS` | Health check cache TTL in ms | `5000` |
 | `HEALTH_DB_TIMEOUT_MS` | Timeout for public database and migration health queries, clamped to 100–10000 ms | `1500` |
+| `HEALTH_REDIS_TIMEOUT_MS` | Timeout for the public Redis health ping and its dedicated client command, clamped to 100–10000 ms | `1000` |
 | `INTERNAL_HEALTH_TOKEN` | Dedicated bearer credential for remote `/internal/health/*` access. When unset, `METRICS_TOKEN` is the machine-token fallback. | — |
 | `INTERNAL_HEALTH_ALLOW_LOOPBACK` | Permit direct socket-loopback access to internal health in production. Ignored whenever `Forwarded` or `X-Forwarded-*` is present. | `false` |
 | `HEALTH_PROBE_INTERVAL_MS` | Internal health-history scheduler interval in ms, clamped to Node's safe timer range 1000–2147483647 | `30000` |
@@ -188,6 +189,10 @@ below the parent coordinator's 40-second minimum and 50-second default.
 | `HEALTH_QUEUE_PROBE_TIMEOUT_MS` | Timeout for each dedicated BullMQ health operation, clamped to 100–10000 ms | `1500` |
 | `HEALTH_QUEUE_PROBE_CACHE_TTL_MS` | Dedicated queue-health result cache TTL, clamped to 0–5000 ms | `1000` |
 | `HEALTH_CRITICAL_QUEUES` | Comma-separated queue IDs/names whose probe failure makes readiness unhealthy. Known IDs: `agent-task`, `chat-run`, `codex-runs`, `document-collections`, `goal-runs`. | Production Compose: all five; standard Compose: none |
+
+The Redis readiness ping is bounded independently of the driver. A timeout
+returns the stable `REDIS_PROBE_TIMEOUT` code as a critical unhealthy check;
+late driver rejection is absorbed after the response has completed.
 
 Production Compose defaults all five registered queues to critical, so failure
 of any physical queue makes readiness return HTTP 503. A missing `REDIS_URL`

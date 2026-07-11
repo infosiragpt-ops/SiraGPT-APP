@@ -43,6 +43,9 @@ const {
 const DEFAULT_HEALTH_DB_TIMEOUT_MS = 1500;
 const MIN_HEALTH_DB_TIMEOUT_MS = 100;
 const MAX_HEALTH_DB_TIMEOUT_MS = 10_000;
+const DEFAULT_HEALTH_REDIS_TIMEOUT_MS = 1000;
+const MIN_HEALTH_REDIS_TIMEOUT_MS = 100;
+const MAX_HEALTH_REDIS_TIMEOUT_MS = 10_000;
 const DATABASE_HEALTH_ERROR_CODES = Object.freeze({
   databaseFailed: 'DATABASE_PROBE_FAILED',
   databaseTimeout: 'DATABASE_PROBE_TIMEOUT',
@@ -50,11 +53,25 @@ const DATABASE_HEALTH_ERROR_CODES = Object.freeze({
   migrationsProbeFailed: 'MIGRATIONS_PROBE_FAILED',
   migrationsProbeTimeout: 'MIGRATIONS_PROBE_TIMEOUT',
 });
+const REDIS_HEALTH_ERROR_CODES = Object.freeze({
+  redisFailed: 'REDIS_PROBE_FAILED',
+  redisTimeout: 'REDIS_PROBE_TIMEOUT',
+  unexpectedReply: 'REDIS_PROBE_UNEXPECTED_REPLY',
+});
 
 function resolveHealthDbTimeoutMs(env = process.env) {
   const parsed = Number.parseInt(env?.HEALTH_DB_TIMEOUT_MS, 10);
   if (!Number.isFinite(parsed)) return DEFAULT_HEALTH_DB_TIMEOUT_MS;
   return Math.min(MAX_HEALTH_DB_TIMEOUT_MS, Math.max(MIN_HEALTH_DB_TIMEOUT_MS, parsed));
+}
+
+function resolveHealthRedisTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(env?.HEALTH_REDIS_TIMEOUT_MS, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_HEALTH_REDIS_TIMEOUT_MS;
+  return Math.min(
+    MAX_HEALTH_REDIS_TIMEOUT_MS,
+    Math.max(MIN_HEALTH_REDIS_TIMEOUT_MS, parsed),
+  );
 }
 
 function runDbOperationWithTimeout(operation, { timeoutMs, label }) {
@@ -70,6 +87,24 @@ function runDbOperationWithTimeout(operation, { timeoutMs, label }) {
 
   // Promise.race installs a rejection handler on operationPromise immediately,
   // so a Prisma call that rejects after the timeout cannot become unhandled.
+  return Promise.race([operationPromise, timeoutPromise])
+    .finally(() => clearTimeout(timer));
+}
+
+function runRedisOperationWithTimeout(operation, timeoutMs) {
+  let timer;
+  const operationPromise = Promise.resolve().then(operation);
+  // Retain an explicit rejection sink in addition to Promise.race's handler:
+  // a ping that rejects after the deadline must never emit unhandledRejection.
+  operationPromise.catch(() => undefined);
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`Redis probe timed out after ${timeoutMs}ms`);
+      error.code = 'HEALTH_REDIS_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+
   return Promise.race([operationPromise, timeoutPromise])
     .finally(() => clearTimeout(timer));
 }
@@ -167,13 +202,14 @@ async function checkMigrations(prisma, env = process.env) {
   }
 }
 
-async function checkRedis(redis) {
+async function checkRedis(redis, env = process.env) {
   if (!redis || typeof redis.ping !== "function") {
     return { name: "redis", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_redis_client_provided" } };
   }
   const start = Date.now();
   try {
-    const reply = await redis.ping();
+    const timeoutMs = resolveHealthRedisTimeoutMs(env);
+    const reply = await runRedisOperationWithTimeout(() => redis.ping(), timeoutMs);
     const ok = reply === "PONG" || reply === true;
     return {
       name: "redis",
@@ -183,12 +219,15 @@ async function checkRedis(redis) {
       critical: true,
       latency_ms: Date.now() - start,
       details: { reply: String(reply).slice(0, 32) },
+      ...(ok ? {} : { error: REDIS_HEALTH_ERROR_CODES.unexpectedReply }),
     };
   } catch (err) {
     return {
       name: "redis", status: "unhealthy", critical: true,
       latency_ms: Date.now() - start,
-      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+      error: err?.code === 'HEALTH_REDIS_TIMEOUT'
+        ? REDIS_HEALTH_ERROR_CODES.redisTimeout
+        : REDIS_HEALTH_ERROR_CODES.redisFailed,
     };
   }
 }
@@ -732,7 +771,7 @@ async function runReadinessCheck({ prisma, redis, queue, env = process.env } = {
   const checks = await Promise.all([
     checkDatabase(prisma, env),
     checkMigrations(prisma, env),
-    checkRedis(redis),
+    checkRedis(redis, env),
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
@@ -758,7 +797,7 @@ async function runFullHealthCheck({
   const checks = await Promise.all([
     checkDatabase(prisma, env),
     checkMigrations(prisma, env),
-    checkRedis(redis),
+    checkRedis(redis, env),
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
@@ -833,8 +872,13 @@ module.exports = {
   DEFAULT_HEALTH_DB_TIMEOUT_MS,
   MIN_HEALTH_DB_TIMEOUT_MS,
   MAX_HEALTH_DB_TIMEOUT_MS,
+  DEFAULT_HEALTH_REDIS_TIMEOUT_MS,
+  MIN_HEALTH_REDIS_TIMEOUT_MS,
+  MAX_HEALTH_REDIS_TIMEOUT_MS,
   DATABASE_HEALTH_ERROR_CODES,
+  REDIS_HEALTH_ERROR_CODES,
   resolveHealthDbTimeoutMs,
+  resolveHealthRedisTimeoutMs,
   checkDatabase,
   checkMigrations,
   checkRedis,
