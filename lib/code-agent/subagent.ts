@@ -1,6 +1,10 @@
+import { createAuthenticatedFetch } from "../authenticated-fetch"
+
 let activeSubagents = 0
 const MAX_PARALLEL = 6
 const MAX_DEPTH = 1
+const SIRA_API_ROOT = `${process.env.SIRAGPT_API_BASE || "http://backend:5000"}/api`
+const subagentFetch = createAuthenticatedFetch({ apiBaseUrl: SIRA_API_ROOT })
 
 export interface SubagentRequest {
   name: string
@@ -32,8 +36,8 @@ export async function spawnSubagent(req: SubagentRequest): Promise<SubagentResul
   activeSubagents++
   try {
     // Use the backend LLM with store:false for ephemeral subagent context
-    const res = await fetch(
-      (process.env.SIRAGPT_API_BASE || "http://backend:5000") + "/api/chat/complete",
+    const res = await subagentFetch(
+      `${SIRA_API_ROOT}/chat/complete`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

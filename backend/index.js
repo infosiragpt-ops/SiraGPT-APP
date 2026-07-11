@@ -62,6 +62,8 @@ initAgentSystem();
 // Runs BEFORE any service init so a misconfigured prod boot
 // fails fast with a clear error.
 const { validateConfigOrExit } = require('./src/utils/config-validator');
+const { isProductionLike } = require('./src/utils/environment');
+const { resolveTrustProxyPolicy } = require('./src/middleware/trust-proxy-policy');
 validateConfigOrExit(process.env);
 
 // ── Startup validation ─────────────────────────────────────
@@ -529,7 +531,8 @@ const PORT = process.env.PORT || 5000;
 // port, which would break the single-external-port Reserved VM deploy. When
 // HOST is unset (production `npm start`) it falls back to 0.0.0.0 as before.
 const HOST = process.env.HOST || '0.0.0.0';
-app.set('trust proxy', 1)
+const trustProxyPolicy = resolveTrustProxyPolicy(process.env);
+app.set('trust proxy', trustProxyPolicy.value);
 
 // Security middleware. CSP defaults to report-only mode so a fresh
 // deploy never breaks inline content; operators tighten the policy
@@ -544,7 +547,7 @@ const cspConfig = resolveCspConfig(process.env);
 // runs over plain http://localhost. frameguard 'deny' on top of the
 // frame-ancestors CSP directive protects browsers that still honor the
 // legacy X-Frame-Options header.
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = isProductionLike(process.env);
 const cspMiddlewareConfig = (() => {
     if (!cspConfig.enabled) return false;
     if (!isProduction && process.env.CSP_ENABLED !== '1' && process.env.CSP_ENABLED !== 'true') {
@@ -688,15 +691,19 @@ const apiLimiter = rateLimit({
 // fallback. This must run before route rate-limiters so browser
 // preflight requests receive Access-Control-* headers before any
 // auth-specific middleware can short-circuit the response.
-const { resolveAllowedOrigins, makeOriginCallback } = require('./src/middleware/cors-policy');
+const {
+    createCredentialedCorsOptions,
+    resolveAllowedOrigins,
+} = require('./src/middleware/cors-policy');
+const {
+    createSamlAcsBodyParser,
+    createSamlAcsCorsMiddleware,
+    createSamlAcsRateLimit,
+} = require('./src/middleware/saml-acs-ingress');
 const ALLOWED_ORIGINS = resolveAllowedOrigins(process.env);
-const globalCors = cors({
-    origin: makeOriginCallback(ALLOWED_ORIGINS),
-    credentials: true,
-    optionsSuccessStatus: 200,
-});
+const credentialedCors = cors(createCredentialedCorsOptions(ALLOWED_ORIGINS));
 const CODE_RUNNER_TOKEN_APP_PATH_RE = /^\/api\/code-runner\/[a-zA-Z0-9_-]+\/[a-fA-F0-9]+\/app(?:\/|$)/;
-app.use((req, res, next) => {
+const globalCors = (req, res, next) => {
     // Sandboxed /code preview iframes have an opaque origin, so browser module
     // requests for Vite assets arrive with `Origin: null`. The runner route is
     // already protected by a run-scoped path token and sets its own narrowly
@@ -704,8 +711,14 @@ app.use((req, res, next) => {
     // rejected by the global credentialed app CORS policy.
     const path = req.path || req.originalUrl || '';
     if (CODE_RUNNER_TOKEN_APP_PATH_RE.test(path)) return next();
-    return globalCors(req, res, next);
-});
+    return credentialedCors(req, res, next);
+};
+// Reject abusive exact-ACS requests in the shared distributed limiter before
+// reading their body or starting request telemetry. Browser IdPs then submit
+// bounded URL-encoded assertions; only that exact route bypasses app CORS.
+app.use(createSamlAcsRateLimit());
+app.use(createSamlAcsBodyParser());
+app.use(createSamlAcsCorsMiddleware(globalCors));
 
 app.use('/api/auth', authLimiter);
 app.use('/api/agent', expensiveLimiter);
@@ -825,7 +838,7 @@ const sessionConfig = {
     secret: process.env.SESSION_SECRET || 'your-session-secret',
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: process.env.NODE_ENV === 'production' },
+    cookie: { secure: isProduction },
 };
 if (process.env.REDIS_URL) {
     const RedisStore = require('connect-redis').default;
@@ -863,7 +876,11 @@ app.use(passport.session());
 // auto-bypassed (browsers don't auto-send Authorization cross-origin).
 // Disabled in test env via CSRF_DISABLED=1.
 const { requireCsrf } = require('./src/middleware/csrf');
-app.use('/api/auth', requireCsrf);
+const {
+    createAuthCsrfMiddleware,
+    createCookieAuthCsrfMiddleware,
+} = require('./src/middleware/csrf-route-policy');
+app.use('/api/auth', createAuthCsrfMiddleware(requireCsrf));
 app.use('/api/users', requireCsrf);
 app.use('/api/chats', requireCsrf);
 app.use('/api/files', requireCsrf);
@@ -883,6 +900,11 @@ app.use('/api/cowork', requireCsrf);
 app.use('/api/memory', requireCsrf);
 app.use('/api/context-intelligence', requireCsrf);
 app.use('/api/thesis', requireCsrf);
+// Catch-all inventory contract: any current or future /api mutation carrying
+// the browser login cookie is CSRF-gated. Cookieless public routes, safe
+// methods, Bearer/API-key clients, Stripe's exact signed webhook, and the
+// generated-app public mounts are explicitly bypassed by the policy.
+app.use('/api', createCookieAuthCsrfMiddleware(requireCsrf));
 
 // ── XSS / prompt-injection sanitization ──────────────────────────
 // Recursively strips script tags, event handlers, and javascript: URIs
@@ -1415,7 +1437,7 @@ async function startServer() {
         // allowlist. The fail-closed CORS callback will then reject
         // every browser request — surface this in the access log so
         // ops can spot the misconfig before users do.
-        if (process.env.NODE_ENV === 'production' && ALLOWED_ORIGINS.length === 0) {
+        if (isProduction && ALLOWED_ORIGINS.length === 0) {
             logger.warn(
                 { hint: 'set CORS_ORIGINS to a comma-separated allowlist' },
                 'cors_allowlist_empty_in_production',
@@ -1425,7 +1447,7 @@ async function startServer() {
         // while CORS rejects unknown origins — a wildcard origin with
         // credentials would let any site send X-CSRF-Token cross-site and
         // bypass CSRF. Loudly flag this dangerous combo in production.
-        if (process.env.NODE_ENV === 'production' && ALLOWED_ORIGINS.includes('*')) {
+        if (isProduction && ALLOWED_ORIGINS.includes('*')) {
             logger.warn(
                 { hint: 'replace CORS_ORIGINS=* with an explicit allowlist; wildcard + credentials defeats CSRF protection' },
                 'cors_wildcard_origin_in_production_csrf_risk',

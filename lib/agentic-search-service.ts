@@ -1,5 +1,6 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
 import { streamSseJson } from "./sse-client"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 
@@ -81,9 +82,8 @@ function authHeader(): Record<string, string> {
  */
 export async function* runIterator(args: AgenticRunArgs): AsyncGenerator<AgenticEvent> {
   const { signal, ...body } = args
-  const resp = await fetch(`${API_ROOT}/search/agentic`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/search/agentic`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(body),
     signal,

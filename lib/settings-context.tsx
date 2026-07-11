@@ -14,6 +14,7 @@
  */
 
 import React from "react"
+import { authenticatedFetch } from "./authenticated-fetch"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const STORAGE_KEY = "siraGPT-settings"
@@ -246,9 +247,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       }
     } catch { /* ignore */ }
 
-    const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-    if (!token) { setLoaded(true); return }
-    fetch(`${API_BASE}/users/settings`, { headers: { Authorization: `Bearer ${token}` } })
+    authenticatedFetch(`${API_BASE}/users/settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.settings) setSettings((prev) => mergeDeep(prev, data.settings))
@@ -270,11 +269,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setSaveStatus('saving')
     debounceRef.current = setTimeout(() => {
-      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      if (!token) { setSaveStatus('idle'); return }
-      fetch(`${API_BASE}/users/settings`, {
+      authenticatedFetch(`${API_BASE}/users/settings`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
       })
         .then((r) => {

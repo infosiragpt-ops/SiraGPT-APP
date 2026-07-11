@@ -10,8 +10,10 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 
 const saml = require('../src/services/saml-handler');
+const { createSamlRequestStore } = require('../src/services/saml-request-store');
 
 const validConfig = {
   provider: 'saml',
@@ -20,6 +22,11 @@ const validConfig = {
   callbackUrl: 'https://sira.example.com/api/auth/sso/acme/callback',
   cert: '-----BEGIN CERTIFICATE-----\nMIIDdjCCAl6gAwIBAgIE...redacted...==\n-----END CERTIFICATE-----',
 };
+const PREAUTH_NONCE = Buffer.alloc(32, 4).toString('base64url');
+const PREAUTH_NONCE_HASH = crypto
+  .createHash('sha256')
+  .update(PREAUTH_NONCE)
+  .digest('base64url');
 
 function makeFakeSdk({ profile, throwOnValidate } = {}) {
   class FakeSAML {
@@ -30,6 +37,55 @@ function makeFakeSdk({ profile, throwOnValidate } = {}) {
     }
   }
   return { SAML: FakeSAML };
+}
+
+function makeCapturingSdk(capture, profile) {
+  class FakeSAML {
+    constructor(opts) {
+      capture.options = opts;
+    }
+
+    async validatePostResponseAsync(input) {
+      capture.input = input;
+      return { profile };
+    }
+  }
+  return { SAML: FakeSAML };
+}
+
+async function makeVerificationInput({
+  requestId = '_request-1',
+  destination = validConfig.callbackUrl,
+} = {}) {
+  const requestStore = createSamlRequestStore({
+    env: {
+      NODE_ENV: 'test',
+      JWT_SECRET: 'test-only-saml-relay-state-secret-32-bytes',
+    },
+  });
+  await requestStore.createCacheProvider('acme').saveAsync(
+    requestId,
+    new Date().toISOString(),
+  );
+  const relayState = await requestStore.issueRelayState({
+    orgSlug: 'acme',
+    requestId,
+    preAuthNonceHash: PREAUTH_NONCE_HASH,
+  });
+  const xml = [
+    '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"',
+    ` ID="_response" Version="2.0" Destination="${destination}" InResponseTo="${requestId}">`,
+    '</samlp:Response>',
+  ].join('');
+  return {
+    samlResponse: Buffer.from(xml, 'utf8').toString('base64'),
+    deps: {
+      requestStore,
+      orgSlug: 'acme',
+      relayState,
+      preAuthNonce: PREAUTH_NONCE,
+    },
+  };
 }
 
 test('returns 501 lib_missing when SDK not available', async () => {
@@ -69,7 +125,9 @@ test('rejects when SAMLResponse body field is empty', async () => {
 });
 
 test('rejects when SDK validation throws', async () => {
-  const out = await saml.verifySamlResponse('xxx', validConfig, {
+  const input = await makeVerificationInput();
+  const out = await saml.verifySamlResponse(input.samlResponse, validConfig, {
+    ...input.deps,
     loadSaml: () => makeFakeSdk({ throwOnValidate: true }),
   });
   assert.equal(out.ok, false);
@@ -78,7 +136,9 @@ test('rejects when SDK validation throws', async () => {
 });
 
 test('rejects when profile has no email claim', async () => {
-  const out = await saml.verifySamlResponse('xxx', validConfig, {
+  const input = await makeVerificationInput();
+  const out = await saml.verifySamlResponse(input.samlResponse, validConfig, {
+    ...input.deps,
     loadSaml: () => makeFakeSdk({ profile: { nameID: 'no-at-sign' } }),
   });
   assert.equal(out.ok, false);
@@ -87,7 +147,9 @@ test('rejects when profile has no email claim', async () => {
 });
 
 test('returns ok with email + profile on success', async () => {
-  const out = await saml.verifySamlResponse('xxx', validConfig, {
+  const input = await makeVerificationInput();
+  const out = await saml.verifySamlResponse(input.samlResponse, validConfig, {
+    ...input.deps,
     loadSaml: () => makeFakeSdk({
       profile: { email: 'Alice@Example.com', displayName: 'Alice Liddell', nameID: 'alice' },
     }),
@@ -96,6 +158,30 @@ test('returns ok with email + profile on success', async () => {
   assert.equal(out.email, 'alice@example.com');
   assert.equal(out.displayName, 'Alice Liddell');
   assert.equal(out.nameId, 'alice');
+});
+
+test('keeps signature plus InResponseTo replay validation on the CSRF-exempt ACS', async () => {
+  const capture = {};
+  const input = await makeVerificationInput();
+  const out = await saml.verifySamlResponse(input.samlResponse, validConfig, {
+    ...input.deps,
+    loadSaml: () => makeCapturingSdk(capture, {
+      email: 'alice@example.com',
+      nameID: 'alice',
+    }),
+  });
+
+  assert.equal(out.ok, true);
+  assert.equal(capture.options.wantAssertionsSigned, true);
+  assert.equal(capture.options.wantAuthnResponseSigned, true);
+  assert.equal(capture.options.validateInResponseTo, 'always');
+  assert.ok(
+    capture.options.requestIdExpirationPeriodMs > 0
+      && capture.options.requestIdExpirationPeriodMs <= 15 * 60 * 1000,
+  );
+  assert.equal(capture.options.audience, validConfig.issuer);
+  assert.equal(typeof capture.options.cacheProvider?.getAsync, 'function');
+  assert.deepEqual(capture.input, { SAMLResponse: input.samlResponse });
 });
 
 test('extractEmailFromProfile prefers email claim over nameID', () => {

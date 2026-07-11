@@ -59,6 +59,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { CODE_OPEN_TOOL_EVENT, CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService, type GithubStatus } from "@/lib/github-service"
@@ -2499,7 +2500,7 @@ function SkillsTool() {
     let alive = true
     const base = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}`
     const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-    fetch(`${base}/cowork/skills`, {
+    authenticatedFetch(`${base}/cowork/skills`, {
       credentials: "include",
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     })

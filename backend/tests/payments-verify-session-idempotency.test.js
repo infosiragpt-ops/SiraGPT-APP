@@ -1,6 +1,10 @@
 'use strict';
 
-// Regression — GET /payments/verify-session must grant plan credits at most
+process.env.NODE_ENV = 'test';
+process.env.RATE_LIMIT_STORE = 'memory';
+process.env.RATE_LIMIT_SENSITIVE_POLICY = 'memory';
+
+// Regression — POST /payments/verify-session must grant plan credits at most
 // once per payment, even when two verify calls (or a verify racing the
 // checkout.session.completed webhook) both observe the payment as PENDING.
 //
@@ -161,24 +165,28 @@ function makeFakePrisma({
   return db;
 }
 
-describe('GET /payments/verify-session · credit grant idempotency', () => {
+describe('POST /payments/verify-session · credit grant idempotency', () => {
   let restoreDb;
   let restoreStripe;
 
   function setup({ rows, user, subscriptionEvents = [], checkoutSession = {} }) {
     const fake = makeFakePrisma({ rows, user, subscriptionEvents });
+    const stripeCalls = { retrieveCheckoutSession: 0 };
     restoreDb = mockResolvedModule(DB_PATH, fake);
     restoreStripe = mockResolvedModule(STRIPE_PATH, {
-      retrieveCheckoutSession: async () => ({
-        id: 'cs_1',
-        payment_status: 'paid',
-        customer: 'cus_1',
-        subscription: 'sub_123',
-        created: 800,
-        metadata: { userId: user.id, plan: 'PRO' },
-        customer_details: { email: user.email },
-        ...checkoutSession,
-      }),
+      retrieveCheckoutSession: async () => {
+        stripeCalls.retrieveCheckoutSession += 1;
+        return {
+          id: 'cs_1',
+          payment_status: 'paid',
+          customer: 'cus_1',
+          subscription: 'sub_123',
+          created: 800,
+          metadata: { userId: user.id, plan: 'PRO' },
+          customer_details: { email: user.email },
+          ...checkoutSession,
+        };
+      },
       isStripeLikeError: () => false,
       demoAllowed: false,
       isConfigured: true,
@@ -186,7 +194,7 @@ describe('GET /payments/verify-session · credit grant idempotency', () => {
     delete require.cache[require.resolve('../src/routes/payments')];
     const app = buildRouteTestApp('/payments', reloadModule('../src/routes/payments'));
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-    return { app, token, fake };
+    return { app, token, fake, stripeCalls };
   }
 
   afterEach(() => {
@@ -197,10 +205,55 @@ describe('GET /payments/verify-session · credit grant idempotency', () => {
 
   function verify(app, token) {
     return request(app)
+      .post('/payments/verify-session')
+      .send({ session_id: 'cs_1' })
+      .set('Authorization', `Bearer ${token}`);
+  }
+
+  function status(app, token) {
+    return request(app)
       .get('/payments/verify-session')
       .query({ session_id: 'cs_1' })
       .set('Authorization', `Bearer ${token}`);
   }
+
+  test('legacy GET is read-only and never retrieves Stripe or grants entitlements', async () => {
+    const user = {
+      id: 'u1',
+      email: 'u1@example.com',
+      stripeCustomerId: 'cus_1',
+      plan: 'FREE',
+      monthlyLimit: 1_000n,
+      gemaTokenLimit: 0n,
+    };
+    const rows = [{
+      id: 'pay1',
+      stripeSessionId: 'cs_1',
+      stripeCustomerId: 'cus_1',
+      userId: 'u1',
+      plan: 'PRO',
+      amount: 5,
+      status: 'PENDING',
+    }];
+    const {
+      app,
+      token,
+      fake,
+      stripeCalls,
+    } = setup({ rows, user });
+
+    const response = await status(app, token);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.paymentStatus, 'PENDING');
+    assert.equal(response.body.readOnly, true);
+    assert.equal(response.body.updated, false);
+    assert.equal(stripeCalls.retrieveCheckoutSession, 0);
+    assert.equal(fake._userUpdates.length, 0);
+    assert.equal(rows[0].status, 'PENDING');
+    assert.equal(user.plan, 'FREE');
+    assert.equal(user.monthlyLimit, 1_000n);
+  });
 
   test('two PENDING-reading verify calls grant credits exactly once', async () => {
     const user = {

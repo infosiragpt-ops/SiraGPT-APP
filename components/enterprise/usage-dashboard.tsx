@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { BarChart3, Zap, Coins, Activity } from "lucide-react"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 interface UsageStats {
   totalRuns: number
@@ -25,7 +26,7 @@ export function UsageDashboard() {
   const [stats, setStats] = React.useState<UsageStats>(DEFAULT_STATS)
 
   React.useEffect(() => {
-    fetch("/api/agents/usage")
+    authenticatedFetch("/api/agents/usage")
       .then((r) => r.ok ? r.json() : null)
       .then((d) => d && setStats(d))
       .catch(() => {})

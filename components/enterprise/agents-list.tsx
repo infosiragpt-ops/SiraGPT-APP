@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Bot, Shield, Search, Wrench } from "lucide-react"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 interface AgentCard {
   id: string
@@ -63,7 +64,7 @@ export function AgentsList() {
     setOutput("")
 
     try {
-      const res = await fetch("/api/agents/run", {
+      const res = await authenticatedFetch("/api/agents/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent: selected, prompt, mode: "auto" }),

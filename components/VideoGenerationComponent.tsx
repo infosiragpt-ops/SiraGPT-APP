@@ -29,6 +29,7 @@ import {
   RefreshCw
 } from "lucide-react"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
@@ -277,7 +278,7 @@ export default function VideoGenerationComponent() {
       // download URL resolved — no log to avoid noise
 
       // Try to fetch the file first to check if it exists
-      const response = await fetch(downloadUrl, { method: 'HEAD' })
+      const response = await authenticatedFetch(downloadUrl, { method: 'HEAD' })
 
       if (!response.ok) {
         toast.error('Video file not found or not ready for download')

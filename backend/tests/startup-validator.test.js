@@ -112,6 +112,18 @@ describe('validateStartupEnvironment · happy path', () => {
   });
 });
 
+describe('validateStartupEnvironment · NODE_ENV', () => {
+  it('blocks the prod alias without reflecting the configured value', () => {
+    const issues = runValidator(happyEnv({ NODE_ENV: 'prod' }));
+    const issue = issues.find((entry) => entry.code === 'NODE_ENV_INVALID_ALIAS');
+    assert.ok(issue);
+    assert.equal(issue.key, 'NODE_ENV');
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.equal(Object.hasOwn(issue, 'value'), false);
+    assert.doesNotMatch(issue.message, /NODE_ENV\s*=\s*prod/i);
+  });
+});
+
 describe('validateStartupEnvironment · RBAC enforcement mode', () => {
   it('accepts explicit shadow and enforce modes', () => {
     for (const mode of ['shadow', 'enforce']) {
@@ -434,28 +446,114 @@ describe('validateStartupEnvironment · REDIS_URL', () => {
     const redis = issues.find(i => i.key === 'REDIS_URL');
     assert.equal(redis, undefined);
   });
+
+  it('blocks production when sensitive limiters have no distributed store', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      REDIS_URL: undefined,
+      RATE_LIMIT_STORE: 'redis',
+    }));
+    const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_REDIS_REQUIRED');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.doesNotMatch(JSON.stringify(issue), /redis:\/\//i);
+  });
+
+  it('blocks production process-memory rate limiting', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RATE_LIMIT_STORE: 'memory',
+    }));
+    const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_STORE_UNSAFE');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+  });
+
+  it('blocks production fail-open or memory sensitive policies', () => {
+    for (const policy of ['fail-open', 'memory']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'production',
+        RATE_LIMIT_STORE: 'redis',
+        RATE_LIMIT_SENSITIVE_POLICY: policy,
+      }));
+      const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_POLICY_UNSAFE');
+      assert.ok(issue, `expected unsafe policy issue for ${policy}`);
+      assert.equal(issue.severity, Severity.BLOCKING);
+      assert.doesNotMatch(JSON.stringify(issue), /fail-open/i);
+    }
+  });
+
+  it('blocks an unknown production sensitive policy without reflecting its value', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RATE_LIMIT_SENSITIVE_POLICY: 'redis://user:secret@internal',
+    }));
+    const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_POLICY_INVALID');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.doesNotMatch(JSON.stringify(issue), /user|secret|internal/i);
+  });
+
+  it('allows explicit memory and fail-open policies in nonproduction', () => {
+    for (const policy of ['memory', 'fail-open']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'test',
+        RATE_LIMIT_STORE: policy === 'memory' ? 'memory' : 'redis',
+        RATE_LIMIT_SENSITIVE_POLICY: policy,
+      }));
+      assert.equal(
+        issues.some(i => String(i.code || '').startsWith('SENSITIVE_RATE_LIMIT_')),
+        false,
+      );
+    }
+  });
+
+  it('accepts explicit distributed production rate limiting', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RATE_LIMIT_STORE: 'redis',
+      RATE_LIMIT_SENSITIVE_POLICY: 'distributed',
+    }));
+    assert.equal(
+      issues.some(i => String(i.code || '').startsWith('SENSITIVE_RATE_LIMIT_')),
+      false,
+    );
+  });
 });
 
 // ── CORS in production ────────────────────────────────────────────
 
 describe('validateStartupEnvironment · CORS in production', () => {
-  it('warns when NODE_ENV=production and CORS_ORIGINS is "*"', () => {
-    const issues = runValidator(happyEnv({
-      NODE_ENV: 'production',
-      CORS_ORIGINS: '*',
-    }));
-    const cors = issues.find(i => i.key === 'CORS_ORIGINS');
-    assert.ok(cors);
-    assert.equal(cors.severity, 'WARNING');
+  it('blocks wildcard credentialed CORS in production', () => {
+    for (const CORS_ORIGINS of ['*', 'https://app.example.com, *']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'production',
+        CORS_ORIGINS,
+      }));
+      const cors = issues.find(i => i.code === 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN');
+      assert.ok(cors);
+      assert.equal(cors.severity, Severity.BLOCKING);
+    }
   });
 
-  it('warns when NODE_ENV=production and CORS_ORIGINS is missing', () => {
+  it('blocks when NODE_ENV=production and CORS_ORIGINS is missing', () => {
     const issues = runValidator(happyEnv({
       NODE_ENV: 'production',
       CORS_ORIGINS: undefined,
     }));
-    const cors = issues.find(i => i.key === 'CORS_ORIGINS');
+    const cors = issues.find(i => i.code === 'CORS_ORIGINS_REQUIRED');
     assert.ok(cors);
+    assert.equal(cors.severity, Severity.BLOCKING);
+  });
+
+  it('blocks malformed production CORS origins', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      CORS_ORIGINS: 'https://siragpt.com, not-an-origin',
+    }));
+    const cors = issues.find(i => i.code === 'CORS_ORIGINS_INVALID');
+    assert.ok(cors);
+    assert.equal(cors.severity, Severity.BLOCKING);
   });
 
   it('no CORS warning in development with "*"', () => {
@@ -465,6 +563,19 @@ describe('validateStartupEnvironment · CORS in production', () => {
     }));
     const cors = issues.find(i => i.key === 'CORS_ORIGINS');
     assert.equal(cors, undefined);
+  });
+
+  it('blocks CSRF_DISABLED in production', () => {
+    for (const CSRF_DISABLED of ['1', 'true', 'TRUE']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'production',
+        CSRF_DISABLED,
+        CORS_ORIGINS: 'https://app.example.com',
+      }));
+      const csrf = issues.find(i => i.code === 'CSRF_DISABLED_IN_PRODUCTION');
+      assert.ok(csrf);
+      assert.equal(csrf.severity, Severity.BLOCKING);
+    }
   });
 });
 

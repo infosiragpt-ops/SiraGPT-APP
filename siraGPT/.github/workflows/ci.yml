@@ -200,7 +200,7 @@ jobs:
       ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       FRONTEND_URL: http://localhost:3000
       BASE_URL: http://localhost:5000
-      CORS_ORIGINS: "*"
+      CORS_ORIGINS: "http://localhost:3000"
       MAX_FILE_SIZE: 50
       UPLOAD_DIR: uploads
       # passport-google-oauth20 requires non-empty clientID/clientSecret at

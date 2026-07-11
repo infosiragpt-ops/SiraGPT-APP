@@ -122,6 +122,11 @@ const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
 const refreshRotation = require('../services/auth/refresh-token-rotation');
 const { clearSessionCookie, setSessionCookie } = require('../utils/session-cookie');
+const { isProductionLike } = require('../utils/environment');
+const {
+  clearSamlPreAuthCookie,
+  setSamlPreAuthCookie,
+} = require('../services/saml-preauth-cookie');
 const {
   validateBody,
   formatExpressValidatorErrors,
@@ -153,9 +158,9 @@ const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'siragpt-clients';
 const JWT_ACCESS_TTL = process.env.JWT_ACCESS_TTL || '7d';
 
 // Rate limiters scoped per sensitive endpoint. See rate-limit-auth.js
-// for the sliding-window semantics and Redis/in-memory fallback. We
-// build these once at module load so the closures share state across
-// requests.
+// for sliding-window semantics: production requires Redis and fails closed;
+// explicit local/test policy may use process memory. We build these once at
+// module load so the closures share state across requests.
 const loginRateLimit = makeAuthRateLimit({
   name: 'login',
   limit: 5,
@@ -601,7 +606,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip — `issueCsrfToken`
     // resets both the public + secret cookies with brand-new randomness.
-    const csrfToken = issueCsrfToken(res);
+    const csrfToken = issueCsrfToken(res, req);
 
     res.status(201).json({
       user: userWithoutPassword,
@@ -725,7 +730,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,
     // task 2). Token rotates on every login.
-    const csrfToken = issueCsrfToken(res);
+    const csrfToken = issueCsrfToken(res, req);
 
     res.json({
       user: serializedUser,
@@ -1162,20 +1167,14 @@ router.post('/sessions/revoke-all', authenticateToken, async (req, res) => {
   }
 });
 
-// ─── SSO scaffold (ratchet 45) ──────────────────────────────────────
-// Two public endpoints that resolve an org by slug and *would* hand off
-// to the configured SAML/OIDC provider. The handshake itself is not
-// implemented yet — both endpoints return 501 with the redacted config
-// so the FE can wire its "Continue with SSO" button and integration
-// tests can assert the contract before the real implementation lands.
+// ─── SSO entry points (ratchet 45) ───────────────────────────────────
+// SAML login is SP-initiated: the GET endpoint creates a one-time
+// AuthnRequest + RelayState and redirects to the configured IdP. OIDC login
+// retains its legacy 501 scaffold; OIDC callbacks remain unchanged.
 //
-//   GET /api/auth/sso/:orgSlug/login     — redirect target placeholder
-//   GET /api/auth/sso/:orgSlug/callback  — IdP callback placeholder
-//
-// When the integration ships the login route should 302 to
-// `org.ssoConfig.entryPoint` with the provider-specific query params,
-// and the callback should validate the SAML response / OIDC code and
-// mint a Sira session for the matched user.
+//   GET  /api/auth/sso/:orgSlug/login     — SAML IdP redirect
+//   GET  /api/auth/sso/:orgSlug/callback  — OIDC callback
+//   POST /api/auth/sso/:orgSlug/callback  — SAML ACS
 
 function redactSsoConfigForPublic(config) {
   if (!config || typeof config !== 'object') return null;
@@ -1203,20 +1202,50 @@ async function resolveOrgForSso(slug) {
   }
 }
 
-router.get('/sso/:orgSlug/login', async (req, res) => {
-  const org = await resolveOrgForSso(req.params.orgSlug);
+async function ssoLoginHandler(req, res, deps = {}) {
+  const resolveOrg = deps.resolveOrgForSso || resolveOrgForSso;
+  const samlHandler = deps.samlHandler || require('../services/saml-handler');
+  const org = await resolveOrg(req.params.orgSlug);
   if (!org) return res.status(404).json({ error: 'organization not found' });
   if (!org.ssoEnabled || !org.ssoConfig) {
     return res.status(400).json({ error: 'SSO is not enabled for this organization' });
   }
-  return res.status(501).json({
-    ok: false,
-    implemented: false,
-    message: 'SSO login redirect not implemented',
+  // Preserve the existing OIDC placeholder exactly. This endpoint only
+  // implements the SAML HTTP-Redirect binding in this hardening cycle.
+  if (org.ssoConfig.provider !== 'saml') {
+    return res.status(501).json({
+      ok: false,
+      implemented: false,
+      message: 'SSO login redirect not implemented',
+      orgSlug: org.slug,
+      config: redactSsoConfigForPublic(org.ssoConfig),
+    });
+  }
+
+  const result = await samlHandler.initiateSamlLogin(org.ssoConfig, {
     orgSlug: org.slug,
-    config: redactSsoConfigForPublic(org.ssoConfig),
   });
-});
+  if (!result.ok) {
+    if (result.status === 503) {
+      res.set('Cache-Control', 'no-store');
+      res.set('Retry-After', String(result.retryAfter || 1));
+    }
+    return res.status(result.status || 500).json({
+      ok: false,
+      error: result.error || 'saml_login_initialization_failed',
+      orgSlug: org.slug,
+    });
+  }
+  const setPreAuthCookie = deps.setSamlPreAuthCookie || setSamlPreAuthCookie;
+  setPreAuthCookie(res, {
+    orgSlug: org.slug,
+    nonce: result.preAuthNonce,
+    maxAgeMs: result.ttlMs,
+  }, deps.env || process.env);
+  return res.redirect(302, result.url);
+}
+
+router.get('/sso/:orgSlug/login', (req, res) => ssoLoginHandler(req, res));
 
 router.get('/sso/:orgSlug/callback', async (req, res) => {
   const org = await resolveOrgForSso(req.params.orgSlug);
@@ -1249,18 +1278,75 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
 // three existing regression test files so they keep passing without
 // modification: deps overrides any of {prisma, writeAuditLog,
 // samlHandler, oidcHandler, resolveOrgForSso}.
+function requestHeader(req, name) {
+  if (typeof req?.get === 'function') return req.get(name);
+  return req?.headers?.[String(name).toLowerCase()];
+}
+
+function wantsTrustedSamlJson(req) {
+  const accept = String(requestHeader(req, 'accept') || '').toLowerCase();
+  const mode = String(requestHeader(req, 'x-sira-response-mode') || '').trim().toLowerCase();
+  return mode === 'json' && accept.includes('application/json');
+}
+
+function resolveSamlFrontendCallback(env = process.env) {
+  const configured = String(env.FRONTEND_URL || getFrontendUrl(env) || '').trim();
+  let frontend;
+  try {
+    frontend = new URL(configured);
+  } catch (_error) {
+    return null;
+  }
+  if (!['http:', 'https:'].includes(frontend.protocol)) return null;
+  if (frontend.username || frontend.password) return null;
+  if (isProductionLike(env) && frontend.protocol !== 'https:') return null;
+  const callback = new URL('/auth/callback', `${frontend.origin}/`);
+  callback.searchParams.set('sso', 'success');
+  return callback.toString();
+}
+
+function completeSamlBrowserLogin(req, res, result, deps = {}) {
+  const env = deps.env || process.env;
+  const callbackUrl = resolveSamlFrontendCallback(env);
+  if (!callbackUrl) {
+    return res.status(500).json({
+      ok: false,
+      error: 'saml_frontend_callback_invalid',
+    });
+  }
+
+  const setCookie = deps.setSessionCookie || setSessionCookie;
+  const issueCsrf = deps.issueCsrfToken || issueCsrfToken;
+  setCookie(res, result.token, env);
+  const csrfToken = issueCsrf(res, req);
+
+  if (wantsTrustedSamlJson(req)) {
+    const { token: _token, ...safeResult } = result;
+    return res.status(200).json({ ...safeResult, csrfToken });
+  }
+  return res.redirect(303, callbackUrl);
+}
+
 async function ssoSamlCallbackHandler(req, res, deps = {}) {
+  const isSamlPost = typeof req?.body?.SAMLResponse === 'string';
+  if (isSamlPost && typeof res?.clearCookie === 'function') {
+    const clearPreAuthCookie = deps.clearSamlPreAuthCookie || clearSamlPreAuthCookie;
+    clearPreAuthCookie(res, req.params.orgSlug, deps.env || process.env);
+  }
   const svc = new SsoCallbackService({
     prisma: deps.prisma || prisma,
     audit: deps.writeAuditLog || writeAuditLog,
     samlHandler: deps.samlHandler || require('../services/saml-handler'),
     oidcHandler: deps.oidcHandler || require('../services/oidc-handler'),
     resolveOrg: deps.resolveOrgForSso || resolveOrgForSso,
-    signSessionToken,
+    signSessionToken: deps.signSessionToken || signSessionToken,
     // Injected narrow Prisma adapters used by callback contract tests do not
     // expose the RBAC transaction surface. Production (no override) always
     // receives the strict lifecycle service.
     rbacAssignments: deps.rbacAssignments || (deps.prisma ? null : rbacAssignments),
+    completeSamlLogin: (request, response, result) => (
+      completeSamlBrowserLogin(request, response, result, deps)
+    ),
   });
   return svc.handle(req, res);
 }
@@ -1303,6 +1389,10 @@ router.__ssoHelpers = {
   resolveOrgForSso,
   extractEmailDomain,
   resolveOrgBySsoDomain,
+  ssoLoginHandler,
+  completeSamlBrowserLogin,
+  resolveSamlFrontendCallback,
+  wantsTrustedSamlJson,
   ssoSamlCallbackHandler,
 };
 
@@ -1725,7 +1815,7 @@ router.post(
       });
 
       setSessionCookie(res, token);
-      const csrfToken = issueCsrfToken(res);
+      const csrfToken = issueCsrfToken(res, req);
 
       return res.json({
         ok: true,
@@ -1926,7 +2016,7 @@ router.post(
       });
 
       setSessionCookie(res, token);
-      const csrfToken = issueCsrfToken(res);
+      const csrfToken = issueCsrfToken(res, req);
 
       return res.json({
         ok: true,

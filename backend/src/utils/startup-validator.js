@@ -22,6 +22,15 @@ const {
   resolveDirectMigrationDatabaseUrl,
   resolveRuntimeDatabaseUrl,
 } = require('../config/database-url');
+const { resolveSensitiveRateLimitPolicy } = require('../middleware/rate-limit-policy');
+const {
+  hasWildcardOrigin,
+  validateAllowedOrigins,
+} = require('../middleware/cors-policy');
+const {
+  isInvalidEnvironmentAlias,
+  isProductionLike,
+} = require('./environment');
 
 // Known placeholder patterns — matches both obvious examples and
 // common copy-paste defaults that should never reach production.
@@ -192,8 +201,19 @@ function checkNumeric(key, value, min, max, label) {
  */
 function validateStartupEnvironment(env = process.env, options = {}) {
   const { failOnBlocking = true } = options;
+  const production = isProductionLike(env);
 
   issues.length = 0; // Reset
+
+  if (isInvalidEnvironmentAlias(env)) {
+    issues.push({
+      key: 'NODE_ENV',
+      code: 'NODE_ENV_INVALID_ALIAS',
+      label: 'Runtime environment',
+      severity: Severity.BLOCKING,
+      message: 'NODE_ENV uses an unsupported alias; use the literal production environment name.',
+    });
+  }
 
   // ─── Required secrets (blocking if missing) ─────────────
   checkRequired('JWT_SECRET', env.JWT_SECRET, 'JWT Secret');
@@ -222,7 +242,7 @@ function validateStartupEnvironment(env = process.env, options = {}) {
       key: 'RBAC_ENFORCEMENT_MODE',
       code: 'RBAC_ENFORCEMENT_MODE_INVALID',
       label: 'RBAC enforcement mode',
-      severity: env.NODE_ENV === 'production' ? Severity.BLOCKING : Severity.WARNING,
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
       message: 'RBAC_ENFORCEMENT_MODE must be either shadow or enforce.',
     });
   }
@@ -287,13 +307,94 @@ function validateStartupEnvironment(env = process.env, options = {}) {
     });
   }
 
+  const sensitiveRateLimitPolicy = resolveSensitiveRateLimitPolicy(env);
+  if (!sensitiveRateLimitPolicy.valid) {
+    issues.push({
+      key: 'RATE_LIMIT_SENSITIVE_POLICY',
+      code: 'SENSITIVE_RATE_LIMIT_POLICY_INVALID',
+      label: 'Sensitive rate-limit policy',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'Sensitive rate-limit policy is invalid.',
+      hint: 'Use distributed in production; memory and fail-open are restricted to local/test environments.',
+    });
+  }
+  if (production) {
+    if (!env.REDIS_URL) {
+      issues.push({
+        key: 'REDIS_URL',
+        code: 'SENSITIVE_RATE_LIMIT_REDIS_REQUIRED',
+        label: 'Sensitive rate-limit distributed store',
+        severity: Severity.BLOCKING,
+        message: 'Production sensitive rate limits require a configured distributed store.',
+      });
+    }
+    if (String(env.RATE_LIMIT_STORE || '').trim().toLowerCase() === 'memory') {
+      issues.push({
+        key: 'RATE_LIMIT_STORE',
+        code: 'SENSITIVE_RATE_LIMIT_STORE_UNSAFE',
+        label: 'Rate-limit store',
+        severity: Severity.BLOCKING,
+        message: 'Production sensitive rate limits cannot use process-local storage.',
+      });
+    }
+    if (
+      sensitiveRateLimitPolicy.valid
+      && sensitiveRateLimitPolicy.configuredMode !== 'distributed'
+    ) {
+      issues.push({
+        key: 'RATE_LIMIT_SENSITIVE_POLICY',
+        code: 'SENSITIVE_RATE_LIMIT_POLICY_UNSAFE',
+        label: 'Sensitive rate-limit policy',
+        severity: Severity.BLOCKING,
+        message: 'Production sensitive rate limits must fail closed on distributed-store errors.',
+      });
+    }
+  }
+
   // ─── CORS origins (important for security) ─────────────
-  if (env.NODE_ENV === 'production' && (!env.CORS_ORIGINS || env.CORS_ORIGINS === '*')) {
+  const corsOrigins = String(env.CORS_ORIGINS || '').trim();
+  if (production && !corsOrigins) {
     issues.push({
       key: 'CORS_ORIGINS',
+      code: 'CORS_ORIGINS_REQUIRED',
       label: 'CORS Origins',
-      severity: Severity.WARNING,
-      message: 'CORS_ORIGINS is "*" in production. Restrict to specific origins.',
+      severity: Severity.BLOCKING,
+      message: 'Production requires an explicit CORS_ORIGINS allowlist.',
+    });
+  }
+  if (production && hasWildcardOrigin(corsOrigins)) {
+    issues.push({
+      key: 'CORS_ORIGINS',
+      code: 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN',
+      label: 'CORS Origins',
+      severity: Severity.BLOCKING,
+      message: 'Credentialed CORS cannot use a wildcard origin in production.',
+    });
+  } else if (production && corsOrigins) {
+    try {
+      validateAllowedOrigins(
+        corsOrigins.split(',').map((origin) => origin.trim()).filter(Boolean),
+      );
+    } catch (_error) {
+      issues.push({
+        key: 'CORS_ORIGINS',
+        code: 'CORS_ORIGINS_INVALID',
+        label: 'CORS Origins',
+        severity: Severity.BLOCKING,
+        message: 'Production CORS_ORIGINS contains an invalid origin.',
+      });
+    }
+  }
+  if (
+    production
+    && ['1', 'true'].includes(String(env.CSRF_DISABLED || '').trim().toLowerCase())
+  ) {
+    issues.push({
+      key: 'CSRF_DISABLED',
+      code: 'CSRF_DISABLED_IN_PRODUCTION',
+      label: 'CSRF protection',
+      severity: Severity.BLOCKING,
+      message: 'CSRF protection cannot be disabled in production.',
     });
   }
 
@@ -352,7 +453,7 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   }
 
   // ─── Production-specific checks ────────────────────────
-  if (env.NODE_ENV === 'production') {
+  if (production) {
     if (!env.CORS_ORIGINS || env.CORS_ORIGINS === '*') {
       // Already warned above — this is an extra nudge
     }

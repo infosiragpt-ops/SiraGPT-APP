@@ -25,6 +25,7 @@ import { Search as SearchIcon, AlertCircle, MessageSquare } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { authenticatedFetch, isTrustedSiraApiUrl } from "@/lib/authenticated-fetch"
 
 export interface SearchHit {
   messageId: string
@@ -76,7 +77,10 @@ export function SearchPanel({ onClose, initialQuery = "", endpoint = "/api/searc
     setError(null)
 
     const url = `${endpoint}?q=${encodeURIComponent(debounced)}&limit=20`
-    fetch(url, { signal: ac.signal, credentials: "include" })
+    const request = isTrustedSiraApiUrl(url)
+      ? authenticatedFetch(url, { signal: ac.signal })
+      : fetch(url, { signal: ac.signal })
+    request
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()

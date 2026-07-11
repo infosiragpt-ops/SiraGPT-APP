@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Key, Copy, Check, Trash2, Eye, EyeOff } from "lucide-react"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 interface ApiKey {
   id: string
@@ -24,7 +25,7 @@ export function ApiKeysCard() {
 
   const fetchKeys = async () => {
     try {
-      const res = await fetch("/api/keys")
+      const res = await authenticatedFetch("/api/keys")
       if (res.ok) {
         const data = await res.json()
         setKeys(data.keys || [])
@@ -36,7 +37,7 @@ export function ApiKeysCard() {
     if (!keyName.trim()) return
     setLoading(true)
     try {
-      const res = await fetch("/api/keys", {
+      const res = await authenticatedFetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: keyName }),
@@ -54,7 +55,7 @@ export function ApiKeysCard() {
 
   const deleteKey = async (id: string) => {
     try {
-      await fetch("/api/keys/" + id, { method: "DELETE" })
+      await authenticatedFetch("/api/keys/" + id, { method: "DELETE" })
       fetchKeys()
     } catch { /* silently ignore */ }
   }

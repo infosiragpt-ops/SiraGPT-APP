@@ -36,6 +36,8 @@
 
 const crypto = require('crypto');
 const { getRequestId } = require('./request-id');
+const { resolveAllowedOrigins } = require('./cors-policy');
+const { isProductionLike } = require('../utils/environment');
 
 const TOKEN_BYTES = 32;
 const TOKEN_COOKIE = 'csrf_token';
@@ -73,18 +75,16 @@ function generateToken() {
  * preview) and browsers that block third-party cookies (Safari ITP), where
  * the `_csrf_secret` cookie never reaches the backend.
  *
- * NOTE: the token is GLOBAL — the signature proves it was minted by this
- * server but does NOT bind it to a session/user. On its own that is not enough
- * for CSRF defense (an attacker can mint one too). It is only safe because
- * requireCsrf honors the stateless path EXCLUSIVELY from the X-CSRF-Token
- * header, which a cross-site attacker cannot set without a CORS preflight the
- * server rejects for unknown origins. A 24h embedded timestamp bounds replay.
+ * When an Express session id is available, the signature also includes that
+ * server-known id. The id itself is never embedded in the public token. This
+ * prevents a stateless token minted in one browser session from being replayed
+ * in another. Requests without a session retain the header-only fallback.
  */
-function makeStatelessToken() {
+function makeStatelessToken(sessionBinding) {
   const nonce = crypto.randomBytes(TOKEN_BYTES).toString('hex');
   const ts = Date.now().toString(36);
   const payload = `${nonce}.${ts}`;
-  const sig = hashToken(payload);
+  const sig = hashToken(statelessSignaturePayload(payload, sessionBinding));
   return `${payload}.${sig}`;
 }
 
@@ -107,13 +107,39 @@ const STATELESS_CLOCK_SKEW_MS = 5 * 60 * 1000;
  * origins), so the header requirement is what preserves CSRF protection. See
  * requireCsrf for the enforcement.
  */
-function verifyStatelessToken(token, maxAgeMs = STATELESS_MAX_AGE_MS) {
+function statelessSignaturePayload(payload, sessionBinding) {
+  const binding = normalizeSessionBinding(sessionBinding);
+  return binding ? `${payload}\0session:${binding}` : payload;
+}
+
+function normalizeSessionBinding(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim();
+  if (!normalized) return '';
+  return normalized.slice(0, 2048);
+}
+
+function csrfSessionBinding(req) {
+  if (!req || typeof req !== 'object') return '';
+  return normalizeSessionBinding(
+    req.sessionID
+    || req.session?.id
+    || req.session?.sessionID,
+  );
+}
+
+function verifyStatelessToken(
+  token,
+  maxAgeMs = STATELESS_MAX_AGE_MS,
+  sessionBinding,
+) {
   if (typeof token !== 'string') return false;
   const parts = token.split('.');
   if (parts.length !== 3) return false;
   const [nonce, ts, sig] = parts;
   if (!nonce || !ts || !sig) return false;
-  const expectedSig = hashToken(`${nonce}.${ts}`);
+  const payload = `${nonce}.${ts}`;
+  const expectedSig = hashToken(statelessSignaturePayload(payload, sessionBinding));
   if (!timingSafeEqual(expectedSig, sig)) return false;
   const issuedAt = parseInt(ts, 36);
   if (!Number.isFinite(issuedAt)) return false;
@@ -172,6 +198,35 @@ function hasBearerAuth(req) {
   return typeof h === 'string' && /^bearer\s+\S+/i.test(h);
 }
 
+function hasCookieAuth(req) {
+  const token = req?.cookies?.token;
+  return typeof token === 'string' && token.trim().length > 0;
+}
+
+function cookieRequestContextFailure(req, env = process.env) {
+  if (!hasCookieAuth(req)) return null;
+  const origin = readHeader(req, 'origin');
+  let allowedOrigins;
+  try {
+    allowedOrigins = resolveAllowedOrigins(env);
+  } catch (_error) {
+    return 'untrusted_origin';
+  }
+  if (
+    typeof origin !== 'string'
+    || origin === 'null'
+    || !allowedOrigins.includes(origin)
+  ) {
+    return 'untrusted_origin';
+  }
+
+  const fetchSite = String(readHeader(req, 'sec-fetch-site') || '').trim().toLowerCase();
+  if (fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+    return 'invalid_fetch_site';
+  }
+  return null;
+}
+
 /**
  * Issues a fresh CSRF token pair on the response (sets both the public
  * `csrf_token` cookie + the httpOnly `_csrf_secret` cookie) and returns
@@ -184,8 +239,8 @@ function hasBearerAuth(req) {
  *     the dedicated fetch. Token still rotates because every call to
  *     this helper generates a brand-new random value.
  */
-function issueCsrfToken(res) {
-  const token = makeStatelessToken();
+function issueCsrfToken(res, req) {
+  const token = makeStatelessToken(csrfSessionBinding(req));
   const secret = hashToken(token);
   // In the Replit dev environment the app is previewed inside a cross-site
   // iframe (top-level origin: replit.com, iframe origin: *.riker.replit.dev).
@@ -196,7 +251,7 @@ function issueCsrfToken(res) {
   // In real production the app is accessed directly so Strict is fine.
   const isReplitSidecar = process.env.REPLIT_BACKEND_MODE === 'sidecar';
   const sameSite = isReplitSidecar ? 'none' : 'strict';
-  const secure = process.env.NODE_ENV === 'production' || isReplitSidecar;
+  const secure = isProductionLike(process.env) || isReplitSidecar;
   const cookieOpts = {
     httpOnly: false, // client JS must be able to read it
     secure,
@@ -216,7 +271,7 @@ function issueCsrfToken(res) {
  * it to subsequent state-mutating calls.
  */
 function csrfTokenRoute(req, res) {
-  const token = issueCsrfToken(res);
+  const token = issueCsrfToken(res, req);
   setCsrfSecurityHeaders(res);
   res.json({ csrfToken: token });
 }
@@ -248,10 +303,18 @@ function requireCsrf(req, res, next) {
   if (hasBearerAuth(req)) return next();
 
   // Allow opt-out via env (e.g. integration tests) — keeps the rest
-  // of the suite from needing to plumb tokens through every request.
-  if (process.env.CSRF_DISABLED === '1' || process.env.CSRF_DISABLED === 'true') {
+  // of the suite from needing to plumb tokens through every request. The
+  // production validator blocks this setting and runtime ignores it as
+  // defense in depth.
+  if (
+    !isProductionLike(process.env)
+    && ['1', 'true'].includes(String(process.env.CSRF_DISABLED || '').trim().toLowerCase())
+  ) {
     return next();
   }
+
+  const contextFailure = cookieRequestContextFailure(req, process.env);
+  if (contextFailure) return rejectCsrf(req, res, contextFailure);
 
   const headerToken = readHeader(req, HEADER_NAME) || readHeader(req, 'x-xsrf-token');
   const bodyToken = req.body && (req.body._csrf || req.body.csrfToken);
@@ -287,7 +350,14 @@ function requireCsrf(req, res, next) {
   // could replay it via a plain cross-site <form> POST and bypass CSRF. A
   // custom header cannot be set cross-site without a CORS preflight (rejected
   // for unknown origins), which is what keeps this path safe.
-  if (headerToken && verifyStatelessToken(headerToken)) {
+  if (
+    headerToken
+    && verifyStatelessToken(
+      headerToken,
+      STATELESS_MAX_AGE_MS,
+      csrfSessionBinding(req),
+    )
+  ) {
     return next();
   }
 
@@ -302,7 +372,10 @@ module.exports = {
   generateToken,
   makeStatelessToken,
   verifyStatelessToken,
+  csrfSessionBinding,
+  cookieRequestContextFailure,
   hasBearerAuth,
+  hasCookieAuth,
   readHeader,
   rejectCsrf,
   setCsrfSecurityHeaders,

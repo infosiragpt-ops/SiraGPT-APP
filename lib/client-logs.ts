@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 type ClientLogPayload = {
   source?: "client" | "api" | "render" | "global" | "network"
   severity?: "fatal" | "error" | "warn" | "info"
@@ -71,7 +73,7 @@ export function reportClientLog(payload: ClientLogPayload): void {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   if (token) headers.Authorization = `Bearer ${token}`
 
-  fetch("/api/telemetry/error", {
+  authenticatedFetch("/api/telemetry/error", {
     method: "POST",
     headers,
     credentials: "include",

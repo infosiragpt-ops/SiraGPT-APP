@@ -1,4 +1,7 @@
 "use client"
+
+import { authenticatedFetch } from "./authenticated-fetch"
+
 // Updated database service to work with the new backend
 export class DatabaseService {
     // User operations
@@ -11,12 +14,14 @@ export class DatabaseService {
         apiUsage: number
         monthlyLimit: number
     }) {
-        const response = await fetch('/api/auth/register', {
+        const response = await authenticatedFetch('/api/auth/register', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify(userData),
+        }, {
+            bearerToken: null,
         })
 
         if (!response.ok) {
@@ -27,7 +32,7 @@ export class DatabaseService {
     }
 
     async getUserByEmail(email: string) {
-        const response = await fetch(`/api/users/by-email?email=${encodeURIComponent(email)}`)
+        const response = await authenticatedFetch(`/api/users/by-email?email=${encodeURIComponent(email)}`)
 
         if (!response.ok) {
             return null
@@ -38,7 +43,7 @@ export class DatabaseService {
     }
 
     async getUserById(id: string) {
-        const response = await fetch(`/api/users/${id}`)
+        const response = await authenticatedFetch(`/api/users/${id}`)
 
         if (!response.ok) {
             return null
@@ -49,11 +54,7 @@ export class DatabaseService {
     }
 
     async getAllUsers() {
-        const response = await fetch('/api/admin/users', {
-            headers: {
-                'Authorization': `Bearer ${this.getToken()}`,
-            },
-        })
+        const response = await authenticatedFetch('/api/admin/users')
 
         if (!response.ok) {
             throw new Error('Failed to fetch users')
@@ -68,11 +69,10 @@ export class DatabaseService {
         title: string
         model: string
     }) {
-        const response = await fetch('/api/chats', {
+        const response = await authenticatedFetch('/api/chats', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getToken()}`,
             },
             body: JSON.stringify(chatData),
         })
@@ -86,11 +86,7 @@ export class DatabaseService {
     }
 
     async getChatsByUserId(userId: string) {
-        const response = await fetch('/api/chats', {
-            headers: {
-                'Authorization': `Bearer ${this.getToken()}`,
-            },
-        })
+        const response = await authenticatedFetch('/api/chats')
 
         if (!response.ok) {
             throw new Error('Failed to fetch chats')
@@ -101,11 +97,10 @@ export class DatabaseService {
     }
 
     async updateChat(id: string, updates: any) {
-        const response = await fetch(`/api/chats/${id}`, {
+        const response = await authenticatedFetch(`/api/chats/${id}`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getToken()}`,
             },
             body: JSON.stringify(updates),
         })
@@ -119,11 +114,8 @@ export class DatabaseService {
     }
 
     async deleteChat(id: string) {
-        const response = await fetch(`/api/chats/${id}`, {
+        const response = await authenticatedFetch(`/api/chats/${id}`, {
             method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${this.getToken()}`,
-            },
         })
 
         return response.ok
@@ -131,11 +123,10 @@ export class DatabaseService {
 
     // Payment operations
     async createPayment(paymentData: any) {
-        const response = await fetch('/api/payments/stripe', {
+        const response = await authenticatedFetch('/api/payments/stripe', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getToken()}`,
             },
             body: JSON.stringify(paymentData),
         })
@@ -148,11 +139,7 @@ export class DatabaseService {
     }
 
     async getAllPayments() {
-        const response = await fetch('/api/admin/payments', {
-            headers: {
-                'Authorization': `Bearer ${this.getToken()}`,
-            },
-        })
+        const response = await authenticatedFetch('/api/admin/payments')
 
         if (!response.ok) {
             throw new Error('Failed to fetch payments')
@@ -170,11 +157,7 @@ export class DatabaseService {
 
     // Analytics
     async getAnalytics() {
-        const response = await fetch('/api/admin/analytics', {
-            headers: {
-                'Authorization': `Bearer ${this.getToken()}`,
-            },
-        })
+        const response = await authenticatedFetch('/api/admin/analytics')
 
         if (!response.ok) {
             throw new Error('Failed to fetch analytics')

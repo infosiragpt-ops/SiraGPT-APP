@@ -151,18 +151,106 @@ below the parent coordinator's 40-second minimum and 50-second default.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CORS_ORIGINS` | Comma-separated allowed origins | `http://localhost:3000` |
+| `NODE_ENV` | Runtime mode; production requires the literal `production` value and the `prod` alias is rejected | `development` |
+| `CORS_ORIGINS` | Comma-separated exact allowed origins; required and validated in production | `http://localhost:3000` locally; production Compose uses the `.com` Caddy hosts |
 | `CSP_ENABLED` | Enable Content Security Policy | `true` |
 | `CSP_REPORT_ONLY` | Report-only mode (vs enforcement) | `true` |
 | `CSP_REPORT_URI` | CSP violation report endpoint | (empty) |
 | `RATE_LIMIT_WINDOW_MS` | Rate limit window in ms | `900000` (15 min) |
 | `RATE_LIMIT_AUTH_MAX` | Max auth requests per window | `30` |
-| `RATE_LIMIT_EXPENSIVE_MAX` | Max expensive requests per window | `60` |
-| `RATE_LIMIT_API_MAX` | Max API requests per window | `1000` |
+| `RATE_LIMIT_EXPENSIVE_MAX` | Max expensive requests per window | `180` |
+| `RATE_LIMIT_API_MAX` | Max API requests per window | `3000` |
 | `RATE_LIMIT_STORE` | Rate limit store backend | `auto` (Redis or memory) |
+| `RATE_LIMIT_SENSITIVE_POLICY` | Sensitive auth/API-key/billing policy; production permits only `distributed` | `distributed` in production |
+| `RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS` | ioredis command timeout and matching outer deadline for every rate-limit command/pipeline | `1000` |
+| `RATE_LIMIT_STORE_RETRY_AFTER_SECONDS` | Retry delay returned when a required distributed store is unavailable | `5` |
+| `RATE_LIMIT_BILLING_CHECKOUT_MAX` | Checkout attempts per user | `10` |
+| `RATE_LIMIT_BILLING_CHECKOUT_IP_MAX` | Checkout attempts per normalized shared IP | `100` |
+| `RATE_LIMIT_BILLING_VERIFY_MAX` | Checkout verification attempts per user | `20` |
+| `RATE_LIMIT_BILLING_VERIFY_IP_MAX` | Checkout verification attempts per normalized shared IP | `200` |
+| `RATE_LIMIT_BILLING_PLAN_CHANGE_MAX` | Plan/subscription mutations per user | `5` |
+| `RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX` | Plan/subscription mutations per normalized shared IP | `50` |
+| `RATE_LIMIT_BILLING_WINDOW_MS` | Checkout and verification window | `900000` |
+| `RATE_LIMIT_BILLING_PLAN_WINDOW_MS` | Plan/subscription mutation window | `3600000` |
+| `RATE_LIMIT_BILLING_REFUND_MAX` | Admin grants/refunds per admin | `5` |
+| `RATE_LIMIT_BILLING_REFUND_IP_MAX` | Admin grants/refunds per normalized shared IP | `50` |
+| `RATE_LIMIT_BILLING_REFUND_WINDOW_MS` | Admin refund window | `3600000` |
+| `SIRAGPT_API_KEY_AUDIT_COUNTER_MAX` | Maximum in-process API-key audit-sampling counters | `10000` |
+| `CSRF_DISABLED` | Emergency/test-only CSRF bypass; never enable in production | `0` |
+| `CSRF_PEPPER` | CSRF HMAC pepper; derives from `JWT_SECRET` when omitted | (derived) |
+| `FRONTEND_URL` | Canonical browser origin for the token-free SAML `303` completion redirect | `http://localhost:3000` outside production |
+| `TRUST_PROXY_HOPS` | Bounded number of known reverse-proxy hops; production Compose pins one Caddy hop | `0` for direct binds |
+| `TRUST_PROXY_CIDR` | Alternative comma-separated exact trusted proxy CIDRs; clear `TRUST_PROXY_HOPS` before using | (empty) |
+| `SAML_REQUEST_TTL_MS` | Lifetime for SP-initiated AuthnRequest IDs and RelayState; clamped to 1–15 minutes | `300000` |
+| `SAML_REQUEST_CACHE_MAX_ENTRIES` | Maximum live request/state entries in the bounded SAML cache | `5000` |
+| `SAML_REDIS_CONNECT_TIMEOUT_MS` | Redis connection deadline for SAML request state; clamped to 10–2000 ms | `500` |
+| `SAML_REDIS_COMMAND_TIMEOUT_MS` | ioredis and wrapper deadline for every SAML cache command; clamped to 10–2000 ms | `500` |
+| `SAML_REDIS_RETRY_BASE_MS` | Initial Redis initialization retry delay for SAML state; clamped to 10–5000 ms | `100` |
+| `SAML_REDIS_RETRY_MAX_MS` | Maximum SAML Redis exponential-backoff delay; clamped to 10–60000 ms | `5000` |
+| `SAML_REDIS_PREFIX` | Dedicated Redis namespace for SAML request and RelayState keys | `sira:saml:` |
+| `SAML_RELAY_STATE_SECRET` | HMAC secret for RelayState; derives from `JWT_SECRET` when omitted | (derived) |
+| `SAML_ACS_BODY_LIMIT_BYTES` | Exact SAML ACS URL-encoded body cap; clamped to 64–512 KiB | `262144` |
+| `SAML_ACS_RATE_LIMIT_MAX` | Exact ACS POST attempts per normalized IP and window | `30` |
+| `SAML_ACS_RATE_LIMIT_WINDOW_MS` | Exact ACS distributed limiter window; clamped to 1 second–15 minutes | `60000` |
 | `SIRAGPT_REDACT_EXTRA_HEADERS` | Optional comma-separated header names to redact from logs/traces in addition to the built-in deny list | (empty) |
 | `SIRAGPT_REDACT_EXTRA_QUERY_KEYS` | Optional comma-separated query parameter names to redact from logs/traces in addition to the built-in deny list | (empty) |
 | `PLAN_QUOTAS_ENFORCED` | Enforce plan-based token quotas | `true` |
+
+Production startup blocks missing Redis, process-memory sensitive limiting,
+and sensitive `memory`/`fail-open` policies. Auth, API-key, and billing
+limiters return a no-store 503 with `Retry-After` if Redis is unavailable. The
+general API catch-all remains available (fail-open) during that incident.
+Billing consumes the tight per-user and higher shared-IP dimensions atomically.
+IPv6 addresses use `/64` buckets and IPv4 is canonicalized from Express
+`req.ip`/the direct socket; raw `X-Forwarded-For` is never parsed by a limiter.
+
+CSRF protection applies automatically to state-changing `/api/*` requests
+that carry the login cookie. Safe methods and Bearer/API-key requests bypass
+the guard. Stripe's signed webhook is exempt only at its exact path. SAML
+HTTP-POST assertions bypass Sira CSRF only on the exact
+`/api/auth/sso/:orgSlug/callback` path with a standard `SAMLResponse` field;
+signature and InResponseTo/replay validation still execute. Public
+generated-app mounts `/api/apps-ai` and `/api/apps-kv` remain exempt.
+Production startup rejects missing, malformed, or wildcard `CORS_ORIGINS` and
+enabled `CSRF_DISABLED`. Cookie-auth unsafe requests also require a trusted
+Origin and `Sec-Fetch-Site` of `same-origin` or `same-site`.
+
+SP-initiated SAML begins at `GET /api/auth/sso/:orgSlug/login`.
+`@node-saml/node-saml` generates the AuthnRequest and authorize redirect with
+`validateInResponseTo: 'always'`. Signed, one-time RelayState binds the
+organization to that request ID; the ACS atomically consumes both and checks
+exact Destination plus configured Audience. In production, Redis is mandatory
+and any connection or command outage fails closed with a bounded no-store 503;
+the bounded memory fallback is non-production only. Redis initialization uses
+a bounded exponential-backoff circuit: every production attempt fails closed,
+then a later request retries and can recover without restarting the backend.
+
+The initiating browser receives a high-entropy pre-auth nonce cookie. It is
+`HttpOnly`, scoped only to that organization's callback path, and
+`SameSite=None` (`Secure` in production) so the cross-site SAML form POST can
+return it. Only its SHA-256 hash is stored. The ACS compares and consumes that
+hash atomically and clears the cookie; cross-browser/login-CSRF attempts fail
+without consuming the legitimate browser's state.
+
+A successful form ACS sets the standard session cookie, issues the existing
+CSRF cookie pair, and returns a `303` to the `/auth/callback` path on the
+validated same origin as `FRONTEND_URL`, without a JWT in the URL or body.
+Explicit JSON negotiation requires both `Accept: application/json` and
+`X-Sira-Response-Mode: json`, and still omits the JWT. IdP CORS is not required:
+the exact standard form POST to the ACS emits no credentialed CORS headers.
+OIDC GET callbacks and all other auth routes retain the normal CORS behavior.
+The dedicated fail-closed ACS rate limiter executes before the bounded body
+parser and request telemetry. It returns `429` on exhaustion, `503` when the
+required production Redis store is unavailable, and the parser returns `413`
+above the clamped body limit.
+
+Use `NODE_ENV=production` literally for production. The `prod` alias is a
+blocking, value-free startup error so no subsystem applies only part of the
+production security policy.
+
+Use only one proxy topology setting. Direct deployments keep
+`TRUST_PROXY_HOPS=0`; the production Caddy topology uses exactly one hop.
+Prefer `TRUST_PROXY_CIDR` when the proxy network is stable and known.
 
 ### Authentication revocation and deletion races
 

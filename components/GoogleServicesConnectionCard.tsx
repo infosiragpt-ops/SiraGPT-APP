@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Calendar, FolderOpen, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { getNormalizedApiBaseUrl } from '@/lib/api-base-url';
+import { authenticatedFetch } from '@/lib/authenticated-fetch';
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface GoogleServicesConnectionCardProps {
@@ -31,19 +32,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
     const checkConnectionStatus = async () => {
         try {
             setIsLoading(true);
-            const token = localStorage.getItem('auth-token');
-
-            if (!token) {
-                setIsConnected(false);
-                setIsLoading(false);
-                return;
-            }
-
-            const response = await fetch(`${apiRoot}/auth/google-services/status`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+            const response = await authenticatedFetch(`${apiRoot}/auth/google-services/status`);
 
             if (response.ok) {
                 const data = await response.json();
@@ -61,23 +50,9 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
     const handleConnect = async () => {
         try {
             setIsConnecting(true);
-            const token = localStorage.getItem('auth-token');
-
-            if (!token) {
-                toast({
-                    title: "Authentication Required",
-                    description: "Please log in to connect Google Services",
-                    variant: "destructive"
-                });
-                return;
-            }
 
             // Get auth URL from backend
-            const response = await fetch(`${apiRoot}/auth/google-services`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+            const response = await authenticatedFetch(`${apiRoot}/auth/google-services`);
 
             if (!response.ok) {
                 throw new Error('Failed to get auth URL');
@@ -137,17 +112,8 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
 
     const handleDisconnect = async () => {
         try {
-            const token = localStorage.getItem('auth-token');
-
-            if (!token) {
-                return;
-            }
-
-            const response = await fetch(`${apiRoot}/auth/google-services/disconnect`, {
+            const response = await authenticatedFetch(`${apiRoot}/auth/google-services/disconnect`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
             });
 
             if (response.ok) {

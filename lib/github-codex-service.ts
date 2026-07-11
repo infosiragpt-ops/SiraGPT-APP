@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 export interface GitHubCodexStatus {
@@ -328,7 +330,7 @@ async function handle<T>(res: Response): Promise<T> {
 
 export const githubCodexService = {
   async status(): Promise<GitHubCodexStatus> {
-    const res = await fetch(`${API_ROOT}/codex/github/status`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/status`, {
       credentials: "include",
       headers: authHeader(),
     })
@@ -341,7 +343,7 @@ export const githubCodexService = {
     qs.set("repo", input.repo)
     if (input.branch?.trim()) qs.set("branch", input.branch.trim())
     if (input.limit) qs.set("limit", String(input.limit))
-    const res = await fetch(`${API_ROOT}/codex/github/repo?${qs.toString()}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/repo?${qs.toString()}`, {
       credentials: "include",
       headers: authHeader(),
     })
@@ -355,7 +357,7 @@ export const githubCodexService = {
     if (input.branch?.trim()) qs.set("branch", input.branch.trim())
     if (input.limit) qs.set("limit", String(input.limit))
     if (input.maxBytes) qs.set("maxBytes", String(input.maxBytes))
-    const res = await fetch(`${API_ROOT}/codex/github/files?${qs.toString()}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/files?${qs.toString()}`, {
       credentials: "include",
       headers: authHeader(),
     })
@@ -376,7 +378,7 @@ export const githubCodexService = {
     if (input.limit) qs.set("limit", String(input.limit))
     if (input.status?.trim()) qs.set("status", input.status.trim())
     if (input.event?.trim()) qs.set("event", input.event.trim())
-    const res = await fetch(`${API_ROOT}/codex/github/actions/runs?${qs.toString()}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/actions/runs?${qs.toString()}`, {
       credentials: "include",
       headers: authHeader(),
     })
@@ -386,7 +388,7 @@ export const githubCodexService = {
   async listActionJobs(input: { repo: string; runId: number }): Promise<GitHubCodexActionJobsResult> {
     const qs = new URLSearchParams()
     qs.set("repo", input.repo)
-    const res = await fetch(`${API_ROOT}/codex/github/actions/runs/${input.runId}/jobs?${qs.toString()}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/actions/runs/${input.runId}/jobs?${qs.toString()}`, {
       credentials: "include",
       headers: authHeader(),
     })
@@ -399,7 +401,7 @@ export const githubCodexService = {
     includeLogs?: boolean
     maxLogBytes?: number
   }): Promise<GitHubCodexActionFailureAnalysisResult> {
-    const res = await fetch(`${API_ROOT}/codex/github/actions/analyze-failure`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/actions/analyze-failure`, {
       method: "POST",
       credentials: "include",
       headers: {
@@ -418,7 +420,7 @@ export const githubCodexService = {
     limit?: number
     maxBytes?: number
   }): Promise<GitHubCodexRagIngestResult> {
-    const res = await fetch(`${API_ROOT}/codex/github/ingest`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/ingest`, {
       method: "POST",
       credentials: "include",
       headers: {
@@ -437,7 +439,7 @@ export const githubCodexService = {
     collection?: string
     k?: number
   }): Promise<GitHubCodexRagSearchResult> {
-    const res = await fetch(`${API_ROOT}/codex/github/retrieve`, {
+    const res = await authenticatedFetch(`${API_ROOT}/codex/github/retrieve`, {
       method: "POST",
       credentials: "include",
       headers: {

@@ -70,16 +70,8 @@ const FEATURED_PATTERNS: Array<{ id: string; display: string; match: (n: string)
   { id: "gpt-4o-mini",                  display: "GPT-4o mini",          match: n => /^gpt-4o-mini$/i.test(n) },
 ]
 
-function authHeader(): Record<string, string> {
-  const t = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-  return t ? { Authorization: `Bearer ${t}` } : {}
-}
-
 async function fetchModels(): Promise<AiModel[]> {
-  const res = await fetch(`${API_ROOT}/ai/models?type=TEXT`, {
-    credentials: "include",
-    headers: authHeader(),
-  })
+  const res = await fetch(`${API_ROOT}/ai/models?type=TEXT`)
   if (!res.ok) return []
   const json = await res.json()
   return Array.isArray(json.models) ? json.models : []

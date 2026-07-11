@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Music, Play, Pause, Download, Volume2, Clock, Sparkles } from "lucide-react"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
@@ -179,7 +180,7 @@ const downloadMusic = async () => {
   if (!generatedMusic) return
 
   try {
-    const res = await fetch(`${apiClient.apiBaseURL}${generatedMusic.audio_url}`, {
+    const res = await authenticatedFetch(`${apiClient.apiBaseURL}${generatedMusic.audio_url}`, {
       credentials: 'include', // add if API requires cookies/auth
     })
     const blob = await res.blob()

@@ -104,6 +104,7 @@ import {
   useNavigationTransition,
 } from "@/components/navigation-transition-context"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
@@ -911,7 +912,7 @@ export function AppSidebar() {
   const startPinnedGptChat = async (gptId: string) => {
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, {
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, {
         method: "POST",
         credentials: "include",
         headers: {

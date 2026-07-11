@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * Frontend client for the /api/github backend (Replit-style workspace).
  *
@@ -45,10 +47,10 @@ async function handle<T>(res: Response): Promise<T> {
 }
 
 function get<T>(path: string): Promise<T> {
-  return fetch(`${baseUrl}${path}`, { credentials: "include", headers: authHeaders() }).then(handle<T>)
+  return authenticatedFetch(`${baseUrl}${path}`, { credentials: "include", headers: authHeaders() }).then(handle<T>)
 }
 function send<T>(method: string, path: string, body?: unknown): Promise<T> {
-  return fetch(`${baseUrl}${path}`, {
+  return authenticatedFetch(`${baseUrl}${path}`, {
     method,
     credentials: "include",
     headers: authHeaders(),
@@ -215,7 +217,7 @@ export const githubService = {
   // Download the whole workspace as a .zip to the user's machine. Uses a
   // fetch+blob flow (not a plain <a href>) so the Bearer auth header rides along.
   downloadZip: async (id: string, fileName = "workspace.zip") => {
-    const res = await fetch(`${baseUrl}/connected/${id}/download`, {
+    const res = await authenticatedFetch(`${baseUrl}/connected/${id}/download`, {
       credentials: "include",
       headers: authHeaders(),
     })

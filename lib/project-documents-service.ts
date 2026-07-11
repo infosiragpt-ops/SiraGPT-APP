@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * project-documents-service — CRUD client for ProjectDocument rows.
  *
@@ -52,7 +54,7 @@ async function handle<T>(res: Response): Promise<T> {
 
 export const projectDocumentsService = {
   async list(projectId: string): Promise<ProjectDocumentSummary[]> {
-    const res = await fetch(`${API_ROOT}/projects/${projectId}/documents`, {
+    const res = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/documents`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -61,7 +63,7 @@ export const projectDocumentsService = {
   },
 
   async get(projectId: string, docId: string): Promise<ProjectDocument> {
-    const res = await fetch(`${API_ROOT}/projects/${projectId}/documents/${docId}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/documents/${docId}`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -70,7 +72,7 @@ export const projectDocumentsService = {
   },
 
   async create(projectId: string, body: { title?: string; content?: string }): Promise<ProjectDocument> {
-    const res = await fetch(`${API_ROOT}/projects/${projectId}/documents`, {
+    const res = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/documents`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -81,7 +83,7 @@ export const projectDocumentsService = {
   },
 
   async update(projectId: string, docId: string, body: { title?: string; content?: string; meta?: any }): Promise<ProjectDocument> {
-    const res = await fetch(`${API_ROOT}/projects/${projectId}/documents/${docId}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/documents/${docId}`, {
       method: "PUT",
       credentials: "include",
       headers: authHeaders(),
@@ -92,7 +94,7 @@ export const projectDocumentsService = {
   },
 
   async remove(projectId: string, docId: string): Promise<void> {
-    const res = await fetch(`${API_ROOT}/projects/${projectId}/documents/${docId}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/documents/${docId}`, {
       method: "DELETE",
       credentials: "include",
       headers: authHeaders(),

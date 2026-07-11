@@ -44,25 +44,15 @@ interface PlanResponse {
   plan: Plan
 }
 
-function authHeader(): Record<string, string> {
-  if (typeof window === "undefined") return {}
-  const token = window.localStorage.getItem("auth-token")
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
 export async function getPlans(): Promise<Plan[]> {
-  const res = await fetch(`${API_ROOT}/plans`, {
-    headers: authHeader(),
-  })
+  const res = await fetch(`${API_ROOT}/plans`)
   if (!res.ok) throw new Error(`getPlans: ${res.status}`)
   const data = (await res.json()) as PlansResponse
   return data.plans
 }
 
 export async function getPlan(code: PlanCode): Promise<Plan | null> {
-  const res = await fetch(`${API_ROOT}/plans/${code}`, {
-    headers: authHeader(),
-  })
+  const res = await fetch(`${API_ROOT}/plans/${code}`)
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`getPlan(${code}): ${res.status}`)
   const data = (await res.json()) as PlanResponse

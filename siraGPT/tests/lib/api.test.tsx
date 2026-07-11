@@ -9,6 +9,7 @@ describe('api client core', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.setToken(null)
+    ;(api as any)._ensureCsrfToken = vi.fn().mockResolvedValue(null)
   })
 
   it('includes Authorization header when token is set', async () => {
@@ -47,6 +48,23 @@ describe('api client core', () => {
     expect(opts.headers.get('x-count')).toBe('2')
     expect(opts.headers.has('x-null')).toBe(false)
     expect(opts.headers.has('x-symbol-value')).toBe(false)
+  })
+
+  it('verifies payment sessions with a CSRF-aware POST body', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ updated: true }),
+    })
+    ;(api as any)._ensureCsrfToken = vi.fn().mockResolvedValue('csrf-payment-token')
+
+    await api.verifyPaymentSession('cs_test_123')
+
+    const [url, opts] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/payments\/verify-session$/)
+    expect(opts.method).toBe('POST')
+    expect(JSON.parse(String(opts.body))).toEqual({ session_id: 'cs_test_123' })
+    expect(opts.headers.get('X-CSRF-Token')).toBe('csrf-payment-token')
   })
 
   it('returns null for 204 No Content (via getCurrentUser)', async () => {

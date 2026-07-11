@@ -1,8 +1,8 @@
 const express = require('express');
 const { randomUUID } = require('node:crypto');
-const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { makeBillingRateLimit } = require('../middleware/billing-rate-limit');
 const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
@@ -162,20 +162,116 @@ async function streamInvoicePdfOrRedirect(req, res, invoice) {
   return res.status(404).json({ error: 'Invoice PDF not available' });
 }
 
-// Rate limiting for payment endpoints
-const paymentLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 requests per windowMs
-  message: { error: 'Too many payment attempts, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const checkoutBillingLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_CHECKOUT_MAX,
+  10,
+  { min: 1, max: 1000 },
+);
+const checkoutBillingIpLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_CHECKOUT_IP_MAX,
+  100,
+  { min: checkoutBillingLimit, max: 100_000 },
+);
+const verifyBillingLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_VERIFY_MAX,
+  20,
+  { min: 1, max: 1000 },
+);
+const verifyBillingIpLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_VERIFY_IP_MAX,
+  200,
+  { min: verifyBillingLimit, max: 100_000 },
+);
+const planChangeBillingLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_PLAN_CHANGE_MAX,
+  5,
+  { min: 1, max: 1000 },
+);
+const planChangeBillingIpLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX,
+  50,
+  { min: planChangeBillingLimit, max: 100_000 },
+);
+const billingWindowMs = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_WINDOW_MS,
+  15 * 60 * 1000,
+  { min: 1000, max: 24 * 60 * 60 * 1000 },
+);
+const planBillingWindowMs = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_PLAN_WINDOW_MS,
+  60 * 60 * 1000,
+  { min: 1000, max: 24 * 60 * 60 * 1000 },
+);
 
-const subscriptionLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour  
-  max: 5, // Limit subscription changes
-  message: { error: 'Too many subscription changes, please try again later.' }
-});
+function billingLimiter(name, limit, ipLimit, windowMs) {
+  return makeBillingRateLimit({
+    name,
+    limit,
+    ipLimit,
+    windowMs,
+  });
+}
+
+const checkoutStripeBillingRateLimit = billingLimiter(
+  'checkout-stripe',
+  checkoutBillingLimit,
+  checkoutBillingIpLimit,
+  billingWindowMs,
+);
+const checkoutPaypalBillingRateLimit = billingLimiter(
+  'checkout-paypal',
+  checkoutBillingLimit,
+  checkoutBillingIpLimit,
+  billingWindowMs,
+);
+const checkoutMercadoPagoBillingRateLimit = billingLimiter(
+  'checkout-mercadopago',
+  checkoutBillingLimit,
+  checkoutBillingIpLimit,
+  billingWindowMs,
+);
+const verifyBillingRateLimit = billingLimiter(
+  'verify-session',
+  verifyBillingLimit,
+  verifyBillingIpLimit,
+  billingWindowMs,
+);
+const planPreviewBillingRateLimit = billingLimiter(
+  'plan-change-preview',
+  planChangeBillingLimit,
+  planChangeBillingIpLimit,
+  planBillingWindowMs,
+);
+const planExecuteBillingRateLimit = billingLimiter(
+  'plan-change-execute',
+  planChangeBillingLimit,
+  planChangeBillingIpLimit,
+  planBillingWindowMs,
+);
+const planCancelBillingRateLimit = billingLimiter(
+  'plan-change-cancel',
+  planChangeBillingLimit,
+  planChangeBillingIpLimit,
+  planBillingWindowMs,
+);
+const subscriptionCancelBillingRateLimit = billingLimiter(
+  'subscription-cancel',
+  planChangeBillingLimit,
+  planChangeBillingIpLimit,
+  planBillingWindowMs,
+);
+const subscriptionReactivateBillingRateLimit = billingLimiter(
+  'subscription-reactivate',
+  planChangeBillingLimit,
+  planChangeBillingIpLimit,
+  planBillingWindowMs,
+);
+const instantSubscriptionBillingRateLimit = billingLimiter(
+  'instant-subscription',
+  planChangeBillingLimit,
+  planChangeBillingIpLimit,
+  planBillingWindowMs,
+);
 
 // Get usage statistics
 router.get('/usage', authenticateToken, async (req, res) => {
@@ -269,9 +365,9 @@ router.put('/notifications/:id/read', authenticateToken, async (req, res) => {
 });
 
 // Preview plan change
-router.post('/plan-change/preview', subscriptionLimiter, [
+router.post('/plan-change/preview', authenticateToken, planPreviewBillingRateLimit, [
   body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
-], authenticateToken, async (req, res) => {
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -290,13 +386,13 @@ router.post('/plan-change/preview', subscriptionLimiter, [
 });
 
 // Execute plan change
-router.post('/plan-change/execute', subscriptionLimiter, [
+router.post('/plan-change/execute', authenticateToken, planExecuteBillingRateLimit, [
   body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan'),
   // `immediate` is optional — the handler defaults it to true. Without
   // .optional(), activating validationResult below would reject every
   // legitimate request that omits it.
   body('immediate').optional().isBoolean().withMessage('Immediate must be boolean')
-], authenticateToken, async (req, res) => {
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -315,7 +411,7 @@ router.post('/plan-change/execute', subscriptionLimiter, [
 });
 
 // Cancel scheduled plan change
-router.post('/plan-change/cancel', subscriptionLimiter, authenticateToken, async (req, res) => {
+router.post('/plan-change/cancel', authenticateToken, planCancelBillingRateLimit, async (req, res) => {
   try {
     const userId = req.user.id;
     
@@ -329,9 +425,9 @@ router.post('/plan-change/cancel', subscriptionLimiter, authenticateToken, async
 });
 
 // Create Stripe checkout session
-router.post('/stripe', paymentLimiter, [
+router.post('/stripe', authenticateToken, checkoutStripeBillingRateLimit, [
   body('plan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
-], authenticateToken, async (req, res) => {
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -438,9 +534,9 @@ router.post('/stripe', paymentLimiter, [
 });
 
 // PayPal payment
-router.post('/paypal', [
+router.post('/paypal', authenticateToken, checkoutPaypalBillingRateLimit, [
   body('plan').isIn(['PRO', 'ENTERPRISE']).withMessage('Invalid plan')
-], authenticateToken, async (req, res) => {
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -476,9 +572,9 @@ router.post('/paypal', [
 });
 
 // MercadoPago payment
-router.post('/mercadopago', [
+router.post('/mercadopago', authenticateToken, checkoutMercadoPagoBillingRateLimit, [
   body('plan').isIn(['PRO', 'ENTERPRISE']).withMessage('Invalid plan')
-], authenticateToken, async (req, res) => {
+], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -677,10 +773,48 @@ async function claimAndGrantVerifiedPayment({
   });
 }
 
-// Verify payment session
+// Legacy read-only status. GET must never retrieve Stripe, claim a payment, or
+// grant entitlements: browser/link prefetchers are allowed to issue safe
+// methods. Fulfillment lives exclusively on the CSRF-protected POST below.
 router.get('/verify-session', authenticateToken, async (req, res) => {
   try {
     const { session_id } = req.query;
+    if (!session_id) {
+      return res.status(400).json({ error: 'Session ID required' });
+    }
+    const payment = await prisma.payment.findFirst({
+      where: {
+        stripeSessionId: session_id,
+        userId: req.user.id,
+      },
+    });
+    if (!payment) {
+      return res.status(404).json({ error: 'Payment session not found' });
+    }
+    return res.json({
+      sessionId: session_id,
+      paymentStatus: payment.status,
+      plan: payment.plan,
+      amount: payment.amount,
+      status: String(payment.status || '').toLowerCase(),
+      customerEmail: req.user.email,
+      updated: false,
+      readOnly: true,
+    });
+  } catch (error) {
+    logRouteError(req, 'payments.verify_session_status_failed', error);
+    return res.status(500).json({
+      error: 'Failed to read payment session status',
+      requestId: requestIdFor(req),
+    });
+  }
+});
+
+// Verify and fulfill payment session. POST is intentional: this operation may
+// atomically claim a payment and grant entitlements.
+router.post('/verify-session', authenticateToken, verifyBillingRateLimit, async (req, res) => {
+  try {
+    const { session_id } = req.body || {};
     
     if (!session_id) {
       return res.status(400).json({ error: 'Session ID required' });
@@ -960,9 +1094,18 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
 //      logged with the `[SUPER_ADMIN_AUDIT]` tag for grep-ability.
 // Without (1) AND (2) the endpoint returns 403/404 — the legacy
 // "any authenticated user can self-upgrade" behavior is gone.
+function requireInstantSuperAdmin(req, res, next) {
+  if (!req.user?.isSuperAdmin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  return next();
+}
+
 router.post(
   '/instant',
   authenticateToken,
+  requireInstantSuperAdmin,
+  instantSubscriptionBillingRateLimit,
   [
     body('plan')
       .isIn(['PRO', 'PRO_MAX', 'ENTERPRISE'])
@@ -973,11 +1116,6 @@ router.post(
   ],
   async (req, res) => {
     try {
-      // Gate 1: super-admin only.
-      if (!req.user?.isSuperAdmin) {
-        return res.status(403).json({ error: 'Super admin access required' });
-      }
-
       // Gate 2: env flag must be on (default-off in production).
       if (process.env.ALLOW_INSTANT_SUBSCRIPTION !== 'true') {
         return res.status(404).json({
@@ -2735,7 +2873,7 @@ router.get('/subscription', authenticateToken, async (req, res) => {
 });
 
 // Cancel subscription
-router.post('/subscription/cancel', subscriptionLimiter, authenticateToken, async (req, res) => {
+router.post('/subscription/cancel', authenticateToken, subscriptionCancelBillingRateLimit, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id }
@@ -2792,7 +2930,7 @@ router.post('/subscription/cancel', subscriptionLimiter, authenticateToken, asyn
 });
 
 // Reactivate subscription
-router.post('/subscription/reactivate', subscriptionLimiter, authenticateToken, async (req, res) => {
+router.post('/subscription/reactivate', authenticateToken, subscriptionReactivateBillingRateLimit, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id }

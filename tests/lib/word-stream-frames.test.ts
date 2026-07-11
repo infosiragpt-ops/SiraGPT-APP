@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiClient as api } from '@/lib/api'
+import { authenticatedFetch, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
 
 vi.mock('@/lib/client-logs', () => ({
   reportClientLog: vi.fn(),
@@ -25,8 +26,11 @@ function streamOfChunks(chunks: string[]): ReadableStream<Uint8Array> {
 
 describe('generateWordStream — cross-read SSE frame reassembly', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.restoreAllMocks()
+    mockFetch.mockReset()
     api.setToken(null)
+    clearAuthenticatedFetchCsrfCache()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
   it('reassembles a data frame split across two reads and fires onClose on a boundary-split done frame', async () => {

@@ -1,5 +1,6 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 
 export interface CustomGPT {
@@ -114,7 +115,7 @@ class GPTsService {
         params.append('visibility', filters.visibility)
       }
 
-      const response = await fetch(`${this.baseUrl}?${params.toString()}`, {
+      const response = await authenticatedFetch(`${this.baseUrl}?${params.toString()}`, {
         credentials: 'include',
         headers: this.authHeaders(),
       })
@@ -133,7 +134,7 @@ class GPTsService {
 
   async getGPT(id: string): Promise<CustomGPT> {
     try {
-      const response = await fetch(`${this.baseUrl}/${id}`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${id}`, {
         credentials: 'include',
         headers: this.authHeaders(),
       })
@@ -152,10 +153,7 @@ class GPTsService {
 
   async getGPTByShareId(shareId: string): Promise<CustomGPT> {
     try {
-      const response = await fetch(`${this.baseUrl}/share/${shareId}`, {
-        credentials: 'include',
-        headers: this.authHeaders(),
-      })
+      const response = await fetch(`${this.baseUrl}/share/${shareId}`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch shared GPT: ${response.statusText}`)
@@ -182,7 +180,7 @@ class GPTsService {
         formData.append('icon', iconFile)
       }
 
-      const response = await fetch(this.baseUrl, {
+      const response = await authenticatedFetch(this.baseUrl, {
         method: 'POST',
         headers: this.authHeaders(false),
         credentials: 'include',
@@ -215,7 +213,7 @@ class GPTsService {
         formData.append('icon', iconFile)
       }
 
-      const response = await fetch(`${this.baseUrl}/${id}`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${id}`, {
         method: 'PUT',
         headers: this.authHeaders(false),
         credentials: 'include',
@@ -237,7 +235,7 @@ class GPTsService {
 
   async deleteGPT(id: string): Promise<void> {
     try {
-      const response = await fetch(`${this.baseUrl}/${id}`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${id}`, {
         method: 'DELETE',
         credentials: 'include',
         headers: this.authHeaders(),
@@ -255,10 +253,7 @@ class GPTsService {
 
   async getCategories(): Promise<string[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/categories`, {
-        credentials: 'include',
-        headers: this.authHeaders(),
-      })
+      const response = await fetch(`${this.baseUrl}/categories`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch categories: ${response.statusText}`)
@@ -274,7 +269,7 @@ class GPTsService {
 
   async startChatWithGPT(gptId: string): Promise<any> {
     try {
-      const response = await fetch(`${this.baseUrl}/${gptId}/chat`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${gptId}/chat`, {
         method: 'POST',
         headers: this.authHeaders(),
         credentials: 'include',
@@ -296,7 +291,7 @@ class GPTsService {
   // ── Knowledge files (Conocimientos) ──
   async getGptKnowledge(id: string): Promise<GPTKnowledgeFile[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/${id}/knowledge`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${id}/knowledge`, {
         credentials: 'include',
         headers: this.authHeaders(),
       })
@@ -321,7 +316,7 @@ class GPTsService {
         formData.append('files', file)
       }
 
-      const response = await fetch(`${this.baseUrl}/${id}/knowledge`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${id}/knowledge`, {
         method: 'POST',
         headers: this.authHeaders(false),
         credentials: 'include',
@@ -343,7 +338,7 @@ class GPTsService {
 
   async deleteGptKnowledge(id: string, fileId: string): Promise<void> {
     try {
-      const response = await fetch(`${this.baseUrl}/${id}/knowledge/${fileId}`, {
+      const response = await authenticatedFetch(`${this.baseUrl}/${id}/knowledge/${fileId}`, {
         method: 'DELETE',
         credentials: 'include',
         headers: this.authHeaders(),
@@ -367,7 +362,7 @@ class GPTsService {
     name?: string
     messages: GPTPreviewMessage[]
   }): Promise<GPTPreviewResponse> {
-    const response = await fetch(`${this.baseUrl}/preview-chat`, {
+    const response = await authenticatedFetch(`${this.baseUrl}/preview-chat`, {
       method: 'POST',
       credentials: 'include',
       headers: this.authHeaders(),

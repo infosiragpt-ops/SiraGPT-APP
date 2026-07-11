@@ -6,12 +6,25 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { validateConfig, resolveEnvName } = require('../src/utils/config-validator');
 
-test('resolveEnvName maps NODE_ENV variants', () => {
+test('resolveEnvName accepts literal production and rejects the prod alias', () => {
   assert.strictEqual(resolveEnvName({ NODE_ENV: 'production' }), 'production');
-  assert.strictEqual(resolveEnvName({ NODE_ENV: 'PROD' }), 'production');
+  assert.strictEqual(resolveEnvName({ NODE_ENV: 'PROD' }), 'invalid');
   assert.strictEqual(resolveEnvName({ NODE_ENV: 'staging' }), 'staging');
   assert.strictEqual(resolveEnvName({ NODE_ENV: 'test' }), 'test');
   assert.strictEqual(resolveEnvName({}), 'development');
+});
+
+test('prod alias is a value-free blocking configuration error', () => {
+  const r = validateConfig({
+    NODE_ENV: 'prod',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+  });
+  const issue = r.errors.find((error) => error.code === 'NODE_ENV_INVALID_ALIAS');
+  assert.ok(issue);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(issue.key, 'NODE_ENV');
+  assert.strictEqual(Object.hasOwn(issue, 'value'), false);
+  assert.doesNotMatch(issue.message, /NODE_ENV\s*=\s*prod/i);
 });
 
 test('production requires a database URL / SESSION_SECRET / JWT_SECRET', () => {
@@ -29,6 +42,7 @@ test('production with valid required vars passes (with warnings allowed)', () =>
     PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
+    CORS_ORIGINS: 'https://siragpt.com',
   });
   assert.strictEqual(r.ok, true);
 });
@@ -39,6 +53,7 @@ test('production + localhost PRISMA_DATABASE_URL warns by default', () => {
     PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
+    CORS_ORIGINS: 'https://siragpt.com',
   });
   assert.strictEqual(r.ok, true);
   assert.ok(r.warnings.some((w) => w.key === 'PRISMA_DATABASE_URL'));
@@ -51,6 +66,7 @@ test('production + localhost PRISMA_DATABASE_URL can be blocked by policy', () =
     PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
+    CORS_ORIGINS: 'https://siragpt.com',
   });
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => e.key === 'PRISMA_DATABASE_URL'));
@@ -63,21 +79,57 @@ test('production + localhost PRISMA_DATABASE_URL is allowed in CI smoke tests', 
     PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
+    CORS_ORIGINS: 'https://siragpt.com',
   });
   assert.strictEqual(r.ok, true);
   assert.ok(r.warnings.some((w) => w.key === 'PRISMA_DATABASE_URL'));
 });
 
-test('production with CORS_ORIGINS=* emits warning', () => {
+test('production blocks wildcard CORS with credentials', () => {
+  for (const CORS_ORIGINS of ['*', 'https://app.example.com, *']) {
+    const r = validateConfig({
+      NODE_ENV: 'production',
+      PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+      SESSION_SECRET: 'a'.repeat(64),
+      JWT_SECRET: 'b'.repeat(64),
+      CORS_ORIGINS,
+    });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.errors.some((error) => (
+      error.key === 'CORS_ORIGINS'
+      && error.code === 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN'
+    )));
+  }
+});
+
+test('production blocks CSRF_DISABLED', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
     PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
-    CORS_ORIGINS: '*',
+    CORS_ORIGINS: 'https://app.example.com',
+    CSRF_DISABLED: '1',
   });
-  assert.strictEqual(r.ok, true);
-  assert.ok(r.warnings.some((w) => w.key === 'CORS_ORIGINS'));
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((error) => (
+    error.key === 'CSRF_DISABLED'
+    && error.code === 'CSRF_DISABLED_IN_PRODUCTION'
+  )));
+});
+
+test('production requires a configured valid CORS allowlist', () => {
+  const base = {
+    NODE_ENV: 'production',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  };
+  const missing = validateConfig(base);
+  assert.ok(missing.errors.some((error) => error.code === 'CORS_ORIGINS_REQUIRED'));
+
+  const invalid = validateConfig({ ...base, CORS_ORIGINS: 'not an origin' });
+  assert.ok(invalid.errors.some((error) => error.code === 'CORS_ORIGINS_INVALID'));
 });
 
 test('development requires only PRISMA_DATABASE_URL', () => {
@@ -101,6 +153,7 @@ test('Accelerate runtime and direct migration URLs validate as separate roles', 
     DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
+    CORS_ORIGINS: 'https://siragpt.com',
   });
 
   assert.strictEqual(r.ok, true);

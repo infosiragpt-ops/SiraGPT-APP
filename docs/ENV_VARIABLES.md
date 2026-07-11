@@ -108,10 +108,65 @@
 |----------|---------|---------|
 | `CSRF_DISABLED` | `0` | Disable CSRF double-submit protection (test env only) |
 | `CSRF_PEPPER` | (derived from JWT_SECRET) | HMAC pepper for CSRF token hashing |
-| `CORS_ORIGINS` | `*` in dev, `siragpt.io,localhost:3000` in prod | Comma-separated CORS allowlist |
-| `CSP_ENABLED` | `0` in dev, `1` in prod | Enable Content-Security-Policy |
+| `CORS_ORIGINS` | localhost in development; required in production | Comma-separated exact-origin allowlist; wildcard is rejected in production |
+| `FRONTEND_URL` | `http://localhost:3000` outside production | Canonical browser origin used for the token-free SAML `303` completion redirect |
+| `TRUST_PROXY_HOPS` | `0` | Number of known reverse-proxy hops Express may trust; production Compose pins the single Caddy hop |
+| `TRUST_PROXY_CIDR` | (empty) | Alternative comma-separated exact proxy CIDRs; mutually exclusive with `TRUST_PROXY_HOPS` |
+| `CSP_ENABLED` | `0` in development, `1` in production | Enable Content-Security-Policy |
 | `CSP_REPORT_ONLY` | `1` | CSP report-only mode |
 | `JWT_SECRET` | required | JWT signing secret |
+| `SAML_REQUEST_TTL_MS` | `300000` | Lifetime for SP-initiated AuthnRequest IDs and RelayState (clamped to 1–15 minutes) |
+| `SAML_REQUEST_CACHE_MAX_ENTRIES` | `5000` | Maximum live SAML request/state entries in the bounded cache |
+| `SAML_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for SAML request state (10–2000 ms) |
+| `SAML_REDIS_COMMAND_TIMEOUT_MS` | `500` | ioredis and wrapper deadline for every SAML cache command (10–2000 ms) |
+| `SAML_REDIS_RETRY_BASE_MS` | `100` | Initial SAML Redis initialization retry delay (10–5000 ms) |
+| `SAML_REDIS_RETRY_MAX_MS` | `5000` | Maximum exponential-backoff delay for SAML Redis initialization (10–60000 ms) |
+| `SAML_REDIS_PREFIX` | `sira:saml:` | Dedicated Redis namespace for SAML request/state keys |
+| `SAML_RELAY_STATE_SECRET` | (derived from `JWT_SECRET`) | Optional dedicated HMAC secret for signed RelayState |
+| `SAML_ACS_BODY_LIMIT_BYTES` | `262144` | Exact ACS URL-encoded body limit, clamped to 64–512 KiB |
+| `SAML_ACS_RATE_LIMIT_MAX` | `30` | Maximum exact ACS POST attempts per normalized IP bucket/window |
+| `SAML_ACS_RATE_LIMIT_WINDOW_MS` | `60000` | Exact ACS distributed limiter window (1 second–15 minutes) |
+
+Cookie-authenticated state-changing requests under `/api/*` use the CSRF
+double-submit guard. Safe methods and Bearer/API-key clients bypass it. The
+Stripe webhook is exempt only at the exact signed webhook path. A standard
+`SAMLResponse` POST bypasses Sira CSRF only at the exact
+`/api/auth/sso/:orgSlug/callback` assertion-consumer path; SAML signature and
+InResponseTo/replay validation still run. Public generated-app mounts
+(`/api/apps-ai`, `/api/apps-kv`) remain cookieless. Production requires a
+valid explicit `CORS_ORIGINS`, rejects wildcards and enabled `CSRF_DISABLED`,
+and requires cookie-auth mutations to send a trusted Origin plus
+`Sec-Fetch-Site: same-origin|same-site`.
+
+SP-initiated SAML starts at `GET /api/auth/sso/:orgSlug/login`, where
+`@node-saml/node-saml` generates an AuthnRequest and redirects to the IdP.
+Each request uses `validateInResponseTo: 'always'`, a short-lived request ID,
+and signed one-time RelayState bound to the organization and request. The ACS
+also verifies exact Destination and configured Audience before provisioning.
+In production, Redis is mandatory for this state and an unavailable store
+fails closed with `503`, `Cache-Control: no-store`, and `Retry-After`; bounded
+memory fallback exists only outside production. A bounded exponential-backoff
+Redis circuit remains fail-closed per attempt and recovers on a later request
+without a process restart.
+
+RelayState is also bound to the initiating browser by a high-entropy pre-auth
+nonce cookie. It is `HttpOnly`, narrowly scoped to that organization's ACS,
+and uses `SameSite=None` (`Secure` in production) for the cross-site SAML POST.
+Redis stores only the nonce's SHA-256 hash. The ACS atomically compares and
+consumes the hash and clears the cookie, so another browser cannot complete or
+burn the initiating browser's login.
+
+On success the form ACS sets the normal session cookie, issues the existing
+CSRF cookie pair, and sends a `303` to the `/auth/callback` path on the
+validated origin of `FRONTEND_URL`, without a JWT in the URL or response body.
+Trusted API/test callers may request JSON only with both
+`Accept: application/json` and `X-Sira-Response-Mode: json`; that response also
+omits the JWT. IdP CORS is not required:
+the exact URL-encoded ACS POST bypasses credentialed app CORS and emits no
+credentialed CORS headers, while OIDC GET and all sibling auth routes keep
+the normal allowlist. A dedicated fail-closed ACS rate limiter runs before its
+bounded body parser and request telemetry; production Redis outages return
+`503`, exhausted buckets return `429`, and oversized bodies return `413`.
 
 ---
 
@@ -123,8 +178,31 @@
 | `RATE_LIMIT_EXPENSIVE_MAX` | `180` | Max expensive (LLM) requests per window |
 | `RATE_LIMIT_API_MAX` | `3000` | Max general API requests per window |
 | `RATE_LIMIT_WINDOW_MS` | `900000` (15 min) | Rate limit window duration |
-| `RATE_LIMIT_STORE` | `redis` | Rate limit store: `redis` or `memory` |
+| `RATE_LIMIT_STORE` | `auto` (`redis` in Compose) | General store selection: `auto`, `redis`, or `memory` |
 | `RATE_LIMIT_REDIS_PREFIX` | `rl:` | Redis key prefix for rate limit counters |
+| `RATE_LIMIT_SENSITIVE_POLICY` | `distributed` in production | Sensitive auth/API-key/billing policy: `distributed`, `memory`, or `fail-open`; production accepts only `distributed` |
+| `RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS` | `1000` | Per-command/pipeline ioredis and outer wrapper timeout (10–30000 ms) |
+| `RATE_LIMIT_STORE_RETRY_AFTER_SECONDS` | `5` | `Retry-After` for fail-closed 503 responses (1–300 seconds) |
+| `RATE_LIMIT_BILLING_CHECKOUT_MAX` | `10` | Checkout attempts per user |
+| `RATE_LIMIT_BILLING_CHECKOUT_IP_MAX` | `100` | Checkout attempts per normalized shared IP |
+| `RATE_LIMIT_BILLING_VERIFY_MAX` | `20` | Checkout verification attempts per user |
+| `RATE_LIMIT_BILLING_VERIFY_IP_MAX` | `200` | Verification attempts per normalized shared IP |
+| `RATE_LIMIT_BILLING_PLAN_CHANGE_MAX` | `5` | Plan/subscription mutations per user |
+| `RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX` | `50` | Plan/subscription mutations per normalized shared IP |
+| `RATE_LIMIT_BILLING_WINDOW_MS` | `900000` | Checkout and verification window |
+| `RATE_LIMIT_BILLING_PLAN_WINDOW_MS` | `3600000` | Plan/subscription mutation window |
+| `RATE_LIMIT_BILLING_REFUND_MAX` | `5` | Admin grant/refund attempts per admin |
+| `RATE_LIMIT_BILLING_REFUND_IP_MAX` | `50` | Admin grant/refund attempts per normalized shared IP |
+| `RATE_LIMIT_BILLING_REFUND_WINDOW_MS` | `3600000` | Admin refund window |
+| `SIRAGPT_API_KEY_AUDIT_COUNTER_MAX` | `10000` | Maximum in-process API-key audit-sampling counters |
+
+Billing atomically consumes its user and IP dimensions, with a higher IP
+ceiling for offices and carrier NAT. IPv6 addresses are grouped by `/64`;
+IPv4 is canonicalized from Express `req.ip`/the socket only, never raw
+`X-Forwarded-For`. Production startup rejects a missing Redis URL,
+process-memory sensitive limiting, and `memory`/`fail-open` sensitive
+policies. The general catch-all API limiter remains fail-open on store errors
+so a Redis incident does not brick unrelated API reads.
 
 ---
 
@@ -205,7 +283,7 @@ local boot may skip or use `MIGRATION_NONFATAL=1`.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PORT` | `5000` | Express backend port |
-| `NODE_ENV` | `development` | Environment: `development`, `production`, `test` |
+| `NODE_ENV` | `development` | Environment: `development`, literal `production`, or `test`; the `prod` alias is rejected at startup |
 | `SIRAGPT_RESEARCH_EMAIL` | — | Email for polite User-Agent in scientific search |
 | `IDEMPOTENCY_ENABLED` | `false` | Enable Stripe-style replay protection |
 | `MAINTENANCE_MODE_ENABLED` | `false` | Enable 503 maintenance mode |

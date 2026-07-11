@@ -54,12 +54,38 @@ function _getApiKeyRateLimitMw() {
   if (_enforceApiKeyRateLimitMw) return _enforceApiKeyRateLimitMw;
   try {
     // eslint-disable-next-line global-require
-    const { enforceApiKeyRateLimit } = require('./enforce-api-key-rate-limit');
-    _enforceApiKeyRateLimitMw = enforceApiKeyRateLimit();
+    const {
+      createResilientApiKeyRateLimitGate,
+    } = require('./enforce-api-key-rate-limit');
+    _enforceApiKeyRateLimitMw = createResilientApiKeyRateLimitGate();
   } catch (_err) {
-    _enforceApiKeyRateLimitMw = false;
+    // Do not cache initialization failures. Production rejects this request
+    // below; the next request retries module/factory initialization.
+    return null;
   }
   return _enforceApiKeyRateLimitMw;
+}
+
+function sendApiKeyRateLimiterUnavailable(req, res) {
+  const { isProductionLike } = require('../utils/environment');
+  if (!isProductionLike(process.env)) return false;
+  const parsed = Number.parseInt(
+    String(process.env.RATE_LIMIT_STORE_RETRY_AFTER_SECONDS || ''),
+    10,
+  );
+  const retryAfterSec = Number.isFinite(parsed) && parsed >= 1 && parsed <= 300
+    ? parsed
+    : 5;
+  try { res.setHeader('Retry-After', String(retryAfterSec)); } catch (_error) { /* swallow */ }
+  sendAuthError(
+    req,
+    res,
+    503,
+    'RATE_LIMIT_STORE_UNAVAILABLE',
+    'Rate limit service temporarily unavailable.',
+    { retryAfterSec },
+  );
+  return true;
 }
 
 function firstHeaderValue(value) {
@@ -299,10 +325,11 @@ const authenticateToken = async (req, res, next) => {
       if (req.user) {
         // Ratchet 45 — enforce per-key sliding-window rate limit + sampled
         // api_key_used audit on every authenticated API-key request. The
-        // middleware sends 429 on cap exceeded and fails open on store
-        // errors. Skipped silently if the module fails to load.
+        // middleware sends 429 on cap exceeded. Production rejects store or
+        // initialization failures; failed initialization is retried next time.
         const rlMw = _getApiKeyRateLimitMw();
         if (rlMw) return rlMw(req, res, next);
+        if (sendApiKeyRateLimiterUnavailable(req, res)) return;
         return next();
       }
       return; // response already sent

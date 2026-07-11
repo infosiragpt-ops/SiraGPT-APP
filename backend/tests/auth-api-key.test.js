@@ -1,5 +1,9 @@
 'use strict';
 
+process.env.NODE_ENV = 'test';
+process.env.RATE_LIMIT_STORE = 'memory';
+process.env.RATE_LIMIT_SENSITIVE_POLICY = 'memory';
+
 /**
  * Tests for the API-key path of the auth middleware (ratchet 45).
  *

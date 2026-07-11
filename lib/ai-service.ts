@@ -1,6 +1,7 @@
 
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
 
 export interface IntentAnalysis {
@@ -1134,7 +1135,7 @@ export class AIService {
     signal?.addEventListener('abort', forwardAbort, { once: true })
 
     try {
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/ai/intent/semantic`,
         {
           method: 'POST',
@@ -1298,7 +1299,7 @@ Respond with only one word.
       messages.push({ role: "user", content: prompt });
 
       // const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/proxy/chat/completions`,
         {
           method: "POST",

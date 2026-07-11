@@ -7,6 +7,7 @@ import {
   describeStage as describeStageVocab,
   friendlyFailureLabel as friendlyFailureLabelVocab,
 } from "@/lib/file-processing-vocab"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 // Re-export the vocab so existing import sites
 // (`from "@/hooks/use-file-processing-status"`) keep working.
@@ -92,7 +93,7 @@ export function useFileProcessingStatus(
     const tick = async () => {
       polls += 1
       try {
-        const resp = await fetch(
+        const resp = await authenticatedFetch(
           `${API_ROOT}/files/${encodeURIComponent(fileId)}/processing-status`,
           { headers: authHeader(), credentials: "include" },
         )

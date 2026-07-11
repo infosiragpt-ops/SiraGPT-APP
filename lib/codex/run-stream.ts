@@ -4,6 +4,7 @@
 // testable unit; the open loop wires it to fetch + the timeline reducer.
 
 import type { CodexEventEnvelope } from './timeline-reducer'
+import { createAuthenticatedFetch } from '../authenticated-fetch'
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
 const TERMINAL = new Set(['done', 'error', 'cancelled'])
@@ -82,6 +83,9 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : undefined)
   const baseUrl = (opts.baseUrl || API_BASE).replace(/\/+$/, '')
   const token = getToken(opts.token)
+  const transport = fetchImpl
+    ? createAuthenticatedFetch({ apiBaseUrl: baseUrl, fetchImpl, getBearerToken: () => token })
+    : null
   const maxBackoff = opts.maxBackoffMs ?? 10_000
 
   let closed = false
@@ -101,9 +105,10 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
         // query string (proxy/server logs). The backend keeps a `?token=`
         // fallback for clients that can't set headers; we don't use it.
         const qs = new URLSearchParams({ afterSeq: String(lastSeq) })
-        const res = await fetchImpl(`${baseUrl}/codex/runs/${encodeURIComponent(runId)}/stream?${qs.toString()}`, {
+        const res = await transport!(`${baseUrl}/codex/runs/${encodeURIComponent(runId)}/stream?${qs.toString()}`, {
           signal: controller.signal,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        }, {
+          bearerToken: token,
         })
         if (!res.ok || !res.body) {
           // Permanent client error (404 not-found, 401/403 auth) — surface once

@@ -1,6 +1,10 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
+import {
+  authenticatedFetch,
+  prepareAuthenticatedRequest,
+} from "./authenticated-fetch"
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
@@ -509,13 +513,6 @@ class ApiClient {
     reject: (err: any) => void;
   }> = [];
 
-  // CSRF token state. The backend uses double-submit cookies:
-  // GET /api/csrf-token sets both a public `csrf_token` cookie (non-httpOnly,
-  // JS-readable) and an httpOnly `_csrf_secret` cookie. Mutating requests
-  // must echo the public token in the `X-CSRF-Token` header.
-  private _csrfTokenInFlight: Promise<string | null> | null = null;
-  private _csrfToken: string | null = null; // cached stateless token (Safari ITP path)
-
   constructor(baseURL: string) {
     this.baseURL = baseURL;
 
@@ -629,17 +626,6 @@ class ApiClient {
       headers.set('Idempotency-Key', safeUUID());
     }
 
-    // CSRF double-submit token. Backend requires X-CSRF-Token on mutating
-    // requests to cookie-auth routers (/api/auth, /api/users, /api/chats,
-    // /api/files, /api/projects, /api/payments, /api/bookmarks, /api/orgs,
-    // /api/library, /api/cowork, /api/thesis). Bearer-auth requests skip
-    // CSRF server-side, but we set the header unconditionally on mutating
-    // calls — harmless when not required.
-    if (isMutating && !headers.has('X-CSRF-Token') && !headers.has('x-csrf-token')) {
-      const csrf = await this._ensureCsrfToken();
-      if (csrf) headers.set('X-CSRF-Token', csrf);
-    }
-
     // Track last error for re-throw on final failure
     let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
@@ -667,7 +653,11 @@ class ApiClient {
           signal: controller.signal as AbortSignal,
         };
 
-        const response = await fetch(url, config);
+        const response = await authenticatedFetch(url, config, {
+          bearerToken: isCredentialHandshake(endpoint, method)
+            ? null
+            : this._getAccessTokenSnapshot(),
+        });
 
         // HTTP-level success (2xx)
         if (response.ok) {
@@ -728,27 +718,6 @@ class ApiClient {
               // Reset attempt counter so this doesn't consume a retry slot
               attempt = -1;
               continue;
-            }
-          }
-
-          // 403 csrf_invalid — token rotated or missing. Refresh once and
-          // retry transparently so the UI doesn't surface a CSRF error.
-          if (response.status === 403 && isMutating) {
-            const peek = await response.clone().json().catch(() => null) as { error?: string } | null;
-            if (peek && peek.error === 'csrf_invalid') {
-              // Force a fresh token (clear in-flight + drop stale cookie value
-              // by re-fetching) and retry once. We cap at one CSRF retry by
-              // tagging the headers so we don't loop indefinitely.
-              if (!headers.has('X-CSRF-Retry')) {
-                const fresh = await this._ensureCsrfToken(true);
-                if (fresh) {
-                  headers.set('X-CSRF-Token', fresh);
-                  headers.set('X-CSRF-Retry', '1');
-                  clearTimeout(timeoutId);
-                  attempt = -1;
-                  continue;
-                }
-              }
             }
           }
 
@@ -844,6 +813,23 @@ class ApiClient {
     return this.baseURL;
   }
 
+  private authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    return authenticatedFetch(input, init, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
+  }
+
+  /**
+   * Compatibility seam for non-ApiClient streaming callers that still own
+   * their response reader. Preparation delegates to the same shared manager,
+   * so cookie sessions and ApiClient requests cannot drift on CSRF behavior.
+   */
+  prepareMutatingFetch(init: RequestInit = {}): Promise<RequestInit> {
+    return prepareAuthenticatedRequest(this.baseURL, init, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
+  }
+
   /**
    * _parseRetryAfter — turn an RFC 9110 Retry-After header value into
    * a millisecond delay relative to "now". Returns null when the
@@ -874,56 +860,6 @@ class ApiClient {
   }
 
   /**
-   * Read the `csrf_token` cookie (set by the backend's double-submit CSRF
-   * middleware). Returns null when running on the server, when document.cookie
-   * is unavailable, or when the cookie hasn't been issued yet.
-   */
-  private _readCsrfCookie(): string | null {
-    if (typeof document === 'undefined') return null;
-    const raw = document.cookie || '';
-    const match = raw.match(/(?:^|;\s*)csrf_token=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
-  }
-
-  /**
-   * Ensure we have a CSRF token to attach to mutating requests. If the
-   * cookie is already present we return it immediately; otherwise we hit
-   * GET /api/csrf-token once (deduped via _csrfTokenInFlight) to have the
-   * backend mint a fresh pair and surface the public token in the body.
-   */
-  private async _ensureCsrfToken(forceRefresh = false): Promise<string | null> {
-    if (typeof window === 'undefined') return null;
-    if (forceRefresh) { this._csrfToken = null; this._csrfTokenInFlight = null; }
-    // Reuse the last good stateless token first. On Safari ITP the public
-    // csrf_token cookie is dropped/partitioned (split-host) and goes stale,
-    // so the cached stateless token is the only value that keeps validating.
-    if (this._csrfToken) return this._csrfToken;
-    if (!forceRefresh) {
-      const existing = this._readCsrfCookie();
-      if (existing) return existing; // double-submit path (non-Safari / same-origin)
-    }
-    if (this._csrfTokenInFlight) return this._csrfTokenInFlight;
-    this._csrfTokenInFlight = (async () => {
-      try {
-        const res = await fetch(`${this.baseURL}/auth/csrf-token`, {
-          method: 'GET',
-          credentials: 'include',
-        });
-        if (!res.ok) return null;
-        const data = await res.json().catch(() => null) as { csrfToken?: string } | null;
-        const token = (data && data.csrfToken) || this._readCsrfCookie();
-        if (token) this._csrfToken = token; // cache the freshly minted stateless token
-        return token;
-      } catch {
-        return null;
-      } finally {
-        this._csrfTokenInFlight = null;
-      }
-    })();
-    return this._csrfTokenInFlight;
-  }
-
-  /**
    * Try to refresh the JWT token by calling /auth/refresh.
    * Ensures only one refresh is in-flight at a time.
    * Returns true if successful, false otherwise.
@@ -941,10 +877,11 @@ class ApiClient {
       }
 
       try {
-        const res = await fetch(`${this.baseURL}/auth/refresh`, {
+        const res = await authenticatedFetch(`${this.baseURL}/auth/refresh`, {
           method: 'POST',
           headers,
-          credentials: 'include',
+        }, {
+          bearerToken: includeBearer ? this.token : null,
         });
 
         if (!res.ok) return false;
@@ -1247,12 +1184,20 @@ class ApiClient {
     if (opts.asyncProcessing) formData.append('asyncProcessing', '1');
 
     const url = `${this.baseURL}/files/upload`;
+    const prepared = await prepareAuthenticatedRequest(url, {
+      method: 'POST',
+      headers: opts.idempotencyKey
+        ? { 'Idempotency-Key': opts.idempotencyKey }
+        : undefined,
+    }, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
+    const preparedHeaders = new Headers(prepared.headers);
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
-      if (this.token) xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
-      if (opts.idempotencyKey) xhr.setRequestHeader('Idempotency-Key', opts.idempotencyKey);
+      preparedHeaders.forEach((value, name) => xhr.setRequestHeader(name, value));
       xhr.withCredentials = true;
       // Don't set Content-Type — XHR sets it with boundary for FormData.
 
@@ -1305,12 +1250,9 @@ class ApiClient {
 
   async getFileContent(id: string): Promise<string> {
     const url = `${this.baseURL}/files/${id}/content`;
-    const headers = new Headers();
-    if (this.token) {
-      headers.set('Authorization', `Bearer ${this.token}`);
-    }
-
-    const response = await fetch(url, { headers });
+    const response = await authenticatedFetch(url, {}, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -1405,11 +1347,10 @@ class ApiClient {
     options: AIStreamOptions = {}
   ) {
     const url = `${this.baseURL}/ai/generate`;
-    const config: RequestInit = {
+    const baseConfig: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
       body: JSON.stringify(data),
       ...(signal && { signal }),
@@ -1447,7 +1388,8 @@ class ApiClient {
       if (hasDeliveredAnyContent) break;
 
       try {
-        const response = await fetch(url, config);
+        const response = await this.authenticatedFetch(url, baseConfig);
+        if (signal?.aborted) { onError(new Error('Request aborted')); return; }
 
         if (!response.ok) {
           let details: any = {};
@@ -1919,18 +1861,15 @@ class ApiClient {
     signal?: AbortSignal
   ) {
     const url = `${this.baseURL}/document-ai/generate-word`;
-    const config: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
-      body: JSON.stringify(data),
-      ...(signal && { signal })
-    };
 
     try {
-      const response = await fetch(url, config);
+      const config = await this.prepareMutatingFetch({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+        ...(signal && { signal }),
+      });
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         let details: any = {};
@@ -2031,18 +1970,15 @@ class ApiClient {
     signal?: AbortSignal
   ): Promise<{ success: boolean; data: any }> {
     const url = `${this.baseURL}/ai/generate-excel`;
-    const config: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
-      body: JSON.stringify(data),
-      ...(signal && { signal })
-    };
 
     try {
-      const response = await fetch(url, config);
+      const config = await this.prepareMutatingFetch({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+        ...(signal && { signal }),
+      });
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         let details: any = {};
@@ -2117,7 +2053,10 @@ class ApiClient {
   }
 
   async verifyPaymentSession(sessionId: string) {
-    return this.request(`/payments/verify-session?session_id=${sessionId}`);
+    return this.request('/payments/verify-session', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    });
   }
 
   async getSubscriptionInfo() {
@@ -2373,7 +2312,7 @@ class ApiClient {
   }
 
   async downloadInvoice(paymentId: string) {
-    const response = await fetch(`${this.baseURL}/payments/invoice/${paymentId}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/payments/invoice/${paymentId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2388,7 +2327,7 @@ class ApiClient {
   }
 
   async downloadStripeInvoice(invoiceId: string) {
-    const response = await fetch(`${this.baseURL}/payments/stripe/invoice/${invoiceId}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/payments/stripe/invoice/${invoiceId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2527,7 +2466,7 @@ class ApiClient {
     limit?: number
   }) {
     const query = new URLSearchParams(params as any).toString();
-    const response = await fetch(`${this.baseURL}/admin/audit-logs.csv${query ? `?${query}` : ''}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/audit-logs.csv${query ? `?${query}` : ''}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2548,7 +2487,7 @@ class ApiClient {
   }
 
   async downloadAdminStripeInvoice(invoiceId: string) {
-    const response = await fetch(`${this.baseURL}/admin/stripe/invoice/${invoiceId}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/stripe/invoice/${invoiceId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2563,7 +2502,7 @@ class ApiClient {
   }
 
   async exportUsersCsv() {
-    const response = await fetch(`${this.baseURL}/admin/users/export/csv`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/users/export/csv`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2580,16 +2519,13 @@ class ApiClient {
   // Download endpoints
   async downloadExcel(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/excel`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2601,16 +2537,13 @@ class ApiClient {
 
   async downloadCSV(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/csv`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2622,16 +2555,13 @@ class ApiClient {
 
   async downloadText(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/text`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2643,16 +2573,13 @@ class ApiClient {
 
   async downloadWord(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/word`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2664,16 +2591,13 @@ class ApiClient {
 
   async downloadPowerPoint(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/powerpoint`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2875,17 +2799,14 @@ class ApiClient {
     onError: (error: Error) => void
   ) {
     const url = `${this.baseURL}/search/web`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    };
+    });
 
     try {
-      const response = await fetch(url, config);
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -2958,7 +2879,7 @@ class ApiClient {
 
   async downloadVideo(filename: string) {
     const url = `${this.apiBaseURL}/video/download/${filename}`;
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2994,7 +2915,7 @@ class ApiClient {
   // /api prefix, so strip it to avoid requesting /api/api/….
   async getMediaArtifactBlob(downloadUrl: string): Promise<Blob> {
     const path = downloadUrl.replace(/^\/api(?=\/)/, '');
-    const res = await fetch(`${this.baseURL}${path}`, {
+    const res = await this.authenticatedFetch(`${this.baseURL}${path}`, {
       headers: this.token ? { Authorization: `Bearer ${this.token}` } : undefined,
       credentials: 'include',
     });
@@ -3088,17 +3009,15 @@ class ApiClient {
     let res: Response;
 
     while (true) {
-      const token = this._getAccessTokenSnapshot();
-      res = await fetch(`${this.baseURL}${path}`, {
+      const config = await this.prepareMutatingFetch({
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(data),
         signal: opts.signal,
       });
+      res = await this.authenticatedFetch(`${this.baseURL}${path}`, config);
 
       if (res.ok) break;
 
@@ -3152,17 +3071,14 @@ class ApiClient {
     onError: (error: Error) => void,
   ) {
     const url = `${this.baseURL}/ai/generate-webdev`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    };
+    });
 
     try {
-      const response = await fetch(url, config);
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: response.statusText }));
@@ -3227,7 +3143,7 @@ class ApiClient {
   // Download PPT file
   async downloadPPT(filename: string) {
     const url = `${this.apiBaseURL}/uploads/presentations/${filename}`;
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -3416,7 +3332,7 @@ class ApiClient {
       headers.set('Authorization', `Bearer ${this.token}`);
     }
 
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       method: 'GET',
       headers,
       credentials: 'include',
@@ -3466,7 +3382,7 @@ class ApiClient {
   async downloadAccountingExport(path: string, filename: string) {
     const headers = new Headers();
     if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
-    const response = await fetch(`${this.baseURL}/accounting/export/${path}`, { method: 'GET', headers, credentials: 'include' });
+    const response = await this.authenticatedFetch(`${this.baseURL}/accounting/export/${path}`, { method: 'GET', headers, credentials: 'include' });
     if (!response.ok) throw new Error('No se pudo generar la exportación');
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);

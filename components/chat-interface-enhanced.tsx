@@ -108,6 +108,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
@@ -3529,14 +3530,14 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     if (!gptId) return;
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, {
+      const request = await apiClient.prepareMutatingFetch({
         method: "POST",
-        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, request);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat");
       localStorage.setItem("currentChatId", data.chat.id);
@@ -3738,9 +3739,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     if (!projectId) return;
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, {
+      const request = await apiClient.prepareMutatingFetch({
         method: "POST",
-        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -3750,6 +3750,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
           model: activeProjectModelName,
         }),
       });
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, request);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat del proyecto");
       localStorage.setItem("currentChatId", data.chat.id);
@@ -6015,12 +6016,12 @@ But first, you need to connect your Spotify account securely using the button be
         price: planMap[plan].price ?? 0,
       };
 
-      const res = await fetch('/api/payments/instant', {
+      const request = await apiClient.prepareMutatingFetch({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(payload),
       });
+      const res = await authenticatedFetch('/api/payments/instant', request);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -7736,12 +7737,12 @@ But first, you need to connect your Spotify account securely using the button be
         if (!isStream) {
           // /research → one-shot POST over 16 sources; ask for a rich set and
           // free OA PDFs (Unpaywall, gated on SIRAGPT_RESEARCH_EMAIL server-side).
-          const res = await fetch(url, {
+          const request = await apiClient.prepareMutatingFetch({
             method: "POST",
-            credentials: "include",
             headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
             body: JSON.stringify({ query, limit: 25, unpaywall: true }),
           });
+          const res = await authenticatedFetch(url, request);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           // Rank by citations (most-cited first) for the student; nulls last.
@@ -7785,12 +7786,12 @@ But first, you need to connect your Spotify account securely using the button be
           }
         } else {
           // /goal → SSE stream the agent phases
-          const res = await fetch(url, {
+          const request = await apiClient.prepareMutatingFetch({
             method: "POST",
-            credentials: "include",
             headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
             body: JSON.stringify({ query, depth: "standard" }),
           });
+          const res = await authenticatedFetch(url, request);
           if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
           const reader = res.body.getReader();
           const decoder = new TextDecoder();

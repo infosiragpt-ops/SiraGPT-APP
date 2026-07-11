@@ -3,6 +3,8 @@
 // Bearer + credentials:include. Used by the timeline hook (feature 10) and the
 // cards/composer (features 11–12).
 
+import { authenticatedFetch } from "../authenticated-fetch"
+
 const BASE = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")}/codex`
 
 function authHeaders(): Record<string, string> {
@@ -15,7 +17,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // call gets a hard timeout (SSE streaming goes through run-stream.ts, not
   // req(), so this is safe globally). Placed AFTER the init spread so a
   // caller-provided signal still wins; absent one, 20s is the ceiling.
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authenticatedFetch(`${BASE}${path}`, {
     credentials: "include",
     headers: authHeaders(),
     ...init,
@@ -33,10 +35,25 @@ export interface CodexRun { id: string; projectId: string; mode: string; status:
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
 
+async function getPublicHealth(): Promise<CodexHealth> {
+  const res = await fetch(`${BASE}/health`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw Object.assign(new Error((body as any)?.error || `codex http ${res.status}`), {
+      status: res.status,
+      body,
+    })
+  }
+  return body as CodexHealth
+}
+
 export const codexApi = {
   // no-store: the flag can change; a cached 304 (enabled:false) would strand
   // the UI on the old /code flow even after the flag is turned on.
-  health: () => req<CodexHealth>("/health", { cache: "no-store" }),
+  health: getPublicHealth,
   access: () => req<CodexAccess>("/access", { cache: "no-store" }),
 
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),

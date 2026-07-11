@@ -11,6 +11,11 @@
  * `backend/src/routes/push.js`).
  */
 
+import {
+  createAuthenticatedFetch,
+  type AuthenticatedFetch,
+} from "../authenticated-fetch"
+
 export type PushTokenInfo = {
   token: string
   platform: "ios" | "android" | "web"
@@ -69,14 +74,11 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
 async function postSubscribe(
   apiBase: string,
   info: PushTokenInfo,
-  authToken: string | undefined,
-  fetchImpl: typeof fetch,
+  transport: AuthenticatedFetch,
 ): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" }
-  if (authToken) headers.Authorization = `Bearer ${authToken}`
-  const res = await fetchImpl(`${apiBase}/api/push/subscribe`, {
+  const res = await transport(`${apiBase}/api/push/subscribe`, {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(info),
   })
   if (!res.ok) throw new Error(`subscribe failed: ${res.status}`)
@@ -85,6 +87,7 @@ async function postSubscribe(
 async function registerFCM(
   opts: PushSubscribeOptions,
   fetchImpl: typeof fetch,
+  transport: AuthenticatedFetch,
 ): Promise<PushSubscribeResult | null> {
   if (!isCapacitorNative()) return null
   try {
@@ -110,7 +113,7 @@ async function registerFCM(
     })
 
     const info: PushTokenInfo = { token, platform: detectPlatform() }
-    await postSubscribe(opts.apiBase ?? "", info, opts.authToken, fetchImpl)
+    await postSubscribe(opts.apiBase ?? "", info, transport)
     return { ok: true, via: "fcm", info }
   } catch (err) {
     return { ok: false, via: "fcm", error: err instanceof Error ? err.message : String(err) }
@@ -120,6 +123,7 @@ async function registerFCM(
 async function registerWebPush(
   opts: PushSubscribeOptions,
   fetchImpl: typeof fetch,
+  transport: AuthenticatedFetch,
 ): Promise<PushSubscribeResult> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
     return { ok: false, via: "none", error: "web push not supported" }
@@ -158,29 +162,37 @@ async function registerWebPush(
     endpoint: json.endpoint ?? sub.endpoint,
     keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
   }
-  await postSubscribe(opts.apiBase ?? "", info, opts.authToken, fetchImpl)
+  await postSubscribe(opts.apiBase ?? "", info, transport)
   return { ok: true, via: "web-push", info }
 }
 
 export async function subscribe(opts: PushSubscribeOptions = {}): Promise<PushSubscribeResult> {
   const fetchImpl = opts.fetchImpl ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : null)
   if (!fetchImpl) return { ok: false, via: "none", error: "fetch unavailable" }
+  const transport = createAuthenticatedFetch({
+    apiBaseUrl: `${opts.apiBase ?? ""}/api`,
+    fetchImpl,
+    ...(opts.authToken ? { getBearerToken: () => opts.authToken! } : {}),
+  })
 
-  const fcm = await registerFCM(opts, fetchImpl)
+  const fcm = await registerFCM(opts, fetchImpl, transport)
   if (fcm) return fcm
 
-  return registerWebPush(opts, fetchImpl)
+  return registerWebPush(opts, fetchImpl, transport)
 }
 
 export async function unsubscribe(opts: PushSubscribeOptions = {}): Promise<{ ok: boolean }> {
   const fetchImpl = opts.fetchImpl ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : null)
   if (!fetchImpl) return { ok: false }
   try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (opts.authToken) headers.Authorization = `Bearer ${opts.authToken}`
-    const res = await fetchImpl(`${opts.apiBase ?? ""}/api/push/unsubscribe`, {
+    const transport = createAuthenticatedFetch({
+      apiBaseUrl: `${opts.apiBase ?? ""}/api`,
+      fetchImpl,
+      ...(opts.authToken ? { getBearerToken: () => opts.authToken! } : {}),
+    })
+    const res = await transport(`${opts.apiBase ?? ""}/api/push/unsubscribe`, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
     })
     return { ok: res.ok }
   } catch {

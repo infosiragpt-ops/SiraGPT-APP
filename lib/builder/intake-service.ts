@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "../authenticated-fetch"
+
 /**
  * Frontend client for the /api/builder backend (siraGPT Builder · E1–E3).
  *
@@ -122,7 +124,7 @@ export interface StepInput {
 export const intakeService = {
   /** The full QuestionCard catalogue + the ordered coverage dimensions. */
   async questions(): Promise<{ dimensions: CoverageDimension[]; questions: QuestionCard[] }> {
-    const res = await fetch(`${baseUrl}/intake/questions`, {
+    const res = await authenticatedFetch(`${baseUrl}/intake/questions`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -131,7 +133,7 @@ export const intakeService = {
 
   /** Record an answer (or just hydrate) and get the next snapshot. */
   async step(input: StepInput): Promise<IntakeSnapshot> {
-    const res = await fetch(`${baseUrl}/intake/step`, {
+    const res = await authenticatedFetch(`${baseUrl}/intake/step`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -142,7 +144,7 @@ export const intakeService = {
 
   /** Assemble the ProjectBrief — only valid once coverage is complete. */
   async brief(session: IntakeSession, openQuestions: string[] = []): Promise<ProjectBrief> {
-    const res = await fetch(`${baseUrl}/intake/brief`, {
+    const res = await authenticatedFetch(`${baseUrl}/intake/brief`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -154,7 +156,7 @@ export const intakeService = {
 
   /** Deterministic build plan from a brief (E2). */
   async blueprint(brief: ProjectBrief): Promise<Blueprint> {
-    const res = await fetch(`${baseUrl}/blueprint`, {
+    const res = await authenticatedFetch(`${baseUrl}/blueprint`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -166,7 +168,7 @@ export const intakeService = {
 
   /** Starter artifacts — blueprint + generated files (E3). */
   async scaffold(brief: ProjectBrief): Promise<ScaffoldResult> {
-    const res = await fetch(`${baseUrl}/scaffold`, {
+    const res = await authenticatedFetch(`${baseUrl}/scaffold`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -190,7 +192,7 @@ export const intakeService = {
     const timeout = AbortSignal.timeout(120_000)
     const anyOf = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any
     const composite = signal && typeof anyOf === "function" ? anyOf([signal, timeout]) : timeout
-    const res = await fetch(`${baseUrl}/generate`, {
+    const res = await authenticatedFetch(`${baseUrl}/generate`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),

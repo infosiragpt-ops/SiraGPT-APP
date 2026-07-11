@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "../authenticated-fetch"
+
 /**
  * Frontend client for /api/opencode — siraGPT's bridge to the OpenCode engine
  * (vendor/opencode, run as a Bun sidecar). Mirrors lib/builder/intake-service:
@@ -53,13 +55,13 @@ async function handle<T>(res: Response): Promise<T> {
 export const opencodeService = {
   /** Is the engine configured/reachable? Safe to call without auth. */
   async health(): Promise<OpencodeHealth> {
-    const res = await fetch(`${baseUrl}/health`, { credentials: "include", headers: authHeaders() })
+    const res = await fetch(`${baseUrl}/health`)
     return handle<OpencodeHealth>(res)
   },
 
   /** Create an agent session on the engine. */
   async createSession(seed: OpencodeSession = {}): Promise<OpencodeSession> {
-    const res = await fetch(`${baseUrl}/session`, {
+    const res = await authenticatedFetch(`${baseUrl}/session`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -71,7 +73,7 @@ export const opencodeService = {
 
   /** Send a text prompt to a session. Returns the engine's response object. */
   async prompt(sessionId: string, text: string): Promise<unknown> {
-    const res = await fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/prompt`, {
+    const res = await authenticatedFetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/prompt`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -87,7 +89,7 @@ export const opencodeService = {
    */
   async listProjectFiles(): Promise<Array<{ path: string; content: string }>> {
     try {
-      const res = await fetch(`${baseUrl}/files`, { credentials: "include", headers: authHeaders() })
+      const res = await authenticatedFetch(`${baseUrl}/files`, { credentials: "include", headers: authHeaders() })
       if (!res.ok) return []
       const json = (await res.json().catch(() => ({}))) as {
         files?: Array<{ path: string; content: string }>
@@ -103,7 +105,7 @@ export const opencodeService = {
   /** Phase B — install deps + start the project's dev server. → { ok, port, devUrl }. */
   async runProject(): Promise<{ ok?: boolean; port?: number; devUrl?: string; error?: string }> {
     try {
-      const res = await fetch(`${baseUrl}/run`, { method: "POST", credentials: "include", headers: authHeaders() })
+      const res = await authenticatedFetch(`${baseUrl}/run`, { method: "POST", credentials: "include", headers: authHeaders() })
       const body = (await res.json().catch(() => ({}))) as {
         ok?: boolean
         port?: number
@@ -136,7 +138,7 @@ export const opencodeService = {
     devUrl?: string
   }> {
     try {
-      const res = await fetch(`${baseUrl}/run/status`, { credentials: "include", headers: authHeaders() })
+      const res = await authenticatedFetch(`${baseUrl}/run/status`, { credentials: "include", headers: authHeaders() })
       if (!res.ok) return { error: `HTTP ${res.status}` }
       return (await res.json().catch(() => ({}))) as Awaited<ReturnType<typeof opencodeService.runStatus>>
     } catch (e) {
@@ -147,7 +149,7 @@ export const opencodeService = {
   /** Phase B — stop the running dev server. */
   async stopRun(): Promise<void> {
     try {
-      await fetch(`${baseUrl}/run/stop`, { method: "POST", credentials: "include", headers: authHeaders() })
+      await authenticatedFetch(`${baseUrl}/run/stop`, { method: "POST", credentials: "include", headers: authHeaders() })
     } catch {
       /* ignore */
     }
@@ -155,7 +157,7 @@ export const opencodeService = {
 
   /** Read a file the agent wrote in the engine's workspace. "" if absent. */
   async readFile(path: string): Promise<string> {
-    const res = await fetch(`${baseUrl}/file?path=${encodeURIComponent(path)}`, {
+    const res = await authenticatedFetch(`${baseUrl}/file?path=${encodeURIComponent(path)}`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -173,7 +175,7 @@ export const opencodeService = {
     onEvent: (event: OpencodeEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> {
-    const res = await fetch(`${baseUrl}/events`, {
+    const res = await authenticatedFetch(`${baseUrl}/events`, {
       credentials: "include",
       headers: { ...authHeaders(), Accept: "text/event-stream" },
       signal,

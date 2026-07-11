@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * Frontend client for /api/hosting — Publishing (deploy a connected repo's
  * build to Hostinger over SFTP/FTP). Mirrors lib/github-service.ts conventions.
@@ -28,9 +30,9 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
-const get = <T>(p: string) => fetch(`${baseUrl}${p}`, { credentials: "include", headers: authHeaders() }).then(handle<T>)
+const get = <T>(p: string) => authenticatedFetch(`${baseUrl}${p}`, { credentials: "include", headers: authHeaders() }).then(handle<T>)
 const send = <T>(method: string, p: string, body?: unknown) =>
-  fetch(`${baseUrl}${p}`, {
+  authenticatedFetch(`${baseUrl}${p}`, {
     method,
     credentials: "include",
     headers: authHeaders(),

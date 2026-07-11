@@ -20,13 +20,40 @@ const { ssoSamlCallbackHandler } = authRouter.__ssoHelpers;
 function makeRes() {
   let status = 200;
   let body;
+  let location;
+  const cookies = [];
+  const clearedCookies = [];
   return {
     status(c) { status = c; return this; },
     json(p) { body = p; return this; },
-    cookie() { return this; },
+    redirect(c, value) { status = c; location = value; return this; },
+    cookie(name, value, options) { cookies.push({ name, value, options }); return this; },
+    clearCookie(name, options) { clearedCookies.push({ name, options }); return this; },
     set() { return this; },
+    setHeader() {},
     get _status() { return status; },
     get _body() { return body; },
+    get _location() { return location; },
+    get _cookies() { return cookies; },
+    get _clearedCookies() { return clearedCookies; },
+  };
+}
+
+function jsonSamlRequest(body = { SAMLResponse: 'x' }) {
+  const headers = {
+    accept: 'application/json',
+    'x-sira-response-mode': 'json',
+  };
+  return {
+    params: { orgSlug: 'acme' },
+    body,
+    cookies: {
+      sira_saml_preauth: Buffer.alloc(32, 6).toString('base64url'),
+    },
+    headers,
+    get(name) {
+      return headers[String(name).toLowerCase()];
+    },
   };
 }
 
@@ -147,13 +174,14 @@ test('POST callback creates user + mints session on success', async () => {
   });
   const res = makeRes();
   await ssoSamlCallbackHandler(
-    { params: { orgSlug: 'acme' }, body: { SAMLResponse: 'x' } },
+    jsonSamlRequest(),
     res,
     deps,
   );
   assert.equal(res._status, 200);
   assert.equal(res._body.ok, true);
-  assert.ok(res._body.token);
+  assert.equal(Object.hasOwn(res._body, 'token'), false);
+  assert.ok(res._cookies.some((entry) => entry.name === 'token'));
   assert.equal(res._body.createdUser, true);
   assert.equal(res._body.user.email, 'new@acme.com');
   assert.ok(audits.some((a) => a.action === 'sso_login_attempt'));
@@ -173,7 +201,7 @@ test('POST callback returns existing user without recreate', async () => {
   });
   const res = makeRes();
   await ssoSamlCallbackHandler(
-    { params: { orgSlug: 'acme' }, body: { SAMLResponse: 'x' } },
+    jsonSamlRequest(),
     res,
     deps,
   );
@@ -198,4 +226,38 @@ test('POST callback 401 on bad SAML response', async () => {
   );
   assert.equal(res._status, 401);
   assert.equal(res._body.error, 'saml_response_invalid');
+});
+
+test('POST callback binds RelayState verification to the route organization', async () => {
+  let verificationContext;
+  const deps = makeDeps({
+    samlHandler: {
+      verifySamlResponse: async (_response, _config, context) => {
+        verificationContext = context;
+        return { ok: false, status: 401, error: 'saml_relay_state_invalid' };
+      },
+    },
+  });
+  const res = makeRes();
+  await ssoSamlCallbackHandler(
+    {
+      params: { orgSlug: 'acme' },
+      body: {
+        SAMLResponse: 'signed-response',
+        RelayState: 'signed-bound-state',
+      },
+      cookies: {
+        sira_saml_preauth: Buffer.alloc(32, 6).toString('base64url'),
+      },
+    },
+    res,
+    deps,
+  );
+
+  assert.equal(res._status, 401);
+  assert.deepEqual(verificationContext, {
+    orgSlug: 'acme',
+    relayState: 'signed-bound-state',
+    preAuthNonce: Buffer.alloc(32, 6).toString('base64url'),
+  });
 });

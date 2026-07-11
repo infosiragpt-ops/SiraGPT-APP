@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { RefreshCw } from "lucide-react"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 type ServiceStatus = "ok" | "healthy" | "up" | "degraded" | "warn" | "down" | "fail" | "unknown" | string
 
@@ -108,7 +109,7 @@ function parsePercentiles(text: string): PercentileBucket[] {
 
 async function fetchJson<T>(url: string): Promise<T | null> {
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json" } })
+    const res = await authenticatedFetch(url, { headers: { Accept: "application/json" } })
     if (!res.ok) return null
     return (await res.json()) as T
   } catch {
@@ -116,9 +117,9 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   }
 }
 
-async function fetchText(url: string): Promise<string | null> {
+async function fetchPublicMetrics(): Promise<string | null> {
   try {
-    const res = await fetch(url, { headers: { Accept: "text/plain" } })
+    const res = await fetch("/metrics", { headers: { Accept: "text/plain" } })
     if (!res.ok) return null
     return await res.text()
   } catch {
@@ -140,7 +141,7 @@ export default function AdminStatusPage() {
       fetchJson<ServicesSnapshot>("/api/admin/health/services"),
       fetchJson<QueuesSnapshot>("/api/admin/queues"),
       fetchJson<UserStatsSnapshot>("/api/admin/stats/users"),
-      fetchText("/metrics"),
+      fetchPublicMetrics(),
     ])
     setServices(s)
     setQueues(q)

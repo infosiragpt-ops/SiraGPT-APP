@@ -40,9 +40,11 @@ delete require.cache[mwPath];
 const {
   enforceApiKeyRateLimit,
   defaultRpmForPlan,
+  createResilientApiKeyRateLimitGate,
   resolveLimit,
   AUDIT_SAMPLE_RATE,
   _resetAuditCountersForTests,
+  _auditCounterSize,
 } = require(mwPath);
 
 function buildReq({
@@ -70,8 +72,8 @@ function buildRes() {
 function makeStore(behaviour) {
   return {
     calls: [],
-    async consume(key, limit, windowMs) {
-      this.calls.push({ key, limit, windowMs });
+    async consume(key, limit, windowMs, options) {
+      this.calls.push({ key, limit, windowMs, options });
       return behaviour(this.calls.length, key, limit);
     },
   };
@@ -90,6 +92,10 @@ function runMw(mw, req, res) {
 }
 
 describe('enforce-api-key-rate-limit · helpers', () => {
+  test('exports a resilient lazy-init gate for the auth middleware', () => {
+    assert.equal(typeof createResilientApiKeyRateLimitGate, 'function');
+  });
+
   test('defaultRpmForPlan respects env overrides + fallback', () => {
     const oldFree = process.env.SIRAGPT_API_KEY_RPM_FREE;
     const oldHard = process.env.SIRAGPT_API_KEY_DEFAULT_RPM;
@@ -197,7 +203,7 @@ describe('enforce-api-key-rate-limit · middleware', () => {
     assert.equal(res.getHeader('X-Content-Type-Options'), 'nosniff');
   });
 
-  test('fails open on store errors and still audits', async () => {
+  test('keeps the explicit nonproduction fail-open policy on store errors', async () => {
     const store = {
       calls: [],
       async consume() {
@@ -205,7 +211,14 @@ describe('enforce-api-key-rate-limit · middleware', () => {
         throw new Error('redis_down');
       },
     };
-    const mw = enforceApiKeyRateLimit({ store });
+    const mw = enforceApiKeyRateLimit({
+      store,
+      env: {
+        NODE_ENV: 'test',
+        RATE_LIMIT_SENSITIVE_POLICY: 'fail-open',
+        REDIS_URL: 'redis://mock',
+      },
+    });
     const req = buildReq({
       apiKey: { id: 'ak_failopen', prefix: 'sk_f', scopes: ['*'] },
     });
@@ -213,6 +226,89 @@ describe('enforce-api-key-rate-limit · middleware', () => {
     const r = await runMw(mw, req, res);
     assert.equal(r, 'next');
     assert.equal(res.statusCode, 200);
+  });
+
+  test('fails closed with a value-free 503 when the production store errors', async () => {
+    const calls = [];
+    const store = {
+      async consume(key, limit, windowMs, options) {
+        calls.push({ key, limit, windowMs, options });
+        throw new Error('redis://user:secret@redis.internal unavailable');
+      },
+    };
+    const env = {
+      NODE_ENV: 'production',
+      REDIS_URL: 'redis://user:secret@redis.internal:6379',
+    };
+    const mw = enforceApiKeyRateLimit({ store, env });
+    const req = buildReq({
+      apiKey: { id: 'ak_failclosed', prefix: 'sk_fc', scopes: ['*'] },
+    });
+    req.requestId = 'req_api_key_store_down';
+    const res = buildRes();
+
+    const result = await runMw(mw, req, res);
+
+    assert.equal(result, 'responded');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.requireDistributed, true);
+    assert.equal(calls[0].options.env, env);
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.body.code, 'RATE_LIMIT_STORE_UNAVAILABLE');
+    assert.equal(res.body.requestId, 'req_api_key_store_down');
+    assert.equal(res.getHeader('Cache-Control'), 'no-store');
+    assert.equal(res.getHeader('X-Content-Type-Options'), 'nosniff');
+    assert.equal(res.getHeader('Retry-After'), '5');
+    assert.doesNotMatch(JSON.stringify(res.body), /user|secret|redis\.internal/i);
+  });
+
+  test('literal production fails closed and uses the active store-breaker Retry-After', async () => {
+    const error = new Error('private redis detail');
+    error.code = 'RATE_LIMIT_STORE_UNAVAILABLE';
+    error.retryAfterSeconds = 17;
+    const store = {
+      async consume() {
+        throw error;
+      },
+    };
+    const mw = enforceApiKeyRateLimit({
+      store,
+      env: {
+        NODE_ENV: 'production',
+        REDIS_URL: 'redis://mock',
+        RATE_LIMIT_STORE_RETRY_AFTER_SECONDS: '5',
+      },
+    });
+    const res = buildRes();
+
+    const result = await runMw(mw, buildReq(), res);
+
+    assert.equal(result, 'responded');
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.getHeader('Retry-After'), '17');
+    assert.equal(res.body.retryAfterSec, 17);
+  });
+
+  test('passes explicit local memory policy to the store', async () => {
+    const store = makeStore(() => ({
+      allowed: true,
+      remaining: 4,
+      resetAt: new Date(Date.now() + 60_000),
+    }));
+    const mw = enforceApiKeyRateLimit({
+      store,
+      env: {
+        NODE_ENV: 'test',
+        RATE_LIMIT_STORE: 'memory',
+        RATE_LIMIT_SENSITIVE_POLICY: 'memory',
+      },
+    });
+
+    const result = await runMw(mw, buildReq(), buildRes());
+
+    assert.equal(result, 'next');
+    assert.equal(store.calls[0].options.requireDistributed, false);
+    assert.equal(store.calls[0].options.env.RATE_LIMIT_STORE, 'memory');
   });
 
   test('emits sampled api_key_used audit every N uses', async () => {
@@ -260,5 +356,70 @@ describe('enforce-api-key-rate-limit · middleware', () => {
     }
     await new Promise((r) => setImmediate(r));
     assert.equal(auditCalls.length, 0);
+  });
+
+  test('bounds the in-process audit-use counter map', async () => {
+    const store = makeStore(() => ({ allowed: true, remaining: 999, resetAt: new Date() }));
+    const mw = enforceApiKeyRateLimit({ store, auditCounterMax: 3 });
+
+    for (let i = 0; i < 10; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await runMw(mw, buildReq({
+        apiKey: { id: `ak_bounded_${i}`, prefix: 'sk_b', scopes: ['read'] },
+      }), buildRes());
+    }
+
+    assert.equal(_auditCounterSize(), 3);
+  });
+});
+
+describe('enforce-api-key-rate-limit · resilient auth gate', () => {
+  test('returns 503 on production init failure and retries initialization next request', async () => {
+    let loads = 0;
+    const gate = createResilientApiKeyRateLimitGate({
+      env: { NODE_ENV: 'production', RATE_LIMIT_STORE_RETRY_AFTER_SECONDS: '11' },
+      loadMiddleware() {
+        loads += 1;
+        if (loads === 1) throw new Error('module init private detail');
+        return (_req, _res, next) => next();
+      },
+    });
+
+    const firstRes = buildRes();
+    const first = await runMw(gate, buildReq(), firstRes);
+    assert.equal(first, 'responded');
+    assert.equal(firstRes.statusCode, 503);
+    assert.equal(firstRes.body.code, 'RATE_LIMIT_STORE_UNAVAILABLE');
+    assert.equal(firstRes.getHeader('Retry-After'), '11');
+
+    const second = await runMw(gate, buildReq(), buildRes());
+    assert.equal(second, 'next');
+    assert.equal(loads, 2, 'failed initialization must not be cached');
+  });
+
+  test('returns 503 on unexpected production runtime failure and reloads next request', async () => {
+    let loads = 0;
+    const gate = createResilientApiKeyRateLimitGate({
+      env: { NODE_ENV: 'production' },
+      loadMiddleware() {
+        loads += 1;
+        if (loads === 1) {
+          return async () => {
+            const error = new Error('runtime private detail');
+            error.retryAfterSeconds = 23;
+            throw error;
+          };
+        }
+        return (_req, _res, next) => next();
+      },
+    });
+
+    const firstRes = buildRes();
+    await runMw(gate, buildReq(), firstRes);
+    assert.equal(firstRes.statusCode, 503);
+    assert.equal(firstRes.getHeader('Retry-After'), '23');
+
+    assert.equal(await runMw(gate, buildReq(), buildRes()), 'next');
+    assert.equal(loads, 2);
   });
 });

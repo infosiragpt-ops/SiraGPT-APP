@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 type SecurityOverview = {
   securityScore?: number
@@ -46,15 +47,12 @@ type SecuritySettings = {
 }
 
 async function fetchJson(path: string, init?: RequestInit): Promise<any> {
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
-  const res = await fetch(path, {
+  const res = await authenticatedFetch(path, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers || {}),
     },
-    credentials: "include",
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()

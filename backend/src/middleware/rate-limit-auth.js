@@ -26,13 +26,20 @@
  *     - Retry-After header in seconds (rounded up)
  *     - JSON body { error, retryAfterMs }
  *
- *   On any consume() error (shouldn't happen — the store fails open
- *   internally) we let the request through to avoid bricking auth
- *   during a Redis outage. This matches the broader fail-open posture
- *   used by the catch-all limiters in index.js (`passOnStoreError`).
+ *   Store-error posture is policy driven: production-sensitive callers
+ *   require Redis and return a no-store 503, while explicit nonproduction
+ *   memory/fail-open modes remain available. The general catch-all limiter
+ *   in index.js keeps its separate `passOnStoreError` behavior.
  */
 
-const { consume } = require('./rate-limit-store');
+const {
+  consume,
+  RATE_LIMIT_STORE_UNAVAILABLE,
+} = require('./rate-limit-store');
+const {
+  resolveSensitiveRateLimitPolicy,
+  resolveStoreRetryAfterSeconds,
+} = require('./rate-limit-policy');
 const crypto = require('node:crypto');
 const { getRequestId } = require('./request-id');
 
@@ -71,8 +78,7 @@ function normalizeIp(value) {
 function pickIp(req) {
   return (
     normalizeIp(req.ip)
-    || normalizeIp(req.headers && req.headers['x-forwarded-for'])
-    || normalizeIp(req.connection && req.connection.remoteAddress)
+    || normalizeIp(req.socket && req.socket.remoteAddress)
     || 'unknown'
   );
 }
@@ -136,6 +142,11 @@ function makeAuthRateLimit(opts = {}) {
   const limit = Number(opts.limit);
   const windowMs = Number(opts.windowMs);
   const keyBy = opts.keyBy || 'ip';
+  const env = opts.env || process.env;
+  const policy = resolveSensitiveRateLimitPolicy(env);
+  const consumeEnv = policy.mode === 'memory'
+    ? { ...env, RATE_LIMIT_STORE: 'memory' }
+    : env;
 
   if (!Number.isFinite(limit) || limit <= 0) {
     throw new TypeError('makeAuthRateLimit: opts.limit must be a positive number');
@@ -145,10 +156,12 @@ function makeAuthRateLimit(opts = {}) {
   }
 
   return async function authRateLimit(req, res, next) {
-    // Fail-open: a misbehaving rate-limiter must never break auth.
     try {
       const key = resolveKey(req, keyBy, name);
-      const result = await consume(key, limit, windowMs);
+      const result = await consume(key, limit, windowMs, {
+        env: consumeEnv,
+        requireDistributed: policy.requireDistributed,
+      });
       const resetAt = normalizeResetAt(result.resetAt, windowMs);
       if (!result.allowed) {
         const retryAfterMs = Math.max(0, resetAt.getTime() - Date.now());
@@ -171,6 +184,23 @@ function makeAuthRateLimit(opts = {}) {
       setRateLimitHeaders(res, { limit, remaining: result.remaining, resetAt });
       return next();
     } catch (_err) {
+      if (policy.failClosed) {
+        const retryAfterSeconds = resolveStoreRetryAfterSeconds(
+          _err,
+          policy.retryAfterSeconds,
+        );
+        setBlockedResponseHeaders(res);
+        setResponseHeader(res, 'Retry-After', String(retryAfterSeconds));
+        const payload = {
+          ok: false,
+          code: RATE_LIMIT_STORE_UNAVAILABLE,
+          error: 'Rate limit service temporarily unavailable.',
+          retryAfterSec: retryAfterSeconds,
+        };
+        const requestId = getRequestId(req);
+        if (requestId) payload.requestId = requestId;
+        return res.status(503).json(payload);
+      }
       return next();
     }
   };

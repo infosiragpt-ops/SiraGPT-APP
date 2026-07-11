@@ -16,8 +16,11 @@
  */
 
 const jwt = require('jsonwebtoken');
+const { isProductionLike } = require('../utils/environment');
 
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+const SENSITIVE_POLICY_MODES = new Set(['distributed', 'memory', 'fail-open']);
+const DEFAULT_STORE_RETRY_AFTER_SECONDS = 5;
 
 function parsePositiveInt(value, fallback) {
   const n = parseInt(value, 10);
@@ -42,6 +45,65 @@ function resolveRateLimitConfig(env = process.env) {
     // legitimate user.
     api: parsePositiveInt(env.RATE_LIMIT_API_MAX, 3000),
   };
+}
+
+function resolveSensitiveRateLimitPolicy(env = process.env) {
+  const production = isProductionLike(env);
+  const rawMode = String(env.RATE_LIMIT_SENSITIVE_POLICY || '').trim().toLowerCase();
+  const explicit = rawMode.length > 0;
+  let configuredMode;
+  let valid = true;
+
+  if (explicit) {
+    if (SENSITIVE_POLICY_MODES.has(rawMode)) {
+      configuredMode = rawMode;
+    } else {
+      configuredMode = 'invalid';
+      valid = false;
+    }
+  } else if (production) {
+    configuredMode = 'distributed';
+  } else {
+    const storeMode = String(env.RATE_LIMIT_STORE || '').trim().toLowerCase();
+    configuredMode = storeMode === 'memory' || !env.REDIS_URL
+      ? 'memory'
+      : 'fail-open';
+  }
+
+  const mode = production
+    ? 'distributed'
+    : (valid ? configuredMode : 'fail-open');
+  const retryAfterRaw = Number.parseInt(
+    String(env.RATE_LIMIT_STORE_RETRY_AFTER_SECONDS || ''),
+    10,
+  );
+  const retryAfterSeconds = Number.isFinite(retryAfterRaw)
+    && retryAfterRaw >= 1
+    && retryAfterRaw <= 300
+    ? retryAfterRaw
+    : DEFAULT_STORE_RETRY_AFTER_SECONDS;
+
+  return {
+    configuredMode,
+    mode,
+    valid,
+    explicit,
+    requireDistributed: mode === 'distributed',
+    failClosed: mode === 'distributed',
+    retryAfterSeconds,
+  };
+}
+
+function resolveStoreRetryAfterSeconds(error, fallback = DEFAULT_STORE_RETRY_AFTER_SECONDS) {
+  const fromBreaker = Number(error && error.retryAfterSeconds);
+  if (Number.isFinite(fromBreaker) && fromBreaker >= 1 && fromBreaker <= 300) {
+    return Math.ceil(fromBreaker);
+  }
+  const parsedFallback = Number(fallback);
+  if (Number.isFinite(parsedFallback) && parsedFallback >= 1 && parsedFallback <= 300) {
+    return Math.ceil(parsedFallback);
+  }
+  return DEFAULT_STORE_RETRY_AFTER_SECONDS;
 }
 
 /**
@@ -100,8 +162,8 @@ function makeJwtAwareKeyGenerator(jwtSecret) {
         }
       }
     }
-    // Match express-rate-limit's default. `app.set('trust proxy', 1)`
-    // is already set in index.js so req.ip reflects X-Forwarded-For.
+    // Match express-rate-limit's default. index.js applies the validated
+    // TRUST_PROXY_HOPS/CIDR policy, so req.ip reflects only trusted proxies.
     return `ip:${req.ip || 'unknown'}`;
   };
 }
@@ -137,8 +199,11 @@ function makeSuperAdminBypass(jwtSecret) {
 
 module.exports = {
   resolveRateLimitConfig,
+  resolveSensitiveRateLimitPolicy,
+  resolveStoreRetryAfterSeconds,
   makeJwtAwareKeyGenerator,
   makeSuperAdminBypass,
   extractBearerToken,
   FIFTEEN_MINUTES_MS,
+  DEFAULT_STORE_RETRY_AFTER_SECONDS,
 };

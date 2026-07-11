@@ -5,6 +5,7 @@ import { Check, Copy, Eraser, Languages} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -63,7 +64,7 @@ export default function ParafraseoPage() {
       // Idempotency-Key for safe retries; response field renamed
       // text → output to match the wider services contract.
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      const response = await fetch(`${API_ROOT}/paraphrase`, {
+      const response = await authenticatedFetch(`${API_ROOT}/paraphrase`, {
         method: "POST",
         credentials: "include",
         headers: {

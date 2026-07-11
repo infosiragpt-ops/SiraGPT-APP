@@ -7,6 +7,9 @@ const {
 const {
   acquireRbacMutationLock,
 } = require('./rbac-system-assignments');
+const {
+  readSamlPreAuthCookie,
+} = require('./saml-preauth-cookie');
 
 /**
  * SsoCallbackService — orchestrates the SAML/OIDC callback pipeline
@@ -41,6 +44,7 @@ class SsoCallbackService {
     resolveOrg,
     signSessionToken,
     rbacAssignments = null,
+    completeSamlLogin = null,
     hashPassword,
     now = () => new Date(),
     logger = console,
@@ -62,6 +66,9 @@ class SsoCallbackService {
     this.resolveOrg = resolveOrg;
     this.signSessionToken = signSessionToken;
     this.rbacAssignments = rbacAssignments;
+    this.completeSamlLogin = typeof completeSamlLogin === 'function'
+      ? completeSamlLogin
+      : null;
     this.hashPassword = hashPassword || ((plain) => bcrypt.hash(plain, 12));
     this.now = now;
     this.logger = logger;
@@ -78,7 +85,12 @@ class SsoCallbackService {
     }
 
     const isOidc = (org.ssoConfig && org.ssoConfig.provider) === 'oidc';
-    const { samlResponse, oidcCode } = this._extractInput(req, isOidc);
+    const {
+      samlResponse,
+      oidcCode,
+      relayState,
+      preAuthNonce,
+    } = this._extractInput(req, isOidc);
     const policy = this._resolvePolicy(org.ssoConfig);
 
     // Audit the *attempt* before verify runs so we have a record
@@ -97,7 +109,11 @@ class SsoCallbackService {
 
     const verified = isOidc
       ? await this.oidcHandler.verifyOidcCode(oidcCode, org.ssoConfig)
-      : await this.samlHandler.verifySamlResponse(samlResponse, org.ssoConfig);
+      : await this.samlHandler.verifySamlResponse(samlResponse, org.ssoConfig, {
+        orgSlug: org.slug,
+        relayState,
+        preAuthNonce,
+      });
     if (!verified.ok) {
       return res.status(verified.status || 401).json({
         ok: false,
@@ -162,14 +178,18 @@ class SsoCallbackService {
         },
       });
 
-      return res.status(200).json({
+      const response = {
         ok: true,
         token,
         user: { id: user.id, email: user.email, name: user.name },
         orgSlug: org.slug,
         createdUser,
         policy,
-      });
+      };
+      if (!isOidc && this.completeSamlLogin) {
+        return this.completeSamlLogin(req, res, response);
+      }
+      return res.status(200).json(response);
     } catch (err) {
       this.logger.error?.(
         '[auth/sso] saml login failed:', err && err.message ? err.message : err
@@ -188,7 +208,16 @@ class SsoCallbackService {
           || (req.body && req.body.code)
           || null
       : null;
-    return { samlResponse, oidcCode };
+    const relayState = !isOidc
+      ? (req.body && req.body.RelayState) || null
+      : null;
+    const preAuthNonce = !isOidc ? readSamlPreAuthCookie(req) : null;
+    return {
+      samlResponse,
+      oidcCode,
+      relayState,
+      preAuthNonce,
+    };
   }
 
   /** Three known policies (jit_create, jit_require_invite, manual);

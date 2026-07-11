@@ -18,6 +18,7 @@ import {
   PenTool
 } from 'lucide-react'
 import { apiClient } from '@/lib/api'
+import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import { toast } from 'sonner'
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -142,7 +143,7 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
           headers.set('Authorization', `Bearer ${token}`);
         }
         
-        const response = await fetch(downloadUrl, {
+        const response = await authenticatedFetch(downloadUrl, {
           method: 'GET',
           headers,
           credentials: 'include',

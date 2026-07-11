@@ -28,7 +28,9 @@
 const express = require('express');
 const { z } = require('zod');
 const { authenticateToken } = require('../middleware/auth');
+const { makeBillingRateLimit } = require('../middleware/billing-rate-limit');
 const requireAdminRoutePermission = require('../services/admin-route-policy');
+const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const {
   completeLedgerTransaction,
@@ -45,6 +47,34 @@ const { sha256Hex } = require('../utils/canonical-json');
 const meRouter = express.Router();
 const adminRouter = express.Router();
 adminRouter.use(authenticateToken, requireAdminRoutePermission);
+
+const adminCreditBillingLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_REFUND_MAX,
+  5,
+  { min: 1, max: 1000 },
+);
+const adminCreditBillingIpLimit = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_REFUND_IP_MAX,
+  50,
+  { min: adminCreditBillingLimit, max: 100_000 },
+);
+const adminCreditBillingWindowMs = parsePositiveInt(
+  process.env.RATE_LIMIT_BILLING_REFUND_WINDOW_MS,
+  60 * 60 * 1000,
+  { min: 1000, max: 24 * 60 * 60 * 1000 },
+);
+const grantBillingRateLimit = makeBillingRateLimit({
+  name: 'admin-credit-grant',
+  limit: adminCreditBillingLimit,
+  ipLimit: adminCreditBillingIpLimit,
+  windowMs: adminCreditBillingWindowMs,
+});
+const refundBillingRateLimit = makeBillingRateLimit({
+  name: 'admin-credit-refund',
+  limit: adminCreditBillingLimit,
+  ipLimit: adminCreditBillingIpLimit,
+  windowMs: adminCreditBillingWindowMs,
+});
 
 const CreditAmountSchema = z.union([
   z.number().int().positive().max(1_000_000_000),
@@ -129,6 +159,11 @@ function requireSuperAdmin(req, res) {
     return false;
   }
   return true;
+}
+
+function requireCreditSuperAdmin(req, res, next) {
+  if (!requireSuperAdmin(req, res)) return undefined;
+  return next();
 }
 
 function deriveWriteRequestHash(body) {
@@ -312,9 +347,8 @@ meRouter.post('/spend', authenticateToken, async (req, res, next) => {
 });
 
 // ── Admin routes ───────────────────────────────────────────────────
-adminRouter.post('/grant', async (req, res, next) => {
+adminRouter.post('/grant', requireCreditSuperAdmin, grantBillingRateLimit, async (req, res, next) => {
   try {
-    if (!requireSuperAdmin(req, res)) return;
     const parse = GrantSchema.safeParse(req.body);
     if (!parse.success) {
       return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });
@@ -345,9 +379,8 @@ adminRouter.post('/grant', async (req, res, next) => {
   }
 });
 
-adminRouter.post('/refund', async (req, res, next) => {
+adminRouter.post('/refund', requireCreditSuperAdmin, refundBillingRateLimit, async (req, res, next) => {
   try {
-    if (!requireSuperAdmin(req, res)) return;
     const parse = RefundSchema.safeParse(req.body);
     if (!parse.success) {
       return res.status(400).json({ error: 'invalid payload', issues: parse.error.issues });

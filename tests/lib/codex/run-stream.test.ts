@@ -139,6 +139,6 @@ describe('openRunStream', () => {
     expect(calledUrl).toContain('afterSeq=5')
     expect(calledUrl).not.toContain('token=tok')
     expect(calledUrl).toContain('/codex/runs/run-1/stream')
-    expect((calledInit?.headers as Record<string, string>)?.Authorization).toBe('Bearer tok')
+    expect(new Headers(calledInit?.headers).get('Authorization')).toBe('Bearer tok')
   })
 })

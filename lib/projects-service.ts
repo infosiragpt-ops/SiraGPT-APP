@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * Frontend client for the /api/projects backend.
  *
@@ -126,7 +128,8 @@ export interface ProjectFilters {
   trash?: boolean
 }
 
-const baseUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects`
+const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+const baseUrl = `${apiRoot}/projects`
 
 function authHeaders(): HeadersInit {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
@@ -151,6 +154,17 @@ async function handle<T>(res: Response): Promise<T> {
 }
 
 export const projectsService = {
+  async uploadFiles(files: Iterable<File>): Promise<Array<{ id: string }>> {
+    const body = new FormData()
+    for (const file of files) body.append("files", file)
+    const res = await authenticatedFetch(`${apiRoot}/files/upload`, {
+      method: "POST",
+      body,
+    })
+    const json = await handle<{ files?: Array<{ id: string }> }>(res)
+    return json.files || []
+  },
+
   async list(filters: ProjectFilters = {}): Promise<Project[]> {
     const params = new URLSearchParams()
     if (filters.search) params.set("search", filters.search)
@@ -158,7 +172,7 @@ export const projectsService = {
     if (filters.type) params.set("type", filters.type)
     if (filters.trash) params.set("trash", "true")
     const qs = params.toString()
-    const res = await fetch(`${baseUrl}${qs ? `?${qs}` : ""}`, {
+    const res = await authenticatedFetch(`${baseUrl}${qs ? `?${qs}` : ""}`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -167,7 +181,7 @@ export const projectsService = {
   },
 
   async get(id: string): Promise<ProjectDetail> {
-    const res = await fetch(`${baseUrl}/${id}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -176,7 +190,7 @@ export const projectsService = {
   },
 
   async context(id: string): Promise<ProjectContextManifest> {
-    const res = await fetch(`${baseUrl}/${id}/context`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}/context`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -189,7 +203,7 @@ export const projectsService = {
     if (opts.search) params.set("search", opts.search)
     if (opts.limit) params.set("limit", String(opts.limit))
     const qs = params.toString()
-    const res = await fetch(`${baseUrl}/${id}/chats${qs ? `?${qs}` : ""}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}/chats${qs ? `?${qs}` : ""}`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -198,7 +212,7 @@ export const projectsService = {
   },
 
   async create(input: CreateProjectInput): Promise<Project> {
-    const res = await fetch(baseUrl, {
+    const res = await authenticatedFetch(baseUrl, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -209,7 +223,7 @@ export const projectsService = {
   },
 
   async update(id: string, input: UpdateProjectInput): Promise<Project> {
-    const res = await fetch(`${baseUrl}/${id}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}`, {
       method: "PUT",
       credentials: "include",
       headers: authHeaders(),
@@ -220,7 +234,7 @@ export const projectsService = {
   },
 
   async remove(id: string): Promise<void> {
-    const res = await fetch(`${baseUrl}/${id}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}`, {
       method: "DELETE",
       credentials: "include",
       headers: authHeaders(),
@@ -229,7 +243,7 @@ export const projectsService = {
   },
 
   async restore(id: string): Promise<Project> {
-    const res = await fetch(`${baseUrl}/${id}/restore`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}/restore`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -240,7 +254,7 @@ export const projectsService = {
 
   /** Start a new chat inside this project. Returns the created chat. */
   async startChat(id: string, opts: { title?: string; model?: string } = {}): Promise<{ id: string; title: string; projectId: string | null; model: string }> {
-    const res = await fetch(`${baseUrl}/${id}/chat`, {
+    const res = await authenticatedFetch(`${baseUrl}/${id}/chat`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -251,7 +265,7 @@ export const projectsService = {
   },
 
   async attachFile(projectId: string, fileId: string): Promise<void> {
-    const res = await fetch(`${baseUrl}/${projectId}/files/${fileId}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${projectId}/files/${fileId}`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -260,7 +274,7 @@ export const projectsService = {
   },
 
   async detachFile(projectId: string, fileId: string): Promise<void> {
-    const res = await fetch(`${baseUrl}/${projectId}/files/${fileId}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${projectId}/files/${fileId}`, {
       method: "DELETE",
       credentials: "include",
       headers: authHeaders(),
@@ -269,7 +283,7 @@ export const projectsService = {
   },
 
   async listMemory(projectId: string): Promise<ProjectMemoryItem[]> {
-    const res = await fetch(`${baseUrl}/${projectId}/memory`, {
+    const res = await authenticatedFetch(`${baseUrl}/${projectId}/memory`, {
       credentials: "include",
       headers: authHeaders(),
     })
@@ -278,7 +292,7 @@ export const projectsService = {
   },
 
   async deleteMemory(projectId: string, factId: string): Promise<void> {
-    const res = await fetch(`${baseUrl}/${projectId}/memory/${factId}`, {
+    const res = await authenticatedFetch(`${baseUrl}/${projectId}/memory/${factId}`, {
       method: "DELETE",
       credentials: "include",
       headers: authHeaders(),
@@ -287,7 +301,7 @@ export const projectsService = {
   },
 
   async enableShare(projectId: string): Promise<{ shareId: string; url: string }> {
-    const res = await fetch(`${baseUrl}/${projectId}/share`, {
+    const res = await authenticatedFetch(`${baseUrl}/${projectId}/share`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -296,7 +310,7 @@ export const projectsService = {
   },
 
   async revokeShare(projectId: string): Promise<void> {
-    const res = await fetch(`${baseUrl}/${projectId}/share`, {
+    const res = await authenticatedFetch(`${baseUrl}/${projectId}/share`, {
       method: "DELETE",
       credentials: "include",
       headers: authHeaders(),
@@ -306,10 +320,7 @@ export const projectsService = {
 
   async getShared(shareId: string): Promise<SharedProjectSnapshot> {
     // Public endpoint — no auth header needed.
-    const res = await fetch(`${baseUrl}/share/${shareId}`, {
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-    })
+    const res = await fetch(`${baseUrl}/share/${shareId}`)
     const json = await handle<{ project: SharedProjectSnapshot }>(res)
     return json.project
   },

@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "../authenticated-fetch"
+
 /**
  * mfa-totp — client for the existing backend 2FA TOTP endpoints.
  *
@@ -44,7 +46,7 @@ async function jsonOrThrow<T>(res: Response, action: string): Promise<T> {
 
 /** Begin TOTP enrolment. Returns the otpauth URL + a QR PNG (base64). */
 export async function setupTotp(): Promise<TotpSetupResponse> {
-  const res = await fetch(`${API_ROOT}/users/me/2fa/totp/setup`, {
+  const res = await authenticatedFetch(`${API_ROOT}/users/me/2fa/totp/setup`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -55,7 +57,7 @@ export async function setupTotp(): Promise<TotpSetupResponse> {
 /** Verify a 6-digit code from the user's authenticator app + flip
  * `totpEnabled=true` on the server. */
 export async function verifyTotp(code: string): Promise<{ ok: true }> {
-  const res = await fetch(`${API_ROOT}/auth/2fa/totp/verify`, {
+  const res = await authenticatedFetch(`${API_ROOT}/auth/2fa/totp/verify`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -68,7 +70,7 @@ export async function verifyTotp(code: string): Promise<{ ok: true }> {
  * server only stores the hashes. The UI must surface them
  * immediately + instruct the user to save them offline. */
 export async function regenerateRecoveryCodes(): Promise<TotpRecoveryCodesResponse> {
-  const res = await fetch(`${API_ROOT}/users/me/2fa/totp/recovery-codes`, {
+  const res = await authenticatedFetch(`${API_ROOT}/users/me/2fa/totp/recovery-codes`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -79,7 +81,7 @@ export async function regenerateRecoveryCodes(): Promise<TotpRecoveryCodesRespon
 /** Disable TOTP completely. Server requires password reverification
  * for sensitive actions, but the endpoint surface is the same. */
 export async function disableTotp(): Promise<{ ok: true }> {
-  const res = await fetch(`${API_ROOT}/users/me/2fa/totp`, {
+  const res = await authenticatedFetch(`${API_ROOT}/users/me/2fa/totp`, {
     method: "DELETE",
     credentials: "include",
     headers: authHeader(),

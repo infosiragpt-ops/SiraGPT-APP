@@ -23,7 +23,11 @@ import {
   ShieldCheck,
   SkipBack,
 } from "lucide-react"
-import { cn, copyToClipboard, downloadHref, downloadUrlAsFile } from "@/lib/utils"
+import { cn, copyToClipboard, downloadBlob, downloadHref } from "@/lib/utils"
+import {
+  createAuthenticatedFetch,
+  isTrustedSiraApiUrl,
+} from "@/lib/authenticated-fetch"
 import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
 import {
@@ -175,12 +179,6 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
   return projected
 }
 
-function authHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {}
-  const token = window.localStorage.getItem("auth-token")
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
 const AUDIO_FORMATS = new Set(["aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "webm"])
 // Deterministic, natural-looking waveform (no Math.random → SSR-safe). A dense
 // bar field with a gentle centre envelope reads like a real audio waveform.
@@ -197,11 +195,20 @@ function formatMediaTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`
 }
 
+const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+const BACKEND_ROOT = API_ROOT.replace(/\/api$/, "")
+const authenticatedArtifactFetch = createAuthenticatedFetch({ apiBaseUrl: BACKEND_ROOT })
+
 function artifactHref(artifact: AgentArtifact): string {
-  const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
   return artifact.downloadUrl.startsWith("http")
     ? artifact.downloadUrl
-    : `${apiRoot.replace(/\/api$/, "")}${artifact.downloadUrl}`
+    : `${BACKEND_ROOT}${artifact.downloadUrl}`
+}
+
+function fetchArtifact(href: string): Promise<Response> {
+  return isTrustedSiraApiUrl(href, BACKEND_ROOT)
+    ? authenticatedArtifactFetch(href)
+    : fetch(href)
 }
 
 /**
@@ -282,10 +289,7 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
     if (downloading) return
     setDownloading(true)
     try {
-      const response = await fetch(href, {
-        credentials: "include",
-        headers: authHeaders(),
-      })
+      const response = await fetchArtifact(href)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
@@ -407,10 +411,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
     if (objectUrlRef.current) return objectUrlRef.current
     setIsLoadingAudio(true)
     try {
-      const response = await fetch(href, {
-        credentials: "include",
-        headers: authHeaders(),
-      })
+      const response = await fetchArtifact(href)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const blob = await response.blob()
       const objectUrl = window.URL.createObjectURL(blob)
@@ -485,10 +486,9 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
     if (isDownloading) return
     setIsDownloading(true)
     try {
-      await downloadUrlAsFile(href, filename, {
-        credentials: "include",
-        headers: authHeaders(),
-      })
+      const response = await fetchArtifact(href)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      downloadBlob(await response.blob(), filename)
     } catch {
       downloadHref(href, filename)
     } finally {

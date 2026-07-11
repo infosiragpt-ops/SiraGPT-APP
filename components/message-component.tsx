@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { useVoiceControls } from './voice-controls';
 import { getNaturalSpeechEngine, isSpeechSupported } from '@/lib/speech/natural-speech-engine';
 import ReactMarkdown from 'react-markdown'
@@ -2179,7 +2180,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         const downloadPPT = async () => {
             try {
                 const url = getPPTDownloadUrl();
-                const response = await fetch(url, { credentials: 'include' });
+                const response = await authenticatedFetch(url);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const blob = await response.blob();
                 const objectUrl = URL.createObjectURL(blob);
