@@ -362,11 +362,12 @@ jobs:
             ${COMPOSE} build backend
             echo "[deploy-workflow] Applying database migrations"
             # Use the same role resolver, advisory lock, redaction, and bounded
-            # process-tree runner as backend boot. The explicit baseline gate
-            # preserves the one-time path for the pre-Prisma production DB.
+            # process-tree runner as backend boot. Migration-only always rejects
+            # SKIP_MIGRATIONS. The no-schema U1 compatibility mode may prove an
+            # equivalent schema, but it never changes Prisma migration history.
             MIGRATION_STATUS=0
             MIGRATION_OUTPUT="$(${COMPOSE} run -T --rm \
-              -e PRISMA_BASELINE_ON_P3005=1 \
+              -e SKIP_MIGRATIONS=0 \
               backend node scripts/start-with-migrations.js --migrate-only </dev/null 2>&1)" \
               || MIGRATION_STATUS="$?"
             printf '%s\n' "${MIGRATION_OUTPUT}"

@@ -3,8 +3,8 @@
  * Backend boot wrapper: runs `prisma migrate deploy` against the
  * production database, then execs the backend entrypoint. On migration
  * failure exits non-zero so the container is replaced. If
- * SKIP_MIGRATIONS=1 the migration step is skipped (useful during local
- * iteration when the schema is already up to date).
+ * SKIP_MIGRATIONS=1 skips only normal local boot. The release-oriented
+ * `--migrate-only` path rejects that setting with configuration exit 78.
  */
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -40,6 +40,54 @@ const MIGRATION_COMMAND_ABORTED_EXIT_STATUS = 143;
 const MIGRATION_COMMAND_OUTPUT_LIMIT_EXIT_STATUS = 125;
 const MIGRATION_PROCESS_TREE_NOT_TERMINATED_EXIT_STATUS = 126;
 const MIGRATION_CONFIGURATION_EXIT_STATUS = 78;
+const MIGRATION_LIFECYCLE_EXIT_STATUS = 75;
+const MIGRATION_EQUIVALENT_UNBASELINED_ENV = "MIGRATION_ALLOW_EQUIVALENT_UNBASELINED";
+const DATABASE_SSL_URL_KEYS = new Set([
+  "ssl",
+  "sslcert",
+  "sslkey",
+  "sslmode",
+  "sslpassword",
+  "sslrootcert",
+  "uselibpqcompat",
+]);
+const DATABASE_SSL_MODES = new Set([
+  "allow",
+  "disable",
+  "no-verify",
+  "prefer",
+  "require",
+  "verify-ca",
+  "verify-full",
+]);
+const INSECURE_DATABASE_SSL_MODES = new Set([
+  "allow",
+  "disable",
+  "no-verify",
+  "prefer",
+]);
+const DATABASE_SSL_MATERIAL_MAX_BYTES = 1024 * 1024;
+const DATABASE_SSL_PATH_MAX_CHARS = 4096;
+const DATABASE_SSL_MATERIALS = Object.freeze([
+  Object.freeze({
+    kind: "ca",
+    property: "ca",
+    urlKey: "sslrootcert",
+    envKey: "DATABASE_SSL_CA",
+  }),
+  Object.freeze({
+    kind: "cert",
+    property: "cert",
+    urlKey: "sslcert",
+    envKey: "DATABASE_SSL_CERT",
+  }),
+  Object.freeze({
+    kind: "key",
+    property: "key",
+    urlKey: "sslkey",
+    envKey: "DATABASE_SSL_KEY",
+  }),
+]);
 const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
   {
     pattern: /^\d{14}_reset_admin_password$/,
@@ -155,6 +203,14 @@ function safePgError(error, fallbackCode) {
   safe.name = "MigrationDatabaseError";
   safe.code = code;
   return safe;
+}
+
+function migrationLifecycleError(code, exitStatus = MIGRATION_LIFECYCLE_EXIT_STATUS) {
+  const error = new Error(code);
+  error.name = "MigrationLifecycleError";
+  error.code = code;
+  error.exitStatus = exitStatus;
+  return error;
 }
 
 function pipeResult(result, options = {}) {
@@ -285,12 +341,264 @@ function synchronizePrismaDatabaseUrl(env = process.env) {
   return directMigrationUrl;
 }
 
+function databaseSslConfigurationError(code) {
+  const error = new Error("PostgreSQL TLS configuration was rejected.");
+  error.name = "DatabaseSslConfigurationError";
+  error.code = code;
+  error.exitStatus = MIGRATION_CONFIGURATION_EXIT_STATUS;
+  return error;
+}
+
+function databaseSslMaterialError(source, kind) {
+  const label = String(kind).toUpperCase();
+  const code = source === "url"
+    ? `DATABASE_SSL_URL_${label}_UNUSABLE`
+    : `DATABASE_SSL_${label}_READ_FAILED`;
+  return databaseSslConfigurationError(code);
+}
+
+function isDatabaseSslPem(value, kind) {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || Buffer.byteLength(value, "utf8") > DATABASE_SSL_MATERIAL_MAX_BYTES
+  ) {
+    return false;
+  }
+  const labels = Array.from(
+    value.matchAll(/-----BEGIN ([A-Z0-9][A-Z0-9 ]*)-----[\s\S]*?-----END \1-----/g),
+    (match) => match[1],
+  );
+  if (kind === "key") {
+    return labels.some((label) => /(?:^| )PRIVATE KEY$/.test(label));
+  }
+  return labels.some((label) => [
+    "CERTIFICATE",
+    "TRUSTED CERTIFICATE",
+    "X509 CERTIFICATE",
+  ].includes(label));
+}
+
+function readBoundedDatabaseSslFile(filePath) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(descriptor);
+    if (
+      !stat.isFile()
+      || stat.size <= 0
+      || stat.size > DATABASE_SSL_MATERIAL_MAX_BYTES
+    ) {
+      return undefined;
+    }
+
+    const buffer = Buffer.allocUnsafe(DATABASE_SSL_MATERIAL_MAX_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(
+        descriptor,
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        null,
+      );
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead === 0 || bytesRead > DATABASE_SSL_MATERIAL_MAX_BYTES) {
+      return undefined;
+    }
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {
+        // A close failure cannot add safe diagnostics and the TLS config fails.
+      }
+    }
+  }
+}
+
+function resolveDatabaseSslMaterial(configured, { source, kind }) {
+  const value = String(configured ?? "").trim();
+  if (!value) throw databaseSslMaterialError(source, kind);
+
+  const expanded = value.includes("\\n")
+    ? value.replaceAll("\\n", "\n")
+    : value;
+  if (expanded.includes("-----BEGIN ")) {
+    if (!isDatabaseSslPem(expanded, kind)) {
+      throw databaseSslMaterialError(source, kind);
+    }
+    return expanded;
+  }
+
+  if (
+    value.length > DATABASE_SSL_PATH_MAX_CHARS
+    || value.includes("\0")
+    || value.includes("\n")
+    || value.includes("\r")
+  ) {
+    throw databaseSslMaterialError(source, kind);
+  }
+  const candidates = path.isAbsolute(value)
+    ? [value]
+    : [path.resolve(BACKEND_DIR, value), path.resolve(value)];
+  const materialPath = candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+  const contents = readBoundedDatabaseSslFile(materialPath);
+  if (!isDatabaseSslPem(contents, kind)) {
+    // Never attach the configured value, path, filesystem error, or material
+    // to this exception: boot and deploy logging may serialize it.
+    throw databaseSslMaterialError(source, kind);
+  }
+  return contents;
+}
+
+function resolveDatabaseSslCa(env = process.env) {
+  const configured = String(env.DATABASE_SSL_CA || "").trim();
+  if (!configured) return undefined;
+  return resolveDatabaseSslMaterial(configured, { source: "env", kind: "ca" });
+}
+
+function resolveDatabaseSslMaterials(urlTlsEntries, env = process.env) {
+  const materials = {};
+  const sources = {};
+
+  for (const definition of DATABASE_SSL_MATERIALS) {
+    const envValue = String(env[definition.envKey] || "").trim();
+    const urlValues = urlTlsEntries
+      .filter(({ key }) => key === definition.urlKey)
+      .map(({ value }) => value);
+    let source;
+    let configured;
+    if (envValue) {
+      source = "env";
+      configured = envValue;
+    } else if (urlValues.length === 1) {
+      source = "url";
+      [configured] = urlValues;
+    } else if (urlValues.length > 1) {
+      throw databaseSslMaterialError("url", definition.kind);
+    } else {
+      continue;
+    }
+
+    materials[definition.property] = resolveDatabaseSslMaterial(configured, {
+      source,
+      kind: definition.kind,
+    });
+    sources[definition.property] = source;
+  }
+
+  if (Boolean(materials.cert) !== Boolean(materials.key)) {
+    const missingPairProperty = materials.cert ? "cert" : "key";
+    throw databaseSslMaterialError(
+      sources[missingPairProperty] || "env",
+      missingPairProperty,
+    );
+  }
+
+  const sslPasswords = urlTlsEntries
+    .filter(({ key }) => key === "sslpassword")
+    .map(({ value }) => value);
+  if (sslPasswords.length > 0) {
+    // Node pg does not map libpq sslpassword to a TLS passphrase. Reject it
+    // explicitly instead of deleting a client-key credential that will not work.
+    throw databaseSslConfigurationError("DATABASE_SSL_URL_PASSPHRASE_UNSUPPORTED");
+  }
+
+  return materials;
+}
+
+function sanitizeDatabaseSslUrl(url, env = process.env) {
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    throw databaseSslConfigurationError("DATABASE_SSL_URL_INVALID");
+  }
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
+    throw databaseSslConfigurationError("DATABASE_SSL_URL_INVALID");
+  }
+
+  const urlTlsEntries = Array.from(parsed.searchParams.entries())
+    .filter(([key]) => DATABASE_SSL_URL_KEYS.has(String(key).toLowerCase()))
+    .map(([key, value]) => ({
+      key: String(key).toLowerCase(),
+      value: String(value),
+      normalizedValue: String(value).trim().toLowerCase(),
+    }));
+  const sslModes = urlTlsEntries
+    .filter(({ key }) => key === "sslmode")
+    .map(({ normalizedValue }) => normalizedValue);
+  const sslValues = urlTlsEntries
+    .filter(({ key }) => key === "ssl")
+    .map(({ normalizedValue }) => normalizedValue);
+  const explicitVerificationOptOut = (
+    String(env.DATABASE_SSL_REJECT_UNAUTHORIZED || "").trim().toLowerCase() === "false"
+  );
+
+  if (sslModes.some((mode) => !DATABASE_SSL_MODES.has(mode))) {
+    throw databaseSslConfigurationError("DATABASE_SSL_MODE_INVALID");
+  }
+  const distinctModes = new Set(sslModes);
+  const sslValueKinds = new Set(sslValues.map((value) => {
+    if (["1", "true"].includes(value)) return "verified";
+    if (["0", "disable", "false", "no-verify"].includes(value)) return "insecure";
+    return "invalid";
+  }));
+  if (sslValueKinds.has("invalid")) {
+    throw databaseSslConfigurationError("DATABASE_SSL_MODE_INVALID");
+  }
+  const insecureOrConflicting = (
+    sslModes.some((mode) => INSECURE_DATABASE_SSL_MODES.has(mode))
+    || distinctModes.size > 1
+    || sslValueKinds.has("insecure")
+    || sslValueKinds.size > 1
+  );
+  if (insecureOrConflicting && !explicitVerificationOptOut) {
+    throw databaseSslConfigurationError("DATABASE_SSL_MODE_INSECURE");
+  }
+
+  const materials = resolveDatabaseSslMaterials(urlTlsEntries, env);
+  const needsSsl = (
+    urlTlsEntries.length > 0
+    || Object.keys(materials).length > 0
+    || /(?:^|\.)neon\.tech$/i.test(parsed.hostname)
+  );
+  const ssl = needsSsl
+    ? {
+      rejectUnauthorized: !explicitVerificationOptOut,
+      ...materials,
+    }
+    : false;
+
+  // pg parses connectionString after top-level options and lets URL SSL
+  // settings override them. Delete only after every effective TLS value has
+  // been validated and copied into the explicit object above.
+  const keysToDelete = new Set(
+    Array.from(parsed.searchParams.keys())
+      .filter((key) => DATABASE_SSL_URL_KEYS.has(String(key).toLowerCase())),
+  );
+  for (const key of keysToDelete) parsed.searchParams.delete(key);
+
+  return {
+    connectionString: parsed.toString(),
+    needsSsl,
+    rejectUnauthorized: !explicitVerificationOptOut,
+    ssl,
+  };
+}
+
 function makePgClientOptions(url, env = process.env) {
-  const needsSsl = /(?:neon|sslmode=require)/i.test(url);
+  const sanitized = sanitizeDatabaseSslUrl(url, env);
   const timeouts = resolveMigrationPgTimeoutConfig(env);
   return {
-    connectionString: url,
-    ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+    connectionString: sanitized.connectionString,
+    ssl: sanitized.ssl,
     connectionTimeoutMillis: timeouts.connectionTimeoutMs,
     query_timeout: timeouts.queryTimeoutMs,
     statement_timeout: timeouts.statementTimeoutMs,
@@ -503,36 +811,46 @@ async function rollbackSafeFailedMigrations() {
   }
 }
 
-function migrationNames() {
-  return fs.readdirSync(MIGRATIONS_DIR)
-    .filter((name) => name !== "migration_lock.toml")
-    .filter((name) => fs.statSync(path.join(MIGRATIONS_DIR, name)).isDirectory())
-    .sort();
-}
+async function verifyEquivalentUnbaselinedSchema(options = {}) {
+  const env = options.env || process.env;
+  const runPrismaImpl = options.runPrismaImpl || ((args, prismaOptions = {}) => runPrisma(
+    args,
+    { ...prismaOptions, env },
+  ));
+  const logFn = options.logFn || log;
 
-async function baselineExistingSchema(options = {}) {
-  log("baselining existing database schema with prisma migrate resolve");
-  for (const name of migrationNames()) {
-    const result = await runPrisma(
-      ["migrate", "resolve", "--applied", name],
-      { signal: options.signal },
-    );
-    if (result.error) {
-      log("prisma migrate resolve spawn error", {
-        migration: name,
-        code: result.migrationCode || result.error.code || "MIGRATION_COMMAND_FAILED",
-        error: migrationErrorMessage(result.error),
-      });
-      return prismaCommandExitStatus(result);
-    }
-    if (prismaCommandExitStatus(result) !== 0) {
-      log("prisma migrate resolve failed", {
-        migration: name,
-        status: prismaCommandExitStatus(result),
-      });
-      return prismaCommandExitStatus(result);
-    }
+  // The schema datasource reads DATABASE_URL. runPrisma synchronizes that
+  // child-only variable to the resolved direct migration datasource. The
+  // compatibility path proves equivalence only; it never edits migration
+  // history and is therefore safe only for this no-schema rollout.
+  const diffArgs = [
+    "migrate",
+    "diff",
+    "--from-schema-datasource",
+    "prisma/schema.prisma",
+    "--to-schema-datamodel",
+    "prisma/schema.prisma",
+    "--exit-code",
+  ];
+  logFn("verifying_equivalent_unbaselined_schema");
+  const diff = await runPrismaImpl(diffArgs, {
+    signal: options.signal,
+    timeoutMs: resolveMigrationCommandTimeoutMs(env),
+  });
+  const diffStatus = diff.error
+    ? Math.max(1, prismaCommandExitStatus(diff))
+    : prismaCommandExitStatus(diff);
+  if (diff.error || diffStatus !== 0) {
+    logFn("schema_drift_or_diff_failure", {
+      code: diff.migrationCode || diff.error?.code || "MIGRATION_SCHEMA_NOT_EQUIVALENT",
+      status: diffStatus,
+    });
+    return diffStatus;
   }
+
+  logFn("schema_equivalent_unbaselined", {
+    migrationHistoryChanged: false,
+  });
   return 0;
 }
 
@@ -798,6 +1116,7 @@ async function defaultPreflightConnect(opts = {}) {
 // than a hung boot).
 async function acquireMigrationLock(opts = {}) {
   const env = opts.env || process.env;
+  const strict = opts.strict === true;
   const pgTimeouts = resolveMigrationPgTimeoutConfig(env);
   const lifecycle = resolveMigrationLifecycleConfig(env);
   const {
@@ -840,6 +1159,7 @@ async function acquireMigrationLock(opts = {}) {
       code: failure.code,
     });
     await closePgClient(client, closeTimeoutMs);
+    if (strict) throw migrationLifecycleError(failure.code);
     return noop;
   }
 
@@ -864,6 +1184,7 @@ async function acquireMigrationLock(opts = {}) {
         code: failure.code,
       });
       await closePgClient(client, closeTimeoutMs);
+      if (strict) throw migrationLifecycleError(failure.code);
       return noop;
     }
     const locked = res && res.rows && (res.rows[0]?.locked === true || res.rows[0]?.locked === "t");
@@ -886,11 +1207,13 @@ async function acquireMigrationLock(opts = {}) {
   if (!acquired) {
     logFn("migration_lock_timeout", { timeoutMs: boundedTimeoutMs });
     await closePgClient(client, closeTimeoutMs);
+    if (strict) throw migrationLifecycleError("MIGRATION_LOCK_TIMEOUT");
     return noop;
   }
 
   logFn("migration_lock_acquired", {});
   return async () => {
+    let releaseError = null;
     try {
       await withOperationTimeout(
         () => client.query("SELECT pg_advisory_unlock($1::int4, $2::int4)", keys),
@@ -903,22 +1226,33 @@ async function acquireMigrationLock(opts = {}) {
       logFn("migration_lock_release_failed", {
         code: failure.code,
       });
+      if (strict) releaseError = migrationLifecycleError(failure.code);
     } finally {
       await closePgClient(client, closeTimeoutMs);
     }
+    if (releaseError) throw releaseError;
   };
 }
 
-async function runMigrations() {
-  loadDotenv();
-  const retryConfig = resolveMigrationRetryConfig(process.env);
-  const signal = activeMigrationAbortController?.signal;
-  if (process.env.SKIP_MIGRATIONS === "1") {
+async function runMigrations(options = {}) {
+  const env = options.env || process.env;
+  if (env === process.env) loadDotenv();
+  const retryConfig = resolveMigrationRetryConfig(env);
+  const signal = options.signal || activeMigrationAbortController?.signal;
+  const strict = options.strict === true;
+  const sleepFn = options.sleepFn || sleep;
+  const logFn = options.logFn || log;
+  const runPrismaImpl = options.runPrismaImpl || runPrisma;
+  const invokePrisma = (args, prismaOptions = {}) => runPrismaImpl(
+    args,
+    { ...prismaOptions, env },
+  );
+  if (env.SKIP_MIGRATIONS === "1") {
     log("skipping prisma migrate deploy (SKIP_MIGRATIONS=1)");
     return 0;
   }
   try {
-    requireDirectMigrationDatabaseUrl(process.env);
+    requireDirectMigrationDatabaseUrl(env);
   } catch (error) {
     log("migration database configuration rejected", {
       code: error?.code || DIRECT_DATABASE_URL_REQUIRED_CODE,
@@ -931,7 +1265,7 @@ async function runMigrations() {
   let result;
   for (let attempt = 1; attempt <= retryConfig.attempts; attempt++) {
     log("running prisma migrate deploy", { attempt, maxAttempts: retryConfig.attempts });
-    result = await runPrisma(["migrate", "deploy"], { signal });
+    result = await invokePrisma(["migrate", "deploy"], { signal });
     if (result.error) {
       log("prisma migrate deploy spawn error", {
         code: result.migrationCode || result.error.code || "MIGRATION_COMMAND_FAILED",
@@ -946,7 +1280,7 @@ async function runMigrations() {
     if (!isTransientMigrationError(result)) break;
     if (attempt < retryConfig.attempts) {
       log("transient migration error — retrying", { attempt, retryInMs: retryConfig.delayMs });
-      await sleep(retryConfig.delayMs, signal);
+      await sleepFn(retryConfig.delayMs, signal);
       if (signal?.aborted) return MIGRATION_COMMAND_ABORTED_EXIT_STATUS;
     }
   }
@@ -955,28 +1289,29 @@ async function runMigrations() {
     return prismaCommandExitStatus(result);
   }
 
-  if (prismaCommandExitStatus(result) !== 0 && process.env.PRISMA_BASELINE_ON_P3005 === "1") {
+  if (prismaCommandExitStatus(result) !== 0) {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     if (output.includes("P3005")) {
-      const baselineStatus = await baselineExistingSchema({ signal });
-      if (baselineStatus !== 0) return baselineStatus;
-      log("retrying prisma migrate deploy after baseline");
-      const retry = await runPrisma(["migrate", "deploy"], { signal });
-      if (retry.error) {
-        log("prisma migrate deploy retry spawn error", {
-          code: retry.migrationCode || retry.error.code || "MIGRATION_COMMAND_FAILED",
-          error: migrationErrorMessage(retry.error),
+      if (env[MIGRATION_EQUIVALENT_UNBASELINED_ENV] !== "1") {
+        logFn("P3005_unbaselined_migration_history", {
+          code: "MIGRATION_HISTORY_BASELINE_REQUIRED",
+          compatibilityMode: false,
         });
-        return prismaCommandExitStatus(retry);
+        return prismaCommandExitStatus(result);
       }
-      return prismaCommandExitStatus(retry);
+      return verifyEquivalentUnbaselinedSchema({
+        env,
+        signal,
+        runPrismaImpl: invokePrisma,
+        logFn,
+      });
     }
   }
-  if (prismaCommandExitStatus(result) !== 0 && process.env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
+  if (prismaCommandExitStatus(result) !== 0 && env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     if (output.includes("P3009") && await rollbackSafeFailedMigrations()) {
       log("retrying prisma migrate deploy after safe failed migration rollback");
-      const retry = await runPrisma(["migrate", "deploy"], { signal });
+      const retry = await invokePrisma(["migrate", "deploy"], { signal });
       if (retry.error) {
         log("prisma migrate deploy retry spawn error", {
           code: retry.migrationCode || retry.error.code || "MIGRATION_COMMAND_FAILED",
@@ -986,7 +1321,7 @@ async function runMigrations() {
       }
       return prismaCommandExitStatus(retry);
     }
-    if (shouldContinueAfterSafeP3009(output)) {
+    if (!strict && shouldContinueAfterSafeP3009(output)) {
       log("continuing boot despite safe P3009 migration block", {
         failedMigrations: extractP3009MigrationNames(output),
       });
@@ -995,10 +1330,10 @@ async function runMigrations() {
   }
 
   if (prismaCommandExitStatus(result) !== 0 && isTransientMigrationError(result)) {
-    log("migration failed after all retries due to transient network error — proceeding with boot (schema already applied)", {
-      hint: "Set SKIP_MIGRATIONS=1 to bypass migrations entirely on future boots if this persists.",
+    log("migration failed after all retries due to a transient database error", {
+      strict,
+      degradedBootAvailable: env.MIGRATION_NONFATAL === "1",
     });
-    return 0;
   }
 
   return prismaCommandExitStatus(result);
@@ -1099,11 +1434,16 @@ function startBackend() {
 }
 
 // Run DB preflight + acquire the migration advisory lock when applicable.
-// Returns an async release() (a no-op when nothing was locked). Every branch is
-// gated by env and fail-safe: a bug here can never block boot or fail it.
+// Returns an async release() (a no-op when nothing was locked). Normal boot is
+// fail-soft here; migration-only mode passes strict=true so a failed preflight
+// or lock operation aborts the release command instead of becoming success.
 async function maybePreflightAndLock(options = {}) {
   const noop = async () => {};
   const env = options.env || process.env;
+  const strict = options.strict === true;
+  const phaseFn = options.phaseFn || phase;
+  const preflightDatabaseImpl = options.preflightDatabaseImpl || preflightDatabase;
+  const acquireMigrationLockImpl = options.acquireMigrationLockImpl || acquireMigrationLock;
   if (env.SKIP_MIGRATIONS === "1") return noop;
 
   if (env === process.env) loadDotenv();
@@ -1112,48 +1452,73 @@ async function maybePreflightAndLock(options = {}) {
   try {
     url = resolvePrismaDatabaseUrl(env);
   } catch (error) {
-    phase("migration_preflight_skipped", {
+    phaseFn("migration_preflight_skipped", {
       reason: "direct_database_url_unavailable",
       code: error?.code || DIRECT_DATABASE_URL_REQUIRED_CODE,
     });
+    if (strict) throw error;
     return noop;
   }
   if (!isDirectPostgresUrl(url)) {
     // Accelerate/Data Proxy (prisma://) or no URL: pg can't dial it, so skip
     // fast instead of burning preflight retries that can never succeed.
-    phase("migration_preflight_skipped", { reason: url ? "non_direct_postgres_url" : "no_database_url" });
+    phaseFn("migration_preflight_skipped", { reason: url ? "non_direct_postgres_url" : "no_database_url" });
+    if (strict) throw migrationLifecycleError("MIGRATION_DIRECT_DATASOURCE_UNAVAILABLE");
     return noop;
   }
 
+  try {
+    makePgClientOptions(url, env);
+  } catch (error) {
+    const code = /^DATABASE_SSL_[A-Z0-9_]+$/.test(String(error?.code || ""))
+      ? error.code
+      : "DATABASE_SSL_CONFIGURATION_INVALID";
+    phaseFn("migration_tls_configuration_rejected", { code });
+    if (code !== error?.code) throw databaseSslConfigurationError(code);
+    throw error;
+  }
+
   if (env.MIGRATION_PREFLIGHT_DISABLED !== "1") {
-    phase("db_preflight_start", { attempts: lifecycle.preflightAttempts });
-    const ok = await preflightDatabase({
+    phaseFn("db_preflight_start", { attempts: lifecycle.preflightAttempts });
+    const ok = await preflightDatabaseImpl({
       env,
+      strict,
       signal: options.signal,
       attempts: lifecycle.preflightAttempts,
       delayMs: lifecycle.preflightDelayMs,
     }).catch((err) => {
       const failure = sanitizePgFailure(err, "MIGRATION_DB_PREFLIGHT_FAILED");
-      phase("db_preflight_error", {
+      phaseFn("db_preflight_error", {
         code: failure.code,
       });
+      if (strict) throw migrationLifecycleError(failure.code);
       return true; // never block boot on a preflight bug
     });
-    if (!ok) phase("db_preflight_giving_up", { note: "continuing to migrate anyway" });
+    if (!ok) {
+      phaseFn("db_preflight_giving_up", {
+        note: strict ? "migration-only aborting" : "continuing to migrate anyway",
+      });
+      if (strict) throw migrationLifecycleError("MIGRATION_DB_PREFLIGHT_EXHAUSTED");
+    }
   }
 
   if (env.MIGRATION_ADVISORY_LOCK_DISABLED === "1") return noop;
-  phase("migration_lock_start", {});
-  return acquireMigrationLock({
+  phaseFn("migration_lock_start", {});
+  return acquireMigrationLockImpl({
     env,
+    strict,
     signal: options.signal,
     timeoutMs: lifecycle.lockTimeoutMs,
     pollMs: lifecycle.lockPollMs,
   }).catch((err) => {
     const failure = sanitizePgFailure(err, "MIGRATION_LOCK_FAILED");
-    phase("migration_lock_error", {
+    phaseFn("migration_lock_error", {
       code: failure.code,
     });
+    if (strict) {
+      if (Number.isInteger(err?.exitStatus)) throw err;
+      throw migrationLifecycleError(failure.code);
+    }
     return noop;
   });
 }
@@ -1342,12 +1707,13 @@ function shouldAllowNonfatalMigrationFailure(status, env = process.env) {
 }
 
 async function runMigrationOnly(options = {}) {
+  const env = options.env || process.env;
   const {
     installSignalHandlers = true,
     loadEnvFn = loadDotenv,
-    runGenerateImpl = ({ signal: generateSignal }) => runPrisma(
+    runGenerateImpl = ({ signal: generateSignal, env: generateEnv }) => runPrisma(
       ["generate", "--schema=prisma/schema.prisma"],
-      { signal: generateSignal },
+      { signal: generateSignal, env: generateEnv },
     ),
     maybePreflightAndLockImpl = maybePreflightAndLock,
     runMigrationsImpl = runMigrations,
@@ -1356,6 +1722,13 @@ async function runMigrationOnly(options = {}) {
   } = options;
   if (installSignalHandlers) installParentShutdownHandlers();
   loadEnvFn();
+  if (env.SKIP_MIGRATIONS === "1") {
+    phaseFn("migration_only_rejected", {
+      status: MIGRATION_CONFIGURATION_EXIT_STATUS,
+      code: "MIGRATION_ONLY_SKIP_FORBIDDEN",
+    });
+    return MIGRATION_CONFIGURATION_EXIT_STATUS;
+  }
 
   const previousController = activeMigrationAbortController;
   const controller = new AbortController();
@@ -1373,7 +1746,7 @@ async function runMigrationOnly(options = {}) {
     phaseFn("migration_only_start", {});
     phaseFn("generate_start", { mode: "migration_only" });
     try {
-      const generateResult = await runGenerateImpl({ signal: controller.signal });
+      const generateResult = await runGenerateImpl({ signal: controller.signal, env });
       status = Number.isInteger(generateResult)
         ? generateResult
         : prismaCommandExitStatus(generateResult);
@@ -1386,22 +1759,50 @@ async function runMigrationOnly(options = {}) {
         status,
         code: error?.code || "PRISMA_GENERATE_FAILED",
       });
-      return status;
     }
     phaseFn("generate_done", { mode: "migration_only", status });
-    if (status !== 0) return status;
-
-    release = await maybePreflightAndLockImpl({ signal: controller.signal });
-    phaseFn("migrate_start", { mode: "migration_only" });
-    status = await runMigrationsImpl({ signal: controller.signal });
-    phaseFn("migrate_done", { mode: "migration_only", status });
-    return status;
+    if (status === 0) {
+      release = await maybePreflightAndLockImpl({
+        env,
+        signal: controller.signal,
+        strict: true,
+      });
+      phaseFn("migrate_start", { mode: "migration_only" });
+      status = await runMigrationsImpl({
+        env,
+        signal: controller.signal,
+        strict: true,
+      });
+      phaseFn("migrate_done", { mode: "migration_only", status });
+    }
+  } catch (error) {
+    status = Number.isInteger(error?.exitStatus)
+      ? error.exitStatus
+      : MIGRATION_LIFECYCLE_EXIT_STATUS;
+    phaseFn("migration_only_failed", {
+      status,
+      code: error?.code || "MIGRATION_ONLY_FAILED",
+    });
   } finally {
-    await Promise.resolve(release()).catch(() => {});
+    try {
+      await Promise.resolve(release());
+    } catch (error) {
+      if (status === 0) {
+        status = Number.isInteger(error?.exitStatus)
+          ? error.exitStatus
+          : MIGRATION_LIFECYCLE_EXIT_STATUS;
+      }
+      phaseFn("migration_lock_release_failed", {
+        mode: "migration_only",
+        status,
+        code: error?.code || "MIGRATION_LOCK_RELEASE_FAILED",
+      });
+    }
     signal?.removeEventListener("abort", forwardAbort);
     activeMigrationAbortController = previousController;
     phaseFn("migration_only_done", { status });
   }
+  return status;
 }
 
 async function main() {
@@ -1502,6 +1903,7 @@ module.exports = {
   isMigrationAutoRollbackSafe,
   migrationSqlIsIdempotentAdditive,
   makePgClientOptions,
+  resolveDatabaseSslCa,
   resolvePrismaDatabaseUrl,
   synchronizePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
@@ -1510,6 +1912,7 @@ module.exports = {
   preflightDatabase,
   defaultPreflightConnect,
   acquireMigrationLock,
+  maybePreflightAndLock,
   forwardShutdownToBackend,
   runPrisma,
   isTerminalMigrationCommandResult,
@@ -1525,6 +1928,7 @@ module.exports = {
   closePgClient,
   runMigrations,
   runMigrationOnly,
+  verifyEquivalentUnbaselinedSchema,
   isMigrationOnlyMode,
   clearStalePortProcess,
   sanitizePgFailure,

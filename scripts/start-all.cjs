@@ -147,7 +147,6 @@ function spawnBackend() {
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
-    PRISMA_BASELINE_ON_P3005: process.env.PRISMA_BASELINE_ON_P3005 || "1",
   };
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {
     cwd: BACKEND_DIR,

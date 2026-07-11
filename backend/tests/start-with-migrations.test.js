@@ -1,8 +1,10 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const { Client } = require("pg");
 
 const {
   extractP3009MigrationNames,
@@ -18,12 +20,14 @@ const {
   preflightDatabase,
   defaultPreflightConnect,
   acquireMigrationLock,
+  maybePreflightAndLock,
   forwardShutdownToBackend,
   runPrisma,
   pipeResult,
   prismaCommandExitStatus,
   resolveMigrationCommandTimeoutMs,
   resolveMigrationPgTimeoutConfig,
+  runMigrations,
   runMigrationOnly,
   isTransientMigrationError,
   sanitizePgFailure,
@@ -37,6 +41,11 @@ const {
 const wrapperSource = fs.readFileSync(path.join(__dirname, "..", "scripts", "start-with-migrations.js"), "utf8");
 const backendIndexSource = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
 const MIGRATIONS_DIR = path.join(__dirname, "..", "prisma", "migrations");
+
+function fakePrivateKey(label, trailingNewline = false) {
+  return `-----BEGIN PRIVATE${" KEY"}-----\n${label}\n`
+    + `-----END PRIVATE${" KEY"}-----${trailingNewline ? "\n" : ""}`;
+}
 
 test("only explicitly allowlisted migrations are safe to auto-rollback", () => {
   assert.equal(isSafeAutoRollbackMigration("20260527000000_reset_admin_password"), true);
@@ -204,7 +213,10 @@ test("migration startup synchronizes Prisma CLI's DATABASE_URL to the canonical 
 
 test("boot wrapper loads backend/root .env files before migrations", () => {
   assert.match(wrapperSource, /require\("\.\.\/src\/config\/load-env"\)/);
-  assert.match(wrapperSource, /function runMigrations\(\) \{[\s\S]{0,160}loadDotenv\(\)/);
+  assert.match(
+    wrapperSource,
+    /function runMigrations\(options = \{\}\) \{[\s\S]{0,240}if \(env === process\.env\) loadDotenv\(\)/,
+  );
   assert.doesNotMatch(
     wrapperSource,
     /const MIGRATION_(?:TRANSIENT_RETRIES|RETRY_DELAY_MS|PREFLIGHT_ATTEMPTS|PREFLIGHT_DELAY_MS|LOCK_TIMEOUT_MS|LOCK_POLL_MS)\s*=\s*parseBoundedTimeout\(\s*process\.env\./,
@@ -221,11 +233,13 @@ test("migration-only mode shares lock, migration, and release lifecycle without 
       calls.push("generate");
       return 0;
     },
-    maybePreflightAndLockImpl: async () => {
+    maybePreflightAndLockImpl: async (options) => {
+      assert.equal(options.strict, true);
       calls.push("lock");
       return async () => calls.push("release");
     },
-    runMigrationsImpl: async () => {
+    runMigrationsImpl: async (options) => {
+      assert.equal(options.strict, true);
       calls.push("migrate");
       return 0;
     },
@@ -237,21 +251,489 @@ test("migration-only mode shares lock, migration, and release lifecycle without 
   assert.equal(wrapperSource.includes("--migrate-only"), true);
 });
 
-test("neon postgres connections are configured with ssl", () => {
-  assert.deepEqual(makePgClientOptions(
+test("migration-only mode returns nonzero when strict preflight or lock acquisition fails", async () => {
+  let migrationsRan = false;
+  const status = await runMigrationOnly({
+    installSignalHandlers: false,
+    loadEnvFn: () => {},
+    runGenerateImpl: async () => 0,
+    maybePreflightAndLockImpl: async (options) => {
+      assert.equal(options.strict, true);
+      throw Object.assign(new Error("transient lock failure"), {
+        code: "MIGRATION_LOCK_CONNECT_FAILED",
+        exitStatus: 75,
+      });
+    },
+    runMigrationsImpl: async () => {
+      migrationsRan = true;
+      return 0;
+    },
+    phaseFn: () => {},
+  });
+
+  assert.equal(status, 75);
+  assert.equal(migrationsRan, false);
+});
+
+test("migration-only mode returns nonzero when strict lock release fails", async () => {
+  const status = await runMigrationOnly({
+    installSignalHandlers: false,
+    loadEnvFn: () => {},
+    runGenerateImpl: async () => 0,
+    maybePreflightAndLockImpl: async () => async () => {
+      throw Object.assign(new Error("unlock failed"), {
+        code: "MIGRATION_LOCK_RELEASE_FAILED",
+        exitStatus: 75,
+      });
+    },
+    runMigrationsImpl: async () => 0,
+    phaseFn: () => {},
+  });
+
+  assert.equal(status, 75);
+});
+
+test("migration-only mode rejects SKIP_MIGRATIONS=1 before generate, preflight, or migrate", async () => {
+  const calls = [];
+  const status = await runMigrationOnly({
+    env: { SKIP_MIGRATIONS: "1" },
+    installSignalHandlers: false,
+    loadEnvFn: () => calls.push("dotenv"),
+    runGenerateImpl: async () => {
+      calls.push("generate");
+      return 0;
+    },
+    maybePreflightAndLockImpl: async () => {
+      calls.push("preflight");
+      return async () => calls.push("release");
+    },
+    runMigrationsImpl: async () => {
+      calls.push("migrate");
+      return 0;
+    },
+    phaseFn: () => {},
+  });
+
+  assert.equal(status, 78);
+  assert.deepEqual(calls, ["dotenv"]);
+});
+
+test("normal boot migration path may still skip migrations explicitly", async () => {
+  const status = await runMigrations({
+    env: { SKIP_MIGRATIONS: "1" },
+    runPrismaImpl: async () => assert.fail("normal skip must not invoke Prisma"),
+  });
+
+  assert.equal(status, 0);
+});
+
+test("strict migrations return the transient Prisma failure after retries are exhausted", async () => {
+  let attempts = 0;
+
+  const status = await runMigrations({
+    strict: true,
+    env: {
+      DIRECT_DATABASE_URL: "postgres://migration.invalid/app",
+      MIGRATION_TRANSIENT_RETRIES: "2",
+      MIGRATION_RETRY_DELAY_MS: "1",
+    },
+    runPrismaImpl: async () => {
+      attempts += 1;
+      return { status: 1, stdout: "", stderr: "ETIMEDOUT" };
+    },
+    sleepFn: async () => {},
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(status, 1);
+});
+
+test("P3005 fails without explicitly named equivalent-unbaselined compatibility mode", async () => {
+  const calls = [];
+  const status = await runMigrations({
+    strict: true,
+    env: {
+      DIRECT_DATABASE_URL: "postgres://migration.invalid/app",
+      MIGRATION_TRANSIENT_RETRIES: "1",
+    },
+    runPrismaImpl: async (args, options) => {
+      calls.push({ args, options });
+      return { status: 1, stdout: "", stderr: "Error: P3005" };
+    },
+  });
+
+  assert.notEqual(status, 0);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["migrate", "deploy"]);
+});
+
+test("explicit equivalent-unbaselined mode accepts a zero diff without resolve or migrate retry", async () => {
+  const calls = [];
+  const logs = [];
+  const status = await runMigrations({
+    strict: true,
+    env: {
+      DIRECT_DATABASE_URL: "postgres://migration.invalid/app",
+      MIGRATION_TRANSIENT_RETRIES: "1",
+      MIGRATION_ALLOW_EQUIVALENT_UNBASELINED: "1",
+      MIGRATION_COMMAND_TIMEOUT_MS: "4321",
+    },
+    logFn: (msg, extra = {}) => logs.push({ msg, ...extra }),
+    runPrismaImpl: async (args, options) => {
+      calls.push({ args, options });
+      if (args[1] === "deploy") {
+        return { status: 1, stdout: "", stderr: "Error: P3005" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  assert.equal(status, 0);
+  assert.deepEqual(calls.map((call) => call.args), [
+    ["migrate", "deploy"],
+    [
+      "migrate",
+      "diff",
+      "--from-schema-datasource",
+      "prisma/schema.prisma",
+      "--to-schema-datamodel",
+      "prisma/schema.prisma",
+      "--exit-code",
+    ],
+  ]);
+  assert.equal(calls[1].options.timeoutMs, 4321);
+  assert.equal(calls.some((call) => call.args.includes("resolve")), false);
+  assert.equal(
+    logs.some((entry) => entry.msg === "schema_equivalent_unbaselined"),
+    true,
+  );
+});
+
+test("equivalent-unbaselined mode rejects schema drift without resolve or migrate retry", async () => {
+  const calls = [];
+  const status = await runMigrations({
+    strict: true,
+    env: {
+      DIRECT_DATABASE_URL: "postgres://migration.invalid/app",
+      MIGRATION_TRANSIENT_RETRIES: "1",
+      MIGRATION_ALLOW_EQUIVALENT_UNBASELINED: "1",
+    },
+    runPrismaImpl: async (args) => {
+      calls.push(args);
+      if (args[1] === "deploy") {
+        return { status: 1, stdout: "", stderr: "Error: P3005" };
+      }
+      return { status: 2, stdout: "schema differs", stderr: "" };
+    },
+  });
+
+  assert.equal(status, 2);
+  assert.deepEqual(calls.map((args) => args.slice(0, 2)), [
+    ["migrate", "deploy"],
+    ["migrate", "diff"],
+  ]);
+  assert.equal(calls.some((args) => args.includes("resolve")), false);
+});
+
+test("migration wrapper contains no automatic migrate resolve path or legacy baseline env", () => {
+  const startAll = fs.readFileSync(path.join(__dirname, "..", "..", "scripts", "start-all.cjs"), "utf8");
+  const deployScript = fs.readFileSync(
+    path.join(__dirname, "..", "..", "scripts", "deploy-production.sh"),
+    "utf8",
+  );
+  const deployWorkflow = fs.readFileSync(
+    path.join(__dirname, "..", "..", ".github", "workflows", "deploy.yml"),
+    "utf8",
+  );
+
+  for (const source of [wrapperSource, startAll, deployScript, deployWorkflow]) {
+    assert.doesNotMatch(source, /PRISMA_BASELINE_(?:ON_P3005|MIGRATION)/);
+  }
+  assert.doesNotMatch(wrapperSource, /["']migrate["']\s*,\s*["']resolve["']/);
+  assert.match(deployWorkflow, /-e\s+SKIP_MIGRATIONS=0/);
+
+  const standardCompose = fs.readFileSync(
+    path.join(__dirname, "..", "..", "docker-compose.yml"),
+    "utf8",
+  );
+  const productionCompose = fs.readFileSync(
+    path.join(__dirname, "..", "..", "docker-compose.prod.yml"),
+    "utf8",
+  );
+  assert.match(standardCompose, /\bSKIP_MIGRATIONS:\s*["']\$\{SKIP_MIGRATIONS:-0\}["']/);
+  assert.match(productionCompose, /\bSKIP_MIGRATIONS:\s*["']0["']/);
+});
+
+test("rollout docs reserve reviewed one-off migration-history baselining for U0", () => {
+  const sources = [
+    path.join(__dirname, "..", "..", "docs", "operations", "ENVIRONMENT.md"),
+    path.join(
+      __dirname,
+      "..",
+      "..",
+      "docs",
+      "plans",
+      "2026-07-10-001-feat-platform-improvements-program-plan.md",
+    ),
+  ].map((file) => fs.readFileSync(file, "utf8"));
+
+  for (const source of sources) {
+    assert.match(source, /U0/i);
+    assert.match(source, /reviewed one-off/i);
+    assert.match(source, /before schema-bearing units/i);
+  }
+});
+
+test("pg Client receives authoritative verified TLS after URL SSL options are removed", () => {
+  const options = makePgClientOptions(
     "postgres://user:pass@ep-example.neon.tech/neondb",
     {
       MIGRATION_DB_CONNECT_TIMEOUT_MS: "321",
       MIGRATION_DB_QUERY_TIMEOUT_MS: "654",
       MIGRATION_DB_STATEMENT_TIMEOUT_MS: "987",
     },
-  ), {
+  );
+  const client = new Client(options);
+
+  assert.deepEqual(options, {
     connectionString: "postgres://user:pass@ep-example.neon.tech/neondb",
-    ssl: { rejectUnauthorized: false },
+    ssl: { rejectUnauthorized: true },
     connectionTimeoutMillis: 321,
     query_timeout: 654,
     statement_timeout: 987,
   });
+  assert.deepEqual(client.connectionParameters.ssl, { rejectUnauthorized: true });
+});
+
+test("pg Client preserves URL custom CA and client-auth files in explicit TLS", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "siragpt-db-mtls-"));
+  const caPath = path.join(directory, "database-ca.pem");
+  const certPath = path.join(directory, "database-client.pem");
+  const keyPath = path.join(directory, "database-client.key");
+  const ca = "-----BEGIN CERTIFICATE-----\nurl-ca\n-----END CERTIFICATE-----\n";
+  const cert = "-----BEGIN CERTIFICATE-----\nurl-client\n-----END CERTIFICATE-----\n";
+  const key = fakePrivateKey("url-key", true);
+  fs.writeFileSync(caPath, ca, { mode: 0o600 });
+  fs.writeFileSync(certPath, cert, { mode: 0o600 });
+  fs.writeFileSync(keyPath, key, { mode: 0o600 });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const url = new URL("postgres://user:pass@db.example/app?schema=tenant_a");
+  url.searchParams.set("sslmode", "verify-full");
+  url.searchParams.set("sslrootcert", caPath);
+  url.searchParams.set("sslcert", certPath);
+  url.searchParams.set("sslkey", keyPath);
+  url.searchParams.set("uselibpqcompat", "true");
+  const options = makePgClientOptions(url.toString(), {});
+  const sanitized = new URL(options.connectionString);
+  const client = new Client(options);
+
+  assert.equal(sanitized.searchParams.get("schema"), "tenant_a");
+  for (const key of [
+    "ssl",
+    "sslmode",
+    "sslrootcert",
+    "sslcert",
+    "sslkey",
+    "uselibpqcompat",
+  ]) {
+    assert.equal(sanitized.searchParams.has(key), false, `${key} must be removed`);
+  }
+  assert.deepEqual(client.connectionParameters.ssl, {
+    rejectUnauthorized: true,
+    ca,
+    cert,
+  });
+  assert.equal(client.connectionParameters.ssl.key, key);
+});
+
+test("pg Client accepts URL-encoded inline PEM mTLS material", () => {
+  const ca = "-----BEGIN CERTIFICATE-----\ninline-url-ca\n-----END CERTIFICATE-----";
+  const cert = "-----BEGIN CERTIFICATE-----\ninline-url-cert\n-----END CERTIFICATE-----";
+  const key = fakePrivateKey("inline-url-key");
+  const url = new URL("postgres://user:pass@db.example/app");
+  url.searchParams.set("sslmode", "verify-full");
+  url.searchParams.set("sslrootcert", ca);
+  url.searchParams.set("sslcert", cert);
+  url.searchParams.set("sslkey", key);
+
+  const client = new Client(makePgClientOptions(url.toString(), {}));
+
+  assert.deepEqual(client.connectionParameters.ssl, {
+    rejectUnauthorized: true,
+    ca,
+    cert,
+  });
+  assert.equal(client.connectionParameters.ssl.key, key);
+});
+
+test("environment mTLS material overrides URL TLS material", () => {
+  const urlCa = "-----BEGIN CERTIFICATE-----\nurl-ca\n-----END CERTIFICATE-----";
+  const urlCert = "-----BEGIN CERTIFICATE-----\nurl-cert\n-----END CERTIFICATE-----";
+  const urlKey = fakePrivateKey("url-key");
+  const envCa = "-----BEGIN CERTIFICATE-----\nenv-ca\n-----END CERTIFICATE-----";
+  const envCert = "-----BEGIN CERTIFICATE-----\nenv-cert\n-----END CERTIFICATE-----";
+  const envKey = fakePrivateKey("env-key");
+  const url = new URL("postgres://user:pass@db.example/app");
+  url.searchParams.set("sslrootcert", urlCa);
+  url.searchParams.set("sslcert", urlCert);
+  url.searchParams.set("sslkey", urlKey);
+
+  const options = makePgClientOptions(url.toString(), {
+    DATABASE_SSL_CA: envCa,
+    DATABASE_SSL_CERT: envCert,
+    DATABASE_SSL_KEY: envKey,
+  });
+
+  const client = new Client(options);
+  assert.deepEqual(client.connectionParameters.ssl, {
+    rejectUnauthorized: true,
+    ca: envCa,
+    cert: envCert,
+  });
+  assert.equal(client.connectionParameters.ssl.key, envKey);
+  const sanitized = new URL(options.connectionString);
+  assert.equal(sanitized.searchParams.has("sslrootcert"), false);
+  assert.equal(sanitized.searchParams.has("sslcert"), false);
+  assert.equal(sanitized.searchParams.has("sslkey"), false);
+});
+
+test("unusable URL TLS material fails with a stable value-free code", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "siragpt-db-mtls-invalid-"));
+  const missingKey = path.join(directory, "private-client-name.key");
+  const oversizedCa = path.join(directory, "private-ca-name.pem");
+  fs.writeFileSync(oversizedCa, Buffer.alloc((1024 * 1024) + 1, 0x61), { mode: 0o600 });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  for (const [parameter, configured, expectedCode] of [
+    ["sslrootcert", oversizedCa, "DATABASE_SSL_URL_CA_UNUSABLE"],
+    ["sslcert", "", "DATABASE_SSL_URL_CERT_UNUSABLE"],
+    ["sslkey", missingKey, "DATABASE_SSL_URL_KEY_UNUSABLE"],
+  ]) {
+    const url = new URL("postgres://secret-user:secret-pass@secret-db.internal/app");
+    url.searchParams.set(parameter, configured);
+    assert.throws(
+      () => makePgClientOptions(url.toString(), {}),
+      (error) => {
+        assert.equal(error.code, expectedCode);
+        assert.equal(error.exitStatus, 78);
+        assert.doesNotMatch(
+          `${error.message}\n${error.stack}`,
+          /secret-user|secret-pass|secret-db|private-client-name|private-ca-name/,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("migration preflight fails before dialing on unusable URL TLS material", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "siragpt-db-preflight-tls-"));
+  const missingCa = path.join(directory, "private-preflight-ca.pem");
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const url = new URL("postgres://secret-user:secret-pass@secret-db.internal/app");
+  url.searchParams.set("sslrootcert", missingCa);
+  const events = [];
+
+  await assert.rejects(
+    () => maybePreflightAndLock({
+      env: { DIRECT_DATABASE_URL: url.toString() },
+      strict: true,
+      phaseFn: (event, payload) => events.push({ event, payload }),
+      preflightDatabaseImpl: async () => assert.fail("invalid TLS must fail before dialing"),
+      acquireMigrationLockImpl: async () => assert.fail("invalid TLS must fail before locking"),
+    }),
+    (error) => {
+      assert.equal(error.code, "DATABASE_SSL_URL_CA_UNUSABLE");
+      assert.equal(error.exitStatus, 78);
+      return true;
+    },
+  );
+  assert.deepEqual(events, [{
+    event: "migration_tls_configuration_rejected",
+    payload: { code: "DATABASE_SSL_URL_CA_UNUSABLE" },
+  }]);
+  assert.doesNotMatch(
+    JSON.stringify(events),
+    /secret-user|secret-pass|secret-db|private-preflight-ca/,
+  );
+});
+
+test("insecure or conflicting URL sslmode fails closed without explicit verification opt-out", () => {
+  for (const query of [
+    "sslmode=disable",
+    "sslmode=no-verify",
+    "sslmode=verify-full&sslmode=disable",
+  ]) {
+    assert.throws(
+      () => makePgClientOptions(
+        `postgres://secret-user:secret-pass@secret-db.internal/app?${query}`,
+        {},
+      ),
+      (error) => {
+        assert.equal(error.code, "DATABASE_SSL_MODE_INSECURE");
+        assert.doesNotMatch(
+          `${error.message}\n${error.stack}`,
+          /secret-user|secret-pass|secret-db\.internal/,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("explicit verification opt-out is authoritative after insecure URL modes are removed", () => {
+  const options = makePgClientOptions(
+    "postgres://user:pass@db.example/app?sslmode=disable&ssl=no-verify",
+    { DATABASE_SSL_REJECT_UNAUTHORIZED: "false" },
+  );
+  const client = new Client(options);
+
+  assert.equal(new URL(options.connectionString).searchParams.has("sslmode"), false);
+  assert.equal(new URL(options.connectionString).searchParams.has("ssl"), false);
+  assert.deepEqual(client.connectionParameters.ssl, { rejectUnauthorized: false });
+
+  const stillVerified = new Client(makePgClientOptions(
+    "postgres://user:pass@db.example/app?sslmode=require",
+    { DATABASE_SSL_REJECT_UNAUTHORIZED: "0" },
+  ));
+  assert.deepEqual(stillVerified.connectionParameters.ssl, { rejectUnauthorized: true });
+});
+
+test("database TLS accepts an inline CA or a CA file without exposing its path in errors", (t) => {
+  const inlineCa = "-----BEGIN CERTIFICATE-----\ninline-ca\n-----END CERTIFICATE-----";
+  const inlineOptions = makePgClientOptions("postgres://db.example/app?sslmode=require", {
+    DATABASE_SSL_CA: inlineCa,
+  });
+  assert.deepEqual(
+    new Client(inlineOptions).connectionParameters.ssl,
+    { rejectUnauthorized: true, ca: inlineCa },
+  );
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "siragpt-db-ca-"));
+  const caPath = path.join(directory, "database-ca.pem");
+  const fileCa = "-----BEGIN CERTIFICATE-----\nfile-ca\n-----END CERTIFICATE-----\n";
+  fs.writeFileSync(caPath, fileCa, { mode: 0o600 });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const fileOptions = makePgClientOptions("postgres://db.example/app?sslmode=require", {
+    DATABASE_SSL_CA: caPath,
+  });
+  assert.deepEqual(
+    new Client(fileOptions).connectionParameters.ssl,
+    { rejectUnauthorized: true, ca: fileCa },
+  );
+
+  const missingPath = path.join(directory, "sensitive-ca-name.pem");
+  assert.throws(
+    () => makePgClientOptions("postgres://db.example/app?sslmode=require", {
+      DATABASE_SSL_CA: missingPath,
+    }),
+    (error) => {
+      assert.equal(error.code, "DATABASE_SSL_CA_READ_FAILED");
+      assert.doesNotMatch(`${error.message}\n${error.stack}`, /sensitive-ca-name/);
+      return true;
+    },
+  );
 });
 
 test("migration timeout configuration is strict, bounded, and never disables deadlines", () => {

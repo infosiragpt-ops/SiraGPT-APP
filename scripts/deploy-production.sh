@@ -982,8 +982,7 @@ run_prisma_migrations() {
   log "Generating Prisma client and applying migrations through the bounded boot lifecycle"
   (
     cd backend
-    PRISMA_BASELINE_ON_P3005="${PRISMA_BASELINE_ON_P3005:-1}" \
-      node scripts/start-with-migrations.js --migrate-only
+    node scripts/start-with-migrations.js --migrate-only
   )
 }
 

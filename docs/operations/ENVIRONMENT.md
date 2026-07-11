@@ -54,12 +54,19 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `PRISMA_DATABASE_URL` | Runtime Prisma datasource URL; may be direct PostgreSQL or remote Accelerate | — |
 | `DIRECT_DATABASE_URL` | Direct PostgreSQL URL for migrations, boot preflight, and advisory locking | — |
 | `DATABASE_URL` | Legacy runtime fallback and direct-migration candidate | — |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED` | Verify PostgreSQL TLS certificates. Only the explicit value `false` disables verification. | `true` |
+| `DATABASE_SSL_CA` | Optional inline PEM CA certificate or path to a CA file. Overrides URL `sslrootcert`; never logged. | — |
+| `DATABASE_SSL_CERT` | Optional inline PEM client certificate or path to a certificate file. Overrides URL `sslcert`; never logged. | — |
+| `DATABASE_SSL_KEY` | Optional inline PEM client private key or path to a key file. Overrides URL `sslkey`; never logged. | — |
 | `MIGRATION_COMMAND_TIMEOUT_MS` | Hard timeout for each asynchronous Prisma process tree | `300000` |
 | `BOOT_COMMAND_TIMEOUT_MS` | Hard timeout for auxiliary boot commands such as stale-port cleanup | `5000` |
 | `MIGRATION_DB_CONNECT_TIMEOUT_MS` | Boot-time `pg` connection deadline | `10000` |
 | `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot-time `pg` client query deadline | `15000` |
 | `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | PostgreSQL server statement timeout requested by boot-time `pg` clients | `15000` |
 | `MIGRATION_LOCK_TIMEOUT_MS` | Total advisory-lock acquisition deadline, including connect and lock queries | `120000` |
+| `MIGRATION_ALLOW_EQUIVALENT_UNBASELINED` | Temporary no-schema U1 compatibility. A bounded zero diff may accept P3005 without changing migration history. | `0` |
+| `SKIP_MIGRATIONS` | Skip migration execution for normal local boot only. Release `--migrate-only` rejects it. | `0` |
+| `MIGRATION_NONFATAL` | Permit normal server boot to start degraded after a non-configuration migration failure. Never affects `--migrate-only`. | `0` |
 | `DATABASE_POOL_MIN` | Informational lower pool bound used by instrumentation; clamped to `1..DATABASE_POOL_MAX` | `2` |
 | `DATABASE_POOL_MAX` | Prisma v6 `connection_limit`; strictly parsed and clamped to `1..100` | `10` |
 | `DATABASE_POOL_TIMEOUT_MS` | Pool acquisition timeout in milliseconds, clamped to `1000..300000` and rounded up to Prisma `pool_timeout` seconds | `10000` |
@@ -88,6 +95,34 @@ with `DIRECT_DATABASE_URL_REQUIRED`. Each Prisma child command and every
 boot-time `pg` connect/query/statement is bounded by the timeout controls above;
 the advisory-lock deadline includes both connection and query time.
 
+TLS-enabled boot-time PostgreSQL clients verify the server certificate by
+default. The wrapper parses the direct URL, rejects insecure or conflicting
+SSL modes unless verification is explicitly disabled, removes URL-level SSL
+parameters only after constructing `pg`'s authoritative `ssl` object, and maps
+`sslrootcert`, `sslcert`, and `sslkey` to `ca`, `cert`, and `key`. Set
+`DATABASE_SSL_REJECT_UNAUTHORIZED=false` only as an explicit temporary
+compatibility exception. `DATABASE_SSL_CA`, `DATABASE_SSL_CERT`, and
+`DATABASE_SSL_KEY` override their corresponding URL values and accept either
+inline PEM or a regular PEM file of at most 1 MiB. Client certificate and key
+must be configured together. Unreadable, oversized, malformed, duplicate, or
+incomplete URL material fails startup with a stable value-free configuration
+code; certificate contents and paths are never emitted in logs.
+
+`--migrate-only` is fail-closed: exhausted preflight retries, advisory-lock
+errors, migration errors, command timeouts, and lock-release errors return
+non-zero. It also rejects `SKIP_MIGRATIONS=1` with configuration exit 78.
+Normal local server boot may skip migrations or use the documented
+`MIGRATION_NONFATAL=1` degraded policy, but neither weakens release migrations.
+
+P3005 never invokes `prisma migrate resolve` in either path. For this no-schema
+U1 rollout only, `MIGRATION_ALLOW_EQUIVALENT_UNBASELINED=1` runs a bounded
+`prisma migrate diff --exit-code` from the direct datasource to
+`schema.prisma`. A zero diff returns the distinct logged
+`schema_equivalent_unbaselined` success without retrying migration or modifying
+history; any drift or diff error fails. U0 must perform a reviewed one-off
+migration-history baseline before schema-bearing units. Do not use the U1
+compatibility mode as a substitute for that reviewed release operation.
+
 For direct `postgres:` and `postgresql:` runtime URLs, the runtime builder
 preserves unrelated parameters such as `schema`, `sslmode`, and `pgbouncer`,
 while replacing only `connection_limit` and `pool_timeout`. It never rewrites
@@ -106,6 +141,11 @@ URLs and credentials are never included in pool logs.
 |----------|-------------|---------|
 | `SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS` | Maximum time the single-container `start-all` parent waits for backend/frontend exit events after forwarding `SIGTERM` or `SIGINT`; clamped to 40000–120000 ms. On Windows the backend chain uses IPC, and `taskkill /T /F` is reserved for this deadline. | `50000` |
 | `SIRAGPT_WORKSPACE_RUN_STOP_GRACE_MS` | Per-workspace dev-runner grace before escalating from graceful termination to a forced process-tree kill. | `3000` |
+
+The backend races every shutdown hook against the remaining portion of its
+30-second global deadline. PM2 and both backend Compose services allow 35
+seconds before force-kill, which exceeds that backend budget while remaining
+below the parent coordinator's 40-second minimum and 50-second default.
 
 ## 🔒 Security
 
@@ -150,7 +190,9 @@ URLs and credentials are never included in pool logs.
 | `HEALTH_CRITICAL_QUEUES` | Comma-separated queue IDs/names whose probe failure makes readiness unhealthy. Known IDs: `agent-task`, `chat-run`, `codex-runs`, `document-collections`, `goal-runs`. | Production Compose: all five; standard Compose: none |
 
 Production Compose defaults all five registered queues to critical, so failure
-of any physical queue makes readiness return HTTP 503. Standard Compose keeps the default empty
+of any physical queue makes readiness return HTTP 503. A missing `REDIS_URL`
+also returns 503 whenever at least one physical queue is selected as critical.
+Standard Compose keeps the default empty
 for local development, and both files allow an explicit `HEALTH_CRITICAL_QUEUES`
 override.
 

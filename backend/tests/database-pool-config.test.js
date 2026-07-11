@@ -523,12 +523,18 @@ test('both Compose backends pass through database roles and boot timeout control
       'PRISMA_DATABASE_URL',
       'DIRECT_DATABASE_URL',
       'DATABASE_URL',
+      'DATABASE_SSL_REJECT_UNAUTHORIZED',
+      'DATABASE_SSL_CA',
+      'DATABASE_SSL_CERT',
+      'DATABASE_SSL_KEY',
       'MIGRATION_COMMAND_TIMEOUT_MS',
       'BOOT_COMMAND_TIMEOUT_MS',
       'MIGRATION_DB_CONNECT_TIMEOUT_MS',
       'MIGRATION_DB_QUERY_TIMEOUT_MS',
       'MIGRATION_DB_STATEMENT_TIMEOUT_MS',
       'MIGRATION_LOCK_TIMEOUT_MS',
+      'MIGRATION_ALLOW_EQUIVALENT_UNBASELINED',
+      'MIGRATION_NONFATAL',
     ]) {
       assert.match(
         source,
@@ -634,6 +640,10 @@ test('database role and boot timeout variables are documented in examples and en
     'PRISMA_DATABASE_URL',
     'DIRECT_DATABASE_URL',
     'DATABASE_URL',
+    'DATABASE_SSL_REJECT_UNAUTHORIZED',
+    'DATABASE_SSL_CA',
+    'DATABASE_SSL_CERT',
+    'DATABASE_SSL_KEY',
     'POSTGRES_HOST',
     'POSTGRES_PORT',
     'MIGRATION_COMMAND_TIMEOUT_MS',
@@ -642,9 +652,13 @@ test('database role and boot timeout variables are documented in examples and en
     'MIGRATION_DB_QUERY_TIMEOUT_MS',
     'MIGRATION_DB_STATEMENT_TIMEOUT_MS',
     'MIGRATION_LOCK_TIMEOUT_MS',
+    'MIGRATION_ALLOW_EQUIVALENT_UNBASELINED',
+    'SKIP_MIGRATIONS',
+    'MIGRATION_NONFATAL',
   ];
 
   for (const contents of files) {
     for (const variable of variables) assert.match(contents, new RegExp(`\\b${variable}\\b`));
+    assert.doesNotMatch(contents, /PRISMA_BASELINE_(?:ON_P3005|MIGRATION)/);
   }
 });

@@ -275,11 +275,12 @@ async function probeQueueRegistry({
   if (!lastErrorsByRegistry.has(registry)) lastErrorsByRegistry.set(registry, errors);
 
   if (!env.REDIS_URL) {
+    const hasCriticalQueues = definitions.some((definition) => definition.critical);
     const snapshot = {
-      status: 'disabled',
+      status: hasCriticalQueues ? 'unhealthy' : 'disabled',
       reason: 'REDIS_URL is not configured',
       queues: definitions.map((definition) => emptyQueueSnapshot(definition, {
-        status: 'skipped',
+        status: definition.critical ? 'unhealthy' : 'skipped',
         lastError: errors.get(definition.name) || null,
       })),
     };

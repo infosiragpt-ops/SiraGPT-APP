@@ -462,7 +462,45 @@ test('dedicated health runtime starts one immediate scheduled refresh and stops 
 test('queue probe is disabled and lists skipped queues without Redis or getter calls', async () => {
   let getterCalls = 0;
   const registry = createQueueRegistry({
-    env: { HEALTH_CRITICAL_QUEUES: 'critical-one' },
+    definitions: [
+      {
+        name: 'optional-one',
+        getter: () => {
+          getterCalls += 1;
+          return fakeQueue();
+        },
+      },
+      {
+        name: 'optional-two',
+        getter: () => {
+          getterCalls += 1;
+          return fakeQueue();
+        },
+      },
+    ],
+  });
+
+  const snapshot = await probeQueueRegistry({ registry, env: {} });
+
+  assert.equal(snapshot.status, 'disabled');
+  assert.match(snapshot.reason, /REDIS_URL/);
+  assert.equal(getterCalls, 0);
+  assert.deepEqual(snapshot.queues.map((queue) => queue.name), ['optional-one', 'optional-two']);
+  assert.deepEqual(snapshot.queues.map((queue) => queue.status), ['skipped', 'skipped']);
+  assert.equal(snapshot.queues[0].jobs, null);
+  assert.equal(snapshot.queues[0].isPaused, null);
+  assert.equal(snapshot.queues[0].lastError, null);
+  assert.equal(snapshot.queues[0].critical, false);
+});
+
+test('missing Redis makes selected critical physical queues unhealthy and readiness returns 503', async () => {
+  let getterCalls = 0;
+  const env = {
+    HEALTH_CRITICAL_QUEUES: 'critical-one',
+    OPENAI_API_KEY: 'test-only',
+  };
+  const registry = createQueueRegistry({
+    env,
     definitions: [
       {
         name: 'critical-one',
@@ -481,17 +519,20 @@ test('queue probe is disabled and lists skipped queues without Redis or getter c
     ],
   });
 
-  const snapshot = await probeQueueRegistry({ registry, env: {} });
-
-  assert.equal(snapshot.status, 'disabled');
+  const snapshot = await probeQueueRegistry({ registry, env });
+  assert.equal(snapshot.status, 'unhealthy');
   assert.match(snapshot.reason, /REDIS_URL/);
   assert.equal(getterCalls, 0);
-  assert.deepEqual(snapshot.queues.map((queue) => queue.name), ['critical-one', 'optional-one']);
-  assert.deepEqual(snapshot.queues.map((queue) => queue.status), ['skipped', 'skipped']);
-  assert.equal(snapshot.queues[0].jobs, null);
-  assert.equal(snapshot.queues[0].isPaused, null);
-  assert.equal(snapshot.queues[0].lastError, null);
+  assert.deepEqual(snapshot.queues.map((queue) => queue.status), ['unhealthy', 'skipped']);
   assert.equal(snapshot.queues[0].critical, true);
+
+  const response = await request(buildHealthApp(registry, { env })).get('/health/ready');
+  assert.equal(response.status, 503);
+  assert.equal(response.body.status, 'unhealthy');
+  const queueCheck = response.body.checks.find((check) => check.name === 'queue');
+  assert.equal(queueCheck.status, 'unhealthy');
+  assert.equal(queueCheck.critical, true);
+  assert.equal(queueCheck.details.criticalFailures, 1);
 });
 
 test('queue probe returns counts and ready when every queue succeeds', async () => {

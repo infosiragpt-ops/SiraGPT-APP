@@ -144,6 +144,9 @@ services:
         - siragpt-backend:latest
     image: siragpt-backend:latest
     restart: unless-stopped
+    # Backend owns a 30s shutdown deadline; Compose leaves 5s for process exit
+    # while remaining below the single-container parent's 40s minimum budget.
+    stop_grace_period: 35s
     depends_on:
       db:
         condition: service_healthy
@@ -160,6 +163,10 @@ services:
       PRISMA_DATABASE_URL: "${PRISMA_DATABASE_URL:-}"
       DIRECT_DATABASE_URL: "${DIRECT_DATABASE_URL:-}"
       DATABASE_URL: "${DATABASE_URL:-}"
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}"
+      DATABASE_SSL_CA: "${DATABASE_SSL_CA:-}"
+      DATABASE_SSL_CERT: "${DATABASE_SSL_CERT:-}"
+      DATABASE_SSL_KEY: "${DATABASE_SSL_KEY:-}"
       POSTGRES_HOST: "${POSTGRES_HOST:-db}"
       POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
@@ -171,6 +178,13 @@ services:
       MIGRATION_DB_QUERY_TIMEOUT_MS: "${MIGRATION_DB_QUERY_TIMEOUT_MS:-15000}"
       MIGRATION_DB_STATEMENT_TIMEOUT_MS: "${MIGRATION_DB_STATEMENT_TIMEOUT_MS:-15000}"
       MIGRATION_LOCK_TIMEOUT_MS: "${MIGRATION_LOCK_TIMEOUT_MS:-120000}"
+      # Production never skips migrations; migration-only also rejects skip.
+      SKIP_MIGRATIONS: "0"
+      # Temporary no-schema rollout compatibility; proves equality only and
+      # never writes Prisma migration history.
+      MIGRATION_ALLOW_EQUIVALENT_UNBASELINED: "${MIGRATION_ALLOW_EQUIVALENT_UNBASELINED:-0}"
+      # Normal boot only; --migrate-only remains strict regardless.
+      MIGRATION_NONFATAL: "${MIGRATION_NONFATAL:-0}"
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}

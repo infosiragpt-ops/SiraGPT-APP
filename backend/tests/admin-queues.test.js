@@ -200,7 +200,10 @@ test('admin queue health uses the shared default registry', async () => {
   const snap = await adminQueues.INTERNAL.buildQueuesHealthSnapshot({
     env: {},
   });
-  assert.deepEqual(snap.queues.map((queue) => queue.name), DEFAULT_PHYSICAL_QUEUE_NAMES);
+  assert.deepEqual(
+    snap.queues.map((queue) => queue.name),
+    defaultQueueRegistry.list().map((queue) => queue.name),
+  );
 });
 
 test('admin /health returns 503 only for unhealthy and retains super-admin details', async () => {

@@ -135,6 +135,10 @@
 | `PRISMA_DATABASE_URL` | Runtime Prisma datasource; direct PostgreSQL or remote `prisma+postgres:` |
 | `DIRECT_DATABASE_URL` | Direct PostgreSQL datasource for migrations, pg preflight, and advisory locking |
 | `DATABASE_URL` | Legacy runtime fallback and direct-migration candidate |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED` | PostgreSQL TLS certificate verification; defaults to `true`, disabled only by explicit `false` |
+| `DATABASE_SSL_CA` | Optional inline PEM CA or CA file path; overrides URL `sslrootcert` and is never logged |
+| `DATABASE_SSL_CERT` | Optional inline PEM client certificate or file path; overrides URL `sslcert` and is never logged |
+| `DATABASE_SSL_KEY` | Optional inline PEM client private key or file path; overrides URL `sslkey` and is never logged |
 | `POSTGRES_HOST` | Host used for the POSTGRES-only local compatibility fallback |
 | `POSTGRES_PORT` | Port used for the POSTGRES-only local compatibility fallback (default `5432`) |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials and database used by the POSTGRES-only fallback |
@@ -144,6 +148,9 @@
 | `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot `pg` query timeout (default `15000`) |
 | `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | Boot PostgreSQL statement timeout (default `15000`) |
 | `MIGRATION_LOCK_TIMEOUT_MS` | Total lock deadline including connect/query (default `120000`) |
+| `MIGRATION_ALLOW_EQUIVALENT_UNBASELINED` | Temporary no-schema U1 compatibility: P3005 may return `schema_equivalent_unbaselined` only after a bounded zero diff; never changes migration history (default `0`) |
+| `SKIP_MIGRATIONS` | Skip migrations during normal local boot only; rejected by `--migrate-only` (default `0`) |
+| `MIGRATION_NONFATAL` | Explicit degraded policy for normal boot only; `--migrate-only` remains strict |
 | `DATABASE_POOL_MIN` | Instrumentation lower bound (default `2`, capped by max) |
 | `DATABASE_POOL_MAX` | Prisma v6 `connection_limit` (default `10`, clamp `1..100`) |
 | `DATABASE_POOL_TIMEOUT_MS` | Prisma acquire timeout in ms (default `10000`, clamp `1000..300000`, rounded up to `pool_timeout` seconds) |
@@ -172,6 +179,24 @@ runtime/direct URL from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
 `POSTGRES_PASSWORD`, and `POSTGRES_DB`. Any explicit URL disables synthesis:
 a direct `PRISMA_DATABASE_URL` remains the migration fallback, while a remote
 `PRISMA_DATABASE_URL` without a direct URL fails closed.
+
+Boot-time PostgreSQL connections map URL `sslrootcert`/`sslcert`/`sslkey` to
+an explicit `pg` `ssl.ca`/`cert`/`key` object, then strip URL-level SSL
+controls so they cannot override it. `DATABASE_SSL_CA`, `DATABASE_SSL_CERT`,
+and `DATABASE_SSL_KEY` take precedence per field. Each accepts inline PEM or a
+regular PEM file up to 1 MiB; certificate and key must be paired. Unusable URL
+material fails with a stable value-free code, and contents/paths are never
+logged. Insecure or conflicting URL modes fail closed unless
+`DATABASE_SSL_REJECT_UNAUTHORIZED=false` is explicit.
+
+P3005 never auto-baselines or invokes `prisma migrate resolve`. The temporary
+`MIGRATION_ALLOW_EQUIVALENT_UNBASELINED=1` path is limited to the no-schema U1
+rollout: a bounded zero diff returns the logged
+`schema_equivalent_unbaselined` result without retrying migration or changing
+history; drift fails. U0 must perform a reviewed one-off migration-history
+baseline before schema-bearing units. Release `--migrate-only` fails non-zero
+on preflight, lock, migration, release, or `SKIP_MIGRATIONS=1`; only normal
+local boot may skip or use `MIGRATION_NONFATAL=1`.
 
 ---
 

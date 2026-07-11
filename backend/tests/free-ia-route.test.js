@@ -443,6 +443,8 @@ test('POST /api/free-ia/metrics/reset requires admin auth (401 anonymous)', asyn
 
 test('GET /api/free-ia/metrics.prom returns Prometheus text format', async () => {
   const metrics = require('../src/services/free-ia-metrics');
+  const previousToken = process.env.METRICS_TOKEN;
+  process.env.METRICS_TOKEN = 'free-ia-route-test-token';
   metrics.reset();
   metrics.recordFallback({ feature: 'paraphrase', amount: 7 });
   const { server, baseURL } = await startServer();
@@ -450,7 +452,9 @@ test('GET /api/free-ia/metrics.prom returns Prometheus text format', async () =>
     // Use http.get to inspect Content-Type without forcing JSON parse.
     const url = `${baseURL}/api/free-ia/metrics.prom`;
     const promResp = await new Promise((resolve, reject) => {
-      http.get(url, (res) => {
+      http.get(url, {
+        headers: { Authorization: 'Bearer free-ia-route-test-token' },
+      }, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => resolve({
@@ -468,6 +472,8 @@ test('GET /api/free-ia/metrics.prom returns Prometheus text format', async () =>
   } finally {
     server.close();
     metrics.reset();
+    if (previousToken === undefined) delete process.env.METRICS_TOKEN;
+    else process.env.METRICS_TOKEN = previousToken;
   }
 });
 

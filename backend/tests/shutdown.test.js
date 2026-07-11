@@ -58,6 +58,28 @@ describe('shutdown — timeouts and isolation', () => {
     assert.equal(r.errors.length, 1);
     assert.equal(r.errors[0].name, 'boom');
   });
+
+  test('remaining global budget interrupts the active hook and skips later hooks', {
+    timeout: 1000,
+  }, async () => {
+    let tailRan = false;
+    shutdownReg.register('tail', () => { tailRan = true; });
+    shutdownReg.register('hung', () => new Promise(() => {}), 250);
+    shutdownReg.register('head', () => new Promise((resolve) => setTimeout(resolve, 35)), 100);
+
+    const startedAt = Date.now();
+    const result = await shutdownReg.shutdown('budget-test', { deadlineMs: 60 });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(result.ok, false);
+    assert.equal(tailRan, false);
+    assert.ok(elapsedMs < 180, `global budget must interrupt the active hook, elapsed=${elapsedMs}`);
+    assert.equal(result.steps.find((step) => step.name === 'hung')?.ok, false);
+    assert.equal(
+      result.steps.find((step) => step.name === 'tail')?.error,
+      'global_deadline_exceeded',
+    );
+  });
 });
 
 describe('shutdown — introspection', () => {
@@ -692,6 +714,31 @@ describe('start-all parent shutdown', () => {
       assert.match(source, /SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS/);
       assert.match(source, /40(?:000|s)/);
       assert.match(source, /50(?:000|s)/);
+    }
+  });
+
+  test('PM2 and both Compose backend grace periods fit between backend and parent deadlines', () => {
+    const {
+      DEFAULT_PARENT_SHUTDOWN_TIMEOUT_MS,
+      MIN_PARENT_SHUTDOWN_TIMEOUT_MS,
+    } = loadParentShutdownHelper();
+    const ecosystem = require('../ecosystem.config');
+    const killTimeoutMs = ecosystem.apps.find((app) => app.name === 'siraGPT-api')?.kill_timeout;
+
+    assert.ok(killTimeoutMs > shutdownReg.TOTAL_SHUTDOWN_DEADLINE_MS);
+    assert.ok(killTimeoutMs < MIN_PARENT_SHUTDOWN_TIMEOUT_MS);
+    assert.ok(killTimeoutMs < DEFAULT_PARENT_SHUTDOWN_TIMEOUT_MS);
+
+    for (const filename of ['docker-compose.yml', 'docker-compose.prod.yml']) {
+      const source = fs.readFileSync(path.resolve(__dirname, `../../${filename}`), 'utf8');
+      const backend = source.match(/\n  backend:\n([\s\S]*?)(?=\n  [a-z][\w-]*:\n|\nvolumes:)/);
+      assert.ok(backend, `${filename} backend service must exist`);
+      const grace = backend[1].match(/\bstop_grace_period:\s*["']?(\d+)s["']?/);
+      assert.ok(grace, `${filename} backend must declare stop_grace_period`);
+      const graceMs = Number(grace[1]) * 1000;
+      assert.ok(graceMs > shutdownReg.TOTAL_SHUTDOWN_DEADLINE_MS);
+      assert.ok(graceMs < MIN_PARENT_SHUTDOWN_TIMEOUT_MS);
+      assert.ok(graceMs < DEFAULT_PARENT_SHUTDOWN_TIMEOUT_MS);
     }
   });
 });

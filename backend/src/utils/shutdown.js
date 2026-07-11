@@ -24,9 +24,10 @@
  * stop producers, stop accepting connections, drain/flush work, then close
  * queues, telemetry, and persistence dependencies.
  *
- * The aggregate `shutdown()` enforces a 30s ceiling: if the sum of
- * per-step timeouts ever exceeds that, the registry will still abort
- * the process via the outer setTimeout below.
+ * The aggregate `shutdown()` enforces a 30s ceiling. Every active hook races
+ * against the smaller of its own timeout and the remaining global budget, so
+ * the deadline interrupts the current step rather than only skipping later
+ * steps after an overlong hook eventually settles.
  */
 
 const DEFAULT_STEP_TIMEOUT_MS = 5000;
@@ -97,14 +98,20 @@ function register(name, fn, timeoutMs = DEFAULT_STEP_TIMEOUT_MS) {
   };
 }
 
-async function _runOne(entry) {
+async function _runOne(entry, remainingBudgetMs = entry.timeoutMs) {
   const t0 = Date.now();
+  const effectiveTimeoutMs = Math.max(
+    1,
+    Math.min(entry.timeoutMs, Math.floor(remainingBudgetMs)),
+  );
   let timer;
   try {
     await Promise.race([
       Promise.resolve().then(() => entry.fn()),
       new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`shutdown step "${entry.name}" timed out after ${entry.timeoutMs}ms`)), entry.timeoutMs);
+        timer = setTimeout(() => reject(new Error(
+          `shutdown step "${entry.name}" timed out after ${effectiveTimeoutMs}ms`,
+        )), effectiveTimeoutMs);
         if (typeof timer.unref === 'function') timer.unref();
       }),
     ]);
@@ -120,15 +127,20 @@ async function _runOne(entry) {
   }
 }
 
-async function shutdown(reason = 'manual') {
+async function shutdown(reason = 'manual', options = {}) {
   if (_shuttingDown) return { ok: false, errors: [{ name: '_global', error: 'already_shutting_down' }], elapsedMs: 0, steps: [] };
   _shuttingDown = true;
   const t0 = Date.now();
+  const requestedDeadlineMs = Number(options.deadlineMs);
+  const deadlineMs = Number.isFinite(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(TOTAL_SHUTDOWN_DEADLINE_MS, Math.floor(requestedDeadlineMs))
+    : TOTAL_SHUTDOWN_DEADLINE_MS;
+  const deadlineAt = t0 + deadlineMs;
   _safeLog('info', { reason, hooks: _hooks.length }, 'shutdown_initiated');
 
   // Hard deadline — if individual steps misbehave we don't sit forever.
   let deadlineHit = false;
-  const deadlineTimer = setTimeout(() => { deadlineHit = true; }, TOTAL_SHUTDOWN_DEADLINE_MS);
+  const deadlineTimer = setTimeout(() => { deadlineHit = true; }, deadlineMs);
   if (typeof deadlineTimer.unref === 'function') deadlineTimer.unref();
 
   const reverseLifo = _hooks.slice().reverse();
@@ -152,14 +164,15 @@ async function shutdown(reason = 'manual') {
   const steps = [];
   const errors = [];
   for (const entry of order) {
-    if (deadlineHit) {
+    const remainingBudgetMs = deadlineAt - Date.now();
+    if (deadlineHit || remainingBudgetMs <= 0) {
       _safeLog('warn', { step: entry.name }, 'shutdown_deadline_exceeded_skipping');
       steps.push({ name: entry.name, ok: false, error: 'global_deadline_exceeded' });
       errors.push({ name: entry.name, error: 'global_deadline_exceeded' });
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
-    const r = await _runOne(entry);
+    const r = await _runOne(entry, remainingBudgetMs);
     steps.push(r);
     if (!r.ok) errors.push({ name: r.name, error: r.error });
   }
