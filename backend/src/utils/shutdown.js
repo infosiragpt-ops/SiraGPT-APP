@@ -109,9 +109,13 @@ async function _runOne(entry, remainingBudgetMs = entry.timeoutMs) {
     await Promise.race([
       Promise.resolve().then(() => entry.fn()),
       new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(
-          `shutdown step "${entry.name}" timed out after ${effectiveTimeoutMs}ms`,
-        )), effectiveTimeoutMs);
+        timer = setTimeout(() => {
+          const error = new Error(
+            `shutdown step "${entry.name}" timed out after ${effectiveTimeoutMs}ms`,
+          );
+          error.code = 'SHUTDOWN_STEP_TIMEOUT';
+          reject(error);
+        }, effectiveTimeoutMs);
         if (typeof timer.unref === 'function') timer.unref();
       }),
     ]);
@@ -121,7 +125,14 @@ async function _runOne(entry, remainingBudgetMs = entry.timeoutMs) {
   } catch (err) {
     const elapsedMs = Date.now() - t0;
     _safeLog('warn', { step: entry.name, status: 'fail', elapsedMs, error: err && err.message }, 'shutdown_step_fail');
-    return { name: entry.name, ok: false, elapsedMs, error: err && err.message };
+    return {
+      name: entry.name,
+      ok: false,
+      elapsedMs,
+      error: err && err.message,
+      deadlineExhausted: err?.code === 'SHUTDOWN_STEP_TIMEOUT'
+        && effectiveTimeoutMs >= Math.floor(remainingBudgetMs),
+    };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -175,6 +186,7 @@ async function shutdown(reason = 'manual', options = {}) {
     const r = await _runOne(entry, remainingBudgetMs);
     steps.push(r);
     if (!r.ok) errors.push({ name: r.name, error: r.error });
+    if (r.deadlineExhausted) deadlineHit = true;
   }
 
   clearTimeout(deadlineTimer);
