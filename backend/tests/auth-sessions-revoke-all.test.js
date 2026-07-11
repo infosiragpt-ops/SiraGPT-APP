@@ -20,6 +20,9 @@ const { buildRouteTestApp, reloadModule } = require('./http-test-utils');
 const {
   onUserSessionsRevoked,
 } = require('../src/services/auth/user-session-revocation-events');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const JWT_SECRET = 'test-revoke-all-jwt-secret-at-least-32-chars!!';
 process.env.JWT_SECRET = JWT_SECRET;
@@ -50,7 +53,10 @@ function mockPrisma() {
 
   prisma.session.findMany = async ({ where }) => store.sessions.filter((session) => {
     if (where.userId && session.userId !== where.userId) return false;
-    if (where.NOT?.token && session.token === where.NOT.token) return false;
+    const excluded = Array.isArray(where.NOT?.token?.in)
+      ? where.NOT.token.in
+      : [where.NOT?.token].filter(Boolean);
+    if (excluded.includes(session.token)) return false;
     return true;
   });
 
@@ -66,8 +72,10 @@ function mockPrisma() {
     for (let i = store.sessions.length - 1; i >= 0; i--) {
       const s = store.sessions[i];
       if (where.userId && s.userId !== where.userId) continue;
-      // Spec from route: NOT: { token: req.token }
-      if (where.NOT && where.NOT.token && s.token === where.NOT.token) continue;
+      const excluded = Array.isArray(where.NOT?.token?.in)
+        ? where.NOT.token.in
+        : [where.NOT?.token].filter(Boolean);
+      if (excluded.includes(s.token)) continue;
       store.sessions.splice(i, 1);
     }
     return { count: before - store.sessions.length };
@@ -98,7 +106,7 @@ function seedUserAndSessions(store, { userId = 'u1', count = 3 } = {}) {
     store.sessions.push({
       id: `sess-${i}`,
       userId,
-      token: t,
+      token: hashSessionToken(t),
       expiresAt: new Date(Date.now() + 3600_000),
       createdAt: new Date(),
     });
@@ -128,7 +136,7 @@ describe('POST /api/auth/sessions/revoke-all', () => {
     assert.equal(res.body.ok, true);
     assert.equal(res.body.count, 3);
     assert.equal(store.sessions.length, 1);
-    assert.equal(store.sessions[0].token, currentToken);
+    assert.equal(store.sessions[0].token, hashSessionToken(currentToken));
   });
 
   it('returns count=0 when the caller has only one session', async () => {
@@ -192,6 +200,18 @@ describe('POST /api/auth/sessions/revoke-all', () => {
       userId: 'u1',
       reason: 'session_revoked',
     }]);
+  });
+
+  it('refuses to revoke the current session when its database token is hashed', async () => {
+    const tokens = seedUserAndSessions(store, { count: 3 });
+
+    const response = await request(app)
+      .delete('/api/auth/sessions/sess-0')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .expect(400);
+
+    assert.equal(response.body.reason, 'is_current');
+    assert.equal(store.sessions.some((session) => session.id === 'sess-0'), true);
   });
 
   it('legacy users revoke-others endpoint publishes the same revocation event', async (t) => {

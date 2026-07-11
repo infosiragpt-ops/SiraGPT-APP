@@ -1,65 +1,63 @@
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
+const {
+  createOAuthStateCodec,
+  createOAuthStateStore,
+} = require('./auth/oauth-state-store');
 
-const STATE_TYPE = 'oauth_state';
-const DEFAULT_EXPIRES_IN = '10m';
+let defaultStore = createOAuthStateStore({ env: process.env });
+const scopedStores = new Map();
 
-function getSecret(env = process.env) {
-  const secret = env.JWT_SECRET;
-  if (!secret) throw new Error('JWT_SECRET is required for OAuth state');
-  return secret;
-}
-
-/**
- * Single-use JTI store: maps jti → expiry timestamp (ms).
- * Entries are pruned lazily on each verify call so the map stays bounded.
- * Exported for test-only reset between test suites.
- */
-const _usedJtis = new Map();
-
-function _pruneExpiredJtis() {
-  const now = Date.now();
-  for (const [jti, exp] of _usedJtis) {
-    if (exp <= now) _usedJtis.delete(jti);
+function storeFor(env, explicitStore) {
+  if (explicitStore) return explicitStore;
+  if (env === process.env) return defaultStore;
+  const key = JSON.stringify({
+    nodeEnv: env.NODE_ENV || '',
+    redisUrl: env.REDIS_URL || '',
+    prefix: env.OAUTH_STATE_REDIS_PREFIX || '',
+    maxEntries: env.OAUTH_STATE_CACHE_MAX_ENTRIES || '',
+  });
+  if (!scopedStores.has(key)) {
+    scopedStores.set(key, createOAuthStateStore({ env }));
   }
+  return scopedStores.get(key);
 }
 
-/** Reset the JTI store — only for use in tests. */
+function codecFor(env, store) {
+  return createOAuthStateCodec({ env, store: storeFor(env, store) });
+}
+
+async function signOAuthState(payload, env = process.env, options = {}) {
+  return codecFor(env, options.store).issue(payload);
+}
+
+async function verifyOAuthState(rawState, expected, env = process.env, options = {}) {
+  return codecFor(env, options.store).consume(rawState, expected);
+}
+
+function oauthStateHealth() {
+  return defaultStore.health();
+}
+
+function oauthStateConfig() {
+  return defaultStore.config();
+}
+
+function readyOAuthStateStore() {
+  return defaultStore.ready();
+}
+
+async function closeOAuthStateStore() {
+  await defaultStore.close();
+}
+
+/** Replace the singleton with an empty local store for isolated unit tests. */
 function _testOnly_clearUsedJtis() {
-  _usedJtis.clear();
-}
-
-function signOAuthState({ userId, service }, env = process.env) {
-  if (!userId || !service) throw new Error('userId and service are required for OAuth state');
-  return jwt.sign(
-    {
-      typ: STATE_TYPE,
-      userId: String(userId),
-      service: String(service),
-      jti: crypto.randomUUID(),
-    },
-    getSecret(env),
-    { expiresIn: env.OAUTH_STATE_TTL || DEFAULT_EXPIRES_IN },
-  );
-}
-
-function verifyOAuthState(rawState, { service }, env = process.env) {
-  if (!rawState || !service) throw new Error('OAuth state is required');
-  const decoded = jwt.verify(String(rawState), getSecret(env));
-  if (!decoded || decoded.typ !== STATE_TYPE || decoded.service !== service || !decoded.userId) {
-    throw new Error('Invalid OAuth state');
-  }
-
-  const { jti } = decoded;
-  if (!jti) throw new Error('Invalid OAuth state: missing nonce');
-
-  _pruneExpiredJtis();
-  if (_usedJtis.has(jti)) throw new Error('OAuth state token has already been used');
-
-  const expiresAt = decoded.exp ? decoded.exp * 1000 : Date.now() + 10 * 60 * 1000;
-  _usedJtis.set(jti, expiresAt);
-
-  return { userId: String(decoded.userId), service: decoded.service };
+  const previous = defaultStore;
+  defaultStore = createOAuthStateStore({
+    env: { ...process.env, NODE_ENV: 'test', REDIS_URL: '' },
+  });
+  void previous.close();
+  for (const store of scopedStores.values()) void store.close();
+  scopedStores.clear();
 }
 
 function frontendOrigin(env = process.env) {
@@ -107,8 +105,12 @@ function popupResponseHtml({ service, status, error, message }, env = process.en
 }
 
 module.exports = {
+  closeOAuthStateStore,
   signOAuthState,
   verifyOAuthState,
+  oauthStateConfig,
+  oauthStateHealth,
+  readyOAuthStateStore,
   frontendOrigin,
   popupResponseHtml,
   _testOnly_clearUsedJtis,

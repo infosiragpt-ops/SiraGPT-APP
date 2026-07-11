@@ -17,6 +17,9 @@ const SECRET = 'backfill-appshots-geo-hint-test-secret-32+chars!';
 process.env.JWT_SECRET = SECRET;
 
 const { run, ipFromHint } = require('../src/jobs/backfill-appshots-geo-hint');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -106,6 +109,28 @@ describe('backfill-appshots-geo-hint run', () => {
     assert.equal(prisma._rows.find((r) => r.id === 's1').geoHint, 'Madrid, ES');
     assert.equal(prisma._rows.find((r) => r.id === 's3').geoHint, 'Lyon, FR');
     assert.equal(prisma._rows.find((r) => r.id === 's2').geoHint, null);
+  });
+
+  it('classifies versioned Appshots hashes by prefix without decoding the digest', async () => {
+    const raw = appshotsToken();
+    const prisma = makePrisma([{
+      id: 'hashed-appshots',
+      token: hashSessionToken(raw, { env: { JWT_SECRET: SECRET } }),
+      ipHint: '81.45.30.0/24',
+      geoHint: null,
+    }]);
+
+    const summary = await run({
+      prisma,
+      logger: silentLogger,
+      delayMs: 0,
+      jwtSecret: SECRET,
+      resolveGeoHint: async () => 'Madrid, ES',
+    });
+
+    assert.equal(summary.appshotsCandidates, 1);
+    assert.equal(summary.filled, 1);
+    assert.equal(prisma._rows[0].geoHint, 'Madrid, ES');
   });
 
   it('dry-run does not persist updates but still counts them', async () => {

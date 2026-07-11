@@ -247,6 +247,34 @@ function validateStartupEnvironment(env = process.env, options = {}) {
     });
   }
 
+  // ─── Session-token hash rolling migration ────────────────
+  // Production intentionally defaults to compat for this release. A hash-mode
+  // pod is rollback-incompatible with old readers, so the explicit drain
+  // acknowledgement is a blocking prerequisite for the flip.
+  const sessionTokenHashMode = String(env.SESSION_TOKEN_HASH_MODE || '').trim().toLowerCase();
+  if (sessionTokenHashMode && !['compat', 'hash'].includes(sessionTokenHashMode)) {
+    issues.push({
+      key: 'SESSION_TOKEN_HASH_MODE',
+      code: 'SESSION_TOKEN_HASH_MODE_INVALID',
+      label: 'Session token hash mode',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'SESSION_TOKEN_HASH_MODE must be either compat or hash.',
+    });
+  } else if (
+    production
+    && sessionTokenHashMode === 'hash'
+    && !/^(1|true|yes|on)$/i.test(String(env.SESSION_TOKEN_HASH_COMPAT_DRAINED || '').trim())
+  ) {
+    issues.push({
+      key: 'SESSION_TOKEN_HASH_MODE',
+      code: 'SESSION_TOKEN_HASH_MODE_UNSAFE_FLIP',
+      label: 'Session token hash mode',
+      severity: Severity.BLOCKING,
+      message: 'Hash mode requires confirmation that every compat-release replica has drained.',
+      hint: 'Drain old replicas, then set SESSION_TOKEN_HASH_MODE=hash and SESSION_TOKEN_HASH_COMPAT_DRAINED=1.',
+    });
+  }
+
   // ─── Database URL ──────────────────────────────────────
   let databaseUrl = null;
   let databaseUrlConflict = false;

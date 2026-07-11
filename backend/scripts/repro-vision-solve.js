@@ -19,6 +19,9 @@ try { require('dotenv').config({ path: path.join(__dirname, '..', '.env') }); } 
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const sharp = require('sharp');
+const {
+  createSessionRecord,
+} = require('../src/services/auth/session-token-persistence');
 
 const prisma = new PrismaClient();
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5000';
@@ -49,8 +52,11 @@ async function main() {
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
     expiresIn: '1h', audience: 'siragpt-clients', issuer: 'siragpt-api',
   });
-  await prisma.session.create({
-    data: { userId: user.id, token, fingerprint: null, expiresAt: new Date(Date.now() + 3600_000) },
+  await createSessionRecord(prisma, {
+    userId: user.id,
+    token,
+    fingerprint: null,
+    expiresAt: new Date(Date.now() + 3600_000),
   });
   const H = { Authorization: `Bearer ${token}` };
 

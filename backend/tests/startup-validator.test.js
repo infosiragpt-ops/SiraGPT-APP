@@ -149,6 +149,55 @@ describe('validateStartupEnvironment · RBAC enforcement mode', () => {
   });
 });
 
+describe('validateStartupEnvironment · session token hash rollout', () => {
+  it('keeps production in compat mode when no explicit rollout mode is configured', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: undefined,
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: undefined,
+    }));
+    assert.equal(
+      result.some((entry) => entry.key === 'SESSION_TOKEN_HASH_MODE'),
+      false,
+    );
+  });
+
+  it('blocks unsupported production session token hash modes', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: 'dual-write',
+    }));
+    const issue = result.find((entry) => entry.code === 'SESSION_TOKEN_HASH_MODE_INVALID');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.doesNotMatch(JSON.stringify(issue), /dual-write/);
+  });
+
+  it('blocks the production hash flip until operators acknowledge compat replicas are drained', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: 'hash',
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: undefined,
+    }));
+    const issue = result.find((entry) => entry.code === 'SESSION_TOKEN_HASH_MODE_UNSAFE_FLIP');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.match(issue.hint, /SESSION_TOKEN_HASH_COMPAT_DRAINED=1/);
+  });
+
+  it('accepts an explicit production hash flip after compat replicas are drained', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: 'hash',
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: '1',
+    }));
+    assert.equal(
+      result.some((entry) => entry.key === 'SESSION_TOKEN_HASH_MODE'),
+      false,
+    );
+  });
+});
+
 // ── Required-secret missing → BLOCKING ────────────────────────────
 
 describe('validateStartupEnvironment · missing required secrets', () => {

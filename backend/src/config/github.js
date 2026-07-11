@@ -15,6 +15,12 @@
  *   GITHUB_OAUTH_SUCCESS_REDIRECT — frontend URL to return to after callback.
  *                                 Defaults to <FRONTEND_URL>/settings
  */
+const {
+  getFrontendUrl,
+  getGithubCallbackURL,
+  getGithubPostCallbackURL,
+  resolvePublicBackendUrl,
+} = require('./oauth-url-policy');
 
 function clientId() {
   return process.env.GITHUB_CLIENT_ID || '';
@@ -25,18 +31,11 @@ function clientSecret() {
 }
 
 function backendBase() {
-  const base =
-    process.env.BACKEND_BASE_URL ||
-    process.env.BASE_URL ||
-    `http://localhost:${process.env.PORT || 5000}`;
-  return base.replace(/\/+$/, '');
+  return resolvePublicBackendUrl(process.env);
 }
 
 function redirectUri() {
-  if (process.env.GITHUB_OAUTH_REDIRECT_URI) {
-    return process.env.GITHUB_OAUTH_REDIRECT_URI;
-  }
-  return `${backendBase()}/api/github/callback`;
+  return getGithubCallbackURL(process.env);
 }
 
 function scopes() {
@@ -44,18 +43,12 @@ function scopes() {
 }
 
 function frontendBase() {
-  const base =
-    process.env.FRONTEND_URL ||
-    process.env.NEXT_PUBLIC_URL ||
-    'http://localhost:3000';
-  return base.replace(/\/+$/, '');
+  return getFrontendUrl(process.env);
 }
 
 /** Where to send the browser after the OAuth callback resolves. */
 function postCallbackRedirect(status) {
-  const base = process.env.GITHUB_OAUTH_SUCCESS_REDIRECT || `${frontendBase()}/settings`;
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}github=${encodeURIComponent(status)}`;
+  return getGithubPostCallbackURL(status, process.env);
 }
 
 function isConfigured() {

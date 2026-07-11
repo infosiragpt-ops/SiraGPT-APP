@@ -39,8 +39,12 @@ const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
+const {
+  createUploadMediaTokenHandler,
+} = require('../middleware/upload-static-access');
 
 const router = express.Router();
+const uploadMediaTokenHandler = createUploadMediaTokenHandler();
 
 function renderPdfFilename(originalName) {
   const stem = path.basename(String(originalName || 'document'), path.extname(String(originalName || '')));
@@ -748,6 +752,8 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 }
 
 // Upload files — parallel batch processing
+router.post('/media-token', authenticateToken, uploadMediaTokenHandler);
+
 router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', UPLOAD_BATCH_MAX), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {

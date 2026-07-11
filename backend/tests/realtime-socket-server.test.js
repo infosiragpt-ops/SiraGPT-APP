@@ -26,6 +26,9 @@ const { _resetForTests: resetTyping } = require('../src/services/realtime/typing
 const {
   emitUserSessionsRevoked,
 } = require('../src/services/auth/user-session-revocation-events');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const ACTIVE_SESSION_SECRET = 'realtime-active-session-secret-at-least-32-characters';
 
@@ -170,7 +173,7 @@ test('socket:default auth rejects a signed JWT whose persisted session was revok
   });
   const closed = await waitCloseWithin(ws);
   assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
-  assert.equal(lookups, 1);
+  assert.equal(lookups, 2);
 });
 
 test('socket:default auth rejects a user deleted after JWT issuance', async (t) => {
@@ -183,7 +186,7 @@ test('socket:default auth rejects a user deleted after JWT issuance', async (t) 
       async findUnique() {
         return {
           id: 'deleted-session',
-          token,
+          token: hashSessionToken(token),
           userId: 'deleted-user',
           expiresAt: new Date(Date.now() + 60_000),
           fingerprint: null,
@@ -222,7 +225,7 @@ test('socket:post-index validation closes a handshake that raced session revocat
         if (lookups > 1) return null;
         return {
           id: 'racing-session',
-          token,
+          token: hashSessionToken(token),
           userId: 'racing-user',
           expiresAt: new Date(Date.now() + 60_000),
           fingerprint: null,
@@ -246,7 +249,7 @@ test('socket:post-index validation closes a handshake that raced session revocat
 
   const closed = await waitCloseWithin(ws);
   assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
-  assert.equal(lookups, 2);
+  assert.equal(lookups, 3);
   assert.equal(getRealtimeState().userIndex.has('racing-user'), false);
 });
 
@@ -261,7 +264,7 @@ test('socket:active session is checked once at handshake, not once per message',
         lookups += 1;
         return {
           id: 'active-session',
-          token,
+          token: hashSessionToken(token),
           userId: 'active-user',
           expiresAt: new Date(Date.now() + 60_000),
           fingerprint: null,
@@ -304,7 +307,7 @@ test('socket:periodic revalidation closes a session when a revocation event was 
         if (!persisted) return null;
         return {
           id: 'missed-session',
-          token,
+          token: hashSessionToken(token),
           userId: 'missed-user',
           expiresAt: new Date(Date.now() + 60_000),
           fingerprint: null,
@@ -336,7 +339,7 @@ test('socket:periodic revalidation closes a session when a revocation event was 
   const closed = await closing;
 
   assert.equal(closed.code, CLOSE_CODE_AUTH_INVALID);
-  assert.equal(lookups, 3);
+  assert.equal(lookups, 4);
 });
 
 test('socket:authenticated client receives welcome with user channel', async () => {

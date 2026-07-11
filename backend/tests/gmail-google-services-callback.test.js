@@ -38,6 +38,7 @@ const {
 } = require('../src/services/oauth-state');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'gmail-cb-smoke-test-secret-32chars!!';
+const GMAIL_REDIRECT_URI = 'https://api.example.test/oauth/gmail/callback';
 
 function makeVault() {
   return {
@@ -533,6 +534,7 @@ describe('OAuth state token security — expiry, replay, and cross-user isolatio
     const securityGmailSvc = new ProviderOAuthService({
       provider: {
         service: 'gmail',
+        redirectUri: GMAIL_REDIRECT_URI,
         oauth2Client: makeOAuth2Client(),
         scopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'],
         scopeFallback: 'gmail',
@@ -543,8 +545,15 @@ describe('OAuth state token security — expiry, replay, and cross-user isolatio
         readSealedTokens: async () => null,
       },
       tokenVault: makeVault(),
-      signState: ({ userId, service }) => signOAuthState({ userId, service }),
-      verifyState: (rawState, { service }) => verifyOAuthState(rawState, { service }),
+      signState: ({ userId, service, redirectUri }) => signOAuthState({
+        userId,
+        service,
+        redirectUri,
+      }),
+      verifyState: (rawState, { service, redirectUri }) => verifyOAuthState(
+        rawState,
+        { service, redirectUri },
+      ),
       logger: { warn: () => {}, error: () => {}, log: () => {} },
     });
 
@@ -571,7 +580,11 @@ describe('OAuth state token security — expiry, replay, and cross-user isolatio
   });
 
   it('replaying a state token after first use is rejected with invalid_state', async () => {
-    const state = signOAuthState({ userId: 'user-replay', service: 'gmail' });
+    const state = await signOAuthState({
+      userId: 'user-replay',
+      service: 'gmail',
+      redirectUri: GMAIL_REDIRECT_URI,
+    });
 
     const firstUse = await request(app)
       .get(`/api/auth/gmail/callback?code=GOODCODE&state=${encodeURIComponent(state)}`)
@@ -590,7 +603,11 @@ describe('OAuth state token security — expiry, replay, and cross-user isolatio
   });
 
   it('state consumed by user-A cannot be replayed in a user-B code exchange', async () => {
-    const userAState = signOAuthState({ userId: 'user-xflow-a', service: 'gmail' });
+    const userAState = await signOAuthState({
+      userId: 'user-xflow-a',
+      service: 'gmail',
+      redirectUri: GMAIL_REDIRECT_URI,
+    });
 
     const userAFlow = await request(app)
       .get(`/api/auth/gmail/callback?code=CODE_FOR_A&state=${encodeURIComponent(userAState)}`)

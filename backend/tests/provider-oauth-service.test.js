@@ -21,6 +21,7 @@ function makeProvider(overrides = {}) {
     persistCalls, clearCalls, readCalls,
     descriptor: {
       service: 'gmail',
+      redirectUri: 'https://api.example.test/oauth/gmail/callback',
       oauth2Client: {
         generateAuthUrl: (opts) => `https://auth.example/?scope=${opts.scope.join(',')}&prompt=${opts.prompt || 'none'}&state=${opts.state}`,
         getToken: async (code) => ({
@@ -72,17 +73,17 @@ test('ProviderOAuthService: constructor enforces descriptor + dep contracts', ()
   );
 });
 
-test('buildAuthUrl: forces consent by default and signs state with service id', () => {
+test('buildAuthUrl: forces consent by default and signs state with service id', async () => {
   const { svc } = makeService();
-  const url = svc.buildAuthUrl('user-1');
+  const url = await svc.buildAuthUrl('user-1');
   assert.match(url, /scope=a,b,c/);
   assert.match(url, /prompt=consent/);
   assert.match(url, /state=STATE%3Auser-1%3Agmail|state=STATE:user-1:gmail/);
 });
 
-test('buildAuthUrl: forceConsent=false drops the prompt flag', () => {
+test('buildAuthUrl: forceConsent=false drops the prompt flag', async () => {
   const { svc } = makeService();
-  const url = svc.buildAuthUrl('user-1', { forceConsent: false });
+  const url = await svc.buildAuthUrl('user-1', { forceConsent: false });
   assert.doesNotMatch(url, /prompt=consent/);
 });
 
@@ -100,6 +101,27 @@ test('handleCallback: invalid state → invalid_state, never exchanges or persis
   });
   const r = await svc.handleCallback({ code: 'C', state: 'X' });
   assert.deepEqual(r, { ok: false, service: 'gmail', error: 'invalid_state' });
+  assert.equal(persistCalls.length, 0);
+});
+
+test('handleCallback: distributed state-store outage remains an actionable 503', async () => {
+  const { svc, persistCalls } = makeService({
+    verifyState: () => {
+      const error = new Error('OAUTH_STATE_STORE_UNAVAILABLE');
+      error.code = 'OAUTH_STATE_STORE_UNAVAILABLE';
+      throw error;
+    },
+  });
+
+  const result = await svc.handleCallback({ code: 'C', state: 'X' });
+
+  assert.deepEqual(result, {
+    ok: false,
+    service: 'gmail',
+    error: 'oauth_state_store_unavailable',
+    status: 503,
+    retryable: true,
+  });
   assert.equal(persistCalls.length, 0);
 });
 

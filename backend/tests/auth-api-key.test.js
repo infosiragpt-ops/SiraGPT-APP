@@ -26,6 +26,9 @@ const dbPath = path.resolve(__dirname, '../src/config/database.js');
 const authPath = path.resolve(__dirname, '../src/middleware/auth.js');
 
 const apiKeysService = require('../src/services/api-keys-service');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const prismaState = {
   apiKey: null, // single row used by findFirst
@@ -291,14 +294,14 @@ describe('authenticateToken · API key path', () => {
       {
         id: 'session-presented',
         userId: deletedUser.id,
-        token,
+        token: hashSessionToken(token),
         expiresAt: new Date(Date.now() + 60_000),
         user: deletedUser,
       },
       {
         id: 'session-other',
         userId: deletedUser.id,
-        token: 'another-token',
+        token: hashSessionToken('another-token'),
         expiresAt: new Date(Date.now() + 60_000),
         user: deletedUser,
       },

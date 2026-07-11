@@ -35,6 +35,12 @@ const { probeQueueRegistry } = require('../services/queues/queue-registry');
 
 const noopStatus = () => ({});
 
+function boundedInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
 function healthRedisConnectionOptions(env = process.env) {
   const timeoutMs = resolveHealthRedisTimeoutMs(env);
   return {
@@ -58,6 +64,7 @@ function healthRedisConnectionOptions(env = process.env) {
  * @param {object} [deps.queueHealthProbe]   Dedicated queue health runtime.
  * @param {Function} [deps.queueProbe]       Optional queue probe override.
  * @param {object} [deps.coworkHealth]      Cowork subsystem health module.
+ * @param {object} [deps.authSecurity]      OAuth-state + impersonation runtime.
  * @param {Function} [deps.getOpenTelemetryStatus]
  * @param {Function} [deps.getSentryStatus]
  * @param {Function} [deps.getLangfuseStatus]
@@ -79,6 +86,7 @@ function createHealthRoutes(deps = {}) {
     queueRegistry = null,
     queueHealthProbe = null,
     coworkHealth = null,
+    authSecurity = null,
     getOpenTelemetryStatus = noopStatus,
     getSentryStatus = noopStatus,
     getLangfuseStatus = noopStatus,
@@ -89,6 +97,7 @@ function createHealthRoutes(deps = {}) {
     startupEnv = { checked: false, issues: [] },
     env = process.env,
   } = deps;
+  const clock = typeof deps.clock === 'function' ? deps.clock : Date.now;
   const hasInjectedRedis = Object.prototype.hasOwnProperty.call(deps, 'redis');
   const queueProbe = typeof deps.queueProbe === 'function'
     ? deps.queueProbe
@@ -101,6 +110,27 @@ function createHealthRoutes(deps = {}) {
   const cacheTtlMs = typeof deps.cacheTtlMs === 'number'
     ? deps.cacheTtlMs
     : parseInt(env.HEALTH_CACHE_TTL_MS || '5000', 10); // 5s default
+
+  const authReadyRetryBaseMs = boundedInteger(
+    env.AUTH_SECURITY_READY_RETRY_BASE_MS,
+    250,
+    10,
+    60_000,
+  );
+  const authReadyRetryMaxMs = Math.max(
+    authReadyRetryBaseMs,
+    boundedInteger(
+      env.AUTH_SECURITY_READY_RETRY_MAX_MS,
+      5_000,
+      10,
+      60_000,
+    ),
+  );
+  let authReadyAttempt = 0;
+  let authReadyDelayMs = 0;
+  let authReadyNextAt = 0;
+  let authReadyLastErrorCode = null;
+  let authReadyRefresh = null;
 
   // ── OAuth boot-config snapshot ─────────────────────────────
   // Populated once at startup by validateOAuthCallbackUrl (see startServer in
@@ -249,6 +279,97 @@ function createHealthRoutes(deps = {}) {
     }
   }
 
+  function readAuthSecurityStatus() {
+    if (!authSecurity || typeof authSecurity.health !== 'function') {
+      return { status: 'skipped', reason: 'no_auth_security_runtime' };
+    }
+    try {
+      const status = authSecurity.health();
+      let config;
+      if (typeof authSecurity.config === 'function') {
+        try {
+          config = authSecurity.config();
+        } catch (_error) {
+          config = { status: 'unavailable' };
+        }
+      }
+      return {
+        ...status,
+        ...(config ? { config } : {}),
+        readinessRetry: {
+          attempt: authReadyAttempt,
+          delayMs: authReadyDelayMs,
+          nextAt: authReadyNextAt || null,
+          lastErrorCode: authReadyLastErrorCode,
+        },
+      };
+    } catch (_error) {
+      return { status: 'unavailable', ok: false };
+    }
+  }
+
+  function rejectedReadiness(results) {
+    if (!Array.isArray(results)) return [];
+    return results
+      .filter((result) => result?.status === 'rejected')
+      .map((result) => result.reason);
+  }
+
+  async function refreshAuthSecurityReadiness() {
+    if (!authSecurity || typeof authSecurity.ready !== 'function') return;
+    const now = clock();
+    if (authReadyRefresh) return authReadyRefresh;
+    if (authReadyNextAt > now) return;
+
+    authReadyRefresh = (async () => {
+      try {
+        const results = await authSecurity.ready();
+        const failures = rejectedReadiness(results);
+        if (failures.length) {
+          throw new AggregateError(failures, 'auth-security readiness failed');
+        }
+        const status = typeof authSecurity.health === 'function'
+          ? authSecurity.health()
+          : { ok: true };
+        if (status?.ok === false) {
+          const error = new Error('AUTH_SECURITY_NOT_READY');
+          error.code = 'AUTH_SECURITY_NOT_READY';
+          throw error;
+        }
+        authReadyAttempt = 0;
+        authReadyDelayMs = 0;
+        authReadyNextAt = 0;
+        authReadyLastErrorCode = null;
+      } catch (error) {
+        authReadyAttempt = Math.min(31, authReadyAttempt + 1);
+        authReadyDelayMs = Math.min(
+          authReadyRetryMaxMs,
+          authReadyRetryBaseMs * (2 ** (authReadyAttempt - 1)),
+        );
+        authReadyNextAt = clock() + authReadyDelayMs;
+        const cause = error instanceof AggregateError ? error.errors?.[0] : error;
+        authReadyLastErrorCode = cause?.code || error?.code || 'AUTH_SECURITY_READY_FAILED';
+      } finally {
+        authReadyRefresh = null;
+      }
+    })();
+    return authReadyRefresh;
+  }
+
+  function attachAuthSecurityStatus(report) {
+    const authSecurityStatus = readAuthSecurityStatus();
+    const next = {
+      ...report,
+      authSecurity: authSecurityStatus,
+    };
+    if (authSecurityStatus.ok === false) {
+      next.status = env.NODE_ENV === 'production'
+        ? 'unhealthy'
+        : (next.status === 'unhealthy' ? 'unhealthy' : 'degraded');
+    }
+    return next;
+  }
+
   /**
    * Register the three health endpoints on an Express app/router.
    *
@@ -269,6 +390,7 @@ function createHealthRoutes(deps = {}) {
     });
 
     app.get(['/health/ready', '/api/health/ready', '/api/ready', '/readyz', '/api/readyz'], async (_req, res) => {
+      await refreshAuthSecurityReadiness();
       const report = await getCachedOrFresh('ready', () => runReadinessCheck({
         prisma,
         redis: getHealthRedisClient(),
@@ -276,7 +398,7 @@ function createHealthRoutes(deps = {}) {
         rbac: readRbacBootstrapStatus(),
         env,
       }));
-      sendHealthReport(res, report);
+      sendHealthReport(res, attachAuthSecurityStatus(report));
     });
 
     app.get(['/health', '/api/health'], async (_req, res) => {
@@ -296,7 +418,7 @@ function createHealthRoutes(deps = {}) {
         getPoolAutoscalerState,
         env,
       }));
-      sendHealthReport(res, report);
+      sendHealthReport(res, attachAuthSecurityStatus(report));
     });
 
     return app;

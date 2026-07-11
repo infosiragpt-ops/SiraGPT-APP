@@ -5,6 +5,11 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { createQueryDedup } = require('../utils/query-dedup');
 const { createWriteBehindCache } = require('../services/write-behind-cache');
 const { validateActiveSession } = require('../services/active-session-validator');
+const {
+  deleteSessionsByPresentedToken,
+  findSessionByPresentedToken,
+  hashSessionToken,
+} = require('../services/auth/session-token-persistence');
 const { getRequestId } = require('./request-id');
 const apiKeysService = require('../services/api-keys-service');
 // Lazy require to keep the auth module's import graph cheap for tests that
@@ -357,10 +362,11 @@ const authenticateToken = async (req, res, next) => {
     // Check if session exists and is valid. Coalesce concurrent
     // identical lookups within a 50ms window so the SPA's burst of
     // authenticated calls only generates one DB roundtrip.
+    const tokenHash = hashSessionToken(token);
     const session = await sessionDedup.wrap(
       'session',
-      { where: { token }, include: { user: true } },
-      () => prisma.session.findUnique({ where: { token }, include: { user: true } })
+      { where: { token: tokenHash }, include: { user: true } },
+      () => findSessionByPresentedToken(prisma, token, { include: { user: true } })
     );
 
     if (!session) {
@@ -371,7 +377,7 @@ const authenticateToken = async (req, res, next) => {
         await revokeInactiveUserSessions(session.user?.id || session.userId);
       } else {
         try {
-          await prisma.session.deleteMany({ where: { token } });
+          await deleteSessionsByPresentedToken(prisma, token);
         } catch (_) { /* best-effort orphan cleanup */ }
         sessionDedup.clear();
       }
@@ -395,7 +401,7 @@ const authenticateToken = async (req, res, next) => {
       // Best-effort: clean up the expired row and emit an audit event
       // so SIEM/operators can correlate "user got logged out" reports.
       try {
-        await prisma.session.deleteMany({ where: { token } });
+        await deleteSessionsByPresentedToken(prisma, token);
       } catch (_) { /* ignore — row may already be gone */ }
       void writeAuditLog(prisma, {
         req,
@@ -430,7 +436,7 @@ const authenticateToken = async (req, res, next) => {
         // Revoke the session — a token presented from a different
         // network/UA is treated as compromised.
         try {
-          await prisma.session.deleteMany({ where: { token } });
+          await deleteSessionsByPresentedToken(prisma, token);
         } catch (_) { /* ignore */ }
         void writeAuditLog(prisma, {
           req,

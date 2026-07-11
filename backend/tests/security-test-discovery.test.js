@@ -29,6 +29,17 @@ const SECURITY_TESTS = Object.freeze([
   'tests/saml-sp-initiated.test.js',
   'tests/saml-browser-flow.test.js',
   'tests/saml-acs-rate-limit.test.js',
+  'tests/auth-sessions-list-pagination.test.js',
+  'tests/upload-static-access.test.js',
+  'tests/oauth-state.test.js',
+  'tests/provider-oauth-service.test.js',
+  'tests/appshots-capture.test.js',
+  'tests/appshots-auto-revoke-email.test.js',
+  'tests/backfill-appshots-geo-hint.test.js',
+  'tests/session-token-hashing.test.js',
+  'tests/users-sessions-current.test.js',
+  'tests/oauth-state-distributed.test.js',
+  'tests/impersonation-rate-limiter.test.js',
   'tests/security-test-discovery.test.js',
 ]);
 
@@ -37,7 +48,7 @@ function canonicalTestFiles() {
   return command.match(/tests\/[A-Za-z0-9._\-/]+\.test\.js/g) || [];
 }
 
-test('all I15-I16 security contracts live in the canonical test script', () => {
+test('all I15-I19 security contracts live in the canonical test script', () => {
   const files = canonicalTestFiles();
   for (const file of SECURITY_TESTS) {
     assert.ok(files.includes(file), `${file} is absent from scripts.test`);
@@ -53,7 +64,7 @@ test('all I15-I16 security contracts live in the canonical test script', () => {
   }
 });
 
-test('test sharder discovers a canonical I15-I16 test from scripts.test', () => {
+test('test sharder discovers a canonical I15-I19 test from scripts.test', () => {
   const files = canonicalTestFiles();
   const target = 'tests/production-environment.test.js';
   const targetIndex = files.indexOf(target);

@@ -47,6 +47,7 @@ const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
   'queue_health_probe_close',
   'observability_flush',
   'prisma_disconnect',
+  'auth_security_runtime_close',
   'redis_disconnect',
 ]);
 

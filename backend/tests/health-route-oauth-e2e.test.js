@@ -174,6 +174,115 @@ describe('GET /health — live OAuth health exposure (e2e)', () => {
     assert.equal(check.status, 'degraded');
   });
 
+  test('auth-security health exposes safe runtime config on full health', async () => {
+    const { app } = buildApp({
+      authSecurity: {
+        health: () => ({
+          ok: true,
+          oauthState: { mode: 'redis', distributed: true },
+          impersonation: { mode: 'redis', distributed: true },
+        }),
+        config: () => ({
+          oauthState: { commandTimeoutMs: 500, offlineQueue: false },
+          impersonation: { commandTimeoutMs: 500, offlineQueue: false },
+        }),
+      },
+    });
+
+    const res = await request(app).get('/health');
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.authSecurity.ok, true);
+    assert.equal(res.body.authSecurity.oauthState.mode, 'redis');
+    assert.equal(res.body.authSecurity.config.oauthState.offlineQueue, false);
+    assert.equal(res.body.authSecurity.config.impersonation.offlineQueue, false);
+  });
+
+  test('production readiness and full health fail when auth-security is unavailable', async () => {
+    const { app } = buildApp({
+      env: { NODE_ENV: 'production', OPENAI_API_KEY: 'sk-test' },
+      authSecurity: {
+        health: () => ({
+          ok: false,
+          oauthState: { mode: 'unavailable', distributed: false },
+          impersonation: { mode: 'unavailable', distributed: false },
+        }),
+        config: () => ({
+          oauthState: { redisConfigured: false },
+          impersonation: { redisConfigured: false },
+        }),
+      },
+    });
+
+    const [full, ready] = await Promise.all([
+      request(app).get('/health'),
+      request(app).get('/health/ready'),
+    ]);
+
+    assert.equal(full.status, 503);
+    assert.equal(full.body.status, 'unhealthy');
+    assert.equal(ready.status, 503);
+    assert.equal(ready.body.status, 'unhealthy');
+    assert.equal(ready.body.authSecurity.ok, false);
+  });
+
+  test('readiness retries auth-security with bounded backoff and recovers without restart', async () => {
+    let now = 10_000;
+    let readyCalls = 0;
+    let healthy = false;
+    const { app } = buildApp({
+      clock: () => now,
+      env: {
+        NODE_ENV: 'production',
+        OPENAI_API_KEY: 'sk-test',
+        AUTH_SECURITY_READY_RETRY_BASE_MS: '100',
+        AUTH_SECURITY_READY_RETRY_MAX_MS: '200',
+      },
+      authSecurity: {
+        async ready() {
+          readyCalls += 1;
+          if (readyCalls === 1) {
+            const error = new Error('redis unavailable');
+            error.code = 'OAUTH_STATE_STORE_UNAVAILABLE';
+            throw error;
+          }
+          healthy = true;
+          return [{ status: 'fulfilled' }];
+        },
+        health: () => ({
+          ok: healthy,
+          oauthState: {
+            mode: healthy ? 'redis' : 'unavailable',
+            distributed: healthy,
+          },
+          impersonation: {
+            mode: healthy ? 'redis' : 'unavailable',
+            distributed: healthy,
+          },
+        }),
+        config: () => ({}),
+      },
+    });
+
+    const failed = await request(app).get('/health/ready');
+    assert.equal(failed.status, 503);
+    assert.equal(readyCalls, 1);
+    assert.equal(failed.body.authSecurity.readinessRetry.attempt, 1);
+    assert.equal(failed.body.authSecurity.readinessRetry.delayMs, 100);
+
+    const throttled = await request(app).get('/health/ready');
+    assert.equal(throttled.status, 503);
+    assert.equal(readyCalls, 1, 'readiness must not hammer Redis inside backoff');
+
+    now += 100;
+    const recovered = await request(app).get('/health/ready');
+    assert.equal(recovered.status, 200);
+    assert.equal(readyCalls, 2);
+    assert.equal(recovered.body.authSecurity.ok, true);
+    assert.equal(recovered.body.authSecurity.readinessRetry.attempt, 0);
+    assert.equal(recovered.body.authSecurity.readinessRetry.delayMs, 0);
+  });
+
   test.after(() => {
     if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalOpenAIKey;

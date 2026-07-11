@@ -115,25 +115,12 @@ export function resolveImageAttachmentUrl(file: any, baseUrl?: string | null) {
   return "";
 }
 
-export function appendUploadAuthToken(url: unknown, token?: string | null) {
-  const raw = String(url || "").trim();
-  const safeToken = String(token || "").trim();
-  if (!raw || !safeToken || /^(data:|blob:)/i.test(raw)) return raw;
-
-  const base =
-    typeof window !== "undefined" && window.location?.origin
-      ? window.location.origin
-      : cleanBaseUrl();
-
-  try {
-    const parsed = new URL(raw, base);
-    if (!parsed.pathname.startsWith("/uploads/")) return raw;
-    if (!parsed.searchParams.has("token")) {
-      parsed.searchParams.set("token", safeToken);
-    }
-    if (/^https?:/i.test(raw)) return parsed.toString();
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return raw;
-  }
+/**
+ * @deprecated Session JWTs must never be copied into URLs. Same-origin upload
+ * requests authenticate with the HttpOnly cookie. A caller that cannot use
+ * that cookie must request a path-scoped capability from
+ * POST /api/files/media-token and use the URL returned by that endpoint.
+ */
+export function appendUploadAuthToken(url: unknown, _token?: string | null) {
+  return String(url || "").trim();
 }

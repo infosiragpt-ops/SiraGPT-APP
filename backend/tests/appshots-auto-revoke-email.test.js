@@ -19,10 +19,15 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'task17-auto-revoke-secret-32
 const prisma = require('../src/config/database');
 const emailService = require('../src/services/email');
 const { authenticateToken } = require('../src/middleware/auth');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
+let tokenSequence = 0;
 function makeAppshotsToken(userId, opts = {}) {
+  tokenSequence += 1;
   return jwt.sign(
-    { userId, scope: 'appshots:capture', nonce: 'x' },
+    { userId, scope: 'appshots:capture', nonce: `test-${tokenSequence}` },
     process.env.JWT_SECRET,
     { expiresIn: opts.expiresIn || '1h' },
   );
@@ -84,7 +89,7 @@ describe('Task 17 — authenticateToken auto-revoke email', () => {
     const token = makeAppshotsToken(user.id);
     prisma.session.findUnique = async () => ({
       id: 'sess-fp',
-      token,
+      token: hashSessionToken(token),
       userId: user.id,
       user,
       expiresAt: new Date(Date.now() + 60_000),
@@ -111,7 +116,7 @@ describe('Task 17 — authenticateToken auto-revoke email', () => {
     const token = makeAppshotsToken(user.id);
     prisma.session.findUnique = async () => ({
       id: 'sess-exp',
-      token,
+      token: hashSessionToken(token),
       userId: user.id,
       user,
       expiresAt: new Date(Date.now() - 60_000),
@@ -132,7 +137,7 @@ describe('Task 17 — authenticateToken auto-revoke email', () => {
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
     prisma.session.findUnique = async () => ({
       id: 'sess-reg',
-      token,
+      token: hashSessionToken(token),
       userId: user.id,
       user,
       expiresAt: new Date(Date.now() + 60_000),
@@ -156,7 +161,7 @@ describe('Task 17 — authenticateToken auto-revoke email', () => {
     const res = makeRes();
     await authenticateToken(req, res, () => {});
 
-    assert.equal(res.statusCode, 403);
+    assert.equal(res.statusCode, 401);
     // Need two microtask flushes: one for prisma.user.findUnique, one for
     // the email helper chained on top.
     await new Promise((r) => setImmediate(r));

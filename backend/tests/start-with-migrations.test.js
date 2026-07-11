@@ -1203,7 +1203,7 @@ test("wrapper and backend index form the IPC centralized-shutdown chain", () => 
   assert.match(backendIndexSource, /process\.on\(['"]message['"]/);
   assert.match(backendIndexSource, /siragpt:shutdown/);
   assert.match(backendIndexSource, /shutdownRegistry\.shutdown\(reason\)/);
-  assert.match(backendIndexSource, /process\.exit\(exitCode\)/);
+  assert.match(backendIndexSource, /process\.exit\(finalExitCode\)/);
   assert.ok(
     backendIndexSource.indexOf("process.on('message'") < backendIndexSource.indexOf("initAgentSystem();"),
     "backend must buffer IPC shutdown before heavy startup begins",

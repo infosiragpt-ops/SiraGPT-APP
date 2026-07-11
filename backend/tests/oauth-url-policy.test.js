@@ -9,8 +9,16 @@ const {
   getGoogleCallbackURL,
   getGoogleGmailCallbackURL,
   getGoogleServicesCallbackURL,
+  getGithubCallbackURL,
+  getSpotifyCallbackURL,
+  getGooglePostCallbackURL,
+  getGithubPostCallbackURL,
+  getSpotifyPostCallbackURL,
   getFrontendUrl,
 } = require('../src/config/oauth-url-policy');
+const {
+  validateOAuthCallbackUrl,
+} = require('../src/utils/oauth-callback-boot-validator');
 
 test('normalizes backend API bases before building OAuth callbacks', () => {
   assert.equal(
@@ -79,6 +87,108 @@ test('development keeps localhost callbacks for local OAuth testing', () => {
   assert.equal(getGoogleGmailCallbackURL(env), 'http://localhost:5000/api/auth/gmail/callback');
   assert.equal(getGoogleServicesCallbackURL(env), 'http://localhost:5000/api/auth/google-services/callback');
   assert.equal(getFrontendUrl(env), 'http://localhost:3000');
+});
+
+test('all provider callback URLs are centralized on the public backend origin', () => {
+  const env = {
+    NODE_ENV: 'production',
+    GOOGLE_AUTH_BASE_URL: 'https://api.example.test',
+    GITHUB_OAUTH_REDIRECT_URI: 'https://api.example.test/api/github/callback',
+    SPOTIFY_REDIRECT_URI: 'https://api.example.test/api/spotify/callback',
+  };
+
+  assert.equal(getGoogleCallbackURL(env), 'https://api.example.test/api/auth/google/callback');
+  assert.equal(getGoogleGmailCallbackURL(env), 'https://api.example.test/api/auth/gmail/callback');
+  assert.equal(
+    getGoogleServicesCallbackURL(env),
+    'https://api.example.test/api/auth/google-services/callback',
+  );
+  assert.equal(getGithubCallbackURL(env), 'https://api.example.test/api/github/callback');
+  assert.equal(getSpotifyCallbackURL(env), 'https://api.example.test/api/spotify/callback');
+});
+
+test('production rejects HTTP and localhost callback/post-callback configuration', () => {
+  const env = {
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'http://localhost:3000',
+    PUBLIC_FRONTEND_URL: 'https://app.example.test',
+    GOOGLE_AUTH_BASE_URL: 'http://localhost:5000',
+    BACKEND_PUBLIC_URL: 'http://api.example.test',
+    API_PUBLIC_URL: 'https://api.example.test',
+    GITHUB_OAUTH_REDIRECT_URI: 'http://localhost:5000/api/github/callback',
+    SPOTIFY_REDIRECT_URI: 'http://spotify.example.test/callback',
+    GITHUB_OAUTH_SUCCESS_REDIRECT: 'http://localhost:3000/settings',
+    SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'http://localhost:3000/chat',
+  };
+
+  for (const value of [
+    getGoogleCallbackURL(env),
+    getGithubCallbackURL(env),
+    getSpotifyCallbackURL(env),
+    getGooglePostCallbackURL('success', env),
+    getGithubPostCallbackURL('connected', env),
+    getSpotifyPostCallbackURL('connected', env),
+  ]) {
+    const parsed = new URL(value);
+    assert.equal(parsed.protocol, 'https:');
+    assert.notEqual(parsed.hostname, 'localhost');
+  }
+});
+
+test('provider post-callback destinations are centralized and preserve status safely', () => {
+  const env = {
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'https://app.example.test',
+  };
+
+  assert.equal(
+    getGooglePostCallbackURL('success', env),
+    'https://app.example.test/auth/callback?sso=success',
+  );
+  assert.equal(
+    getGooglePostCallbackURL('invalid_state', env),
+    'https://app.example.test/auth/login?error=invalid_state',
+  );
+  assert.equal(
+    getGithubPostCallbackURL('already_linked', env),
+    'https://app.example.test/settings?github=already_linked',
+  );
+  assert.equal(
+    getSpotifyPostCallbackURL('connected', env),
+    'https://app.example.test/chat?spotify_connected=true',
+  );
+  assert.equal(
+    getSpotifyPostCallbackURL('invalid_state', env),
+    'https://app.example.test/connections?spotify_connected=false&error=invalid_state',
+  );
+});
+
+test('production boot validation blocks insecure GitHub and Spotify callback configuration', () => {
+  const logs = [];
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      GITHUB_CLIENT_ID: 'github-id',
+      GITHUB_CLIENT_SECRET: 'github-secret',
+      GITHUB_OAUTH_REDIRECT_URI: 'http://localhost:5000/api/github/callback',
+      GITHUB_OAUTH_SUCCESS_REDIRECT: 'http://app.example.test/settings',
+      SPOTIFY_CLIENT_ID: 'spotify-id',
+      SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+      SPOTIFY_REDIRECT_URI: 'http://spotify.example.test/callback',
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'http://localhost:3000/chat',
+    },
+    logger: {
+      warn: (...args) => logs.push(args),
+      error: (...args) => logs.push(args),
+    },
+  });
+
+  assert.equal(result.checked, true);
+  assert.equal(result.shouldBlock, true);
+  assert.ok(result.issues.includes('oauth_callback_https_required'));
+  assert.ok(result.issues.includes('oauth_callback_localhost_in_production'));
+  assert.ok(result.issues.includes('oauth_post_callback_https_required'));
+  assert.ok(logs.length >= 1);
 });
 
 test('GOOGLE_AUTH_BASE_URL overrides stale per-flow URI secrets pointing to a different host', () => {

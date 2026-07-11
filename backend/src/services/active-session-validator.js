@@ -6,6 +6,11 @@ const {
   computeFingerprint,
   compareFingerprints,
 } = require('../utils/session-fingerprint');
+const {
+  deleteSessionsByPresentedToken,
+  findSessionByPresentedToken,
+  hashSessionToken,
+} = require('./auth/session-token-persistence');
 
 const MAX_SESSION_TOKEN_LENGTH = 8192;
 const DEFAULT_REVALIDATION_TTL_MS = 5_000;
@@ -31,7 +36,11 @@ function tokenSubject(decoded) {
 async function bestEffortDelete(prismaClient, where) {
   if (typeof prismaClient?.session?.deleteMany !== 'function') return;
   try {
-    await prismaClient.session.deleteMany({ where });
+    if (where?.token) {
+      await deleteSessionsByPresentedToken(prismaClient, where.token);
+    } else {
+      await prismaClient.session.deleteMany({ where });
+    }
   } catch {
     // Authentication still fails closed. Cleanup can be retried by the
     // deletion/session sweeper when the database becomes writable again.
@@ -224,9 +233,8 @@ async function validateActiveSession({
   let session;
   try {
     session = typeof loadSession === 'function'
-      ? await loadSession(token)
-      : await prismaClient.session.findUnique({
-          where: { token },
+      ? await loadSession(hashSessionToken(token))
+      : await findSessionByPresentedToken(prismaClient, token, {
           include: { user: true },
         });
   } catch (cause) {

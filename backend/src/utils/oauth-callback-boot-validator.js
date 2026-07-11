@@ -40,6 +40,8 @@ const {
   getGoogleCallbackURL,
   getGoogleGmailCallbackURL,
   getGoogleServicesCallbackURL,
+  getGithubCallbackURL,
+  getSpotifyCallbackURL,
   resolvePublicBackendUrl,
   isLocalhostUrl,
 } = require('../config/oauth-url-policy');
@@ -55,6 +57,10 @@ const BLOCKING_ISSUE_CODES = new Set([
   'google_auth_base_url_localhost_in_production',
   'oauth_callback_url_malformed',
   'oauth_callback_localhost_in_production',
+  'oauth_callback_https_required',
+  'oauth_post_callback_url_malformed',
+  'oauth_post_callback_localhost_in_production',
+  'oauth_post_callback_https_required',
   'host_mismatch',
 ]);
 
@@ -129,7 +135,46 @@ function auditCallbackUrl(resolvedUrl, label, isProd) {
       },
     });
   }
+  if (isProd && new URL(resolvedUrl).protocol !== 'https:') {
+    findings.push({
+      level: 'error',
+      event: 'oauth_callback_https_required',
+      data: {
+        label,
+        resolvedUrl,
+        hint: `${label} must use HTTPS in production.`,
+      },
+    });
+  }
 
+  return findings;
+}
+
+function auditConfiguredUrl(value, label, isProd, { postCallback = false } = {}) {
+  if (!value) return [];
+  const prefix = postCallback ? 'oauth_post_callback' : 'oauth_callback';
+  if (!isWellFormedUrl(value)) {
+    return [{
+      level: 'warn',
+      event: `${prefix}_url_malformed`,
+      data: { label, hint: `${label} must be an absolute http/https URL.` },
+    }];
+  }
+  const findings = [];
+  if (isProd && isLocalhostUrl(value)) {
+    findings.push({
+      level: 'error',
+      event: `${prefix}_localhost_in_production`,
+      data: { label, hint: `${label} cannot point to localhost in production.` },
+    });
+  }
+  if (isProd && new URL(value).protocol !== 'https:') {
+    findings.push({
+      level: 'error',
+      event: `${prefix}_https_required`,
+      data: { label, hint: `${label} must use HTTPS in production.` },
+    });
+  }
   return findings;
 }
 
@@ -165,6 +210,41 @@ function validateOAuthCallbackUrl(deps = {}) {
     const hasClientId = !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_ID.trim());
     const hasClientSecret = !!(env.GOOGLE_CLIENT_SECRET && env.GOOGLE_CLIENT_SECRET.trim());
     const googleOAuthActive = hasClientId || hasClientSecret;
+    const githubOAuthActive = Boolean(
+      env.GITHUB_CLIENT_ID
+      || env.GITHUB_CLIENT_SECRET
+      || env.GITHUB_OAUTH_REDIRECT_URI,
+    );
+    const spotifyOAuthActive = Boolean(
+      env.SPOTIFY_CLIENT_ID
+      || env.SPOTIFY_CLIENT_SECRET
+      || env.SPOTIFY_REDIRECT_URI,
+    );
+
+    const explicitUrls = [
+      [env.GOOGLE_AUTH_URI, 'Google OAuth callback URL', false],
+      [env.GOOGLE_REDIRECT_URI, 'Gmail OAuth callback URL', false],
+      [env.GOOGLE_REDIRECT_CALENDAR_DRIVE_URI, 'Google Services callback URL', false],
+      [env.GITHUB_OAUTH_REDIRECT_URI, 'GitHub OAuth callback URL', false],
+      [env.SPOTIFY_REDIRECT_URI, 'Spotify OAuth callback URL', false],
+      [env.GITHUB_OAUTH_SUCCESS_REDIRECT, 'GitHub post-callback URL', true],
+      [env.SPOTIFY_OAUTH_SUCCESS_REDIRECT, 'Spotify success post-callback URL', true],
+      [env.SPOTIFY_OAUTH_FAILURE_REDIRECT, 'Spotify failure post-callback URL', true],
+    ];
+    for (const [value, label, postCallback] of explicitUrls) {
+      for (const finding of auditConfiguredUrl(
+        value,
+        label,
+        isProd,
+        { postCallback },
+      )) {
+        collectedIssues.push(finding.event);
+        try {
+          const logFn = finding.level === 'error' ? logger.error : logger.warn;
+          logFn.call(logger, finding.data, finding.event);
+        } catch (_error) { /* swallow */ }
+      }
+    }
 
     // ── 1. Paired credential check ──────────────────────────────
     if (googleOAuthActive) {
@@ -299,6 +379,28 @@ function validateOAuthCallbackUrl(deps = {}) {
         }
       }
     }
+
+    for (const { active, url, label } of [
+      {
+        active: githubOAuthActive,
+        url: githubOAuthActive ? getGithubCallbackURL(env) : null,
+        label: 'GitHub OAuth callback URL',
+      },
+      {
+        active: spotifyOAuthActive,
+        url: spotifyOAuthActive ? getSpotifyCallbackURL(env) : null,
+        label: 'Spotify OAuth callback URL',
+      },
+    ]) {
+      if (!active) continue;
+      for (const finding of auditCallbackUrl(url, label, isProd)) {
+        collectedIssues.push(finding.event);
+        try {
+          const logFn = finding.level === 'error' ? logger.error : logger.warn;
+          logFn.call(logger, finding.data, finding.event);
+        } catch (_error) { /* swallow */ }
+      }
+    }
   } catch (outerErr) {
     try {
       logger.warn(
@@ -312,7 +414,13 @@ function validateOAuthCallbackUrl(deps = {}) {
   const checked = !!(
     env.GOOGLE_CLIENT_ID ||
     env.GOOGLE_CLIENT_SECRET ||
-    env.GOOGLE_AUTH_BASE_URL
+    env.GOOGLE_AUTH_BASE_URL ||
+    env.GITHUB_CLIENT_ID ||
+    env.GITHUB_CLIENT_SECRET ||
+    env.GITHUB_OAUTH_REDIRECT_URI ||
+    env.SPOTIFY_CLIENT_ID ||
+    env.SPOTIFY_CLIENT_SECRET ||
+    env.SPOTIFY_REDIRECT_URI
   );
   const shouldBlock = isProd && collectedIssues.some(c => BLOCKING_ISSUE_CODES.has(c));
   return { checked, mismatch: false, issues: collectedIssues, shouldBlock };

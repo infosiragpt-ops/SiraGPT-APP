@@ -40,6 +40,16 @@ const emailPrefs = require('../services/email-preferences');
 const {
   publishUserSessionsRevoked,
 } = require('../services/auth/user-session-revocation-events');
+const {
+  createSessionRecord,
+  hashSessionToken,
+} = require('../services/auth/session-token-persistence');
+const {
+  isAppshotsSession,
+  isAppshotsToken,
+  markAppshotsUserAgent,
+  visibleAppshotsUserAgent,
+} = require('../utils/appshots-token');
 
 const router = express.Router();
 
@@ -113,21 +123,21 @@ router.post('/pair', authenticateToken, async (req, res) => {
       console.warn('[appshots] geo lookup failed, degrading silently:', err?.message || err);
     }
 
-    await prisma.session.create({
-      data: {
-        userId: req.user.id,
-        token,
-        expiresAt: new Date(Date.now() + ttlMs),
-        userAgent,
-        ipHint,
-        geoHint,
-      },
+    await createSessionRecord(prisma, {
+      userId: req.user.id,
+      token,
+      expiresAt: new Date(Date.now() + ttlMs),
+      // Session.userAgent is Appshots-only today and doubles as the
+      // no-schema discriminator once Session.token contains only a digest.
+      userAgent: markAppshotsUserAgent(userAgent),
+      ipHint,
+      geoHint,
     });
 
     auditLog.audit({
       event: 'appshots_paired',
       userId: req.user.id,
-      tokenPrefix: token.slice(0, 12),
+      tokenHashPrefix: hashSessionToken(token).slice(0, 12),
       userAgent,
       ipHint,
       geoHint,
@@ -214,9 +224,12 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     const currentIpHint = currentRawIp ? reduceIp(currentRawIp) || null : null;
 
     const sessions = rows
-      .filter((row) => isAppshotsToken(row.token))
+      .filter((row) => isAppshotsSession(row))
       .map((row) => {
-        const rowUaNorm = row.userAgent ? String(row.userAgent).trim().toLowerCase() : '';
+        const visibleUserAgent = visibleAppshotsUserAgent(row.userAgent);
+        const rowUaNorm = visibleUserAgent
+          ? visibleUserAgent.trim().toLowerCase()
+          : '';
         // Sólo consideramos "este dispositivo" cuando ambos datos
         // coinciden Y los dos no son vacíos — un UA o ipHint vacío en
         // la fila no debería marcar todas las sesiones huérfanas como
@@ -232,7 +245,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
           expiresAt: row.expiresAt,
           lastUsedAt: row.lastUsedAt,
           label: row.label || null,
-          userAgent: row.userAgent || null,
+          userAgent: visibleUserAgent,
           ipHint: row.ipHint || null,
           // Task 19 — pre-resolved "City, CC" hint. Null when the lookup
           // failed at pair time or the row predates the migration; the UI
@@ -249,7 +262,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
           // Pre-computed friendly device string ("Chrome en macOS") so the UI
           // doesn't need to ship a UA parser. Falls back to null when we
           // can't recognise the UA — clients then render the raw string.
-          device: row.userAgent ? describeUserAgent(row.userAgent) : null,
+          device: visibleUserAgent ? describeUserAgent(visibleUserAgent) : null,
           isCurrent,
         };
       });
@@ -298,12 +311,12 @@ router.patch('/sessions/:id', authenticateToken, async (req, res) => {
 
     const row = await prisma.session.findUnique({
       where: { id },
-      select: { id: true, userId: true, token: true },
+      select: { id: true, userId: true, token: true, userAgent: true },
     });
     if (!row || row.userId !== req.user.id) {
       return res.status(404).json({ error: 'session not found' });
     }
-    if (!isAppshotsToken(row.token)) {
+    if (!isAppshotsSession(row)) {
       return res.status(403).json({ error: 'not an appshots session' });
     }
     await prisma.session.update({ where: { id }, data: { label } });
@@ -417,12 +430,12 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
     // compromised cookie can't be used to log every browser tab out.
     const row = await prisma.session.findUnique({
       where: { id },
-      select: { id: true, userId: true, token: true },
+      select: { id: true, userId: true, token: true, userAgent: true },
     });
     if (!row || row.userId !== req.user.id) {
       return res.status(404).json({ error: 'session not found' });
     }
-    if (!isAppshotsToken(row.token)) {
+    if (!isAppshotsSession(row)) {
       return res.status(403).json({ error: 'not an appshots session' });
     }
     await prisma.session.delete({ where: { id } });
@@ -464,8 +477,6 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Revoke failed' });
   }
 });
-
-const { isAppshotsToken } = require('../utils/appshots-token');
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/appshots/capture
@@ -797,4 +808,13 @@ function getCanonicalFrontendBaseUrl(req) {
 }
 
 module.exports = router;
-module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate, pickOcrFlag, isAppshotsToken, describeUserAgent };
+module.exports._private = {
+  sanitiseLabel,
+  sanitiseNote,
+  sanitiseModel,
+  truncate,
+  pickOcrFlag,
+  isAppshotsSession,
+  isAppshotsToken,
+  describeUserAgent,
+};

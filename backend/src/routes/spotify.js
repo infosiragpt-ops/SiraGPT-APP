@@ -4,6 +4,11 @@ const spotifyService = require('../services/spotify-mcp');
 const { encrypt } = require('../utils/encryption');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { getSpotifyPostCallbackURL } = require('../config/oauth-url-policy');
+const {
+  isOAuthStateInfrastructureError,
+  sendOAuthStateUnavailable,
+} = require('../services/auth/oauth-state-http');
 
 // Route to get Spotify connection URL
 router.get('/connect', authenticateToken, async (req, res) => {
@@ -11,7 +16,10 @@ router.get('/connect', authenticateToken, async (req, res) => {
     const authorizeURL = await spotifyService.connect(req.user.id);
     res.json({ url: authorizeURL });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to get Spotify connection URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'spotify', error });
+    }
+    return res.status(500).json({ error: 'Failed to get Spotify connection URL' });
   }
 });
 
@@ -20,9 +28,17 @@ router.get('/callback', async (req, res) => {
   const { code, state } = req.query;
   // Recover the user id from the SIGNED state — never trust a raw id in the
   // query, or an attacker could overwrite another user's Spotify tokens.
-  const userId = spotifyService.verifyState(state);
+  let userId;
+  try {
+    userId = await spotifyService.verifyState(state);
+  } catch (error) {
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'spotify', error });
+    }
+    return res.redirect(getSpotifyPostCallbackURL('invalid_state'));
+  }
   if (!userId) {
-    return res.redirect('http://localhost:3000/connections?spotify_connected=false');
+    return res.redirect(getSpotifyPostCallbackURL('invalid_state'));
   }
   try {
     const { access_token, refresh_token } = await spotifyService.handleCallback(code);
@@ -47,11 +63,11 @@ router.get('/callback', async (req, res) => {
     });
 
     // User ko frontend par redirect karein
-    res.redirect('http://localhost:3000/chat');
+    return res.redirect(getSpotifyPostCallbackURL('connected'));
 
   } catch (error) {
-    console.log('Error during Spotify callback:', error);
-    res.redirect('http://localhost:3000/connections?spotify_connected=false');
+    console.log('Error during Spotify callback:', error?.message || 'spotify_callback_failed');
+    return res.redirect(getSpotifyPostCallbackURL('error'));
 
   }
 

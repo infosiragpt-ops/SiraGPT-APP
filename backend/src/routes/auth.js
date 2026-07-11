@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('node:crypto');
 const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
@@ -20,7 +21,15 @@ const {
 const {
   sendRbacMutationBusyResponse,
 } = require('../services/rbac-mutation-http');
+const {
+  IMPERSONATION_LIMITER_CAPACITY,
+  IMPERSONATION_LIMITER_UNAVAILABLE,
+  createImpersonationRateLimiter,
+} = require('../services/auth/impersonation-rate-limiter');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
+const {
+  sessionTokenMatches,
+} = require('../services/auth/session-token-persistence');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
 // Accelerate retry, token envelope crypto, fire-and-forget audit
@@ -35,6 +44,7 @@ const users = new UserRepository({
 const partialSessions = new PartialSessionRepository({ prisma, withRetry: withAccelerateRetry });
 const auditLogs = new AuditLogRepository({ prisma, withRetry: withAccelerateRetry });
 const tokenVault = new TokenVault({ encrypt: encryptToken, decrypt: decryptToken });
+const impersonationLimiter = createImpersonationRateLimiter({ env: process.env });
 const {
   publishUserSessionsRevoked,
 } = require('../services/auth/user-session-revocation-events');
@@ -213,8 +223,14 @@ const {
   verifyOAuthState,
 } = require('../services/oauth-state');
 const {
+  isOAuthStateInfrastructureError,
+  sendOAuthStateUnavailable,
+} = require('../services/auth/oauth-state-http');
+const {
   getFrontendUrl,
+  getGoogleCallbackURL,
   getGoogleGmailCallbackURL,
+  getGooglePostCallbackURL,
   getGoogleServicesCallbackURL,
 } = require('../config/oauth-url-policy');
 const twoFASms = require('../services/two-fa-sms');
@@ -298,6 +314,7 @@ const GOOGLE_SERVICES_SCOPES = [
 const gmailOAuth = new ProviderOAuthService({
   provider: {
     service: 'gmail',
+    redirectUri: getGoogleGmailCallbackURL(),
     oauth2Client: gmailOauth2Client,
     scopes: GMAIL_SCOPES,
     scopeFallback: 'gmail',
@@ -320,6 +337,7 @@ const gmailOAuth = new ProviderOAuthService({
 const googleServicesOAuth = new ProviderOAuthService({
   provider: {
     service: 'google_services',
+    redirectUri: getGoogleServicesCallbackURL(),
     oauth2Client: googleServicesOauth2Client,
     scopes: GOOGLE_SERVICES_SCOPES,
     scopeFallback: 'calendar,drive',
@@ -342,30 +360,73 @@ const googleServicesOAuth = new ProviderOAuthService({
   verifyState: verifyOAuthState,
 });
 
-// Google OAuth routes
-router.get('/google',
-  requireGoogleOAuth,
-  passport.authenticate('google', {
-    scope: [
-      'profile',
-      'email',
-      // 'https://www.googleapis.com/auth/gmail.readonly',
-      // 'https://www.googleapis.com/auth/gmail.send',
-      // 'https://www.googleapis.com/auth/gmail.modify',
-      // 'https://www.googleapis.com/auth/calendar',
-      // 'https://www.googleapis.com/auth/calendar.events',
-      // 'https://www.googleapis.com/auth/drive',
-      // 'https://www.googleapis.com/auth/drive.file',
-      // 'https://www.googleapis.com/auth/drive.readonly',
-      // 'https://www.googleapis.com/auth/drive.metadata.readonly'
-    ],
-    accessType: 'offline',
-    prompt: 'consent'
-  })
-);
+function googleLoginStateUser(req) {
+  const browserSessionId = req.sessionID || req.session?.id;
+  if (!browserSessionId) throw new Error('Google OAuth browser session is unavailable');
+  return crypto
+    .createHash('sha256')
+    .update('siragpt:google-oauth-browser:v1')
+    .update('\0')
+    .update(String(browserSessionId))
+    .digest('hex');
+}
+
+function persistGoogleLoginStateBinding(req) {
+  if (!req.session || typeof req.session !== 'object') {
+    throw new Error('Google OAuth browser session is unavailable');
+  }
+  const binding = googleLoginStateUser(req);
+  // express-session uses saveUninitialized:false. Mutating the session makes
+  // it persist the cookie + Redis row before Passport ends the redirect, so a
+  // callback landing on another replica derives the same browser binding.
+  req.session.oauthStateBinding = binding;
+  return binding;
+}
+
+// General Google login also uses the distributed one-time state service. The
+// user is not known before Google authenticates them, so the state is bound to
+// a domain-separated digest of the browser's server-side session id.
+router.get('/google', requireGoogleOAuth, async (req, res, next) => {
+  try {
+    const stateUser = persistGoogleLoginStateBinding(req);
+    const state = await signOAuthState({
+      userId: stateUser,
+      service: 'google',
+      redirectUri: getGoogleCallbackURL(),
+    });
+    return passport.authenticate('google', {
+      scope: ['profile', 'email'],
+      accessType: 'offline',
+      prompt: 'consent',
+      state,
+    })(req, res, next);
+  } catch (error) {
+    console.error('Google OAuth state issuance failed:', error?.code || error?.message);
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'google', error });
+    }
+    return res.redirect(getGooglePostCallbackURL('oauth_state_unavailable'));
+  }
+});
 
 router.get('/google/callback',
   requireGoogleOAuth,
+  async (req, res, next) => {
+    try {
+      await verifyOAuthState(req.query.state, {
+        userId: googleLoginStateUser(req),
+        service: 'google',
+        redirectUri: getGoogleCallbackURL(),
+      });
+      return next();
+    } catch (error) {
+      console.warn('Google OAuth state validation failed:', error?.code || error?.message);
+      if (isOAuthStateInfrastructureError(error)) {
+        return sendOAuthStateUnavailable(res, { provider: 'google', error });
+      }
+      return res.redirect(getGooglePostCallbackURL('invalid_state'));
+    }
+  },
   // Custom-callback form of passport.authenticate so we can distinguish
   // between a real auth failure and a transient database outage. When
   // passport returns `info.message === 'database_unavailable'` (set by
@@ -377,11 +438,11 @@ router.get('/google/callback',
     passport.authenticate('google', { session: false }, (err, user, info) => {
       if (err) {
         console.error('Google passport.authenticate error:', err && err.message ? err.message : err);
-        return res.redirect(`${getFrontendUrl()}/auth/login?error=auth_failed`);
+        return res.redirect(getGooglePostCallbackURL('auth_failed'));
       }
       if (!user) {
         const reason = info && info.message === 'database_unavailable' ? 'db_unavailable' : 'auth_failed';
-        return res.redirect(`${getFrontendUrl()}/auth/login?error=${reason}`);
+        return res.redirect(getGooglePostCallbackURL(reason));
       }
       req.user = user;
       return next();
@@ -407,8 +468,11 @@ router.get('/google/callback',
         expiresAt,
       });
 
-      // Redirect to frontend with token
-      res.redirect(`${getFrontendUrl()}/auth/callback?token=${token}`);
+      // Keep the bearer out of browser history, referrers, proxy logs, and
+      // analytics. The existing callback page hydrates cookie-authenticated
+      // sessions when `sso=success`.
+      setSessionCookie(res, token);
+      return res.redirect(getGooglePostCallbackURL('success'));
     } catch (error) {
       console.error('Google auth callback error:', error);
       // Same Accelerate-aware soft-failure treatment as passport.js:
@@ -416,7 +480,7 @@ router.get('/google/callback',
       // `db_unavailable` code so the login UI shows the friendly
       // Spanish message instead of the generic auth_failed.
       const reason = isAccelerateTransientError(error) ? 'db_unavailable' : 'auth_failed';
-      res.redirect(`${getFrontendUrl()}/auth/login?error=${reason}`);
+      res.redirect(getGooglePostCallbackURL(reason));
     }
   }
 );
@@ -427,6 +491,9 @@ router.get('/google/callback',
 // codes, popup HTML, auth/middleware) — every provider concern lives
 // in the service.
 function _renderCallbackResult(res, result, { successMessage } = {}) {
+  if (result.status === 503 && result.error === 'oauth_state_store_unavailable') {
+    return sendOAuthStateUnavailable(res, { provider: result.service });
+  }
   res.set('Content-Type', 'text/html');
   if (result.ok) {
     return res.send(popupResponseHtml({
@@ -442,12 +509,15 @@ function _renderCallbackResult(res, result, { successMessage } = {}) {
   }));
 }
 
-router.get('/gmail', authenticateToken, requireGoogleIntegrations, (req, res) => {
+router.get('/gmail', authenticateToken, requireGoogleIntegrations, async (req, res) => {
   try {
-    res.json({ authUrl: gmailOAuth.buildAuthUrl(req.user.id) });
+    res.json({ authUrl: await gmailOAuth.buildAuthUrl(req.user.id) });
   } catch (error) {
     console.error('Gmail OAuth error:', error);
-    res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'gmail', error });
+    }
+    return res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
   }
 });
 
@@ -479,21 +549,27 @@ router.get('/gmail/status', authenticateToken, async (req, res) => {
 // `prompt: 'consent'` — the service already forces consent by
 // default, so this endpoint is now identical to /gmail. Kept as a
 // separate path so existing frontend code doesn't have to change.
-router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, (req, res) => {
+router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, async (req, res) => {
   try {
-    res.json({ authUrl: gmailOAuth.buildAuthUrl(req.user.id, { forceConsent: true }) });
+    res.json({ authUrl: await gmailOAuth.buildAuthUrl(req.user.id, { forceConsent: true }) });
   } catch (error) {
     console.error('Gmail reauth error:', error);
-    res.status(500).json({ error: 'Failed to generate reauth URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'gmail', error });
+    }
+    return res.status(500).json({ error: 'Failed to generate reauth URL' });
   }
 });
 
-router.get('/google-services', authenticateToken, requireGoogleIntegrations, (req, res) => {
+router.get('/google-services', authenticateToken, requireGoogleIntegrations, async (req, res) => {
   try {
-    res.json({ authUrl: googleServicesOAuth.buildAuthUrl(req.user.id) });
+    res.json({ authUrl: await googleServicesOAuth.buildAuthUrl(req.user.id) });
   } catch (error) {
     console.error('Google Services OAuth error:', error);
-    res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'google_services', error });
+    }
+    return res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
   }
 });
 
@@ -851,41 +927,46 @@ router.post('/refresh', authenticateToken, async (req, res) => {
 //     cookie has a much smaller blast radius.
 //   - Caller must provide `reason` (>= 10 chars) so the audit row
 //     answers "why did admin X log in as user Y".
-//   - Per-target rate limit: max 3 impersonations / hour, keyed
-//     on `${adminId}:${targetUserId}`. Mitigates abuse without
-//     blocking legitimate "admin needs to reproduce a bug" flows.
+//   - A distributed atomic sliding window enforces both admin+target and
+//     global-admin limits across every backend replica.
 //   - Every successful + denied attempt is logged with the
 //     `[SUPER_ADMIN_AUDIT]` tag for grep / SIEM ingestion.
 //
-// The rate-limit map lives in-process. For multi-instance deploys
-// promote this to the existing rate-limit-store (Redis) when
-// REDIS_URL is configured.
-const IMPERSONATE_LIMIT = 3;
-const IMPERSONATE_WINDOW_MS = 60 * 60 * 1000;
-const impersonateAttempts = new Map(); // key: `${adminId}:${targetId}` → number[] (timestamps)
 const IMPERSONATE_TTL_MS = 30 * 60 * 1000;
+const MAX_IMPERSONATION_RETRY_AFTER_SECONDS = 24 * 60 * 60;
 
-function recordImpersonationAttempt(adminId, targetId) {
-  const key = `${adminId}:${targetId}`;
-  const now = Date.now();
-  const arr = (impersonateAttempts.get(key) || []).filter((t) => now - t < IMPERSONATE_WINDOW_MS);
-  if (arr.length >= IMPERSONATE_LIMIT) {
-    return { ok: false, retryAfterMs: IMPERSONATE_WINDOW_MS - (now - arr[0]) };
-  }
-  arr.push(now);
-  impersonateAttempts.set(key, arr);
-  return { ok: true };
+function boundedImpersonationRetryAfter(seconds) {
+  const parsed = Number(seconds);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(MAX_IMPERSONATION_RETRY_AFTER_SECONDS, Math.ceil(parsed)));
+}
+
+function auditImpersonationDenied(req, targetId, denialReason, metadata = {}) {
+  void writeAuditLog(prisma, {
+    req,
+    action: 'impersonate_denied',
+    resource: 'user',
+    resourceId: targetId || null,
+    userId: req.user?.id,
+    actorName: req.user?.email,
+    metadata: {
+      reason: denialReason,
+      ...metadata,
+    },
+  });
 }
 
 router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
   try {
     if (!req.user.isSuperAdmin) {
       console.warn(`[SUPER_ADMIN_AUDIT] impersonate_denied non_admin=${req.user.email} target=${req.params.userId}`);
+      auditImpersonationDenied(req, req.params.userId, 'super_admin_required');
       return res.status(403).json({ error: 'Super admin access required' });
     }
 
     const reason = String((req.body && req.body.reason) || '').trim();
     if (reason.length < 10) {
+      auditImpersonationDenied(req, req.params.userId, 'reason_required');
       return res.status(400).json({
         error: 'Impersonation reason required (min 10 chars) for the audit log',
       });
@@ -893,23 +974,51 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
 
     const { userId } = req.params;
 
-    const rate = recordImpersonationAttempt(req.user.id, userId);
-    if (!rate.ok) {
-      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_rate_limited admin=${req.user.email} target=${userId}`);
-      const retryAfterSec = Math.max(1, Math.ceil(rate.retryAfterMs / 1000));
+    let rate;
+    try {
+      rate = await impersonationLimiter.consume({
+        adminId: req.user.id,
+        targetId: userId,
+      });
+    } catch (error) {
+      if (
+        error?.code !== IMPERSONATION_LIMITER_UNAVAILABLE
+        && error?.code !== IMPERSONATION_LIMITER_CAPACITY
+      ) {
+        throw error;
+      }
+      const retryAfterSec = boundedImpersonationRetryAfter(error.retryAfterSeconds);
       res.set('Retry-After', String(retryAfterSec));
+      auditImpersonationDenied(req, userId, 'rate_limit_store_unavailable', {
+        retryAfterSeconds: retryAfterSec,
+      });
+      return res.status(503).json({
+        error: 'Impersonation rate limit is temporarily unavailable',
+        retryAfterMs: retryAfterSec * 1000,
+      });
+    }
+    if (!rate.allowed) {
+      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_rate_limited admin=${req.user.email} target=${userId}`);
+      const retryAfterSec = boundedImpersonationRetryAfter(rate.retryAfterMs / 1000);
+      res.set('Retry-After', String(retryAfterSec));
+      auditImpersonationDenied(req, userId, 'rate_limited', {
+        dimension: rate.dimension,
+        retryAfterSeconds: retryAfterSec,
+      });
       return res.status(429).json({
         error: 'Too many impersonations for this target. Try again later.',
-        retryAfterMs: rate.retryAfterMs,
+        retryAfterMs: retryAfterSec * 1000,
       });
     }
 
     const targetUser = await users.findById(userId);
     if (!targetUser) {
+      auditImpersonationDenied(req, userId, 'target_not_found');
       return res.status(404).json({ error: 'User not found' });
     }
     if (targetUser.isSuperAdmin) {
       console.warn(`[SUPER_ADMIN_AUDIT] impersonate_denied_super_admin admin=${req.user.email} target=${targetUser.email}`);
+      auditImpersonationDenied(req, userId, 'target_is_super_admin');
       return res.status(403).json({ error: 'Cannot impersonate other super admins' });
     }
 
@@ -1069,7 +1178,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     };
 
     const items = rows.map((s) => {
-      const isCurrent = s.token === req.token;
+      const isCurrent = sessionTokenMatches(s.token, req.token);
       const meta = pickAuditFor(s.createdAt) || (isCurrent ? currentReqMeta : null) || {};
       return {
         id: s.id,
@@ -1103,7 +1212,7 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
       // status code as a genuine 404 keeps enumeration noisy.
       return res.status(404).json({ error: 'Session not found' });
     }
-    if (target.token === req.token) {
+    if (sessionTokenMatches(target.token, req.token)) {
       // Refuse to nuke the active session via this endpoint — that's
       // what /logout is for and avoids a confusing "Suddenly logged out"
       // surprise after a misclick in the sessions UI.
@@ -2100,6 +2209,13 @@ router.post('/webauthn/authentication-verify', async (req, res) => {
     console.error('WebAuthn authentication-verify error:', error);
     return res.status(500).json({ error: 'webauthn_authentication_verify_failed' });
   }
+});
+
+router.securityRuntime = Object.freeze({
+  health: () => impersonationLimiter.health(),
+  config: () => impersonationLimiter.config(),
+  ready: () => impersonationLimiter.ready(),
+  close: () => impersonationLimiter.close(),
 });
 
 module.exports = router;

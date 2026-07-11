@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  createSessionRecord,
+} = require('./auth/session-token-persistence');
+
 const bcrypt = require('bcryptjs');
 const {
   sendRbacMutationBusyResponse,
@@ -502,7 +506,7 @@ class SsoCallbackService {
       error.code = 'SSO_SESSION_WRITER_REQUIRED';
       throw error;
     }
-    await db.session.create({ data: { userId: user.id, token, expiresAt } });
+    await createSessionRecord(db, { userId: user.id, token, expiresAt });
     return { token, expiresAt };
   }
 }

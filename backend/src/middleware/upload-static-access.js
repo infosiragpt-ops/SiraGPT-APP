@@ -1,5 +1,14 @@
 const path = require('path');
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
+const {
+  findSessionByPresentedToken,
+} = require('../services/auth/session-token-persistence');
+
+const UPLOAD_MEDIA_TOKEN_AUDIENCE = 'siragpt-upload-static';
+const UPLOAD_MEDIA_TOKEN_TYPE = 'upload_media';
+const UPLOAD_MEDIA_TOKEN_DEFAULT_TTL_SECONDS = 120;
+const UPLOAD_MEDIA_TOKEN_MAX_TTL_SECONDS = 300;
 
 const PUBLIC_UPLOAD_PREFIXES = new Set([
   'audio',
@@ -78,19 +87,117 @@ function classifyUploadPath(relativePath) {
 function tokenFromRequest(req) {
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) return authHeader.slice('Bearer '.length).trim();
-  // Cookies are sent automatically only when the cookie's domain matches
-  // the request origin. In our split-host setup (frontend on one origin,
-  // backend on another) the `token` cookie issued by the backend isn't
-  // sent on `<img src="/uploads/...">` requests originating from the
-  // frontend page. Allow callers to pass the JWT explicitly via the
-  // `?token=` query string so authenticated media (images, video, etc.)
-  // can be referenced from plain HTML elements that cannot set custom
-  // Authorization headers. The token is still validated against the DB
-  // session below, so this carries the same security properties as the
-  // header-based path.
-  const queryToken = req.query && typeof req.query.token === 'string' ? req.query.token.trim() : '';
-  if (queryToken) return queryToken;
+  // Session JWTs are deliberately never accepted from the URL. Query strings
+  // are routinely retained by browser history, reverse proxies, and access
+  // logs; a separate path-scoped media capability is handled by the guard.
   return req.cookies?.token || null;
+}
+
+function mediaTokenFromRequest(req) {
+  return req.query && typeof req.query.token === 'string'
+    ? req.query.token.trim()
+    : '';
+}
+
+function mintUploadMediaToken({
+  userId,
+  uploadPath,
+  jwtSecret = process.env.JWT_SECRET,
+  issuer = process.env.JWT_ISSUER || 'siragpt-api',
+  ttlSeconds = process.env.UPLOAD_MEDIA_TOKEN_TTL_SECONDS,
+  randomUUID = crypto.randomUUID,
+}) {
+  const subject = String(userId || '').trim();
+  if (!subject || subject.length > 256 || /[\r\n\0]/.test(subject)) {
+    throw new TypeError('media token userId is invalid');
+  }
+  if (!jwtSecret) throw new Error('JWT_SECRET is required for media tokens');
+
+  const withoutMount = String(uploadPath || '').replace(/^\/?uploads\//, '');
+  const relativePath = normaliseUploadPath(withoutMount);
+  const access = relativePath ? classifyUploadPath(relativePath) : { kind: 'blocked' };
+  if (access.kind !== 'owned' || String(access.userId) !== subject) {
+    const error = new Error('UPLOAD_MEDIA_TOKEN_PATH_FORBIDDEN');
+    error.code = 'UPLOAD_MEDIA_TOKEN_PATH_FORBIDDEN';
+    throw error;
+  }
+
+  const parsedTtl = Number(ttlSeconds);
+  const boundedTtl = Number.isFinite(parsedTtl)
+    ? Math.max(30, Math.min(UPLOAD_MEDIA_TOKEN_MAX_TTL_SECONDS, Math.floor(parsedTtl)))
+    : UPLOAD_MEDIA_TOKEN_DEFAULT_TTL_SECONDS;
+  return jwt.sign({
+    typ: UPLOAD_MEDIA_TOKEN_TYPE,
+    sub: subject,
+    path: relativePath,
+  }, jwtSecret, {
+    algorithm: 'HS256',
+    audience: UPLOAD_MEDIA_TOKEN_AUDIENCE,
+    issuer,
+    expiresIn: boundedTtl,
+    jwtid: randomUUID(),
+  });
+}
+
+function createUploadMediaTokenHandler({
+  jwtSecret = process.env.JWT_SECRET,
+  issuer = process.env.JWT_ISSUER || 'siragpt-api',
+  ttlSeconds = process.env.UPLOAD_MEDIA_TOKEN_TTL_SECONDS,
+} = {}) {
+  return function uploadMediaTokenHandler(req, res) {
+    try {
+      const uploadPath = req.body?.path;
+      const token = mintUploadMediaToken({
+        userId: req.user?.id,
+        uploadPath,
+        jwtSecret,
+        issuer,
+        ttlSeconds,
+      });
+      const relativePath = normaliseUploadPath(
+        String(uploadPath || '').replace(/^\/?uploads\//, ''),
+      );
+      res.set?.('Cache-Control', 'no-store');
+      return res.json({
+        token,
+        url: `/uploads/${relativePath}?token=${encodeURIComponent(token)}`,
+        expiresInSeconds: Number(jwt.decode(token)?.exp) - Number(jwt.decode(token)?.iat),
+      });
+    } catch (error) {
+      const forbidden = error?.code === 'UPLOAD_MEDIA_TOKEN_PATH_FORBIDDEN';
+      return res.status(forbidden ? 403 : 400).json({
+        error: forbidden ? 'Upload path is not owned by the current user' : 'Invalid upload path',
+      });
+    }
+  };
+}
+
+function userIdFromMediaToken({
+  token,
+  relativePath,
+  jwtSecret,
+  issuer = process.env.JWT_ISSUER || 'siragpt-api',
+}) {
+  if (!token || !jwtSecret) return null;
+  try {
+    const claims = jwt.verify(token, jwtSecret, {
+      algorithms: ['HS256'],
+      audience: UPLOAD_MEDIA_TOKEN_AUDIENCE,
+      issuer,
+    });
+    if (
+      claims?.typ !== UPLOAD_MEDIA_TOKEN_TYPE
+      || typeof claims.sub !== 'string'
+      || typeof claims.path !== 'string'
+      || typeof claims.jti !== 'string'
+      || claims.path !== relativePath
+    ) {
+      return null;
+    }
+    return claims.sub;
+  } catch {
+    return null;
+  }
 }
 
 async function userFromToken({ token, jwtSecret, prisma }) {
@@ -102,8 +209,7 @@ async function userFromToken({ token, jwtSecret, prisma }) {
     return null;
   }
 
-  const session = await prisma.session.findUnique({
-    where: { token },
+  const session = await findSessionByPresentedToken(prisma, token, {
     include: { user: true },
   });
 
@@ -124,6 +230,22 @@ function createUploadStaticAccessGuard({ uploadsDir, prisma, jwtSecret = process
     const access = classifyUploadPath(relativePath);
     if (access.kind === 'public') return next();
     if (access.kind === 'blocked') return res.status(404).json({ error: 'File not found' });
+
+    const mediaToken = mediaTokenFromRequest(req);
+    if (mediaToken) {
+      const mediaUserId = userIdFromMediaToken({
+        token: mediaToken,
+        relativePath,
+        jwtSecret,
+      });
+      if (!mediaUserId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      if (String(mediaUserId) !== access.userId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      return next();
+    }
 
     const user = await userFromToken({
       token: tokenFromRequest(req),
@@ -175,11 +297,19 @@ function createUploadR2Fallback({ objectStorage = require('../services/object-st
 module.exports = {
   BLOCKED_UPLOAD_PREFIXES,
   PUBLIC_UPLOAD_PREFIXES,
+  UPLOAD_MEDIA_TOKEN_AUDIENCE,
+  UPLOAD_MEDIA_TOKEN_DEFAULT_TTL_SECONDS,
+  UPLOAD_MEDIA_TOKEN_MAX_TTL_SECONDS,
+  UPLOAD_MEDIA_TOKEN_TYPE,
   classifyUploadPath,
+  createUploadMediaTokenHandler,
   createUploadStaticAccessGuard,
   createUploadR2Fallback,
   normaliseUploadPath,
   resolveConfinedPath,
+  mediaTokenFromRequest,
+  mintUploadMediaToken,
   tokenFromRequest,
+  userIdFromMediaToken,
   userFromToken,
 };

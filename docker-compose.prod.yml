@@ -51,7 +51,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     # Bound to 127.0.0.1 only — the backend runs on the host under PM2
@@ -198,6 +198,29 @@ services:
       # Normal boot only; --migrate-only remains strict regardless.
       MIGRATION_NONFATAL: "${MIGRATION_NONFATAL:-0}"
       REDIS_URL: redis://redis:6379
+      # Security-critical shared state. Both runtimes fail closed in production.
+      # Keep compat until every pre-hash/compat replica is drained.
+      SESSION_TOKEN_HASH_MODE: ${SESSION_TOKEN_HASH_MODE:-compat}
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: ${SESSION_TOKEN_HASH_COMPAT_DRAINED:-0}
+      SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE: ${SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE:-100}
+      SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES: ${SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES:-10}
+      AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO: ${AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO:-0.8}
+      AUTH_SECURITY_READY_RETRY_BASE_MS: ${AUTH_SECURITY_READY_RETRY_BASE_MS:-250}
+      AUTH_SECURITY_READY_RETRY_MAX_MS: ${AUTH_SECURITY_READY_RETRY_MAX_MS:-5000}
+      OAUTH_STATE_TTL: ${OAUTH_STATE_TTL:-10m}
+      OAUTH_STATE_RETRY_AFTER_SECONDS: ${OAUTH_STATE_RETRY_AFTER_SECONDS:-5}
+      OAUTH_STATE_CACHE_MAX_ENTRIES: ${OAUTH_STATE_CACHE_MAX_ENTRIES:-10000}
+      OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS: ${OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS:-500}
+      OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS: ${OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS:-500}
+      OAUTH_STATE_REDIS_PREFIX: ${OAUTH_STATE_REDIS_PREFIX:-sira:oauth-state:}
+      IMPERSONATION_TARGET_LIMIT: ${IMPERSONATION_TARGET_LIMIT:-3}
+      IMPERSONATION_ADMIN_LIMIT: ${IMPERSONATION_ADMIN_LIMIT:-10}
+      IMPERSONATION_WINDOW_MS: ${IMPERSONATION_WINDOW_MS:-3600000}
+      IMPERSONATION_MEMORY_MAX_KEYS: ${IMPERSONATION_MEMORY_MAX_KEYS:-10000}
+      IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS: ${IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS:-500}
+      IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS: ${IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS:-500}
+      IMPERSONATION_REDIS_PREFIX: ${IMPERSONATION_REDIS_PREFIX:-sira:impersonation:}
+      IMPERSONATION_STORE_RETRY_AFTER_SECONDS: ${IMPERSONATION_STORE_RETRY_AFTER_SECONDS:-5}
       # Production-sensitive limiters never fall back to process memory.
       RATE_LIMIT_STORE: redis
       RATE_LIMIT_SENSITIVE_POLICY: distributed
@@ -242,6 +265,15 @@ services:
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       FRONTEND_URL: ${FRONTEND_URL:-https://siragpt.com}
+      GOOGLE_AUTH_BASE_URL: ${GOOGLE_AUTH_BASE_URL:-https://api.siragpt.com}
+      GOOGLE_AUTH_URI: ${GOOGLE_AUTH_URI:-https://api.siragpt.com/api/auth/google/callback}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://api.siragpt.com/api/auth/gmail/callback}
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: ${GOOGLE_REDIRECT_CALENDAR_DRIVE_URI:-https://api.siragpt.com/api/auth/google-services/callback}
+      GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:-https://api.siragpt.com/api/github/callback}
+      GITHUB_OAUTH_SUCCESS_REDIRECT: ${GITHUB_OAUTH_SUCCESS_REDIRECT:-https://siragpt.com/settings}
+      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-https://api.siragpt.com/api/spotify/callback}
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: ${SPOTIFY_OAUTH_SUCCESS_REDIRECT:-https://siragpt.com/chat}
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: ${SPOTIFY_OAUTH_FAILURE_REDIRECT:-https://siragpt.com/connections}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}

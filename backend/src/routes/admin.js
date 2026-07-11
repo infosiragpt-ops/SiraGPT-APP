@@ -787,7 +787,7 @@ router.delete('/users/:id', async (req, res) => {
     try {
       preDeleteSessions = await prisma.session.findMany({
         where: { userId: req.params.id },
-        select: { id: true, token: true },
+        select: { id: true, token: true, userAgent: true },
       });
     } catch (_) {
       preDeleteSessions = [];
@@ -806,9 +806,9 @@ router.delete('/users/:id', async (req, res) => {
     // metadata.scope === 'appshots:capture' is the tag the appshots
     // revocations endpoint requires to include the row.
     try {
-      const { isAppshotsToken } = require('../utils/appshots-token');
+      const { isAppshotsSession } = require('../utils/appshots-token');
       for (const s of preDeleteSessions) {
-        const isAppshots = isAppshotsToken(s.token);
+        const isAppshots = isAppshotsSession(s);
         void writeAuditLog(prisma, {
           req,
           action: 'session_admin_revoked',

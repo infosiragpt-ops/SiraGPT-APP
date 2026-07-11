@@ -31,6 +31,10 @@ const gitService = require('../services/github/git.service');
 const workspaceFiles = require('../services/github/workspace-files.service');
 const workspaceRunner = require('../services/github/workspace-runner.service');
 const { buildUpstreamRequestHeaders, isForwardableResponseHeader } = require('../utils/proxy-headers');
+const {
+  isOAuthStateInfrastructureError,
+  sendOAuthStateUnavailable,
+} = require('../services/auth/oauth-state-http');
 
 const router = express.Router();
 
@@ -103,7 +107,7 @@ router.get('/connect', authenticateToken, async (req, res) => {
     if (!githubConfig.isConfigured()) {
       return res.status(503).json({ error: 'GitHub OAuth is not configured on the server' });
     }
-    const state = oauth.signState(req.user.id);
+    const state = await oauth.signState(req.user.id);
     const url = oauth.buildAuthorizeUrl(state);
     // Default: return JSON so the SPA controls navigation. ?redirect=1 → 302.
     if (String(req.query.redirect || '') === '1') {
@@ -112,6 +116,9 @@ router.get('/connect', authenticateToken, async (req, res) => {
     return res.json({ url });
   } catch (err) {
     console.error('[github] connect error:', err.message);
+    if (isOAuthStateInfrastructureError(err)) {
+      return sendOAuthStateUnavailable(res, { provider: 'github', error: err });
+    }
     return res.status(500).json({ error: 'Failed to start GitHub OAuth' });
   }
 });
@@ -127,7 +134,15 @@ router.get('/callback', async (req, res) => {
     return res.redirect(githubConfig.postCallbackRedirect('invalid'));
   }
 
-  const userId = oauth.verifyState(state);
+  let userId;
+  try {
+    userId = await oauth.verifyState(state);
+  } catch (error) {
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'github', error });
+    }
+    return res.redirect(githubConfig.postCallbackRedirect('expired'));
+  }
   if (!userId) {
     return res.redirect(githubConfig.postCallbackRedirect('expired'));
   }

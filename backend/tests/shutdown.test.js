@@ -130,6 +130,23 @@ describe('shutdown — introspection', () => {
     assert.ok(hook, 'workspace runner shutdown hook must be registered');
     assert.match(hook[1], /await\s+workspaceRunner\.stopAll\(\)/);
   });
+
+  test('auth-security close has an explicit order and shutdown failures are surfaced', () => {
+    const order = shutdownReg.PRODUCTION_SHUTDOWN_ORDER;
+    const drain = order.indexOf('drain_inflight_requests');
+    const authSecurity = order.indexOf('auth_security_runtime_close');
+    const redis = order.indexOf('redis_disconnect');
+
+    assert.ok(authSecurity >= 0, 'auth-security close must be explicitly ordered');
+    assert.ok(drain < authSecurity, 'in-flight auth requests must drain before store close');
+    assert.ok(authSecurity < redis, 'owned auth Redis clients must close before Redis teardown');
+
+    const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+    assert.match(source, /auth_security_runtime_close/);
+    assert.match(source, /new AggregateError\([^)]*auth-security/i);
+    assert.match(source, /shutdownResult\.ok/);
+    assert.match(source, /shutdown_registry_failure/);
+  });
 });
 
 function loadParentShutdownHelper() {

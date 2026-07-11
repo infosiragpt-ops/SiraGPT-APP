@@ -1022,6 +1022,15 @@ const startupEnvResult = {
 // `healthRoutes.setOAuthBootResult(...)` to feed in the boot-time OAuth result.
 const { createHealthRoutes } = require('./src/routes/health-routes');
 const {
+    closeOAuthStateStore,
+    oauthStateConfig,
+    oauthStateHealth,
+    readyOAuthStateStore,
+} = require('./src/services/oauth-state');
+const {
+    createSessionTokenHashMigration,
+} = require('./src/services/auth/session-token-persistence');
+const {
     defaultQueueHealthProbe,
     defaultQueueRegistry,
 } = require('./src/services/queues/queue-registry');
@@ -1039,11 +1048,55 @@ const rbacBootstrap = createRbacBootstrapService({
     writeAuditLog: writeRbacAuditLog,
     logger,
 });
+const sessionTokenHashMigration = createSessionTokenHashMigration({
+    prisma,
+    env: process.env,
+});
+const authSecurityRuntime = {
+    health() {
+        const oauthState = oauthStateHealth();
+        const impersonation = authRoutes.securityRuntime.health();
+        const sessionTokens = sessionTokenHashMigration.health();
+        return {
+            ok: Boolean(oauthState.ok && impersonation.ok && sessionTokens.ok),
+            oauthState,
+            impersonation,
+            sessionTokens,
+        };
+    },
+    config() {
+        return {
+            oauthState: oauthStateConfig(),
+            impersonation: authRoutes.securityRuntime.config(),
+            sessionTokens: sessionTokenHashMigration.config(),
+        };
+    },
+    async ready() {
+        return Promise.allSettled([
+            sessionTokenHashMigration.ready(),
+            readyOAuthStateStore(),
+            authRoutes.securityRuntime.ready(),
+        ]);
+    },
+    async close() {
+        const results = await Promise.allSettled([
+            closeOAuthStateStore(),
+            authRoutes.securityRuntime.close(),
+        ]);
+        const failures = results
+            .filter((result) => result.status === 'rejected')
+            .map((result) => result.reason);
+        if (failures.length) {
+            throw new AggregateError(failures, 'auth-security runtime close failed');
+        }
+    },
+};
 const healthRoutes = createHealthRoutes({
     prisma,
     queueRegistry: defaultQueueRegistry,
     queueHealthProbe: defaultQueueHealthProbe,
     coworkHealth,
+    authSecurity: authSecurityRuntime,
     getOpenTelemetryStatus,
     getSentryStatus,
     getLangfuseStatus,
@@ -1369,6 +1422,18 @@ async function startServer() {
         logger,
     });
 
+    // Prime the distributed OAuth-state and impersonation stores so /health
+    // reports their actual mode before the first sensitive request. Failure is
+    // observable but does not crash boot; both operations fail closed in
+    // production until Redis recovers.
+    const authSecurityReady = await authSecurityRuntime.ready();
+    if (authSecurityReady.some((result) => result.status === 'rejected')) {
+        logger.warn(
+            { authSecurity: authSecurityRuntime.health() },
+            'auth_security_runtime_degraded',
+        );
+    }
+
     // Seed and verify the runtime RBAC catalog before accepting traffic.
     // Enforce mode rejects startup on any legacy-admin or permission gap;
     // shadow mode remains observable through the health endpoints.
@@ -1590,6 +1655,11 @@ async function startServer() {
         () => closeUserSessionRevocationBus(),
         5000,
     );
+    shutdownRegistry.register(
+        'auth_security_runtime_close',
+        () => authSecurityRuntime.close(),
+        5000,
+    );
 
     shutdownRegistry.register('database_pool_autoscaler_stop', () => {
         poolAutoscaler?.stop();
@@ -1700,12 +1770,21 @@ async function startServer() {
             : 1;
         shutdownPromise = (async () => {
             logger.info({ reason, exitCode }, 'shutdown_signal_received');
+            let finalExitCode = exitCode;
             try {
-                await shutdownRegistry.shutdown(reason);
+                const shutdownResult = await shutdownRegistry.shutdown(reason);
+                if (!shutdownResult.ok) {
+                    finalExitCode = finalExitCode || 1;
+                    logger.error(
+                        { errors: shutdownResult.errors },
+                        'shutdown_registry_failure',
+                    );
+                }
             } catch (err) {
+                finalExitCode = finalExitCode || 1;
                 logger.error({ err: err && err.message }, 'shutdown_registry_failure');
             }
-            process.exit(exitCode);
+            process.exit(finalExitCode);
         })();
         return shutdownPromise;
     }

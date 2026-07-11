@@ -6,6 +6,8 @@ const CALLBACK_PATHS = Object.freeze({
   google: '/api/auth/google/callback',
   gmail: '/api/auth/gmail/callback',
   googleServices: '/api/auth/google-services/callback',
+  github: '/api/github/callback',
+  spotify: '/api/spotify/callback',
 });
 
 const stripTrailingSlash = (value) => String(value || '').replace(/\/+$/, '');
@@ -89,6 +91,7 @@ function hasDifferentBackendHost(urlValue, backendBaseUrl) {
 function isUsablePublicUrl(value, env = process.env, backendBaseUrl = '') {
   const parsed = parseUrl(value);
   if (!parsed || !/^https?:$/.test(parsed.protocol)) return false;
+  if (isProduction(env) && parsed.protocol !== 'https:') return false;
   if (isProduction(env) && isLocalhostUrl(value)) return false;
   // Inside a Replit container, localhost is not reachable from the user's
   // browser (which lives on the *.replit.dev preview domain), so a
@@ -116,7 +119,13 @@ function resolvePublicBackendUrl(env = process.env) {
   if (env.GOOGLE_AUTH_BASE_URL) {
     const normalized = normalizePublicBackendBaseUrl(env.GOOGLE_AUTH_BASE_URL);
     const isLocalhost = isLocalhostUrl(normalized);
-    if (normalized && !(isProduction(env) && isLocalhost) && !(env.REPLIT_DEV_DOMAIN && isLocalhost)) {
+    const parsed = parseUrl(normalized);
+    if (
+      normalized
+      && !(isProduction(env) && isLocalhost)
+      && !(isProduction(env) && parsed?.protocol !== 'https:')
+      && !(env.REPLIT_DEV_DOMAIN && isLocalhost)
+    ) {
       return normalized;
     }
   }
@@ -138,6 +147,7 @@ function resolvePublicBackendUrl(env = process.env) {
     const normalized = normalizePublicBackendBaseUrl(candidate);
     if (!normalized) continue;
     if (isProduction(env) && isLocalhostUrl(normalized)) continue;
+    if (isProduction(env) && parseUrl(normalized)?.protocol !== 'https:') continue;
     // Inside a Replit container, localhost is unreachable from the user's
     // browser. Skip localhost candidates whenever a Replit dev domain is
     // available so OAuth callbacks land on a host the browser can reach.
@@ -166,7 +176,15 @@ function resolvePublicBackendUrl(env = process.env) {
   if (!isProduction(env) && env.REPLIT_DEV_DOMAIN) {
     return `https://${env.REPLIT_DEV_DOMAIN}`;
   }
-  if (inferred) return inferred;
+  if (
+    inferred
+    && (!isProduction(env) || (
+      parseUrl(inferred)?.protocol === 'https:'
+      && !isLocalhostUrl(inferred)
+    ))
+  ) {
+    return inferred;
+  }
   // Last-resort fallback for environments that haven't set FRONTEND_URL.
   // In production we still default to the public siragpt.com origin (single
   // container), not a non-existent api.* subdomain.
@@ -205,6 +223,14 @@ function getGoogleServicesCallbackURL(env = process.env) {
   return buildCallbackUrl(env, 'GOOGLE_REDIRECT_CALENDAR_DRIVE_URI', CALLBACK_PATHS.googleServices);
 }
 
+function getGithubCallbackURL(env = process.env) {
+  return buildCallbackUrl(env, 'GITHUB_OAUTH_REDIRECT_URI', CALLBACK_PATHS.github);
+}
+
+function getSpotifyCallbackURL(env = process.env) {
+  return buildCallbackUrl(env, 'SPOTIFY_REDIRECT_URI', CALLBACK_PATHS.spotify);
+}
+
 function getFrontendUrl(env = process.env) {
   const candidates = [
     env.FRONTEND_URL,
@@ -216,10 +242,69 @@ function getFrontendUrl(env = process.env) {
     const normalized = stripTrailingSlash(candidate);
     if (!normalized) continue;
     if (isProduction(env) && isLocalhostUrl(normalized)) continue;
+    if (isProduction(env) && parseUrl(normalized)?.protocol !== 'https:') continue;
     return normalized;
   }
 
   return isProduction(env) ? 'https://siragpt.com' : 'http://localhost:3000';
+}
+
+function secureFrontendDestination(env, configured, defaultPath) {
+  const frontend = getFrontendUrl(env);
+  const candidate = stripTrailingSlash(configured);
+  if (candidate && isUsablePublicUrl(candidate, env)) return candidate;
+  return `${frontend}${defaultPath}`;
+}
+
+function withQuery(urlValue, values) {
+  const parsed = new URL(urlValue);
+  for (const [key, value] of Object.entries(values)) {
+    if (value != null && value !== '') parsed.searchParams.set(key, String(value));
+  }
+  return parsed.toString();
+}
+
+function safeStatus(value, fallback) {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(normalized) ? normalized : fallback;
+}
+
+function getGooglePostCallbackURL(status = 'success', env = process.env) {
+  const outcome = safeStatus(status, 'auth_failed');
+  if (outcome === 'success') {
+    return withQuery(`${getFrontendUrl(env)}/auth/callback`, { sso: 'success' });
+  }
+  return withQuery(`${getFrontendUrl(env)}/auth/login`, { error: outcome });
+}
+
+function getGithubPostCallbackURL(status, env = process.env) {
+  const base = secureFrontendDestination(
+    env,
+    env.GITHUB_OAUTH_SUCCESS_REDIRECT,
+    '/settings',
+  );
+  return withQuery(base, { github: safeStatus(status, 'error') });
+}
+
+function getSpotifyPostCallbackURL(status, env = process.env) {
+  const outcome = safeStatus(status, 'error');
+  if (outcome === 'connected') {
+    const base = secureFrontendDestination(
+      env,
+      env.SPOTIFY_OAUTH_SUCCESS_REDIRECT,
+      '/chat',
+    );
+    return withQuery(base, { spotify_connected: 'true' });
+  }
+  const base = secureFrontendDestination(
+    env,
+    env.SPOTIFY_OAUTH_FAILURE_REDIRECT,
+    '/connections',
+  );
+  return withQuery(base, {
+    spotify_connected: 'false',
+    error: outcome,
+  });
 }
 
 module.exports = {
@@ -231,5 +316,10 @@ module.exports = {
   getGoogleCallbackURL,
   getGoogleGmailCallbackURL,
   getGoogleServicesCallbackURL,
+  getGithubCallbackURL,
+  getSpotifyCallbackURL,
+  getGooglePostCallbackURL,
+  getGithubPostCallbackURL,
+  getSpotifyPostCallbackURL,
   getFrontendUrl,
 };

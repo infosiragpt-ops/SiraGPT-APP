@@ -115,6 +115,36 @@
 | `CSP_ENABLED` | `0` in development, `1` in production | Enable Content-Security-Policy |
 | `CSP_REPORT_ONLY` | `1` | CSP report-only mode |
 | `JWT_SECRET` | required | JWT signing secret |
+| `SESSION_TOKEN_HASH_MODE` | `compat` in production/staging; `hash` elsewhere | Two-phase session persistence mode. `compat` reads raw/hash but writes raw and never upgrades; `hash` writes hashes and atomically upgrades legacy rows |
+| `SESSION_TOKEN_HASH_COMPAT_DRAINED` | `0` | Must be `1` before production may start in `hash` mode, confirming all compat/legacy replicas are drained |
+| `SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE` | `100` | Maximum raw session rows converted in one hash-activation transaction (1–1000) |
+| `SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES` | `10` | Maximum transactions per readiness pass (1–100); later probes continue until no raw rows remain |
+| `AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO` | `0.8` | Production readiness ceiling for Redis used/max memory after Lua and `noeviction` checks |
+| `AUTH_SECURITY_READY_RETRY_BASE_MS` | `250` | Initial auth-security readiness retry delay after Redis/backfill failure (10–60000 ms) |
+| `AUTH_SECURITY_READY_RETRY_MAX_MS` | `5000` | Maximum exponential readiness retry delay (10–60000 ms; never below the base) |
+| `OAUTH_STATE_TTL` | `10m` | Signed OAuth state lifetime, clamped to 1–15 minutes; the Redis entry uses the same effective expiry |
+| `OAUTH_STATE_RETRY_AFTER_SECONDS` | `5` | Bounded `Retry-After` for fail-closed OAuth state-store outages |
+| `OAUTH_STATE_CACHE_MAX_ENTRIES` | `10000` | Maximum live OAuth states in Redis or the non-production memory fallback |
+| `OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for OAuth state (10–2000 ms) |
+| `OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS` | `500` | ioredis and wrapper deadline for each OAuth state command (10–2000 ms) |
+| `OAUTH_STATE_REDIS_PREFIX` | `sira:oauth-state:` | Dedicated Redis namespace; state JTIs are SHA-256 keyed |
+| `IMPERSONATION_TARGET_LIMIT` | `3` | Attempts in one admin+target sliding window |
+| `IMPERSONATION_ADMIN_LIMIT` | `10` | Attempts in the global per-admin sliding window |
+| `IMPERSONATION_WINDOW_MS` | `3600000` | Impersonation sliding-window duration (1 second–24 hours) |
+| `IMPERSONATION_MEMORY_MAX_KEYS` | `10000` | Maximum local limiter keys outside production |
+| `IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for impersonation limiting (10–2000 ms) |
+| `IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS` | `500` | ioredis and wrapper deadline for atomic limiter commands (10–2000 ms) |
+| `IMPERSONATION_REDIS_PREFIX` | `sira:impersonation:` | Dedicated Redis namespace; admin identifiers are SHA-256 keyed |
+| `IMPERSONATION_STORE_RETRY_AFTER_SECONDS` | `5` | Bounded `Retry-After` for fail-closed limiter-store outages (1–300 seconds) |
+| `GOOGLE_AUTH_BASE_URL` | backend origin | Canonical public backend origin used to build provider callbacks; HTTPS and non-localhost in production |
+| `GOOGLE_AUTH_URI` | derived | Google login callback URL |
+| `GOOGLE_REDIRECT_URI` | derived | Gmail callback URL |
+| `GOOGLE_REDIRECT_CALENDAR_DRIVE_URI` | derived | Google Calendar/Drive callback URL |
+| `GITHUB_OAUTH_REDIRECT_URI` | derived | GitHub callback URL |
+| `GITHUB_OAUTH_SUCCESS_REDIRECT` | `<FRONTEND_URL>/settings` | GitHub post-callback destination |
+| `SPOTIFY_REDIRECT_URI` | derived | Spotify callback URL |
+| `SPOTIFY_OAUTH_SUCCESS_REDIRECT` | `<FRONTEND_URL>/chat` | Spotify success destination |
+| `SPOTIFY_OAUTH_FAILURE_REDIRECT` | `<FRONTEND_URL>/connections` | Spotify failure destination |
 | `SAML_REQUEST_TTL_MS` | `300000` | Lifetime for SP-initiated AuthnRequest IDs and RelayState (clamped to 1–15 minutes) |
 | `SAML_REQUEST_CACHE_MAX_ENTRIES` | `5000` | Maximum live SAML request/state entries in the bounded cache |
 | `SAML_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for SAML request state (10–2000 ms) |

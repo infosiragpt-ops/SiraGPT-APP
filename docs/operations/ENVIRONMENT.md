@@ -181,6 +181,27 @@ below the parent coordinator's 40-second minimum and 50-second default.
 | `FRONTEND_URL` | Canonical browser origin for the token-free SAML `303` completion redirect | `http://localhost:3000` outside production |
 | `TRUST_PROXY_HOPS` | Bounded number of known reverse-proxy hops; production Compose pins one Caddy hop | `0` for direct binds |
 | `TRUST_PROXY_CIDR` | Alternative comma-separated exact trusted proxy CIDRs; clear `TRUST_PROXY_HOPS` before using | (empty) |
+| `SESSION_TOKEN_HASH_MODE` | Rolling-safe session persistence: `compat` reads raw/hash, writes raw, and never upgrades; `hash` writes hashes and upgrades legacy rows | `compat` in production/staging; `hash` elsewhere |
+| `SESSION_TOKEN_HASH_COMPAT_DRAINED` | Explicit acknowledgement required before production starts in `hash` mode | `0` |
+| `SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE` | Maximum raw rows converted inside one activation transaction (1–1000) | `100` |
+| `SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES` | Maximum transactions per readiness pass; subsequent probes resume incomplete backfills (1–100) | `10` |
+| `AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO` | Readiness ceiling for used/max Redis memory after Lua and `noeviction` checks | `0.8` |
+| `AUTH_SECURITY_READY_RETRY_BASE_MS` | Initial delay before retrying failed auth-security readiness (10–60000 ms) | `250` |
+| `AUTH_SECURITY_READY_RETRY_MAX_MS` | Maximum exponential auth-security readiness delay (10–60000 ms) | `5000` |
+| `OAUTH_STATE_TTL` | Signed OAuth state and matching one-time-store lifetime, clamped to 1–15 minutes | `10m` |
+| `OAUTH_STATE_RETRY_AFTER_SECONDS` | Bounded `Retry-After` for a required OAuth state-store outage | `5` |
+| `OAUTH_STATE_CACHE_MAX_ENTRIES` | Maximum live OAuth states in Redis or bounded non-production memory | `10000` |
+| `OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS` | OAuth-state Redis connection deadline; clamped to 10–2000 ms | `500` |
+| `OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS` | OAuth-state ioredis and wrapper command deadline; clamped to 10–2000 ms | `500` |
+| `OAUTH_STATE_REDIS_PREFIX` | Namespace for SHA-256-keyed OAuth state JTIs | `sira:oauth-state:` |
+| `IMPERSONATION_TARGET_LIMIT` | Attempts per admin+target sliding window | `3` |
+| `IMPERSONATION_ADMIN_LIMIT` | Attempts per global-admin sliding window | `10` |
+| `IMPERSONATION_WINDOW_MS` | Impersonation sliding window; clamped to 1 second–24 hours | `3600000` |
+| `IMPERSONATION_MEMORY_MAX_KEYS` | Maximum local limiter keys outside production | `10000` |
+| `IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS` | Impersonation Redis connection deadline; clamped to 10–2000 ms | `500` |
+| `IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS` | Impersonation atomic-command deadline; clamped to 10–2000 ms | `500` |
+| `IMPERSONATION_REDIS_PREFIX` | Namespace for hashed impersonation buckets | `sira:impersonation:` |
+| `IMPERSONATION_STORE_RETRY_AFTER_SECONDS` | Bounded `Retry-After` when the required store is unavailable | `5` |
 | `SAML_REQUEST_TTL_MS` | Lifetime for SP-initiated AuthnRequest IDs and RelayState; clamped to 1–15 minutes | `300000` |
 | `SAML_REQUEST_CACHE_MAX_ENTRIES` | Maximum live request/state entries in the bounded SAML cache | `5000` |
 | `SAML_REDIS_CONNECT_TIMEOUT_MS` | Redis connection deadline for SAML request state; clamped to 10–2000 ms | `500` |
@@ -518,7 +539,7 @@ than publishing a partial scrape; alert on scrape failures.
 
 Production Compose defaults `NEXT_PUBLIC_API_URL` to `https://api.siragpt.com/api` and `NEXT_PUBLIC_URL` to `https://siragpt.com`. Keep those values for the public deployment so OAuth callbacks stay on the API domain.
 
-## Google OAuth Public URLs
+## OAuth public URLs
 
 | Variable | Description | Production value |
 |----------|-------------|------------------|
@@ -526,9 +547,18 @@ Production Compose defaults `NEXT_PUBLIC_API_URL` to `https://api.siragpt.com/ap
 | `GOOGLE_AUTH_URI` | Login callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/google/callback` |
 | `GOOGLE_REDIRECT_URI` | Gmail integration callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/gmail/callback` |
 | `GOOGLE_REDIRECT_CALENDAR_DRIVE_URI` | Calendar/Drive integration callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/google-services/callback` |
+| `GITHUB_OAUTH_REDIRECT_URI` | GitHub callback registered in the OAuth App | `https://api.siragpt.com/api/github/callback` |
+| `GITHUB_OAUTH_SUCCESS_REDIRECT` | GitHub post-callback browser destination | `https://siragpt.com/settings` |
+| `SPOTIFY_REDIRECT_URI` | Spotify callback registered in the developer dashboard | `https://api.siragpt.com/api/spotify/callback` |
+| `SPOTIFY_OAUTH_SUCCESS_REDIRECT` | Spotify success browser destination | `https://siragpt.com/chat` |
+| `SPOTIFY_OAUTH_FAILURE_REDIRECT` | Spotify failure browser destination | `https://siragpt.com/connections` |
 | `GOOGLE_ALLOW_FRONTEND_CALLBACK` | Set to `true` only for same-origin deployments where the frontend domain intentionally proxies OAuth callbacks | unset |
 
-In production, SiraGPT rejects localhost callbacks and frontend-domain Google callbacks when the API has its own public host. This prevents `redirect_uri_mismatch` regressions when `siragpt.com` serves the UI and `api.siragpt.com` serves the backend.
+In production, every provider callback and post-callback must use HTTPS and
+must not resolve to localhost. SiraGPT also rejects frontend-domain Google
+callbacks when the API has its own public host. These checks prevent
+`redirect_uri_mismatch` regressions and session-bearing redirects to an
+insecure origin.
 
 ---
 

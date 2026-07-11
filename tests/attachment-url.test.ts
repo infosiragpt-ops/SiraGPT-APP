@@ -103,14 +103,14 @@ test('normalizeBackendAssetUrl passes through data: and blob: URLs verbatim', ()
   assert.equal(normalizeBackendAssetUrl('blob:http://localhost:3000/abc-def'), 'blob:http://localhost:3000/abc-def');
 });
 
-test('appendUploadAuthToken appends JWTs only to upload URLs', () => {
+test('appendUploadAuthToken never places a session JWT in an upload URL', () => {
   assert.equal(
     appendUploadAuthToken('https://api.siragpt.com/uploads/user-1/image.png', 'jwt-123'),
-    'https://api.siragpt.com/uploads/user-1/image.png?token=jwt-123',
+    'https://api.siragpt.com/uploads/user-1/image.png',
   );
   assert.equal(
     appendUploadAuthToken('/uploads/user-1/image.png', 'jwt-123'),
-    '/uploads/user-1/image.png?token=jwt-123',
+    '/uploads/user-1/image.png',
   );
   assert.equal(
     appendUploadAuthToken('https://cdn.example.com/image.png', 'jwt-123'),
@@ -154,7 +154,7 @@ test('resolveGptIconImageUrl authenticates uploaded GPT avatars without treating
       token: 'jwt-123',
       baseUrl: '/api',
     }),
-    '/uploads/user-1/icon.png?token=jwt-123',
+    '/uploads/user-1/icon.png',
   );
 
   assert.equal(

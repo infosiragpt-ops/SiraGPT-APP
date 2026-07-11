@@ -1,24 +1,32 @@
 const SpotifyWebApi = require('spotify-web-api-node');
-const jwt = require('jsonwebtoken');
 const { encrypt, decrypt } = require('../utils/encryption');
 const prisma = require('../config/database');
+const {
+  signOAuthState,
+  verifyOAuthState,
+} = require('./oauth-state');
+const { getSpotifyCallbackURL } = require('../config/oauth-url-policy');
 
 // OAuth `state` must be a SIGNED token, not the bare userId — otherwise an
 // attacker who completes the consent flow can tamper `state` to a victim's id
 // and overwrite the victim's stored Spotify tokens (account-linking CSRF).
 // Mirrors github-oauth.service.js signState/verifyState.
-const SPOTIFY_STATE_TTL_SECONDS = 600;
-function signState(userId) {
-  return jwt.sign({ uid: String(userId), kind: 'spotify_oauth' }, process.env.JWT_SECRET, {
-    expiresIn: SPOTIFY_STATE_TTL_SECONDS,
+async function signState(userId) {
+  return signOAuthState({
+    userId: String(userId),
+    service: 'spotify',
+    redirectUri: getSpotifyCallbackURL(),
   });
 }
-function verifyState(state) {
+async function verifyState(state) {
   try {
-    const decoded = jwt.verify(String(state || ''), process.env.JWT_SECRET);
-    if (!decoded || decoded.kind !== 'spotify_oauth' || !decoded.uid) return null;
-    return String(decoded.uid);
-  } catch {
+    const decoded = await verifyOAuthState(state, {
+      service: 'spotify',
+      redirectUri: getSpotifyCallbackURL(),
+    });
+    return decoded.userId;
+  } catch (error) {
+    if (error?.code === 'OAUTH_STATE_STORE_UNAVAILABLE') throw error;
     return null;
   }
 }
@@ -26,7 +34,7 @@ function verifyState(state) {
 const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-  redirectUri: process.env.SPOTIFY_REDIRECT_URI,
+  redirectUri: getSpotifyCallbackURL(),
 });
 
 // Defensive read for User.spotifyTokens. New writes are AES-CBC
@@ -144,7 +152,7 @@ const spotifyService = {
       'user-modify-playback-state',
       'user-read-recently-played'
     ];
-    const authorizeURL = spotifyApi.createAuthorizeURL(scopes, signState(userId));
+    const authorizeURL = spotifyApi.createAuthorizeURL(scopes, await signState(userId));
     return authorizeURL;
   },
 

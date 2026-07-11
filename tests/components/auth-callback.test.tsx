@@ -62,18 +62,19 @@ describe('auth callback completion', () => {
     expect(localStorage.getItem('auth-token')).toBeNull()
   })
 
-  it('preserves the legacy OAuth token callback path', async () => {
+  it('rejects OAuth session tokens in the query string without persisting them', async () => {
     navigation.params = new URLSearchParams('token=legacy-oauth-token')
-    auth.loginWithToken.mockResolvedValueOnce(true)
 
     render(<AuthCallback />)
 
     await waitFor(() => {
-      expect(navigation.replace).toHaveBeenCalledWith('/chat')
+      expect(navigation.replace).toHaveBeenCalledWith(
+        '/auth/login?error=' + encodeURIComponent('Enlace de autenticación no válido'),
+      )
     })
 
-    expect(auth.loginWithToken).toHaveBeenCalledTimes(1)
-    expect(auth.loginWithToken).toHaveBeenCalledWith('legacy-oauth-token')
+    expect(auth.loginWithToken).not.toHaveBeenCalled()
     expect(auth.hydrateSession).not.toHaveBeenCalled()
+    expect(localStorage.getItem('auth-token')).toBeNull()
   })
 })

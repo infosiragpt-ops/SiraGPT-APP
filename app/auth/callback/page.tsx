@@ -7,7 +7,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 function AuthCallbackContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { loginWithToken, hydrateSession } = useAuth()
+  const { hydrateSession } = useAuth()
 
   useEffect(() => {
 
@@ -22,16 +22,10 @@ function AuthCallbackContent() {
       }
 
       if (token) {
-        // Store token and redirect
-        localStorage.setItem('auth-token', token)
-
-        const loginSuccess = await loginWithToken(token);
-
-        if (loginSuccess) {
-          router.replace('/chat');
-        } else {
-          router.replace('/auth/login?error=' + encodeURIComponent('La sesión es inválida o expiró'));
-        }
+        // Session JWTs must never cross the OAuth redirect URL. Successful
+        // providers set the HttpOnly cookie server-side and use sso=success.
+        router.replace('/auth/login?error=' + encodeURIComponent('Enlace de autenticación no válido'))
+        return
       } else if (sso === 'success') {
         const hydration = await hydrateSession()
         if (hydration.status === 'authenticated') {

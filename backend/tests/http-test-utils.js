@@ -6,6 +6,9 @@ const addFormats = require('ajv-formats');
 
 const prisma = require('../src/config/database');
 const { buildJsonSchemaRegistry } = require('../src/services/contracts/schema-registry');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const TEST_JWT_SECRET = 'phase-8d-http-contract-secret';
 
@@ -36,15 +39,20 @@ function installAuthSessionMock(userOverrides = {}) {
     ...userOverrides,
   };
   const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  const tokenHash = hashSessionToken(token);
   const originalFindUnique = prisma.session.findUnique;
   prisma.session.findUnique = async ({ where } = {}) => {
-    if (where?.token === token) return {
+    if (where?.token === tokenHash) return {
       id: 'http-session-1',
-      token,
+      token: tokenHash,
       userId: user.id,
       user,
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     };
+    // Session lookup is dual-read during the rolling hash migration. A miss on
+    // the raw representation must stay inside this test double so it can fall
+    // through to the digest lookup without touching the real Prisma client.
+    if (where?.token) return null;
     if (typeof originalFindUnique === 'function') {
       return originalFindUnique.call(prisma.session, { where });
     }

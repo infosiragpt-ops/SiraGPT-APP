@@ -14,6 +14,9 @@ const {
 const {
   emitUserSessionsRevoked,
 } = require('../src/services/auth/user-session-revocation-events');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const COMPUTER_WS_SECRET = 'computer-use-ws-session-secret-at-least-32-characters';
 
@@ -233,13 +236,14 @@ describe('Computer Use WebSocket active-session authentication', { concurrency: 
     process.env.JWT_SECRET = COMPUTER_WS_SECRET;
     const computerUse = reloadModule('../src/routes/computer-use');
     const token = jwt.sign({ userId: 'computer-user' }, COMPUTER_WS_SECRET, { expiresIn: '1h' });
+    const storedToken = hashSessionToken(token);
     let lookups = 0;
     const deletes = [];
     const prismaClient = {
       session: {
         async findUnique() {
           lookups += 1;
-          return typeof sessionRow === 'function' ? sessionRow(token) : sessionRow;
+          return typeof sessionRow === 'function' ? sessionRow(storedToken) : sessionRow;
         },
         async deleteMany({ where }) {
           deletes.push(where);
@@ -292,7 +296,7 @@ describe('Computer Use WebSocket active-session authentication', { concurrency: 
     const closed = await waitWsClose(harness.client);
 
     assert.equal(closed.code, 1008);
-    assert.equal(harness.lookups, 1);
+    assert.equal(harness.lookups, 2);
   });
 
   test('rejects a user deleted after JWT issuance and revokes the session family', async (t) => {
@@ -347,7 +351,7 @@ describe('Computer Use WebSocket active-session authentication', { concurrency: 
     const closed = await closing;
 
     assert.equal(closed.code, 1008);
-    assert.equal(harness.lookups, 2);
+    assert.equal(harness.lookups, 3);
     assert.equal(harness.socketServer.userIndex?.has('computer-user'), false);
   });
 
@@ -418,7 +422,7 @@ describe('Computer Use WebSocket active-session authentication', { concurrency: 
     const closed = await closing;
 
     assert.equal(closed.code, 1008);
-    assert.equal(harness.lookups, 3);
+    assert.equal(harness.lookups, 4);
   });
 
   test('user-deletion broadcast closes an authenticated computer-use socket', async (t) => {

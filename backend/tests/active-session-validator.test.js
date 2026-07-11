@@ -9,10 +9,27 @@ const {
   createActiveSessionRevalidator,
   validateActiveSession,
 } = require('../src/services/active-session-validator');
+const {
+  SESSION_TOKEN_SCOPE_APPSHOTS,
+  SESSION_TOKEN_SCOPE_SESSION,
+  digestSessionToken,
+  formatSessionTokenHash,
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 const backendPackage = require('../package.json');
 
 const SECRET = 'active-session-validator-test-secret-at-least-32-chars';
 const NOW = new Date('2026-07-11T09:00:00.000Z');
+
+function revocationCandidates(token) {
+  const digest = digestSessionToken(token);
+  return [
+    formatSessionTokenHash(digest, SESSION_TOKEN_SCOPE_SESSION),
+    formatSessionTokenHash(digest, SESSION_TOKEN_SCOPE_APPSHOTS),
+    digest,
+    token,
+  ];
+}
 
 test('canonical backend suite registers every active-session auth contract', () => {
   for (const file of [
@@ -122,10 +139,11 @@ function makeHarness({
     SECRET,
     { expiresIn: '1h' },
   );
+  const tokenHash = hashSessionToken(token);
   const session = sessionPresent
     ? {
         id: 'session-1',
-        token,
+        token: tokenHash,
         userId: sessionUserId,
         expiresAt: sessionExpiresAt,
         fingerprint: computeFingerprint(fingerprintRequest),
@@ -140,11 +158,11 @@ function makeHarness({
   const prisma = {
     session: {
       async findUnique(args) {
-        assert.deepEqual(args, {
-          where: { token },
-          include: { user: true },
-        });
-        return session;
+        assert.deepEqual(args.where, { token: args.where.token });
+        if (args.include) assert.deepEqual(args.include, { user: true });
+        if (args.select) assert.deepEqual(args.select, { id: true });
+        if (args.where.token !== tokenHash) return null;
+        return args.select ? { id: session?.id } : session;
       },
       async deleteMany(args) {
         deletes.push(args.where);
@@ -152,7 +170,7 @@ function makeHarness({
       },
     },
   };
-  return { token, session, prisma, deletes };
+  return { token, tokenHash, session, prisma, deletes };
 }
 
 test('validateActiveSession accepts a signed, persisted, nonexpired active-user session', async () => {
@@ -222,7 +240,9 @@ test('validateActiveSession rejects and deletes an expired persisted session', a
     (error) => error instanceof ActiveSessionValidationError
       && error.code === 'session_expired',
   );
-  assert.deepEqual(harness.deletes, [{ token: harness.token }]);
+  assert.deepEqual(harness.deletes, [{
+    token: { in: revocationCandidates(harness.token) },
+  }]);
 });
 
 test('validateActiveSession rejects subject mismatch instead of trusting JWT claims', async () => {
@@ -242,7 +262,9 @@ test('validateActiveSession rejects subject mismatch instead of trusting JWT cla
     (error) => error instanceof ActiveSessionValidationError
       && error.code === 'session_subject_mismatch',
   );
-  assert.deepEqual(harness.deletes, [{ token: harness.token }]);
+  assert.deepEqual(harness.deletes, [{
+    token: { in: revocationCandidates(harness.token) },
+  }]);
 });
 
 test('validateActiveSession enforces stored fingerprint when request context is available', async () => {
@@ -261,7 +283,9 @@ test('validateActiveSession enforces stored fingerprint when request context is 
     (error) => error instanceof ActiveSessionValidationError
       && error.code === 'fingerprint_mismatch',
   );
-  assert.deepEqual(harness.deletes, [{ token: harness.token }]);
+  assert.deepEqual(harness.deletes, [{
+    token: { in: revocationCandidates(harness.token) },
+  }]);
 });
 
 test('validateActiveSession rejects a token with an invalid signature before database lookup', async () => {

@@ -522,6 +522,7 @@ test('production shutdown hooks execute in explicit dependency-safe order', asyn
     'queue_health_probe_close',
     'observability_flush',
     'prisma_disconnect',
+    'auth_security_runtime_close',
     'redis_disconnect',
   ];
   const registrationOrder = [
@@ -537,6 +538,7 @@ test('production shutdown hooks execute in explicit dependency-safe order', asyn
     'bullmq_workers_close',
     'queue_health_probe_close',
     'prisma_disconnect',
+    'auth_security_runtime_close',
     'redis_disconnect',
     'observability_flush',
     'scheduler_stop',

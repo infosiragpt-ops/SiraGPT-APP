@@ -17,6 +17,11 @@ const {
 const {
   publishUserSessionsRevoked,
 } = require('../services/auth/user-session-revocation-events');
+const {
+  deleteOtherSessionsForUser,
+  findOtherSessionsForUser,
+  sessionTokenMatches,
+} = require('../services/auth/session-token-persistence');
 const { parseUA } = require('../utils/session-info');
 const rateLimitStore = require('../middleware/rate-limit-store');
 
@@ -47,7 +52,8 @@ const router = express.Router();
 // authenticateToken's Task 17 path doesn't fire because the deleted session
 // never reaches the middleware. This helper takes the snapshot the caller
 // captured *before* prisma.session.deleteMany() and, for any row whose
-// token decodes as an `appshots:capture`-scoped JWT, fans a single
+// metadata identifies an Appshots session (or a legacy token still decodes
+// as `appshots:capture`), fans a single
 // `sendAppshotsDeviceAutoRevoked` email per session id with the supplied
 // reason. Lazy-requires email + the appshots-token util so test envs that
 // don't load nodemailer/jsonwebtoken still boot. Best-effort, never throws.
@@ -57,14 +63,14 @@ function _notifyAppshotsAutoRevoked(preDeleteRows, owner, reason) {
     if (!owner || !owner.email) return;
     const emailService = require('../services/email');
     if (!emailService || typeof emailService.sendAppshotsDeviceAutoRevoked !== 'function') return;
-    const { isAppshotsToken } = require('../utils/appshots-token');
-    if (typeof isAppshotsToken !== 'function') return;
+    const { isAppshotsSession } = require('../utils/appshots-token');
+    if (typeof isAppshotsSession !== 'function') return;
     const seen = new Set();
     const when = new Date();
     for (const row of preDeleteRows) {
       if (!row || !row.token || !row.id) continue;
       if (seen.has(row.id)) continue;
-      if (!isAppshotsToken(row.token)) continue;
+      if (!isAppshotsSession(row)) continue;
       seen.add(row.id);
       Promise.resolve(
         emailService.sendAppshotsDeviceAutoRevoked(owner, { when, reason }),
@@ -909,12 +915,11 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     });
     // Get the current token off the Authorization header so we can
     // mark "this device" vs "other devices".
-    const currentToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     const out = sessions.map((s) => ({
       id: s.id,
       createdAt: s.createdAt,
       expiresAt: s.expiresAt,
-      current: s.token === currentToken,
+      current: sessionTokenMatches(s.token, req.token),
     }));
     res.json({ sessions: out, total: out.length });
   } catch (error) {
@@ -925,22 +930,18 @@ router.get('/sessions', authenticateToken, async (req, res) => {
 
 router.post('/sessions/revoke-others', authenticateToken, async (req, res) => {
   try {
-    const currentToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     // Task 21 — snapshot the rows we're about to nuke so we can fan
     // sendAppshotsDeviceAutoRevoked notices to the owner for each
     // Appshots-scoped session. authenticateToken's Task 17 path
     // doesn't fire on bulk revocations.
     let preDelete = [];
     try {
-      preDelete = await prisma.session.findMany({
-        where: { userId: req.user.id, NOT: { token: currentToken } },
-        select: { id: true, token: true },
+      preDelete = await findOtherSessionsForUser(prisma, req.user.id, req.token, {
+        select: { id: true, token: true, userAgent: true },
       });
     } catch (_) { preDelete = []; }
 
-    const result = await prisma.session.deleteMany({
-      where: { userId: req.user.id, NOT: { token: currentToken } },
-    });
+    const result = await deleteOtherSessionsForUser(prisma, req.user.id, req.token);
     if (result.count > 0) {
       await publishUserSessionsRevoked({
         userId: req.user.id,
@@ -1427,7 +1428,7 @@ router.post(
       try {
         preDeleteAppshots = await prisma.session.findMany({
           where: { userId },
-          select: { id: true, token: true },
+          select: { id: true, token: true, userAgent: true },
         });
       } catch (_) { preDeleteAppshots = []; }
       try {

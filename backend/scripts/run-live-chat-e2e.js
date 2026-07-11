@@ -41,6 +41,9 @@ try { require('dotenv').config({ path: path.join(__dirname, '..', '.env') }); } 
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const { generateAll } = require('./lib/e2e-fixtures');
+const {
+  createSessionRecord,
+} = require('../src/services/auth/session-token-persistence');
 
 const prisma = new PrismaClient();
 
@@ -133,13 +136,11 @@ async function setup() {
     audience: process.env.JWT_AUDIENCE || 'siragpt-clients',
     issuer: process.env.JWT_ISSUER || 'siragpt-api',
   });
-  await prisma.session.create({
-    data: {
-      userId: user.id,
-      token,
-      expiresAt: new Date(Date.now() + 2 * 24 * 3600 * 1000),
-      fingerprint: null, // null → fingerprint binding check skipped
-    },
+  await createSessionRecord(prisma, {
+    userId: user.id,
+    token,
+    expiresAt: new Date(Date.now() + 2 * 24 * 3600 * 1000),
+    fingerprint: null, // null → fingerprint binding check skipped
   });
   ctx.user = user;
   ctx.token = token;
