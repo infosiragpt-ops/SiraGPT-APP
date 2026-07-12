@@ -1563,6 +1563,15 @@ function resolveAgentToolScopes(user = {}) {
   return Array.from(scopes);
 }
 
+function shouldRunSourcePreservingEdit({
+  request = '',
+  fileIds = [],
+  preferRecentArtifact = false,
+} = {}) {
+  return Boolean(preferRecentArtifact)
+    || isSourcePreservingEditRequest(request, fileIds);
+}
+
 function runAgentTaskJob(payload = {}, job = null) {
   const taskId = payload && payload.taskId;
   if (!taskId) return _runAgentTaskJobImpl(payload, job);
@@ -1607,8 +1616,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
   const hasEditableDocumentContext = hasAttachedFiles || Boolean(preferRecentArtifact);
-  let wantsSourcePreservingEdit = Boolean(preferRecentArtifact)
-    || isSourcePreservingEditRequest(displayGoal || goal, files);
+  let wantsSourcePreservingEdit = shouldRunSourcePreservingEdit({
+    request: displayGoal || goal,
+    fileIds: files,
+    preferRecentArtifact,
+  });
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
     hasAttachedFiles;
   if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasEditableDocumentContext) {
@@ -2209,7 +2221,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   };
 
   try {
-    if (wantsSourcePreservingEdit && documentPolicy?.autoGenerate) {
+    // Editing the user's existing file is not the same as auto-generating a
+    // new document. Prompts such as "devuélveme el mismo Word; no crees uno
+    // nuevo" intentionally set autoGenerate=false, but must still enter this
+    // source-preserving path before the thin-attachment guard.
+    if (wantsSourcePreservingEdit) {
       stepIdCounter = 1;
       currentStepId = 's1';
       emit({ type: 'step_start', id: currentStepId, label: 'Editando documento original', icon: 'file-text' });
@@ -3533,5 +3549,6 @@ module.exports = {
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
   resolveAgentToolScopes,
+  shouldRunSourcePreservingEdit,
   shouldUseDeterministicAttachmentAnswer,
 };

@@ -5,7 +5,25 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { classifyTaskError, normalizeAgentRuntimeModel, buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+const {
+  classifyTaskError,
+  normalizeAgentRuntimeModel,
+  buildAttachmentGroundedFallbackAnswer,
+  shouldRunSourcePreservingEdit,
+} = require('../src/services/agents/agent-task-runner');
+
+test('source-preserving edits run even when the user forbids creating a new document', () => {
+  const request = [
+    'Edita profesionalmente este documento completo.',
+    'Mejora la claridad y haz el contenido más interesante.',
+    'Devuélveme el mismo archivo Word editado; no crees un documento nuevo, un resumen ni un anexo.',
+  ].join(' ');
+
+  assert.equal(shouldRunSourcePreservingEdit({
+    request,
+    fileIds: ['uploaded-docx'],
+  }), true);
+});
 
 test('classifyTaskError: rate-limit errors are retryable', () => {
   for (const msg of [
