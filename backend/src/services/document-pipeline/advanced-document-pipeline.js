@@ -2403,7 +2403,21 @@ async function buildPptx(plan, outputPath) {
     if (slideSpec.summary) {
       slide.addText(slideSpec.summary, { x: 0.8, y: 1.95, w: 7.25, h: 0.9, fontSize: 17, color: palette.body, breakLine: true, fit: 'shrink' });
     }
-    (slideSpec.bullets || []).slice(0, 4).forEach((bullet, bulletIndex) => {
+    const visibleBullets = (slideSpec.bullets || []).slice(0, 4);
+    const sparseBullets = !slideSpec.summary && visibleBullets.length > 0 && visibleBullets.length <= 2;
+    visibleBullets.forEach((bullet, bulletIndex) => {
+      if (sparseBullets) {
+        const y = 2.15 + bulletIndex * 1.52;
+        slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 7.2, h: 1.25, rectRadius: 0.1, fill: { color: bulletIndex % 2 === 0 ? palette.surface : palette.surfaceAlt }, line: { color: palette.line } });
+        slide.addText(String(bulletIndex + 1), { x: 1.04, y: y + 0.42, w: 0.34, h: 0.25, fontSize: 12, bold: true, color: palette.accent, align: 'center', margin: 0 });
+        if (bullet.label) {
+          slide.addText(bullet.label, { x: 1.58, y: y + 0.22, w: 5.95, h: 0.32, fontSize: 18, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
+          slide.addText(bullet.text, { x: 1.58, y: y + 0.62, w: 5.95, h: 0.42, fontSize: 15.5, color: palette.body, margin: 0, fit: 'shrink' });
+        } else {
+          slide.addText(bullet.text, { x: 1.58, y: y + 0.34, w: 5.95, h: 0.58, fontSize: 18, color: palette.body, margin: 0, fit: 'shrink' });
+        }
+        return;
+      }
       const y = (slideSpec.summary ? 3.0 : 2.2) + bulletIndex * 0.92;
       slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 0.34, h: 0.34, rectRadius: 0.08, fill: { color: palette.surfaceAlt }, line: { color: palette.chipLine } });
       slide.addText(String(bulletIndex + 1), { x: 0.82, y: y + 0.045, w: 0.34, h: 0.25, fontSize: 11, bold: true, color: palette.accent, align: 'center', margin: 0 });
@@ -2541,6 +2555,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     }
     // bullets / forma legada
     const bullets = (spec.bullets || []).slice(0, 4);
+    const sparseBullets = !spec.summary && bullets.length > 0 && bullets.length <= 2;
     const takeaway = spec.takeaway || (bullets[0] ? `${bullets[0].label ? `${bullets[0].label}: ` : ''}${bullets[0].text}` : '');
     return slideShell(`
       <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
@@ -2548,9 +2563,9 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
         <div style="flex:1.5;">
           ${spec.summary ? `<div style="font-size:14px;color:${BODY};margin-bottom:14px;max-width:480px;">${xmlEscape(spec.summary)}</div>` : ''}
           ${bullets.map((bullet, i) => `
-            <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start;">
+            <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start;${sparseBullets ? `border:1px solid ${LINE};background:${i % 2 === 0 ? SURFACE : SURFACE_ALT};border-radius:10px;padding:14px 16px;min-height:62px;` : ''}">
               <span style="flex:none;width:24px;height:24px;border-radius:7px;background:${SURFACE_ALT};border:1px solid ${LINE};color:${ACCENT};font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;">${i + 1}</span>
-              <span style="font-size:14px;color:${BODY};line-height:1.45;">${bullet.label ? `<strong style="color:${INK};">${xmlEscape(bullet.label)}.</strong> ` : ''}${xmlEscape(bullet.text)}</span>
+              <span style="font-size:${sparseBullets ? '15px' : '14px'};color:${BODY};line-height:1.45;">${bullet.label ? `<strong style="color:${INK};">${xmlEscape(bullet.label)}.</strong> ` : ''}${xmlEscape(bullet.text)}</span>
             </div>`).join('')}
         </div>
         ${takeaway ? `

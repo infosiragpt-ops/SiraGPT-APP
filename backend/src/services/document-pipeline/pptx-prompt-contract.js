@@ -6,7 +6,7 @@ const MAX_TOTAL_SLIDES = 40;
 
 const GENERIC_META_RE = /\b(?:pipeline|multiagente|generado por|contenido editable|validaci[oó]n t[eé]cnica|estructura premium|presentaci[oó]n profesional)\b/i;
 const CLOSING_RE = /\b(?:cierre|conclus|recomend|pr[oó]ximos pasos|plan de acci[oó]n|decisi[oó]n)\b/i;
-const STRONG_NUMERIC_CLAIM_RE = /(?:[$€£]|S\/)\s*\d[\d.,]*|\b\d+(?:[.,]\d+)?\s*(?:%|por\s+ciento|millones?|billones?|mil\s+millones|usd|eur|d[oó]lares?|euros?|personas?|empresas?|usuarios?|clientes?)(?=\s|[.,;:!?)]|$)/gi;
+const STRONG_NUMERIC_CLAIM_RE = /(?:[$€£]|S\/)\s*\d[\d.,]*|\b\d+(?:[.,]\d+)?\s*(?:%|por\s+ciento|millones?|billones?|mil\s+millones|usd|eur|d[oó]lares?|euros?)(?=\s|[.,;:!?)]|$)|\b(?!30\s+d[ií]as\b|60\s+d[ií]as\b|90\s+d[ií]as\b)\d+(?:[.,]\d+)?\s+[a-záéíóúüñ]{3,}(?=\s|[.,;:!?)]|$)/gi;
 
 function clean(value, max = 240) {
   const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();

@@ -68,13 +68,16 @@ test('sanitizeChart rechaza datos incompletos', () => {
 });
 
 test('sanitizeDeck bloquea estadísticas y gráficos sin evidencia literal', () => {
-  const deck = sanitizeDeck(validDeck(), {
+  const raw = validDeck();
+  raw.slides[1].bullets.push({ text: 'Programa de liderazgo para 150 gerentes intermedios' });
+  const deck = sanitizeDeck(raw, {
     title: 'Gestión administrativa',
     prompt: 'Crea una presentación general sin datos adjuntos.',
   });
   assert.ok(deck);
   assert.equal(deck.slides.some((slide) => slide.layout === 'stat'), false);
   assert.equal(deck.slides.some((slide) => slide.layout === 'chart'), false);
+  assert.equal(deck.slides.some((slide) => JSON.stringify(slide).includes('150 gerentes')), false);
 });
 
 test('planPptxDeckWithLLM no toca la red en NODE_ENV=test', async () => {

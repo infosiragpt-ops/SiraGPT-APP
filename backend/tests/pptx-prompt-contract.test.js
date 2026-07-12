@@ -105,8 +105,25 @@ test('reconcilePptxPlan condenses a two-slide deck into cover plus synthesis', (
 
 test('numeric evidence gate detects the unsupported 68% failure from production', () => {
   assert.deepEqual(extractStrongNumericClaims('68% de empresas mejora márgenes'), ['68%']);
+  assert.deepEqual(extractStrongNumericClaims('Programa de liderazgo para 150 gerentes intermedios'), ['150 gerentes']);
+  assert.deepEqual(extractStrongNumericClaims('Plan de 30 días, 60 días y 90 días'), []);
   assert.equal(valueIsGrounded('68%', 'Solicitud general sobre gestión de empresas'), false);
   assert.equal(valueIsGrounded('68%', 'La fuente adjunta reporta 68% de empresas'), true);
+});
+
+test('audit rejects an unsupported headcount even when it is not a percentage', () => {
+  const plan = reconcilePptxPlan({
+    topic: 'Gestión empresarial',
+    thesis: 'Tesis',
+    references: [],
+    slides: [
+      ...sampleSlides().slice(0, 5),
+      { layout: 'bullets', title: 'El talento sostiene la ejecución', bullets: [{ text: 'Programa de liderazgo para 150 gerentes intermedios' }], notes: 'Explicar.' },
+    ],
+  }, { slideTarget: 8 });
+  const report = auditPptxPlan(plan, { prompt: 'Presentación general sin estadísticas.' });
+  assert.equal(report.checks.groundedNumbers, false);
+  assert.equal(report.unsupportedNumericClaims[0].claim, '150 gerentes');
 });
 
 test('audit rejects unsupported metrics and accepts the same metric when sourced', () => {

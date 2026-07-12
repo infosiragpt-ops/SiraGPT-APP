@@ -109,12 +109,15 @@ function sanitizeDeck(raw, {
   for (const rawSlide of raw.slides.slice(0, MAX_SLIDES)) {
     if (!rawSlide || typeof rawSlide !== 'object') continue;
     const layout = VALID_LAYOUTS.has(String(rawSlide.layout)) ? String(rawSlide.layout) : 'bullets';
+    const slideTitle = clean(rawSlide.title || '', 64);
+    if (!textIsGrounded(slideTitle, evidenceText)) continue;
+    const takeaway = clean(rawSlide.takeaway || rawSlide.insight || '', 120);
     const slide = {
       layout,
-      title: clean(rawSlide.title || '', 64),
+      title: slideTitle,
       kicker: clean(rawSlide.kicker || '', 40),
       notes: clean(rawSlide.notes || '', 400),
-      takeaway: clean(rawSlide.takeaway || rawSlide.insight || '', 120),
+      takeaway: textIsGrounded(takeaway, evidenceText) ? takeaway : '',
     };
     if (layout === 'bullets' || layout === 'section') {
       const summary = clean(rawSlide.summary || '', 220);
@@ -153,7 +156,8 @@ function sanitizeDeck(raw, {
       const chart = sanitizeChart(rawSlide.chart, { evidenceText });
       if (!chart) continue;
       slide.chart = chart;
-      slide.insight = clean(rawSlide.insight || '', 160);
+      const insight = clean(rawSlide.insight || '', 160);
+      slide.insight = textIsGrounded(insight, evidenceText) ? insight : '';
     }
     if (!slide.title && layout !== 'quote') continue;
     slides.push(legacyShape(slide));
