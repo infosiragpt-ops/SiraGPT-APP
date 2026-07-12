@@ -437,9 +437,14 @@ test('buildLlmAttachmentRecoveryAnswer returns null without provider keys or on 
   );
 });
 
-test('agentModelFailoverEnabled + resolveAgentModelFailoverRuntime gate and pick cross-provider', () => {
+test('agent model failover walks configured providers and detects unrecovered model errors', () => {
   clearAgentModules();
-  const { agentModelFailoverEnabled, resolveAgentModelFailoverRuntime } = require('../src/services/agents/agent-task-runner');
+  const {
+    agentModelFailoverEnabled,
+    isUnrecoveredModelFailure,
+    resolveAgentModelFailoverRuntime,
+    resolveAgentModelFailoverRuntimes,
+  } = require('../src/services/agents/agent-task-runner');
 
   assert.equal(agentModelFailoverEnabled({}), true);
   assert.equal(agentModelFailoverEnabled({ AGENT_TASK_MODEL_FAILOVER: '0' }), false);
@@ -453,6 +458,15 @@ test('agentModelFailoverEnabled + resolveAgentModelFailoverRuntime gate and pick
   assert.equal(picked.model, 'gpt-4o-mini');
   assert.ok(picked.client);
 
+  // Si OpenAI también agota cuota, el runner debe poder continuar con
+  // Gemini y luego DeepSeek en vez de detenerse tras el primer reintento.
+  const chain = resolveAgentModelFailoverRuntimes(profile, {
+    OPENAI_API_KEY: 'openai-key',
+    GEMINI_API_KEY: 'gemini-key',
+    DEEPSEEK_API_KEY: 'deepseek-key',
+  });
+  assert.deepEqual(chain.map(({ provider }) => provider), ['OpenAI', 'Gemini', 'DeepSeek']);
+
   // El proveedor que falló se excluye aunque tenga key.
   const openaiFailed = resolveAgentModelFailoverRuntime(
     { detected: { provider: 'OpenAI' }, runtimeModel: 'gpt-4o' },
@@ -462,6 +476,166 @@ test('agentModelFailoverEnabled + resolveAgentModelFailoverRuntime gate and pick
 
   // Sin keys alternativas → null.
   assert.equal(resolveAgentModelFailoverRuntime(profile, {}), null);
+  assert.deepEqual(resolveAgentModelFailoverRuntimes(profile, {}), []);
+
+  assert.equal(isUnrecoveredModelFailure('model_error: 429 insufficient_quota'), true);
+  assert.equal(isUnrecoveredModelFailure('completed'), false);
+});
+
+test('runAgentTaskJob continues to Gemini when OpenRouter and OpenAI both fail', async () => {
+  const restoreEnv = rememberEnv([
+    'OPENROUTER_API_KEY',
+    'OPENAI_API_KEY',
+    'GEMINI_API_KEY',
+    'DEEPSEEK_API_KEY',
+    'AGENT_TASK_STORE_DIR',
+    'AGENT_TASK_MODEL_FAILOVER',
+    'NODE_ENV',
+  ]);
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-model-failover-chain-'));
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  process.env.OPENAI_API_KEY = 'test-openai-key';
+  process.env.GEMINI_API_KEY = 'test-gemini-key';
+  delete process.env.DEEPSEEK_API_KEY;
+  process.env.AGENT_TASK_STORE_DIR = storeDir;
+  process.env.AGENT_TASK_MODEL_FAILOVER = '1';
+  process.env.NODE_ENV = 'test';
+  clearAgentModules();
+
+  const persistence = require('../src/services/agents/agent-task-persistence');
+  const reactAgent = require('../src/services/react-agent');
+  const taskContractResolver = require('../src/services/agents/task-contract-resolver');
+  const originalUpsert = persistence.upsertAgentTask;
+  const originalAppend = persistence.appendAgentTaskEvent;
+  const originalArtifact = persistence.persistGeneratedArtifact;
+  const originalRun = reactAgent.run;
+  const originalResolveTaskContract = taskContractResolver.resolveTaskContract;
+  const models = [];
+
+  persistence.upsertAgentTask = async () => null;
+  persistence.appendAgentTaskEvent = async () => null;
+  persistence.persistGeneratedArtifact = async () => null;
+  taskContractResolver.resolveTaskContract = async ({ fallback }) => ({ contract: fallback(), source: 'test-fallback' });
+  reactAgent.run = async (_client, args) => {
+    models.push(args.model);
+    if (models.length < 3) {
+      return { finalAnswer: '', steps: [], stoppedReason: 'model_error: 429 insufficient_quota' };
+    }
+    return {
+      finalAnswer: 'Respuesta recuperada correctamente mediante un proveedor alternativo.',
+      steps: [],
+      stoppedReason: 'completed',
+    };
+  };
+
+  try {
+    const { runAgentTaskJob } = require('../src/services/agents/agent-task-runner');
+    const taskStore = require('../src/services/agents/task-store');
+    const result = await runAgentTaskJob({
+      taskId: 'task-model-failover-chain-1',
+      traceId: 'trace-model-failover-chain-1',
+      user: { id: 'user-model-failover-chain-1', email: 'failover@example.com' },
+      goal: 'Redacta una respuesta breve y responde solo en el chat.',
+      displayGoal: 'Redacta una respuesta breve y responde solo en el chat.',
+      files: [],
+      fileMetadata: [],
+      model: 'openai/gpt-5.5',
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
+      maxSteps: 4,
+      maxRuntimeMs: 60_000,
+    });
+
+    const snapshot = taskStore.getTaskSnapshotForUser('task-model-failover-chain-1', 'user-model-failover-chain-1');
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(models, ['openai/gpt-5.5', 'gpt-4o-mini', 'gemini-2.5-flash']);
+    assert.match(snapshot.streamState.finalText, /proveedor alternativo/);
+    assert.equal(snapshot.streamState.stoppedReason, 'completed');
+  } finally {
+    persistence.upsertAgentTask = originalUpsert;
+    persistence.appendAgentTaskEvent = originalAppend;
+    persistence.persistGeneratedArtifact = originalArtifact;
+    reactAgent.run = originalRun;
+    taskContractResolver.resolveTaskContract = originalResolveTaskContract;
+    fs.rmSync(storeDir, { recursive: true, force: true });
+    clearAgentModules();
+    restoreEnv();
+  }
+});
+
+test('runAgentTaskJob never turns an unrecovered model error into a Word artifact', async () => {
+  const restoreEnv = rememberEnv([
+    'OPENROUTER_API_KEY',
+    'OPENAI_API_KEY',
+    'GEMINI_API_KEY',
+    'DEEPSEEK_API_KEY',
+    'AGENT_TASK_STORE_DIR',
+    'AGENT_TASK_MODEL_FAILOVER',
+    'NODE_ENV',
+  ]);
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-model-error-artifact-guard-'));
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  process.env.OPENAI_API_KEY = 'test-openai-key';
+  process.env.GEMINI_API_KEY = 'test-gemini-key';
+  delete process.env.DEEPSEEK_API_KEY;
+  process.env.AGENT_TASK_STORE_DIR = storeDir;
+  process.env.AGENT_TASK_MODEL_FAILOVER = '1';
+  process.env.NODE_ENV = 'test';
+  clearAgentModules();
+
+  const persistence = require('../src/services/agents/agent-task-persistence');
+  const reactAgent = require('../src/services/react-agent');
+  const taskContractResolver = require('../src/services/agents/task-contract-resolver');
+  const originalUpsert = persistence.upsertAgentTask;
+  const originalAppend = persistence.appendAgentTaskEvent;
+  const originalArtifact = persistence.persistGeneratedArtifact;
+  const originalRun = reactAgent.run;
+  const originalResolveTaskContract = taskContractResolver.resolveTaskContract;
+  let persistedArtifacts = 0;
+
+  persistence.upsertAgentTask = async () => null;
+  persistence.appendAgentTaskEvent = async () => null;
+  persistence.persistGeneratedArtifact = async () => { persistedArtifacts += 1; };
+  taskContractResolver.resolveTaskContract = async ({ fallback }) => ({ contract: fallback(), source: 'test-fallback' });
+  reactAgent.run = async () => ({
+    finalAnswer: 'Hubo un problema temporal con el modelo y no pude completar la respuesta.',
+    steps: [],
+    stoppedReason: 'model_error: 429 insufficient_quota',
+  });
+
+  try {
+    const { runAgentTaskJob } = require('../src/services/agents/agent-task-runner');
+    const taskStore = require('../src/services/agents/task-store');
+    const result = await runAgentTaskJob({
+      taskId: 'task-model-error-artifact-guard-1',
+      traceId: 'trace-model-error-artifact-guard-1',
+      user: { id: 'user-model-error-artifact-guard-1', email: 'guard@example.com' },
+      goal: 'Crea un documento Word profesional con introducción y conclusión.',
+      displayGoal: 'Crea un documento Word profesional con introducción y conclusión.',
+      files: [],
+      fileMetadata: [],
+      model: 'openai/gpt-5.5',
+      documentPolicy: { mode: 'doc_required', format: 'docx', autoGenerate: true },
+      maxSteps: 4,
+      maxRuntimeMs: 60_000,
+    });
+
+    const snapshot = taskStore.getTaskSnapshotForUser('task-model-error-artifact-guard-1', 'user-model-error-artifact-guard-1');
+    assert.equal(result.status, 'completed');
+    assert.equal(result.artifacts, 0);
+    assert.equal(persistedArtifacts, 0);
+    assert.equal(snapshot.documentPolicy.autoGenerate, false);
+    assert.equal(snapshot.documentPolicy.thresholds.modelFailure, true);
+    assert.equal(snapshot.streamState.artifacts.length, 0);
+  } finally {
+    persistence.upsertAgentTask = originalUpsert;
+    persistence.appendAgentTaskEvent = originalAppend;
+    persistence.persistGeneratedArtifact = originalArtifact;
+    reactAgent.run = originalRun;
+    taskContractResolver.resolveTaskContract = originalResolveTaskContract;
+    fs.rmSync(storeDir, { recursive: true, force: true });
+    clearAgentModules();
+    restoreEnv();
+  }
 });
 
 test('runAgentTaskJob: recovers weak tool-unavailable attachment final answer', async () => {

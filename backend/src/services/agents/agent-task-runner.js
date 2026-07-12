@@ -1384,10 +1384,10 @@ function agentModelFailoverEnabled(env = process.env) {
 /**
  * Runtime de respaldo cross-provider para cuando el modelo seleccionado
  * falla EN EJECUCIÓN (402 sin créditos, 401, caída del proveedor) aunque
- * su key exista. Elige el primer proveedor DISTINTO al que acaba de
- * fallar que tenga key configurada. Devuelve null si no hay alternativa.
+ * su key exista. Devuelve todos los proveedores alternativos configurados
+ * en orden de preferencia para poder continuar si el primero también falla.
  */
-function resolveAgentModelFailoverRuntime(profile, env = process.env) {
+function resolveAgentModelFailoverRuntimes(profile, env = process.env) {
   const failedProvider = String(profile?.detected?.provider || 'OpenAI');
   const fallbackModel = String(
     env.AGENT_TASK_OPENAI_MODEL || env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
@@ -1402,13 +1402,22 @@ function resolveAgentModelFailoverRuntime(profile, env = process.env) {
     },
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
   ];
+  const runtimes = [];
   for (const target of candidates) {
     if (target.provider === failedProvider) continue;
     if (!env[target.apiKeyEnv]) continue;
     const client = buildOpenAICompatibleClient(target, env);
-    if (client) return { client, model: target.model, provider: target.provider };
+    if (client) runtimes.push({ client, model: target.model, provider: target.provider });
   }
-  return null;
+  return runtimes;
+}
+
+function resolveAgentModelFailoverRuntime(profile, env = process.env) {
+  return resolveAgentModelFailoverRuntimes(profile, env)[0] || null;
+}
+
+function isUnrecoveredModelFailure(reason) {
+  return String(reason || '').startsWith('model_error');
 }
 
 // Resolve the OpenAI-compatible client the agent runtime should drive.
@@ -2137,6 +2146,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     taskStore.markTaskStatus(task, status, {
       streamState,
+      documentPolicy,
       stats: {
         steps,
         artifacts: artifactsList.length,
@@ -2999,12 +3009,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     // The tool stack (búsquedas científicas key-free, documentos, etc.) es
     // agnóstico del modelo: si el modelo seleccionado muere (402 sin
     // créditos, 401 key inválida, caída del proveedor), la tarea NO debe
-    // morir con él. Reintentamos UNA vez con el primer runtime sano de
-    // otro proveedor antes de degradar la respuesta.
-    const modelFailed = String(result.stoppedReason || '').startsWith('model_error');
+    // morir con él. Recorremos los runtimes de proveedores distintos hasta
+    // obtener una respuesta válida o agotar las alternativas configuradas.
+    const modelFailed = isUnrecoveredModelFailure(result.stoppedReason);
     if (modelFailed && agentModelFailoverEnabled()) {
-      const failoverRuntime = resolveAgentModelFailoverRuntime(runtimeModelProfile);
-      if (failoverRuntime?.client) {
+      const failoverRuntimes = resolveAgentModelFailoverRuntimes(runtimeModelProfile);
+      for (const failoverRuntime of failoverRuntimes) {
         console.warn(`[agent-task] model failover: ${runtimeModelProfile.runtimeModel} → ${failoverRuntime.provider}:${failoverRuntime.model} (task ${taskId})`);
         emit({
           type: 'checkpoint',
@@ -3027,6 +3037,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           model: failoverRuntime.model,
           resumeCheckpoint: failoverResume,
         });
+        if (!isUnrecoveredModelFailure(result.stoppedReason)) break;
       }
     }
 
@@ -3105,15 +3116,36 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           : 'Se explicó cómo aportar contenido legible en lugar de dejar el chat vacío.',
       });
     }
-    documentPolicy = buildDocumentDeliveryPolicy({
-      goal,
-      displayGoal,
-      finalText: finalMarkdown,
-      files,
-      requestedFormat: documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required'
-        ? documentPolicy?.format
-        : null,
-    });
+    if (isUnrecoveredModelFailure(stoppedReason) && artifacts.length === 0) {
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: 'No se generó un archivo porque ningún proveedor de IA pudo producir contenido válido.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          modelFailure: true,
+          originalStoppedReason: stoppedReason,
+        },
+      };
+      emit({
+        type: 'quality_gate',
+        gate: 'model_failure_artifact_guard',
+        label: 'Archivo no generado',
+        passed: false,
+        summary: 'Se evitó adjuntar como documento un mensaje de error del proveedor.',
+      });
+    } else {
+      documentPolicy = buildDocumentDeliveryPolicy({
+        goal,
+        displayGoal,
+        finalText: finalMarkdown,
+        files,
+        requestedFormat: documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required'
+          ? documentPolicy?.format
+          : null,
+      });
+    }
     task.documentPolicy = documentPolicy;
     emit({ type: 'document_policy', policy: documentPolicy });
 
@@ -3306,6 +3338,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     taskStore.markTaskStatus(task, status, {
       streamState,
+      documentPolicy,
       stats: {
         steps: completedStepCount,
         artifacts: artifacts.length,
@@ -3472,6 +3505,8 @@ module.exports = {
   pickAttachmentRecoveryRuntime,
   agentModelFailoverEnabled,
   resolveAgentModelFailoverRuntime,
+  resolveAgentModelFailoverRuntimes,
+  isUnrecoveredModelFailure,
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
