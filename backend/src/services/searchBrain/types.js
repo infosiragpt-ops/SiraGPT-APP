@@ -21,7 +21,7 @@
  */
 
 /**
- * @typedef {"wos" | "scopus" | "openalex" | "scielo" | "semantic" | "crossref" | "pubmed" | "doaj"} SearchBrainSource
+ * @typedef {"wos" | "scopus" | "openalex" | "scielo" | "semantic" | "crossref" | "pubmed" | "europepmc" | "doaj" | "redalyc" | "arxiv" | "dblp" | "datacite" | "biorxiv" | "medrxiv" | "core"} SearchBrainSource
  *
  * @typedef {object} NormalisedResult
  * @property {SearchBrainSource} source
@@ -41,6 +41,10 @@
  * @property {boolean} [openAccess]
  * @property {number} [rerankScore]
  * @property {number} [providerRank]
+ * @property {string[]} [sources]
+ * @property {number} [sourceCount]
+ * @property {number} [retrievalScore]
+ * @property {number} [qualityScore]
  * @property {unknown} [raw]
  *
  * @typedef {object} DecomposedQuery

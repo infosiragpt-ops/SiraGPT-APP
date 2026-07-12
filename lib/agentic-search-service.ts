@@ -41,19 +41,23 @@ export interface AgenticSource {
   citationCount?: number
   openAccess?: boolean
   rerankScore?: number
+  retrievalScore?: number
+  qualityScore?: number
+  sources?: string[]
+  sourceCount?: number
 }
 
 export type AgenticEvent =
-  | { type: "start"; query: string; target: number; batchSize: number; topK: number; providers: string[]; startedAt: number }
-  | { type: "batch"; batchN: number; round: number; provider: string; requested: number; received: number; unique: number; duplicates: number; totalCollected: number; target: number; sources: AgenticSource[] }
+  | { type: "start"; query: string; target: number; batchSize: number; topK: number; providers: string[]; queries?: string[]; filters?: Record<string, unknown>; language?: string; startedAt: number }
+  | { type: "batch"; batchN: number; round: number; provider: string; query?: string; requested: number; received: number; unique: number; duplicates: number; confirmations?: number; filtered?: number; totalCollected: number; target: number; sources: AgenticSource[] }
   | { type: "batch_error"; batchN: number; provider: string; error: string; totalCollected: number }
   | { type: "provider_done"; provider: string; contributed: number; reason: string }
-  | { type: "collection_done"; totalCollected: number; deduped: number; requestedCalls: number; providerStats: Record<string, { contributed: number; errors: number; exhausted: boolean; offset: number }>; elapsedMs: number }
-  | { type: "ranking_start"; message: string; pool: number; topK: number }
+  | { type: "collection_done"; totalCollected: number; totalMatches?: number; deduped: number; filtered?: number; queries?: string[]; filters?: Record<string, unknown>; requestedCalls: number; providerStats: Record<string, { contributed: number; confirmations?: number; errors: number; exhausted: boolean; offset: number }>; elapsedMs: number }
+  | { type: "ranking_start"; message: string; pool: number; candidatePool?: number; topK: number }
   | { type: "rerank_error"; error: string }
   | { type: "selected"; topK: number; rerankerWasUsed: boolean; sources: AgenticSource[] }
   | { type: "summary"; markdown: string }
-  | { type: "done"; stats: { totalCollected: number; dedupedCount: number; selectedCount: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
+  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
   | { type: "saved"; dbMessage: any }
   | { type: "persist_error"; error: string }
   | { type: "aborted"; reason: string; provider?: string; round?: number }
@@ -65,7 +69,7 @@ export interface AgenticRunArgs {
   target?: number          // 10..1000, default 500
   batchSize?: number       // 5..50, default 10
   topK?: number            // 1..100, default 25
-  providers?: string[]     // subset of [wos, scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
+  providers?: string[]     // subset of the worldwide scientific provider registry
   language?: string
   signal?: AbortSignal
 }

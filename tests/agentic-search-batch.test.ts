@@ -12,11 +12,15 @@ type AgenticBatchEvent = {
   provider?: string
   reason?: string
   totalCollected?: number
+  sources?: any[]
+  queries?: string[]
+  filters?: Record<string, unknown>
 }
 
-const { runAgenticBatch, buildSummaryMarkdown } = cjsRequire("./backend/src/services/searchBrain/agenticBatch") as {
+const { runAgenticBatch, buildSummaryMarkdown, DEFAULT_PROVIDERS } = cjsRequire("./backend/src/services/searchBrain/agenticBatch") as {
   runAgenticBatch: (opts: any) => AsyncGenerator<AgenticBatchEvent>
   buildSummaryMarkdown: (args: any) => string
+  DEFAULT_PROVIDERS: string[]
 }
 
 const providers = cjsRequire("./backend/src/services/searchBrain/providers") as {
@@ -29,6 +33,13 @@ const providers = cjsRequire("./backend/src/services/searchBrain/providers") as 
 }
 
 describe("agentic search batch", () => {
+  it("uses the complete 16-index scientific provider pool", () => {
+    assert.equal(DEFAULT_PROVIDERS.length, 16)
+    for (const provider of ["arxiv", "europepmc", "core", "dblp", "datacite", "redalyc", "biorxiv", "medrxiv"]) {
+      assert.ok(DEFAULT_PROVIDERS.includes(provider), `missing ${provider}`)
+    }
+  })
+
   it("exhausts a provider when pagination returns only duplicates", async () => {
     const repeated = Array.from({ length: 5 }, (_, index) => ({
       source: "crossref",
@@ -161,5 +172,119 @@ describe("agentic search batch", () => {
     assert.match(markdown, /\*RECIMUNDO\*, 9\(3\), 51-59\./)
     assert.match(markdown, /https:\/\/doi\.org\/10\.26820\/recimundo\/9\.\(3\)\.sep\.2025\.51-59/)
     assert.doesNotMatch(markdown, /Top \d+ fuentes|Proveedores consultados|abstract/i)
+  })
+
+  it("merges the same DOI across indexes and preserves cross-index validation", async () => {
+    let selected: any[] = []
+    for await (const evt of runAgenticBatch({
+      query: "climate adaptation coastal cities",
+      target: 10,
+      batchSize: 5,
+      topK: 5,
+      providers: ["openalex", "crossref"],
+      deps: {
+        retrieve: async ({ source }: any) => [{
+          source,
+          title: "Climate adaptation in coastal cities",
+          doi: "10.1000/coastal",
+          url: "https://doi.org/10.1000/coastal",
+          authors: source === "openalex" ? ["Ana Ruiz"] : [],
+          abstract: source === "openalex" ? "Evidence for urban climate adaptation." : undefined,
+          citationCount: source === "crossref" ? 42 : undefined,
+          providerRank: 0,
+        }],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+    }
+
+    assert.equal(selected.length, 1)
+    assert.equal(selected[0].sourceCount, 2)
+    assert.deepEqual(selected[0].sources.slice().sort(), ["crossref", "openalex"])
+    assert.equal(selected[0].citationCount, 42)
+    assert.match(selected[0].abstract, /urban climate adaptation/i)
+  })
+
+  it("searches deterministic bilingual query expansions", async () => {
+    const requestedQueries: string[] = []
+    let startEvent: AgenticBatchEvent | undefined
+    for await (const evt of runAgenticBatch({
+      query: "Busca artículos científicos sobre gestión empresarial",
+      target: 10,
+      batchSize: 5,
+      topK: 3,
+      providers: ["openalex"],
+      deps: {
+        retrieve: async ({ query }: any) => {
+          requestedQueries.push(query)
+          return [{
+            source: "openalex",
+            title: `Research ${query}`,
+            doi: `10.1000/${requestedQueries.length}`,
+            url: `https://doi.org/10.1000/${requestedQueries.length}`,
+            authors: [],
+          }]
+        },
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "start") startEvent = evt
+    }
+
+    assert.ok(requestedQueries.length >= 2)
+    assert.ok(startEvent?.queries && startEvent.queries.length >= 2)
+    assert.ok(requestedQueries.some(query => /management|business|enterprise/i.test(query)))
+  })
+
+  it("honours requested year and open-access filters", async () => {
+    const currentYear = new Date().getUTCFullYear()
+    let selected: any[] = []
+    for await (const evt of runAgenticBatch({
+      query: "Busca artículos científicos de acceso abierto de los últimos 5 años sobre energía",
+      target: 10,
+      batchSize: 5,
+      topK: 5,
+      providers: ["openalex"],
+      deps: {
+        retrieve: async () => [
+          { source: "openalex", title: "Old energy study", doi: "10.1/old", url: "https://doi.org/10.1/old", year: currentYear - 10, openAccess: true },
+          { source: "openalex", title: "Closed energy study", doi: "10.1/closed", url: "https://doi.org/10.1/closed", year: currentYear, openAccess: false },
+          { source: "openalex", title: "Open energy study", doi: "10.1/open", url: "https://doi.org/10.1/open", year: currentYear, openAccess: true },
+        ],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+    }
+
+    assert.deepEqual(selected.map(row => row.doi), ["10.1/open"])
+  })
+
+  it("ranks a precise topical result above a highly cited off-topic result without an LLM", async () => {
+    let selected: any[] = []
+    for await (const evt of runAgenticBatch({
+      query: "administrative management in public institutions",
+      target: 10,
+      batchSize: 5,
+      topK: 2,
+      providers: ["crossref"],
+      deps: {
+        retrieve: async () => [
+          { source: "crossref", title: "A general theory of galaxies", doi: "10.1/off", url: "https://doi.org/10.1/off", citationCount: 99999, providerRank: 0 },
+          { source: "crossref", title: "Administrative management in public institutions", doi: "10.1/on", url: "https://doi.org/10.1/on", citationCount: 2, providerRank: 1 },
+        ],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+    }
+
+    assert.equal(selected[0].doi, "10.1/on")
+    assert.ok(selected[0].retrievalScore > selected[1].retrievalScore)
   })
 })

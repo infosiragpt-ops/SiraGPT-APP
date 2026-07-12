@@ -337,11 +337,11 @@ describe('rerankResults · LLM path', () => {
     assert.equal(out.results.length, 15);
   });
 
-  it('malformed JSON in one batch leaves those items un-scored (still sorted)', async () => {
+  it('malformed JSON leaves items heuristically sorted and reports reranked:false', async () => {
     const callLLM = async () => ({ content: 'not json' });
     const results = [{ title: 'a' }, { title: 'b' }];
     const out = await rerankResults({ query: 'q', results, callLLM });
-    assert.equal(out.reranked, true);
+    assert.equal(out.reranked, false);
     // No rerankScore on either.
     for (const r of out.results) {
       assert.equal(r.rerankScore, undefined);

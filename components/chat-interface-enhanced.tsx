@@ -152,6 +152,7 @@ import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import VoiceCatalogModal from "./voice/voice-catalog-modal"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
+import { isAcademicResearchPrompt } from "@/lib/academic-search-intent"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
@@ -8578,6 +8579,7 @@ REWRITTEN TEXT:`;
       && !hasDedicatedConnector
       && !hasMediaGenerator
       && shouldRouteWorkModePromptThroughAgentTask(msg, filesToSend);
+    const shouldUseAcademicSearch = filesToSend.length === 0 && isAcademicResearchPrompt(msg);
     // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
     // enter the durable agent-task path. That backend path owns the current
     // source-preserving Office/PDF editor, artifact persistence and validation.
@@ -8594,8 +8596,9 @@ REWRITTEN TEXT:`;
         // straight into the agent-task pipeline and the chat froze on
         // "Analizando solicitud" whenever the worker/relay hiccupped.
         && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend));
+    const shouldStartAgenticLoopForCurrentMessage = shouldStartAgenticLoopImmediately && !shouldUseAcademicSearch;
 
-    if (shouldStartAgenticLoopImmediately) {
+    if (shouldStartAgenticLoopForCurrentMessage) {
       try {
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
       } finally {
@@ -8648,7 +8651,7 @@ REWRITTEN TEXT:`;
       // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
       // For new chats, `createNewChat` will handle creating the chat, and the context will replace the temp chat.
 
-      if (isWebSearchActive) {
+      if (isWebSearchActive || shouldUseAcademicSearch) {
         await handleWebSearch(msg);
         return;
       }
@@ -10340,7 +10343,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const bumpProvider = (name: string, count: number) => {
         const i = progress.providers.findIndex(p => p.name === name);
-        if (i >= 0) progress.providers[i].count = Math.max(progress.providers[i].count, count);
+        if (i >= 0) progress.providers[i].count += Math.max(0, count);
         else progress.providers.push({ name, count });
       };
 
@@ -10363,12 +10366,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           if (/(\.edu|\.gov|\.ac\.|scielo|pubmed|crossref|wiley|springer|elsevier|nature)/.test(url)) {
             checks.push("✓ autoridad");
           }
+          if (Number(s.sourceCount) >= 2) checks.push(`✓ ${s.sourceCount} índices`);
           return checks.join(" · ");
         };
         const lines: string[] = [];
-        lines.push(`## Resultados verificados`);
+        lines.push(`## Resultados científicos priorizados`);
         lines.push(``);
-        lines.push(`Encontré ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"} relevante${sources.length === 1 ? "" : "s"}, validadas por DOI, año y autoridad de dominio:`);
+        const crossValidated = sources.filter((source) => Number(source.sourceCount) >= 2).length;
+        lines.push(`Encontré ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"} relevante${sources.length === 1 ? "" : "s"}, ordenadas por precisión temática, calidad de metadatos, autoridad del índice y coincidencia entre bases.`);
+        if (crossValidated > 0) {
+          lines.push(`${crossValidated} ${crossValidated === 1 ? "resultado fue corroborado" : "resultados fueron corroborados"} por más de una base académica.`);
+        }
         lines.push(``);
         sources.forEach((s: any, idx: number) => {
           const link = s.doi ? `https://doi.org/${s.doi}` : (s.url || "");
@@ -10416,7 +10424,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 progress.label = "Recopilando fuentes";
                 progress.counter = `${done}/${total} fuentes`;
                 progress.percent = 10 + Math.round((done / total) * 50);  // 10→60%
-                if ((evt as any).provider) bumpProvider(String((evt as any).provider), done);
+                if ((evt as any).provider) bumpProvider(String((evt as any).provider), Math.max(0, Number((evt as any).unique) || 0));
                 updateBubble(renderProgress());
                 break;
               }

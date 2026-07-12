@@ -404,9 +404,12 @@ function parseAtomFeed(xml) {
 
 async function searchArxiv(query, opts = {}) {
   const limit = clampLimit(opts.limit);
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
   const params = new URLSearchParams({
     search_query: `all:${query}`,
-    start: '0',
+    start: String(offset),
     max_results: String(limit),
     sortBy: 'relevance',
     sortOrder: 'descending',
@@ -483,9 +486,13 @@ function mapOpenAlexWork(w, source, { venueLabel, preferLandingPage } = {}) {
 
 async function searchOpenAlex(query, opts = {}) {
   const limit = clampLimit(opts.limit);
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
   const params = new URLSearchParams({
     search: query,
     per_page: String(limit),
+    page: String(Math.floor(offset / limit) + 1),
   });
   if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
   const url = `https://api.openalex.org/works?${params.toString()}`;
@@ -505,9 +512,13 @@ async function searchOpenAlex(query, opts = {}) {
 const REDALYC_OPENALEX_SOURCE = 'S4377196100';
 async function searchRedalyc(query, opts = {}) {
   const limit = clampLimit(opts.limit);
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
   const params = new URLSearchParams({
     search: query,
     per_page: String(limit),
+    page: String(Math.floor(offset / limit) + 1),
     filter: `primary_location.source.id:${REDALYC_OPENALEX_SOURCE}`,
   });
   if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
@@ -532,9 +543,13 @@ const MEDRXIV_OPENALEX_SOURCE = 'S3005729997';
 
 async function searchPinnedOpenAlexSource(query, opts, { sourceId, source, venueLabel, label }) {
   const limit = clampLimit(opts.limit);
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
   const params = new URLSearchParams({
     search: query,
     per_page: String(limit),
+    page: String(Math.floor(offset / limit) + 1),
     filter: `primary_location.source.id:${sourceId}`,
   });
   if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
@@ -709,7 +724,10 @@ async function searchEuropePMC(query, opts = {}) {
 async function searchCore(query, opts = {}) {
   const limit = clampLimit(opts.limit);
   if (!process.env.CORE_API_KEY) return [];
-  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
+  const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) });
   const url = `https://api.core.ac.uk/v3/search/works?${params.toString()}`;
   const json = await safeJson(url, {
     headers: { Authorization: `Bearer ${process.env.CORE_API_KEY}` },
@@ -767,7 +785,10 @@ async function searchDOAJ(query, opts = {}) {
 // index for computer-science publications (conferences + journals worldwide).
 async function searchDBLP(query, opts = {}) {
   const limit = clampLimit(opts.limit);
-  const params = new URLSearchParams({ q: query, format: 'json', h: String(limit) });
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
+  const params = new URLSearchParams({ q: query, format: 'json', h: String(limit), f: String(offset) });
   const url = `https://dblp.org/search/publ/api?${params.toString()}`;
   const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'dblp' });
   const hits = json?.result?.hits?.hit;
@@ -799,7 +820,14 @@ async function searchDBLP(query, opts = {}) {
 // datasets, software, preprints and theses that Crossref often misses.
 async function searchDataCite(query, opts = {}) {
   const limit = clampLimit(opts.limit);
-  const params = new URLSearchParams({ query, 'page[size]': String(limit) });
+  const offset = Number.isFinite(Number(opts.offset)) && Number(opts.offset) >= 0
+    ? Math.floor(Number(opts.offset))
+    : 0;
+  const params = new URLSearchParams({
+    query,
+    'page[size]': String(limit),
+    'page[number]': String(Math.floor(offset / limit) + 1),
+  });
   const url = `https://api.datacite.org/dois?${params.toString()}`;
   const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'datacite' });
   const items = Array.isArray(json?.data) ? json.data : [];

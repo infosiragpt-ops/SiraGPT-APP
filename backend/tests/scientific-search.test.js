@@ -219,6 +219,40 @@ test('searchArxiv: returns parsed entries from atom response', async () => {
   assert.equal(out[0].source, 'arxiv');
 });
 
+test('deep-search providers honour pagination offsets', async () => {
+  const requested = [];
+  const priorCoreKey = process.env.CORE_API_KEY;
+  process.env.CORE_API_KEY = 'core-test-key';
+  setFetchHandler((url) => {
+    requested.push(url);
+    if (url.includes('export.arxiv.org')) return Promise.resolve(textResponse('<feed></feed>'));
+    if (url.includes('api.openalex.org')) return Promise.resolve(jsonResponse({ results: [] }));
+    if (url.includes('dblp.org')) return Promise.resolve(jsonResponse({ result: { hits: { hit: [] } } }));
+    if (url.includes('api.datacite.org')) return Promise.resolve(jsonResponse({ data: [] }));
+    if (url.includes('api.core.ac.uk')) return Promise.resolve(jsonResponse({ results: [] }));
+    throw new Error(`unexpected URL: ${url}`);
+  });
+
+  try {
+    await ss.searchArxiv('q', { limit: 10, offset: 30 });
+    await ss.searchOpenAlex('q', { limit: 10, offset: 30 });
+    await ss.searchRedalyc('q', { limit: 10, offset: 30 });
+    await ss.searchBioRxiv('q', { limit: 10, offset: 30 });
+    await ss.searchDBLP('q', { limit: 10, offset: 30 });
+    await ss.searchDataCite('q', { limit: 10, offset: 30 });
+    await ss.searchCore('q', { limit: 10, offset: 30 });
+  } finally {
+    if (priorCoreKey === undefined) delete process.env.CORE_API_KEY;
+    else process.env.CORE_API_KEY = priorCoreKey;
+  }
+
+  assert.match(requested.find(url => url.includes('export.arxiv.org')) || '', /start=30/);
+  for (const url of requested.filter(url => url.includes('api.openalex.org'))) assert.match(url, /page=4/);
+  assert.match(requested.find(url => url.includes('dblp.org')) || '', /(?:\?|&)f=30(?:&|$)/);
+  assert.match(requested.find(url => url.includes('api.datacite.org')) || '', /page%5Bnumber%5D=4/);
+  assert.match(requested.find(url => url.includes('api.core.ac.uk')) || '', /offset=30/);
+});
+
 test('searchSemanticScholar: maps API JSON to canonical Paper shape', async () => {
   setFetchHandler((url) => {
     assert.ok(url.includes('api.semanticscholar.org/graph/v1/paper/search'));

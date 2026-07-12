@@ -25,6 +25,7 @@
 
 const { USER_AGENT } = require("./types");
 const { sanitizeHeaders } = require("../../utils/async-guard");
+const scientificSearch = require("../scientific-search");
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESULTS = 20;
@@ -626,16 +627,79 @@ async function searchScopus(query, opts = {}) {
   });
 }
 
+// ─── Scientific-search bridge ───────────────────────────────────────────
+// The product already has robust canonical adapters for eight additional
+// scholarly indexes. Reuse those implementations here so the live /chat
+// agentic path reaches the same worldwide corpus instead of maintaining a
+// second, smaller provider universe.
+
+function adaptScientificPaper(paper, source, providerRank = 0) {
+  const doi = typeof paper?.doi === "string"
+    ? paper.doi.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").trim()
+    : undefined;
+  const url = paper?.htmlUrl || (doi ? `https://doi.org/${doi}` : paper?.pdfUrl) || "";
+  const openAccess = typeof paper?.openAccess === "boolean" ? paper.openAccess : undefined;
+  return {
+    source,
+    title: paper?.title || "Untitled",
+    authors: normaliseAuthors(paper?.authors),
+    year: safeInt(paper?.year),
+    journal: textValue(paper?.venue),
+    doi,
+    url,
+    pdfUrl: textValue(paper?.pdfUrl),
+    abstract: textValue(paper?.abstract),
+    citationCount: safeInt(paper?.citations),
+    openAccess,
+    providerRank,
+    raw: paper,
+  };
+}
+
+function createScientificAdapter(searchFn, source) {
+  return async function searchScientificIndex(query, opts = {}) {
+    const maxResults = Math.min(50, Math.max(1, opts.maxResults ?? DEFAULT_MAX_RESULTS));
+    const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+    const papers = await searchFn(query, {
+      limit: maxResults,
+      offset,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    });
+    if (!Array.isArray(papers)) return [];
+    return papers.slice(0, maxResults).map((paper, index) => (
+      adaptScientificPaper(paper, source, offset + index)
+    ));
+  };
+}
+
+const searchArxiv = createScientificAdapter(scientificSearch.searchArxiv, "arxiv");
+const searchEuropePMC = createScientificAdapter(scientificSearch.searchEuropePMC, "europepmc");
+const searchCore = createScientificAdapter(scientificSearch.searchCore, "core");
+const searchDBLP = createScientificAdapter(scientificSearch.searchDBLP, "dblp");
+const searchDataCite = createScientificAdapter(scientificSearch.searchDataCite, "datacite");
+const searchRedalyc = createScientificAdapter(scientificSearch.searchRedalyc, "redalyc");
+const searchBioRxiv = createScientificAdapter(scientificSearch.searchBioRxiv, "biorxiv");
+const searchMedRxiv = createScientificAdapter(scientificSearch.searchMedRxiv, "medrxiv");
+
 // ─── Registry + dispatcher ───────────────────────────────────────────────
 
 const REGISTRY = {
-  wos: searchWebOfScience,
   openalex: searchOpenAlex,
   semantic: searchSemanticScholar,
   crossref: searchCrossRef,
   pubmed: searchPubMed,
+  europepmc: searchEuropePMC,
   doaj: searchDOAJ,
   scielo: searchSciELO,
+  redalyc: searchRedalyc,
+  arxiv: searchArxiv,
+  dblp: searchDBLP,
+  datacite: searchDataCite,
+  biorxiv: searchBioRxiv,
+  medrxiv: searchMedRxiv,
+  core: searchCore,
+  wos: searchWebOfScience,
   scopus: searchScopus,
 };
 
@@ -648,11 +712,11 @@ const REGISTRY = {
  * ignore it and return the same first page (the agentic batcher
  * dedupes anyway).
  */
-async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken, authtoken }) {
+async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken, authtoken, signal }) {
   const fn = REGISTRY[source];
   if (!fn) return [];
   try {
-    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken, authtoken });
+    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken, authtoken, signal });
     return Array.isArray(out) ? out : [];
   } catch {
     return [];
@@ -669,10 +733,19 @@ module.exports = {
   searchSciELO,
   searchScopus,
   searchWebOfScience,
+  searchArxiv,
+  searchEuropePMC,
+  searchCore,
+  searchDBLP,
+  searchDataCite,
+  searchRedalyc,
+  searchBioRxiv,
+  searchMedRxiv,
+  adaptScientificPaper,
   reconstructAbstract,
   normaliseAuthors,
   buildWosUsrQuery,
   firstEnv,
   REGISTRY,
-  INTERNAL: { normaliseWosRecords, findIdentifier, objectText },
+  INTERNAL: { normaliseWosRecords, findIdentifier, objectText, adaptScientificPaper },
 };
