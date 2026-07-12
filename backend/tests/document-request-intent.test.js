@@ -32,10 +32,41 @@ test('deterministic: courtesy stripped even when constraint word is typo\'d', ()
   assert.ok(!/porfavor|profeiosnal|de forma/.test(plan.title), `courtesy/quality gone: ${plan.title}`);
 });
 
-test('normalizeIntent clamps counts and rejects empty topics', () => {
-  const good = normalizeIntent({ topic: 'gestión administrativa', title: 'Gestión Administrativa', slideCount: 10, wordCount: null, pageCount: null, conditions: ['muy profesional'] });
+test('deterministic: audience and visual style stay out of the deck title', () => {
+  const plan = buildPlan({
+    prompt: 'Créame una presentación ejecutiva y minimalista en 8 diapositivas sobre gestión de empresas para un directorio. Debe incluir estrategia, operaciones, personas, riesgos y próximos pasos. No inventes estadísticas.',
+    format: 'pptx',
+    template: 'business',
+    complexity: 'standard',
+  });
+  assert.equal(plan.title, 'Gestión de empresas');
+  assert.equal(plan.slideTarget, 8);
+  assert.equal(plan.presentationBrief.audience, 'directorio');
+  assert.equal(plan.presentationBrief.visualStyle, 'minimalista');
+  assert.deepEqual(plan.presentationBrief.mustInclude, ['estrategia', 'operaciones', 'personas', 'riesgos', 'próximos pasos']);
+  assert.deepEqual(plan.presentationBrief.mustAvoid, ['estadísticas']);
+});
+
+test('normalizeIntent clamps counts and preserves the presentation brief', () => {
+  const good = normalizeIntent({
+    topic: 'gestión administrativa',
+    title: 'Gestión Administrativa',
+    slideCount: 10,
+    wordCount: null,
+    pageCount: null,
+    conditions: ['muy profesional'],
+    audience: 'directorio',
+    purpose: 'apoyar una decisión',
+    tone: 'ejecutivo',
+    visualStyle: 'minimalista',
+    mustInclude: ['cronograma', 'riesgos'],
+    mustAvoid: ['estadísticas sin fuente'],
+  });
   assert.equal(good.slideCount, 10);
   assert.deepEqual(good.conditions, ['muy profesional']);
+  assert.equal(good.audience, 'directorio');
+  assert.deepEqual(good.mustInclude, ['cronograma', 'riesgos']);
+  assert.deepEqual(good.mustAvoid, ['estadísticas sin fuente']);
   assert.equal(normalizeIntent({ topic: '', title: 'x', slideCount: 5 }), null);
   assert.equal(normalizeIntent({ topic: 't', title: 'Valid Title', slideCount: 999, wordCount: 5, pageCount: 0, conditions: [] }).slideCount, null, 'out-of-range slideCount clamped to null');
 });

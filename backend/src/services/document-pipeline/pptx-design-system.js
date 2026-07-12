@@ -169,8 +169,11 @@ const DEFAULT_THEME_ID = 'aurora';
 // Prompt keyword → theme. First match wins; checked before template mapping so
 // the user's explicit styling words override the template default.
 const PROMPT_THEME_RULES = [
-  { re: /\b(oscur\w*|dark|nocturn\w*|ejecutiv\w*|executive|elegant\w*|lujo|luxury|premium|dorad\w*|gold)\b/i, theme: 'boardroom' },
+  // Explicit visual adjectives win over communication-tone words. A request
+  // can be "ejecutiva y minimalista": executive describes the audience/job,
+  // while minimal describes what the user actually wants to see.
   { re: /\b(minimalis\w*|minimal|limpi\w*|clean|simple|sobri\w*|blanc\w*)\b/i, theme: 'minimal' },
+  { re: /\b(oscur\w*|dark|nocturn\w*|elegant\w*|lujo|luxury|premium|dorad\w*|gold)\b/i, theme: 'boardroom' },
   { re: /\b(c[aá]lid\w*|warm|editorial|educaci[oó]n|educativ\w*|cultural?|humanis\w*|creativ\w*|natur\w*)\b/i, theme: 'editorial' },
   { re: /\b(consultor\w*|consulting|estrateg\w*|strategy|corporativ\w*|corporate|negocio\w*|business|financier\w*|finanz\w*|banca)\b/i, theme: 'consulting' },
   { re: /\b(modern\w*|tecnol[oó]g\w*|tech|startup|innovaci[oó]n|digital)\b/i, theme: 'aurora' },

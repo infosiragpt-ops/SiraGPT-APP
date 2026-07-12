@@ -4566,7 +4566,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}:${op.slideNumber || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -6181,10 +6181,14 @@ function sanitizeOfficeOperations(rawOps, format) {
     .filter((r) => r.some((c) => c !== ''));
   for (const raw of rawOps.slice(0, 15)) {
     const kind = str(raw?.kind || raw?.op, 40);
+    const scopedSlide = format === 'pptx' && Number.isInteger(Number(raw?.slideNumber))
+      && Number(raw.slideNumber) >= 1 && Number(raw.slideNumber) <= 500
+      ? Number(raw.slideNumber)
+      : null;
     if (kind === 'replace_text' && str(raw.needle).length >= 3) {
-      ops.push({ kind: 'replace_text', needle: str(raw.needle), replacement: str(raw.replacement) });
+      ops.push({ kind: 'replace_text', needle: str(raw.needle), replacement: str(raw.replacement), ...(scopedSlide ? { slideNumber: scopedSlide } : {}) });
     } else if (kind === 'delete_text' && str(raw.needle).length >= 3) {
-      ops.push({ kind: 'delete_text', needle: str(raw.needle) });
+      ops.push({ kind: 'delete_text', needle: str(raw.needle), ...(scopedSlide ? { slideNumber: scopedSlide } : {}) });
     } else if (format === 'xlsx' && kind === 'set_cell' && /^[A-Z]{1,3}[1-9][0-9]{0,6}$/i.test(str(raw.address, 12))) {
       ops.push({ kind: 'set_cell', sheetName: str(raw.sheetName, 40), address: str(raw.address, 12).toUpperCase(), value: str(raw.value, 500) });
     } else if (format === 'xlsx' && kind === 'append_rows') {
@@ -6217,8 +6221,8 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
         '{"kind":"add_sheet","name":"Resumen","rows":[["Mes","Total"],["Enero",1200]]}  // hoja NUEVA',
       ]
       : [
-        '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
-        '{"kind":"delete_text","needle":"texto exacto"}',
+        '{"kind":"replace_text","slideNumber":3,"needle":"texto exacto","replacement":"texto nuevo"}  // limita el cambio a una diapositiva cuando el usuario la indique',
+        '{"kind":"delete_text","slideNumber":3,"needle":"texto exacto"}  // elimina solo dentro de esa diapositiva',
         '{"kind":"add_slide","title":"Riesgos del proyecto","bullets":["Riesgo 1...","Riesgo 2..."]}  // diapositiva NUEVA al final',
       ];
     const { client, model: contentModel } = resolveContentClient();
@@ -6277,8 +6281,10 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
   const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
   if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
   const rawReplacement = extractReplacementPair(requestText);
+  const pptxSlideMatch = format === 'pptx' ? SLIDE_NOUN_RE.exec(normalizeText(requestText)) : null;
+  const pptxSlideNumber = pptxSlideMatch ? Number(pptxSlideMatch[1]) : null;
   if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
-    add({ kind: 'replace_text', ...rawReplacement });
+    add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
   }
   for (const clause of clauses) {
     if (format === 'xlsx') {
@@ -6291,14 +6297,14 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
     const replacement = extractReplacementPair(clause);
     if (replacement) {
       if (!(format === 'xlsx' && replacementTargetsXlsxCell(replacement))) {
-        add({ kind: 'replace_text', ...replacement });
+        add({ kind: 'replace_text', ...replacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
       }
       continue;
     }
     if (clauseIsDelete(clause)) {
       const needle = extractDeletionNeedle(clause);
       if (needle) {
-        add({ kind: 'delete_text', needle });
+        add({ kind: 'delete_text', needle, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
         continue;
       }
     }
@@ -6356,14 +6362,18 @@ function executePptxOperations({ input, ops, blocks }) {
   const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
   for (const op of ops) {
     if (op.kind === 'replace_text') {
-      const result = replaceTextInPptxBuffer(buffer, op.needle, op.replacement);
+      const result = op.slideNumber
+        ? pptxAdapterModule().replaceSlideText({ buffer, slideNumber: op.slideNumber, needle: op.needle, replacement: op.replacement })
+        : replaceTextInPptxBuffer(buffer, op.needle, op.replacement);
       buffer = result.buffer;
       validationBlocks.push(block('normal', op.replacement));
-      steps.push({ kind: 'replace_text', mode: 'pptx_safe_replace', changedCount: result.changedCount });
+      steps.push({ kind: 'replace_text', mode: 'pptx_safe_replace', changedCount: result.changedCount, slideNumber: op.slideNumber || null });
     } else if (op.kind === 'delete_text') {
-      const result = replaceTextInPptxBuffer(buffer, op.needle, '');
+      const result = op.slideNumber
+        ? pptxAdapterModule().replaceSlideText({ buffer, slideNumber: op.slideNumber, needle: op.needle, replacement: '' })
+        : replaceTextInPptxBuffer(buffer, op.needle, '');
       buffer = result.buffer;
-      steps.push({ kind: 'delete_text', mode: 'pptx_safe_delete', removedCount: result.changedCount });
+      steps.push({ kind: 'delete_text', mode: 'pptx_safe_delete', removedCount: result.changedCount, slideNumber: op.slideNumber || null });
     } else if (op.kind === 'add_slide') {
       const slideBlocks = [
         block('heading1', op.title),
@@ -6414,9 +6424,9 @@ function describeStep(step) {
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
   if (step.kind === 'delete_section_range') return `eliminé ${step.label || 'la sección'} y todo el contenido posterior`;
   if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
-  if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
+  if (step.kind === 'delete_text') return `eliminé el texto específico solicitado${step.slideNumber ? ` en la diapositiva ${step.slideNumber}` : ''} (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'set_document_title') return `actualicé el título del documento a «${step.newTitle}» conservando su formato`;
-  if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
+  if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado${step.slideNumber ? ` en la diapositiva ${step.slideNumber}` : ''} (${step.changedCount || 0} coincidencia(s))`;
   if (step.kind === 'proofread_minimal') {
     const count = Number(step.changedCount || 0);
     return count > 0

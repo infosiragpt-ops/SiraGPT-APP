@@ -25,8 +25,14 @@ const REQUEST_INTENT_SCHEMA = {
       wordCount: { type: ['integer', 'null'], description: 'Requested word count ("en 200 palabras") or null.' },
       pageCount: { type: ['integer', 'null'], description: 'Requested page count ("de 2 páginas") or null.' },
       conditions: { type: 'array', items: { type: 'string' }, description: 'Other delivery conditions the user stated (tone, audience, structure requirements), each as a short phrase. Empty array if none.' },
+      audience: { type: ['string', 'null'], description: 'Intended audience stated or strongly implied by the user, or null.' },
+      purpose: { type: ['string', 'null'], description: 'Communication job: inform, persuade, sell, teach, recommend, support a decision, or null.' },
+      tone: { type: ['string', 'null'], description: 'Requested tone such as executive, academic, educational, commercial, concise, or null.' },
+      visualStyle: { type: ['string', 'null'], description: 'Requested visual direction such as minimal, corporate, dark, editorial, warm, or null.' },
+      mustInclude: { type: 'array', items: { type: 'string' }, description: 'Topics, sections, facts, or deliverables explicitly required by the user.' },
+      mustAvoid: { type: 'array', items: { type: 'string' }, description: 'Topics, claims, styles, or elements explicitly excluded by the user.' },
     },
-    required: ['topic', 'title', 'slideCount', 'wordCount', 'pageCount', 'conditions'],
+    required: ['topic', 'title', 'slideCount', 'wordCount', 'pageCount', 'conditions', 'audience', 'purpose', 'tone', 'visualStyle', 'mustInclude', 'mustAvoid'],
   },
 };
 
@@ -47,6 +53,14 @@ function normalizeIntent(parsed) {
     pageCount: clampCount(parsed.pageCount, 1, 200),
     conditions: (Array.isArray(parsed.conditions) ? parsed.conditions : [])
       .map((c) => String(c).trim()).filter(Boolean).slice(0, 6),
+    audience: String(parsed.audience || '').trim().slice(0, 120) || null,
+    purpose: String(parsed.purpose || '').trim().slice(0, 120) || null,
+    tone: String(parsed.tone || '').trim().slice(0, 80) || null,
+    visualStyle: String(parsed.visualStyle || '').trim().slice(0, 80) || null,
+    mustInclude: (Array.isArray(parsed.mustInclude) ? parsed.mustInclude : [])
+      .map((item) => String(item).trim()).filter(Boolean).slice(0, 12),
+    mustAvoid: (Array.isArray(parsed.mustAvoid) ? parsed.mustAvoid : [])
+      .map((item) => String(item).trim()).filter(Boolean).slice(0, 12),
   };
 }
 
@@ -71,6 +85,7 @@ async function parseDocumentRequest({ prompt, format = 'docx', language = 'es', 
             'Condiciones típicas que NUNCA van en el tema/título: número de láminas/diapositivas/slides, número de palabras o páginas, cortesías (por favor, porfavor, gracias, please), adjetivos de calidad (profesional, bonito, bien elaborado, executive), palabras de formato (ppt, powerpoint, word, docx, excel, pdf, documento, presentación) y verbos de pedido (crea, genera, hazme).',
             'Repara typos evidentes ANTES de interpretar: "Landin"/"landin" en contexto "en 10 …" significa "láminas"; "profeiosnal"→"profesional"; "diapositvas"→"diapositivas".',
             'Si el usuario pide un número de láminas, va en slideCount (entero), jamás en el tema.',
+            'Extrae audiencia, propósito, tono, estilo visual, elementos obligatorios y exclusiones. No inventes preferencias ausentes.',
             'Responde SOLO el JSON del schema.',
           ].join('\n'),
         },
