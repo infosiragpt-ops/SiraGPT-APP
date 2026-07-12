@@ -1,8 +1,10 @@
 const API_BASE = process.env.SIRAGPT_API_BASE || "http://backend:5000"
 
 export interface LlmMessage {
-  role: "system" | "user" | "assistant"
+  role: "system" | "user" | "assistant" | "tool"
   content: string
+  tool_call_id?: string
+  tool_calls?: LlmToolCall[]
 }
 
 export interface LlmToolDef {
@@ -37,6 +39,7 @@ const TOOL_DEFS: LlmToolDef[] = [
   { type: "function", function: { name: "grep", description: "Search for a pattern in files", parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] } } },
   { type: "function", function: { name: "web_search", description: "Search the web", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "web_fetch", description: "Fetch content from a URL", parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
+  { type: "function", function: { name: "spawn_subagent", description: "Delegate a focused subtask to a specialist subagent", parameters: { type: "object", properties: { name: { type: "string" }, prompt: { type: "string" } }, required: ["name", "prompt"] } } },
 ]
 
 export function getToolDefsForAgent(enabledTools: Record<string, boolean>): LlmToolDef[] {
