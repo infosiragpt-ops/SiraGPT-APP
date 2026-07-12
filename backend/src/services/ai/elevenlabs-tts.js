@@ -146,6 +146,7 @@ async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, Eleve
     audioUrl: `/api/elevenlabs/audio/${filename}`,
     sizeBytes: audioBuffer.length,
     mime: 'audio/mpeg',
+    format: 'mp3',
     voiceId: resolvedVoiceId,
     modelId: resolvedModelId,
     characters: narration.length,

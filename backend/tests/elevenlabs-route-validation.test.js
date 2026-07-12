@@ -65,6 +65,11 @@ test('chat speech and music routes propagate client disconnect cancellation', ()
   );
   assert.match(
     aiRouteSource,
+    /generateGeminiSpeechFile\(\{[\s\S]{0,300}signal: requestAbort\.signal/,
+    'Gemini speech generation must receive the request abort signal'
+  );
+  assert.match(
+    aiRouteSource,
     /generateLyriaMusicFile\(\{[^}]*signal: requestAbort\.signal[^}]*\}\)/,
     'Lyria generation must receive the request abort signal'
   );
@@ -74,4 +79,12 @@ test('chat speech and music routes propagate client disconnect cancellation', ()
     'ElevenLabs music generation must receive the request abort signal'
   );
   assert.match(aiRouteSource, /cancelled by client/);
+});
+
+test('chat speech route selects Gemini and falls back across configured providers', () => {
+  assert.match(aiRouteSource, /const geminiReady = geminiTts\.isGeminiTtsConfigured\(\)/);
+  assert.match(aiRouteSource, /const wantsGemini = \/gemini\|mimo\|minimax\/i\.test\(selectedModel\)/);
+  assert.match(aiRouteSource, /isRecoverableSpeechProviderError\(providerError\)/);
+  assert.match(aiRouteSource, /modelLabel = usedProvider === 'gemini'/);
+  assert.match(aiRouteSource, /format: audioFormat/);
 });

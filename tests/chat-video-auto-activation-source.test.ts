@@ -332,11 +332,24 @@ describe("chat video auto-activation source contract", () => {
       /musicAbortControllerRef\.current = controller;[\s\S]{0,220}markLocalJobBusy\(activeChat\.id, controller\)/,
       "Music generation must register its real request controller"
     )
-    assert.match(source, /generateSpeechMessage\(\{[\s\S]{0,300}\}, \{ signal: controller\.signal \}\)/)
+    assert.match(source, /generateSpeechMessage\(\{[\s\S]{0,720}\}, \{ signal: controller\.signal \}\)/)
     assert.match(source, /generateMusicMessage\(\{[\s\S]{0,420}\}, \{ signal: controller\.signal \}\)/)
     assert.match(source, /error: 'aborted'/)
     assert.match(apiSource, /generateSpeechMessage\([\s\S]{0,520}options: \{ signal\?: AbortSignal \}/)
     assert.match(apiSource, /generateMusicMessage\([\s\S]{0,520}options: \{ signal\?: AbortSignal \}/)
     assert.match(apiSource, /signal: options\.signal/)
+  })
+
+  it("uses the working Gemini TTS provider and sends professional voice controls", () => {
+    assert.match(source, /type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs"/)
+    assert.match(source, /const VOICE_MODEL_OPTIONS: VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs"\]/)
+    assert.match(source, /useState<VoiceModel>\("Gemini 2\.5 Flash TTS"\)/)
+    assert.match(
+      source,
+      /generateSpeechMessage\(\{[\s\S]{0,420}model: selectedVoiceModel,[\s\S]{0,260}language: selectedVoiceLanguage,[\s\S]{0,260}accent: selectedVoiceAccent/,
+    )
+    assert.match(source, /voiceId: selectedVoiceModel === 'ElevenLabs'/)
+    assert.match(apiSource, /model\?: string;/)
+    assert.match(apiSource, /language\?: string;/)
   })
 })

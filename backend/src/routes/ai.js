@@ -66,6 +66,7 @@ const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../s
 const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
+const geminiTts = require('../services/ai/gemini-tts');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
 const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
@@ -6728,12 +6729,12 @@ router.post(
 // gate blocked, the breaker tripped, and the user got a degraded
 // "service unavailable" answer instead of audio. Voice is an explicit,
 // unambiguous request — like image/video/music it gets a dedicated,
-// deterministic path that ALWAYS produces the MP3 and persists it as a
+// deterministic path that ALWAYS produces an audio file and persists it as a
 // chat artifact that the existing AgenticStepsRenderer shows as "Generation N".
-function buildSpeechAgentState({ displayText, artifact }) {
+function buildSpeechAgentState({ displayText, artifact, model }) {
   const safeText = String(displayText || '').slice(0, 200);
   return {
-    meta: { goal: safeText, model: 'ElevenLabs', tools: ['generate_speech'] },
+    meta: { goal: safeText, model: model || 'Gemini 2.5 Flash TTS', tools: ['generate_speech'] },
     steps: [
       {
         id: 'speech-1',
@@ -6754,6 +6755,14 @@ function buildSpeechAgentState({ displayText, artifact }) {
     finalText: '',
     done: true,
   };
+}
+
+function isRecoverableSpeechProviderError(error) {
+  const status = Number(error?.status || error?.statusCode || 0);
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  return [401, 402, 403, 429, 503].includes(status)
+    || /(payment|required|subscription|quota|credit|rate.?limit|temporar|unavailable)/i.test(`${code} ${message}`);
 }
 
 function buildMusicAgentState({ displayText, artifact, model }) {
@@ -6788,6 +6797,11 @@ router.post(
     body('text').isString().trim().isLength({ min: 1, max: 5000 }),
     body('voiceId').optional().isString().trim().isLength({ max: 120 }),
     body('modelId').optional().isString().trim().isLength({ max: 80 }),
+    body('model').optional().isString().trim().isLength({ max: 80 }),
+    body('language').optional().isString().trim().isLength({ max: 40 }),
+    body('accent').optional().isString().trim().isLength({ max: 40 }),
+    body('effect').optional().isString().trim().isLength({ max: 60 }),
+    body('stability').optional().isFloat({ min: 0, max: 100 }),
     body('chatId').optional({ nullable: true }).isString(),
     body('voiceSettings').optional().isObject(),
     body('regenerate').optional().isBoolean(),
@@ -6798,7 +6812,9 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    if (!elevenLabsTts.isElevenLabsConfigured()) {
+    const elevenReady = elevenLabsTts.isElevenLabsConfigured();
+    const geminiReady = geminiTts.isGeminiTtsConfigured();
+    if (!elevenReady && !geminiReady) {
       return res.status(503).json({ ok: false, error: 'El servicio de voz no está configurado.' });
     }
 
@@ -6810,37 +6826,80 @@ router.post(
     const regenerate = req.body.regenerate === true;
     const voiceId = String(req.body.voiceId || '').trim();
     const modelId = String(req.body.modelId || '').trim();
+    const selectedModel = String(req.body.model || '').trim();
+    const language = String(req.body.language || 'Spanish').trim();
+    const accent = String(req.body.accent || 'Latino').trim();
+    const effect = String(req.body.effect || 'Studio Clean').trim();
+    const stability = Number.isFinite(Number(req.body.stability)) ? Number(req.body.stability) : 100;
     const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
       ? req.body.voiceSettings
       : undefined;
     const requestAbort = bindRequestAbort(req, res);
 
     try {
-      const result = await elevenLabsTts.generateSpeechFile({
-        text,
-        voiceId,
-        modelId,
-        voiceSettings,
-        signal: requestAbort.signal,
-      });
+      const wantsGemini = /gemini|mimo|minimax/i.test(selectedModel);
+      const providerOrder = wantsGemini
+        ? [geminiReady && 'gemini', elevenReady && 'elevenlabs'].filter(Boolean)
+        : [elevenReady && 'elevenlabs', geminiReady && 'gemini'].filter(Boolean);
+      let result = null;
+      let usedProvider = null;
+      let lastError = null;
+
+      for (const provider of providerOrder) {
+        try {
+          result = provider === 'gemini'
+            ? await geminiTts.generateGeminiSpeechFile({
+              text,
+              language,
+              accent,
+              effect,
+              stability,
+              signal: requestAbort.signal,
+            })
+            : await elevenLabsTts.generateSpeechFile({
+              text,
+              voiceId,
+              modelId,
+              voiceSettings,
+              signal: requestAbort.signal,
+            });
+          usedProvider = provider;
+          break;
+        } catch (providerError) {
+          lastError = providerError;
+          if (requestAbort.signal.aborted || isAbortError(providerError)) break;
+          console.warn(
+            `[ai/generate-speech] ${provider} failed (${providerError?.code || providerError?.status || 'ERR'}): ${providerError?.message || providerError}`,
+          );
+          if (!isRecoverableSpeechProviderError(providerError)) break;
+        }
+      }
+
+      if (!result) throw lastError || new Error('No speech provider is available');
       if (requestAbort.signal.aborted) {
         await fs.unlink(result.audioPath).catch(() => {});
         return;
       }
 
+      const modelLabel = usedProvider === 'gemini'
+        ? 'Gemini 2.5 Flash TTS'
+        : 'ElevenLabs';
+      const audioFormat = String(result.format || path.extname(result.filename).slice(1) || 'mp3').toLowerCase();
+
       const artifact = {
         id: `speech-${result.filename}`,
-        filename: `voz-${Date.now()}.mp3`,
+        filename: `voz-${Date.now()}.${audioFormat}`,
         mime: result.mime,
-        format: 'mp3',
+        format: audioFormat,
         kind: 'speech',
         category: 'audio',
+        model: modelLabel,
         sizeBytes: result.sizeBytes,
         downloadUrl: result.audioUrl,
         prompt: text.slice(0, 280),
       };
 
-      const state = buildSpeechAgentState({ displayText: text, artifact });
+      const state = buildSpeechAgentState({ displayText: text, artifact, model: modelLabel });
       const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
 
       // Persist the turn so it survives a reload (mirrors how the agentic
@@ -6854,7 +6913,7 @@ router.post(
             text,
             content,
             text.length,
-            'elevenlabs-tts',
+            usedProvider === 'gemini' ? 'gemini-tts' : 'elevenlabs-tts',
             [],
             [],
             regenerate,
@@ -6874,6 +6933,8 @@ router.post(
         state,
         assistantMessageId,
         chatId,
+        provider: usedProvider,
+        model: modelLabel,
         voiceId: result.voiceId,
         modelId: result.modelId,
       });
@@ -6884,7 +6945,7 @@ router.post(
       }
       console.error('[ai/generate-speech] error:', error?.message || error);
       const status = error?.code === 'TEXT_REQUIRED' ? 400
-        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
+        : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED') ? 503
           : 502;
       return res.status(status).json({
         ok: false,

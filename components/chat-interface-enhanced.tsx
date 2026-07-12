@@ -477,7 +477,7 @@ type ImageQuality = "512px" | "1K" | "2K" | "4K"
 type VideoResolution = "480p" | "720p"
 type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
 type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
-type VoiceModel = "ElevenLabs" | "Mimo Max 02HD"
+type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
 type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
 type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
 type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
@@ -509,7 +509,7 @@ const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string
   { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
 ]
 const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-const VOICE_MODEL_OPTIONS: VoiceModel[] = ["ElevenLabs", "Mimo Max 02HD"]
+const VOICE_MODEL_OPTIONS: VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
 const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
 const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
 const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
@@ -1640,7 +1640,7 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">{isVoiceGenerationActive ? 'Voz activa' : 'Voz'}</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  Texto a voz · ElevenLabs
+                  Texto a voz · Gemini y ElevenLabs
                 </div>
               </div>
               {isVoiceGenerationActive && (
@@ -2543,8 +2543,8 @@ const ActiveToolsDisplay = ({
       voice: VOICE_MODEL_OPTIONS.map((name) => ({
         name,
         displayName: name,
-        provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
-        iconName: "Bot",
+        provider: name === "ElevenLabs" ? "ElevenLabs" : "Google",
+        iconName: name.startsWith("Gemini") ? "GeminiLogo" : "Bot",
       })),
       music: MUSIC_MODEL_OPTIONS.map((name) => ({
         name,
@@ -2986,13 +2986,13 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Google", surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
               configurations). Sits right after the provider selector per the
               requested order: provider → Voice → configurations. */}
-          <button
+          {selectedVoiceModel === "ElevenLabs" && <button
             type="button"
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
@@ -3001,7 +3001,7 @@ const ActiveToolsDisplay = ({
           >
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
-          </button>
+          </button>}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -4827,13 +4827,13 @@ function ChatInterfaceContent() {
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
-  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("ElevenLabs")
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("Gemini 2.5 Flash TTS")
   const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
   const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
   const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
-  // Specific ElevenLabs voice chosen from the Voice Catalog. Persisted so the
-  // selection survives reloads. Empty → backend uses the multilingual default.
+  // Specific ElevenLabs voice chosen from the Voice Catalog. It is only sent
+  // when ElevenLabs is selected; Gemini uses its own production voice.
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
@@ -10586,12 +10586,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     });
 
     const runningState = {
-      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      meta: { goal: narration.slice(0, 200), model: selectedVoiceModel, tools: ['generate_speech'] },
       steps: [{
         id: 'speech-bootstrap',
         label: 'Generando audio',
         icon: 'thought',
-        reasoning: 'Convirtiendo el texto a voz con ElevenLabs.',
+        reasoning: `Convirtiendo el texto a voz con ${selectedVoiceModel}.`,
         status: 'running',
         toolCalls: [],
       }],
@@ -10625,7 +10625,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const resp = await apiClient.generateSpeechMessage({
         text: narration,
         chatId: activeChat.id,
-        voiceId: selectedVoiceId || undefined,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        effect: selectedVoiceEffect,
+        stability: selectedVoiceStability,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -10633,7 +10638,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } else {
         throw new Error('El servicio de voz no devolvió audio.');
       }
-      toast.success('Audio generado');
+      toast.success(resp?.model ? `Audio generado con ${resp.model}` : 'Audio generado');
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
       if (controller.signal.aborted || err?.name === 'AbortError') {
@@ -10685,12 +10690,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const messagesUpToEdit = currentChat.messages.slice(0, idx);
     const updatedUserMessage = { ...currentChat.messages[idx], content: narration };
     const runningState = {
-      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      meta: { goal: narration.slice(0, 200), model: selectedVoiceModel, tools: ['generate_speech'] },
       steps: [{
         id: 'speech-bootstrap',
         label: 'Regenerando audio',
         icon: 'thought',
-        reasoning: 'Convirtiendo el texto editado a voz con ElevenLabs.',
+        reasoning: `Convirtiendo el texto editado a voz con ${selectedVoiceModel}.`,
         status: 'running',
         toolCalls: [],
       }],
@@ -10733,7 +10738,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         text: narration,
         chatId,
         regenerate: true,
-        voiceId: selectedVoiceId || undefined,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        effect: selectedVoiceEffect,
+        stability: selectedVoiceStability,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -10741,7 +10751,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } else {
         throw new Error('El servicio de voz no devolvió audio.');
       }
-      toast.success('Audio regenerado');
+      toast.success(resp?.model ? `Audio regenerado con ${resp.model}` : 'Audio regenerado');
       if (chatId) selectChat(chatId);
     } catch (err: any) {
       if (controller.signal.aborted || err?.name === 'AbortError') {
