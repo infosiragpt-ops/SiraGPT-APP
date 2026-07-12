@@ -4670,13 +4670,13 @@ function namedSectionFallbackBlocks({ sectionTitle = '', requestText = '', sourc
     ];
     const count = requestedSectionPointCount(requestText, 2);
     return [
-      block('heading2', sectionTitle),
+      block('heading1', sectionTitle),
       ...Array.from({ length: count }, (_, index) => block('bullet', recommendations[index % recommendations.length])),
     ];
   }
   const context = compact(sourceText, 260);
   return [
-    block('heading2', sectionTitle),
+    block('heading1', sectionTitle),
     block('normal', context || `Contenido incorporado según la solicitud: ${compact(requestText, 360)}.`),
   ];
 }
@@ -4693,13 +4693,13 @@ function normalizeNamedSectionBlocks(blocks = [], { sectionTitle = '', documentT
     if (/^(?:anexo|anexos|appendix|appendices)$/.test(textNorm)) continue;
     if (documentNorm && textNorm === documentNorm && /^heading/.test(String(item?.kind || ''))) continue;
     if (textNorm === sectionNorm && /^heading/.test(String(item?.kind || ''))) {
-      if (!hasHeading) normalized.push(block('heading2', sectionTitle));
+      if (!hasHeading) normalized.push(block('heading1', sectionTitle));
       hasHeading = true;
       continue;
     }
     normalized.push(item);
   }
-  if (!hasHeading) normalized.unshift(block('heading2', sectionTitle));
+  if (!hasHeading) normalized.unshift(block('heading1', sectionTitle));
   return normalized;
 }
 
