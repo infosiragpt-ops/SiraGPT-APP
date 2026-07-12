@@ -42,7 +42,7 @@ describe("reduceEvent · queue_status", () => {
 })
 
 describe("reduceEvent · file_artifact", () => {
-  it("appends to the artifacts list (does NOT replace)", () => {
+  it("keeps distinct artifacts", () => {
     let s = fresh()
     s = reduceEvent(s, {
       type: "file_artifact",
@@ -55,6 +55,34 @@ describe("reduceEvent · file_artifact", () => {
     assert.equal(s.artifacts.length, 2)
     assert.equal(s.artifacts[0].id, "a1")
     assert.equal(s.artifacts[1].id, "a2")
+  })
+
+  it("replaces an earlier revision of the same deliverable", () => {
+    let s = fresh()
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "draft",
+        filename: "Informe.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 10,
+        downloadUrl: "/draft",
+      },
+    } as any)
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "final",
+        filename: "informe.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 20,
+        downloadUrl: "/final",
+      },
+    } as any)
+
+    assert.equal(s.artifacts.length, 1)
+    assert.equal(s.artifacts[0].id, "final")
+    assert.equal(s.artifacts[0].downloadUrl, "/final")
   })
 })
 
