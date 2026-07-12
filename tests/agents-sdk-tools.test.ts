@@ -49,6 +49,16 @@ describe("Agents SDK tools surface", () => {
     assert.match(page, /CodexAgentPanel/)
     assert.match(page, /surface="apps"/)
     assert.match(page, /AgentsList/)
-    assert.match(page, /App Builder/)
+    assert.match(page, /Agents SDK/)
+  })
+
+  it("codex apps panel auto-bootstraps workspace and offers enterprise starters", () => {
+    const panel = readFileSync(join(ROOT, "components/codex/codex-agent-panel.tsx"), "utf8")
+    assert.match(panel, /createProject\(hint/)
+    assert.match(panel, /manageBusy: false/)
+    assert.match(panel, /CRM de ventas/)
+    assert.match(panel, /enterprise_analyst/)
+    assert.match(panel, /buildAutonomousPrompt/)
+    assert.match(panel, /Composer disabled=\{false\}/)
   })
 })

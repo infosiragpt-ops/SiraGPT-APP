@@ -12,6 +12,7 @@ import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import { Loader2, Plus, Eye, FileCode2, ListChecks, Plug, Play } from "lucide-react"
 import { codexApi, type CodexAccess, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
+import { DEFAULT_TIER } from "@/lib/codex/model-tiers"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { useOptionalCodeWorkspace } from "@/lib/code-workspace-context"
 import { codexIdForProject, upsertCodexProject } from "@/lib/codex-projects"
@@ -237,12 +238,20 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
           setProjects([])
           return
         }
-        codexApi.listProjects().then(setProjects).catch(() => setProjects([]))
+        codexApi.listProjects()
+          .then((list) => {
+            setProjects(list)
+            // Claude Code style: drop the user into a workspace immediately.
+            // Prefer the most recent project; if none exist we'll bootstrap on send.
+            if (!project && list.length > 0) setProject(list[0])
+          })
+          .catch(() => setProjects([]))
       })
       .catch(() => {
         setAccess({ ok: false, enabled: false, canRun: false, allowlistConfigured: false })
         setProjects([])
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once on mount
   }, [])
 
   // Pick the most recent active/last run for the selected project.
@@ -257,27 +266,27 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     void syncWorkspaceFiles()
   }, [project?.id])
 
-  async function createProject() {
-    setBusy(true)
+  async function createProject(nameHint?: string, opts?: { manageBusy?: boolean }): Promise<CodexProject | null> {
+    const manageBusy = opts?.manageBusy !== false
+    if (manageBusy) setBusy(true)
     try {
-      const p = await codexApi.createProject(t(surface === "apps" ? "panel.defaultAppName" : "panel.defaultProjectName", { n: (projects?.length || 0) + 1 }))
+      const defaultName = t(surface === "apps" ? "panel.defaultAppName" : "panel.defaultProjectName", {
+        n: (projects?.length || 0) + 1,
+      })
+      const p = await codexApi.createProject(nameHint?.trim() || defaultName)
       setProjects((cur) => [p, ...(cur || [])])
       setProject(p)
+      return p
     } catch (e: any) {
       toast.error(e?.message || t("errors.createProject"))
+      return null
     } finally {
-      setBusy(false)
+      if (manageBusy) setBusy(false)
     }
   }
 
-  // A composer send starts with a real plan run. In APPS default mode the plan
-  // auto-approves into build when ready; Plan mode stops at the plan card.
-  async function send(payload: ComposerSendPayload) {
-    if (!project) return
-    const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
-    const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
-    if (!fullPrompt) return
-    const autonomousPrompt = [
+  function buildAutonomousPrompt(fullPrompt: string): string {
+    return [
       "MODO APPS TIPO CODEX:",
       "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
       "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
@@ -286,22 +295,55 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
       "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturacion, RRHH, POS, gestion de clientes/proveedores/proyectos): delega PRIMERO en enterprise_analyst y construye una app multi-modulo con navegacion lateral, dashboard con KPIs y datos de ejemplo realistas del dominio (nunca lorem ipsum).",
       "- Para UI usa frontend_builder; para datos/API backend_engineer o db_architect; cierra con qa_reviewer o debugger si hay errores de tsc/dev server.",
       "- Puedes emitir VARIOS run_subagent en el mismo turno cuando las tareas no dependan entre si.",
+      "- Trabaja como Claude Code: lee el workspace, escribe archivos completos, verifica con type_check/dev_server_check y corrige hasta que el preview arranque.",
       "",
       "SOLICITUD DEL USUARIO:",
       fullPrompt,
     ].join("\n")
+  }
+
+  // A composer send starts with a real plan run. In APPS default mode the plan
+  // auto-approves into build when ready; Plan mode stops at the plan card.
+  // If there is no project yet (first visit), bootstrap one automatically —
+  // Claude Code never asks you to "create a folder" before the first prompt.
+  async function send(payload: ComposerSendPayload) {
+    const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
+    const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
+    if (!fullPrompt) return
+
     setBusy(true)
     try {
-      const run = await codexApi.createRun(project.id, { mode: "plan", prompt: autonomousPrompt, tier: payload.tier })
+      let target = project
+      if (!target) {
+        // Derive a short app name from the first meaningful words of the prompt.
+        const hint = fullPrompt
+          .replace(/\s+/g, " ")
+          .slice(0, 48)
+          .replace(/[.,;:!?]+$/g, "")
+          .trim()
+        target = await createProject(hint || undefined, { manageBusy: false })
+        if (!target) return
+      }
+      const run = await codexApi.createRun(target.id, {
+        mode: "plan",
+        prompt: buildAutonomousPrompt(fullPrompt),
+        tier: payload.tier,
+      })
       setActivePlanOnly(payload.planOnly)
       if (!payload.planOnly) setPendingAutoBuild({ planRunId: run.id, tier: payload.tier })
       else setPendingAutoBuild(null)
       setActiveRunId(run.id)
+      // After starting a build, surface the Preview tab so the user sees progress + result.
+      if (surface === "apps" && !payload.planOnly) setRightTab("preview")
     } catch (e: any) {
       toast.error(e?.message || t("errors.startRun"))
     } finally {
       setBusy(false)
     }
+  }
+
+  async function sendStarter(prompt: string) {
+    await send({ prompt, planOnly: false, tier: DEFAULT_TIER, attachments: [] })
   }
 
   async function stop() {
@@ -335,18 +377,96 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     )
   }
 
+  const appsStarters: { title: string; blurb: string; prompt: string }[] = surface === "apps"
+    ? [
+        {
+          title: "CRM de ventas",
+          blurb: "Pipeline, clientes, cotizaciones y KPIs",
+          prompt:
+            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light.",
+        },
+        {
+          title: "Inventario multi-almacén",
+          blurb: "Stock, movimientos y alertas",
+          prompt:
+            "Construye un sistema de inventario multi-almacén: productos, almacenes, movimientos de entrada/salida/transferencia, stock mínimo con alertas y dashboard. UI multi-módulo con tablas filtrables y datos realistas.",
+        },
+        {
+          title: "Facturación",
+          blurb: "Clientes, productos, impuestos",
+          prompt:
+            "App de facturación: clientes, productos/servicios, facturas con estados (borrador/emitida/pagada/anulada), impuestos, y panel de cobros. Datos de ejemplo realistas en español y navegación lateral.",
+        },
+        {
+          title: "RRHH / nómina light",
+          blurb: "Empleados, ausencias, org chart",
+          prompt:
+            "Software RRHH light: empleados, departamentos, ausencias/vacaciones, organigrama y dashboard de headcount. Roles admin/manager/empleado. Datos realistas, UI multi-módulo.",
+        },
+        {
+          title: "POS / punto de venta",
+          blurb: "Caja, catálogo y tickets",
+          prompt:
+            "Punto de venta (POS): catálogo de productos, carrito, cobro, tickets/historial de ventas y cierre de caja. Dashboard del día. Datos realistas en español.",
+        },
+        {
+          title: "Landing + panel",
+          blurb: "Marketing + app interna",
+          prompt:
+            "Landing page premium de un SaaS B2B con hero, features, pricing y CTA, más un panel autenticado simple con dashboard de uso. React + Vite + TypeScript + Tailwind.",
+        },
+      ]
+    : []
+
   const agentView = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
         {activeRunId ? (
           <CodexRunTimeline state={state} cardRenderer={renderCard} />
         ) : (
-          <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-zinc-500">
-            {project ? t("panel.emptyDescribe") : t("panel.emptySelect")}
+          <div className="flex flex-1 flex-col items-center justify-center gap-5 overflow-y-auto px-6 py-8">
+            <div className="max-w-lg text-center">
+              <div className="mb-2 text-base font-semibold text-zinc-100">
+                {surface === "apps" ? "Construye software como Claude Code" : t("panel.emptyDescribe")}
+              </div>
+              <p className="text-sm leading-relaxed text-zinc-500">
+                {surface === "apps"
+                  ? "Escribe qué quieres (CRM, ERP, landing, dashboard…) y el agente planifica, delega en subagentes, escribe código, verifica y abre el preview. Sin intake ni preguntas innecesarias."
+                  : project
+                    ? t("panel.emptyDescribe")
+                    : t("panel.emptySelect")}
+              </p>
+              {surface === "apps" && (
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5 text-[10px] text-zinc-500">
+                  {["enterprise_analyst", "frontend_builder", "backend_engineer", "db_architect", "qa_reviewer", "debugger"].map((name) => (
+                    <span key={name} className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-zinc-400">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {appsStarters.length > 0 && (
+              <div className="grid w-full max-w-2xl gap-2 sm:grid-cols-2">
+                {appsStarters.map((s) => (
+                  <button
+                    key={s.title}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void sendStarter(s.prompt)}
+                    className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-left transition-colors hover:border-violet-500/40 hover:bg-violet-500/10 disabled:opacity-50"
+                  >
+                    <div className="text-sm font-medium text-zinc-100">{s.title}</div>
+                    <div className="mt-0.5 text-[11px] text-zinc-500">{s.blurb}</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
-      <Composer disabled={!project} busy={busy} active={active} showPlanToggle onSend={send} onStop={stop} />
+      {/* Composer always enabled: first send auto-creates the workspace (Claude Code ergonomics). */}
+      <Composer disabled={false} busy={busy} active={active} showPlanToggle onSend={send} onStop={stop} />
     </div>
   )
 
@@ -391,9 +511,14 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
           <option value="">{t("panel.selectProject")}</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <button type="button" onClick={createProject} disabled={busy} className="ml-auto flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10">
+        <button type="button" onClick={() => void createProject()} disabled={busy} className="ml-auto flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10">
           <Plus className="h-3.5 w-3.5" /> {t(surface === "apps" ? "panel.newApp" : "panel.newProject")}
         </button>
+        {surface === "apps" && (
+          <span className="hidden rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200 sm:inline">
+            Plan → Build → Preview
+          </span>
+        )}
         {status && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">{status}</span>}
       </header>
 
