@@ -1861,6 +1861,69 @@ describe('source-preserving document edit — document-understanding brain', () 
   });
 });
 
+describe('source-preserving DOCX title edits', () => {
+  const {
+    extractDocxTitleChange,
+    planSourcePreservingOperations,
+    setDocxDocumentTitleBuffer,
+    validateDocxOperationCriteria,
+  } = sourcePreservingInternals;
+
+  it('extracts the new title without swallowing the next requested edit', () => {
+    const parsed = extractDocxTitleChange(
+      'Ahora cambia el título a Informe final Trabajo 2026 y agrega una sección Recomendaciones con dos puntos.',
+    );
+    assert.deepEqual(parsed, { newTitle: 'Informe final Trabajo 2026' });
+  });
+
+  it('plans a native title update instead of replacing the literal word título', async () => {
+    const source = await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({ style: 'Title', children: [new TextRun('Informe de prueba Trabajo 2026')] }),
+        new Paragraph('Introducción que debe conservarse.'),
+      ] }],
+    }));
+    const documentXml = new PizZip(Buffer.from(source)).file('word/document.xml').asText();
+    const operations = planSourcePreservingOperations({
+      requestText: 'Cambia el título a Informe final Trabajo 2026 y agrega una sección Recomendaciones con dos puntos.',
+      documentXml,
+    });
+
+    assert.equal(operations.filter((op) => op.kind === 'set_document_title').length, 1);
+    assert.equal(operations.some((op) => op.kind === 'replace_text' && op.needle === 'titulo'), false);
+    assert.equal(operations.some((op) => op.kind === 'append_generic'), true);
+  });
+
+  it('changes only the visible title and preserves its formatting and body', async () => {
+    const source = await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          style: 'Title',
+          children: [new TextRun({ text: 'Informe de prueba Trabajo 2026', bold: true, color: 'AA0000' })],
+        }),
+        new Paragraph('Introducción que debe conservarse.'),
+        new Paragraph('Conclusión que debe conservarse.'),
+      ] }],
+    }));
+    const edited = setDocxDocumentTitleBuffer(Buffer.from(source), 'Informe final Trabajo 2026');
+    const xml = new PizZip(edited.buffer).file('word/document.xml').asText();
+
+    assert.equal(edited.previousTitle, 'Informe de prueba Trabajo 2026');
+    assert.match(xml, /Informe final Trabajo 2026/);
+    assert.doesNotMatch(xml, /Informe de prueba Trabajo 2026/);
+    assert.match(xml, /Introducción que debe conservarse/);
+    assert.match(xml, /Conclusión que debe conservarse/);
+    assert.match(xml, /<w:b\/>/);
+    assert.match(xml, /w:color w:val="AA0000"/);
+    const validation = validateDocxOperationCriteria(edited.buffer, [{
+      kind: 'set_document_title',
+      previousTitle: edited.previousTitle,
+      newTitle: edited.newTitle,
+    }]);
+    assert.equal(validation.passed, true);
+  });
+});
+
 describe('source-preserving Office edit — generic XLSX/PPTX operations', () => {
   const {
     appendToPptxBuffer,

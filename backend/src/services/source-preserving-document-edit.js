@@ -1949,6 +1949,71 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   };
 }
 
+function replaceParagraphTextPreservingFormatting(paragraphXmlValue = '', replacement = '') {
+  let wroteReplacement = false;
+  return String(paragraphXmlValue || '').replace(
+    /<w:t\b([^>]*)>[\s\S]*?<\/w:t>/g,
+    (_full, attributes = '') => {
+      const value = wroteReplacement ? '' : xmlEscape(replacement);
+      wroteReplacement = true;
+      return `<w:t${attributes}>${value}</w:t>`;
+    },
+  );
+}
+
+function setDocxDocumentTitleBuffer(buffer, newTitle) {
+  const cleanTitle = String(newTitle || '').trim();
+  if (cleanTitle.length < 2) {
+    const err = new Error('No se especificó el nuevo título del documento Word.');
+    err.code = 'DOCUMENT_TITLE_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const visibleParagraphs = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
+  const styledTitle = visibleParagraphs.find((paragraph) => (
+    /<w:pStyle\b[^>]*w:val=["'](?:title|titulo|t[ií]tulo|heading\s*1|heading1|titulo\s*1|t[ií]tulo\s*1)["']/iu.test(paragraph.xml)
+  ));
+  const titleParagraph = styledTitle || visibleParagraphs[0];
+  if (!titleParagraph) {
+    const err = new Error('No encontré un título visible dentro del DOCX.');
+    err.code = 'DOCUMENT_TITLE_NOT_FOUND';
+    throw err;
+  }
+  if (normalizeText(titleParagraph.text) === normalizeText(cleanTitle)) {
+    return {
+      buffer: Buffer.from(buffer),
+      previousTitle: titleParagraph.text.trim(),
+      newTitle: cleanTitle,
+    };
+  }
+  const updatedParagraph = replaceParagraphTextPreservingFormatting(titleParagraph.xml, cleanTitle);
+  if (updatedParagraph === titleParagraph.xml) {
+    const err = new Error('No pude actualizar el título sin alterar el formato del DOCX.');
+    err.code = 'DOCUMENT_TITLE_NOT_FOUND';
+    throw err;
+  }
+  documentXml = `${documentXml.slice(0, titleParagraph.start)}${updatedParagraph}${documentXml.slice(titleParagraph.end)}`;
+  zip.file('word/document.xml', documentXml);
+
+  const coreFile = zip.file('docProps/core.xml');
+  if (coreFile) {
+    let coreXml = coreFile.asText();
+    if (/<dc:title\b[^>]*>[\s\S]*?<\/dc:title>/i.test(coreXml)) {
+      coreXml = coreXml.replace(/<dc:title\b([^>]*)>[\s\S]*?<\/dc:title>/i, `<dc:title$1>${xmlEscape(cleanTitle)}</dc:title>`);
+      zip.file('docProps/core.xml', coreXml);
+    }
+  }
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    previousTitle: titleParagraph.text.trim(),
+    newTitle: cleanTitle,
+  };
+}
+
 function preserveCaseReplacement(match = '', lowerReplacement = '') {
   const source = String(match || '');
   const replacement = String(lowerReplacement || '');
@@ -3320,6 +3385,18 @@ function validateDocxOperationCriteria(buffer, operations = []) {
   const normalized = normalizeText(text);
   const checks = [];
   for (const op of operations || []) {
+    if (op.kind === 'set_document_title') {
+      checks.push({
+        id: 'document_title_changed',
+        label: 'Título del documento actualizado',
+        passed: normalizedTextIncludes(text, op.newTitle),
+        details: {
+          previousTitle: compact(op.previousTitle, 120),
+          newTitle: compact(op.newTitle, 120),
+        },
+      });
+      continue;
+    }
     if (op.kind === 'proofread_minimal') {
       const expected = Array.isArray(op.expectedReplacements) ? op.expectedReplacements : [];
       const failed = expected.filter((pair) => {
@@ -3746,7 +3823,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
 // (4) execute every operation in order on the same evolving buffer.
 // ---------------------------------------------------------------------------
 
-const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|aplic\\w*|corrig\\w*|correg\\w*|mejora\\w*|arregl\\w*|ajust\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|aplic\\w*|corrig\\w*|correg\\w*|cambi\\w*|mejora\\w*|arregl\\w*|ajust\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
 
 function splitRequestClauses(text) {
   const normalized = normalizeText(text);
@@ -3880,6 +3957,22 @@ function extractReplacementPair(text = '') {
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
 
+function extractDocxTitleChange(text = '') {
+  const raw = String(text || '').trim();
+  if (!/\b(?:cambi\w*|modific\w*|reemplaz\w*|actualiz\w*|corrig\w*)\b/iu.test(raw)) return null;
+  const match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
+  if (!match) return null;
+  const nextAction = /\s+(?:y|e)\s+(?=(?:agreg\w*|a[nñ]ad\w*|inclu\w*|incorpor\w*|conserv\w*|mant\w*|devu[eé]lv\w*|entreg\w*|quit\w*|elimin\w*|borr\w*|revis\w*|verific\w*)\b)/iu;
+  const newTitle = match[1]
+    .split(nextAction)[0]
+    .split(/[.;\n]/)[0]
+    .replace(/^['"“”‘’`]+|['"“”‘’`]+$/g, '')
+    .replace(/\s+(?:y|e)$/iu, '')
+    .trim();
+  if (newTitle.length < 2) return null;
+  return { newTitle: newTitle.slice(0, 180) };
+}
+
 function cleanupXlsxCellWriteValue(value = '') {
   return String(value || '')
     .replace(/[.;!?]+$/g, '')
@@ -3967,6 +4060,7 @@ function clauseHasStructuralEditIntent(clauseNorm) {
     || clauseIsAppend(clauseNorm)
     || clauseIsFill(clauseNorm)
     || clauseIsDelete(clauseNorm)
+    || extractDocxTitleChange(clauseNorm)
     || extractReplacementPair(clauseNorm)
     || clauseMentionsCover(clauseNorm)
     || clauseWantsBibliography(clauseNorm)
@@ -3992,7 +4086,12 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   const fill = clauseIsFill(clauseNorm);
   const append = clauseIsAppend(clauseNorm);
   const remove = clauseIsDelete(clauseNorm);
+  const titleChange = extractDocxTitleChange(clauseNorm);
   const replacement = extractReplacementPair(clauseNorm);
+
+  if (titleChange) {
+    return { kind: 'set_document_title', ...titleChange };
+  }
 
   if (replacement) {
     return { kind: 'replace_text', ...replacement };
@@ -4049,7 +4148,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -4066,8 +4165,10 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
     ops.push(op);
   };
 
+  const rawTitleChange = extractDocxTitleChange(requestText);
+  if (rawTitleChange) add({ kind: 'set_document_title', ...rawTitleChange });
   const rawReplacement = extractReplacementPair(requestText);
-  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
+  if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
   const norm = normalizeText(requestText);
   if (requestWantsMinimalProofreading(norm)) add({ kind: 'proofread_minimal' });
   for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
@@ -4630,6 +4731,22 @@ function runReplaceTextOperation({ buffer, op }) {
       changedCount: result.changedCount,
       needle: op.needle,
       replacement: op.replacement,
+    },
+  };
+}
+
+function runSetDocumentTitleOperation({ buffer, op }) {
+  const result = setDocxDocumentTitleBuffer(buffer, op.newTitle);
+  op.previousTitle = result.previousTitle;
+  return {
+    buffer: result.buffer,
+    validationBlocks: [block('heading1', op.newTitle)],
+    step: {
+      kind: 'set_document_title',
+      label: 'Título del documento',
+      mode: 'format_preserving_title_replace',
+      previousTitle: result.previousTitle,
+      newTitle: op.newTitle,
     },
   };
 }
@@ -5470,6 +5587,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runDeleteTextOperation({ buffer, op });
     } else if (op.kind === 'delete_section' || op.kind === 'delete_section_range') {
       result = runDeleteSectionOperation({ buffer, op });
+    } else if (op.kind === 'set_document_title') {
+      result = runSetDocumentTitleOperation({ buffer, op });
     } else if (op.kind === 'replace_text') {
       result = runReplaceTextOperation({ buffer, op });
     } else if (op.kind === 'proofread_minimal') {
@@ -5744,6 +5863,7 @@ function describeStep(step) {
   if (step.kind === 'delete_section_range') return `eliminé ${step.label || 'la sección'} y todo el contenido posterior`;
   if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
+  if (step.kind === 'set_document_title') return `actualicé el título del documento a «${step.newTitle}» conservando su formato`;
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
   if (step.kind === 'proofread_minimal') {
     const count = Number(step.changedCount || 0);
@@ -6316,6 +6436,7 @@ module.exports = {
     detectSectionTablePlan,
     extractParagraphProperties,
     extractRunProperties,
+    extractDocxTitleChange,
     extractTextFromPptxBuffer,
     paragraphXml,
     pickRepresentativeListParagraph,
@@ -6351,6 +6472,7 @@ module.exports = {
     sanitizeCapturedParagraphProperties,
     selectSourcePreservingDocumentSet,
     setXlsxCellBuffer,
+    setDocxDocumentTitleBuffer,
     sourceDocumentParallelism,
     splitRequestClauses,
   },
