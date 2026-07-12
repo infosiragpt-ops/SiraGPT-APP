@@ -171,7 +171,10 @@ function redactString(input, opts = {}) {
   }
 
   value = redactQueryFragments(value);
-  value = value.replace(/\b(https?:\/\/)[^\s/?#@]+:[^\s/?#@]+@/giu, '$1');
+  value = value.replace(
+    /\b((?:https?|postgres(?:ql)?|prisma\+postgres|redis(?:s)?|mysql|mongodb(?:\+srv)?):\/\/)[^\s/?#@]+:[^\s/?#@]+@/giu,
+    '$1',
+  );
 
   for (const { name, pattern } of TOKEN_PATTERNS) {
     value = value.replace(pattern, `***${name}-redacted***`);

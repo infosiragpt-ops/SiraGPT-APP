@@ -146,10 +146,27 @@ jobs:
             READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
             VERSION_URL="${VERSION_URL:-https://api.siragpt.com/api/version}"
             FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com}"
+            READY_WAIT_SECONDS="${READY_WAIT_SECONDS:-180}"
+
+            dump_backend_diagnostics() {
+              echo "[deploy-workflow] Backend container state"
+              ${COMPOSE} ps backend || true
+              local container_id
+              container_id="$(${COMPOSE} ps -q backend 2>/dev/null || true)"
+              if [[ -n "${container_id}" ]]; then
+                docker inspect --format \
+                  'status={{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} error={{.State.Error}}' \
+                  "${container_id}" || true
+              fi
+              echo "[deploy-workflow] Redacted backend log tail"
+              ${COMPOSE} logs --no-color --tail=200 backend 2>&1 \
+                | docker run --rm -i siragpt-backend:latest node scripts/redact-log-stream.js \
+                || true
+            }
 
             wait_ready() {
               local deadline status
-              deadline=$(( $(date +%s) + 60 ))
+              deadline=$(( $(date +%s) + READY_WAIT_SECONDS ))
               while [[ $(date +%s) -lt "${deadline}" ]]; do
                 status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "${READY_URL}" || true)"
                 if [[ "${status}" == "200" ]]; then
@@ -158,6 +175,7 @@ jobs:
                 sleep 3
               done
               echo "[deploy-workflow] Health check failed: ${READY_URL} (last status: ${status:-none})"
+              dump_backend_diagnostics
               return 1
             }
 

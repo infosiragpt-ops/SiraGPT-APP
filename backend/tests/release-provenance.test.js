@@ -145,6 +145,18 @@ test('production deploy proves the exact commit and restores rollback provenance
   assert.doesNotMatch(workflow, /PREV_SHA="\$\(git rev-parse HEAD/);
 });
 
+test('production deploy emits redacted backend diagnostics before rollback', () => {
+  const workflow = read('.github/workflows/deploy.yml');
+  const redactor = read('backend/scripts/redact-log-stream.js');
+
+  assert.match(workflow, /READY_WAIT_SECONDS="\$\{READY_WAIT_SECONDS:-180\}"/);
+  assert.match(workflow, /dump_backend_diagnostics/);
+  assert.match(workflow, /redact-log-stream\.js/);
+  assert.match(workflow, /Health check failed:[\s\S]*dump_backend_diagnostics/);
+  assert.match(redactor, /redactString/);
+  assert.doesNotMatch(redactor, /console\.log\(line\)/);
+});
+
 test('official production deploy paths use the bounded migration-only wrapper', () => {
   const workflow = read('.github/workflows/deploy.yml');
   const deployScript = read('scripts/deploy-production.sh');
