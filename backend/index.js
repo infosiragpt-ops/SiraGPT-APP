@@ -1360,13 +1360,10 @@ const { globalErrorHandler: buildGlobalErrorHandler } = require('./src/middlewar
 app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryException }));
 
 async function startServer() {
-    // ── Google OAuth configuration check ───────────────────────
-    // Run before app.listen so a broken OAuth config is caught
-    // before the server accepts any traffic. In production, critical
-    // issues (localhost callback, malformed base URL, host mismatch)
-    // are treated as blocking failures and halt startup with a clear
-    // error message. In non-production environments, the same checks
-    // run but only emit warnings — the server still starts.
+    // ── Provider-aware OAuth configuration check ───────────────
+    // Core Google OAuth remains fail-fast in production. Optional
+    // providers are classified independently and may degrade without
+    // preventing the rest of the backend from accepting traffic.
     try {
         const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
         const oauthResult = validateOAuthCallbackUrl({ logger });
@@ -1376,18 +1373,23 @@ async function startServer() {
         // running server) and the live /health route reads this snapshot.
         healthRoutes.setOAuthBootResult(oauthResult);
         if (oauthResult.shouldBlock) {
+            const blockingProviders = Object.entries(oauthResult.providers || {})
+                .filter(([, status]) => status && status.blocking)
+                .map(([provider]) => provider);
             logger.error(
                 {
+                    blockingProviders,
                     issues: oauthResult.issues,
                     hint:
-                        'Google OAuth is misconfigured. The server will not start in production ' +
-                        'with a broken OAuth configuration. Fix the issues listed above and restart.',
+                        'A required OAuth provider is misconfigured. Fix the provider-specific ' +
+                        'reason codes listed above and restart.',
                 },
                 'oauth_config_boot_check_failed',
             );
-            console.error('[FATAL] Google OAuth configuration is invalid — aborting startup.');
+            console.error('[FATAL] Required OAuth provider configuration is invalid — aborting startup.');
+            console.error(`[FATAL] Blocking providers: ${blockingProviders.join(', ') || 'unknown'}`);
             console.error(`[FATAL] Issues: ${oauthResult.issues.join(', ')}`);
-            console.error('[FATAL] Check GOOGLE_AUTH_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and related redirect URI secrets.');
+            console.error('[FATAL] Check the credentials and callback settings for each blocking provider.');
             // Exit synchronously so app.listen is never reached.
             // process.exit flushes stdio in Node ≥ 18; the exitCode is set
             // first as a belt-and-braces fallback in case exit is deferred

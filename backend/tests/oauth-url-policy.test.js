@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -163,19 +165,24 @@ test('provider post-callback destinations are centralized and preserve status sa
   );
 });
 
-test('production boot validation blocks insecure GitHub and Spotify callback configuration', () => {
+test('production U2 fixture degrades legacy localhost Spotify while valid Google stays available', () => {
   const logs = [];
   const result = validateOAuthCallbackUrl({
     env: {
       NODE_ENV: 'production',
-      GITHUB_CLIENT_ID: 'github-id',
-      GITHUB_CLIENT_SECRET: 'github-secret',
-      GITHUB_OAUTH_REDIRECT_URI: 'http://localhost:5000/api/github/callback',
-      GITHUB_OAUTH_SUCCESS_REDIRECT: 'http://app.example.test/settings',
+      FRONTEND_URL: 'https://siragpt.com',
+      GOOGLE_CLIENT_ID: 'google-id',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+      GOOGLE_AUTH_BASE_URL: 'https://api.siragpt.com',
+      GOOGLE_AUTH_URI: 'https://api.siragpt.com/api/auth/google/callback',
+      GOOGLE_REDIRECT_URI: 'https://api.siragpt.com/api/auth/gmail/callback',
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI:
+        'https://api.siragpt.com/api/auth/google-services/callback',
       SPOTIFY_CLIENT_ID: 'spotify-id',
       SPOTIFY_CLIENT_SECRET: 'spotify-secret',
-      SPOTIFY_REDIRECT_URI: 'http://spotify.example.test/callback',
-      SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'http://localhost:3000/chat',
+      SPOTIFY_REDIRECT_URI: 'http://localhost:5000/api/spotify/callback',
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/chat',
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: 'https://siragpt.com/connections',
     },
     logger: {
       warn: (...args) => logs.push(args),
@@ -184,11 +191,270 @@ test('production boot validation blocks insecure GitHub and Spotify callback con
   });
 
   assert.equal(result.checked, true);
-  assert.equal(result.shouldBlock, true);
-  assert.ok(result.issues.includes('oauth_callback_https_required'));
-  assert.ok(result.issues.includes('oauth_callback_localhost_in_production'));
-  assert.ok(result.issues.includes('oauth_post_callback_https_required'));
+  assert.equal(result.shouldBlock, false);
+  assert.deepEqual(result.providers.google, {
+    configured: true,
+    enabled: true,
+    status: 'healthy',
+    blocking: false,
+    reasons: [],
+  });
+  assert.deepEqual(result.providers.spotify, {
+    configured: true,
+    enabled: false,
+    status: 'degraded',
+    blocking: false,
+    reasons: [
+      'callback_localhost_in_production',
+      'callback_https_required',
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(result.providers), /localhost:5000|spotify-secret/);
   assert.ok(logs.length >= 1);
+});
+
+test('production still blocks an invalid configured Google/core provider', () => {
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      GOOGLE_CLIENT_ID: 'google-id',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+      GOOGLE_AUTH_BASE_URL: 'http://localhost:5000',
+      GOOGLE_AUTH_URI: 'http://localhost:5000/api/auth/google/callback',
+    },
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.shouldBlock, true);
+  assert.equal(result.providers.google.configured, true);
+  assert.equal(result.providers.google.enabled, false);
+  assert.equal(result.providers.google.status, 'degraded');
+  assert.equal(result.providers.google.blocking, true);
+  assert.ok(result.providers.google.reasons.includes('base_url_localhost_in_production'));
+});
+
+test('configured optional providers require explicit callback and post-callback URLs', () => {
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      GITHUB_CLIENT_ID: 'github-id',
+      GITHUB_CLIENT_SECRET: 'github-secret',
+      SPOTIFY_CLIENT_ID: 'spotify-id',
+      SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+    },
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.shouldBlock, false);
+  assert.deepEqual(result.providers.github.reasons, [
+    'callback_url_missing',
+    'post_callback_url_missing',
+  ]);
+  assert.deepEqual(result.providers.spotify.reasons, [
+    'callback_url_missing',
+    'success_post_callback_url_missing',
+    'failure_post_callback_url_missing',
+  ]);
+  assert.equal(result.providers.github.enabled, false);
+  assert.equal(result.providers.spotify.enabled, false);
+});
+
+test('valid optional OAuth providers remain enabled', () => {
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      GITHUB_CLIENT_ID: 'github-id',
+      GITHUB_CLIENT_SECRET: 'github-secret',
+      GITHUB_OAUTH_REDIRECT_URI: 'https://api.siragpt.com/api/github/callback',
+      GITHUB_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/settings',
+      SPOTIFY_CLIENT_ID: 'spotify-id',
+      SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+      SPOTIFY_REDIRECT_URI: 'https://api.siragpt.com/api/spotify/callback',
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/chat',
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: 'https://siragpt.com/connections',
+      GOOGLE_AUTH_BASE_URL: 'https://api.siragpt.com',
+    },
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.shouldBlock, false);
+  assert.equal(result.providers.github.status, 'healthy');
+  assert.equal(result.providers.github.enabled, true);
+  assert.equal(result.providers.spotify.status, 'healthy');
+  assert.equal(result.providers.spotify.enabled, true);
+});
+
+test('production fails closed when active Google provider validation throws', () => {
+  const logs = [];
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      GOOGLE_CLIENT_ID: 'google-id',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+      GOOGLE_AUTH_BASE_URL: 'https://api.siragpt.com',
+    },
+    providerValidators: {
+      google() {
+        throw new Error('validator exploded at https://private.example.test?token=unsafe');
+      },
+    },
+    logger: {
+      warn: (...args) => logs.push(args),
+      error: (...args) => logs.push(args),
+    },
+  });
+
+  assert.equal(result.shouldBlock, true);
+  assert.deepEqual(result.providers.google, {
+    configured: true,
+    enabled: false,
+    status: 'degraded',
+    blocking: true,
+    reasons: ['validator_error'],
+  });
+  assert.ok(result.issues.includes('google_validator_error'));
+  assert.doesNotMatch(JSON.stringify({ result, logs }), /private\.example|token=unsafe|exploded/);
+});
+
+test('optional provider validator exceptions degrade only that provider', () => {
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      FRONTEND_URL: 'https://siragpt.com',
+      GOOGLE_CLIENT_ID: 'google-id',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+      GOOGLE_AUTH_BASE_URL: 'https://api.siragpt.com',
+      GITHUB_CLIENT_ID: 'github-id',
+      GITHUB_CLIENT_SECRET: 'github-secret',
+      GITHUB_OAUTH_REDIRECT_URI: 'https://api.siragpt.com/api/github/callback',
+      GITHUB_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/settings',
+      SPOTIFY_CLIENT_ID: 'spotify-id',
+      SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+      SPOTIFY_REDIRECT_URI: 'https://api.siragpt.com/api/spotify/callback',
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/chat',
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: 'https://siragpt.com/connections',
+    },
+    providerValidators: {
+      spotify() {
+        throw new Error('spotify validator leaked unsafe-secret');
+      },
+    },
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.shouldBlock, false);
+  assert.equal(result.providers.google.status, 'healthy');
+  assert.equal(result.providers.github.status, 'healthy');
+  assert.deepEqual(result.providers.spotify, {
+    configured: true,
+    enabled: false,
+    status: 'degraded',
+    blocking: false,
+    reasons: ['validator_error'],
+  });
+  assert.deepEqual(Object.keys(result.providers), ['google', 'github', 'spotify']);
+  assert.doesNotMatch(JSON.stringify(result), /unsafe-secret/);
+});
+
+test('production rejects attacker-controlled OAuth post-callback origins', () => {
+  const env = {
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'https://app.example.test',
+    GOOGLE_AUTH_BASE_URL: 'https://api.example.test',
+    GITHUB_CLIENT_ID: 'github-id',
+    GITHUB_CLIENT_SECRET: 'github-secret',
+    GITHUB_OAUTH_REDIRECT_URI: 'https://api.example.test/api/github/callback',
+    GITHUB_OAUTH_SUCCESS_REDIRECT: 'https://attacker.example/settings',
+    SPOTIFY_CLIENT_ID: 'spotify-id',
+    SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+    SPOTIFY_REDIRECT_URI: 'https://api.example.test/api/spotify/callback',
+    SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'https://attacker.example/chat',
+    SPOTIFY_OAUTH_FAILURE_REDIRECT: 'https://attacker.example/connections',
+  };
+  const result = validateOAuthCallbackUrl({
+    env,
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.shouldBlock, false);
+  assert.deepEqual(result.providers.github.reasons, [
+    'post_callback_origin_not_allowed',
+  ]);
+  assert.deepEqual(result.providers.spotify.reasons, [
+    'success_post_callback_origin_not_allowed',
+    'failure_post_callback_origin_not_allowed',
+  ]);
+  assert.equal(result.providers.github.enabled, false);
+  assert.equal(result.providers.spotify.enabled, false);
+  assert.equal(
+    getGithubPostCallbackURL('connected', env),
+    'https://app.example.test/settings?github=connected',
+  );
+  assert.equal(
+    getSpotifyPostCallbackURL('connected', env),
+    'https://app.example.test/chat?spotify_connected=true',
+  );
+  assert.doesNotMatch(
+    `${getGithubPostCallbackURL('connected', env)} ${getSpotifyPostCallbackURL('error', env)}`,
+    /attacker\.example/,
+  );
+});
+
+test('production allows an explicit bounded OAuth post-callback origin', () => {
+  const env = {
+    NODE_ENV: 'production',
+    NEXT_PUBLIC_URL: 'https://app.example.test',
+    GOOGLE_AUTH_BASE_URL: 'https://api.example.test',
+    OAUTH_POST_CALLBACK_ALLOWED_ORIGINS: 'https://trusted.example.test',
+    GITHUB_CLIENT_ID: 'github-id',
+    GITHUB_CLIENT_SECRET: 'github-secret',
+    GITHUB_OAUTH_REDIRECT_URI: 'https://api.example.test/api/github/callback',
+    GITHUB_OAUTH_SUCCESS_REDIRECT: 'https://trusted.example.test/settings',
+  };
+  const result = validateOAuthCallbackUrl({
+    env,
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.providers.github.enabled, true);
+  assert.equal(result.providers.github.status, 'healthy');
+  assert.equal(
+    getGithubPostCallbackURL('connected', env),
+    'https://trusted.example.test/settings?github=connected',
+  );
+});
+
+test('OAuth post-callback origin allowlist is capped at ten entries', () => {
+  const origins = Array.from(
+    { length: 11 },
+    (_value, index) => `https://allowed-${index + 1}.example.test`,
+  );
+  const result = validateOAuthCallbackUrl({
+    env: {
+      NODE_ENV: 'production',
+      FRONTEND_URL: 'https://app.example.test',
+      GOOGLE_AUTH_BASE_URL: 'https://api.example.test',
+      OAUTH_POST_CALLBACK_ALLOWED_ORIGINS: origins.join(','),
+      GITHUB_CLIENT_ID: 'github-id',
+      GITHUB_CLIENT_SECRET: 'github-secret',
+      GITHUB_OAUTH_REDIRECT_URI: 'https://api.example.test/api/github/callback',
+      GITHUB_OAUTH_SUCCESS_REDIRECT: `${origins[10]}/settings`,
+    },
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.providers.github.enabled, false);
+  assert.deepEqual(result.providers.github.reasons, [
+    'post_callback_origin_not_allowed',
+  ]);
+});
+
+test('startup fatal output is generic and identifies blocking providers', () => {
+  const indexSource = fs.readFileSync(path.resolve(__dirname, '../index.js'), 'utf8');
+
+  assert.match(indexSource, /blockingProviders/);
+  assert.match(indexSource, /Required OAuth provider configuration is invalid/);
+  assert.doesNotMatch(indexSource, /Google OAuth configuration is invalid/);
 });
 
 test('GOOGLE_AUTH_BASE_URL overrides stale per-flow URI secrets pointing to a different host', () => {
@@ -296,3 +562,8 @@ test('production env snapshot: GOOGLE_AUTH_BASE_URL wins over stale GOOGLE_REDIR
     'https://siragpt.com/api/auth/google-services/callback'
   );
 });
+
+// backend/package.json enumerates test entrypoints explicitly. Keep the HTTP
+// degradation regression in this registered OAuth entrypoint as well as in its
+// independently runnable file.
+require('./oauth-provider-route-degrade.test');

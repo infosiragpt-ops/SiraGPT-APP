@@ -30,6 +30,9 @@ const express = require('express');
 const request = require('supertest');
 
 const { createHealthRoutes } = require('../src/routes/health-routes');
+const {
+  validateOAuthCallbackUrl,
+} = require('../src/utils/oauth-callback-boot-validator');
 
 // Fake healthy dependencies so the composite report is deterministic and the
 // suite never touches a real Postgres/Redis. OPENAI_API_KEY is set so the
@@ -155,6 +158,91 @@ describe('GET /health — live OAuth health exposure (e2e)', () => {
     assert.deepEqual(check.details.issues, [
       'redirect host mismatch: expected siragpt.com',
     ]);
+  });
+
+  test('optional Spotify degradation is sanitized in health without degrading valid Google', async () => {
+    const { app, healthRoutes } = buildApp();
+    const oauthResult = validateOAuthCallbackUrl({
+      env: {
+        NODE_ENV: 'production',
+        FRONTEND_URL: 'https://siragpt.com',
+        GOOGLE_CLIENT_ID: 'google-id',
+        GOOGLE_CLIENT_SECRET: 'google-secret',
+        GOOGLE_AUTH_BASE_URL: 'https://api.siragpt.com',
+        GOOGLE_AUTH_URI: 'https://api.siragpt.com/api/auth/google/callback',
+        GOOGLE_REDIRECT_URI: 'https://api.siragpt.com/api/auth/gmail/callback',
+        GOOGLE_REDIRECT_CALENDAR_DRIVE_URI:
+          'https://api.siragpt.com/api/auth/google-services/callback',
+        SPOTIFY_CLIENT_ID: 'spotify-id',
+        SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+        SPOTIFY_REDIRECT_URI: 'http://localhost:5000/api/spotify/callback',
+        SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/chat',
+        SPOTIFY_OAUTH_FAILURE_REDIRECT: 'https://siragpt.com/connections',
+      },
+      logger: { warn() {}, error() {} },
+    });
+    healthRoutes.setOAuthBootResult(oauthResult);
+
+    const res = await request(app).get('/health');
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'degraded');
+    assert.deepEqual(res.body.oauthProviders.spotify, {
+      configured: true,
+      enabled: false,
+      status: 'degraded',
+      blocking: false,
+      reasons: [
+        'callback_localhost_in_production',
+        'callback_https_required',
+      ],
+    });
+    assert.equal(
+      res.body.checks.find((check) => check.name === 'google_oauth').status,
+      'healthy',
+    );
+    assert.equal(
+      res.body.checks.find((check) => check.name === 'oauth_providers').status,
+      'degraded',
+    );
+    assert.doesNotMatch(
+      JSON.stringify(res.body.oauthProviders),
+      /localhost:5000|http:\/\/|google-secret|spotify-secret/,
+    );
+  });
+
+  test('provider validator errors surface as sanitized degraded health', async () => {
+    const { app, healthRoutes } = buildApp();
+    const oauthResult = validateOAuthCallbackUrl({
+      env: {
+        NODE_ENV: 'production',
+        FRONTEND_URL: 'https://siragpt.com',
+        GOOGLE_CLIENT_ID: 'google-id',
+        GOOGLE_CLIENT_SECRET: 'google-secret',
+        GOOGLE_AUTH_BASE_URL: 'https://api.siragpt.com',
+        SPOTIFY_CLIENT_ID: 'spotify-id',
+        SPOTIFY_CLIENT_SECRET: 'spotify-secret',
+        SPOTIFY_REDIRECT_URI: 'https://api.siragpt.com/api/spotify/callback',
+        SPOTIFY_OAUTH_SUCCESS_REDIRECT: 'https://siragpt.com/chat',
+        SPOTIFY_OAUTH_FAILURE_REDIRECT: 'https://siragpt.com/connections',
+      },
+      providerValidators: {
+        spotify() {
+          throw new Error('validator failed with secret=do-not-expose');
+        },
+      },
+      logger: { warn() {}, error() {} },
+    });
+    healthRoutes.setOAuthBootResult(oauthResult);
+
+    const res = await request(app).get('/health');
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'degraded');
+    assert.deepEqual(res.body.oauthProviders.spotify.reasons, ['validator_error']);
+    assert.equal(res.body.oauthProviders.spotify.status, 'degraded');
+    assert.equal(res.body.oauthProviders.spotify.enabled, false);
+    assert.doesNotMatch(JSON.stringify(res.body), /do-not-expose|secret=/);
   });
 
   test('the /api/health alias exposes the same OAuth wiring', async () => {

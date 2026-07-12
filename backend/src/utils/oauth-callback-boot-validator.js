@@ -3,7 +3,8 @@
 // ──────────────────────────────────────────────────────────────
 // SiraGPT — OAuth Callback URL Boot Validator
 // ──────────────────────────────────────────────────────────────
-// Defense-in-depth check executed at boot. Validates:
+// Provider-aware defense-in-depth check executed at boot and reused by the
+// optional-provider route gates. It validates:
 //
 //   1. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are both present
 //      when any Google credential is set.
@@ -15,25 +16,12 @@
 //      breaks the OAuth round-trip for every user.
 //   4. The resolved Google callback host matches
 //      GOOGLE_AUTH_BASE_URL when that variable is set.
+//   5. GitHub and Spotify have complete credentials plus explicit callback
+//      URLs and approved-origin post-callback URLs before either is enabled.
 //
-// Severity policy:
-//   - Production + localhost callback/base URL → logger.error
-//   - Malformed URL, host mismatch              → logger.warn
-//   - Missing paired credential                 → logger.warn
-//
-// Blocking policy (shouldBlock):
-//   In production, the following issue codes are considered
-//   critical enough to halt startup — callers should call
-//   process.exit(1) when shouldBlock is true:
-//     - malformed_google_auth_base_url
-//     - google_auth_base_url_localhost_in_production
-//     - oauth_callback_url_malformed
-//     - oauth_callback_localhost_in_production
-//     - host_mismatch
-//
-// Non-blocking in non-production environments — always warns,
-// never exits. All exceptions are swallowed so a bug in this
-// validator never crashes boot regardless of environment.
+// Blocking policy: invalid configured Google/core OAuth blocks production.
+// GitHub and Spotify are optional; invalid configuration disables only that
+// provider and is surfaced as a sanitized degraded status.
 // ──────────────────────────────────────────────────────────────
 
 const {
@@ -42,39 +30,28 @@ const {
   getGoogleServicesCallbackURL,
   getGithubCallbackURL,
   getSpotifyCallbackURL,
-  resolvePublicBackendUrl,
+  isAllowedOAuthPostCallbackUrl,
   isLocalhostUrl,
 } = require('../config/oauth-url-policy');
 
-// Issue codes that should block production startup.
-// A mispaired credential is as fatal as a broken callback URL — OAuth
-// will fail for every user at either the authorization or token-exchange
-// step, and there is no graceful recovery path.
+// Value-free Google/core reasons that block production startup.
 const BLOCKING_ISSUE_CODES = new Set([
-  'missing_google_client_id',
-  'missing_google_client_secret',
-  'malformed_google_auth_base_url',
-  'google_auth_base_url_localhost_in_production',
-  'oauth_callback_url_malformed',
-  'oauth_callback_localhost_in_production',
-  'oauth_callback_https_required',
-  'oauth_post_callback_url_malformed',
-  'oauth_post_callback_localhost_in_production',
-  'oauth_post_callback_https_required',
-  'host_mismatch',
+  'client_id_missing',
+  'client_secret_missing',
+  'base_url_malformed',
+  'base_url_localhost_in_production',
+  'base_url_https_required',
+  'callback_url_missing',
+  'callback_url_malformed',
+  'callback_localhost_in_production',
+  'callback_https_required',
+  'callback_host_mismatch',
+  'callback_resolution_failed',
+  'validator_error',
 ]);
 
 function normalizeHostname(hostname) {
   return String(hostname || '').toLowerCase().replace(/^www\./, '');
-}
-
-function parseHostname(urlValue) {
-  if (!urlValue) return '';
-  try {
-    return normalizeHostname(new URL(urlValue).hostname);
-  } catch {
-    return '';
-  }
 }
 
 function isWellFormedUrl(value) {
@@ -87,343 +64,359 @@ function isWellFormedUrl(value) {
   }
 }
 
-/**
- * Audit a single resolved callback URL.
- * Returns an array of { level, event, data } findings.
- */
-function auditCallbackUrl(resolvedUrl, label, isProd) {
-  const findings = [];
+const OPTIONAL_PROVIDER_ENV = Object.freeze({
+  github: Object.freeze({
+    clientId: 'GITHUB_CLIENT_ID',
+    clientSecret: 'GITHUB_CLIENT_SECRET',
+    callback: 'GITHUB_OAUTH_REDIRECT_URI',
+    callbackGetter: getGithubCallbackURL,
+    postCallbacks: Object.freeze([
+      Object.freeze({
+        key: 'GITHUB_OAUTH_SUCCESS_REDIRECT',
+        prefix: 'post_callback',
+      }),
+    ]),
+  }),
+  spotify: Object.freeze({
+    clientId: 'SPOTIFY_CLIENT_ID',
+    clientSecret: 'SPOTIFY_CLIENT_SECRET',
+    callback: 'SPOTIFY_REDIRECT_URI',
+    callbackGetter: getSpotifyCallbackURL,
+    postCallbacks: Object.freeze([
+      Object.freeze({
+        key: 'SPOTIFY_OAUTH_SUCCESS_REDIRECT',
+        prefix: 'success_post_callback',
+      }),
+      Object.freeze({
+        key: 'SPOTIFY_OAUTH_FAILURE_REDIRECT',
+        prefix: 'failure_post_callback',
+      }),
+    ]),
+  }),
+});
 
-  if (!resolvedUrl) {
-    findings.push({
-      level: 'warn',
-      event: 'oauth_callback_url_empty',
-      data: {
-        label,
-        hint:
-          `${label} resolved to an empty string. ` +
-          'Check that GOOGLE_AUTH_BASE_URL or the relevant redirect URI secret is set.',
-      },
-    });
-    return findings;
-  }
+const GOOGLE_PROVIDER_ENV_KEYS = Object.freeze([
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'GOOGLE_AUTH_BASE_URL',
+  'GOOGLE_AUTH_URI',
+  'GOOGLE_REDIRECT_URI',
+  'GOOGLE_REDIRECT_CALENDAR_DRIVE_URI',
+]);
 
-  if (!isWellFormedUrl(resolvedUrl)) {
-    findings.push({
-      level: 'warn',
-      event: 'oauth_callback_url_malformed',
-      data: {
-        label,
-        resolvedUrl,
-        hint: `${label} resolved to a malformed URL: ${resolvedUrl}. OAuth logins will fail.`,
-      },
-    });
-    return findings;
-  }
-
-  if (isProd && isLocalhostUrl(resolvedUrl)) {
-    findings.push({
-      level: 'error',
-      event: 'oauth_callback_localhost_in_production',
-      data: {
-        label,
-        resolvedUrl,
-        hint:
-          `${label} resolves to localhost in production: ${resolvedUrl}. ` +
-          'Google will redirect users back to localhost and every OAuth login will fail. ' +
-          'Set GOOGLE_AUTH_BASE_URL to your public production domain.',
-      },
-    });
-  }
-  if (isProd && new URL(resolvedUrl).protocol !== 'https:') {
-    findings.push({
-      level: 'error',
-      event: 'oauth_callback_https_required',
-      data: {
-        label,
-        resolvedUrl,
-        hint: `${label} must use HTTPS in production.`,
-      },
-    });
-  }
-
-  return findings;
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-function auditConfiguredUrl(value, label, isProd, { postCallback = false } = {}) {
-  if (!value) return [];
-  const prefix = postCallback ? 'oauth_post_callback' : 'oauth_callback';
-  if (!isWellFormedUrl(value)) {
-    return [{
-      level: 'warn',
-      event: `${prefix}_url_malformed`,
-      data: { label, hint: `${label} must be an absolute http/https URL.` },
-    }];
-  }
-  const findings = [];
+function unique(values) {
+  return [...new Set(values)];
+}
+
+/**
+ * Return value-free reason codes for one required OAuth URL. These codes are
+ * safe to expose through /health and route errors: no URL, host, query value,
+ * credential, or provider response is retained.
+ */
+function configuredUrlReasons(value, prefix, isProd) {
+  if (!nonEmpty(value)) return [`${prefix}_url_missing`];
+  if (!isWellFormedUrl(value)) return [`${prefix}_url_malformed`];
+
+  const reasons = [];
   if (isProd && isLocalhostUrl(value)) {
-    findings.push({
-      level: 'error',
-      event: `${prefix}_localhost_in_production`,
-      data: { label, hint: `${label} cannot point to localhost in production.` },
-    });
+    reasons.push(`${prefix}_localhost_in_production`);
   }
   if (isProd && new URL(value).protocol !== 'https:') {
-    findings.push({
-      level: 'error',
-      event: `${prefix}_https_required`,
-      data: { label, hint: `${label} must use HTTPS in production.` },
-    });
+    reasons.push(`${prefix}_https_required`);
   }
-  return findings;
+  return reasons;
+}
+
+function callbackHostMismatch(configured, resolved) {
+  if (!isWellFormedUrl(configured) || !isWellFormedUrl(resolved)) return false;
+  return normalizeHostname(new URL(configured).hostname)
+    !== normalizeHostname(new URL(resolved).hostname);
+}
+
+function optionalProviderStatus(provider, env, isProd) {
+  const descriptor = OPTIONAL_PROVIDER_ENV[provider];
+  const relevantKeys = [
+    descriptor.clientId,
+    descriptor.clientSecret,
+    descriptor.callback,
+    ...descriptor.postCallbacks.map(({ key }) => key),
+  ];
+  const configured = relevantKeys.some((key) => nonEmpty(env[key]));
+  if (!configured) {
+    return {
+      configured: false,
+      enabled: false,
+      status: 'disabled',
+      blocking: false,
+      reasons: [],
+    };
+  }
+
+  const reasons = [];
+  if (!nonEmpty(env[descriptor.clientId])) reasons.push('client_id_missing');
+  if (!nonEmpty(env[descriptor.clientSecret])) reasons.push('client_secret_missing');
+
+  const callbackReasons = configuredUrlReasons(env[descriptor.callback], 'callback', isProd);
+  reasons.push(...callbackReasons);
+  for (const { key, prefix } of descriptor.postCallbacks) {
+    const postCallbackReasons = configuredUrlReasons(env[key], prefix, isProd);
+    reasons.push(...postCallbackReasons);
+    if (
+      isProd
+      && postCallbackReasons.length === 0
+      && !isAllowedOAuthPostCallbackUrl(env[key], env)
+    ) {
+      reasons.push(`${prefix}_origin_not_allowed`);
+    }
+  }
+
+  // oauth-url-policy intentionally refuses a callback on a different host.
+  // Surface that refusal instead of silently authorizing with a derived URL
+  // that does not match the provider dashboard registration.
+  if (callbackReasons.length === 0) {
+    try {
+      const resolved = descriptor.callbackGetter(env);
+      if (callbackHostMismatch(env[descriptor.callback], resolved)) {
+        reasons.push('callback_host_mismatch');
+      }
+    } catch {
+      reasons.push('callback_resolution_failed');
+    }
+  }
+
+  const safeReasons = unique(reasons);
+  const enabled = safeReasons.length === 0;
+  return {
+    configured: true,
+    enabled,
+    status: enabled ? 'healthy' : 'degraded',
+    blocking: false,
+    reasons: safeReasons,
+  };
+}
+
+function googleProviderStatus(env, isProd) {
+  const hasClientId = nonEmpty(env.GOOGLE_CLIENT_ID);
+  const hasClientSecret = nonEmpty(env.GOOGLE_CLIENT_SECRET);
+  const validationActive = GOOGLE_PROVIDER_ENV_KEYS.some((key) => nonEmpty(env[key]));
+  const reasons = [];
+
+  // Preserve the existing paired-credential policy: a valid public base URL
+  // may be shared by optional providers without enabling Google OAuth.
+  if (hasClientId && !hasClientSecret) reasons.push('client_secret_missing');
+  if (hasClientSecret && !hasClientId) reasons.push('client_id_missing');
+
+  if (nonEmpty(env.GOOGLE_AUTH_BASE_URL)) {
+    reasons.push(...configuredUrlReasons(env.GOOGLE_AUTH_BASE_URL, 'base', isProd).map(
+      (reason) => reason.replace(/^base_(localhost|https)/, 'base_url_$1'),
+    ));
+  }
+  for (const key of [
+    'GOOGLE_AUTH_URI',
+    'GOOGLE_REDIRECT_URI',
+    'GOOGLE_REDIRECT_CALENDAR_DRIVE_URI',
+  ]) {
+    if (nonEmpty(env[key])) {
+      reasons.push(...configuredUrlReasons(env[key], 'callback', isProd));
+    }
+  }
+
+  if (hasClientId || hasClientSecret || nonEmpty(env.GOOGLE_AUTH_BASE_URL)) {
+    try {
+      const resolvedCallbacks = [
+        getGoogleCallbackURL(env),
+        getGoogleGmailCallbackURL(env),
+        getGoogleServicesCallbackURL(env),
+      ];
+      for (const callback of resolvedCallbacks) {
+        reasons.push(...configuredUrlReasons(callback, 'callback', isProd));
+      }
+
+      if (
+        nonEmpty(env.GOOGLE_AUTH_BASE_URL)
+        && callbackHostMismatch(env.GOOGLE_AUTH_BASE_URL, resolvedCallbacks[0])
+      ) {
+        reasons.push('callback_host_mismatch');
+      }
+    } catch {
+      reasons.push('callback_resolution_failed');
+    }
+  }
+
+  const safeReasons = unique(reasons);
+  const enabled = hasClientId && hasClientSecret && safeReasons.length === 0;
+  const blocking = isProd && safeReasons.some((reason) => BLOCKING_ISSUE_CODES.has(reason));
+  return {
+    configured: validationActive,
+    enabled,
+    status: safeReasons.length > 0 ? 'degraded' : (enabled ? 'healthy' : 'disabled'),
+    blocking,
+    reasons: safeReasons,
+  };
+}
+
+function providerEnvKeys(provider) {
+  if (provider === 'google') return GOOGLE_PROVIDER_ENV_KEYS;
+  const descriptor = OPTIONAL_PROVIDER_ENV[provider];
+  if (!descriptor) return [];
+  return [
+    descriptor.clientId,
+    descriptor.clientSecret,
+    descriptor.callback,
+    ...descriptor.postCallbacks.map(({ key }) => key),
+  ];
+}
+
+function providerConfiguredHint(provider, env) {
+  try {
+    return providerEnvKeys(provider).some((key) => nonEmpty(env[key]));
+  } catch {
+    // If configuration cannot be inspected, production core OAuth must not
+    // be allowed to fail open.
+    return true;
+  }
+}
+
+function validatorErrorStatus(provider, env, isProd) {
+  const configured = providerConfiguredHint(provider, env);
+  return {
+    configured,
+    enabled: false,
+    status: 'degraded',
+    blocking: provider === 'google' && isProd && configured,
+    reasons: ['validator_error'],
+  };
+}
+
+function normalizeProviderStatus(provider, status) {
+  if (!status || typeof status !== 'object') {
+    throw new TypeError(`${provider} validator returned no status`);
+  }
+  if (!['healthy', 'degraded', 'disabled'].includes(status.status)) {
+    throw new TypeError(`${provider} validator returned an invalid status`);
+  }
+  if (!Array.isArray(status.reasons)) {
+    throw new TypeError(`${provider} validator returned invalid reasons`);
+  }
+  const reasons = unique(status.reasons.map((reason) => String(reason || '').trim()));
+  if (reasons.some((reason) => !/^[a-z][a-z0-9_]{0,79}$/.test(reason))) {
+    throw new TypeError(`${provider} validator returned unsafe reasons`);
+  }
+  return {
+    configured: Boolean(status.configured),
+    enabled: Boolean(status.enabled),
+    status: status.status,
+    blocking: provider === 'google' ? Boolean(status.blocking) : false,
+    reasons,
+  };
+}
+
+function defaultProviderValidator(provider, env, isProd) {
+  if (provider === 'google') return googleProviderStatus(env, isProd);
+  return optionalProviderStatus(provider, env, isProd);
+}
+
+function productionEnvironmentHint(env) {
+  try {
+    return env.NODE_ENV === 'production';
+  } catch {
+    // An unreadable environment must use the stricter policy.
+    return true;
+  }
+}
+
+function classifyOAuthProviders(env = process.env, deps = {}) {
+  const isProd = productionEnvironmentHint(env);
+  const validators = deps.providerValidators || {};
+  const providers = {};
+  for (const provider of ['google', 'github', 'spotify']) {
+    try {
+      const validator = typeof validators[provider] === 'function'
+        ? validators[provider]
+        : defaultProviderValidator;
+      const status = validator === defaultProviderValidator
+        ? validator(provider, env, isProd)
+        : validator(env, isProd);
+      providers[provider] = normalizeProviderStatus(provider, status);
+    } catch {
+      providers[provider] = validatorErrorStatus(provider, env, isProd);
+    }
+  }
+  return providers;
+}
+
+function providerIssues(providers) {
+  return Object.entries(providers).flatMap(([provider, status]) => (
+    status.reasons.map((reason) => `${provider}_${reason}`)
+  ));
+}
+
+function providerResult(env, deps = {}) {
+  const providers = classifyOAuthProviders(env, deps);
+  const issues = providerIssues(providers);
+  return {
+    providers,
+    issues,
+    shouldBlock: Object.values(providers).some((status) => status.blocking),
+    checked: Object.values(providers).some(
+      (status) => status.configured || status.reasons.includes('validator_error'),
+    ),
+    mismatch: providers.google.reasons.includes('callback_host_mismatch'),
+  };
+}
+
+function logProviderClassifications(logger, providers) {
+  for (const [provider, status] of Object.entries(providers)) {
+    if (status.status !== 'degraded') continue;
+    try {
+      const log = status.blocking ? logger.error : logger.warn;
+      log.call(logger, {
+        provider,
+        blocking: status.blocking,
+        reasons: status.reasons,
+      }, 'oauth_provider_config_degraded');
+    } catch (_error) {
+      // Configuration telemetry must never alter the boot decision.
+    }
+  }
 }
 
 /**
- * At startup, validate the full Google OAuth configuration:
- *   - credential presence (GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET)
- *   - GOOGLE_AUTH_BASE_URL well-formedness and localhost check
- *   - all three resolved callback URLs (well-formed, not localhost in prod)
- *   - callback host matches GOOGLE_AUTH_BASE_URL (original check)
- *
- * Returns:
- *   { checked, mismatch, issues, shouldBlock }
- *
- *   shouldBlock — true when running in production AND at least one
- *   critical issue was found. Callers should process.exit(1) when
- *   shouldBlock is true; the validator itself never exits.
- *
- * All exceptions are swallowed so a bug in this validator never
- * crashes boot regardless of environment.
- *
- * @param {object} [deps]
- * @param {object} [deps.logger]  - pino-like logger (defaults to console)
- * @param {object} [deps.env]     - defaults to process.env (test injection)
- * @returns {{ checked: boolean, mismatch: boolean, issues: string[], shouldBlock: boolean }}
+ * Validate and classify every OAuth provider without retaining configuration
+ * values. The returned reasons are safe for health output and startup logs.
  */
 function validateOAuthCallbackUrl(deps = {}) {
   const env = deps.env || process.env;
   const logger = deps.logger || console;
-  const isProd = env.NODE_ENV === 'production';
-  const collectedIssues = [];
-
+  let result;
   try {
-    const hasClientId = !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_ID.trim());
-    const hasClientSecret = !!(env.GOOGLE_CLIENT_SECRET && env.GOOGLE_CLIENT_SECRET.trim());
-    const googleOAuthActive = hasClientId || hasClientSecret;
-    const githubOAuthActive = Boolean(
-      env.GITHUB_CLIENT_ID
-      || env.GITHUB_CLIENT_SECRET
-      || env.GITHUB_OAUTH_REDIRECT_URI,
+    result = providerResult(env, deps);
+  } catch (_error) {
+    const providers = Object.fromEntries(
+      ['google', 'github', 'spotify'].map((provider) => [
+        provider,
+        validatorErrorStatus(provider, env, productionEnvironmentHint(env)),
+      ]),
     );
-    const spotifyOAuthActive = Boolean(
-      env.SPOTIFY_CLIENT_ID
-      || env.SPOTIFY_CLIENT_SECRET
-      || env.SPOTIFY_REDIRECT_URI,
-    );
-
-    const explicitUrls = [
-      [env.GOOGLE_AUTH_URI, 'Google OAuth callback URL', false],
-      [env.GOOGLE_REDIRECT_URI, 'Gmail OAuth callback URL', false],
-      [env.GOOGLE_REDIRECT_CALENDAR_DRIVE_URI, 'Google Services callback URL', false],
-      [env.GITHUB_OAUTH_REDIRECT_URI, 'GitHub OAuth callback URL', false],
-      [env.SPOTIFY_REDIRECT_URI, 'Spotify OAuth callback URL', false],
-      [env.GITHUB_OAUTH_SUCCESS_REDIRECT, 'GitHub post-callback URL', true],
-      [env.SPOTIFY_OAUTH_SUCCESS_REDIRECT, 'Spotify success post-callback URL', true],
-      [env.SPOTIFY_OAUTH_FAILURE_REDIRECT, 'Spotify failure post-callback URL', true],
-    ];
-    for (const [value, label, postCallback] of explicitUrls) {
-      for (const finding of auditConfiguredUrl(
-        value,
-        label,
-        isProd,
-        { postCallback },
-      )) {
-        collectedIssues.push(finding.event);
-        try {
-          const logFn = finding.level === 'error' ? logger.error : logger.warn;
-          logFn.call(logger, finding.data, finding.event);
-        } catch (_error) { /* swallow */ }
-      }
-    }
-
-    // ── 1. Paired credential check ──────────────────────────────
-    if (googleOAuthActive) {
-      if (!hasClientId) {
-        collectedIssues.push('missing_google_client_id');
-        try {
-          logger.warn(
-            {
-              hint:
-                'GOOGLE_CLIENT_SECRET is set but GOOGLE_CLIENT_ID is missing. ' +
-                'Google OAuth will fail at the authorization step.',
-            },
-            'oauth_config_missing_client_id',
-          );
-        } catch (_e) { /* swallow */ }
-      }
-      if (!hasClientSecret) {
-        collectedIssues.push('missing_google_client_secret');
-        try {
-          logger.warn(
-            {
-              hint:
-                'GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET is missing. ' +
-                'Google OAuth will fail at the token exchange step.',
-            },
-            'oauth_config_missing_client_secret',
-          );
-        } catch (_e) { /* swallow */ }
-      }
-    }
-
-    // ── 2. GOOGLE_AUTH_BASE_URL well-formedness ─────────────────
-    if (env.GOOGLE_AUTH_BASE_URL) {
-      if (!isWellFormedUrl(env.GOOGLE_AUTH_BASE_URL)) {
-        collectedIssues.push('malformed_google_auth_base_url');
-        try {
-          logger.warn(
-            {
-              GOOGLE_AUTH_BASE_URL: env.GOOGLE_AUTH_BASE_URL,
-              hint:
-                'GOOGLE_AUTH_BASE_URL is not a valid http/https URL. ' +
-                'All resolved OAuth callback URLs will be incorrect and logins will fail.',
-            },
-            'oauth_config_malformed_base_url',
-          );
-        } catch (_e) { /* swallow */ }
-      } else if (isProd && isLocalhostUrl(env.GOOGLE_AUTH_BASE_URL)) {
-        collectedIssues.push('google_auth_base_url_localhost_in_production');
-        try {
-          logger.error(
-            {
-              GOOGLE_AUTH_BASE_URL: env.GOOGLE_AUTH_BASE_URL,
-              hint:
-                'GOOGLE_AUTH_BASE_URL points to localhost in production. ' +
-                'All Google OAuth callback URLs will resolve to localhost and logins will fail. ' +
-                'Set GOOGLE_AUTH_BASE_URL to your public production domain (e.g. https://siragpt.com).',
-            },
-            'oauth_config_base_url_localhost_in_production',
-          );
-        } catch (_e) { /* swallow */ }
-      }
-    }
-
-    // ── 3. Resolved callback URL audits ─────────────────────────
-    // Run if any Google OAuth env var is in play.
-    if (googleOAuthActive || env.GOOGLE_AUTH_BASE_URL) {
-      let googleCallbackUrl, gmailCallbackUrl, servicesCallbackUrl, resolvedBase;
-      try {
-        googleCallbackUrl = getGoogleCallbackURL(env);
-        gmailCallbackUrl = getGoogleGmailCallbackURL(env);
-        servicesCallbackUrl = getGoogleServicesCallbackURL(env);
-        resolvedBase = resolvePublicBackendUrl(env);
-      } catch (resolveErr) {
-        try {
-          logger.warn(
-            { err: resolveErr && resolveErr.message },
-            'oauth_callback_boot_validator_resolve_failed',
-          );
-        } catch (_e) { /* swallow */ }
-        const shouldBlock = isProd && collectedIssues.some(c => BLOCKING_ISSUE_CODES.has(c));
-        return { checked: false, mismatch: false, issues: collectedIssues, shouldBlock };
-      }
-
-      const urlsToAudit = [
-        { url: googleCallbackUrl, label: 'Google OAuth callback URL' },
-        { url: gmailCallbackUrl, label: 'Gmail OAuth callback URL' },
-        { url: servicesCallbackUrl, label: 'Google-Services OAuth callback URL' },
-      ];
-
-      for (const { url, label } of urlsToAudit) {
-        const findings = auditCallbackUrl(url, label, isProd);
-        for (const finding of findings) {
-          collectedIssues.push(finding.event);
-          try {
-            const logFn = finding.level === 'error' ? logger.error : logger.warn;
-            logFn.call(logger, finding.data, finding.event);
-          } catch (_e) { /* swallow */ }
-        }
-      }
-
-      // ── 4. Host mismatch check (original behaviour) ───────────
-      if (env.GOOGLE_AUTH_BASE_URL) {
-        const expectedHost = parseHostname(env.GOOGLE_AUTH_BASE_URL);
-        const resolvedHost = parseHostname(googleCallbackUrl);
-
-        if (expectedHost && resolvedHost && expectedHost !== resolvedHost) {
-          collectedIssues.push('host_mismatch');
-          try {
-            logger.warn(
-              {
-                expectedBaseUrl: env.GOOGLE_AUTH_BASE_URL,
-                resolvedCallbackUrl: googleCallbackUrl,
-                resolvedBaseUrl: resolvedBase,
-                expectedHost,
-                resolvedHost,
-                hint:
-                  'GOOGLE_AUTH_BASE_URL host does not match the resolved OAuth callback host. ' +
-                  'Check that GOOGLE_AUTH_BASE_URL, GOOGLE_AUTH_URI, and related secrets are ' +
-                  'consistent. OAuth logins will redirect to the wrong host.',
-              },
-              'oauth_callback_host_mismatch',
-            );
-          } catch (_e) { /* swallow */ }
-
-          const shouldBlock = isProd && collectedIssues.some(c => BLOCKING_ISSUE_CODES.has(c));
-          return { checked: true, mismatch: true, issues: collectedIssues, shouldBlock };
-        }
-
-        if (expectedHost && resolvedHost) {
-          const shouldBlock = isProd && collectedIssues.some(c => BLOCKING_ISSUE_CODES.has(c));
-          return { checked: true, mismatch: false, issues: collectedIssues, shouldBlock };
-        }
-      }
-    }
-
-    for (const { active, url, label } of [
-      {
-        active: githubOAuthActive,
-        url: githubOAuthActive ? getGithubCallbackURL(env) : null,
-        label: 'GitHub OAuth callback URL',
-      },
-      {
-        active: spotifyOAuthActive,
-        url: spotifyOAuthActive ? getSpotifyCallbackURL(env) : null,
-        label: 'Spotify OAuth callback URL',
-      },
-    ]) {
-      if (!active) continue;
-      for (const finding of auditCallbackUrl(url, label, isProd)) {
-        collectedIssues.push(finding.event);
-        try {
-          const logFn = finding.level === 'error' ? logger.error : logger.warn;
-          logFn.call(logger, finding.data, finding.event);
-        } catch (_error) { /* swallow */ }
-      }
-    }
-  } catch (outerErr) {
-    try {
-      logger.warn(
-        { err: outerErr && outerErr.message },
-        'oauth_callback_boot_validator_unexpected_error',
-      );
-    } catch (_e) { /* swallow */ }
-    return { checked: false, mismatch: false, issues: collectedIssues, shouldBlock: false };
+    result = {
+      checked: true,
+      mismatch: false,
+      issues: providerIssues(providers),
+      shouldBlock: Object.values(providers).some((status) => status.blocking),
+      providers,
+    };
   }
-
-  const checked = !!(
-    env.GOOGLE_CLIENT_ID ||
-    env.GOOGLE_CLIENT_SECRET ||
-    env.GOOGLE_AUTH_BASE_URL ||
-    env.GITHUB_CLIENT_ID ||
-    env.GITHUB_CLIENT_SECRET ||
-    env.GITHUB_OAUTH_REDIRECT_URI ||
-    env.SPOTIFY_CLIENT_ID ||
-    env.SPOTIFY_CLIENT_SECRET ||
-    env.SPOTIFY_REDIRECT_URI
-  );
-  const shouldBlock = isProd && collectedIssues.some(c => BLOCKING_ISSUE_CODES.has(c));
-  return { checked, mismatch: false, issues: collectedIssues, shouldBlock };
+  logProviderClassifications(logger, result.providers);
+  return result;
 }
 
-module.exports = { validateOAuthCallbackUrl, BLOCKING_ISSUE_CODES };
+module.exports = {
+  validateOAuthCallbackUrl,
+  classifyOAuthProviders,
+  BLOCKING_ISSUE_CODES,
+  OPTIONAL_PROVIDER_ENV,
+};

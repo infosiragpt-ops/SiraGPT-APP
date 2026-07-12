@@ -563,6 +563,7 @@ Production Compose defaults `NEXT_PUBLIC_API_URL` to `https://api.siragpt.com/ap
 | `GOOGLE_AUTH_URI` | Login callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/google/callback` |
 | `GOOGLE_REDIRECT_URI` | Gmail integration callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/gmail/callback` |
 | `GOOGLE_REDIRECT_CALENDAR_DRIVE_URI` | Calendar/Drive integration callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/google-services/callback` |
+| `OAUTH_POST_CALLBACK_ALLOWED_ORIGINS` | Optional comma-separated exact HTTPS origins for intentional cross-origin post-OAuth browser handoffs (maximum 10 origins / 2048 characters) | unset |
 | `GITHUB_OAUTH_REDIRECT_URI` | GitHub callback registered in the OAuth App | `https://api.siragpt.com/api/github/callback` |
 | `GITHUB_OAUTH_SUCCESS_REDIRECT` | GitHub post-callback browser destination | `https://siragpt.com/settings` |
 | `SPOTIFY_REDIRECT_URI` | Spotify callback registered in the developer dashboard | `https://api.siragpt.com/api/spotify/callback` |
@@ -571,10 +572,14 @@ Production Compose defaults `NEXT_PUBLIC_API_URL` to `https://api.siragpt.com/ap
 | `GOOGLE_ALLOW_FRONTEND_CALLBACK` | Set to `true` only for same-origin deployments where the frontend domain intentionally proxies OAuth callbacks | unset |
 
 In production, every provider callback and post-callback must use HTTPS and
-must not resolve to localhost. SiraGPT also rejects frontend-domain Google
-callbacks when the API has its own public host. These checks prevent
-`redirect_uri_mismatch` regressions and session-bearing redirects to an
-insecure origin.
+must not resolve to localhost. A GitHub or Spotify post-callback must also
+match the origin of `FRONTEND_URL`, `PUBLIC_FRONTEND_URL`, or
+`NEXT_PUBLIC_URL`. Intentional extra origins must be listed exactly in
+`OAUTH_POST_CALLBACK_ALLOWED_ORIGINS`; wildcards, URL paths, credentials,
+entries after the tenth, and allowlists over 2048 characters are rejected.
+SiraGPT also rejects frontend-domain Google callbacks when the API has its own
+public host. These checks prevent `redirect_uri_mismatch` regressions and
+session-bearing redirects to an untrusted origin.
 
 ---
 

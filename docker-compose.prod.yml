@@ -273,6 +273,7 @@ services:
       GOOGLE_AUTH_URI: ${GOOGLE_AUTH_URI:-https://api.siragpt.com/api/auth/google/callback}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://api.siragpt.com/api/auth/gmail/callback}
       GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: ${GOOGLE_REDIRECT_CALENDAR_DRIVE_URI:-https://api.siragpt.com/api/auth/google-services/callback}
+      OAUTH_POST_CALLBACK_ALLOWED_ORIGINS: ${OAUTH_POST_CALLBACK_ALLOWED_ORIGINS:-}
       GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:-https://api.siragpt.com/api/github/callback}
       GITHUB_OAUTH_SUCCESS_REDIRECT: ${GITHUB_OAUTH_SUCCESS_REDIRECT:-https://siragpt.com/settings}
       SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-https://api.siragpt.com/api/spotify/callback}

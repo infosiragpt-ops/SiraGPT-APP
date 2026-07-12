@@ -9,9 +9,15 @@ const {
   isOAuthStateInfrastructureError,
   sendOAuthStateUnavailable,
 } = require('../services/auth/oauth-state-http');
+const {
+  getOptionalOAuthProviderStatus,
+  requireOptionalOAuthProvider,
+} = require('../middleware/oauth-provider-availability');
+
+const requireSpotifyOAuth = requireOptionalOAuthProvider('spotify');
 
 // Route to get Spotify connection URL
-router.get('/connect', authenticateToken, async (req, res) => {
+router.get('/connect', requireSpotifyOAuth, authenticateToken, async (req, res) => {
   try {
     const authorizeURL = await spotifyService.connect(req.user.id);
     res.json({ url: authorizeURL });
@@ -24,7 +30,7 @@ router.get('/connect', authenticateToken, async (req, res) => {
 });
 
 // Route to handle Spotify callback
-router.get('/callback', async (req, res) => {
+router.get('/callback', requireSpotifyOAuth, async (req, res) => {
   const { code, state } = req.query;
   // Recover the user id from the SIGNED state — never trust a raw id in the
   // query, or an attacker could overwrite another user's Spotify tokens.
@@ -135,11 +141,12 @@ router.post('/command', authenticateToken, async (req, res) => {
 
 router.get('/status', authenticateToken, async (req, res) => {
   try {
+    const providerStatus = getOptionalOAuthProviderStatus('spotify');
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (user && user.spotifyTokens) {
-      res.json({ isConnected: true });
+      res.json({ ...providerStatus, isConnected: true });
     } else {
-      res.json({ isConnected: false });
+      res.json({ ...providerStatus, isConnected: false });
     }
   } catch (error) {
     res.status(500).json({ error: 'Failed to get Spotify status' });

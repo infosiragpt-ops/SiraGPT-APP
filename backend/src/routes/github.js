@@ -35,8 +35,13 @@ const {
   isOAuthStateInfrastructureError,
   sendOAuthStateUnavailable,
 } = require('../services/auth/oauth-state-http');
+const {
+  getOptionalOAuthProviderStatus,
+  requireOptionalOAuthProvider,
+} = require('../middleware/oauth-provider-availability');
 
 const router = express.Router();
+const requireGithubOAuth = requireOptionalOAuthProvider('github');
 
 // owner / repo path-segment validator — blocks traversal + injection in params.
 const NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;
@@ -82,13 +87,14 @@ async function touchWorkspace(repositoryId, userId, localPath, patch) {
 // GET /api/github/status
 router.get('/status', authenticateToken, async (req, res) => {
   try {
+    const providerStatus = getOptionalOAuthProviderStatus('github');
     const account = await accounts.findByUserId(req.user.id);
     if (!account) {
-      return res.json({ connected: false, configured: githubConfig.isConfigured() });
+      return res.json({ ...providerStatus, connected: false });
     }
     return res.json({
+      ...providerStatus,
       connected: true,
-      configured: githubConfig.isConfigured(),
       login: account.login,
       name: account.name,
       avatarUrl: account.avatarUrl,
@@ -102,7 +108,7 @@ router.get('/status', authenticateToken, async (req, res) => {
 });
 
 // GET /api/github/connect → consent URL
-router.get('/connect', authenticateToken, async (req, res) => {
+router.get('/connect', requireGithubOAuth, authenticateToken, async (req, res) => {
   try {
     if (!githubConfig.isConfigured()) {
       return res.status(503).json({ error: 'GitHub OAuth is not configured on the server' });
@@ -124,7 +130,7 @@ router.get('/connect', authenticateToken, async (req, res) => {
 });
 
 // GET /api/github/callback → finish OAuth, persist, redirect to frontend
-router.get('/callback', async (req, res) => {
+router.get('/callback', requireGithubOAuth, async (req, res) => {
   const { code, state, error: ghError } = req.query;
 
   if (ghError) {

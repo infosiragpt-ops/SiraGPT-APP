@@ -1,6 +1,13 @@
 'use strict';
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const MAX_OAUTH_POST_CALLBACK_ALLOWED_ORIGINS = 10;
+const MAX_OAUTH_POST_CALLBACK_ALLOWED_ORIGINS_CHARS = 2048;
+const FRONTEND_ORIGIN_ENV_KEYS = Object.freeze([
+  'FRONTEND_URL',
+  'PUBLIC_FRONTEND_URL',
+  'NEXT_PUBLIC_URL',
+]);
 
 const CALLBACK_PATHS = Object.freeze({
   google: '/api/auth/google/callback',
@@ -232,11 +239,7 @@ function getSpotifyCallbackURL(env = process.env) {
 }
 
 function getFrontendUrl(env = process.env) {
-  const candidates = [
-    env.FRONTEND_URL,
-    env.PUBLIC_FRONTEND_URL,
-    env.NEXT_PUBLIC_URL,
-  ];
+  const candidates = FRONTEND_ORIGIN_ENV_KEYS.map((key) => env[key]);
 
   for (const candidate of candidates) {
     const normalized = stripTrailingSlash(candidate);
@@ -249,10 +252,63 @@ function getFrontendUrl(env = process.env) {
   return isProduction(env) ? 'https://siragpt.com' : 'http://localhost:3000';
 }
 
+function safeOrigin(value, env = process.env) {
+  const parsed = parseUrl(stripTrailingSlash(value));
+  if (!parsed || !/^https?:$/.test(parsed.protocol)) return '';
+  if (parsed.username || parsed.password) return '';
+  if (isProduction(env) && parsed.protocol !== 'https:') return '';
+  if (isProduction(env) && isLocalhostUrl(parsed.toString())) return '';
+  return parsed.origin;
+}
+
+/**
+ * Browser destinations after OAuth must stay on a configured frontend origin.
+ * A small explicit allowlist supports intentional cross-origin handoffs without
+ * turning provider environment variables into arbitrary open redirects.
+ */
+function getOAuthPostCallbackAllowedOrigins(env = process.env) {
+  const origins = new Set();
+  for (const key of FRONTEND_ORIGIN_ENV_KEYS) {
+    const origin = safeOrigin(env[key], env);
+    if (origin) origins.add(origin);
+  }
+
+  const fallbackOrigin = safeOrigin(getFrontendUrl(env), env);
+  if (fallbackOrigin) origins.add(fallbackOrigin);
+
+  const raw = String(env.OAUTH_POST_CALLBACK_ALLOWED_ORIGINS || '').trim();
+  if (!raw || raw.length > MAX_OAUTH_POST_CALLBACK_ALLOWED_ORIGINS_CHARS) {
+    return origins;
+  }
+
+  const configured = raw.split(/[\s,]+/).filter(Boolean);
+  for (const value of configured.slice(0, MAX_OAUTH_POST_CALLBACK_ALLOWED_ORIGINS)) {
+    const parsed = parseUrl(value);
+    if (!parsed) continue;
+    if ((parsed.pathname && parsed.pathname !== '/') || parsed.search || parsed.hash) continue;
+    const origin = safeOrigin(value, env);
+    if (origin) origins.add(origin);
+  }
+  return origins;
+}
+
+function isAllowedOAuthPostCallbackUrl(value, env = process.env) {
+  const parsed = parseUrl(value);
+  if (!parsed || parsed.username || parsed.password) return false;
+  if (!isUsablePublicUrl(value, env)) return false;
+  return getOAuthPostCallbackAllowedOrigins(env).has(parsed.origin);
+}
+
 function secureFrontendDestination(env, configured, defaultPath) {
   const frontend = getFrontendUrl(env);
   const candidate = stripTrailingSlash(configured);
-  if (candidate && isUsablePublicUrl(candidate, env)) return candidate;
+  if (
+    candidate
+    && isUsablePublicUrl(candidate, env)
+    && (!isProduction(env) || isAllowedOAuthPostCallbackUrl(candidate, env))
+  ) {
+    return candidate;
+  }
   return `${frontend}${defaultPath}`;
 }
 
@@ -309,6 +365,8 @@ function getSpotifyPostCallbackURL(status, env = process.env) {
 
 module.exports = {
   CALLBACK_PATHS,
+  MAX_OAUTH_POST_CALLBACK_ALLOWED_ORIGINS,
+  MAX_OAUTH_POST_CALLBACK_ALLOWED_ORIGINS_CHARS,
   stripTrailingSlash,
   isLocalhostUrl,
   normalizePublicBackendBaseUrl,
@@ -322,4 +380,6 @@ module.exports = {
   getGithubPostCallbackURL,
   getSpotifyPostCallbackURL,
   getFrontendUrl,
+  getOAuthPostCallbackAllowedOrigins,
+  isAllowedOAuthPostCallbackUrl,
 };

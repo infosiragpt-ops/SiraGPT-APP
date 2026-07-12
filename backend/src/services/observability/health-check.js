@@ -727,12 +727,19 @@ function checkGoogleOAuth(oauthResult) {
     };
   }
 
-  const checked = Boolean(oauthResult.checked);
+  const google = oauthResult.providers?.google;
+  const checked = google
+    ? Boolean(google.configured)
+    : Boolean(oauthResult.checked);
   const mismatch = Boolean(oauthResult.mismatch);
-  const issues = Array.isArray(oauthResult.issues) ? oauthResult.issues : [];
+  const issues = google && Array.isArray(google.reasons)
+    ? google.reasons
+    : (Array.isArray(oauthResult.issues) ? oauthResult.issues : []);
 
   let status;
-  if (!checked) status = "skipped";
+  if (google?.status === "healthy") status = "healthy";
+  else if (google?.status === "degraded") status = "degraded";
+  else if (!checked || google?.status === "disabled") status = "skipped";
   else if (issues.length > 0) status = "degraded";
   else status = "healthy";
 
@@ -742,6 +749,34 @@ function checkGoogleOAuth(oauthResult) {
     critical: false,
     latency_ms: 0,
     details: { checked, mismatch, issues },
+  };
+}
+
+function checkOAuthProviders(oauthResult) {
+  const providers = oauthResult?.providers;
+  if (!providers || typeof providers !== "object" || Object.keys(providers).length === 0) {
+    return {
+      name: "oauth_providers",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_provider_classification", providers: {} },
+    };
+  }
+
+  const statuses = Object.values(providers)
+    .map((provider) => provider?.status)
+    .filter(Boolean);
+  let status = "skipped";
+  if (statuses.includes("degraded")) status = "degraded";
+  else if (statuses.includes("healthy")) status = "healthy";
+
+  return {
+    name: "oauth_providers",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { providers },
   };
 }
 
@@ -925,6 +960,8 @@ async function runFullHealthCheck({
   // read `{ checked, mismatch, issues }` directly without scanning checks.
   const googleOAuthCheck = checkGoogleOAuth(googleOAuth);
   checks.push(googleOAuthCheck);
+  const oauthProvidersCheck = checkOAuthProviders(googleOAuth);
+  checks.push(oauthProvidersCheck);
 
   // Startup environment health: pushed into the checks array so lingering
   // config issues drive the composite status to `degraded`, and also mirrored
@@ -941,6 +978,7 @@ async function runFullHealthCheck({
 
   const report = composeStatus(checks);
   report.googleOAuth = googleOAuthCheck.details;
+  report.oauthProviders = oauthProvidersCheck.details.providers;
   report.startupEnv = startupEnvCheck.details;
   if (rbacCheck) report.rbac = rbacCheck.details;
   if (databasePoolCheck) report.databasePool = databasePoolCheck.details;
@@ -1000,6 +1038,7 @@ module.exports = {
   checkPostHog,
   checkCircuitBreakers,
   checkGoogleOAuth,
+  checkOAuthProviders,
   checkStartupEnvironment,
   checkRbacBootstrap,
   checkCoworkSubsystem,

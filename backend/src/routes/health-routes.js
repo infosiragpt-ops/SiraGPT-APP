@@ -141,12 +141,39 @@ function createHealthRoutes(deps = {}) {
   // startServer runs gets a sane shape.
   let oauthBootResult = { checked: false, mismatch: false, issues: [] };
 
+  function sanitizedProviderStatuses(providers) {
+    if (!providers || typeof providers !== 'object') return undefined;
+    const sanitized = {};
+    for (const provider of ['google', 'github', 'spotify']) {
+      const source = providers[provider];
+      if (!source || typeof source !== 'object') continue;
+      const reasons = Array.isArray(source.reasons)
+        ? [...new Set(source.reasons
+          .map((reason) => String(reason || '').trim().toLowerCase())
+          .filter((reason) => /^[a-z][a-z0-9_]{0,79}$/.test(reason)))]
+        : [];
+      const status = ['healthy', 'degraded', 'disabled'].includes(source.status)
+        ? source.status
+        : (reasons.length > 0 ? 'degraded' : 'disabled');
+      sanitized[provider] = {
+        configured: Boolean(source.configured),
+        enabled: Boolean(source.enabled),
+        status,
+        blocking: Boolean(source.blocking),
+        reasons,
+      };
+    }
+    return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+  }
+
   function setOAuthBootResult(result) {
     oauthBootResult = {
       checked: Boolean(result && result.checked),
       mismatch: Boolean(result && result.mismatch),
       issues: Array.isArray(result && result.issues) ? result.issues : [],
     };
+    const providers = sanitizedProviderStatuses(result && result.providers);
+    if (providers) oauthBootResult.providers = providers;
     return oauthBootResult;
   }
 

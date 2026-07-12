@@ -142,6 +142,7 @@
 | `GOOGLE_AUTH_URI` | derived | Google login callback URL |
 | `GOOGLE_REDIRECT_URI` | derived | Gmail callback URL |
 | `GOOGLE_REDIRECT_CALENDAR_DRIVE_URI` | derived | Google Calendar/Drive callback URL |
+| `OAUTH_POST_CALLBACK_ALLOWED_ORIGINS` | unset | Optional comma-separated exact HTTPS origins for intentional post-OAuth browser handoffs; production also trusts configured frontend origins; capped at 10 entries and 2048 characters |
 | `GITHUB_OAUTH_REDIRECT_URI` | derived | GitHub callback URL |
 | `GITHUB_OAUTH_SUCCESS_REDIRECT` | `<FRONTEND_URL>/settings` | GitHub post-callback destination |
 | `SPOTIFY_REDIRECT_URI` | derived | Spotify callback URL |
