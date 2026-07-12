@@ -4245,7 +4245,10 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
     });
     if (!existing) return res.status(404).json({ error: 'organization not found' });
     const before = existing.settings && typeof existing.settings === 'object' ? existing.settings : {};
-    const merged = mergeSettings(before, patch);
+    // Persist the schema-normalized value (not the raw payload). Security
+    // policies such as mcpAllowedHosts are canonicalized and deduplicated by
+    // the shared MCP hostname parser before they reach Organization.settings.
+    const merged = mergeSettings(before, parsed.value);
     const updated = await db.organization.update({
       where: { id: orgId },
       data: { settings: merged },

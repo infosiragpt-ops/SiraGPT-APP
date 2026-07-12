@@ -1536,8 +1536,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tiny-invariant` | 1.3.3 | MIT | [link](https://github.com/alexreardon/tiny-invariant) |
 | `tinyexec` | 1.1.1, 1.1.2 | MIT | [link](https://github.com/tinylibs/tinyexec) |
 | `tinyglobby` | 0.2.17 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
-| `tldts` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
-| `tldts-core` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
+| `tldts` | 6.1.86, 7.4.8 | MIT | [link](https://github.com/remusao/tldts) |
+| `tldts-core` | 6.1.86, 7.4.8 | MIT | [link](https://github.com/remusao/tldts) |
 | `tmp` | 0.2.7 | MIT | [link](https://github.com/raszi/node-tmp) |
 | `to-regex-range` | 5.0.1 | MIT | [link](https://github.com/micromatch/to-regex-range) |
 | `toad-cache` | 3.7.0 | MIT | [link](https://github.com/kibertoad/toad-cache) |

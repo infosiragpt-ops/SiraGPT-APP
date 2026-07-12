@@ -666,6 +666,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           write: (payload) => writeSse(res, payload),
           chatId: toolContext.chatId || null,
           userId: toolContext.userId || null,
+          requestedOrganizationId: toolContext.requestedOrganizationId || null,
+          activeOrganizationId: toolContext.activeOrganizationId || null,
           prisma: toolContext.prisma || null,
           signal,
           describeTool: stageLabelFor,

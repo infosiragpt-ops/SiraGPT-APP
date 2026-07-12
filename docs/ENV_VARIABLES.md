@@ -115,6 +115,8 @@
 | `CSP_ENABLED` | `0` in development, `1` in production | Enable Content-Security-Policy |
 | `CSP_REPORT_ONLY` | `1` | CSP report-only mode |
 | `JWT_SECRET` | required | JWT signing secret |
+| `SIRAGPT_MCP_ALLOWED_HOSTS` | empty (MCP deny-all in production) | Global comma-separated hostname ceiling for user-registered external MCP servers |
+| `SIRAGPT_MCP_ALLOW_HTTP` | `0` | Outside production only, permits HTTP for loopback MCP endpoints when explicitly set to `1` |
 | `SESSION_TOKEN_HASH_MODE` | `compat` in production/staging; `hash` elsewhere | Two-phase session persistence mode. `compat` reads raw/hash but writes raw and never upgrades; `hash` writes hashes and atomically upgrades legacy rows |
 | `SESSION_TOKEN_HASH_COMPAT_DRAINED` | `0` | Must be `1` before production may start in `hash` mode, confirming all compat/legacy replicas are drained |
 | `SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE` | `100` | Maximum raw session rows converted in one hash-activation transaction (1–1000) |
@@ -156,6 +158,21 @@
 | `SAML_ACS_BODY_LIMIT_BYTES` | `262144` | Exact ACS URL-encoded body limit, clamped to 64–512 KiB |
 | `SAML_ACS_RATE_LIMIT_MAX` | `30` | Maximum exact ACS POST attempts per normalized IP bucket/window |
 | `SAML_ACS_RATE_LIMIT_WINDOW_MS` | `60000` | Exact ACS distributed limiter window (1 second–15 minutes) |
+
+External MCP registrations require HTTPS in production. The global
+`SIRAGPT_MCP_ALLOWED_HOSTS` policy accepts normalized exact hosts and safe
+leading-* subdomain patterns such as `*.tools.example.com`; a wildcard never
+matches its apex, and wildcards over a public suffix such as `*.com` or
+`*.co.uk` are rejected. IP literals, userinfo, private/reserved destinations,
+and unsafe non-default HTTPS ports are rejected. Optional
+`User.settings.mcpAllowedHosts` and
+`Organization.settings.mcpAllowedHosts` lists intersect the global policy and
+can only restrict it. Organization restrictions apply only when the agent turn
+has an explicit, membership-verified active organization; personal chats use
+the global and user layers only. A missing production global allowlist activates
+MCP deny-all and reports a degraded MCP health status without preventing the
+rest of the backend from starting. HTTP is available only for loopback during
+non-production development with `SIRAGPT_MCP_ALLOW_HTTP=1`.
 
 Cookie-authenticated state-changing requests under `/api/*` use the CSRF
 double-submit guard. Safe methods and Bearer/API-key clients bypass it. The

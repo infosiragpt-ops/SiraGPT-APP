@@ -453,6 +453,63 @@ function checkModelProvidersConfigured(env = process.env) {
   };
 }
 
+/**
+ * Report whether user-registered external MCP endpoints can be authorized.
+ *
+ * Host patterns are deliberately reduced to a count and stable error codes:
+ * health responses must never disclose private integration hostnames.
+ */
+function checkMcpPolicyConfiguration(env = process.env) {
+  const start = Date.now();
+  try {
+    const {
+      resolveMcpPolicyConfig,
+    } = require('../agent-harness/mcp-policy');
+    const config = resolveMcpPolicyConfig(env);
+    const errorCodes = config.errors
+      .map((entry) => entry?.code)
+      .filter((code) => typeof code === 'string');
+    const denyAll = Boolean(
+      config.production
+      && config.denyAll
+      && errorCodes.length === 1
+      && errorCodes[0] === 'MCP_ALLOWED_HOSTS_REQUIRED',
+    );
+    return {
+      name: 'mcp_policy',
+      status: config.valid ? 'healthy' : (denyAll ? 'degraded' : (config.production ? 'unhealthy' : 'degraded')),
+      critical: config.production && !denyAll,
+      latency_ms: Date.now() - start,
+      details: {
+        configured: config.configured,
+        deny_all: denyAll,
+        allowed_host_count: config.allowedHostCount,
+        https_required: config.production,
+        http_loopback_enabled: config.allowHttpLoopback,
+        error_codes: errorCodes,
+      },
+      ...(errorCodes.length ? { error: 'MCP_POLICY_CONFIGURATION_INVALID' } : {}),
+    };
+  } catch {
+    const production = env?.NODE_ENV === 'production';
+    return {
+      name: 'mcp_policy',
+      status: production ? 'unhealthy' : 'degraded',
+      critical: production,
+      latency_ms: Date.now() - start,
+      details: {
+        configured: false,
+          deny_all: production,
+        allowed_host_count: 0,
+        https_required: production,
+        http_loopback_enabled: false,
+        error_codes: ['MCP_POLICY_VALIDATION_UNAVAILABLE'],
+      },
+      error: 'MCP_POLICY_VALIDATION_UNAVAILABLE',
+    };
+  }
+}
+
 function resolveOptionalIntegrationHealth(details) {
   const configured = Boolean(details.configured);
   const enabled = Boolean(details.enabled);
@@ -844,6 +901,7 @@ async function runFullHealthCheck({
   ]);
   checks.push(checkProcess());
   checks.push(checkModelProvidersConfigured(env));
+  checks.push(checkMcpPolicyConfiguration(env));
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));
   checks.push(checkLangfuse(langfuse));
@@ -935,6 +993,7 @@ module.exports = {
   checkProcess,
   checkDatabasePool,
   checkModelProvidersConfigured,
+  checkMcpPolicyConfiguration,
   checkOpenTelemetry,
   checkSentry,
   checkLangfuse,

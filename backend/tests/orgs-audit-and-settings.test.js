@@ -314,6 +314,54 @@ test('parseOrgSettingsPatch: accepts known keys with valid shape', () => {
   assert.equal(r.value.defaultModel, 'opus-4-7');
 });
 
+test('parseOrgSettingsPatch: normalizes and deduplicates bounded MCP host patterns', () => {
+  const r = parseOrgSettingsPatch({
+    mcpAllowedHosts: [
+      'MÜNICH.de',
+      'xn--mnich-kva.de',
+      '*.Tools.Example.com',
+    ],
+  });
+  assert.equal(r.error, null);
+  assert.deepEqual(r.warnings, []);
+  assert.deepEqual(r.value.mcpAllowedHosts, [
+    'xn--mnich-kva.de',
+    '*.tools.example.com',
+  ]);
+});
+
+test('parseOrgSettingsPatch: rejects unsafe or oversized MCP host policies', () => {
+  for (const value of [
+    ['*.co.uk'],
+    ['https://mcp.example.com'],
+    Array.from({ length: 101 }, (_, index) => `mcp-${index}.example.com`),
+  ]) {
+    const r = parseOrgSettingsPatch({ mcpAllowedHosts: value });
+    assert.ok(r.error);
+    assert.ok(r.error.issues.some((issue) => issue.path.startsWith('mcpAllowedHosts')));
+  }
+});
+
+test('patch settings: persists normalized MCP host patterns, never the raw payload', async () => {
+  const { prisma, writeAuditLog } = makeFakePrisma({
+    members: { 'o1:a1': { role: 'ADMIN' } },
+    orgs: { o1: { id: 'o1', settings: {} } },
+  });
+  const req = {
+    user: { id: 'a1' },
+    params: { id: 'o1' },
+    body: {
+      settings: {
+        mcpAllowedHosts: ['MÜNICH.de', 'xn--mnich-kva.de'],
+      },
+    },
+  };
+  const res = makeRes();
+  await patchOrgSettings(req, res, { prisma, writeAuditLog });
+  assert.equal(res._status, 200);
+  assert.deepEqual(res._body.settings.mcpAllowedHosts, ['xn--mnich-kva.de']);
+});
+
 test('parseOrgSettingsPatch: rejects unknown enum value for responseStyle', () => {
   const r = parseOrgSettingsPatch({ responseStyle: 'verbose' });
   assert.ok(r.error, 'expected error');

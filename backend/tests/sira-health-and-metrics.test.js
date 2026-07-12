@@ -765,6 +765,7 @@ describe("runFullHealthCheck", () => {
       prisma: { $queryRawUnsafe: async () => 1 },
       redis: { ping: async () => "PONG" },
       startupEnv: { checked: true, issues: [{ key: "REDIS_URL", severity: "WARNING", message: "not set" }] },
+      env: { NODE_ENV: "test" },
     });
     const check = r.checks.find((c) => c.name === "startup_env");
     assert.ok(check);

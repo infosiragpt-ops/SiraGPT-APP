@@ -86,6 +86,8 @@ function buildHarnessTools(existingNames, opts = {}) {
  * @param {function} opts.write        — async (payload) => SSE frame writer.
  * @param {string|null} [opts.chatId]
  * @param {string|null} [opts.userId]
+ * @param {string|null} [opts.requestedOrganizationId] — caller-requested tenant.
+ * @param {string|null} [opts.activeOrganizationId] — middleware-verified tenant.
  * @param {object|null} [opts.prisma]  — for MCP server discovery.
  * @param {AbortSignal} [opts.signal]
  * @param {function} [opts.describeTool] — (name, args) => human label for
@@ -101,6 +103,9 @@ async function attachHarness(opts = {}) {
     write = async () => {},
     chatId = null,
     userId = null,
+    organizationId = null,
+    requestedOrganizationId = null,
+    activeOrganizationId = null,
     prisma = null,
     signal = null,
     describeTool = null,
@@ -140,7 +145,20 @@ async function attachHarness(opts = {}) {
   if (mcpEnabled && userId && prisma) {
     try {
       const { loadUserMcpTools } = require('./mcp-client');
-      const loaded = await loadUserMcpTools({ userId, prisma });
+      const splitOrganizationContext = (
+        Object.prototype.hasOwnProperty.call(opts, 'requestedOrganizationId')
+        || Object.prototype.hasOwnProperty.call(opts, 'activeOrganizationId')
+      );
+      const loaded = await loadUserMcpTools({
+        userId,
+        requestedOrganizationId: splitOrganizationContext
+          ? requestedOrganizationId
+          : organizationId,
+        activeOrganizationId: splitOrganizationContext
+          ? activeOrganizationId
+          : organizationId,
+        prisma,
+      });
       mcpTools = loaded.tools.filter((t) => t && !existingNames.has(t.name));
       mcpErrors = loaded.errors;
       for (const tool of mcpTools) {

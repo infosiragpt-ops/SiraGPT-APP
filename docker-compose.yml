@@ -89,6 +89,10 @@ services:
       AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS: "${AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS:-5000}"
       AUTH_SOCKET_REVALIDATION_TIMEOUT_MS: "${AUTH_SOCKET_REVALIDATION_TIMEOUT_MS:-2000}"
       AUTH_SOCKET_REVALIDATION_CACHE_MAX: "${AUTH_SOCKET_REVALIDATION_CACHE_MAX:-2000}"
+      # External MCP endpoints are HTTPS-only in production. HTTP is available
+      # only for explicit non-production loopback development.
+      SIRAGPT_MCP_ALLOWED_HOSTS: "${SIRAGPT_MCP_ALLOWED_HOSTS:-}"
+      SIRAGPT_MCP_ALLOW_HTTP: "${SIRAGPT_MCP_ALLOW_HTTP:-0}"
       # Pass role URLs through without inventing a direct URL beside an explicit
       # remote runtime. The pure resolver uses these POSTGRES_* values only when
       # all three URL roles are absent.

@@ -2277,6 +2277,24 @@ router.post(
       // from the critical path (from sequential ~150-300 ms → one ~50-100 ms
       // parallel wait). Results are unpacked below in the same order as the
       // original sequential code so all downstream logic is unchanged.
+      // Preserve the caller's explicit tenant request independently from the
+      // quota middleware's verified context. That middleware is intentionally
+      // fail-open for non-MCP chat availability; MCP receives both values and
+      // fails closed if they do not match.
+      const __requestedOrgIdForAi = (() => {
+        try {
+          const { resolveOrgId } = require('../middleware/enforce-org-quota');
+          return resolveOrgId(req);
+        } catch (_error) {
+          const header = req.headers
+            && (req.headers['x-org-id'] || req.headers['X-Org-Id']);
+          if (typeof header === 'string' && header.trim()) return header.trim();
+          const bodyOrg = req.body && typeof req.body === 'object'
+            ? req.body.organizationId
+            : null;
+          return typeof bodyOrg === 'string' && bodyOrg.trim() ? bodyOrg.trim() : null;
+        }
+      })();
       const __orgIdForAi = (req.orgContext && req.orgContext.orgId) || null;
       const [_chatPrefetch, _userPrefetch, _orgPrefetch] = await Promise.all([
         canPersist
@@ -5645,6 +5663,8 @@ router.post(
                   },
                   toolContext: {
                     userId,
+                    requestedOrganizationId: __requestedOrgIdForAi,
+                    activeOrganizationId: __orgIdForAi,
                     chatId: canPersist ? chatId : null,
                     userEmail: req.user?.email || null,
                     clearance: req.user?.clearance || null,

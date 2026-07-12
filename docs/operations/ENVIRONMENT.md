@@ -436,6 +436,22 @@ payload in the recovery record.
 | `E2B_API_KEY` | E2B sandbox API key | (disabled) |
 | `MCP_CODE_EXECUTE_ENABLED` | Enable code execution MCP | `false` |
 | `MCP_WEB_FETCH_ENABLED` | Enable web fetch MCP | `false` |
+| `SIRAGPT_MCP_ALLOWED_HOSTS` | Global comma-separated hostname ceiling for user-registered external MCP servers | empty (production MCP deny-all) |
+| `SIRAGPT_MCP_ALLOW_HTTP` | Permit HTTP only for non-production loopback MCP endpoints | `0` |
+
+External MCP registrations require HTTPS in production. Configure exact
+hostnames or safe leading-* subdomain patterns such as
+`*.tools.example.com`; wildcard matches are label-bound, exclude the apex, and
+cannot target a public suffix such as `*.com` or `*.co.uk`. The runtime also
+rejects userinfo, IP literals, private/reserved DNS results, and unsafe
+non-default HTTPS ports. Optional `User.settings.mcpAllowedHosts` and
+`Organization.settings.mcpAllowedHosts` restrictions intersect the global
+allowlist and cannot expand it. The organization layer is used only for an
+explicit, membership-verified active organization; personal chats use global
+and user restrictions only. A missing production global allowlist activates
+MCP deny-all, surfaces degraded MCP health, and does not prevent backend
+startup. Development HTTP requires both a loopback URL and
+`SIRAGPT_MCP_ALLOW_HTTP=1`.
 
 ## ⚙️ Idempotency
 

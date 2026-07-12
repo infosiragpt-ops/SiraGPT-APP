@@ -426,6 +426,81 @@ function validateStartupEnvironment(env = process.env, options = {}) {
     });
   }
 
+  // ─── External MCP transport policy ──────────────────────
+  // Production is fail-closed: every user-registered MCP endpoint must be
+  // HTTPS and its normalized hostname must intersect this global allowlist.
+  // Diagnostics intentionally expose only stable codes, never host values.
+  try {
+    const { resolveMcpPolicyConfig } = require('../services/agent-harness/mcp-policy');
+    const mcpConfig = resolveMcpPolicyConfig(env);
+    const codes = new Set(mcpConfig.errors.map((entry) => entry.code));
+    if (codes.has('MCP_ALLOWED_HOSTS_REQUIRED')) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOWED_HOSTS',
+        code: 'MCP_ALLOWED_HOSTS_REQUIRED',
+        label: 'MCP allowed hosts',
+        severity: Severity.WARNING,
+        message: 'MCP is deny-all until a production hostname allowlist is configured.',
+      });
+    }
+    if (
+      mcpConfig.configured
+      && mcpConfig.errors.some((entry) => (
+        entry.code !== 'MCP_ALLOWED_HOSTS_REQUIRED'
+        && entry.code !== 'MCP_HTTP_FORBIDDEN_PRODUCTION'
+      ))
+    ) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOWED_HOSTS',
+        code: 'MCP_ALLOWED_HOSTS_INVALID',
+        label: 'MCP allowed hosts',
+        severity: production ? Severity.BLOCKING : Severity.WARNING,
+        message: 'MCP hostname allowlist contains an invalid or unsafe pattern.',
+      });
+    }
+    if (codes.has('MCP_HTTP_FORBIDDEN_PRODUCTION')) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOW_HTTP',
+        code: 'MCP_HTTP_FORBIDDEN_PRODUCTION',
+        label: 'MCP HTTP loopback override',
+        severity: Severity.BLOCKING,
+        message: 'Production MCP connections require HTTPS; the local HTTP override is forbidden.',
+      });
+    }
+    if (
+      production
+      && /^(1|true|yes|on)$/i.test(String(env.SIRAGPT_MCP_ALLOW_PRIVATE || '').trim())
+    ) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOW_PRIVATE',
+        code: 'MCP_PRIVATE_BYPASS_UNSUPPORTED',
+        label: 'MCP private-network bypass',
+        severity: Severity.BLOCKING,
+        message: 'Production cannot bypass MCP private-network protections.',
+      });
+    }
+    if (
+      production
+      && /^(0|false|no|off)$/i.test(String(env.SIRAGPT_MCP_SSRF_GUARD || '').trim())
+    ) {
+      issues.push({
+        key: 'SIRAGPT_MCP_SSRF_GUARD',
+        code: 'MCP_SSRF_GUARD_REQUIRED',
+        label: 'MCP DNS rebinding guard',
+        severity: Severity.BLOCKING,
+        message: 'Production cannot disable MCP DNS rebinding protections.',
+      });
+    }
+  } catch (_error) {
+    issues.push({
+      key: 'SIRAGPT_MCP_ALLOWED_HOSTS',
+      code: 'MCP_POLICY_VALIDATION_UNAVAILABLE',
+      label: 'MCP transport policy',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'MCP transport policy could not be validated.',
+    });
+  }
+
   // ─── Google OAuth credentials ──────────────────────────
   // Warn when only one of the paired credentials is present — OAuth
   // will fail at either the authorization or token-exchange step.

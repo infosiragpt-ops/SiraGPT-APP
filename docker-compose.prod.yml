@@ -169,6 +169,10 @@ services:
       AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS: "${AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS:-5000}"
       AUTH_SOCKET_REVALIDATION_TIMEOUT_MS: "${AUTH_SOCKET_REVALIDATION_TIMEOUT_MS:-2000}"
       AUTH_SOCKET_REVALIDATION_CACHE_MAX: "${AUTH_SOCKET_REVALIDATION_CACHE_MAX:-2000}"
+      # Global ceiling for user-registered external MCP endpoints. Missing
+      # configuration starts the backend with MCP deny-all/degraded.
+      SIRAGPT_MCP_ALLOWED_HOSTS: "${SIRAGPT_MCP_ALLOWED_HOSTS:-}"
+      SIRAGPT_MCP_ALLOW_HTTP: "0"
       # Keep explicit runtime/direct roles untouched. POSTGRES-only deployments
       # are synthesized by the shared pure resolver after all URL roles are
       # confirmed absent, so a remote runtime can never silently target `db`.
