@@ -1393,6 +1393,12 @@ function resolveAgentModelFailoverRuntimes(profile, env = process.env) {
     env.AGENT_TASK_OPENAI_MODEL || env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
   ).trim() || 'gpt-4o-mini';
   const candidates = [
+    {
+      provider: 'Cerebras',
+      apiKeyEnv: 'CEREBRAS_API_KEY',
+      baseURL: env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
+      model: env.AGENT_TASK_CEREBRAS_MODEL || env.FREE_IA_MODEL_ID || 'gpt-oss-120b',
+    },
     { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: fallbackModel },
     {
       provider: 'Gemini',

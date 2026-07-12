@@ -458,14 +458,15 @@ test('agent model failover walks configured providers and detects unrecovered mo
   assert.equal(picked.model, 'gpt-4o-mini');
   assert.ok(picked.client);
 
-  // Si OpenAI también agota cuota, el runner debe poder continuar con
-  // Gemini y luego DeepSeek en vez de detenerse tras el primer reintento.
+  // El runner conserva una cadena completa: Cerebras primero y después
+  // OpenAI, Gemini y DeepSeek si cada proveedor anterior falla.
   const chain = resolveAgentModelFailoverRuntimes(profile, {
+    CEREBRAS_API_KEY: 'cerebras-key',
     OPENAI_API_KEY: 'openai-key',
     GEMINI_API_KEY: 'gemini-key',
     DEEPSEEK_API_KEY: 'deepseek-key',
   });
-  assert.deepEqual(chain.map(({ provider }) => provider), ['OpenAI', 'Gemini', 'DeepSeek']);
+  assert.deepEqual(chain.map(({ provider }) => provider), ['Cerebras', 'OpenAI', 'Gemini', 'DeepSeek']);
 
   // El proveedor que falló se excluye aunque tenga key.
   const openaiFailed = resolveAgentModelFailoverRuntime(
@@ -482,9 +483,10 @@ test('agent model failover walks configured providers and detects unrecovered mo
   assert.equal(isUnrecoveredModelFailure('completed'), false);
 });
 
-test('runAgentTaskJob continues to Gemini when OpenRouter and OpenAI both fail', async () => {
+test('runAgentTaskJob continues to Gemini when Cerebras and OpenAI also fail', async () => {
   const restoreEnv = rememberEnv([
     'OPENROUTER_API_KEY',
+    'CEREBRAS_API_KEY',
     'OPENAI_API_KEY',
     'GEMINI_API_KEY',
     'DEEPSEEK_API_KEY',
@@ -494,6 +496,7 @@ test('runAgentTaskJob continues to Gemini when OpenRouter and OpenAI both fail',
   ]);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-model-failover-chain-'));
   process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  process.env.CEREBRAS_API_KEY = 'test-cerebras-key';
   process.env.OPENAI_API_KEY = 'test-openai-key';
   process.env.GEMINI_API_KEY = 'test-gemini-key';
   delete process.env.DEEPSEEK_API_KEY;
@@ -518,7 +521,7 @@ test('runAgentTaskJob continues to Gemini when OpenRouter and OpenAI both fail',
   taskContractResolver.resolveTaskContract = async ({ fallback }) => ({ contract: fallback(), source: 'test-fallback' });
   reactAgent.run = async (_client, args) => {
     models.push(args.model);
-    if (models.length < 3) {
+    if (models.length < 4) {
       return { finalAnswer: '', steps: [], stoppedReason: 'model_error: 429 insufficient_quota' };
     }
     return {
@@ -547,7 +550,7 @@ test('runAgentTaskJob continues to Gemini when OpenRouter and OpenAI both fail',
 
     const snapshot = taskStore.getTaskSnapshotForUser('task-model-failover-chain-1', 'user-model-failover-chain-1');
     assert.equal(result.status, 'completed');
-    assert.deepEqual(models, ['openai/gpt-5.5', 'gpt-4o-mini', 'gemini-2.5-flash']);
+    assert.deepEqual(models, ['openai/gpt-5.5', 'gpt-oss-120b', 'gpt-4o-mini', 'gemini-2.5-flash']);
     assert.match(snapshot.streamState.finalText, /proveedor alternativo/);
     assert.equal(snapshot.streamState.stoppedReason, 'completed');
   } finally {
@@ -565,6 +568,7 @@ test('runAgentTaskJob continues to Gemini when OpenRouter and OpenAI both fail',
 test('runAgentTaskJob never turns an unrecovered model error into a Word artifact', async () => {
   const restoreEnv = rememberEnv([
     'OPENROUTER_API_KEY',
+    'CEREBRAS_API_KEY',
     'OPENAI_API_KEY',
     'GEMINI_API_KEY',
     'DEEPSEEK_API_KEY',
@@ -574,6 +578,7 @@ test('runAgentTaskJob never turns an unrecovered model error into a Word artifac
   ]);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-model-error-artifact-guard-'));
   process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  process.env.CEREBRAS_API_KEY = 'test-cerebras-key';
   process.env.OPENAI_API_KEY = 'test-openai-key';
   process.env.GEMINI_API_KEY = 'test-gemini-key';
   delete process.env.DEEPSEEK_API_KEY;
