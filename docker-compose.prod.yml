@@ -204,7 +204,7 @@ services:
       REDIS_URL: redis://redis:6379
       # Security-critical shared state. Both runtimes fail closed in production.
       # Keep compat until every pre-hash/compat replica is drained.
-      SESSION_TOKEN_HASH_MODE: ${SESSION_TOKEN_HASH_MODE:-compat}
+      SESSION_TOKEN_HASH_MODE: ${SESSION_TOKEN_HASH_MODE:-hash}
       SESSION_TOKEN_HASH_COMPAT_DRAINED: ${SESSION_TOKEN_HASH_COMPAT_DRAINED:-0}
       SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE: ${SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE:-100}
       SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES: ${SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES:-10}

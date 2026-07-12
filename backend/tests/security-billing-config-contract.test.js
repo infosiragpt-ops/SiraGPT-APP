@@ -267,6 +267,14 @@ test('central OAuth URL controls are documented and passed to every backend repl
   }
 });
 
+test('production activates hashed sessions only after the compatibility rollout', () => {
+  const productionCompose = read('docker-compose.prod.yml');
+  const localCompose = read('docker-compose.yml');
+
+  assert.match(productionCompose, /SESSION_TOKEN_HASH_MODE:\s+\$\{SESSION_TOKEN_HASH_MODE:-hash\}/);
+  assert.match(localCompose, /SESSION_TOKEN_HASH_MODE:\s+"\$\{SESSION_TOKEN_HASH_MODE:-compat\}"/);
+});
+
 test('auth-security runbook documents migration, replay, outage, and limiter operations', () => {
   const runbook = read('docs/operations/AUTH_SECURITY.md');
 
