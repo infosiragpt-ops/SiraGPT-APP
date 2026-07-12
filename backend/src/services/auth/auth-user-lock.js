@@ -2,7 +2,13 @@
 
 const crypto = require('node:crypto');
 
-const AUTH_USER_LOCK_SQL = 'SELECT pg_advisory_xact_lock($1::bigint) AS locked';
+const AUTH_USER_LOCK_SQL = `
+  WITH lock_acquired AS (
+    SELECT pg_advisory_xact_lock($1::bigint)
+  )
+  SELECT 1::int AS locked
+  FROM lock_acquired
+`;
 const AUTH_USER_LOCK_TIMEOUT_SQL =
   "SELECT set_config('lock_timeout', $1, TRUE) AS lock_timeout";
 const DEFAULT_AUTH_USER_LOCK_TIMEOUT_MS = 500;

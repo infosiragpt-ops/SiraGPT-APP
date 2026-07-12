@@ -288,10 +288,25 @@ function existingReservationResult(row, identity) {
   };
 }
 
-async function lockOperation(tx, idempotencyKeyHash) {
+async function acquireCreditOperationLock(tx, idempotencyKeyHash) {
   return tx.$queryRaw(Prisma.sql`
     /* credit-ledger:lock-operation */
-    SELECT pg_advisory_xact_lock(hashtext(${idempotencyKeyHash})) AS locked
+    WITH lock_acquired AS (
+      SELECT pg_advisory_xact_lock(hashtext(${idempotencyKeyHash}))
+    )
+    SELECT 1::INT AS locked
+    FROM lock_acquired
+  `);
+}
+
+async function acquireFallbackQuotaLock(tx, quotaLockKey) {
+  return tx.$queryRaw(Prisma.sql`
+    /* credit-ledger:lock-fallback-quota */
+    WITH lock_acquired AS (
+      SELECT pg_advisory_xact_lock(hashtext(${quotaLockKey}))
+    )
+    SELECT 1::INT AS locked
+    FROM lock_acquired
   `);
 }
 
@@ -704,7 +719,7 @@ async function reservePaidCharge({
       error.code = 'CREDIT_LEDGER_UNAVAILABLE';
       throw error;
     }
-    await lockOperation(tx, identity.idempotencyKeyHash);
+    await acquireCreditOperationLock(tx, identity.idempotencyKeyHash);
     const existing = await selectByKey(tx, identity.idempotencyKeyHash);
     if (existing) {
       return claimExistingReservation(tx, existing, identity, { now, leaseMs });
@@ -797,17 +812,14 @@ async function reserveFallbackCharge({
       error.code = 'CREDIT_LEDGER_UNAVAILABLE';
       throw error;
     }
-    await lockOperation(tx, identity.idempotencyKeyHash);
+    await acquireCreditOperationLock(tx, identity.idempotencyKeyHash);
     const existing = await selectByKey(tx, identity.idempotencyKeyHash);
     if (existing) {
       return claimExistingReservation(tx, existing, identity, { now, leaseMs });
     }
 
     const quotaLockKey = `free-ia:${identity.userId}:${windowStart.toISOString()}`;
-    await tx.$queryRaw(Prisma.sql`
-      /* credit-ledger:lock-fallback-quota */
-      SELECT pg_advisory_xact_lock(hashtext(${quotaLockKey})) AS locked
-    `);
+    await acquireFallbackQuotaLock(tx, quotaLockKey);
     const countRows = await tx.$queryRaw(Prisma.sql`
       /* credit-ledger:count-fallback */
       SELECT COUNT(*)::INT AS "used"
@@ -979,7 +991,7 @@ async function reserveCreditGrant({
   });
   if (!identity) return { ok: false, code: 'INVALID_AMOUNT' };
   return prismaClient.$transaction(async (tx) => {
-    await lockOperation(tx, identity.idempotencyKeyHash);
+    await acquireCreditOperationLock(tx, identity.idempotencyKeyHash);
     const existing = await selectByKey(tx, identity.idempotencyKeyHash);
     if (existing) {
       return claimExistingReservation(tx, existing, identity, { now, leaseMs });
@@ -1331,7 +1343,7 @@ async function refundLedgerTransaction({
   }
   return prismaClient.$transaction(async (tx) => {
     const refundKeyHash = deterministicRefundKey(originalTransaction);
-    await lockOperation(tx, refundKeyHash);
+    await acquireCreditOperationLock(tx, refundKeyHash);
     const original = await selectByIdForUpdate(
       tx,
       originalTransaction.id,
@@ -1548,6 +1560,8 @@ module.exports = {
   MAX_CACHED_RESPONSE_BYTES,
   MAX_IDEMPOTENCY_LEASE_MS,
   MIN_IDEMPOTENCY_LEASE_MS,
+  acquireCreditOperationLock,
+  acquireFallbackQuotaLock,
   attachLedgerResource,
   cachedResponseOf,
   claimExistingReservation,
