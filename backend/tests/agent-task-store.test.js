@@ -95,6 +95,28 @@ test('agent task store: appends events and creates checkpoints for important tra
   assert.equal(loaded.streamState.steps.length, 1);
 });
 
+test('agent task store: replaces intermediate artifacts with the latest same-name version', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-task-store-'));
+  const base = taskStore.writeTaskSnapshot({
+    taskId: 'task-artifact-versions',
+    userId: 'user-a',
+    streamState: { steps: [], artifacts: [], finalText: '', done: false },
+  });
+
+  const first = taskStore.appendTaskEvent(base, {
+    type: 'file_artifact',
+    artifact: { id: 'artifact-v1', filename: 'Informe.docx', format: 'docx', sizeBytes: 1200 },
+  }, base.streamState);
+  taskStore.appendTaskEvent(first, {
+    type: 'file_artifact',
+    artifact: { id: 'artifact-v2', filename: 'Informe.docx', format: 'docx', sizeBytes: 1600 },
+  }, base.streamState);
+
+  const loaded = taskStore.getTaskSnapshotForUser('task-artifact-versions', 'user-a');
+  assert.equal(loaded.artifacts.length, 1);
+  assert.equal(loaded.artifacts[0].id, 'artifact-v2');
+});
+
 test('agent task store: marks terminal status with timestamps and stats', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-task-store-'));
 

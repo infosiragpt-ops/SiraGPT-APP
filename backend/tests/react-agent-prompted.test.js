@@ -135,6 +135,22 @@ test('prompted mode treats plain text with no parseable call as a direct answer'
   assert.equal(result.finalAnswer, 'La capital de Francia es París.');
 });
 
+test('prompted mode unwraps a structured final-answer envelope returned as plain text', async () => {
+  const requests = [];
+  const openai = makePromptedFakeOpenAI([
+    assistantText(JSON.stringify({ answer: '# Informe listo\n\nDocumento validado.', confidence: 'high' })),
+  ], requests);
+  const result = await reactAgent.run(openai, {
+    query: 'crea un informe',
+    tools: [ECHO_TOOL],
+    model: 'gpt-oss-120b',
+    maxSteps: 3,
+    toolCallMode: 'prompted',
+  });
+  assert.equal(result.stoppedReason, 'plain_text_finalize');
+  assert.equal(result.finalAnswer, '# Informe listo\n\nDocumento validado.');
+});
+
 test('prompted mode ignores hallucinated tool names and lets the loop continue', async () => {
   const requests = [];
   const openai = makePromptedFakeOpenAI([

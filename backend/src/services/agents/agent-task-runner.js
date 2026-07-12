@@ -136,6 +136,21 @@ function summarizeForChat(text, policy) {
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
 }
 
+function upsertArtifactForDelivery(artifacts, artifact) {
+  if (!Array.isArray(artifacts) || !artifact) return null;
+  const filename = String(artifact.filename || '').trim().toLowerCase();
+  const format = String(artifact.format || artifact.mime || '').trim().toLowerCase();
+  const existingIndex = filename
+    ? artifacts.findIndex((item) => (
+      String(item?.filename || '').trim().toLowerCase() === filename
+      && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+    ))
+    : -1;
+  if (existingIndex >= 0) artifacts.splice(existingIndex, 1, artifact);
+  else artifacts.push(artifact);
+  return artifact;
+}
+
 function normalizeAttachmentFallbackContent(text) {
   const tableHeaderCells = new Set([
     'n', 'no', 'titulo', 'titulo del articulo', 'autores', 'ano de publicacion',
@@ -2846,7 +2861,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       onEvent: (evt) => {
         const payloadEvent = { ...evt, stepId: evt.stepId || currentStepId };
         if (evt.type === 'file_artifact' && evt.artifact) {
-          artifacts.push(evt.artifact);
+          upsertArtifactForDelivery(artifacts, evt.artifact);
           void persistence.persistGeneratedArtifact({ artifact: evt.artifact, task, validation: evt.artifact.validation });
         }
         if (evt.type === 'contract_review') {
@@ -3513,6 +3528,7 @@ module.exports = {
   resolveAgentModelFailoverRuntime,
   resolveAgentModelFailoverRuntimes,
   isUnrecoveredModelFailure,
+  upsertArtifactForDelivery,
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,

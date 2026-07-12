@@ -483,6 +483,17 @@ test('agent model failover walks configured providers and detects unrecovered mo
   assert.equal(isUnrecoveredModelFailure('completed'), false);
 });
 
+test('upsertArtifactForDelivery keeps the latest same-name artifact', () => {
+  clearAgentModules();
+  const { upsertArtifactForDelivery } = require('../src/services/agents/agent-task-runner');
+  const artifacts = [];
+  upsertArtifactForDelivery(artifacts, { id: 'v1', filename: 'Informe.docx', format: 'docx' });
+  upsertArtifactForDelivery(artifacts, { id: 'v2', filename: 'informe.docx', format: 'docx' });
+  upsertArtifactForDelivery(artifacts, { id: 'sheet', filename: 'Datos.xlsx', format: 'xlsx' });
+
+  assert.deepEqual(artifacts.map(({ id }) => id), ['v2', 'sheet']);
+});
+
 test('runAgentTaskJob continues to Gemini when Cerebras and OpenAI also fail', async () => {
   const restoreEnv = rememberEnv([
     'OPENROUTER_API_KEY',

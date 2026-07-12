@@ -730,8 +730,23 @@ function buildDegradedAnswer(stoppedReason) {
   return 'No logré cerrar la tarea dentro del presupuesto de pasos disponible. Te respondo con lo que alcancé a determinar; si necesitas más profundidad, reformula la solicitud o divídela en partes más pequeñas.';
 }
 
+function unwrapFinalAnswerEnvelope(answer) {
+  const raw = String(answer == null ? '' : answer).trim();
+  if (!raw.startsWith('{') || !raw.endsWith('}')) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return raw;
+    for (const key of ['answer', 'finalAnswer', 'final_answer', 'markdown', 'content']) {
+      if (typeof parsed[key] === 'string' && parsed[key].trim()) return parsed[key].trim();
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+
 function sanitizeFinalAnswerDiagnostics(answer) {
-  const raw = String(answer == null ? '' : answer);
+  const raw = unwrapFinalAnswerEnvelope(answer);
   if (!raw.trim()) return '';
   const withoutVerificationNotes = raw
     .replace(
@@ -1605,6 +1620,7 @@ module.exports = {
   hasNativeToolCalls,
   stripNativeToolCallMarkup,
   sanitizeFinalAnswerDiagnostics,
+  unwrapFinalAnswerEnvelope,
   // Tool-error classification for the weighted per-run error budget.
   classifyToolError,
   // ACI observation formatting (SWE-agent) — exported for tests.

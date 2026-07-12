@@ -42,6 +42,21 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
   assert.equal(state.meta.goal, 'Investiga fuentes');
 });
 
+test('agent task route: keeps only the latest generated version for the same delivery slot', () => {
+  let state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'file_artifact',
+    artifact: { id: 'artifact-v1', filename: 'Informe.docx', format: 'docx', sizeBytes: 1200 },
+  });
+  state = INTERNAL.reduceAgentState(state, {
+    type: 'file_artifact',
+    artifact: { id: 'artifact-v2', filename: 'Informe.docx', format: 'docx', sizeBytes: 1600 },
+  });
+
+  assert.equal(state.artifacts.length, 1);
+  assert.equal(state.artifacts[0].id, 'artifact-v2');
+  assert.equal(state.artifacts[0].sizeBytes, 1600);
+});
+
 test('agent task route: continues edits from the latest generated document', () => {
   assert.equal(
     INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({

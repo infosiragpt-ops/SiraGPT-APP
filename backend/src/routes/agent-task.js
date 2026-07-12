@@ -3227,8 +3227,20 @@ function reduceAgentState(state, evt) {
           step.id === evt.id ? { ...step, status: evt.ok ? 'done' : 'error' } : step
         ),
       };
-    case 'file_artifact':
-      return { ...state, artifacts: [...state.artifacts, evt.artifact] };
+    case 'file_artifact': {
+      const artifacts = Array.isArray(state.artifacts) ? [...state.artifacts] : [];
+      const filename = String(evt.artifact?.filename || '').trim().toLowerCase();
+      const format = String(evt.artifact?.format || evt.artifact?.mime || '').trim().toLowerCase();
+      const existingIndex = filename
+        ? artifacts.findIndex((item) => (
+          String(item?.filename || '').trim().toLowerCase() === filename
+          && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+        ))
+        : -1;
+      if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact);
+      else artifacts.push(evt.artifact);
+      return { ...state, artifacts };
+    }
     case 'final_text':
       return { ...state, finalText: evt.markdown };
     case 'done':

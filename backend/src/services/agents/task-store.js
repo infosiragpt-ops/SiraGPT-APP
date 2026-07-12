@@ -237,10 +237,20 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
     updatedAt: nowIso(),
   };
   if (stamped.type === 'file_artifact' && stamped.artifact) {
-    const current = Array.isArray(next.artifacts) ? next.artifacts : [];
-    if (!current.some((artifact) => artifact.id === stamped.artifact.id)) {
-      next.artifacts = [...current, stamped.artifact];
-    }
+    const current = Array.isArray(next.artifacts) ? [...next.artifacts] : [];
+    const filename = String(stamped.artifact.filename || '').trim().toLowerCase();
+    const format = String(stamped.artifact.format || stamped.artifact.mime || '').trim().toLowerCase();
+    const existingIndex = current.findIndex((artifact) => (
+      artifact.id === stamped.artifact.id
+      || (
+        filename
+        && String(artifact.filename || '').trim().toLowerCase() === filename
+        && String(artifact.format || artifact.mime || '').trim().toLowerCase() === format
+      )
+    ));
+    if (existingIndex >= 0) current.splice(existingIndex, 1, stamped.artifact);
+    else current.push(stamped.artifact);
+    next.artifacts = current;
   }
   const written = persistTerminalMetricObservation({
     current: existing,
