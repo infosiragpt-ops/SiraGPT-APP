@@ -2032,6 +2032,7 @@ describe('source-preserving professional DOCX editing', () => {
     const source = Buffer.from(await Packer.toBuffer(new Document({
       sections: [{ children: [
         new Paragraph({ style: 'Title', children: [new TextRun({ text: 'Informe SIRAGPT 2026', bold: true, color: 'AA0000' })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Documento de trabajo - Comité de Dirección', bold: true })] }),
         new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Introducción')] }),
         new Paragraph({
           children: [new TextRun({
@@ -2051,10 +2052,12 @@ describe('source-preserving professional DOCX editing', () => {
       rewriteBatch: async ({ batch }) => ({
         provider: 'test-editor',
         rejected: [],
-        revisions: batch.map((item) => ({
-          id: item.id,
-          text: 'En 2026, SIRAGPT consolidó un proceso de mejora orientado a organizar el trabajo, fortalecer la coordinación y comunicar los resultados con mayor claridad y precisión.',
-        })),
+        revisions: batch.map((item) => item.text.startsWith('Documento de trabajo')
+          ? { id: item.id, text: 'Documento institucional modificado' }
+          : {
+            id: item.id,
+            text: 'En 2026, SIRAGPT consolidó un proceso de mejora orientado a organizar el trabajo, fortalecer la coordinación y comunicar los resultados con mayor claridad y precisión.',
+          }),
       }),
     });
 
@@ -2063,6 +2066,8 @@ describe('source-preserving professional DOCX editing', () => {
     assert.deepEqual(result.providers, ['test-editor']);
     const xml = new PizZip(result.buffer).file('word/document.xml').asText();
     assert.match(xml, /Informe SIRAGPT 2026/);
+    assert.match(xml, /Documento de trabajo - Comité de Dirección/);
+    assert.doesNotMatch(xml, /Documento institucional modificado/);
     assert.match(xml, /consolidó un proceso de mejora/);
     assert.match(xml, /Dato fijo 99/);
     assert.match(xml, /Castro, L\. \(2024\)/);
@@ -2128,6 +2133,13 @@ describe('source-preserving professional DOCX editing', () => {
       original,
       'En 2026, SIRAGPT procesó 150 solicitudes y alcanzó un 95% de cumplimiento, resultado que evidencia una ejecución consistente durante la evaluación.',
     ).ok, true);
+
+    const repetitive = validateProfessionalRevision(
+      'El equipo utiliza una herramienta central para organizar la información y facilitar la toma de decisiones en las reuniones comerciales.',
+      'El equipo utiliza la herramienta como una herramienta estratégica para organizar la información y facilitar decisiones en las reuniones comerciales.',
+    );
+    assert.equal(repetitive.ok, false);
+    assert.equal(repetitive.reason, 'repeated_wording');
   });
 });
 
