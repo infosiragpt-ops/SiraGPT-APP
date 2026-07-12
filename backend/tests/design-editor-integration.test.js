@@ -39,6 +39,14 @@ function sourceFile(p) {
 async function run(prompt, filePath) {
   return generateSourcePreservingDocumentEdit({
     sourceFile: sourceFile(filePath), prompt, displayPrompt: prompt, userId: 'u', chatId: 'c',
+    professionalRewriteBatch: async ({ batch }) => ({
+      provider: 'test-editor',
+      rejected: [],
+      revisions: batch.map((item) => ({
+        id: item.id,
+        text: `${item.text.replace(/[.]+$/, '')}, con redacción clara.`,
+      })),
+    }),
   });
 }
 

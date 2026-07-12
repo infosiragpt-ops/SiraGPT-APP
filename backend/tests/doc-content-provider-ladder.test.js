@@ -5,6 +5,7 @@ const assert = require('node:assert');
 
 const {
   resolveContentClient,
+  resolveContentClients,
   hasAnyContentKey,
   sanitizeResponseFormat,
   stripSchemaConstraints,
@@ -36,6 +37,14 @@ test('OpenAI is used only when it is the sole configured provider', () => {
 test('DOC_CONTENT_PROVIDER forces the head of the ladder when its key exists', () => {
   const env = { CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'or', DOC_CONTENT_PROVIDER: 'OpenRouter' };
   assert.equal(resolveContentClient({ env }).provider, 'OpenRouter');
+  assert.deepEqual(resolveContentClients({ env }).map((entry) => entry.provider), ['OpenRouter', 'Cerebras']);
+});
+
+test('content provider list exposes every configured failover without keys', () => {
+  const env = { CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'or', OPENAI_API_KEY: 'oai' };
+  const providers = resolveContentClients({ env });
+  assert.deepEqual(providers.map((entry) => entry.provider), ['Cerebras', 'OpenRouter', 'OpenAI']);
+  assert.equal(providers.some((entry) => Object.prototype.hasOwnProperty.call(entry, 'apiKey')), false);
 });
 
 test('returns null when NO provider key is configured (degraded/fallback mode)', () => {

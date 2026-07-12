@@ -1971,6 +1971,166 @@ describe('source-preserving DOCX title edits', () => {
   });
 });
 
+describe('source-preserving professional DOCX editing', () => {
+  const {
+    planSourcePreservingOperations,
+    professionalEditDocxBuffer,
+    selectSourcePreservingDocumentSet,
+    validateProfessionalRevision,
+  } = sourcePreservingInternals;
+
+  it('plans an in-place professional edit instead of a generic appendix', async () => {
+    const source = await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({ style: 'Title', children: [new TextRun('Informe institucional')] }),
+        new Paragraph('Este documento tiene una redacción simple que necesita mayor claridad y cohesión para su presentación final.'),
+      ] }],
+    }));
+    const documentXml = new PizZip(Buffer.from(source)).file('word/document.xml').asText();
+    const operations = planSourcePreservingOperations({
+      requestText: 'Edita profesionalmente este documento, mejora el contenido y hazlo más interesante.',
+      documentXml,
+    });
+
+    assert.equal(operations.length, 1);
+    assert.equal(operations[0].kind, 'professional_edit');
+    assert.equal(operations.some((op) => op.kind === 'append_generic'), false);
+
+    const minimal = planSourcePreservingOperations({
+      requestText: 'Aplica solo correcciones mínimas de ortografía, sin reescribir el contenido.',
+      documentXml,
+    });
+    assert.deepEqual(minimal.map((op) => op.kind), ['proofread_minimal']);
+  });
+
+  it('prioritizes the document the user says they delivered over an older generated artifact', () => {
+    const selection = selectSourcePreservingDocumentSet({
+      requestText: 'Mejora profesionalmente el mismo documento que te entregué y devuélvemelo editado.',
+      sourceFiles: [{
+        id: 'uploaded-original',
+        originalName: 'informe-del-usuario.docx',
+        filename: 'informe-del-usuario.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        path: '/tmp/informe-del-usuario.docx',
+        source: 'recent_attachment',
+      }],
+      priorArtifacts: [{
+        id: 'artifact:older',
+        originalName: 'otro-documento-editado.docx',
+        filename: 'otro-documento-editado.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        path: '/tmp/otro-documento-editado.docx',
+        source: 'generated_artifact',
+      }],
+    });
+
+    assert.equal(selection.sourceFile.id, 'uploaded-original');
+    assert.equal(selection.selectionReason, 'current_supported_file');
+  });
+
+  it('rewrites narrative paragraphs while preserving title, table, references, facts, and formatting', async () => {
+    const source = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({ style: 'Title', children: [new TextRun({ text: 'Informe SIRAGPT 2026', bold: true, color: 'AA0000' })] }),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Introducción')] }),
+        new Paragraph({
+          children: [new TextRun({
+            text: 'En 2026, SIRAGPT inició un proceso de mejora que permitió ordenar el trabajo y presentar resultados de manera más clara.',
+            color: '223344',
+          })],
+        }),
+        new Table({ rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph('Dato fijo 99')] })] })] }),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Referencias bibliográficas')] }),
+        new Paragraph('Castro, L. (2024). Documento de referencia. https://example.com/fuente'),
+      ] }],
+    })));
+
+    const result = await professionalEditDocxBuffer(source, {
+      requestText: 'Mejora profesionalmente este documento y hazlo interesante.',
+      sourceText: 'Informe institucional de SIRAGPT correspondiente al año 2026.',
+      rewriteBatch: async ({ batch }) => ({
+        provider: 'test-editor',
+        rejected: [],
+        revisions: batch.map((item) => ({
+          id: item.id,
+          text: 'En 2026, SIRAGPT consolidó un proceso de mejora orientado a organizar el trabajo, fortalecer la coordinación y comunicar los resultados con mayor claridad y precisión.',
+        })),
+      }),
+    });
+
+    assert.equal(result.changedParagraphs, 1);
+    assert.equal(result.reviewedParagraphs, 1);
+    assert.deepEqual(result.providers, ['test-editor']);
+    const xml = new PizZip(result.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Informe SIRAGPT 2026/);
+    assert.match(xml, /consolidó un proceso de mejora/);
+    assert.match(xml, /Dato fijo 99/);
+    assert.match(xml, /Castro, L\. \(2024\)/);
+    assert.match(xml, /w:color w:val="223344"/);
+    assert.doesNotMatch(xml, />ANEXOS</);
+  });
+
+  it('returns a validated edited artifact based on the uploaded DOCX', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-professional-edit-'));
+    const originalPath = path.join(tmp, 'informe-original.docx');
+    const source = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({ style: 'Title', children: [new TextRun('Informe operativo 2026')] }),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Situación actual')] }),
+        new Paragraph('En 2026, el equipo registró 40 solicitudes y organizó la información para comunicar el avance del proyecto.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, source);
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'uploaded-professional-docx',
+        path: originalPath,
+        originalName: 'informe-original.docx',
+        filename: 'informe-original.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Informe operativo 2026. En 2026, el equipo registró 40 solicitudes.',
+      },
+      prompt: 'Edita profesionalmente este documento, mejora su claridad y devuélveme el mismo Word.',
+      displayPrompt: 'Edita profesionalmente este documento, mejora su claridad y devuélveme el mismo Word.',
+      userId: 'user-professional-edit',
+      chatId: 'chat-professional-edit',
+      professionalRewriteBatch: async ({ batch }) => ({
+        provider: 'test-editor',
+        rejected: [],
+        revisions: batch.map((item) => ({
+          id: item.id,
+          text: 'En 2026, el equipo gestionó 40 solicitudes y estructuró la información con criterios consistentes, lo que permitió comunicar el avance del proyecto con mayor claridad.',
+        })),
+      }),
+    });
+
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true);
+    assert.match(result.file.filename, /informe-original_editado_profesionalmente\.docx$/);
+    assert.match(result.content, /mejoré profesionalmente 1 párrafo/);
+    assert.equal(result.orchestration.baseFile, 'informe-original.docx');
+    assert.equal(result.orchestration.operations[0].kind, 'professional_edit');
+    const edited = fs.readFileSync(result.artifact.path);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+    assert.match(xml, /Informe operativo 2026/);
+    assert.match(xml, /gestionó 40 solicitudes/);
+    assert.doesNotMatch(xml, />ANEXOS</);
+  });
+
+  it('rejects attractive rewrites that drop protected figures or acronyms', () => {
+    const original = 'En 2026, SIRAGPT procesó 150 solicitudes y alcanzó un 95% de cumplimiento durante la evaluación.';
+    assert.equal(validateProfessionalRevision(
+      original,
+      'Durante la evaluación, la plataforma procesó numerosas solicitudes y obtuvo un cumplimiento destacado.',
+    ).ok, false);
+    assert.equal(validateProfessionalRevision(
+      original,
+      'En 2026, SIRAGPT procesó 150 solicitudes y alcanzó un 95% de cumplimiento, resultado que evidencia una ejecución consistente durante la evaluación.',
+    ).ok, true);
+  });
+});
+
 describe('source-preserving Office edit — generic XLSX/PPTX operations', () => {
   const {
     appendToPptxBuffer,
