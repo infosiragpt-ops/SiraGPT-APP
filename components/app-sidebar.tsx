@@ -1935,7 +1935,7 @@ export function AppSidebar() {
                     <Shield className="mr-2 h-4 w-4" />
                     {t("privacyPolicy")}
                   </DropdownMenuItem>
-                  {user?.isAdmin && (
+                  {(user?.isAdmin || user?.isSuperAdmin) && (
                     <>
                       <DropdownMenuSeparator className={LG_SEP} />
                       <DropdownMenuItem
@@ -1945,19 +1945,6 @@ export function AppSidebar() {
                       >
                         <Settings className="mr-2 h-4 w-4" />
                         {t("adminPanel")}
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  {user?.isSuperAdmin && (
-                    <>
-                      <DropdownMenuSeparator className={LG_SEP} />
-                      <DropdownMenuItem
-                        onClick={() => navigate("/super-admin")}
-                        onMouseEnter={() => prefetchOnHover("/super-admin")}
-                        className={LG_ITEM}
-                      >
-                        <Shield className="mr-2 h-4 w-4 text-red-600" />
-                        <span className="text-red-600">{t("superAdminPanel")}</span>
                       </DropdownMenuItem>
                     </>
                   )}
