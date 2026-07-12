@@ -517,6 +517,53 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const MUSIC_STYLE_PROFILES: Record<MusicStyle, { label: string; description: string; accentClass: string }> = {
+  Auto: {
+    label: "Auto",
+    description: "Deja que el modelo elija el genero segun tu prompt.",
+    accentClass: "bg-zinc-900 dark:bg-white",
+  },
+  Cinematic: {
+    label: "Cinematic",
+    description: "Texturas amplias, tension y final de trailer.",
+    accentClass: "bg-violet-500",
+  },
+  Pop: {
+    label: "Pop",
+    description: "Hook claro, bateria pulida y estructura comercial.",
+    accentClass: "bg-pink-500",
+  },
+  Electronic: {
+    label: "Electronic",
+    description: "Sintetizadores, pulso moderno y energia digital.",
+    accentClass: "bg-cyan-500",
+  },
+  Ambient: {
+    label: "Ambient",
+    description: "Capas suaves, atmosfera y movimiento discreto.",
+    accentClass: "bg-teal-500",
+  },
+  Orchestral: {
+    label: "Orchestral",
+    description: "Cuerdas, metales y dinamica de partitura.",
+    accentClass: "bg-amber-500",
+  },
+  Latin: {
+    label: "Latin",
+    description: "Ritmo calido, percusion marcada y sabor latino.",
+    accentClass: "bg-red-500",
+  },
+  "Hip-Hop": {
+    label: "Hip-Hop",
+    description: "Beat con groove, bajo presente y espacio vocal.",
+    accentClass: "bg-slate-700 dark:bg-slate-300",
+  },
+  Jazz: {
+    label: "Jazz",
+    description: "Armonia rica, swing sutil e instrumentacion organica.",
+    accentClass: "bg-emerald-600",
+  },
+}
 const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
 
 const DEFAULT_IMAGE_MODEL = ""
@@ -3116,12 +3163,24 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
-              <div className="relative z-10 py-1">
+              <div className="relative z-10 p-1.5">
+                <div className="px-2 pb-2 pt-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
+                      <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
+                    </div>
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-rose-200/80 bg-rose-50 text-rose-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200">
+                      <Music className="h-4 w-4" />
+                    </span>
+                  </div>
+                </div>
+                <DropdownMenuSeparator className="mx-1 mb-1 bg-zinc-950/8 dark:bg-white/12" />
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de música</span>
                     <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicModel}</span>
                   </DropdownMenuSubTrigger>
@@ -3138,24 +3197,50 @@ const ActiveToolsDisplay = ({
                 </DropdownMenuSub>
 
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
-                    <span>Style</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicStyle}</span>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-12 cursor-pointer items-center justify-between gap-3 px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span className="min-w-0">
+                      <span className="block leading-none">Estilo</span>
+                      <span className="mt-1 block max-w-[150px] truncate text-[10.5px] font-medium leading-none text-zinc-500 dark:text-white/60">{MUSIC_STYLE_PROFILES[selectedMusicStyle].description}</span>
+                    </span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72">{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
-                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {MUSIC_STYLE_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicStyle(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedMusicStyle === option && <Check className="h-3.5 w-3.5" />}
-                        </DropdownMenuItem>
-                      ))}
+                    <DropdownMenuSubContent sideOffset={10} alignOffset={-8} collisionPadding={12} className="liquid-menu-surface max-h-[min(25rem,calc(100vh-2rem))] w-[min(calc(100vw-1rem),19rem)] overflow-y-auto p-1.5">
+                      <div className="relative z-10 px-2 pb-1.5 pt-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Estilos de producción</p>
+                        <p className="mt-1 text-[11.5px] leading-4 text-zinc-600 dark:text-white/68">Selecciona una dirección sonora clara para que el resultado suene intencional.</p>
+                      </div>
+                      {MUSIC_STYLE_OPTIONS.map(option => {
+                        const selected = selectedMusicStyle === option;
+                        const profile = MUSIC_STYLE_PROFILES[option];
+                        return (
+                          <DropdownMenuItem
+                            key={option}
+                            className={cn(
+                              "relative z-10 flex min-h-[3.65rem] cursor-pointer items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors",
+                              selected
+                                ? "bg-zinc-950/[0.055] text-zinc-950 ring-1 ring-zinc-950/10 dark:bg-white/10 dark:text-white dark:ring-white/12"
+                                : "text-zinc-800 hover:bg-zinc-950/[0.04] focus:bg-zinc-950/[0.04] dark:text-white/86 dark:hover:bg-white/[0.08] dark:focus:bg-white/[0.08]"
+                            )}
+                            onClick={() => setSelectedMusicStyle(option)}
+                          >
+                            <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_0_4px_rgba(0,0,0,0.035)] dark:shadow-[0_0_0_4px_rgba(255,255,255,0.06)]", profile.accentClass)} />
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center justify-between gap-2">
+                                <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" />}
+                              </span>
+                              <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
+                            </span>
+                          </DropdownMenuItem>
+                        )
+                      })}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
 
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Mood</span>
                     <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicMood}</span>
                   </DropdownMenuSubTrigger>
@@ -3205,7 +3290,7 @@ const ActiveToolsDisplay = ({
                 </div>
 
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
                     <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicEffect}</span>
                   </DropdownMenuSubTrigger>
@@ -3221,6 +3306,9 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
 
+                <div className="mt-1 border-t border-zinc-950/8 px-2.5 py-2 text-[10.5px] font-medium leading-4 text-zinc-600 dark:border-white/12 dark:text-white/72">
+                  {MUSIC_STYLE_PROFILES[selectedMusicStyle].label} / {selectedMusicMood} / {selectedMusicEffect} / {selectedMusicDuration < 60 ? `${selectedMusicDuration}s` : `${Math.floor(selectedMusicDuration / 60)}:${String(selectedMusicDuration % 60).padStart(2, "0")}`}
+                </div>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>

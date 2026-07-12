@@ -223,6 +223,39 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
+  it("renders Music Style as a professional guided selector", () => {
+    assert.match(
+      source,
+      /const MUSIC_STYLE_PROFILES: Record<MusicStyle,/,
+      "Music style options should carry UI labels, descriptions and accents"
+    )
+    assert.match(
+      source,
+      /Estilos de producción[\s\S]{0,180}Selecciona una dirección sonora clara/,
+      "The style submenu should explain what the selection controls"
+    )
+    assert.match(
+      source,
+      /MUSIC_STYLE_OPTIONS\.map\(option => \{[\s\S]{0,160}const profile = MUSIC_STYLE_PROFILES\[option\]/,
+      "Style rows should render from the professional style profile metadata"
+    )
+    assert.match(
+      source,
+      /min-h-\[3\.65rem\]/,
+      "Style options should be taller descriptive rows instead of a plain option list"
+    )
+    assert.match(
+      source,
+      /\{profile\.description\}<\/span>/,
+      "Each style option should show its production description"
+    )
+    assert.match(
+      source,
+      /MUSIC_STYLE_PROFILES\[selectedMusicStyle\]\.description/,
+      "The active Style row should show the selected style description"
+    )
+  })
+
   it("keeps Voice mode visible and cancellable while speech generation is running", () => {
     assert.match(
       source,
