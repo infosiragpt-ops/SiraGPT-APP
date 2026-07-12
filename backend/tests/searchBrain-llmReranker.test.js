@@ -261,6 +261,25 @@ describe('INTERNAL.combinedScore', () => {
     // rerank=1, w.rerank=2 → 2; other weights zero so no contribution.
     assert.equal(s, 2);
   });
+
+  it('does not let an LLM score or citations rescue an off-topic paper', () => {
+    const topical = INTERNAL.combinedScore({
+      retrievalScore: 0.95,
+      qualityScore: 0.82,
+      providerRank: 1,
+      citationCount: 5,
+      openAccess: true,
+    }, 4, w);
+    const offTopic = INTERNAL.combinedScore({
+      retrievalScore: 0.1,
+      qualityScore: 0.2,
+      providerRank: 0,
+      citationCount: 10000,
+      openAccess: true,
+    }, 10, w);
+
+    assert.ok(topical > offTopic, `topical=${topical} offTopic=${offTopic}`);
+  });
 });
 
 // ── rerankResults ──────────────────────────────────────────────

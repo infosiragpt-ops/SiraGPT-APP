@@ -23,6 +23,9 @@ Rubric:
 Rules:
 - Score EVERY candidate.
 - Use the full 0..10 range — don't cluster at 7.
+- The central topic, population and context in the query are mandatory.
+- A candidate missing a central concept cannot score above 3, even if its
+  methodology, publication year or study type matches a preference.
 - Use only the title + abstract snippet shown.`;
 
 function parseJson(text) {
@@ -75,13 +78,25 @@ function combinedScore(result, rerankScore, weights) {
       : (Number.isFinite(result.retrievalScore) ? result.retrievalScore : 0)
   ));
   const corroboration = Math.min(1, Math.max(0, (Number(result.sourceCount) || 1) - 1) / 3);
-  return (
-    weights.rerank * rerank +
-    deterministicQuality * (hasRerank ? 0.8 : 1.2) +
+  const hasTopicalScore = Number.isFinite(result.retrievalScore);
+  const topicalAlignment = hasTopicalScore
+    ? Math.max(0, Math.min(1, Number(result.retrievalScore)))
+    : 1;
+  // The LLM may correctly notice a requested methodology while overlooking
+  // that the paper is about another subject. Relevance is therefore a gate on
+  // every secondary signal: citations, authority and even the LLM score cannot
+  // rescue a result that barely matches the user's central topic.
+  const topicalFactor = hasTopicalScore ? (0.2 + topicalAlignment * 0.8) : 1;
+  const supportingSignals = (
     corroboration * 0.15 +
     weights.providerRank * providerRankScore +
     weights.citations * citationScore +
     weights.openAccessBoost * oaBoost
+  ) * topicalFactor;
+  return (
+    weights.rerank * rerank * topicalFactor +
+    deterministicQuality * (hasRerank ? 1.25 : 1.5) +
+    supportingSignals
   );
 }
 

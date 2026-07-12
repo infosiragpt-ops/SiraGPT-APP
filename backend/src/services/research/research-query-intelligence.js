@@ -24,13 +24,22 @@ const STOPWORDS = new Set((
   'about over under between into during such using based study studies research paper papers article articles ' +
   'una un el la los las de del y o en con por para a al se su sus es son lo le les como sobre entre ' +
   'segun según mas más muy entre cuales cuáles sobre acerca trabajo articulo artículo artículos estudio estudios ' +
-  'busca buscame búscame encuentra dame quiero necesito hazme sobre tema temas cientifico científico cientificos científicos'
+  'busca buscame búscame encuentra dame quiero necesito hazme sobre tema temas cientifico científico cientificos científicos ' +
+  'publicado publicada publicados publicadas publicacion publicación publicaciones published publication publications'
 ).split(/\s+/).filter(Boolean).map((w) => _stripDia(w.toLowerCase())));
 
 // Bilingual research-domain lexicon: each entry maps a concept to its ES + EN
 // surface forms. Used both to TRANSLATE detected terms across languages and to
 // add near-synonyms, broadening recall without drifting off-topic.
 const LEXICON = [
+  {
+    es: ['aprendizaje autorregulado', 'autorregulacion del aprendizaje', 'autorregulación del aprendizaje', 'autorregulado'],
+    en: ['self-regulated learning', 'self regulated learning', 'learning self-regulation'],
+  },
+  {
+    es: ['educacion superior', 'educación superior', 'universidad', 'universitario'],
+    en: ['higher education', 'university', 'tertiary education'],
+  },
   { es: ['gestion', 'gestión', 'administracion', 'administración'], en: ['management', 'administration'] },
   { es: ['empresa', 'empresas', 'empresarial'], en: ['business', 'enterprise', 'firm', 'company'] },
   { es: ['educacion', 'educación', 'educativo'], en: ['education', 'educational', 'learning'] },
@@ -112,6 +121,18 @@ function contentTerms(text) {
   return out;
 }
 
+function retrievalText(text) {
+  return String(text || '')
+    // A trailing preference clause describes how to rank the evidence, not the
+    // scientific topic itself. Keeping it in the provider query made words
+    // such as "sistemática", "DOI" or "pertinencia" outweigh the actual topic.
+    .replace(/(?:^|[.;])\s*(?:prioriza(?:r)?|priorice|prefiere|preferir|prioriti[sz]e|prefer)\b[\s\S]*$/i, ' ')
+    .replace(/\b(?:de\s+)?acceso abierto\b|\bopen access\b/gi, ' ')
+    .replace(/\bdoi(?:\s+verificable)?\b|\bverifiable doi\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function extractFilters(text) {
   const t = String(text || '');
   const lower = t.toLowerCase();
@@ -165,15 +186,29 @@ function expandTerms(terms, fullTextLower) {
     const all = [...entry.es, ...entry.en];
     const matched = all.some((form) => {
       const f = stripDiacritics(form.toLowerCase());
-      return terms.includes(f.split(' ')[0]) || haystack.includes(` ${form.toLowerCase()} `) || haystack.includes(` ${f} `);
+      const formTerms = f.split(/\s+/).filter(Boolean);
+      const termMatch = formTerms.length === 1
+        ? terms.includes(formTerms[0])
+        : formTerms.every((term) => terms.includes(term));
+      return termMatch || haystack.includes(` ${form.toLowerCase()} `) || haystack.includes(` ${f} `);
     });
     if (matched) {
       for (const form of all) expansions.add(form.toLowerCase());
     }
   }
-  // Don't echo back the literal terms as "expansions".
-  for (const t of terms) expansions.delete(t);
-  return Array.from(expansions);
+  // Don't echo the literal topic back as an "expansion". Normalise accents so
+  // "educación superior" and "educacion superior" collapse to one concept,
+  // leaving the limited query budget for actual cross-language alternatives.
+  const literal = ` ${stripDiacritics(fullTextLower)} `;
+  const seen = new Set();
+  const useful = [];
+  for (const form of expansions) {
+    const key = stripDiacritics(String(form).toLowerCase()).replace(/\s+/g, ' ').trim();
+    if (!key || terms.includes(key) || literal.includes(` ${key} `) || seen.has(key)) continue;
+    seen.add(key);
+    useful.push(form);
+  }
+  return useful;
 }
 
 /**
@@ -192,9 +227,10 @@ function analyzeQuery(rawQuery, opts = {}) {
   const original = String(rawQuery || '');
   const normalized = original.replace(/\s+/g, ' ').trim();
   const language = detectLanguage(normalized);
-  const terms = contentTerms(normalized);
+  const topicText = retrievalText(normalized) || normalized;
+  const terms = contentTerms(topicText);
   const filters = extractFilters(normalized);
-  const fullLower = stripDiacritics(normalized.toLowerCase());
+  const fullLower = stripDiacritics(topicText.toLowerCase());
   const expansions = expandTerms(terms, fullLower);
 
   // Build search-query variants:
@@ -209,16 +245,17 @@ function analyzeQuery(rawQuery, opts = {}) {
   };
   pushQ(coreQuery);
   if (expansions.length) {
-    pushQ(`${coreQuery} ${expansions.slice(0, 4).join(' ')}`);
+    pushQ(`${coreQuery} ${expansions.slice(0, 8).join(' ')}`);
     // English-leaning: prefer expansions that look English (ascii-only words).
     const englishish = expansions.filter((e) => /^[a-z0-9 -]+$/.test(e));
-    if (englishish.length) pushQ(englishish.slice(0, 5).join(' '));
+    if (englishish.length) pushQ(englishish.slice(0, 8).join(' '));
   }
   if (!searchQueries.length) pushQ(normalized);
 
   return {
     original,
     normalized,
+    topicText,
     language,
     terms,
     filters,
@@ -234,5 +271,5 @@ module.exports = {
   extractFilters,
   expandTerms,
   STUDY_TYPES,
-  _internal: { stripDiacritics, STOPWORDS, LEXICON },
+  _internal: { stripDiacritics, retrievalText, STOPWORDS, LEXICON },
 };

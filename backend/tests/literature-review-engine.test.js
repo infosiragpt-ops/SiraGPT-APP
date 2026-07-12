@@ -28,6 +28,27 @@ test('analyzeQuery: bilingual expansion adds English synonyms for gestión', () 
   assert.ok(r.searchQueries.some((q) => /management/.test(q)));
 });
 
+test('analyzeQuery: separates the scientific topic from ranking and metadata instructions', () => {
+  const r = qi.analyzeQuery(
+    'Busca 5 artículos científicos publicados entre 2021 y 2026 sobre aprendizaje autorregulado en educación superior. ' +
+    'Prioriza revisiones sistemáticas y estudios empíricos, acceso abierto, DOI verificable y alta pertinencia temática.',
+  );
+
+  assert.deepEqual(r.terms, ['aprendizaje', 'autorregulado', 'educacion', 'superior']);
+  assert.equal(r.filters.yearFrom, 2021);
+  assert.equal(r.filters.yearTo, 2026);
+  assert.equal(r.filters.openAccessOnly, true);
+  assert.ok(r.searchQueries.some((q) => /self-regulated learning/i.test(q)), `queries=${r.searchQueries}`);
+  assert.ok(r.searchQueries.some((q) => /higher education/i.test(q)), `queries=${r.searchQueries}`);
+  assert.ok(r.searchQueries.every((q) => !/doi|pertinencia|verificable/i.test(q)), `queries=${r.searchQueries}`);
+});
+
+test('analyzeQuery: does not activate a compound concept from one generic word', () => {
+  const collaborative = qi.analyzeQuery('aprendizaje colaborativo en educación inicial');
+  assert.ok(!collaborative.expansions.some((term) => /self-regulated/i.test(term)));
+  assert.ok(!collaborative.expansions.some((term) => /higher education/i.test(term)));
+});
+
 test('extractFilters: year range, recency, study type, open access, language', () => {
   assert.deepEqual(qi.extractFilters('entre 2018 y 2022'), { yearFrom: 2018, yearTo: 2022 });
   const recent = qi.extractFilters('estudios recientes');
