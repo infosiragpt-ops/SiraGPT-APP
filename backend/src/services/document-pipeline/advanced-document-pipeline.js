@@ -1397,11 +1397,16 @@ function validateDocument({ format, buffer, expected = {} }) {
   }
   const integrityScore = buffer?.length ? Math.min(100, Math.round(buffer.length / 200)) : 0;
   const overallScore = Math.round((result.technicalScore * 0.5) + (result.qualityScore * 0.35) + (integrityScore * 0.15));
+  const blockingPptxChecks = ['exactSlideCount', 'promptFidelity', 'requiredTerms', 'uniqueTitles'];
+  const hasBlockingFailure = format === 'pptx'
+    && blockingPptxChecks.some((name) => result.checks?.[name] === false);
   return {
     ...result,
     integrityScore,
     overallScore,
-    passed: result.technicalScore >= MIN_TECHNICAL_SCORE && result.qualityScore >= MIN_QUALITY_SCORE,
+    passed: result.technicalScore >= MIN_TECHNICAL_SCORE
+      && result.qualityScore >= MIN_QUALITY_SCORE
+      && !hasBlockingFailure,
   };
 }
 
@@ -2185,6 +2190,7 @@ async function buildPptx(plan, outputPath) {
   const contentPlan = reconcilePptxPlan(rawContentPlan, {
     slideTarget: plan.slideTarget,
     fallbackSlides: fallbackPlan.slides,
+    requiredItems: plan.presentationBrief?.mustInclude,
   });
   plan.slidePlan = contentPlan;
   const theme = pickPptxTheme({
@@ -2343,11 +2349,14 @@ async function buildPptx(plan, outputPath) {
     if (layout === 'two_column' && Array.isArray(slideSpec.columns) && slideSpec.columns.length >= 2) {
       slideSpec.columns.slice(0, 2).forEach((column, columnIndex) => {
         const x = 0.8 + columnIndex * 6.1;
+        const columnItems = column.items.slice(0, 4);
+        const singleItem = columnItems.length === 1;
         slide.addShape(pptx.ShapeType.roundRect, { x, y: 2.05, w: 5.7, h: 4.5, rectRadius: 0.1, fill: { color: columnIndex === 0 ? palette.surface : palette.surfaceAlt }, line: { color: palette.line } });
         slide.addText(column.heading || `Columna ${columnIndex + 1}`, { x: x + 0.3, y: 2.35, w: 5.1, h: 0.4, fontSize: 19, bold: true, color: columnIndex === 0 ? palette.dark : palette.accent, margin: 0 });
-        column.items.slice(0, 4).forEach((item, itemIndex) => {
-          slide.addText('•', { x: x + 0.32, y: 2.95 + itemIndex * 0.78, w: 0.25, h: 0.3, fontSize: 17, color: palette.accent, margin: 0 });
-          slide.addText(item, { x: x + 0.62, y: 2.9 + itemIndex * 0.78, w: 4.75, h: 0.68, fontSize: 16, color: palette.body, fit: 'shrink', margin: 0 });
+        columnItems.forEach((item, itemIndex) => {
+          const itemY = singleItem ? 3.55 : 2.95 + itemIndex * 0.78;
+          slide.addText('•', { x: x + 0.32, y: itemY, w: 0.25, h: 0.3, fontSize: singleItem ? 20 : 17, color: palette.accent, margin: 0 });
+          slide.addText(item, { x: x + 0.62, y: itemY - 0.05, w: 4.75, h: singleItem ? 1.15 : 0.68, fontSize: singleItem ? 20 : 16, color: palette.body, fit: 'shrink', margin: 0 });
         });
       });
       slide.addNotes(slideSpec.notes);
@@ -2450,6 +2459,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const contentPlan = reconcilePptxPlan(rawContentPlan, {
     slideTarget: plan.slideTarget,
     fallbackSlides: fallbackPlan.slides,
+    requiredItems: plan.presentationBrief?.mustInclude,
   });
   const theme = pickPptxTheme({
     template: plan.template,
@@ -2515,9 +2525,11 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
         <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
         <div style="display:flex;gap:18px;padding:18px 40px 0;">
           ${spec.columns.slice(0, 2).map((column, i) => `
-            <div style="flex:1;border-radius:12px;padding:16px 18px;border:1px solid ${LINE};background:${i === 0 ? SURFACE : SURFACE_ALT};">
+            <div style="flex:1;min-height:250px;border-radius:12px;padding:16px 18px;border:1px solid ${LINE};background:${i === 0 ? SURFACE : SURFACE_ALT};">
               <div style="font-size:15px;font-weight:800;color:${i === 0 ? INK : ACCENT};margin-bottom:10px;">${xmlEscape(column.heading || '')}</div>
-              ${(column.items || []).slice(0, 4).map((item) => `<div style="display:flex;gap:8px;margin-bottom:8px;font-size:14px;color:${BODY};"><span style="color:${ACCENT};font-weight:800;">•</span><span>${xmlEscape(item)}</span></div>`).join('')}
+              <div style="${(column.items || []).length === 1 ? 'padding-top:64px;' : ''}">
+                ${(column.items || []).slice(0, 4).map((item) => `<div style="display:flex;gap:8px;margin-bottom:8px;font-size:${(column.items || []).length === 1 ? '17px' : '14px'};color:${BODY};"><span style="color:${ACCENT};font-weight:800;">•</span><span>${xmlEscape(item)}</span></div>`).join('')}
+              </div>
             </div>`).join('')}
         </div>
         ${footer(pageNum)}`);
@@ -2900,16 +2912,27 @@ function repairPlan(plan, validation) {
     blocks: plan.blocks,
     referenceBriefs: plan.referenceBriefs,
   });
+  const repairedSlidePlan = plan.format === 'pptx'
+    ? reconcilePptxPlan(fallbackPptxPlan, {
+      slideTarget: plan.slideTarget,
+      fallbackSlides: fallbackPptxPlan.slides,
+      requiredItems: plan.presentationBrief?.mustInclude,
+    })
+    : fallbackPptxPlan;
   const repaired = {
     ...plan,
     complexity: plan.complexity === 'standard' ? 'high' : plan.complexity,
     sections,
-    slidePlan: plan.format === 'pptx'
-      ? reconcilePptxPlan(fallbackPptxPlan, {
-        slideTarget: plan.slideTarget,
-        fallbackSlides: fallbackPptxPlan.slides,
+    slidePlan: repairedSlidePlan,
+    promptFidelity: plan.format === 'pptx'
+      ? auditPptxPlan(repairedSlidePlan, {
+        prompt: plan.userRequest,
+        referenceBriefs: plan.referenceBriefs,
+        sourceContent: plan.sourceContent,
+        requiredItems: plan.presentationBrief?.mustInclude,
+        forbiddenItems: plan.presentationBrief?.mustAvoid,
       })
-      : fallbackPptxPlan,
+      : plan.promptFidelity,
     repairedFrom: validation,
   };
   return repaired;
@@ -3073,6 +3096,7 @@ async function runAdvancedDocumentPipeline({
     plan.slidePlan = reconcilePptxPlan(llmDeck || fallbackPptxPlan, {
       slideTarget: plan.slideTarget,
       fallbackSlides: fallbackPptxPlan.slides,
+      requiredItems: plan.presentationBrief?.mustInclude,
     });
     plan.presentationTheme = pickPptxTheme({
       template: plan.template,

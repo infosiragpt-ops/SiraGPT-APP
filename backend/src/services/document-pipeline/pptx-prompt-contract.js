@@ -6,7 +6,7 @@ const MAX_TOTAL_SLIDES = 40;
 
 const GENERIC_META_RE = /\b(?:pipeline|multiagente|generado por|contenido editable|validaci[oó]n t[eé]cnica|estructura premium|presentaci[oó]n profesional)\b/i;
 const CLOSING_RE = /\b(?:cierre|conclus|recomend|pr[oó]ximos pasos|plan de acci[oó]n|decisi[oó]n)\b/i;
-const STRONG_NUMERIC_CLAIM_RE = /(?:[$€£]|S\/)\s*\d[\d.,]*|\b\d+(?:[.,]\d+)?\s*(?:%|por\s+ciento|millones?|billones?|mil\s+millones|usd|eur|d[oó]lares?|euros?)(?=\s|[.,;:!?)]|$)|\b(?!30\s+d[ií]as\b|60\s+d[ií]as\b|90\s+d[ií]as\b)\d+(?:[.,]\d+)?\s+[a-záéíóúüñ]{3,}(?=\s|[.,;:!?)]|$)/gi;
+const STRONG_NUMERIC_CLAIM_RE = /(?:[$€£]|S\/)\s*\d[\d.,]*|\b\d+(?:[.,]\d+)?\s*(?:%|por\s+ciento|millones?|billones?|mil\s+millones|usd|eur|d[oó]lares?|euros?)(?=\s|[.,;:!?)]|$)|(?<![\d-])\b(?!30\s+d[ií]as\b|60\s+d[ií]as\b|90\s+d[ií]as\b)\d+(?:[.,]\d+)?\s+[a-záéíóúüñ]{3,}(?=\s|[.,;:!?)]|$)/gi;
 
 function clean(value, max = 240) {
   const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
@@ -61,6 +61,10 @@ function slideText(slide = {}) {
   if (slide.chart) parts.push(slide.chart.title, ...(slide.chart.labels || []), ...(slide.chart.values || []), slide.chart.unit, slide.chart.source);
   if (slide.quote) parts.push(slide.quote, slide.attribution);
   return parts.filter(Boolean).join(' ');
+}
+
+function visibleSlideText(slide = {}) {
+  return slideText({ ...slide, notes: '' });
 }
 
 function uniqueSlides(slides = []) {
@@ -167,7 +171,42 @@ function ensureLayoutVariety(slides, sourceSlides) {
   return uniqueSlides(next).length === next.length ? next : slides;
 }
 
-function reconcilePptxPlan(plan = {}, { slideTarget, fallbackSlides = [] } = {}) {
+function ensureRequiredItems(slides, sourceSlides, requiredItems = []) {
+  const requirements = (Array.isArray(requiredItems) ? requiredItems : []).filter(Boolean);
+  if (!requirements.length || !slides.length) return slides;
+  const next = slides.slice();
+  const selectedKeys = new Set(next.map((slide) => normalize(slide.title || slideText(slide))));
+
+  for (const requirement of requirements) {
+    if (next.some((slide) => requirementIsPresent(requirement, visibleSlideText(slide)))) continue;
+    const candidate = sourceSlides.find((slide) => {
+      const key = normalize(slide.title || slideText(slide));
+      return !selectedKeys.has(key) && requirementIsPresent(requirement, visibleSlideText(slide));
+    });
+    if (!candidate) continue;
+
+    const protectedIndexes = new Set();
+    for (const otherRequirement of requirements) {
+      const matches = next
+        .map((slide, index) => requirementIsPresent(otherRequirement, visibleSlideText(slide)) ? index : -1)
+        .filter((index) => index >= 0);
+      if (matches.length === 1) protectedIndexes.add(matches[0]);
+    }
+    let replaceIndex = -1;
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      if (protectedIndexes.has(index) || CLOSING_RE.test(next[index]?.title || '')) continue;
+      replaceIndex = index;
+      break;
+    }
+    if (replaceIndex < 0) continue;
+    selectedKeys.delete(normalize(next[replaceIndex].title || slideText(next[replaceIndex])));
+    next[replaceIndex] = candidate;
+    selectedKeys.add(normalize(candidate.title || slideText(candidate)));
+  }
+  return next;
+}
+
+function reconcilePptxPlan(plan = {}, { slideTarget, fallbackSlides = [], requiredItems = [] } = {}) {
   const manifest = buildPptxDeckManifest({
     slideTarget,
     references: plan.references,
@@ -190,6 +229,7 @@ function reconcilePptxPlan(plan = {}, { slideTarget, fallbackSlides = [] } = {})
     slides = chooseEvenly(candidatePool, manifest.contentSlides);
     slides = ensureLayoutVariety(slides, candidatePool);
     slides = ensureClosingSlide(slides, candidates);
+    slides = ensureRequiredItems(slides, candidates, requiredItems);
   }
   if (slides.length < manifest.contentSlides) {
     for (let index = slides.length; index < manifest.contentSlides; index += 1) {
@@ -281,7 +321,7 @@ function auditPptxPlan(plan = {}, {
   }
   const layoutCount = new Set(slides.map((slide) => slide.layout || 'bullets')).size;
   const expectedContent = plan.manifest?.contentSlides || slides.length;
-  const visibleContent = slides.map(slideText).join(' ');
+  const visibleContent = slides.map(visibleSlideText).join(' ');
   const missingRequiredItems = (Array.isArray(requiredItems) ? requiredItems : [])
     .filter((item) => !requirementIsPresent(item, visibleContent));
   const presentForbiddenItems = (Array.isArray(forbiddenItems) ? forbiddenItems : [])
@@ -323,6 +363,7 @@ module.exports = {
   requirementIsPresent,
   auditPptxPlan,
   slideText,
+  visibleSlideText,
   INTERNAL: {
     clampTotalSlides,
     uniqueSlides,
@@ -331,6 +372,7 @@ module.exports = {
     chooseEvenly,
     ensureClosingSlide,
     ensureLayoutVariety,
+    ensureRequiredItems,
     normalizeEvidence,
   },
 };

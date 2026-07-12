@@ -107,8 +107,40 @@ test('numeric evidence gate detects the unsupported 68% failure from production'
   assert.deepEqual(extractStrongNumericClaims('68% de empresas mejora márgenes'), ['68%']);
   assert.deepEqual(extractStrongNumericClaims('Programa de liderazgo para 150 gerentes intermedios'), ['150 gerentes']);
   assert.deepEqual(extractStrongNumericClaims('Plan de 30 días, 60 días y 90 días'), []);
+  assert.deepEqual(extractStrongNumericClaims('Próximos pasos con un plan 30-60-90 Implementación'), []);
   assert.equal(valueIsGrounded('68%', 'Solicitud general sobre gestión de empresas'), false);
   assert.equal(valueIsGrounded('68%', 'La fuente adjunta reporta 68% de empresas'), true);
+});
+
+test('reconcile injects visible fallback content for explicitly required topics', () => {
+  const primary = sampleSlides().map((slide) => ({ ...slide }));
+  const fallbackRisk = {
+    layout: 'bullets',
+    title: 'Los controles reducen riesgos',
+    bullets: [{ label: 'Riesgos', text: 'identificar responsables y alertas tempranas' }],
+    notes: 'Explicar los controles.',
+  };
+  const plan = reconcilePptxPlan({
+    topic: 'Gestión empresarial',
+    thesis: 'Tesis',
+    slides: primary,
+  }, {
+    slideTarget: 8,
+    fallbackSlides: [...primary, fallbackRisk],
+    requiredItems: ['riesgos'],
+  });
+  assert.equal(plan.slides.some((slide) => /riesgos/i.test(JSON.stringify({ ...slide, notes: '' }))), true);
+});
+
+test('speaker notes alone do not satisfy visible prompt requirements', () => {
+  const slides = sampleSlides().map((slide) => ({ ...slide, notes: 'Explicar riesgos.' }));
+  const plan = reconcilePptxPlan({ topic: 'Gestión empresarial', thesis: 'Tesis', slides }, { slideTarget: 8 });
+  const report = auditPptxPlan(plan, {
+    prompt: 'Presentación general.',
+    requiredItems: ['riesgos'],
+  });
+  assert.equal(report.checks.requiredItems, false);
+  assert.deepEqual(report.missingRequiredItems, ['riesgos']);
 });
 
 test('audit rejects an unsupported headcount even when it is not a percentage', () => {

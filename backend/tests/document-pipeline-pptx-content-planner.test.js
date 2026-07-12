@@ -103,3 +103,35 @@ test('requested 8 slides produces exactly 8 in PPTX and HTML preview', async () 
     await fs.rm(outputDir, { recursive: true, force: true });
   }
 });
+
+test('PPTX prompt fidelity is a blocking validation and repair recomputes it', async () => {
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-pptx-fidelity-block-'));
+  try {
+    const plan = buildPlan({
+      prompt: 'Crea una PPT en 8 diapositivas sobre gestión de empresas. Debe incluir riesgos.',
+      format: 'pptx',
+      template: 'business',
+    });
+    const artifact = await INTERNAL.buildDocumentFile({ plan, outputDir });
+    const blocked = validateDocument({
+      format: 'pptx',
+      buffer: artifact.buffer,
+      expected: {
+        minSlides: 8,
+        exactSlides: 8,
+        requiresChart: false,
+        requiresImage: false,
+        requiresNotes: true,
+        promptFidelity: false,
+      },
+    });
+    assert.equal(blocked.checks.promptFidelity, false);
+    assert.equal(blocked.passed, false);
+
+    plan.promptFidelity = { passed: false };
+    const repaired = INTERNAL.repairPlan(plan, blocked);
+    assert.equal(repaired.promptFidelity.passed, true, JSON.stringify(repaired.promptFidelity));
+  } finally {
+    await fs.rm(outputDir, { recursive: true, force: true });
+  }
+});
