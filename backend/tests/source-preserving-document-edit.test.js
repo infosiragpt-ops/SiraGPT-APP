@@ -5,7 +5,7 @@ const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, TableCell } = require('docx');
+const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel, Table, TableRow, TableCell } = require('docx');
 const ExcelJS = require('exceljs');
 const PptxGenJS = require('pptxgenjs');
 const PizZip = require('pizzip');
@@ -1864,6 +1864,7 @@ describe('source-preserving document edit — document-understanding brain', () 
 describe('source-preserving DOCX title edits', () => {
   const {
     extractDocxTitleChange,
+    extractNamedSectionAppend,
     planSourcePreservingOperations,
     setDocxDocumentTitleBuffer,
     validateDocxOperationCriteria,
@@ -1874,6 +1875,10 @@ describe('source-preserving DOCX title edits', () => {
       'Ahora cambia el título a Informe final Trabajo 2026 y agrega una sección Recomendaciones con dos puntos.',
     );
     assert.deepEqual(parsed, { newTitle: 'Informe final Trabajo 2026' });
+    assert.deepEqual(
+      extractNamedSectionAppend('Agrega una sección Recomendaciones con dos puntos.'),
+      { sectionTitle: 'Recomendaciones' },
+    );
   });
 
   it('plans a native title update instead of replacing the literal word título', async () => {
@@ -1891,7 +1896,49 @@ describe('source-preserving DOCX title edits', () => {
 
     assert.equal(operations.filter((op) => op.kind === 'set_document_title').length, 1);
     assert.equal(operations.some((op) => op.kind === 'replace_text' && op.needle === 'titulo'), false);
-    assert.equal(operations.some((op) => op.kind === 'append_generic'), true);
+    assert.equal(operations.some((op) => op.kind === 'append_section' && op.sectionTitle === 'Recomendaciones'), true);
+    assert.equal(operations.some((op) => op.kind === 'append_generic'), false);
+  });
+
+  it('adds a named section to the document body instead of creating ANEXOS', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-named-section-'));
+    const originalPath = path.join(tmp, 'informe.docx');
+    const source = await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({ style: 'Title', children: [new TextRun('Informe de prueba Trabajo 2026')] }),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Introducción')] }),
+        new Paragraph('Introducción que debe conservarse en el documento editado.'),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Conclusión')] }),
+        new Paragraph('Conclusión que debe conservarse en el documento editado.'),
+      ] }],
+    }));
+    fs.writeFileSync(originalPath, source);
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'named-section-docx',
+        path: originalPath,
+        originalName: 'informe.docx',
+        filename: 'informe.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Informe de prueba Trabajo 2026. Introducción. Conclusión.',
+      },
+      prompt: 'Agrega una sección Recomendaciones con dos puntos y devuelve el Word actualizado.',
+      displayPrompt: 'Agrega una sección Recomendaciones con dos puntos y devuelve el Word actualizado.',
+      userId: 'user-named-section',
+      chatId: 'chat-named-section',
+    });
+
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_section'), true);
+    assert.match(result.content, /sección «Recomendaciones»/);
+    const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(xml, /Recomendaciones/);
+    assert.match(xml, /Implementar las mejoras propuestas/);
+    assert.match(xml, /Establecer indicadores de seguimiento/);
+    assert.doesNotMatch(xml, />ANEXOS</);
+    assert.match(xml, /Introducción que debe conservarse/);
+    assert.match(xml, /Conclusión que debe conservarse/);
   });
 
   it('changes only the visible title and preserves its formatting and body', async () => {

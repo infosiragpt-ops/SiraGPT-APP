@@ -3467,6 +3467,17 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       checks.push({ id: 'instrument_appended', label: 'Instrumento agregado al Word', passed });
       continue;
     }
+    if (op.kind === 'append_section') {
+      const passed = Boolean(op.sectionTitle)
+        && normalizedTextIncludes(text, op.sectionTitle)
+        && text.length > 200;
+      checks.push({
+        id: 'named_section_appended',
+        label: `Sección ${op.sectionTitle || 'solicitada'} agregada al Word`,
+        passed,
+      });
+      continue;
+    }
     if (op.kind === 'append_generic' || op.kind === 'append_labeled') {
       // Generic append (non-instrument): the ANEXOS section must exist and the
       // document must have grown with real content beyond the anchor heading.
@@ -3864,6 +3875,22 @@ function clauseIsAppend(clauseNorm) {
     || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
 }
 
+function extractNamedSectionAppend(text = '') {
+  const raw = String(text || '').trim();
+  const match = raw.match(/\b(?:agreg\w*|a[nñ]ad\w*|incorpor\w*|inclu\w*|coloc\w*)\s+(?:un\s+|una\s+)?secci[oó]n(?:\s+de)?\s+["“”'‘’]?(.{2,100}?)(?=["“”'‘’]?(?:\s+(?:con|que|para|al|antes|despu[eé]s|sin|y\s+(?:conserv\w*|mant\w*|devu[eé]lv\w*|entreg\w*|revis\w*|verific\w*))\b|[.;,\n]|$))/iu);
+  if (!match) return null;
+  const sectionTitle = match[1]
+    .replace(/^["“”'‘’`]+|["“”'‘’`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalized = normalizeText(sectionTitle);
+  if (!sectionTitle || /^(?:n(?:ro|umero)?\.?\s*)?\d{1,3}$/.test(normalized)) return null;
+  if (/^(?:nueva?|adicional|extra|sin nombre)$/.test(normalized)) return null;
+  return {
+    sectionTitle: sectionTitle.charAt(0).toUpperCase() + sectionTitle.slice(1),
+  };
+}
+
 // "agrega dos referencias…", "añade citas a la bibliografía", "pon fuentes
 // bibliográficas al pie". clauseNorm llega sin acentos (normalizeText), y se
 // tolera el typo común "bliografia".
@@ -4082,6 +4109,7 @@ function clauseWantsVisual(clauseNorm) {
 
 function buildOperationFromClause(clauseNorm, documentXml) {
   const target = parseTargetSectionRequest(clauseNorm);
+  const namedSection = extractNamedSectionAppend(clauseNorm);
   const wantsInstrument = clauseWantsInstrument(clauseNorm);
   const fill = clauseIsFill(clauseNorm);
   const append = clauseIsAppend(clauseNorm);
@@ -4124,6 +4152,10 @@ function buildOperationFromClause(clauseNorm, documentXml) {
     return { kind: 'append_references', count: extractReferenceCount(clauseNorm) };
   }
 
+  if (append && namedSection) {
+    return { kind: 'append_section', ...namedSection };
+  }
+
   if (target) {
     const exists = sectionExistsInDoc(documentXml, target);
     const contentKind = requestWantsCronogramaAnexo3(clauseNorm, target) ? 'cronograma_anexo_3' : undefined;
@@ -4148,7 +4180,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -4167,6 +4199,8 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
 
   const rawTitleChange = extractDocxTitleChange(requestText);
   if (rawTitleChange) add({ kind: 'set_document_title', ...rawTitleChange });
+  const rawNamedSection = extractNamedSectionAppend(requestText);
+  if (rawNamedSection) add({ kind: 'append_section', ...rawNamedSection });
   const rawReplacement = extractReplacementPair(requestText);
   if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
   const norm = normalizeText(requestText);
@@ -4236,6 +4270,7 @@ function heuristicPlanIsConfident(ops, requestText) {
   if (ops.length === 1 && ops[0].kind === 'append_generic') {
     return clauseIsAppend(norm) || clauseWantsInstrument(norm);
   }
+  if (ops.length === 1 && ops[0].kind === 'append_section') return true;
   return true;
 }
 
@@ -4495,7 +4530,7 @@ async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, 
 // and DUMPED it into the chat instead of the file. This produces the actual,
 // topic-specific content and appends THAT. Fail-open: returns null (caller
 // keeps the deterministic builder) when no provider key or on any failure.
-async function generateAppendixBlocksLLM({ requestText, sourceText, title, signal }) {
+async function generateAppendixBlocksLLM({ requestText, sourceText, title, sectionTitle = '', signal }) {
   // Never touch the network in tests (deterministic fallback keeps CI offline).
   if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_APPENDIX_LLM_NETWORK !== '1') return null;
   const resolved = resolveContentClient();
@@ -4509,12 +4544,18 @@ async function generateAppendixBlocksLLM({ requestText, sourceText, title, signa
         {
           role: 'system',
           content: [
-            'Eres un redactor académico experto. El usuario quiere AGREGAR contenido nuevo (un anexo) a un documento existente, no reescribirlo.',
+            sectionTitle
+              ? `Eres un redactor académico experto. El usuario quiere AGREGAR una sección normal llamada "${sectionTitle}" a un documento existente, no crear un anexo ni reescribir el archivo.`
+              : 'Eres un redactor académico experto. El usuario quiere AGREGAR contenido nuevo (un anexo) a un documento existente, no reescribirlo.',
             'Genera SOLO el contenido solicitado, en español, completo y específico al tema del documento (no plantillas genéricas ni marcadores).',
-            'Formato de salida: Markdown. Usa ## para el título del anexo, ### para subsecciones, tablas Markdown (| col | col |) para cuestionarios/matrices/escalas, y listas donde aporten.',
+            sectionTitle
+              ? `Formato de salida: Markdown. Usa ## ${sectionTitle} como encabezado principal, ### para subsecciones y listas para los puntos solicitados.`
+              : 'Formato de salida: Markdown. Usa ## para el título del anexo, ### para subsecciones, tablas Markdown (| col | col |) para cuestionarios/matrices/escalas, y listas donde aporten.',
             'Si piden "instrumentos de investigación": redacta los instrumentos reales (cuestionarios con ítems concretos por dimensión, escala de Likert, instrucciones) adaptados EXACTAMENTE a las variables y población del documento.',
             'No inventes estadísticas ni fuentes citadas; el contenido es un instrumento/plantilla de trabajo, no resultados.',
-            'No repitas el contenido que ya está en el documento; SOLO produce lo nuevo a anexar.',
+            sectionTitle
+              ? 'No repitas el título del documento ni crees encabezados ANEXOS; produce solo la nueva sección solicitada.'
+              : 'No repitas el contenido que ya está en el documento; SOLO produce lo nuevo a anexar.',
           ].join('\n'),
         },
         {
@@ -4523,7 +4564,9 @@ async function generateAppendixBlocksLLM({ requestText, sourceText, title, signa
             `Tema/título del documento: ${topic || '(sin título detectado)'}`,
             context ? `Extracto del documento (para adaptar el contenido a su tema, variables y población):\n${context}` : '',
             `Instrucción del usuario: ${String(requestText || '').slice(0, 800)}`,
-            'Redacta ahora el contenido del anexo en Markdown.',
+            sectionTitle
+              ? `Redacta ahora la sección "${sectionTitle}" en Markdown.`
+              : 'Redacta ahora el contenido del anexo en Markdown.',
           ].filter(Boolean).join('\n\n'),
         },
       ],
@@ -4605,6 +4648,86 @@ async function runAppendGenericOperation({ buffer, op, requestText, sourceText, 
     buffer: appendToDocxBuffer(buffer, blocks),
     validationBlocks: blocks,
     step: { kind: 'append_generic', mode },
+  };
+}
+
+function requestedSectionPointCount(requestText = '', fallback = 2) {
+  const text = normalizeText(requestText);
+  const match = text.match(/\b(\d{1,2}|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?:puntos?|recomendaciones?|acciones?|medidas?|ideas?|elementos?)\b/);
+  const value = match ? (Number(match[1]) || SPANISH_SMALL_COUNTS[match[1]] || fallback) : fallback;
+  return Math.max(1, Math.min(10, value));
+}
+
+function namedSectionFallbackBlocks({ sectionTitle = '', requestText = '', sourceText = '' } = {}) {
+  const normalizedTitle = normalizeText(sectionTitle);
+  if (normalizedTitle.includes('recomendacion')) {
+    const recommendations = [
+      'Implementar las mejoras propuestas de forma gradual, con responsables y plazos definidos para cada acción.',
+      'Establecer indicadores de seguimiento y realizar revisiones periódicas para comprobar la eficacia de las mejoras.',
+      'Documentar los resultados obtenidos y ajustar el proceso cuando se detecten desviaciones frente a los objetivos.',
+      'Comunicar los cambios a las personas involucradas y recoger su retroalimentación durante la implementación.',
+      'Mantener un registro de riesgos, decisiones y medidas correctivas para facilitar la mejora continua.',
+    ];
+    const count = requestedSectionPointCount(requestText, 2);
+    return [
+      block('heading2', sectionTitle),
+      ...Array.from({ length: count }, (_, index) => block('bullet', recommendations[index % recommendations.length])),
+    ];
+  }
+  const context = compact(sourceText, 260);
+  return [
+    block('heading2', sectionTitle),
+    block('normal', context || `Contenido incorporado según la solicitud: ${compact(requestText, 360)}.`),
+  ];
+}
+
+function normalizeNamedSectionBlocks(blocks = [], { sectionTitle = '', documentTitle = '' } = {}) {
+  const sectionNorm = normalizeText(sectionTitle);
+  const documentNorm = normalizeText(documentTitle);
+  const normalized = [];
+  let hasHeading = false;
+  for (const item of blocks || []) {
+    const text = String(item?.text || '').trim();
+    const textNorm = normalizeText(text);
+    if (!text || item?.kind === 'pageBreak') continue;
+    if (/^(?:anexo|anexos|appendix|appendices)$/.test(textNorm)) continue;
+    if (documentNorm && textNorm === documentNorm && /^heading/.test(String(item?.kind || ''))) continue;
+    if (textNorm === sectionNorm && /^heading/.test(String(item?.kind || ''))) {
+      if (!hasHeading) normalized.push(block('heading2', sectionTitle));
+      hasHeading = true;
+      continue;
+    }
+    normalized.push(item);
+  }
+  if (!hasHeading) normalized.unshift(block('heading2', sectionTitle));
+  return normalized;
+}
+
+async function runAppendSectionOperation({ buffer, op, requestText, sourceText, sourceFile, signal }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const documentTitle = inferDocumentTitle(sourceText || sourceFile.extractedText || '', originalName);
+  let blocks = await generateAppendixBlocksLLM({
+    requestText,
+    sourceText: sourceText || sourceFile.extractedText || '',
+    title: documentTitle,
+    sectionTitle: op.sectionTitle,
+    signal,
+  });
+  if (!blocks) {
+    blocks = namedSectionFallbackBlocks({
+      sectionTitle: op.sectionTitle,
+      requestText,
+      sourceText: sourceText || sourceFile.extractedText || '',
+    });
+  }
+  blocks = normalizeNamedSectionBlocks(blocks, {
+    sectionTitle: op.sectionTitle,
+    documentTitle,
+  });
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'append_section', mode: 'named_section', label: op.sectionTitle },
   };
 }
 
@@ -5571,6 +5694,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
     } else if (op.kind === 'append_labeled') {
       result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'append_section') {
+      result = await runAppendSectionOperation({ buffer, op, requestText, sourceText, sourceFile, signal });
     } else if (op.kind === 'insert_visual') {
       result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
     } else if (op.kind === 'insert_table') {
@@ -5846,6 +5971,7 @@ function describeStep(step) {
   if (step.kind === 'append_labeled' && step.mode === 'instrument') return `agregué ${step.label} con los instrumentos profesionales`;
   if (step.kind === 'append_labeled' && step.mode === 'fallback_paragraphs') return `agregué ${step.label} al final (no existía en el documento)`;
   if (step.kind === 'append_labeled') return `agregué ${step.label}`;
+  if (step.kind === 'append_section') return `agregué la sección «${step.label}» en el cuerpo del documento`;
   if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
   if (step.kind === 'append_references' && step.mode === 'unavailable') return 'no pude obtener referencias verificadas en línea en este intento (vuelve a pedirlo en unos minutos)';
@@ -5930,6 +6056,7 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
     operations: operations.map((op) => ({
       kind: op.kind,
       target: op.target?.label || null,
+      sectionTitle: op.kind === 'append_section' ? op.sectionTitle : undefined,
       wantsInstrument: Boolean(op.wantsInstrument),
       tableKind: op.kind === 'insert_table' ? (op.tableKind || 'table') : undefined,
       needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
@@ -6437,6 +6564,7 @@ module.exports = {
     extractParagraphProperties,
     extractRunProperties,
     extractDocxTitleChange,
+    extractNamedSectionAppend,
     extractTextFromPptxBuffer,
     paragraphXml,
     pickRepresentativeListParagraph,
