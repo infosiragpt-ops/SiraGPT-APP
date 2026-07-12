@@ -45,6 +45,12 @@ export interface AgenticSource {
   qualityScore?: number
   sources?: string[]
   sourceCount?: number
+  doiStatus?: "missing" | "format_valid" | "format_invalid"
+  publicationStage?: "preprint" | "published_article" | "conference_paper" | "thesis" | "dataset" | "unknown"
+  peerReviewStatus?: "confirmed" | "likely_peer_reviewed" | "not_peer_reviewed" | "unknown"
+  studyType?: string
+  integrityStatus?: "clear" | "corrected" | "expression_of_concern" | "withdrawn" | "retracted" | "unknown"
+  integrityAlerts?: string[]
 }
 
 export type AgenticEvent =
@@ -52,12 +58,12 @@ export type AgenticEvent =
   | { type: "batch"; batchN: number; round: number; provider: string; query?: string; requested: number; received: number; unique: number; duplicates: number; confirmations?: number; filtered?: number; totalCollected: number; target: number; sources: AgenticSource[] }
   | { type: "batch_error"; batchN: number; provider: string; error: string; totalCollected: number }
   | { type: "provider_done"; provider: string; contributed: number; reason: string }
-  | { type: "collection_done"; totalCollected: number; totalMatches?: number; deduped: number; filtered?: number; queries?: string[]; filters?: Record<string, unknown>; requestedCalls: number; providerStats: Record<string, { contributed: number; confirmations?: number; errors: number; exhausted: boolean; offset: number }>; elapsedMs: number }
+  | { type: "collection_done"; totalCollected: number; totalMatches?: number; deduped: number; filtered?: number; integrityFiltered?: number; queries?: string[]; filters?: Record<string, unknown>; requestedCalls: number; providerStats: Record<string, { contributed: number; confirmations?: number; errors: number; exhausted: boolean; offset: number }>; elapsedMs: number }
   | { type: "ranking_start"; message: string; pool: number; candidatePool?: number; topK: number }
   | { type: "rerank_error"; error: string }
   | { type: "selected"; topK: number; rerankerWasUsed: boolean; sources: AgenticSource[] }
   | { type: "summary"; markdown: string }
-  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
+  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; validDoiCount?: number; preprintCount?: number; integrityFilteredCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
   | { type: "saved"; dbMessage: any }
   | { type: "persist_error"; error: string }
   | { type: "aborted"; reason: string; provider?: string; round?: number }

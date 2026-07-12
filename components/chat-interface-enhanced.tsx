@@ -10355,8 +10355,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         if (!Array.isArray(sources) || sources.length === 0) return "";
         const validate = (s: any) => {
           const checks: string[] = [];
-          const hasDoi = !!s.doi && /^10\.\d{4,9}\//i.test(String(s.doi));
-          if (hasDoi) checks.push("✓ DOI");
+          const hasDoi = s.doiStatus === "format_valid" || (!!s.doi && /^10\.\d{4,9}\//i.test(String(s.doi)));
+          if (hasDoi) checks.push("✓ DOI con formato válido");
           else if (s.url) checks.push("✓ URL");
           else checks.push("⚠ sin enlace");
           const yr = parseInt(String(s.year || s.published || ""), 10);
@@ -10367,6 +10367,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             checks.push("✓ autoridad");
           }
           if (Number(s.sourceCount) >= 2) checks.push(`✓ ${s.sourceCount} índices`);
+          if (s.publicationStage === "preprint") checks.push("⚠ preprint: sin revisión por pares confirmada");
+          else if (s.peerReviewStatus === "confirmed") checks.push("✓ revisión por pares confirmada");
+          else if (s.peerReviewStatus === "likely_peer_reviewed") checks.push("publicado en revista; revisión por pares no confirmada");
+          if (s.studyType && s.studyType !== "unknown") checks.push(`tipo: ${String(s.studyType).replace(/_/g, " ")}`);
+          if (s.integrityStatus === "corrected") checks.push("corrección registrada");
+          if (s.integrityStatus === "expression_of_concern") checks.push("⚠ expresión de preocupación");
+          if (s.integrityStatus === "retracted") checks.push("⚠ retractado");
           return checks.join(" · ");
         };
         const lines: string[] = [];

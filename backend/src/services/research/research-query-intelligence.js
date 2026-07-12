@@ -81,8 +81,8 @@ const LEXICON = [
 // synthesiser's evidence-quality weighting.
 const STUDY_TYPES = [
   { type: 'meta_analysis', re: /\bmeta[- ]?an[aá]lisis\b|\bmeta[- ]?analysis\b/i },
-  { type: 'systematic_review', re: /\brevisi[oó]n sistem[aá]tica\b|\bsystematic review\b/i },
-  { type: 'review', re: /\brevisi[oó]n( de literatura| bibliogr[aá]fica)?\b|\bliterature review\b|\bscoping review\b/i },
+  { type: 'systematic_review', re: /\brevisi(?:[oó]n|ones) sistem[aá]ticas?\b|\bsystematic reviews?\b/i },
+  { type: 'review', re: /\brevisi(?:[oó]n|ones)( de literatura| bibliogr[aá]ficas?)?\b|\bliterature reviews?\b|\bscoping reviews?\b/i },
   { type: 'rct', re: /\bensayo cl[ií]nico( aleatorizado)?\b|\brandomi[sz]ed controlled trial\b|\brct\b/i },
   { type: 'cohort', re: /\bestudio de cohorte\b|\bcohort study\b/i },
   { type: 'case_study', re: /\bestudio de caso\b|\bcase study\b/i },
@@ -168,9 +168,28 @@ function extractFilters(text) {
     filters.openAccessOnly = true;
   }
 
+  // Peer review is not asserted from a DOI alone. Downstream integrity logic
+  // accepts explicitly reviewed records and likely journal publications while
+  // still labelling the latter as an inference in the UI.
+  if (/\bpeer[- ]reviewed\b|\brevisad[oa]s? por pares\b|\barbitrad[oa]s?\b/.test(lower)) {
+    filters.peerReviewedOnly = true;
+    filters.excludePreprints = true;
+  }
+
+  // Retractions and withdrawals are excluded by default. They are admitted
+  // only when the research request is explicitly about those records.
+  if (/\bretractad[oa]s?\b|\bretracted\b|\bretractions?\b|\bretractaciones?\b|\bwithdrawn papers?\b/.test(lower)) {
+    filters.includeRetracted = true;
+  }
+
   // Study type
   for (const s of STUDY_TYPES) {
-    if (s.re.test(t)) { filters.studyType = s.type; break; }
+    if (s.re.test(t)) {
+      filters.studyType = s.type;
+      const strictPrefix = /\b(?:solo|solamente|unicamente|únicamente|exclusivamente|only)\b/i;
+      filters.studyTypeRequired = strictPrefix.test(t);
+      break;
+    }
   }
 
   return filters;

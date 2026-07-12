@@ -22,12 +22,14 @@ const { extractEvidence } = require('./evidence-extractor');
 const { synthesize } = require('./literature-synthesizer');
 const { formatBibliography, inTextCitation } = require('./bibliography-formatter');
 const scientificSearch = require('../scientific-search');
+const { annotateSource, passesIntegrityFilters } = require('./source-integrity');
 
 function applyFilters(papers, filters = {}) {
-  return papers.filter((p) => {
+  return papers.map(annotateSource).filter((p) => {
     if (filters.yearFrom && (!Number.isFinite(p.year) || p.year < filters.yearFrom)) return false;
     if (filters.yearTo && (!Number.isFinite(p.year) || p.year > filters.yearTo)) return false;
     if (filters.openAccessOnly && !(p.openAccess === true || p.pdfUrl)) return false;
+    if (!passesIntegrityFilters(p, filters)) return false;
     return true;
   });
 }
@@ -50,13 +52,14 @@ function authorsShort(paper) {
 
 function buildComparisonTable(papers, lang = 'es') {
   const h = lang === 'es'
-    ? ['#', 'Autores', 'Año', 'Título', 'Tipo', 'Citas', 'AA', 'Hallazgo clave']
-    : ['#', 'Authors', 'Year', 'Title', 'Type', 'Cites', 'OA', 'Key finding'];
+    ? ['#', 'Autores', 'Año', 'Título', 'Tipo', 'Integridad', 'Citas', 'AA', 'Hallazgo clave']
+    : ['#', 'Authors', 'Year', 'Title', 'Type', 'Integrity', 'Cites', 'OA', 'Key finding'];
   const rows = papers.map((p, i) => {
-    const t = p.evidence?.studyType || '—';
+    const t = p.evidence?.studyType || p.studyType || '—';
     const oa = p.openAccess === true ? '✓' : (p.openAccess === false ? '✗' : '?');
     const finding = truncate(p.evidence?.topFinding || p.abstract || '—', 90);
-    return `| ${i + 1} | ${mdEscape(authorsShort(p))} | ${p.year || '—'} | ${mdEscape(truncate(p.title, 60))} | ${t} | ${Number.isFinite(p.citations) ? p.citations : '—'} | ${oa} | ${mdEscape(finding)} |`;
+    const integrity = p.integrityStatus === 'unknown' ? '?' : p.integrityStatus;
+    return `| ${i + 1} | ${mdEscape(authorsShort(p))} | ${p.year || '—'} | ${mdEscape(truncate(p.title, 60))} | ${t} | ${integrity} | ${Number.isFinite(p.citations) ? p.citations : '—'} | ${oa} | ${mdEscape(finding)} |`;
   });
   return [`| ${h.join(' | ')} |`, `| ${h.map(() => '---').join(' | ')} |`, ...rows].join('\n');
 }
@@ -177,6 +180,10 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
   }
 
   let papers = scientificSearch._internal.dedupeByDoi(collected);
+  const integrityExcluded = papers
+    .map(annotateSource)
+    .filter((paper) => !passesIntegrityFilters(paper, qa.filters))
+    .length;
   papers = applyFilters(papers, qa.filters);
   papers = scientificSearch._internal.rankPapers(papers, qa.normalized).slice(0, maxPapers);
 
@@ -205,6 +212,7 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
       providers: Array.from(providersUsed),
       errors,
       count: papers.length,
+      integrityExcluded,
       queriesRun: qa.searchQueries,
       durationMs: Date.now() - t0,
     },

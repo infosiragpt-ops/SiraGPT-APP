@@ -15,6 +15,7 @@ type AgenticBatchEvent = {
   sources?: any[]
   queries?: string[]
   filters?: Record<string, unknown>
+  stats?: Record<string, any>
 }
 
 const { runAgenticBatch, buildSummaryMarkdown, DEFAULT_PROVIDERS } = cjsRequire("./backend/src/services/searchBrain/agenticBatch") as {
@@ -207,6 +208,30 @@ describe("agentic search batch", () => {
     assert.match(selected[0].abstract, /urban climate adaptation/i)
   })
 
+  it("keeps the strongest publication and DOI metadata when indexes disagree", async () => {
+    let selected: any[] = []
+    for await (const evt of runAgenticBatch({
+      query: "climate adaptation",
+      target: 10,
+      batchSize: 5,
+      topK: 5,
+      providers: ["arxiv", "crossref"],
+      deps: {
+        retrieve: async ({ source }: any) => source === "arxiv"
+          ? [{ source, title: "Climate adaptation", doi: "10.1000/adaptation" }]
+          : [{ source, title: "Climate adaptation", doi: "10.1000/adaptation", journal: "Climate Journal", raw: { type: "journal-article" } }],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+    }
+
+    assert.equal(selected[0].publicationStage, "published_article")
+    assert.equal(selected[0].peerReviewStatus, "likely_peer_reviewed")
+    assert.equal(selected[0].doiStatus, "format_valid")
+  })
+
   it("searches deterministic bilingual query expansions", async () => {
     const requestedQueries: string[] = []
     let startEvent: AgenticBatchEvent | undefined
@@ -262,6 +287,60 @@ describe("agentic search batch", () => {
     }
 
     assert.deepEqual(selected.map(row => row.doi), ["10.1/open"])
+  })
+
+  it("excludes retracted results by default and reports the integrity filter", async () => {
+    let selected: any[] = []
+    let doneStats: Record<string, any> = {}
+    for await (const evt of runAgenticBatch({
+      query: "administrative management evidence",
+      target: 10,
+      batchSize: 5,
+      topK: 5,
+      providers: ["openalex"],
+      deps: {
+        retrieve: async () => [
+          { source: "openalex", title: "Retracted administrative management evidence", doi: "10.1000/retracted", raw: { is_retracted: true } },
+          { source: "openalex", title: "Administrative management evidence", doi: "10.1000/valid", raw: { is_retracted: false } },
+        ],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+      if (evt.type === "done") doneStats = evt.stats || {}
+    }
+
+    assert.deepEqual(selected.map(row => row.doi), ["10.1000/valid"])
+    assert.equal(selected[0].doiStatus, "format_valid")
+    assert.equal(selected[0].integrityStatus, "clear")
+    assert.equal(doneStats.integrityFilteredCount, 1)
+    assert.equal(doneStats.validDoiCount, 1)
+  })
+
+  it("keeps preprints visible but labels their review status", async () => {
+    let selected: any[] = []
+    for await (const evt of runAgenticBatch({
+      query: "machine learning preprint",
+      target: 10,
+      batchSize: 5,
+      topK: 5,
+      providers: ["arxiv"],
+      deps: {
+        retrieve: async () => [{
+          source: "arxiv",
+          title: "Machine learning preprint",
+          doi: "10.48550/arXiv.2601.00001",
+        }],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+    }
+
+    assert.equal(selected[0].publicationStage, "preprint")
+    assert.equal(selected[0].peerReviewStatus, "not_peer_reviewed")
   })
 
   it("ranks a precise topical result above a highly cited off-topic result without an LLM", async () => {

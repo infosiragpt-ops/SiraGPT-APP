@@ -58,6 +58,10 @@ test('extractFilters: year range, recency, study type, open access, language', (
   assert.equal(qi.extractFilters('una revisión sistemática').studyType, 'systematic_review');
   assert.equal(qi.extractFilters('papers open access').openAccessOnly, true);
   assert.equal(qi.extractFilters('artículos en español').language, 'es');
+  assert.equal(qi.extractFilters('solo artículos revisados por pares').peerReviewedOnly, true);
+  assert.equal(qi.extractFilters('solo artículos revisados por pares').excludePreprints, true);
+  assert.equal(qi.extractFilters('estudio de artículos retractados').includeRetracted, true);
+  assert.equal(qi.extractFilters('solo revisiones sistemáticas').studyTypeRequired, true);
 });
 
 test('analyzeQuery: "últimos 3 años" sets a recent yearFrom', () => {
@@ -203,6 +207,30 @@ test('applyFilters: openAccessOnly keeps OA + pdf, drops closed', () => {
     { year: 2020, openAccess: null, pdfUrl: 'x' },
   ], { openAccessOnly: true });
   assert.equal(out.length, 2);
+});
+
+test('applyFilters: excludes retracted records by default and preserves integrity metadata', () => {
+  const out = applyFilters([
+    { source: 'openalex', title: 'Retracted result', raw: { is_retracted: true } },
+    { source: 'pubmed', title: 'Published result', journal: 'Journal of Evidence' },
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].integrityStatus, 'unknown');
+  assert.equal(out[0].publicationStage, 'published_article');
+});
+
+test('buildLiteratureReview: reports how many unsafe records were excluded', async () => {
+  const searchImpl = async () => ({
+    papers: [
+      ...FIXTURE,
+      { source: 'openalex', doi: '10.1/retracted', title: 'Retracted administrative study', raw: { is_retracted: true } },
+    ],
+    errors: [],
+    providers: ['openalex'],
+  });
+  const review = await buildLiteratureReview('gestión administrativa', { searchImpl });
+  assert.equal(review.papers.some((p) => p.integrityStatus === 'retracted'), false);
+  assert.equal(review.meta.integrityExcluded, 1);
 });
 
 test('buildLiteratureReview: empty query returns a graceful empty review', async () => {

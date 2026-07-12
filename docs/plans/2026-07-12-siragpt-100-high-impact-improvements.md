@@ -1,0 +1,177 @@
+# SiraGPT: 100 mejoras profesionales de alto impacto
+
+## Objetivo
+
+Convertir SiraGPT en una plataforma de investigación, creación de documentos,
+presentaciones y trabajo empresarial con resultados verificables. Cada mejora
+se considera terminada solo cuando tiene implementación, prueba automatizada,
+validación en producción y evidencia de uso real.
+
+## Estados
+
+- `COVERED`: capacidad ya presente y verificada en el código base.
+- `DELIVERED-R1`: entregada en la primera liberación de este programa.
+- `PARTIAL`: existe una base útil, pero falta completar el criterio.
+- `PENDING`: todavía no cumple el criterio de aceptación.
+
+## 1-10. Cobertura científica mundial
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 1 | Integración OpenAlex | COVERED | Buscar obras con paginación y metadatos normalizados. |
+| 2 | Integración Crossref | COVERED | Recuperar DOI, revista, autores, citas y relaciones editoriales. |
+| 3 | PubMed y Europe PMC | COVERED | Recuperar literatura biomédica desde ambos índices. |
+| 4 | SciELO y Redalyc | COVERED | Priorizar cobertura científica iberoamericana. |
+| 5 | arXiv, bioRxiv y medRxiv | COVERED | Recuperar preprints y conservar su procedencia. |
+| 6 | Semantic Scholar, CORE, DOAJ, DBLP y DataCite | COVERED | Consultar y normalizar todos los proveedores públicos. |
+| 7 | Scopus y Web of Science | COVERED | Activarse con credenciales y degradar sin interrumpir la búsqueda. |
+| 8 | Enrutamiento por disciplina | PARTIAL | Seleccionar índices y vocabularios según la carrera o área. |
+| 9 | Búsqueda bilingüe español-inglés | COVERED | Expandir conceptos sin desplazar el tema literal del usuario. |
+| 10 | Recuperación profunda de hasta 1,000 candidatos | PARTIAL | Paginar fuentes compatibles y detenerse con límites auditables. |
+
+## 11-20. Precisión y ranking
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 11 | Interpretación estructurada de la consulta | COVERED | Extraer tema, idioma, conceptos y preferencias. |
+| 12 | Filtros de año, idioma y acceso abierto | COVERED | Aplicar los filtros antes del ranking final. |
+| 13 | Filtro de revisión por pares | DELIVERED-R1 | Excluir preprints y etiquetar inferencias sin afirmar certeza. |
+| 14 | Preferencia y filtro estricto por tipo de estudio | DELIVERED-R1 | Distinguir preferencia de solicitudes exclusivas. |
+| 15 | Cobertura de conceptos compuestos | COVERED | Evitar coincidencias por una sola palabra genérica. |
+| 16 | Ranking determinista por pertinencia | COVERED | Priorizar coincidencia temática aunque otra fuente tenga más citas. |
+| 17 | Reordenamiento semántico con LLM | COVERED | Reordenar un conjunto acotado y degradar de forma determinista. |
+| 18 | Autoridad del índice | COVERED | Incorporar reputación de la fuente sin dominar la pertinencia. |
+| 19 | Señales de citas, actualidad y acceso | COVERED | Combinar señales con pesos explícitos y probados. |
+| 20 | Diversidad y corroboración entre índices | COVERED | Fusionar duplicados y mostrar confirmación multifuente. |
+
+## 21-30. Calidad e integridad de evidencia
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 21 | Validación sintáctica de DOI | DELIVERED-R1 | Marcar formato válido sin afirmar resolución en línea. |
+| 22 | Resolución activa de DOI | PENDING | Confirmar HTTP, destino canónico y estado editorial con caché. |
+| 23 | Detección de retractaciones y retiros | DELIVERED-R1 | Leer OpenAlex/Crossref y excluirlos por defecto. |
+| 24 | Correcciones y expresiones de preocupación | DELIVERED-R1 | Conservar y mostrar el evento editorial más riesgoso. |
+| 25 | Clasificación de preprints | DELIVERED-R1 | Identificar repositorios y tipos `posted-content`. |
+| 26 | Estado de revisión por pares | DELIVERED-R1 | Separar confirmado, probable, no revisado y desconocido. |
+| 27 | Clasificación del diseño de estudio | DELIVERED-R1 | Detectar revisiones, meta-análisis, RCT, cohortes y otros diseños. |
+| 28 | Señales de integridad visibles en chat | DELIVERED-R1 | Mostrar DOI, etapa, diseño y alertas en cada resultado. |
+| 29 | Contadores auditables de exclusión | DELIVERED-R1 | Informar registros únicos excluidos por integridad. |
+| 30 | Extracción de hallazgos y estadísticas | COVERED | Extraer frases de resultados, dirección, cifras y trabajo futuro. |
+
+## 31-40. Revisiones sistemáticas
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 31 | Constructor PICO | PENDING | Convertir población, intervención, comparación y resultado en consultas. |
+| 32 | Constructor SPIDER | PENDING | Soportar investigación cualitativa y métodos mixtos. |
+| 33 | Flujo PRISMA | PENDING | Registrar identificación, cribado, elegibilidad e inclusión. |
+| 34 | Criterios de inclusión y exclusión | PENDING | Configurarlos, aplicarlos y explicar cada descarte. |
+| 35 | Dedupe para revisión sistemática | PARTIAL | Fusionar DOI/título y permitir resolver conflictos manualmente. |
+| 36 | Cribado por título y resumen | PENDING | Aceptar, excluir o dejar en duda con motivos. |
+| 37 | Evaluación de riesgo de sesgo | PENDING | Aplicar listas por diseño con trazabilidad. |
+| 38 | Gradación de certeza de evidencia | PENDING | Resumir certeza con criterios explícitos. |
+| 39 | Síntesis de consenso y contradicciones | PARTIAL | Citar los estudios que sostienen cada conclusión. |
+| 40 | Exportación del protocolo | PENDING | Descargar estrategia, filtros, decisiones y diagrama. |
+
+## 41-50. Biblioteca y referencias
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 41 | Guardar fuentes en Biblioteca | PARTIAL | Persistir un resultado científico desde el chat. |
+| 42 | Colecciones, carpetas y etiquetas | PENDING | Organizar referencias por investigación y tema. |
+| 43 | Notas y anotaciones por fuente | PENDING | Guardar comentarios privados con referencia estable. |
+| 44 | Bibliografía APA 7 | COVERED | Generar y ordenar referencias con DOI canónico. |
+| 45 | Bibliografías IEEE y MLA | COVERED | Cambiar formato sin perder metadatos. |
+| 46 | Exportación BibTeX y RIS | PARTIAL | Exportar la selección científica desde el mismo resultado. |
+| 47 | Integración Zotero y Mendeley | PENDING | Enviar colecciones con deduplicación. |
+| 48 | Dedupe de referencias | COVERED | Fusionar DOI y título normalizado conservando datos más ricos. |
+| 49 | Auditoría de referencias citadas | PENDING | Detectar DOI inválido, cita huérfana o referencia no usada. |
+| 50 | Grafo de citación | PENDING | Explorar trabajos citados, citantes y conexiones temáticas. |
+
+## 51-60. Experiencia de investigación en chat
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 51 | Progreso de búsqueda en tiempo real | COVERED | Mostrar fases, conteos y proveedores durante el SSE. |
+| 52 | Cancelación inmediata | COVERED | Detener proveedores, ranking y actualización visual. |
+| 53 | Estado por proveedor | COVERED | Mostrar contribución, errores y agotamiento sin bloquear el resto. |
+| 54 | Panel profesional de filtros | PENDING | Editar filtros sin reescribir el prompt. |
+| 55 | Tarjetas científicas expandibles | PARTIAL | Ver resumen, metadatos, integridad y acciones por fuente. |
+| 56 | Orden configurable | PENDING | Ordenar por pertinencia, fecha, citas, evidencia o acceso. |
+| 57 | Comparación de estudios | PARTIAL | Seleccionar fuentes y comparar diseño, muestra y hallazgos. |
+| 58 | Preguntas de seguimiento con contexto | PARTIAL | Reutilizar la selección sin repetir la búsqueda completa. |
+| 59 | Búsquedas guardadas y alertas | PENDING | Reejecutar consultas y notificar literatura nueva. |
+| 60 | Accesibilidad y móvil | PARTIAL | Operar búsqueda, filtros y fuentes con teclado y pantallas pequeñas. |
+
+## 61-70. Documentos y presentaciones
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 61 | Convertir investigación en DOCX | PARTIAL | Generar un Word real con estructura y referencias. |
+| 62 | Editar el DOCX original | COVERED | Devolver el mismo archivo con estructura preservada. |
+| 63 | Convertir investigación en PPTX | PARTIAL | Crear una presentación descargable desde fuentes seleccionadas. |
+| 64 | Fidelidad al prompt y número de diapositivas | PARTIAL | Cumplir tema, audiencia, extensión y restricciones exactas. |
+| 65 | Citas y referencias por diapositiva | PENDING | Vincular cada afirmación a sus fuentes. |
+| 66 | Tablas de evidencia editables | PARTIAL | Insertar matrices con estudio, método, muestra y resultados. |
+| 67 | Esquema editable antes de generar | PENDING | Aprobar y reorganizar capítulos o diapositivas. |
+| 68 | Regeneración focalizada | PARTIAL | Modificar una sección o diapositiva sin rehacer todo. |
+| 69 | Procedencia de gráficos y cifras | PENDING | Adjuntar fuente, unidad y fecha a cada visualización. |
+| 70 | Validación técnica del artefacto | COVERED | Abrir, renderizar y comprobar DOCX/PPTX antes de entregar. |
+
+## 71-80. Empresas y colaboración
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 71 | Nombre Empresas en toda la interfaz | COVERED | Mantener rutas/permisos y cambiar solo la denominación visible. |
+| 72 | Biblioteca científica por empresa | PENDING | Compartir fuentes dentro del tenant correcto. |
+| 73 | Colecciones compartidas | PENDING | Colaborar con permisos por colección. |
+| 74 | Roles y permisos | COVERED | Aplicar permisos de propietario, administrador y miembro. |
+| 75 | Comentarios y menciones | PARTIAL | Comentar fuentes y artefactos notificando al destinatario. |
+| 76 | Registro de actividad | COVERED | Auditar acciones relevantes sin exponer secretos. |
+| 77 | Historial de versiones de artefactos | PENDING | Restaurar versiones de documentos y presentaciones. |
+| 78 | Plantillas de investigación por empresa | PENDING | Reutilizar normas, marca, estructura y fuentes aprobadas. |
+| 79 | Memoria aislada por proyecto | COVERED | Mantener archivos, chats y contexto dentro del proyecto. |
+| 80 | Aislamiento multi-tenant | COVERED | Impedir acceso cruzado en datos, previews y artefactos. |
+
+## 81-90. Agentes y automatización
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 81 | Agente de búsqueda federada | COVERED | Planificar, consultar, fusionar, ordenar y sintetizar. |
+| 82 | Agente crítico de evidencia | PARTIAL | Revisar calidad, contradicciones y soporte de afirmaciones. |
+| 83 | Agente verificador de citas | PENDING | Comprobar citas contra metadatos y texto disponible. |
+| 84 | Agente de revisión sistemática | PARTIAL | Coordinar estrategia, cribado, extracción y síntesis. |
+| 85 | Agente editor de documentos | COVERED | Editar archivos reales con validaciones. |
+| 86 | Agente de presentaciones | COVERED | Crear PPTX y validar el artefacto. |
+| 87 | Paralelismo entre proveedores | COVERED | Consultar hosts independientes de forma concurrente. |
+| 88 | Reintentos y circuit breakers | COVERED | Limitar fallos, tiempos y degradación de proveedores. |
+| 89 | Checkpoints y reanudación | COVERED | Recuperar tareas duraderas tras interrupciones. |
+| 90 | Aprobación humana | COVERED | Bloquear acciones de alto impacto hasta autorización. |
+
+## 91-100. Plataforma, seguridad y negocio
+
+| # | Mejora | Estado | Criterio de aceptación |
+|---:|---|---|---|
+| 91 | Health checks de disponibilidad | COVERED | Exponer readiness y validar servicios requeridos. |
+| 92 | Despliegue con backup y rollback | COVERED | Respaldar, desplegar sin volúmenes destructivos y revertir por SHA. |
+| 93 | Observabilidad de búsqueda | PARTIAL | Medir latencia, cobertura, errores, filtros y calidad por proveedor. |
+| 94 | Rate limits y colas | COVERED | Controlar abuso y mantener reintentos cancelables. |
+| 95 | Gestión segura de secretos | COVERED | Evitar claves en código, logs, commits y respuestas. |
+| 96 | Controles de seguridad automatizados | COVERED | Ejecutar validaciones de cadena de suministro y patrones inseguros. |
+| 97 | Presupuestos de costo y tokens | COVERED | Aplicar límites por tarea, conversación y usuario. |
+| 98 | Configuración administrativa de proveedores | COVERED | Activar proveedores/modelos sin cambios de código. |
+| 99 | Analítica de uso y calidad | PARTIAL | Medir adopción, éxito, cancelación y satisfacción sin PII. |
+| 100 | Evaluación continua de calidad | COVERED | Ejecutar pruebas, 100 controles y gates de liberación por SHA. |
+
+## Liberación R1: integridad científica
+
+Incluye las mejoras 13, 14 y 21-29. La liberación debe cumplir:
+
+1. Pruebas unitarias de DOI, preprints, revisión por pares y eventos editoriales.
+2. Pruebas del flujo agéntico con exclusión y contadores únicos.
+3. Pruebas de revisión de literatura con metadatos de integridad.
+4. Compilación, lint, bloqueo visual y escaneo de secretos.
+5. Suite completa sin fallos.
+6. CI verde para el SHA exacto.
+7. Despliegue no destructivo, health check y búsqueda autenticada real.

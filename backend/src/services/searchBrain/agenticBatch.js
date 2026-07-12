@@ -36,6 +36,11 @@ const { rerankResults } = require("./llmReranker");
 const { callLLM } = require("./llmClient");
 const { analyzeQuery } = require("../research/research-query-intelligence");
 const { scoreResult } = require("../agents/web-search/relevance");
+const {
+  annotateSource,
+  passesIntegrityFilters,
+  strongerStatus,
+} = require("../research/source-integrity");
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_TARGET = 500;
@@ -112,6 +117,14 @@ function mergeCandidate(base, extra) {
   const openAccess = base.openAccess === true || extra.openAccess === true
     ? true
     : (base.openAccess === false || extra.openAccess === false ? false : undefined);
+  const publicationStagePriority = { unknown: 0, preprint: 1, dataset: 2, thesis: 2, conference_paper: 3, published_article: 4 };
+  const publicationStage = (publicationStagePriority[extra.publicationStage] || 0) > (publicationStagePriority[base.publicationStage] || 0)
+    ? extra.publicationStage
+    : (base.publicationStage || extra.publicationStage || "unknown");
+  const peerReviewPriority = { unknown: 0, not_peer_reviewed: 1, likely_peer_reviewed: 2, confirmed: 3 };
+  const peerReviewStatus = (peerReviewPriority[extra.peerReviewStatus] || 0) > (peerReviewPriority[base.peerReviewStatus] || 0)
+    ? extra.peerReviewStatus
+    : base.peerReviewStatus;
   return {
     ...base,
     title: preferLonger(base.title, extra.title) || "Untitled",
@@ -131,6 +144,17 @@ function mergeCandidate(base, extra) {
     sources,
     sourceCount: sources.length,
     retrievalScore: Math.max(base.retrievalScore || 0, extra.retrievalScore || 0),
+    doiStatus: [base.doiStatus, extra.doiStatus].includes("format_valid")
+      ? "format_valid"
+      : ([base.doiStatus, extra.doiStatus].includes("format_invalid") ? "format_invalid" : "missing"),
+    publicationStage,
+    peerReviewStatus: peerReviewStatus || "unknown",
+    studyType: base.studyType && base.studyType !== "unknown" ? base.studyType : (extra.studyType || "unknown"),
+    integrityStatus: strongerStatus(base.integrityStatus || "unknown", extra.integrityStatus || "unknown"),
+    integrityAlerts: Array.from(new Set([
+      ...(Array.isArray(base.integrityAlerts) ? base.integrityAlerts : []),
+      ...(Array.isArray(extra.integrityAlerts) ? extra.integrityAlerts : []),
+    ])),
   };
 }
 
@@ -139,6 +163,7 @@ function passesFilters(item, filters) {
   if (Number.isFinite(filters?.yearFrom) && (!Number.isFinite(year) || year < filters.yearFrom)) return false;
   if (Number.isFinite(filters?.yearTo) && (!Number.isFinite(year) || year > filters.yearTo)) return false;
   if (filters?.openAccessOnly && item?.openAccess !== true) return false;
+  if (!passesIntegrityFilters(item, filters)) return false;
   return true;
 }
 
@@ -201,7 +226,8 @@ function sourceAuthority(item) {
   return sources.reduce((best, source) => Math.max(best, SOURCE_AUTHORITY[source] || 0.6), 0.6);
 }
 
-function qualityScore(item, queries, conceptGroups) {
+function qualityScore(item, queries, conceptGroups, filters = {}) {
+  if (["retracted", "withdrawn"].includes(item?.integrityStatus)) return 0;
   const relevance = candidateRelevance(item, queries, conceptGroups);
   const corroboration = Math.min(1, Math.max(0, (Number(item?.sourceCount) || 1) - 1) / 3);
   const metadata = metadataCompleteness(item);
@@ -211,23 +237,31 @@ function qualityScore(item, queries, conceptGroups) {
   const age = Number.isFinite(year) ? Math.max(0, new Date().getUTCFullYear() - year) : 20;
   const recency = Math.max(0, 1 - age / 15);
   const openAccess = item?.openAccess === true ? 1 : 0;
+  const doi = item?.doiStatus === "format_valid" ? 1 : 0;
+  const integrity = item?.integrityStatus === "clear"
+    ? 1
+    : (item?.integrityStatus === "corrected" ? 0.8 : (item?.integrityStatus === "expression_of_concern" ? 0.2 : 0.6));
+  const studyMatch = filters?.studyType ? (item?.studyType === filters.studyType ? 1 : 0) : 0.5;
   return Math.min(1, (
-    relevance * 0.64 +
-    corroboration * 0.12 +
+    relevance * 0.60 +
+    corroboration * 0.11 +
     authority * 0.08 +
     metadata * 0.06 +
-    citations * 0.05 +
+    citations * 0.04 +
     recency * 0.03 +
-    openAccess * 0.02
+    openAccess * 0.02 +
+    doi * 0.03 +
+    integrity * 0.02 +
+    studyMatch * 0.01
   ));
 }
 
-function rankDeterministically(items, queries, conceptGroups) {
+function rankDeterministically(items, queries, conceptGroups, filters = {}) {
   return items
     .map((item) => {
       const retrievalScore = candidateRelevance(item, queries, conceptGroups);
       const annotated = { ...item, retrievalScore };
-      return { ...annotated, qualityScore: qualityScore(annotated, queries, conceptGroups) };
+      return { ...annotated, qualityScore: qualityScore(annotated, queries, conceptGroups, filters) };
     })
     .sort((a, b) => (
       (b.qualityScore - a.qualityScore) ||
@@ -262,6 +296,12 @@ function compactSource(item) {
     qualityScore: item.qualityScore,
     sources: Array.isArray(item.sources) ? item.sources : (item.source ? [item.source] : []),
     sourceCount: item.sourceCount || (Array.isArray(item.sources) ? item.sources.length : 1),
+    doiStatus: item.doiStatus,
+    publicationStage: item.publicationStage,
+    peerReviewStatus: item.peerReviewStatus,
+    studyType: item.studyType,
+    integrityStatus: item.integrityStatus,
+    integrityAlerts: Array.isArray(item.integrityAlerts) ? item.integrityAlerts : [],
   };
 }
 
@@ -312,7 +352,17 @@ function formatArticleCitation(source, index) {
   const provenance = source.sourceCount >= 2
     ? `\n_Validado en ${source.sourceCount} índices: ${(source.sources || []).join(", ")}._`
     : "";
-  return `${index + 1}. ${metadata}${link ? `\n${link}` : ""}${provenance}`;
+  const signals = [];
+  if (source.doiStatus === "format_valid") signals.push("DOI con formato válido");
+  if (source.publicationStage === "preprint") signals.push("Preprint: revisión por pares no confirmada");
+  else if (source.peerReviewStatus === "confirmed") signals.push("Revisión por pares confirmada por metadatos");
+  else if (source.peerReviewStatus === "likely_peer_reviewed") signals.push("Publicado en revista; revisión por pares no confirmada");
+  if (source.studyType && source.studyType !== "unknown") signals.push(`Tipo: ${source.studyType.replace(/_/g, " ")}`);
+  if (source.integrityStatus === "corrected") signals.push("Corrección registrada");
+  if (source.integrityStatus === "expression_of_concern") signals.push("Alerta: expresión de preocupación");
+  if (source.integrityStatus === "retracted") signals.push("Alerta: retractado");
+  const integrity = signals.length ? `\n_${signals.join(" · ")}._` : "";
+  return `${index + 1}. ${metadata}${link ? `\n${link}` : ""}${provenance}${integrity}`;
 }
 
 function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, providerStats }) {
@@ -328,8 +378,12 @@ function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, provid
   });
   lines.push("---");
   const corroborated = top.filter((source) => source.sourceCount >= 2).length;
+  const validDoi = top.filter((source) => source.doiStatus === "format_valid").length;
+  const preprints = top.filter((source) => source.publicationStage === "preprint").length;
   lines.push(`*Consulta: "${query}". Se localizaron ${dedupedCount || totalCollected} registros únicos y se seleccionaron ${top.length}.` +
     (corroborated ? ` ${corroborated} fueron corroborados en más de un índice.` : "") +
+    (validDoi ? ` ${validDoi} tienen DOI con formato válido.` : "") +
+    (preprints ? ` ${preprints} son preprints y se muestran sin afirmar revisión por pares.` : "") +
     (providersUsed.length ? ` Proveedores con resultados: ${providersUsed.join(", ")}.` : "") + "*");
   return lines.join("\n");
 }
@@ -449,6 +503,7 @@ async function* runAgenticBatch(opts) {
   let totalRequested = 0;
   let totalMatches = 0;
   let totalFiltered = 0;
+  const integrityFilteredKeys = new Set();
   const minimumSearchRounds = Math.min(2, searchQueries.length);
   const hardCollectionCap = Math.min(1200, target + providers.length * batchSize);
 
@@ -466,12 +521,12 @@ async function* runAgenticBatch(opts) {
       rawItem.source || provider,
       provider,
     ].filter(Boolean)));
-    const item = {
+    const item = annotateSource({
       ...rawItem,
       source: rawItem.source || provider,
       sources: initialSources,
       sourceCount: initialSources.length,
-    };
+    });
     item.retrievalScore = candidateRelevance(
       item,
       [searchQueries[0], query, laneQuery, ...searchQueries.slice(1)],
@@ -584,12 +639,14 @@ async function* runAgenticBatch(opts) {
 
         for (const rawItem of batch) {
           if (!rawItem || typeof rawItem !== "object") continue;
-          if (!passesFilters(rawItem, filters)) {
+          const annotatedItem = annotateSource({ ...rawItem, source: rawItem.source || provider });
+          if (!passesFilters(annotatedItem, filters)) {
             filteredCount += 1;
             totalFiltered += 1;
+            if (!passesIntegrityFilters(annotatedItem, filters)) integrityFilteredKeys.add(dedupKey(annotatedItem));
             continue;
           }
-          const merged = mergeIntoCollection(rawItem, provider, laneQuery);
+          const merged = mergeIntoCollection(annotatedItem, provider, laneQuery);
           if (merged.fresh) fresh.push(merged.fresh);
           else duplicateCount += 1;
           if (merged.confirmed) confirmationCount += 1;
@@ -660,6 +717,7 @@ async function* runAgenticBatch(opts) {
     totalMatches,
     deduped: collected.length,
     filtered: totalFiltered,
+    integrityFiltered: integrityFilteredKeys.size,
     queries: searchQueries,
     filters,
     requestedCalls: totalRequested,
@@ -686,6 +744,7 @@ async function* runAgenticBatch(opts) {
     collected,
     [searchQueries[0], query, ...searchQueries.slice(1)],
     conceptGroups,
+    filters,
   );
   const rerankPoolSize = Math.min(
     deterministic.length,
@@ -750,6 +809,9 @@ async function* runAgenticBatch(opts) {
       dedupedCount: collected.length,
       selectedCount: top.length,
       validatedCount: top.filter((source) => source.sourceCount >= 2).length,
+      validDoiCount: top.filter((source) => source.doiStatus === "format_valid").length,
+      preprintCount: top.filter((source) => source.publicationStage === "preprint").length,
+      integrityFilteredCount: integrityFilteredKeys.size,
       elapsedMs: Date.now() - startedAt,
       rerankerWasUsed,
     },
