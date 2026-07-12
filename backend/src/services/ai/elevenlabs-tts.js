@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { throwIfAborted } = require('../../utils/abort-signal');
 
 // ElevenLabs "Rachel" multilingual voice — the historical default of the
 // generate_speech agent tool. Always available on the project account and
@@ -85,9 +86,10 @@ function getClient(ElevenLabsClientCtor) {
  * @param {string} [opts.modelId]     ElevenLabs model id (defaults multilingual)
  * @param {object} [opts.voiceSettings] stability/similarity_boost/style/use_speaker_boost
  * @param {Function} [opts.ElevenLabsClientCtor] injectable client ctor (tests)
+ * @param {AbortSignal} [opts.signal] user/request cancellation signal
  * @returns {Promise<{filename,audioPath,audioUrl,sizeBytes,mime,voiceId,modelId,characters}>}
  */
-async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, ElevenLabsClientCtor } = {}) {
+async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, ElevenLabsClientCtor, signal } = {}) {
   const narration = String(text || '').trim();
   if (!narration) {
     const err = new Error('Text is required for speech generation');
@@ -104,17 +106,24 @@ async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, Eleve
   const resolvedVoiceId = String(voiceId || '').trim() || DEFAULT_VOICE_ID;
   const resolvedModelId = String(modelId || '').trim() || DEFAULT_MODEL_ID;
   const settings = clampVoiceSettings(voiceSettings);
+  throwIfAborted(signal);
 
   const audioStream = await client.textToSpeech.convert(resolvedVoiceId, {
     text: narration,
     model_id: resolvedModelId,
     voice_settings: settings,
+  }, {
+    abortSignal: signal,
+    maxRetries: 0,
+    timeoutInSeconds: Math.max(1, Math.ceil((Number(process.env.ELEVENLABS_TIMEOUT_MS) || 120000) / 1000)),
   });
 
   const chunks = [];
   for await (const chunk of audioStream) {
+    throwIfAborted(signal);
     chunks.push(chunk);
   }
+  throwIfAborted(signal);
   const audioBuffer = Buffer.concat(chunks);
   if (!audioBuffer || audioBuffer.length === 0) {
     const err = new Error('ElevenLabs returned no audio');
@@ -125,6 +134,7 @@ async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, Eleve
   ensureDir(audioDir);
   const filename = generatedAudioFilename('tts');
   const audioPath = path.join(audioDir, filename);
+  throwIfAborted(signal);
   fs.writeFileSync(audioPath, audioBuffer);
 
   return {

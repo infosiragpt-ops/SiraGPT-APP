@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { body, validationResult } = require('express-validator');
+
+const aiRouteSource = fs.readFileSync(path.join(__dirname, '../src/routes/ai.js'), 'utf8');
 
 // Mirrors the hardened input validators on the legacy ElevenLabs audio routes
 // (backend/src/routes/elevenlabs.js). Locks the bounded contract so a future
@@ -50,4 +54,24 @@ test('tts route: caps text length and rejects empty', async () => {
   assert.equal((await validate(ttsValidators, { text: '' })).ok, false);
   assert.equal((await validate(ttsValidators, { text: 'a'.repeat(5001) })).ok, false);
   assert.equal((await validate(ttsValidators, { text: 'hola mundo' })).ok, true);
+});
+
+test('chat speech and music routes propagate client disconnect cancellation', () => {
+  assert.match(aiRouteSource, /const requestAbort = bindRequestAbort\(req, res\)/);
+  assert.match(
+    aiRouteSource,
+    /generateSpeechFile\(\{[\s\S]{0,240}signal: requestAbort\.signal/,
+    'speech generation must receive the request abort signal'
+  );
+  assert.match(
+    aiRouteSource,
+    /generateLyriaMusicFile\(\{[^}]*signal: requestAbort\.signal[^}]*\}\)/,
+    'Lyria generation must receive the request abort signal'
+  );
+  assert.match(
+    aiRouteSource,
+    /generateMusicFile\(\{[^}]*signal: requestAbort\.signal[^}]*\}\)/,
+    'ElevenLabs music generation must receive the request abort signal'
+  );
+  assert.match(aiRouteSource, /cancelled by client/);
 });

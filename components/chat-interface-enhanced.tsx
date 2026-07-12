@@ -4867,6 +4867,8 @@ function ChatInterfaceContent() {
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
+  const voiceAbortControllerRef = React.useRef<AbortController | null>(null)
+  const musicAbortControllerRef = React.useRef<AbortController | null>(null)
   // Dedicated cancel handle for video generation, mirroring the image path so
   // every composer-driven media kind cancels through the same mechanism.
   const videoAbortControllerRef = React.useRef<AbortController | null>(null)
@@ -5459,6 +5461,22 @@ function ChatInterfaceContent() {
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
+    }
+    if (voiceAbortControllerRef.current) {
+      const controller = voiceAbortControllerRef.current;
+      voiceAbortControllerRef.current = null;
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+      toast.info('Generación de voz detenida');
+    }
+    if (musicAbortControllerRef.current) {
+      const controller = musicAbortControllerRef.current;
+      musicAbortControllerRef.current = null;
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+      toast.info('Generación de música detenida');
     }
     if (isGeneratingVoiceRef.current) {
       isGeneratingVoiceRef.current = false;
@@ -10549,7 +10567,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
     }
 
-    markLocalJobBusy(activeChat.id);
+    voiceAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    voiceAbortControllerRef.current = controller;
+    markLocalJobBusy(activeChat.id, controller);
 
     const userMessage = {
       id: `msg-user-${Date.now()}`,
@@ -10606,7 +10627,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         chatId: activeChat.id,
         voiceId: selectedVoiceId || undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
-      });
+      }, { signal: controller.signal });
       if (resp?.content) {
         setBubble(resp.content);
       } else {
@@ -10615,6 +10636,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.success('Audio generado');
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        const cancelledState = {
+          ...runningState,
+          done: true,
+          error: 'aborted',
+          steps: runningState.steps.map(s => ({ ...s, label: 'Generación detenida', status: 'error' })),
+        };
+        setBubble('```agent-task-state\n' + JSON.stringify(cancelledState) + '\n```');
+        return;
+      }
       const friendly = err?.message || 'No se pudo generar el audio. Intenta de nuevo.';
       const errorState = {
         ...runningState,
@@ -10625,7 +10656,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
       toast.error(friendly);
     } finally {
-      markLocalJobIdle(activeChat.id);
+      if (voiceAbortControllerRef.current === controller) {
+        voiceAbortControllerRef.current = null;
+      }
+      markLocalJobIdle(activeChat.id, controller);
     }
   };
 
@@ -10686,7 +10720,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       });
     };
 
-    markLocalJobBusy(chatId);
+    voiceAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    voiceAbortControllerRef.current = controller;
+    markLocalJobBusy(chatId, controller);
     isGeneratingVoiceRef.current = true;
     setIsGeneratingVoice(true);
     try {
@@ -10698,7 +10735,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         regenerate: true,
         voiceId: selectedVoiceId || undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
-      });
+      }, { signal: controller.signal });
       if (resp?.content) {
         setBubble(resp.content);
       } else {
@@ -10707,6 +10744,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.success('Audio regenerado');
       if (chatId) selectChat(chatId);
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        const cancelledState = {
+          ...runningState,
+          done: true,
+          error: 'aborted',
+          steps: runningState.steps.map(s => ({ ...s, label: 'Generación detenida', status: 'error' })),
+        };
+        setBubble('```agent-task-state\n' + JSON.stringify(cancelledState) + '\n```');
+        return;
+      }
       const friendly = err?.message || 'No se pudo regenerar el audio. Intenta de nuevo.';
       const errorState = {
         ...runningState,
@@ -10717,9 +10764,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
       toast.error(friendly);
     } finally {
+      if (voiceAbortControllerRef.current === controller) {
+        voiceAbortControllerRef.current = null;
+      }
       isGeneratingVoiceRef.current = false;
       setIsGeneratingVoice(false);
-      markLocalJobIdle(chatId);
+      markLocalJobIdle(chatId, controller);
     }
   };
 
@@ -10766,7 +10816,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
     }
 
-    markLocalJobBusy(activeChat.id);
+    musicAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    musicAbortControllerRef.current = controller;
+    markLocalJobBusy(activeChat.id, controller);
 
     const userMessage = {
       id: `msg-user-${Date.now()}`,
@@ -10827,7 +10880,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         effect: selectedMusicEffect,
         influence: selectedMusicInfluence,
         model: selectedMusicModel,
-      });
+      }, { signal: controller.signal });
       if (resp?.content) {
         setBubble(resp.content);
       } else {
@@ -10836,6 +10889,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.success(resp?.model ? `Música generada con ${resp.model}` : 'Música generada');
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        const cancelledState = {
+          ...runningState,
+          done: true,
+          error: 'aborted',
+          steps: runningState.steps.map(s => ({ ...s, label: 'Generación detenida', status: 'error' })),
+        };
+        setBubble('```agent-task-state\n' + JSON.stringify(cancelledState) + '\n```');
+        return;
+      }
       const friendly = err?.message || 'No se pudo generar la música. Intenta de nuevo.';
       const errorState = {
         ...runningState,
@@ -10846,7 +10909,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
       toast.error(friendly);
     } finally {
-      markLocalJobIdle(activeChat.id);
+      if (musicAbortControllerRef.current === controller) {
+        musicAbortControllerRef.current = null;
+      }
+      markLocalJobIdle(activeChat.id, controller);
     }
   };
 

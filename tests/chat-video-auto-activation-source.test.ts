@@ -5,6 +5,7 @@ import path from "node:path"
 
 const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const source = fs.readFileSync(componentPath, "utf8")
+const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
 
 describe("chat video auto-activation source contract", () => {
   it("auto-enables the video tool from normal chat intent before send", () => {
@@ -316,5 +317,26 @@ describe("chat video auto-activation source contract", () => {
       /isStopButtonVisible && \(input\.trim\(\)\.length === 0 \|\| shouldPrioritizeStopButton\)/,
       "The stop button should remain available even if the composer has text during Voice generation"
     )
+  })
+
+  it("cancels Voice and Music transport instead of only clearing the spinner", () => {
+    assert.match(source, /const voiceAbortControllerRef = React\.useRef<AbortController \| null>\(null\)/)
+    assert.match(source, /const musicAbortControllerRef = React\.useRef<AbortController \| null>\(null\)/)
+    assert.match(
+      source,
+      /voiceAbortControllerRef\.current = controller;[\s\S]{0,220}markLocalJobBusy\(activeChat\.id, controller\)/,
+      "Voice generation must register its real request controller"
+    )
+    assert.match(
+      source,
+      /musicAbortControllerRef\.current = controller;[\s\S]{0,220}markLocalJobBusy\(activeChat\.id, controller\)/,
+      "Music generation must register its real request controller"
+    )
+    assert.match(source, /generateSpeechMessage\(\{[\s\S]{0,300}\}, \{ signal: controller\.signal \}\)/)
+    assert.match(source, /generateMusicMessage\(\{[\s\S]{0,420}\}, \{ signal: controller\.signal \}\)/)
+    assert.match(source, /error: 'aborted'/)
+    assert.match(apiSource, /generateSpeechMessage\([\s\S]{0,520}options: \{ signal\?: AbortSignal \}/)
+    assert.match(apiSource, /generateMusicMessage\([\s\S]{0,520}options: \{ signal\?: AbortSignal \}/)
+    assert.match(apiSource, /signal: options\.signal/)
   })
 })

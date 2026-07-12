@@ -56,6 +56,31 @@ test('generateMusicFile: clamps duration into [5,300]', async () => {
   assert.equal(low.body.music_length_ms, 5 * 1000);
 });
 
+test('generateMusicFile: aborts the provider request when the user cancels', async () => {
+  const controller = new AbortController();
+  let started;
+  const providerStarted = new Promise((resolve) => { started = resolve; });
+  const run = music.generateMusicFile({
+    prompt: 'pista que será cancelada',
+    signal: controller.signal,
+    fetchImpl: async (_url, opts) => {
+      started(opts.signal);
+      return new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        }, { once: true });
+      });
+    },
+  });
+  const providerSignal = await providerStarted;
+  assert.equal(providerSignal.aborted, false);
+  controller.abort();
+  await assert.rejects(run, (err) => err?.name === 'AbortError');
+  assert.equal(providerSignal.aborted, true);
+});
+
 test('generateMusicFile: rejects empty prompt', async () => {
   await assert.rejects(
     () => music.generateMusicFile({ prompt: '   ', fetchImpl: makeFakeFetch({}) }),

@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { signalWithTimeout, throwIfAborted } = require('../../utils/abort-signal');
 
 const ELEVEN_API_BASE = process.env.ELEVENLABS_API_BASE || 'https://api.elevenlabs.io/v1';
 const DEFAULT_MUSIC_MODEL = process.env.ELEVENLABS_MUSIC_MODEL || 'music_v1';
@@ -89,9 +90,10 @@ function composeMusicPrompt(text, { style, mood, effect, influence } = {}) {
  * @param {string} [opts.modelId]         ElevenLabs music model (default music_v1)
  * @param {string} [opts.outputFormat]    ElevenLabs output format
  * @param {Function} [opts.fetchImpl]     injectable fetch (tests)
+ * @param {AbortSignal} [opts.signal]     user/request cancellation signal
  * @returns {Promise<{filename,audioPath,audioUrl,sizeBytes,mime,durationSeconds,modelId}>}
  */
-async function generateMusicFile({ prompt, durationSeconds, modelId, outputFormat, fetchImpl } = {}) {
+async function generateMusicFile({ prompt, durationSeconds, modelId, outputFormat, fetchImpl, signal } = {}) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) {
     const err = new Error('Prompt is required for music generation');
@@ -114,10 +116,11 @@ async function generateMusicFile({ prompt, durationSeconds, modelId, outputForma
   const seconds = clampSeconds(durationSeconds, 30);
   const resolvedModelId = String(modelId || '').trim() || DEFAULT_MUSIC_MODEL;
   const resolvedFormat = String(outputFormat || '').trim() || DEFAULT_OUTPUT_FORMAT;
+  throwIfAborted(signal);
 
   const resp = await doFetch(`${ELEVEN_API_BASE}/music`, {
     method: 'POST',
-    signal: AbortSignal.timeout(MUSIC_TIMEOUT_MS),
+    signal: signalWithTimeout(signal, MUSIC_TIMEOUT_MS),
     headers: {
       'xi-api-key': process.env.ELEVENLABS_API_KEY,
       'Content-Type': 'application/json',
@@ -148,7 +151,9 @@ async function generateMusicFile({ prompt, durationSeconds, modelId, outputForma
     throw err;
   }
 
+  throwIfAborted(signal);
   const audioBuffer = Buffer.from(await resp.arrayBuffer());
+  throwIfAborted(signal);
   if (!audioBuffer || audioBuffer.length === 0) {
     const err = new Error('ElevenLabs returned no audio');
     err.code = 'EMPTY_AUDIO';
@@ -158,6 +163,7 @@ async function generateMusicFile({ prompt, durationSeconds, modelId, outputForma
   ensureDir(audioDir);
   const filename = generatedMusicFilename('music');
   const audioPath = path.join(audioDir, filename);
+  throwIfAborted(signal);
   fs.writeFileSync(audioPath, audioBuffer);
 
   return {

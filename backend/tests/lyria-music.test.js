@@ -83,6 +83,30 @@ test('generateLyriaMusicFile: surfaces a mid-stream error with no audio', async 
   );
 });
 
+test('generateLyriaMusicFile: aborts the OpenRouter stream when the user cancels', async () => {
+  const controller = new AbortController();
+  let started;
+  const providerStarted = new Promise((resolve) => { started = resolve; });
+  const run = lyria.generateLyriaMusicFile({
+    prompt: 'pista cancelable',
+    signal: controller.signal,
+    fetchImpl: async (_url, opts) => {
+      started(opts.signal);
+      return new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        }, { once: true });
+      });
+    },
+  });
+  const providerSignal = await providerStarted;
+  controller.abort();
+  await assert.rejects(run, (err) => err?.name === 'AbortError');
+  assert.equal(providerSignal.aborted, true);
+});
+
 test('generateLyriaMusicFile: rejects empty prompt', async () => {
   await assert.rejects(
     () => lyria.generateLyriaMusicFile({ prompt: '  ', fetchImpl: async () => sseResponse([]) }),

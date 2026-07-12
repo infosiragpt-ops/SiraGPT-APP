@@ -68,6 +68,7 @@ const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
+const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -6812,9 +6813,20 @@ router.post(
     const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
       ? req.body.voiceSettings
       : undefined;
+    const requestAbort = bindRequestAbort(req, res);
 
     try {
-      const result = await elevenLabsTts.generateSpeechFile({ text, voiceId, modelId, voiceSettings });
+      const result = await elevenLabsTts.generateSpeechFile({
+        text,
+        voiceId,
+        modelId,
+        voiceSettings,
+        signal: requestAbort.signal,
+      });
+      if (requestAbort.signal.aborted) {
+        await fs.unlink(result.audioPath).catch(() => {});
+        return;
+      }
 
       const artifact = {
         id: `speech-${result.filename}`,
@@ -6866,6 +6878,10 @@ router.post(
         modelId: result.modelId,
       });
     } catch (error) {
+      if (requestAbort.signal.aborted || isAbortError(error)) {
+        console.info('[ai/generate-speech] cancelled by client');
+        return;
+      }
       console.error('[ai/generate-speech] error:', error?.message || error);
       const status = error?.code === 'TEXT_REQUIRED' ? 400
         : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
@@ -6874,6 +6890,8 @@ router.post(
         ok: false,
         error: 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
       });
+    } finally {
+      requestAbort.cleanup();
     }
   }
 );
@@ -6907,6 +6925,7 @@ router.post(
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
     const selectedModel = String(req.body.model || '').trim();
     const wantsLyria = /lyria/i.test(selectedModel);
+    const requestAbort = bindRequestAbort(req, res);
 
     // Fold the composer's visible settings into the prompt so Style / Mood /
     // Effect / Prompt-influence actually shape the track (displayed prompt = text).
@@ -6935,12 +6954,13 @@ router.post(
     for (const provider of order) {
       try {
         result = provider === 'lyria'
-          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds })
-          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds });
+          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal })
+          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
         usedProvider = provider;
         break;
       } catch (err) {
         lastErr = err;
+        if (requestAbort.signal.aborted || isAbortError(err)) break;
         console.warn(`[ai/generate-music] ${provider} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
         // Only fall through on credit/quota/rate exhaustion; hard errors stop here.
         if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED') break;
@@ -6948,6 +6968,11 @@ router.post(
     }
 
     if (!result) {
+      if (requestAbort.signal.aborted || isAbortError(lastErr)) {
+        console.info('[ai/generate-music] cancelled by client');
+        requestAbort.cleanup();
+        return;
+      }
       const code = lastErr?.code;
       const status = code === 'PROMPT_REQUIRED' ? 400
         : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED') ? 503
@@ -6962,6 +6987,12 @@ router.post(
             ? 'El servicio de música no está configurado.'
             : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
+    }
+
+    if (requestAbort.signal.aborted) {
+      await fs.unlink(result.audioPath).catch(() => {});
+      requestAbort.cleanup();
+      return;
     }
 
     const modelLabel = usedProvider === 'lyria' ? 'Lyria 3 Pro' : 'ElevenLabs Music';
@@ -7000,7 +7031,7 @@ router.post(
       }
     }
 
-    return res.json({
+    const response = res.json({
       ok: true,
       provider: usedProvider,
       model: modelLabel,
@@ -7011,6 +7042,8 @@ router.post(
       chatId,
       durationSeconds: result.durationSeconds,
     });
+    requestAbort.cleanup();
+    return response;
   }
 );
 

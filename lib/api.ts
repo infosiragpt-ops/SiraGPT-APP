@@ -2647,7 +2647,7 @@ class ApiClient {
       style?: number;
       use_speaker_boost?: boolean;
     };
-  }): Promise<{
+  }, options: { signal?: AbortSignal } = {}): Promise<{
     ok: boolean;
     artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
     content: string;
@@ -2658,6 +2658,14 @@ class ApiClient {
     return this.request('/ai/generate-speech', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
+      // Long narrations can legitimately take longer than the generic 30s
+      // API ceiling. Keep the browser alive slightly longer than the
+      // provider-side timeout while still allowing immediate user aborts.
+      timeoutMs: 150000,
+      // Speech generation is billable. A transport retry could create a
+      // second audio file after the first provider call already succeeded.
+      maxRetries: 0,
     });
   }
 
@@ -2670,7 +2678,7 @@ class ApiClient {
     effect?: string;
     influence?: number;
     model?: string;
-  }): Promise<{
+  }, options: { signal?: AbortSignal } = {}): Promise<{
     ok: boolean;
     provider?: string;
     model?: string;
@@ -2683,6 +2691,7 @@ class ApiClient {
     return this.request('/ai/generate-music', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
       // Music generation runs synchronously inside the request and can take a
       // while for long (3–4 min) tracks. Give it a generous ceiling and never
       // retry — a retry would double-bill ElevenLabs credits.
