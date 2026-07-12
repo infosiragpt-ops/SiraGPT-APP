@@ -5044,6 +5044,10 @@ footer {
   opacity: 0.8;
   mix-blend-mode: screen;
 }
+.composer-surface.composer-liquid-surface::before {
+  content: none;
+  display: none !important;
+}
 .composer-liquid-surface::after {
   inset: auto -12% -42% 42%;
   width: 58%;
@@ -5057,37 +5061,40 @@ footer {
 }
 
 .composer-surface {
-  border: 1px solid hsl(220 13% 89% / 0.9);
-  border-radius: 1.75rem;
+  isolation: isolate;
+  border: 1px solid hsl(220 13% 86% / 0.86);
+  border-radius: 1.5rem;
   background-color: hsl(0 0% 100%);
-  /* Layered elevation (tight contact + soft ambient) instead of one flat
-     blob — mirrors the dark-mode composer's design language. */
   box-shadow:
-    0 1px 2px hsl(220 30% 18% / 0.05),
-    0 10px 28px -14px hsl(220 30% 18% / 0.14);
-  transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    0 1px 2px hsl(220 28% 14% / 0.045),
+    0 14px 34px -24px hsl(220 30% 18% / 0.28);
+  transition:
+    border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* Focus is the only place accent appears (design spec): typing gently lifts
-   the card with a whisper of violet — same behavior dark mode already has. */
+.composer-surface:hover {
+  border-color: hsl(220 13% 81% / 0.92);
+}
+
 .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.35);
+  border-color: hsl(var(--accent-violet) / 0.46);
   box-shadow:
-    0 0 0 1px hsl(var(--accent-violet) / 0.22),
-    0 1px 2px hsl(220 30% 18% / 0.05),
-    0 14px 34px -14px hsl(220 30% 18% / 0.2);
+    0 0 0 3px hsl(var(--accent-violet) / 0.08),
+    0 1px 2px hsl(220 28% 14% / 0.045),
+    0 16px 38px -24px hsl(220 30% 18% / 0.32);
 }
 
 .composer-input-row {
   display: grid !important;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: minmax(2rem, auto) auto;
+  grid-template-rows: minmax(1.5rem, auto) auto;
   align-items: end;
-  column-gap: 0.75rem;
-  row-gap: 0.45rem;
-  min-height: 5.9rem;
-  padding: 1rem 1rem 0.82rem !important;
+  column-gap: 0.625rem;
+  row-gap: 0.25rem;
+  min-height: 5.5rem;
+  padding: 0.625rem 0.75rem 0.5rem !important;
 }
 
 .composer-input-row > :first-child {
@@ -5108,7 +5115,29 @@ footer {
   grid-row: 2;
   justify-self: end;
   align-self: center;
+  min-height: 2.75rem;
   max-width: 100%;
+  gap: 0.375rem !important;
+}
+
+.composer-input-row .composer-toolbar-actions > button {
+  width: 2.75rem !important;
+  min-width: 2.75rem;
+  height: 2.75rem !important;
+  min-height: 2.75rem;
+}
+
+.composer-input-row .composer-model-inline .chat-model-trigger {
+  min-height: 2.75rem;
+  border-radius: 0.875rem;
+  padding-inline: 0.625rem;
+  background-color: hsl(220 14% 97% / 0.72);
+}
+
+.composer-input-row .composer-model-inline .chat-model-trigger:hover,
+.composer-input-row .composer-model-inline .chat-model-trigger[data-state="open"] {
+  border-color: hsl(220 13% 86% / 0.76);
+  background-color: hsl(220 14% 95% / 0.92);
 }
 
 .composer-inline-active-tools {
@@ -5139,6 +5168,10 @@ footer {
   position: relative;
   isolation: isolate;
   overflow: hidden;
+  width: 2.75rem !important;
+  min-width: 2.75rem;
+  height: 2.75rem !important;
+  min-height: 2.75rem;
   /* Calm resting state: hairline border + near-flat surface + one soft
      contact shadow. The embossed-sphere insets read dated next to the
      otherwise flat composer; the liquid shimmer stays on hover (below). */
@@ -5231,8 +5264,8 @@ footer {
   grid-template-rows: minmax(0, auto) auto;
   align-items: end;
   column-gap: 0.625rem;
-  row-gap: 0.5rem;
-  padding: 0.875rem 0.875rem 0.625rem !important;
+  row-gap: 0.375rem;
+  padding: 0.75rem 0.75rem 0.5rem !important;
 }
 
 .composer-input-row[data-expanded="true"] > :first-child {
@@ -5480,15 +5513,19 @@ button.anti-bribery-context-chip:not(:disabled):active {
 }
 @media (max-width: 640px) {
   .composer-surface {
-    border-radius: 1.85rem;
+    border-radius: 1.5rem;
   }
   .composer-input-row {
-    column-gap: 0.6rem;
-    min-height: 6rem;
-    padding: 0.95rem 0.82rem 0.78rem !important;
+    column-gap: 0.5rem;
+    min-height: 5.5rem;
+    padding: 0.625rem 0.625rem 0.5rem !important;
   }
   .composer-input-row .composer-toolbar-actions {
-    gap: 0.35rem;
+    gap: 0.25rem !important;
+  }
+  .composer-input-row .composer-model-inline .chat-model-trigger {
+    height: 2.75rem !important;
+    min-height: 2.75rem;
   }
   .composer-textarea-shell .composer-textarea {
     min-height: 2.35rem !important;
@@ -5511,16 +5548,19 @@ button.anti-bribery-context-chip:not(:disabled):active {
 /* ─── Composer — premium dark surface ────────────────────────────── */
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
-  border: 1px solid hsl(var(--composer-border));
-  box-shadow: 0 2px 12px -4px rgba(0, 0, 0, 0.5);
+  border: 1px solid hsl(var(--composer-border) / 0.88);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.32),
+    0 16px 36px -24px rgba(0, 0, 0, 0.86);
   transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .dark .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.45);
-  box-shadow: 0 0 0 1px hsl(var(--accent-violet) / 0.35),
-              0 14px 38px rgba(0, 0, 0, 0.36);
+  border-color: hsl(var(--accent-violet) / 0.5);
+  box-shadow:
+    0 0 0 3px hsl(var(--accent-violet) / 0.12),
+    0 18px 42px -24px rgba(0, 0, 0, 0.92);
 }
 
 
@@ -7066,31 +7106,11 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   position: relative;
 }
 .composer-focus-glow::before {
-  content: "";
-  position: absolute;
-  inset: 0; /* the pill clips overflow, so the ring hugs the inner edge */
-  border-radius: inherit;
-  padding: 1.5px;
-  background: conic-gradient(
-    from var(--sira-glow-angle, 0deg),
-    transparent 0%,
-    hsl(var(--primary) / 0.45) 18%,
-    rgba(139, 92, 246, 0.5) 38%,
-    hsl(var(--primary) / 0.3) 58%,
-    transparent 78%
-  );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity 0.35s ease;
-  pointer-events: none;
-  z-index: 0;
+  content: none;
+  display: none;
 }
 .composer-focus-glow:focus-within::before {
-  opacity: 1;
-  animation: sira-glow-spin 7s linear infinite;
+  animation: none;
 }
 @keyframes sira-glow-spin {
   to {
