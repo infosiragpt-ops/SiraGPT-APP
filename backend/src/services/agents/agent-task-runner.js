@@ -1564,6 +1564,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     systemContract,
     files = [],
     fileMetadata = [],
+    preferRecentArtifact = false,
     chatId = null,
     model = 'gpt-4o',
     maxSteps = 100,
@@ -1575,10 +1576,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
-  let wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
+  const hasEditableDocumentContext = hasAttachedFiles || Boolean(preferRecentArtifact);
+  let wantsSourcePreservingEdit = Boolean(preferRecentArtifact)
+    || isSourcePreservingEditRequest(displayGoal || goal, files);
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
     hasAttachedFiles;
-  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasAttachedFiles) {
+  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasEditableDocumentContext) {
     throw new Error('OPENAI_API_KEY not configured');
   }
 

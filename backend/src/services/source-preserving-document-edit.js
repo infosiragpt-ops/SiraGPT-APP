@@ -474,6 +474,15 @@ async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, 
   return dedupeFiles([...dbArtifacts, ...messageArtifacts]);
 }
 
+async function hasRecentGeneratedArtifactSource(prisma, { userId, chatId } = {}) {
+  const artifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, {
+    userId,
+    chatId,
+    limit: 1,
+  });
+  return artifacts.length > 0;
+}
+
 function artifactIdFromUrl(url = '') {
   const match = String(url || '').match(/\/api\/agent\/artifact\/([^/?#]+)/);
   return match ? decodeURIComponent(match[1]) : '';
@@ -6259,6 +6268,7 @@ module.exports = {
   fillDocxCronogramaSectionBuffer,
   fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
+  hasRecentGeneratedArtifactSource,
   inferDocumentTitle,
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,

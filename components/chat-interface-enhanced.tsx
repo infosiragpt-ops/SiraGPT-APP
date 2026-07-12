@@ -49,6 +49,7 @@ import {
   Star,
   Disc3,
   Menu as MenuIcon,
+  BriefcaseBusiness,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -111,7 +112,7 @@ import { apiClient } from "@/lib/api"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -999,6 +1000,8 @@ const ActionsDropdown = ({
   chatType,
   setChatType,
   currentPlan,
+  isWorkModeActive,
+  setIsWorkModeActive,
   isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
@@ -1439,6 +1442,30 @@ const ActionsDropdown = ({
             accept="image/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
             onChange={handleFilesSelected}
           />
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onSelect={(event) => {
+              event.preventDefault();
+              setChatType('text');
+              setIsWorkModeActive(!isWorkModeActive);
+              setIsOpen(false);
+            }}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-950/40">
+                <BriefcaseBusiness className="h-4 w-4 text-[#FF0000]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">
+                  {isWorkModeActive ? 'Trabajo activo' : 'Trabajo'}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Planifica, ejecuta y entrega archivos
+                </div>
+              </div>
+              {isWorkModeActive && <div className="h-2 w-2 shrink-0 rounded-full bg-[#FF0000]" />}
+            </div>
+          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -2133,6 +2160,8 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
 }, areActiveOptionsDisplayPropsEqual);
 // Active Tools Display Component - Shows INSIDE the textarea at the bottom
 const ActiveToolsDisplay = ({
+  isWorkModeActive,
+  setIsWorkModeActive,
   isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
@@ -2222,6 +2251,8 @@ const ActiveToolsDisplay = ({
   handleWordConnectorToggle,
   handleExcelConnectorToggle
 }: {
+  isWorkModeActive: boolean;
+  setIsWorkModeActive: (value: boolean) => void;
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
   isImageGenerationActive: boolean;
@@ -2341,7 +2372,7 @@ const ActiveToolsDisplay = ({
   ].filter(Boolean) as { id: string; label: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
+  const hasOtherTools = isWorkModeActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
   const visibleImageAspectRatioOptions = React.useMemo(
     () => IMAGE_ASPECT_RATIO_OPTIONS.filter(option => showAllImageRatios || option.visibleByDefault || option.value === selectedImageAspectRatio),
@@ -2691,6 +2722,21 @@ const ActiveToolsDisplay = ({
           </button>
         </span>
       ))}
+      {isWorkModeActive && (
+        <div className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-red-200 bg-red-50 py-0 pl-2.5 pr-1.5 text-xs font-medium text-red-700 dark:border-red-900/70 dark:bg-red-950/35 dark:text-red-300">
+          <BriefcaseBusiness className="h-3.5 w-3.5 shrink-0" />
+          <span>Trabajo</span>
+          <button
+            type="button"
+            onClick={() => setIsWorkModeActive(false)}
+            aria-label="Cerrar modo Trabajo"
+            title="Cerrar modo Trabajo"
+            className="ml-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full transition-colors hover:bg-red-100 dark:hover:bg-red-900/50"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       {isWebSearchActive && (
         <div
           className="group/web-search-tool flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
@@ -4545,6 +4591,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   );
 }, areNavbarModelSelectorPropsEqual);
 
+const WORK_MODE_STORAGE_KEY = 'sira:chat:work-mode';
+
 export default function ChatInterface() {
   return <ChatInterfaceContent />
 }
@@ -5125,6 +5173,18 @@ function ChatInterfaceContent() {
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
+  const [isWorkModeActive, setIsWorkModeActiveState] = React.useState(false);
+  React.useEffect(() => {
+    try {
+      setIsWorkModeActiveState(window.localStorage.getItem(WORK_MODE_STORAGE_KEY) === '1');
+    } catch { /* storage can be disabled without breaking chat */ }
+  }, []);
+  const setIsWorkModeActive = React.useCallback((value: boolean) => {
+    setIsWorkModeActiveState(value);
+    try {
+      window.localStorage.setItem(WORK_MODE_STORAGE_KEY, value ? '1' : '0');
+    } catch { /* storage can be disabled without breaking chat */ }
+  }, []);
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
   const isWebSearchActiveRef = React.useRef(isWebSearchActive);
   React.useEffect(() => {
@@ -8397,21 +8457,37 @@ REWRITTEN TEXT:`;
     // "derivada" → math, "imagen" → image), keep image-only turns out of the
     // agent loop entirely — the vision path reads the image and responds.
     const imageOnlyTurn = isImageOnlyAttachmentTurn(filesToSend);
+    const hasDedicatedConnector = isGmailActive
+      || isGoogleCalendarActive
+      || isGoogleDriveActive
+      || isSpotifyActive
+      || isComputerUseActive
+      || isWordConnectorActive
+      || isExcelConnectorActive;
+    const hasMediaGenerator = isImageGenerationActive
+      || isVoiceGenerationActive
+      || isMusicGenerationActive
+      || isVideoGenerationActive;
+    const shouldUseWorkModeAgent = isWorkModeActive
+      && !hasDedicatedConnector
+      && !hasMediaGenerator
+      && shouldRouteWorkModePromptThroughAgentTask(msg, filesToSend);
     // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
     // enter the durable agent-task path. That backend path owns the current
     // source-preserving Office/PDF editor, artifact persistence and validation.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
-    const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
-      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
-      && !imageOnlyTurn
-      // Same gate as the semantic switch below: no-file analytical turns
-      // (web lookups, formulas, charts) belong on the RELIABLE inline
-      // /generate agentic loop, not the durable queued path. Without this,
-      // the deterministic fast-path queued "busca en la web…" style prompts
-      // straight into the agent-task pipeline and the chat froze on
-      // "Analizando solicitud" whenever the worker/relay hiccupped.
-      && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend);
+    const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
+      || (deterministicAgenticIntent
+        && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
+        && !imageOnlyTurn
+        // Same gate as the semantic switch below: no-file analytical turns
+        // (web lookups, formulas, charts) belong on the RELIABLE inline
+        // /generate agentic loop, not the durable queued path. Without this,
+        // the deterministic fast-path queued "busca en la web…" style prompts
+        // straight into the agent-task pipeline and the chat froze on
+        // "Analizando solicitud" whenever the worker/relay hiccupped.
+        && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend));
 
     if (shouldStartAgenticLoopImmediately) {
       try {
@@ -9767,7 +9843,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // Any active tool/connector/thesis mode? Used to conditionally render active
   // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
-    isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
+    isWorkModeActive || isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
@@ -9803,6 +9879,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // but the prop contract is identical, so centralising it avoids
   // drift between the two composer instances (initial vs in-chat).
   const activeToolsProps = {
+    isWorkModeActive, setIsWorkModeActive,
     isWebSearchActive, setIsWebSearchActive,
     isImageGenerationActive, setIsImageGenerationActive,
     isGeneratingImage,
@@ -11222,6 +11299,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           chatType={chatType}
                           setChatType={setChatType}
                           currentPlan={currentPlan}
+                          isWorkModeActive={isWorkModeActive}
+                          setIsWorkModeActive={setIsWorkModeActive}
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}
                           isImageGenerationActive={isImageGenerationActive}
@@ -11319,7 +11398,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                               ? tComposer("placeholderSpotify")
                                               : isWordConnectorActive
                                                 ? tComposer("placeholderWord")
-                                                : tComposer("placeholderDefault")
+                                                : isWorkModeActive
+                                                  ? "Describe el resultado que quieres obtener"
+                                                  : tComposer("placeholderDefault")
                             }
                             className={cn(
                               "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
@@ -11798,6 +11879,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               chatType={chatType}
                               setChatType={setChatType}
                               currentPlan={currentPlan}
+                              isWorkModeActive={isWorkModeActive}
+                              setIsWorkModeActive={setIsWorkModeActive}
                               isWebSearchActive={isWebSearchActive}
                               setIsWebSearchActive={setIsWebSearchActive}
                               isImageGenerationActive={isImageGenerationActive}
@@ -11892,7 +11975,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                                   ? tComposer("placeholderSpotify")
                                                   : isWordConnectorActive
                                                     ? tComposer("placeholderWord")
-                                                    : tComposer("placeholderDefault")
+                                                    : isWorkModeActive
+                                                      ? "Describe el resultado que quieres obtener"
+                                                      : tComposer("placeholderDefault")
                                 }
                                 className={cn(
                                   "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",

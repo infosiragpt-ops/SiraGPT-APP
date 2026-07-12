@@ -890,6 +890,23 @@ export function isLightweightConversationalPrompt(prompt: string): boolean {
   return false
 }
 
+/**
+ * Explicit Trabajo mode mirrors the product split used by agent workspaces:
+ * greetings stay fast and conversational, while substantive prompts and
+ * document/data attachments enter the durable task runtime. Image-only turns
+ * remain on the vision path because the queued agent does not receive pixels.
+ */
+export function shouldRouteWorkModePromptThroughAgentTask(prompt: string, files: any[] = []): boolean {
+  const normalizedFiles = Array.isArray(files) ? files.filter(Boolean) : []
+  if (normalizedFiles.length > 0) {
+    return !isImageOnlyAttachmentTurn(normalizedFiles)
+  }
+
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return false
+  return !isLightweightConversationalPrompt(normalized)
+}
+
 export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files: any[] = []): boolean {
   const normalized = normalizePrompt(prompt)
   if (GOAL_COMMAND_RE.test(prompt)) return true

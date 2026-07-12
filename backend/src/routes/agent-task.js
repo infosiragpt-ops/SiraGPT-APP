@@ -104,10 +104,30 @@ const {
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+const {
+  hasRecentGeneratedArtifactSource,
+  isSourcePreservingEditRequest,
+} = require('../services/source-preserving-document-edit');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
 })();
+
+const GENERATED_DOCUMENT_CONTEXT = [{
+  originalName: 'documento-generado.docx',
+  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}];
+
+function shouldResumeGeneratedArtifactForDocumentFollowup({
+  goal,
+  providedFileIds = [],
+  hasGeneratedArtifact = false,
+} = {}) {
+  if (!hasGeneratedArtifact) return false;
+  if (Array.isArray(providedFileIds) && providedFileIds.length > 0) return false;
+  if (!looksLikeDocumentFollowupQuestion(goal)) return false;
+  return isSourcePreservingEditRequest(goal, GENERATED_DOCUMENT_CONTEXT);
+}
 
 // ── Utility: safe JSON serialization ──────────────────────────────
 // Never throws on circular refs, BigInt, Symbol, or undefined values.
@@ -1086,14 +1106,33 @@ router.post(
     try {
       const providedNow = Array.isArray(req.body.files) ? req.body.files.map(String).filter(Boolean) : [];
       if (providedNow.length === 0 && req.body.chatId && looksLikeDocumentFollowupQuestion(req.body.goal)) {
-        const reattached = await resolveChatDocumentFileIds(prisma, {
+        const hasGeneratedArtifact = await hasRecentGeneratedArtifactSource(prisma, {
           userId: req.user?.id,
           chatId: String(req.body.chatId),
-          providedFileIds: providedNow,
         });
-        if (Array.isArray(reattached) && reattached.length > 0) {
-          req.body.files = reattached;
-          console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+        const resumeGeneratedArtifact = shouldResumeGeneratedArtifactForDocumentFollowup({
+          goal: req.body.goal,
+          providedFileIds: providedNow,
+          hasGeneratedArtifact,
+        });
+
+        if (resumeGeneratedArtifact) {
+          // Keep files empty deliberately. The document runtime will resolve the
+          // latest owner-scoped generated artifact from this chat and edit that
+          // version, preserving every previous turn instead of rebasing onto the
+          // original upload.
+          req.body.preferRecentArtifact = true;
+          console.log('[agent-task] continuing edit from latest generated chat artifact');
+        } else {
+          const reattached = await resolveChatDocumentFileIds(prisma, {
+            userId: req.user?.id,
+            chatId: String(req.body.chatId),
+            providedFileIds: providedNow,
+          });
+          if (Array.isArray(reattached) && reattached.length > 0) {
+            req.body.files = reattached;
+            console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+          }
         }
       }
     } catch (reattachErr) {
@@ -1103,13 +1142,21 @@ router.post(
     const requestedFileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
-    const canUseLocalDocumentRuntime = requestedFileIds.length > 0 || isTranscriptionRequest(String(req.body.goal || ''));
+    const canUseLocalDocumentRuntime = requestedFileIds.length > 0
+      || Boolean(req.body.preferRecentArtifact)
+      || isTranscriptionRequest(String(req.body.goal || ''));
     if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
       return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
     }
 
     if (process.env.AGENT_TASK_INLINE !== '1') {
       return handleQueuedTaskRequest(req, res);
+    }
+    if (req.body.preferRecentArtifact) {
+      return handleLocalTaskRequest(req, res, {
+        fallbackReason: 'generated_artifact_continuation',
+        fallbackDetail: 'continue editing the latest generated document in this chat',
+      });
     }
     if (!process.env.OPENAI_API_KEY && canUseLocalDocumentRuntime) {
       return handleLocalTaskRequest(req, res, { fallbackReason: 'openai_not_configured' });
@@ -2063,6 +2110,7 @@ async function handleQueuedTaskRequest(req, res) {
     systemContract,
     files: fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     chatId,
     model,
     maxSteps,
@@ -2108,6 +2156,7 @@ async function handleQueuedTaskRequest(req, res) {
     systemContract,
     fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     model,
     maxSteps,
     maxRuntimeMs,
@@ -2273,6 +2322,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     systemContract,
     fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     model,
     maxSteps,
     maxRuntimeMs,
@@ -2342,6 +2392,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     systemContract,
     files: fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     chatId,
     model,
     maxSteps,
@@ -3273,6 +3324,7 @@ router.INTERNAL = {
   reduceAgentState,
   safeJsonStringify,
   resolveQueuedStreamTimeoutMs,
+  shouldResumeGeneratedArtifactForDocumentFollowup,
   shouldRunAttachmentTaskLocally,
   shortLabel,
   streamTaskEvents,

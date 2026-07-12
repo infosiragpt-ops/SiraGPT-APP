@@ -13,6 +13,7 @@ import {
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
+  shouldRouteWorkModePromptThroughAgentTask,
   isImageAnalysisPrompt,
   isImageOnlyAttachmentTurn,
   shouldUseFastTextRoute,
@@ -562,6 +563,31 @@ describe("ai-service · deterministic intent routing", () => {
     for (const intent of ["gmail", "google_services", "image", "video", "figma", "artifact", "webdev", "plan"] as const) {
       assert.equal(shouldRouteThroughAgenticRuntime(intent), false)
     }
+  })
+
+  it("keeps Trabajo conversational for greetings and durable for real work", () => {
+    assert.equal(shouldRouteWorkModePromptThroughAgentTask("hola"), false)
+    assert.equal(shouldRouteWorkModePromptThroughAgentTask("gracias"), false)
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("crea un informe Word profesional con conclusiones"),
+      true,
+    )
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("investiga el mercado y entrega una hoja de cálculo"),
+      true,
+    )
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("edita este archivo", [
+        { name: "informe.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+      ]),
+      true,
+    )
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("describe esta imagen", [
+        { name: "captura.png", mimeType: "image/png" },
+      ]),
+      false,
+    )
   })
 
   it("adds professional execution contracts without replacing the user prompt", () => {

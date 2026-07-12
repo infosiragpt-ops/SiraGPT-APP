@@ -42,6 +42,38 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
   assert.equal(state.meta.goal, 'Investiga fuentes');
 });
 
+test('agent task route: continues edits from the latest generated document', () => {
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: 'Cambia el título de mi documento y agrega una conclusión',
+      hasGeneratedArtifact: true,
+    }),
+    true,
+  );
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: 'Cambia el título de mi documento',
+      providedFileIds: ['new-upload'],
+      hasGeneratedArtifact: true,
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: 'Cambia el título de mi documento',
+      hasGeneratedArtifact: false,
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: '¿De qué trata mi documento?',
+      hasGeneratedArtifact: true,
+    }),
+    false,
+  );
+});
+
 test('agent task route: safeJsonStringify keeps oversized SSE events parseable', () => {
   const serialized = INTERNAL.safeJsonStringify({
     type: 'framework_status',
