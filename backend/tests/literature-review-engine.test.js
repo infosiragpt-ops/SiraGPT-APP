@@ -41,6 +41,8 @@ test('analyzeQuery: separates the scientific topic from ranking and metadata ins
   assert.ok(r.searchQueries.some((q) => /self-regulated learning/i.test(q)), `queries=${r.searchQueries}`);
   assert.ok(r.searchQueries.some((q) => /higher education/i.test(q)), `queries=${r.searchQueries}`);
   assert.ok(r.searchQueries.every((q) => !/doi|pertinencia|verificable/i.test(q)), `queries=${r.searchQueries}`);
+  assert.ok(r.conceptGroups.some((group) => group.includes('aprendizaje autorregulado')));
+  assert.ok(r.conceptGroups.some((group) => group.includes('educacion superior')));
 });
 
 test('analyzeQuery: does not activate a compound concept from one generic word', () => {

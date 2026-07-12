@@ -176,22 +176,40 @@ function extractFilters(text) {
   return filters;
 }
 
+function lexiconEntryMatches(entry, terms, fullTextLower) {
+  const haystack = ` ${stripDiacritics(String(fullTextLower || '').toLowerCase())} `;
+  return [...entry.es, ...entry.en].some((form) => {
+    const normalized = stripDiacritics(form.toLowerCase());
+    const formTerms = normalized.split(/\s+/).filter(Boolean);
+    const termMatch = formTerms.length === 1
+      ? terms.includes(formTerms[0])
+      : formTerms.every((term) => terms.includes(term));
+    return termMatch || haystack.includes(` ${normalized} `);
+  });
+}
+
+function matchedConceptGroups(terms, fullTextLower) {
+  const groups = [];
+  for (const entry of LEXICON) {
+    if (!lexiconEntryMatches(entry, terms, fullTextLower)) continue;
+    const forms = Array.from(new Set([...entry.es, ...entry.en]
+      .map((form) => stripDiacritics(form.toLowerCase()).replace(/\s+/g, ' ').trim())
+      .filter(Boolean)));
+    // Single-word synonym sets improve recall, but exact concept validation is
+    // reserved for concepts that have at least one compound form.
+    if (forms.some((form) => form.includes(' '))) groups.push(forms);
+  }
+  return groups;
+}
+
 // Expand the content terms across the bilingual lexicon: every matched concept
 // contributes its synonyms in BOTH languages. Returns a de-duplicated list of
 // expansion tokens/phrases (excluding the originals).
 function expandTerms(terms, fullTextLower) {
   const expansions = new Set();
-  const haystack = ` ${fullTextLower} `;
   for (const entry of LEXICON) {
     const all = [...entry.es, ...entry.en];
-    const matched = all.some((form) => {
-      const f = stripDiacritics(form.toLowerCase());
-      const formTerms = f.split(/\s+/).filter(Boolean);
-      const termMatch = formTerms.length === 1
-        ? terms.includes(formTerms[0])
-        : formTerms.every((term) => terms.includes(term));
-      return termMatch || haystack.includes(` ${form.toLowerCase()} `) || haystack.includes(` ${f} `);
-    });
+    const matched = lexiconEntryMatches(entry, terms, fullTextLower);
     if (matched) {
       for (const form of all) expansions.add(form.toLowerCase());
     }
@@ -232,6 +250,7 @@ function analyzeQuery(rawQuery, opts = {}) {
   const filters = extractFilters(normalized);
   const fullLower = stripDiacritics(topicText.toLowerCase());
   const expansions = expandTerms(terms, fullLower);
+  const conceptGroups = matchedConceptGroups(terms, fullLower);
 
   // Build search-query variants:
   //   1. the core content terms (literal intent, stopwords stripped)
@@ -260,6 +279,7 @@ function analyzeQuery(rawQuery, opts = {}) {
     terms,
     filters,
     expansions,
+    conceptGroups,
     searchQueries: searchQueries.slice(0, maxQueries),
   };
 }
@@ -271,5 +291,5 @@ module.exports = {
   extractFilters,
   expandTerms,
   STUDY_TYPES,
-  _internal: { stripDiacritics, retrievalText, STOPWORDS, LEXICON },
+  _internal: { stripDiacritics, retrievalText, lexiconEntryMatches, matchedConceptGroups, STOPWORDS, LEXICON },
 };

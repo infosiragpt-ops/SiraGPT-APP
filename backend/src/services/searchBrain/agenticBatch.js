@@ -142,7 +142,22 @@ function passesFilters(item, filters) {
   return true;
 }
 
-function candidateRelevance(item, queries) {
+function conceptCoverage(item, conceptGroups) {
+  if (!Array.isArray(conceptGroups) || conceptGroups.length === 0) return null;
+  const documentText = normaliseText(`${item?.title || ''} ${item?.abstract || ''}`);
+  if (!documentText) return 0;
+  let hits = 0;
+  for (const group of conceptGroups) {
+    const matched = Array.isArray(group) && group.some((form) => {
+      const phrase = normaliseText(form);
+      return phrase && documentText.includes(phrase);
+    });
+    if (matched) hits += 1;
+  }
+  return hits / conceptGroups.length;
+}
+
+function candidateRelevance(item, queries, conceptGroups) {
   const result = {
     title: item?.title,
     snippet: item?.abstract,
@@ -150,7 +165,11 @@ function candidateRelevance(item, queries) {
   };
   const cleanQueries = Array.from(new Set((queries || []).map((query) => String(query || "").trim()).filter(Boolean)));
   if (cleanQueries.length === 0) return 0;
-  const primary = scoreResult(cleanQueries[0], result);
+  const lexicalPrimary = scoreResult(cleanQueries[0], result);
+  const concepts = conceptCoverage(item, conceptGroups);
+  const primary = concepts === null
+    ? lexicalPrimary
+    : (lexicalPrimary * 0.7 + concepts * 0.3);
   let expansionBest = 0;
   for (const query of cleanQueries.slice(1)) {
     expansionBest = Math.max(expansionBest, scoreResult(query, result));
@@ -182,8 +201,8 @@ function sourceAuthority(item) {
   return sources.reduce((best, source) => Math.max(best, SOURCE_AUTHORITY[source] || 0.6), 0.6);
 }
 
-function qualityScore(item, queries) {
-  const relevance = candidateRelevance(item, queries);
+function qualityScore(item, queries, conceptGroups) {
+  const relevance = candidateRelevance(item, queries, conceptGroups);
   const corroboration = Math.min(1, Math.max(0, (Number(item?.sourceCount) || 1) - 1) / 3);
   const metadata = metadataCompleteness(item);
   const authority = sourceAuthority(item);
@@ -203,12 +222,12 @@ function qualityScore(item, queries) {
   ));
 }
 
-function rankDeterministically(items, queries) {
+function rankDeterministically(items, queries, conceptGroups) {
   return items
     .map((item) => {
-      const retrievalScore = candidateRelevance(item, queries);
+      const retrievalScore = candidateRelevance(item, queries, conceptGroups);
       const annotated = { ...item, retrievalScore };
-      return { ...annotated, qualityScore: qualityScore(annotated, queries) };
+      return { ...annotated, qualityScore: qualityScore(annotated, queries, conceptGroups) };
     })
     .sort((a, b) => (
       (b.qualityScore - a.qualityScore) ||
@@ -385,6 +404,7 @@ async function* runAgenticBatch(opts) {
   }
   if (searchQueries.length === 0) searchQueries.push(query);
   const filters = plan.filters || {};
+  const conceptGroups = Array.isArray(plan.conceptGroups) ? plan.conceptGroups : [];
   const language = opts.language || filters.language || plan.language;
   const startedAt = Date.now();
   yield {
@@ -396,6 +416,7 @@ async function* runAgenticBatch(opts) {
     providers,
     queries: searchQueries,
     filters,
+    conceptGroups,
     language,
     startedAt,
   };
@@ -451,7 +472,11 @@ async function* runAgenticBatch(opts) {
       sources: initialSources,
       sourceCount: initialSources.length,
     };
-    item.retrievalScore = candidateRelevance(item, [searchQueries[0], query, laneQuery, ...searchQueries.slice(1)]);
+    item.retrievalScore = candidateRelevance(
+      item,
+      [searchQueries[0], query, laneQuery, ...searchQueries.slice(1)],
+      conceptGroups,
+    );
     const keys = identityKeys(item);
     let index;
     for (const key of keys) {
@@ -657,7 +682,11 @@ async function* runAgenticBatch(opts) {
     return;
   }
 
-  const deterministic = rankDeterministically(collected, [searchQueries[0], query, ...searchQueries.slice(1)]);
+  const deterministic = rankDeterministically(
+    collected,
+    [searchQueries[0], query, ...searchQueries.slice(1)],
+    conceptGroups,
+  );
   const rerankPoolSize = Math.min(
     deterministic.length,
     Math.max(topK, Math.min(100, topK * 5)),
@@ -740,6 +769,7 @@ module.exports = {
     mergeCandidate,
     passesFilters,
     candidateRelevance,
+    conceptCoverage,
     sourceAuthority,
     qualityScore,
     rankDeterministically,

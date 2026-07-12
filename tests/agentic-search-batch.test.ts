@@ -287,4 +287,40 @@ describe("agentic search batch", () => {
     assert.equal(selected[0].doi, "10.1/on")
     assert.ok(selected[0].retrievalScore > selected[1].retrievalScore)
   })
+
+  it("distinguishes higher education from basic education with the word superior", async () => {
+    let selected: any[] = []
+    for await (const evt of runAgenticBatch({
+      query: "aprendizaje autorregulado en educación superior",
+      target: 10,
+      batchSize: 5,
+      topK: 2,
+      providers: ["crossref"],
+      deps: {
+        retrieve: async () => [
+          {
+            source: "crossref",
+            title: "Aprendizaje autorregulado en Educación Básica Superior",
+            doi: "10.1/basic",
+            url: "https://doi.org/10.1/basic",
+            providerRank: 0,
+          },
+          {
+            source: "crossref",
+            title: "Aprendizaje autorregulado en educación superior universitaria",
+            doi: "10.1/higher",
+            url: "https://doi.org/10.1/higher",
+            providerRank: 1,
+          },
+        ],
+        rerank: async ({ results }: any) => ({ results, reranked: false }),
+        sleep: async () => undefined,
+      },
+    })) {
+      if (evt.type === "selected") selected = evt.sources || []
+    }
+
+    assert.equal(selected[0].doi, "10.1/higher")
+    assert.ok(selected[0].retrievalScore > selected[1].retrievalScore)
+  })
 })
