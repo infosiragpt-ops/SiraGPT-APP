@@ -272,6 +272,10 @@ test('production activates hashed sessions only after the compatibility rollout'
   const localCompose = read('docker-compose.yml');
 
   assert.match(productionCompose, /SESSION_TOKEN_HASH_MODE:\s+\$\{SESSION_TOKEN_HASH_MODE:-hash\}/);
+  assert.match(
+    productionCompose,
+    /SESSION_TOKEN_HASH_COMPAT_DRAINED:\s+\$\{SESSION_TOKEN_HASH_COMPAT_DRAINED:-1\}/,
+  );
   assert.match(localCompose, /SESSION_TOKEN_HASH_MODE:\s+"\$\{SESSION_TOKEN_HASH_MODE:-compat\}"/);
 });
 
