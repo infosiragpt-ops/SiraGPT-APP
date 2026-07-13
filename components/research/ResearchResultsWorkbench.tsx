@@ -224,8 +224,8 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
   }
 
   return (
-    <section className="min-w-0" aria-label="Resultados de investigación">
-      <div className={cn("flex flex-wrap items-center gap-2 border-b border-border/50", compact ? "px-4 py-3" : "px-4 py-3.5") }>
+    <section className="w-full min-w-0 max-w-full overflow-hidden whitespace-normal font-sans" aria-label="Resultados de investigación">
+      <div className={cn("flex min-w-0 flex-wrap items-center gap-2 border-b border-border/50", compact ? "px-3 py-3 sm:px-4" : "px-3 py-3 sm:px-4 sm:py-3.5") }>
         <Button type="button" variant={filtersOpen ? "secondary" : "outline"} size="sm" onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>
           <SlidersHorizontal className="mr-2 h-4 w-4" />Filtros{activeFilterCount ? ` (${activeFilterCount})` : ""}
         </Button>
@@ -295,7 +295,7 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
       </div>
 
       {visible.length ? (
-        <ol className="space-y-2 px-3 pb-3">
+        <ol className="min-w-0 space-y-2 px-2 pb-3 sm:px-3">
           {visible.map((source, index) => {
             const identity = researchSourceIdentity(source, index)
             const isExpanded = expanded.has(identity)
@@ -305,18 +305,18 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
             const meta = [authors, source.year || null, source.journal || source.venue || null].filter(Boolean).join(" · ")
             return (
               <li key={identity}>
-                <article className={cn("rounded-lg border bg-background p-3 transition-colors", isSelected ? "border-foreground/40" : "border-border/60")}>
-                  <div className="flex items-start gap-3">
+                <article className={cn("w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-background p-3 transition-colors", isSelected ? "border-foreground/40" : "border-border/60")}>
+                  <div className="flex min-w-0 items-start gap-3">
                     <label className="mt-0.5 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border" title="Seleccionar para comparar">
                       <input type="checkbox" className="sr-only" checked={isSelected} onChange={() => toggleSelected(source, index)} aria-label={`Seleccionar ${source.title || "estudio"} para comparar`} />
                       {isSelected ? <Check className="h-4 w-4" /> : <span className="text-[11px] text-muted-foreground">{index + 1}</span>}
                     </label>
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-3">
-                        <h3 className="text-sm font-semibold leading-5">{source.title || "Fuente sin título"}</h3>
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <h3 className="min-w-0 flex-1 break-words text-sm font-semibold leading-5 [overflow-wrap:anywhere]">{source.title || "Fuente sin título"}</h3>
                         <span className="shrink-0 text-xs font-medium text-muted-foreground">{researchCitationCount(source).toLocaleString()} citas</span>
                       </div>
-                      {meta ? <p className="mt-1 text-xs text-muted-foreground">{meta}</p> : null}
+                      {meta ? <p className="mt-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">{meta}</p> : null}
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
                         {source.studyType ? <span className="rounded bg-muted px-1.5 py-0.5">{source.studyType.replace(/_/g, " ")}</span> : null}
                         {source.peerReviewStatus ? <span className="rounded bg-muted px-1.5 py-0.5">{source.peerReviewStatus.replace(/_/g, " ")}</span> : null}

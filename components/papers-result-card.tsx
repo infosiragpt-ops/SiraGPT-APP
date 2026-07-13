@@ -31,10 +31,10 @@ export function PapersResultCard({ data }: { data: PapersPayload }) {
   }
 
   return (
-    <div className="my-2 overflow-hidden rounded-lg border border-border/60 bg-background">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
+    <div className="my-2 w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-border/60 bg-background font-sans whitespace-normal">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-3 sm:px-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold"><BookOpen className="h-4 w-4" /><span>{total.toLocaleString()} artículos científicos</span></div>
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold"><BookOpen className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{total.toLocaleString()} artículos científicos</span></div>
           <p className="mt-1 truncate text-xs text-muted-foreground">{data?.query || "Investigación científica"} · {providers.length || "varias"} fuentes</p>
         </div>
         <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground"><Sparkles className="h-3 w-3" />Resultados verificables</span>

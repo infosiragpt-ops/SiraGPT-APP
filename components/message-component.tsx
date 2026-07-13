@@ -74,6 +74,7 @@ import { InteractiveArtifactDisplay } from './artifact/interactive-artifact-disp
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import { PapersResultCard } from "./papers-result-card"
+import { shouldUnwrapInteractiveFence } from "@/lib/interactive-message-blocks"
 import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ExtractedDataDownload from "./ExtractedDataDownload"
@@ -1471,10 +1472,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             pre: ({ children }: any) => {
                 const child = React.Children.toArray(children)[0]
                 const childProps = React.isValidElement(child) ? (child.props as any) : null
-                if (
-                    typeof childProps?.className === "string" &&
-                    childProps.className.includes("language-agent-task-state")
-                ) {
+                if (shouldUnwrapInteractiveFence(childProps?.className)) {
                     return <>{children}</>
                 }
                 return <pre>{children}</pre>
