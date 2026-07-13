@@ -220,6 +220,51 @@ export type WebSourcesPayload = {
   sources: WebSource[]
 }
 
+export type ResearchCollectionRecord = {
+  id: string
+  name: string
+  description?: string | null
+  folder?: string | null
+  tags: string[]
+  createdAt: string
+  updatedAt: string
+  _count?: { items: number }
+}
+
+export type ResearchReferenceRecord = {
+  id: string
+  title: string
+  doi?: string | null
+  authors?: Array<{ name?: string; orcid?: string | null } | string> | null
+  year?: number | null
+  venue?: string | null
+  abstract?: string | null
+  url?: string | null
+  pdfUrl?: string | null
+  source?: string | null
+  sources: string[]
+  tags: string[]
+  note?: string | null
+  citationCount?: number | null
+  openAccess?: boolean | null
+  publicationStage?: string | null
+  peerReviewStatus?: string | null
+  studyType?: string | null
+  integrityStatus?: string | null
+  collectionItems?: Array<{ collectionId: string }>
+  updatedAt: string
+}
+
+export type ResearchLibraryEnvelope = {
+  references: ResearchReferenceRecord[]
+  collections: ResearchCollectionRecord[]
+  pendingConflicts: number
+  page: number
+  limit: number
+  total: number
+  totalPages: number
+}
+
 export type MemoryItem = {
   id?: string
   fact: string
@@ -2921,6 +2966,74 @@ class ApiClient {
   async getMediaLibrary(params?: { page?: number; limit?: number; type?: 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp' }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
+  }
+
+  async getResearchLibrary(params?: { page?: number; limit?: number; search?: string; collectionId?: string }) {
+    const query = new URLSearchParams(Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)])).toString();
+    return (await this.request(`/research-library${query ? `?${query}` : ''}`)) as ResearchLibraryEnvelope;
+  }
+
+  async saveResearchReferences(data: { sources: unknown[]; collectionId?: string; collectionName?: string; folder?: string; tags?: string[]; note?: string }) {
+    return this.request('/research-library/references', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateResearchReference(id: string, data: { note?: string | null; tags?: string[]; title?: string }) {
+    return this.request(`/research-library/references/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteResearchReference(id: string) {
+    return this.request(`/research-library/references/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async createResearchCollection(data: { name: string; description?: string; folder?: string; tags?: string[] }) {
+    return this.request('/research-library/collections', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateResearchCollection(id: string, data: { name?: string; description?: string | null; folder?: string | null; tags?: string[] }) {
+    return this.request(`/research-library/collections/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteResearchCollection(id: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async addReferencesToResearchCollection(collectionId: string, referenceIds: string[]) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/references`, { method: 'POST', body: JSON.stringify({ referenceIds }) });
+  }
+
+  async exportResearchReferences(data: { collectionId?: string; referenceIds?: string[]; format: 'bibtex' | 'ris' }) {
+    const response = await this.authenticatedFetch(`${this.baseURL}/research-library/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error(`No se pudieron exportar las referencias (${response.status})`);
+    return response.blob();
+  }
+
+  async auditResearchReferences(data: { text: string; collectionId?: string; referenceIds?: string[] }) {
+    return this.request('/research-library/audit', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getResearchCitationGraph(data: { collectionId?: string; referenceIds?: string[]; limit?: number }) {
+    return this.request('/research-library/citation-graph', { method: 'POST', body: JSON.stringify(data), timeoutMs: 60000 });
+  }
+
+  async getResearchReferenceConflicts(status: 'pending' | 'resolved' = 'pending') {
+    return this.request(`/research-library/conflicts?status=${status}`);
+  }
+
+  async resolveResearchReferenceConflict(id: string, action: 'keep_existing' | 'keep_candidate' | 'merge') {
+    return this.request(`/research-library/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
+  }
+
+  async syncResearchCollectionToZotero(data: { collectionId?: string; referenceIds?: string[]; apiKey: string; zoteroUserId: string; zoteroCollectionKey?: string; collectionName?: string }) {
+    return this.request('/research-library/sync/zotero', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
+  }
+
+  async syncResearchCollectionToMendeley(data: { collectionId?: string; referenceIds?: string[]; accessToken: string; mendeleyFolderId?: string; collectionName?: string }) {
+    return this.request('/research-library/sync/mendeley', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
   }
 
   // Fetch an agent-artifact (audio/music/web-app) as a Blob with the bearer

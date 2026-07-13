@@ -117,4 +117,17 @@ describe('scientific-search /review route', () => {
     assert.equal(res.status, 422);
     assert.equal(res.body.error, 'systematic_protocol_required');
   });
+
+  test('assesses full text with risk-of-bias evidence and GRADE effects', async () => {
+    const fullText = `${'Randomized controlled trial methods. '.repeat(20)} Allocation concealment was used. Intention-to-treat analysis. Validated outcome scale. The protocol was registered. n=800. RR=0.75, 95% CI 0.65 to 0.86.`;
+    const res = await request(app())
+      .post('/api/scientific-search/review/assess')
+      .set('Authorization', auth.authHeader)
+      .send({ studies: [{ paper: { id: 'p1', title: 'Randomized controlled trial', studyType: 'rct' }, fullText }] });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.meta.scope, 'full_text');
+    assert.equal(res.body.studies[0].riskOfBias.basis, 'full_text_domain_assessment');
+    assert.equal(res.body.studies[0].effects.estimates[0].measure, 'RR');
+    assert.equal(res.body.certainty.level, 'high');
+  });
 });

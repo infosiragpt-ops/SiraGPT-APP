@@ -17,6 +17,7 @@ import {
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { ThinkingIndicator } from '@/components/ui/thinking-indicator';
 import { projectsService, type Project } from '@/lib/projects-service';
+import ResearchLibrary from './ResearchLibrary';
 
 type MediaType = 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp';
 
@@ -38,14 +39,15 @@ interface MediaItem {
     source?: string;
 }
 
-type FilterType = 'all' | MediaType;
+type FilterType = 'all' | 'references' | MediaType;
 
 // Tab order requested by the product: apps first, then video/image, then the
 // audio family. "Todos" stays first as the catch-all view.
-const TAB_ORDER: FilterType[] = ['all', 'webapp', 'mobileapp', 'video', 'image', 'music', 'audio'];
+const TAB_ORDER: FilterType[] = ['all', 'references', 'webapp', 'mobileapp', 'video', 'image', 'music', 'audio'];
 
 const TAB_LABELS: Record<FilterType, string> = {
     all: 'Todos',
+    references: 'Referencias',
     image: 'Imágenes',
     video: 'Videos',
     music: 'Música',
@@ -92,6 +94,11 @@ const MediaLibrary: React.FC = () => {
     const router = useRouter();
 
     const fetchMediaItems = async (page: number, typeFilter: FilterType) => {
+        if (typeFilter === 'references') {
+            setLoading(false);
+            setError(null);
+            return;
+        }
         setLoading(true);
         setError(null);
         try {
@@ -257,12 +264,12 @@ const MediaLibrary: React.FC = () => {
     return (
         <div className="library-page mx-auto w-full max-w-7xl px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-8 sm:pt-7 lg:px-8">
             <Head>
-                <title>Biblioteca de archivos</title>
+                <title>Biblioteca</title>
             </Head>
             <div className="library-header mb-5 flex items-start gap-3 sm:mb-6">
                 <SidebarTrigger className="mt-1 md:hidden" />
                 <div className="min-w-0">
-                    <h1 className="library-title text-[1.85rem] leading-[1.04] sm:text-4xl">Tu biblioteca de archivos</h1>
+                    <h1 className="library-title text-[1.85rem] leading-[1.04] sm:text-4xl">Tu biblioteca</h1>
                 </div>
             </div>
 
@@ -286,7 +293,7 @@ const MediaLibrary: React.FC = () => {
                     })}
                 </div>
 
-                <div className="library-search" role="search">
+                {filterType !== 'references' && <div className="library-search" role="search">
                     <Search className="w-4 h-4 shrink-0 text-[hsl(var(--muted-foreground))] pointer-events-none" />
                     <label htmlFor="library-search-input" className="sr-only">
                         Buscar por prompt
@@ -309,9 +316,12 @@ const MediaLibrary: React.FC = () => {
                             <X className="h-4 w-4" />
                         </button>
                     )}
-                </div>
+                </div>}
             </div>
 
+            {filterType === 'references' ? (
+                <ResearchLibrary />
+            ) : <>
             {loading && <p className="text-gray-600 text-center py-10">Cargando archivos…</p>}
             {error && <p className="text-red-500 text-center py-10">Error: {error}</p>}
 
@@ -561,6 +571,7 @@ const MediaLibrary: React.FC = () => {
                     </div>
                 </div>
             )}
+            </>}
         </div>
     );
 };

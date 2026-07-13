@@ -11,7 +11,9 @@
  */
 
 import * as React from "react"
-import { BookOpen, ExternalLink, FileText, Quote, Sparkles, TrendingUp } from "lucide-react"
+import { BookMarked, BookOpen, ExternalLink, FileText, Quote, Sparkles, TrendingUp } from "lucide-react"
+import { toast } from "sonner"
+import apiClient from "@/lib/api"
 
 export type ScientificPaper = {
   source?: string
@@ -186,6 +188,7 @@ function PaperRow({ paper, rank }: { paper: ScientificPaper; rank: number }) {
 
 export function PapersResultCard({ data }: { data: PapersPayload }) {
   const [showAll, setShowAll] = React.useState(false)
+  const [saving, setSaving] = React.useState(false)
   const papers = Array.isArray(data?.papers) ? data.papers : []
   const providers = Array.isArray(data?.providers) ? data.providers : []
   const total = typeof data?.count === "number" ? data.count : papers.length
@@ -241,22 +244,32 @@ export function PapersResultCard({ data }: { data: PapersPayload }) {
 
       {/* Footer */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 px-4 py-2.5">
-        {papers.length > 12 ? (
+        <div className="flex items-center gap-3">
+          {papers.length > 12 && (
+            <button type="button" onClick={() => setShowAll((v) => !v)} className="text-[12px] font-medium text-blue-600 transition-opacity hover:opacity-80 dark:text-blue-400">
+              {showAll ? "Ver menos" : `Ver los ${papers.length} resultados`}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setShowAll((v) => !v)}
-            className="text-[12px] font-medium text-blue-600 transition-opacity hover:opacity-80 dark:text-blue-400"
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true)
+              try {
+                await apiClient.saveResearchReferences({ sources: papers, collectionName: "Fuentes guardadas", tags: ["chat", "investigación"] })
+                toast.success(`${papers.length} referencias guardadas en Biblioteca`)
+              } catch (error: any) {
+                toast.error(error?.message || "No se pudieron guardar las referencias")
+              } finally {
+                setSaving(false)
+              }
+            }}
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium text-foreground hover:underline disabled:opacity-50"
           >
-            {showAll ? "Ver menos" : `Ver los ${papers.length} resultados`}
+            <BookMarked className="h-3.5 w-3.5" />{saving ? "Guardando…" : "Guardar en Biblioteca"}
           </button>
-        ) : (
-          <span />
-        )}
-        {providers.length ? (
-          <span className="truncate text-[10px] text-muted-foreground">
-            Fuentes: {providers.map((p) => SOURCE_LABEL[p] || p).join(" · ")}
-          </span>
-        ) : null}
+        </div>
+        {providers.length ? <span className="truncate text-[10px] text-muted-foreground">Fuentes: {providers.map((p) => SOURCE_LABEL[p] || p).join(" · ")}</span> : null}
       </div>
     </div>
   )

@@ -13,6 +13,7 @@ validación en producción y evidencia de uso real.
 - `DELIVERED-R1`: entregada en la primera liberación de este programa.
 - `DELIVERED-R2`: entregada en la segunda liberación de este programa.
 - `DELIVERED-R3`: entregada en la tercera liberación de este programa.
+- `DELIVERED-R4`: entregada en la cuarta liberación de este programa.
 - `PARTIAL`: existe una base útil, pero falta completar el criterio.
 - `PENDING`: todavía no cumple el criterio de aceptación.
 
@@ -69,10 +70,10 @@ validación en producción y evidencia de uso real.
 | 32 | Constructor SPIDER | DELIVERED-R2 | Soportar investigación cualitativa y métodos mixtos. |
 | 33 | Flujo PRISMA | DELIVERED-R2 | Registrar identificación, cribado, elegibilidad e inclusión. |
 | 34 | Criterios de inclusión y exclusión | DELIVERED-R2 | Configurarlos, aplicarlos y explicar cada descarte. |
-| 35 | Dedupe para revisión sistemática | PARTIAL | Fusionar DOI/título y permitir resolver conflictos manualmente. |
+| 35 | Dedupe para revisión sistemática | DELIVERED-R4 | Fusionar DOI/título y permitir resolver conflictos manualmente. |
 | 36 | Cribado por título y resumen | DELIVERED-R2 | Aceptar, excluir o dejar en duda con motivos. |
-| 37 | Evaluación de riesgo de sesgo | PARTIAL | Ya orienta la lista por diseño y registra dominios; falta evaluar texto completo. |
-| 38 | Gradación de certeza de evidencia | PARTIAL | Ya expone dominios y motivos preliminares; falta evaluación con efectos y texto completo. |
+| 37 | Evaluación de riesgo de sesgo | DELIVERED-R4 | Evaluar texto completo por dominios, conservar evidencia y admitir juicio del revisor. |
+| 38 | Gradación de certeza de evidencia | DELIVERED-R4 | Gradación GRADE con efectos, intervalos, muestra y dominios explícitos. |
 | 39 | Síntesis de consenso y contradicciones | DELIVERED-R2 | Citar los estudios que sostienen cada conclusión. |
 | 40 | Exportación del protocolo | DELIVERED-R2 | Descargar estrategia, filtros, decisiones y diagrama. |
 
@@ -80,16 +81,16 @@ validación en producción y evidencia de uso real.
 
 | # | Mejora | Estado | Criterio de aceptación |
 |---:|---|---|---|
-| 41 | Guardar fuentes en Biblioteca | PARTIAL | Persistir un resultado científico desde el chat. |
-| 42 | Colecciones, carpetas y etiquetas | PENDING | Organizar referencias por investigación y tema. |
-| 43 | Notas y anotaciones por fuente | PENDING | Guardar comentarios privados con referencia estable. |
+| 41 | Guardar fuentes en Biblioteca | DELIVERED-R4 | Persistir un resultado científico desde el chat. |
+| 42 | Colecciones, carpetas y etiquetas | DELIVERED-R4 | Organizar referencias por investigación y tema. |
+| 43 | Notas y anotaciones por fuente | DELIVERED-R4 | Guardar comentarios privados con referencia estable. |
 | 44 | Bibliografía APA 7 | COVERED | Generar y ordenar referencias con DOI canónico. |
 | 45 | Bibliografías IEEE y MLA | COVERED | Cambiar formato sin perder metadatos. |
-| 46 | Exportación BibTeX y RIS | PARTIAL | Exportar la selección científica desde el mismo resultado. |
-| 47 | Integración Zotero y Mendeley | PENDING | Enviar colecciones con deduplicación. |
+| 46 | Exportación BibTeX y RIS | DELIVERED-R4 | Exportar la selección científica desde el mismo resultado. |
+| 47 | Integración Zotero y Mendeley | DELIVERED-R4 | Enviar colecciones con deduplicación. |
 | 48 | Dedupe de referencias | COVERED | Fusionar DOI y título normalizado conservando datos más ricos. |
-| 49 | Auditoría de referencias citadas | PENDING | Detectar DOI inválido, cita huérfana o referencia no usada. |
-| 50 | Grafo de citación | PENDING | Explorar trabajos citados, citantes y conexiones temáticas. |
+| 49 | Auditoría de referencias citadas | DELIVERED-R4 | Detectar DOI inválido, cita huérfana o referencia no usada. |
+| 50 | Grafo de citación | DELIVERED-R4 | Explorar trabajos citados, citantes y conexiones temáticas. |
 
 ## 51-60. Experiencia de investigación en chat
 
@@ -212,3 +213,22 @@ la eliminación de cuentas. La liberación debe cumplir:
 10. Superar suites completas, tipado, lint, bloqueo visual, seguridad y validación en producción.
 
 Estado después de R3: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 18 `PARTIAL` y 16 `PENDING`.
+
+## Liberación R4: biblioteca científica y evaluación completa
+
+Incluye las mejoras 35, 37-38, 41-43, 46-47 y 49-50. La liberación debe cumplir:
+
+1. Persistir referencias por usuario con identidad DOI o título-año y fusionar los metadatos más ricos.
+2. Crear colecciones, carpetas y etiquetas, y permitir que una referencia pertenezca a varias colecciones.
+3. Guardar notas privadas y editar etiquetas sin alterar la referencia canónica.
+4. Detectar conflictos de título con DOI distintos y ofrecer resolución manual auditable.
+5. Exportar la selección o colección en BibTeX y RIS con DOI canónico.
+6. Auditar citas numéricas y autor-año, DOI inválidos, referencias no usadas y duplicados.
+7. Evaluar riesgo de sesgo desde texto completo con evidencia por dominio y overrides del revisor.
+8. Calcular certeza GRADE usando diseño, sesgo, efectos, intervalos de confianza y tamaño muestral.
+9. Crear un grafo de trabajos citados y citantes mediante OpenAlex con degradación local explícita.
+10. Sincronizar Zotero Web API v3 y Mendeley Core API sin guardar credenciales y omitiendo duplicados.
+11. Mostrar la Biblioteca científica en la interfaz y permitir guardar las fuentes finalistas desde el chat.
+12. Superar migración aditiva, pruebas, tipado, lint, bloqueo visual, seguridad y validación en producción.
+
+Estado después de R4: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 13 `PARTIAL` y 11 `PENDING`.

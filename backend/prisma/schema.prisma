@@ -147,6 +147,9 @@ model User {
   pushSubscriptions       PushSubscription[]
   savedSearches           SavedSearch[]
   bookmarks               Bookmark[]
+  researchCollections     ResearchCollection[]
+  researchReferences      ResearchReference[]
+  researchReferenceConflicts ResearchReferenceConflict[]
   webhookEndpoints        WebhookEndpoint[]
   slackIntegrations       SlackIntegration[]
   policyAcceptances       PolicyAcceptance[]
@@ -711,6 +714,100 @@ model Bookmark {
   @@index([userId, createdAt])
   @@index([userId, folder])
   @@map("bookmarks")
+}
+
+// Scientific reference library. References are deduplicated per user by a
+// canonical DOI/title identity and can belong to several collections.
+model ResearchCollection {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?  @db.Text
+  folder      String?
+  tags        String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items ResearchCollectionItem[]
+
+  @@unique([userId, name])
+  @@index([userId, folder, updatedAt])
+  @@map("research_collections")
+}
+
+model ResearchReference {
+  id               String   @id @default(cuid())
+  userId           String
+  identityKey      String
+  titleKey         String
+  doi              String?
+  title            String
+  authors          Json?
+  year             Int?
+  venue            String?
+  abstract         String?  @db.Text
+  url              String?
+  pdfUrl           String?
+  source           String?
+  sources          String[] @default([])
+  tags             String[] @default([])
+  note             String?  @db.Text
+  metadata         Json?
+  citationCount    Int?
+  openAccess       Boolean?
+  publicationStage String?
+  peerReviewStatus String?
+  studyType        String?
+  integrityStatus  String?
+  status           String   @default("active")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user               User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collectionItems    ResearchCollectionItem[]
+  existingConflicts  ResearchReferenceConflict[] @relation("ExistingResearchReference")
+  candidateConflicts ResearchReferenceConflict[] @relation("CandidateResearchReference")
+
+  @@unique([userId, identityKey])
+  @@index([userId, titleKey])
+  @@index([userId, status, updatedAt])
+  @@map("research_references")
+}
+
+model ResearchCollectionItem {
+  id           String   @id @default(cuid())
+  collectionId String
+  referenceId  String
+  position     Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  collection ResearchCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  reference  ResearchReference  @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, referenceId])
+  @@index([referenceId])
+  @@map("research_collection_items")
+}
+
+model ResearchReferenceConflict {
+  id                   String    @id @default(cuid())
+  userId               String
+  existingReferenceId  String
+  candidateReferenceId String
+  reason               String
+  status               String    @default("pending")
+  resolution           Json?
+  createdAt            DateTime  @default(now())
+  resolvedAt           DateTime?
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  existing  ResearchReference @relation("ExistingResearchReference", fields: [existingReferenceId], references: [id], onDelete: Cascade)
+  candidate ResearchReference @relation("CandidateResearchReference", fields: [candidateReferenceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, existingReferenceId, candidateReferenceId])
+  @@index([userId, status, createdAt])
+  @@map("research_reference_conflicts")
 }
 
 // User-managed outbound webhook subscriptions. Each row is one

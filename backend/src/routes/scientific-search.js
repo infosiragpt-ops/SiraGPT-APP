@@ -26,6 +26,11 @@ const {
   DISCIPLINE_IDS,
   orderProvidersForDiscipline,
 } = require('../services/research/research-discipline-router');
+const {
+  assessFullTextRiskOfBias,
+  extractEffectEstimates,
+  gradeFullTextEvidence,
+} = require('../services/research/systematic-review-protocol');
 
 const router = express.Router();
 
@@ -180,6 +185,37 @@ router.post(
       return res.status(500).json({ error: 'protocol_export_failed', message: err.message });
     }
   }
+);
+
+/**
+ * POST /api/scientific-search/review/assess — full-text risk-of-bias and
+ * GRADE assessment. Reviewer overrides remain explicit and every automated
+ * judgment carries the supporting sentence from the supplied full text.
+ */
+router.post(
+  '/review/assess',
+  authenticateToken,
+  [
+    body('studies').isArray({ min: 1, max: 50 }),
+    body('studies.*.paper').isObject(),
+    body('studies.*.fullText').isString().isLength({ min: 100, max: 200_000 }),
+    body('studies.*.judgments').optional().isObject(),
+    body('grade').optional().isObject(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    const studies = req.body.studies.map((study, index) => {
+      const riskOfBias = assessFullTextRiskOfBias(study.paper, { fullText: study.fullText, judgments: study.judgments });
+      const effects = extractEffectEstimates(study.fullText);
+      return { id: study.paper.id || `study-${index + 1}`, ...study.paper, fullText: study.fullText, riskOfBias, effects };
+    });
+    return res.json({
+      studies: studies.map(({ fullText, ...study }) => study),
+      certainty: gradeFullTextEvidence(studies, req.body.grade || {}),
+      meta: { scope: 'full_text', studiesAssessed: studies.length, reviewerOverridesSupported: true },
+    });
+  },
 );
 
 module.exports = router;

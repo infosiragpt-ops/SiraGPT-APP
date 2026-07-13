@@ -268,6 +268,177 @@ function gradeEvidence(papers, synthesis = {}) {
   };
 }
 
+const DOMAIN_EVIDENCE = Object.freeze({
+  randomization: {
+    positive: [/random(?:ized|ised|izad[oa])/, /allocation conceal/, /secuencia aleatoria/],
+    concern: [/quasi[- ]?random/, /alternat(?:ion|ing)/, /asignaci[oó]n por conveniencia/],
+  },
+  deviations_from_intervention: {
+    positive: [/intention[- ]to[- ]treat/, /intenci[oó]n de tratar/, /protocol adher/],
+    concern: [/per[- ]protocol only/, /cross[- ]over imbalance/, /desviaciones? del protocolo/],
+  },
+  missing_outcome_data: {
+    positive: [/lost to follow[- ]up.{0,40}(?:[0-9]|none|no )/, /attrition.{0,40}%/, /datos faltantes/],
+    concern: [/high attrition/, /loss to follow[- ]up.{0,20}(?:[3-9][0-9]|100)%/, /p[eé]rdida.{0,20}(?:[3-9][0-9]|100)%/],
+  },
+  outcome_measurement: {
+    positive: [/validated (?:scale|instrument)/, /instrumento validado/, /blinded outcome assessor/],
+    concern: [/self[- ]reported only/, /unvalidated (?:scale|instrument)/, /instrumento no validado/],
+  },
+  selective_reporting: {
+    positive: [/preregistered/, /registered protocol/, /protocol registration/, /protocolo registrado/],
+    concern: [/outcome switching/, /post[- ]hoc outcome/, /desenlace post[- ]hoc/],
+  },
+  protocol_registration: {
+    positive: [/prospero/, /clinicaltrials\.gov/, /registered protocol/, /protocolo registrado/],
+    concern: [/no protocol/, /without registration/, /sin protocolo/],
+  },
+  search_completeness: {
+    positive: [/searched.{0,60}(?:pubmed|medline).{0,80}(?:embase|scopus|web of science)/, /multiple databases/, /m[uú]ltiples bases/],
+    concern: [/single database/, /una sola base/],
+  },
+  duplicate_screening: {
+    positive: [/two independent reviewers/, /dual screening/, /dos revisores independientes/],
+    concern: [/single reviewer/, /un solo revisor/],
+  },
+  study_bias_assessment: {
+    positive: [/risk of bias/, /rob 2/, /robins-i/, /amstar/, /riesgo de sesgo/],
+    concern: [/did not assess.{0,20}(?:bias|quality)/, /no se evalu[oó].{0,20}(?:sesgo|calidad)/],
+  },
+  publication_bias: {
+    positive: [/funnel plot/, /egger/, /sesgo de publicaci[oó]n/],
+    concern: [/publication bias not assessed/, /no se evalu[oó] el sesgo de publicaci[oó]n/],
+  },
+  confounding: {
+    positive: [/adjusted for/, /multivariable/, /propensity score/, /ajustado por/],
+    concern: [/unadjusted analysis/, /confounding not controlled/, /sin ajuste/],
+  },
+  participant_selection: {
+    positive: [/consecutive (?:patients|participants)/, /population[- ]based/, /muestreo consecutivo/],
+    concern: [/convenience sample/, /selection bias/, /muestra por conveniencia/],
+  },
+  exposure_classification: {
+    positive: [/validated exposure/, /objective measure/, /medici[oó]n objetiva/],
+    concern: [/recall only/, /misclassification/, /sesgo de recuerdo/],
+  },
+  missing_data: {
+    positive: [/multiple imputation/, /complete case sensitivity/, /imputaci[oó]n m[uú]ltiple/],
+    concern: [/complete cases only/, /missing data not addressed/, /datos faltantes no abordados/],
+  },
+  researcher_reflexivity: {
+    positive: [/reflexiv/, /positionality/, /reflexividad/],
+    concern: [/no reflexiv/, /sin reflexividad/],
+  },
+  sampling_appropriateness: {
+    positive: [/purposive sampling/, /theoretical sampling/, /muestreo (?:te[oó]rico|intencional)/],
+    concern: [/sampling not described/, /muestreo no descrito/],
+  },
+  data_collection_rigor: {
+    positive: [/data saturation/, /triangulat/, /saturaci[oó]n de datos/],
+    concern: [/single brief interview/, /sin saturaci[oó]n/],
+  },
+  analysis_rigor: {
+    positive: [/thematic analysis/, /coding framework/, /member checking/, /an[aá]lisis tem[aá]tico/],
+    concern: [/analysis not described/, /an[aá]lisis no descrito/],
+  },
+  participant_voice: {
+    positive: [/participant quotes/, /verbatim quotes/, /citas textuales/],
+    concern: [/no participant quotes/, /sin citas de participantes/],
+  },
+});
+
+function sentenceEvidence(text, patterns) {
+  const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/).map((value) => value.trim()).filter(Boolean);
+  for (const pattern of patterns || []) {
+    const sentence = sentences.find((candidate) => pattern.test(candidate.toLowerCase()));
+    if (sentence) return sentence.slice(0, 500);
+  }
+  return null;
+}
+
+function assessFullTextRiskOfBias(input, options = {}) {
+  const paper = annotateSource(input);
+  const fullText = String(options.fullText || input?.fullText || '').trim();
+  const manual = options.judgments && typeof options.judgments === 'object' ? options.judgments : {};
+  const domains = biasDomains(paper.studyType);
+  const checks = domains.map((domain) => {
+    const override = manual[domain] && typeof manual[domain] === 'object' ? manual[domain] : null;
+    if (override && ['low', 'some_concerns', 'high', 'unclear'].includes(override.judgment)) {
+      return { domain, judgment: override.judgment, evidence: String(override.evidence || '').slice(0, 500), source: 'reviewer' };
+    }
+    const patterns = DOMAIN_EVIDENCE[domain] || { positive: [], concern: [] };
+    const concern = sentenceEvidence(fullText, patterns.concern);
+    const positive = sentenceEvidence(fullText, patterns.positive);
+    if (concern) return { domain, judgment: 'high', evidence: concern, source: 'full_text' };
+    if (positive) return { domain, judgment: 'low', evidence: positive, source: 'full_text' };
+    return { domain, judgment: 'unclear', evidence: null, source: 'full_text' };
+  });
+  const high = checks.filter((check) => check.judgment === 'high').length;
+  const unclear = checks.filter((check) => ['unclear', 'some_concerns'].includes(check.judgment)).length;
+  return {
+    level: high > 0 ? 'high' : (unclear > 0 ? 'some_concerns' : 'low'),
+    basis: fullText.length >= 500 ? 'full_text_domain_assessment' : 'insufficient_full_text',
+    recommendedTool: recommendedBiasTool(paper.studyType),
+    checks,
+    assessedDomains: checks.filter((check) => check.judgment !== 'unclear').length,
+    totalDomains: checks.length,
+    requiresFullTextAssessment: fullText.length < 500,
+  };
+}
+
+function extractEffectEstimates(fullText) {
+  const text = String(fullText || '');
+  const estimates = [];
+  const effectRe = /\b(RR|OR|HR|MD|SMD|risk ratio|odds ratio|hazard ratio|mean difference)\s*(?:=|:)?\s*(-?\d+(?:\.\d+)?)\s*(?:[,; ]+95\s*%?\s*CI\s*[:=]?\s*([\[(]?\s*-?\d+(?:\.\d+)?)\s*(?:to|[-,;])\s*(-?\d+(?:\.\d+)?\s*[\])]?)\s*)?/gi;
+  for (const match of text.matchAll(effectRe)) {
+    estimates.push({
+      measure: match[1].toUpperCase().replace(/\s+/g, '_'),
+      value: Number(match[2]),
+      ciLower: match[3] ? Number(String(match[3]).replace(/[^0-9.-]/g, '')) : null,
+      ciUpper: match[4] ? Number(String(match[4]).replace(/[^0-9.-]/g, '')) : null,
+      evidence: match[0].slice(0, 300),
+    });
+  }
+  const samples = Array.from(text.matchAll(/\b(?:n\s*=\s*|sample(?: size)? of |muestra de )(\d{1,7})\b/gi))
+    .map((match) => Number(match[1])).filter(Number.isFinite);
+  return { estimates: estimates.slice(0, 50), sampleSizes: samples.slice(0, 20), totalSample: samples.reduce((sum, value) => sum + value, 0) };
+}
+
+function gradeFullTextEvidence(papers, options = {}) {
+  const list = Array.isArray(papers) ? papers : [];
+  const effects = list.map((paper) => paper.effects || extractEffectEstimates(paper.fullText)).filter(Boolean);
+  const robust = list.filter((paper) => ['rct', 'systematic_review', 'meta_analysis'].includes(paper.studyType)).length;
+  let score = robust > list.length / 2 ? 4 : 2;
+  const reasons = [];
+  const domains = {
+    riskOfBias: list.some((paper) => paper.riskOfBias?.level === 'high') ? 'serious' : 'not_serious',
+    inconsistency: options.inconsistency || 'not_detected',
+    indirectness: options.indirectness || 'not_serious',
+    imprecision: 'not_serious',
+    publicationBias: options.publicationBias || 'undetected',
+  };
+  if (domains.riskOfBias === 'serious') { score -= 1; reasons.push('serious_risk_of_bias'); }
+  if (domains.inconsistency === 'serious') { score -= 1; reasons.push('serious_inconsistency'); }
+  if (domains.indirectness === 'serious') { score -= 1; reasons.push('serious_indirectness'); }
+  const withIntervals = effects.flatMap((effect) => effect.estimates || []).filter((effect) => Number.isFinite(effect.ciLower) && Number.isFinite(effect.ciUpper));
+  const totalSample = effects.reduce((sum, effect) => sum + (Number(effect.totalSample) || 0), 0);
+  if (!withIntervals.length || totalSample < 400) {
+    domains.imprecision = 'serious';
+    score -= 1;
+    reasons.push(!withIntervals.length ? 'confidence_intervals_missing' : 'small_information_size');
+  }
+  if (domains.publicationBias === 'suspected') { score -= 1; reasons.push('publication_bias_suspected'); }
+  const levels = ['very_low', 'very_low', 'low', 'moderate', 'high'];
+  return {
+    level: levels[Math.max(0, Math.min(4, score))],
+    basis: 'grade_from_full_text_effects_and_domain_judgments',
+    reasons: reasons.length ? reasons : ['no_serious_downgrade_detected'],
+    domains,
+    counts: { studies: list.length, robustDesigns: robust, effectEstimates: effects.flatMap((effect) => effect.estimates || []).length, totalSample },
+    requiresFullTextAssessment: list.some((paper) => paper.riskOfBias?.requiresFullTextAssessment),
+  };
+}
+
 function buildPrismaFlow({ identified = 0, deduped = 0, screened = [], included = 0 }) {
   const excluded = screened.filter((entry) => entry.screening?.decision === 'exclude');
   const uncertain = screened.filter((entry) => entry.screening?.decision === 'uncertain');
@@ -302,8 +473,11 @@ module.exports = {
   detectFramework,
   extractFrameworkFields,
   gradeEvidence,
+  gradeFullTextEvidence,
   isSystematicReviewRequest,
   preliminaryRiskOfBias,
+  assessFullTextRiskOfBias,
+  extractEffectEstimates,
   screenPaper,
-  _internal: { biasDomains, fieldCoverage, normaliseText, recommendedBiasTool, FRAMEWORK_FIELDS, FIELD_ALIASES },
+  _internal: { biasDomains, fieldCoverage, normaliseText, recommendedBiasTool, sentenceEvidence, FRAMEWORK_FIELDS, FIELD_ALIASES },
 };

@@ -50,6 +50,7 @@ import {
   Disc3,
   Menu as MenuIcon,
   BriefcaseBusiness,
+  BookMarked,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -467,6 +468,7 @@ type SearchActivityState = {
   totalCollected: number
   dedupedCount?: number
   selectedCount?: number
+  selectedSources?: AgenticSource[]
   elapsedMs?: number
   entries: SearchActivityEntry[]
 }
@@ -970,6 +972,7 @@ function applySearchActivityEvent(activity: SearchActivityState, evt: AgenticEve
       break
     case "selected":
       next.selectedCount = evt.sources.length
+      next.selectedSources = evt.sources
       break
     case "done":
       next.status = "complete"
@@ -991,7 +994,8 @@ function applySearchActivityEvent(activity: SearchActivityState, evt: AgenticEve
   return next
 }
 
-function SearchActivityPanel({ activity, onClose }: { activity: SearchActivityState; onClose: () => void }) {
+function SearchActivityPanel({ activity, onClose, onSave }: { activity: SearchActivityState; onClose: () => void; onSave: (activity: SearchActivityState) => Promise<void> }) {
+  const [saving, setSaving] = React.useState(false)
   const elapsed = activity.elapsedMs ?? activity.updatedAt - activity.startedAt
   const statusLabel = activity.status === "complete"
     ? "Completado"
@@ -1025,6 +1029,22 @@ function SearchActivityPanel({ activity, onClose }: { activity: SearchActivitySt
             <span className="rounded-full bg-background px-2 py-1">Lotes {activity.batchSize}</span>
             <span className="rounded-full bg-background px-2 py-1">{activity.providers.length || 0} proveedores</span>
           </div>
+          {activity.selectedSources && activity.selectedSources.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3 w-full"
+              disabled={saving}
+              onClick={async () => {
+                setSaving(true)
+                try { await onSave(activity) } finally { setSaving(false) }
+              }}
+            >
+              <BookMarked className="mr-2 h-4 w-4" />
+              {saving ? "Guardando…" : `Guardar ${activity.selectedSources.length} en Biblioteca`}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -5949,6 +5969,20 @@ But first, you need to connect your Spotify account securely using the button be
 
   const closeSearchActivityPanel = React.useCallback(() => {
     setActiveSearchActivityId(null);
+  }, []);
+
+  const saveSearchActivityToLibrary = React.useCallback(async (activity: SearchActivityState) => {
+    if (!activity.selectedSources?.length) return
+    try {
+      const result = await apiClient.saveResearchReferences({
+        sources: activity.selectedSources,
+        collectionName: "Fuentes guardadas",
+        tags: ["chat", "investigación"],
+      }) as any
+      toast.success(`${result?.references?.length || activity.selectedSources.length} referencias guardadas en Biblioteca`)
+    } catch (error: any) {
+      toast.error(error?.message || "No se pudieron guardar las referencias")
+    }
   }, []);
 
   const handleMessageAreaClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -12496,6 +12530,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
+                  onSave={saveSearchActivityToLibrary}
                 />
               )}
               {!showAudioPanel && !activeSearchActivity && documentPreviewUrl && (

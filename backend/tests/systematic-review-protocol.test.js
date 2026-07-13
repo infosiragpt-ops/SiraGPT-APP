@@ -7,7 +7,10 @@ const {
   buildProtocol,
   detectFramework,
   gradeEvidence,
+  gradeFullTextEvidence,
   preliminaryRiskOfBias,
+  assessFullTextRiskOfBias,
+  extractEffectEstimates,
   screenPaper,
 } = require('../src/services/research/systematic-review-protocol');
 
@@ -97,4 +100,28 @@ test('PRISMA flow is computed from actual identified, deduped and screening coun
   assert.equal(prisma.screening.recordsUncertain, 1);
   assert.equal(prisma.screening.exclusionReasons.outside_year_range, 2);
   assert.equal(prisma.included.studiesInPreliminarySynthesis, 3);
+});
+
+test('full-text risk-of-bias assessment records domain evidence and reviewer overrides', () => {
+  const fullText = `${'Randomized controlled trial. '.repeat(20)} Allocation concealment was used. Analysis followed the intention-to-treat principle. A validated scale and blinded outcome assessor were used. The protocol was registered before recruitment. Lost to follow-up was 4%.`;
+  const assessment = assessFullTextRiskOfBias({ title: 'Randomized controlled trial', studyType: 'rct' }, {
+    fullText,
+    judgments: { selective_reporting: { judgment: 'low', evidence: 'Protocol registration verified by reviewer.' } },
+  });
+  assert.equal(assessment.basis, 'full_text_domain_assessment');
+  assert.equal(assessment.requiresFullTextAssessment, false);
+  assert.ok(assessment.checks.some((check) => check.domain === 'randomization' && check.evidence));
+  assert.ok(assessment.checks.some((check) => check.domain === 'selective_reporting' && check.source === 'reviewer'));
+});
+
+test('full-text GRADE uses effects, intervals, sample size and bias domains', () => {
+  const fullText = `${'Trial methods and results. '.repeat(25)} n=650. RR=0.72, 95% CI 0.61 to 0.84.`;
+  const effects = extractEffectEstimates(fullText);
+  assert.equal(effects.estimates[0].measure, 'RR');
+  assert.equal(effects.estimates[0].ciLower, 0.61);
+  assert.equal(effects.totalSample, 650);
+  const certainty = gradeFullTextEvidence([{ studyType: 'rct', fullText, effects, riskOfBias: { level: 'low', requiresFullTextAssessment: false } }]);
+  assert.equal(certainty.level, 'high');
+  assert.equal(certainty.domains.imprecision, 'not_serious');
+  assert.equal(certainty.requiresFullTextAssessment, false);
 });
