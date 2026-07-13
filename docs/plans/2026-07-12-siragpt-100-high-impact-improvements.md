@@ -18,6 +18,7 @@ validación en producción y evidencia de uso real.
 - `DELIVERED-R6`: entregada en la sexta liberación de este programa.
 - `DELIVERED-R7`: entregada en la séptima liberación de este programa.
 - `DELIVERED-R8`: entregada en la octava liberación de este programa.
+- `DELIVERED-R9`: entregada en la novena liberación de este programa.
 - `PARTIAL`: existe una base útil, pero falta completar el criterio.
 - `PENDING`: todavía no cumple el criterio de aceptación.
 
@@ -168,7 +169,7 @@ validación en producción y evidencia de uso real.
 | 96 | Controles de seguridad automatizados | COVERED | Ejecutar validaciones de cadena de suministro y patrones inseguros. |
 | 97 | Presupuestos de costo y tokens | COVERED | Aplicar límites por tarea, conversación y usuario. |
 | 98 | Configuración administrativa de proveedores | COVERED | Activar proveedores/modelos sin cambios de código. |
-| 99 | Analítica de uso y calidad | PARTIAL | Medir adopción, éxito, cancelación y satisfacción sin PII. |
+| 99 | Analítica de uso y calidad | DELIVERED-R9 | Medir adopción, éxito, cancelación y satisfacción sin PII. |
 | 100 | Evaluación continua de calidad | COVERED | Ejecutar pruebas, 100 controles y gates de liberación por SHA. |
 
 ## Liberación R1: integridad científica
@@ -312,3 +313,23 @@ en 81 y 85-90. La liberación debe cumplir:
 11. Superar pruebas focalizadas, rutas, suite completa, tipado, lint, seguridad, CI y validación autenticada en producción.
 
 Estado después de R8: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 8 `DELIVERED-R6`, 5 `DELIVERED-R7`, 3 `DELIVERED-R8`, 1 `PARTIAL` y 0 `PENDING`.
+
+## Liberación R9: analítica de calidad privada y escalable
+
+Incluye la mejora 99 y completa la hoja de ruta de cien mejoras. La liberación
+debe cumplir:
+
+1. Medir usuarios activos, adopción general, adopción de chat y adopción de agentes con conteos agregados.
+2. Separar ejecuciones iniciadas, completadas, fallidas, canceladas y en curso para chat y agentes.
+3. Calcular éxito, fallo y cancelación únicamente sobre resultados terminales.
+4. Medir satisfacción y cobertura de valoraciones usando solo feedback persistido de respuestas del asistente.
+5. Omitir tasas y segmentos diarios cuando no alcancen una cohorte mínima de cinco observaciones.
+6. Excluir nombres, correos, identificadores, prompts, contenido y motivos individuales de cancelación del contrato de respuesta.
+7. Calcular tendencias dentro de PostgreSQL y mantener el rango administrativo acotado a 366 días.
+8. Añadir índices aditivos para fechas de inicio, finalización, fallo, cancelación y feedback.
+9. Proteger el endpoint con permiso de métricas y requisito explícito de superadministrador.
+10. Mostrar KPIs y evolución diaria en un panel adaptable a escritorio y móvil, con estados vacíos claros.
+11. Superar pruebas de privacidad, cohortes, permisos, migración, tipado, lint, compilación, seguridad y suite completa.
+12. Desplegar con respaldo previo, aplicar la migración de forma aditiva y validar endpoint, interfaz, health y SHA en producción.
+
+Estado después de R9: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 8 `DELIVERED-R6`, 5 `DELIVERED-R7`, 3 `DELIVERED-R8`, 1 `DELIVERED-R9`, 0 `PARTIAL` y 0 `PENDING`.

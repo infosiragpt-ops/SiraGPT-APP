@@ -2530,6 +2530,11 @@ class ApiClient {
     return this.request(`/admin/stats/agents${query ? `?${query}` : ''}`);
   }
 
+  async getAdminProductQualityStats(params?: { from?: string; to?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stats/product-quality${query ? `?${query}` : ''}`);
+  }
+
   async getAdminServiceHealth() {
     return this.request('/admin/health/services');
   }

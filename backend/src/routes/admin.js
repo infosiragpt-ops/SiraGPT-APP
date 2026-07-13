@@ -2183,6 +2183,9 @@ router.get('/stats/files', requireSuperAdmin, STATS_CACHE, (req, res) =>
 router.get('/stats/agents', requireSuperAdmin, STATS_CACHE, (req, res) =>
   _handleStatsRoute(adminStats.aggregateAgentStats, req, res, 'agents')
 );
+router.get('/stats/product-quality', requireSuperAdmin, STATS_CACHE, (req, res) =>
+  _handleStatsRoute(adminStats.aggregateProductQualityStats, req, res, 'product-quality')
+);
 
 // ── Queue dashboard ─────────────────────────────────────────────────────────
 // The repo already exposes the BullMQ board at /api/admin/queues/board.

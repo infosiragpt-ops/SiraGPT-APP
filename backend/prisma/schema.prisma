@@ -196,6 +196,7 @@ model User {
   deployEnvs            DeployEnv[]
 
   @@index([deletedAt])
+  @@index([lastActiveAt])
   @@map("users")
 }
 
@@ -569,6 +570,7 @@ model Message {
 
   @@index([chatId, timestamp])
   @@index([chatId, deletedAt])
+  @@index([timestamp, feedback])
   @@index([runId])
   @@map("messages")
 }
@@ -674,7 +676,12 @@ model ChatRun {
 
   @@index([chatId, status])
   @@index([userId, status, updatedAt])
+  @@index([userId, createdAt])
   @@index([status, createdAt])
+  @@index([createdAt])
+  @@index([completedAt])
+  @@index([cancelledAt])
+  @@index([status, updatedAt])
   @@map("chat_runs")
 }
 
@@ -996,8 +1003,13 @@ model AgentTask {
   artifacts GeneratedArtifact[]
 
   @@index([userId, updatedAt])
+  @@index([userId, createdAt])
   @@index([status, updatedAt])
   @@index([chatId])
+  @@index([createdAt])
+  @@index([completedAt])
+  @@index([failedAt])
+  @@index([cancelledAt])
   @@map("agent_tasks")
 }
 

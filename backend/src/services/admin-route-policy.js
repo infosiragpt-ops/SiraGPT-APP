@@ -165,6 +165,7 @@ const ADMIN_ROUTE_POLICIES = Object.freeze({
   'GET /api/admin/stats/usage': policy('admin.metrics.read'),
   'GET /api/admin/stats/files': policy('admin.metrics.read', true),
   'GET /api/admin/stats/agents': policy('admin.metrics.read', true),
+  'GET /api/admin/stats/product-quality': policy('admin.metrics.read', true),
   'GET /api/admin/queues': policy('admin.queues.read', true),
   'POST /api/admin/queues/:name/retry-failed': policy('admin.queues.manage', true),
   'DELETE /api/admin/queues/:name/job/:id': policy('admin.queues.manage', true),

@@ -11,6 +11,8 @@ const {
   aggregateUsageStats,
   aggregateFileStats,
   aggregateAgentStats,
+  aggregateProductQualityStats,
+  MAX_PRODUCT_QUALITY_WINDOW_DAYS,
   PLAN_MRR_USD,
 } = require('../src/services/admin-stats-aggregator');
 
@@ -348,4 +350,138 @@ test('aggregateAgentStats agentTaskTrend is all zeros when no tasks', async () =
   assert.ok(stats.agentTaskTrend.every(
     (r) => r.started === 0 && r.completed === 0 && r.failed === 0
   ));
+});
+
+// ── product quality stats ──────────────────────────────────────────────────
+test('aggregateProductQualityStats measures adoption, outcomes and satisfaction without PII', async () => {
+  const prisma = {
+    user: {
+      count: async ({ where }) => {
+        const metric = where.AND?.[0] || where;
+        if (metric.OR?.some((entry) => entry.lastActiveAt)) return 10;
+        if (metric.OR?.length === 2) return 8;
+        if (metric.chatRuns) return 7;
+        if (metric.agentTasks) return 4;
+        return 20;
+      },
+    },
+    chatRun: {
+      groupBy: async () => [
+        { status: 'completed', _count: { _all: 8 } },
+        { status: 'failed', _count: { _all: 1 } },
+        { status: 'cancelled', _count: { _all: 1 } },
+        { status: 'running', _count: { _all: 2 } },
+      ],
+    },
+    agentTask: {
+      groupBy: async () => [
+        { status: 'completed', _count: { _all: 3 } },
+        { status: 'failed', _count: { _all: 1 } },
+        { status: 'cancelled', _count: { _all: 1 } },
+        { status: 'queued', _count: { _all: 1 } },
+      ],
+    },
+    message: {
+      count: async () => 100,
+      groupBy: async () => [
+        { feedback: 'liked', _count: { _all: 8 } },
+        { feedback: 'disliked', _count: { _all: 2 } },
+      ],
+    },
+    $queryRaw: async () => [
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'started', count: 10n },
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'completed', count: 6n },
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'cancelled', count: 1n },
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'liked', count: 8n },
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'disliked', count: 2n },
+      { day: new Date('2026-01-02T00:00:00.000Z'), metric: 'started', count: 8n },
+      { day: new Date('2026-01-02T00:00:00.000Z'), metric: 'completed', count: 5n },
+      { day: new Date('2026-01-02T00:00:00.000Z'), metric: 'failed', count: 2n },
+      { day: new Date('2026-01-02T00:00:00.000Z'), metric: 'cancelled', count: 1n },
+    ],
+  };
+
+  const result = await aggregateProductQualityStats(prisma, {
+    from: '2026-01-01T00:00:00.000Z',
+    to: '2026-01-02T23:59:59.999Z',
+  });
+
+  assert.equal(result.adoption.eligibleUsers, 20);
+  assert.equal(result.adoption.activeUsers, 10);
+  assert.equal(result.adoption.adopters, 8);
+  assert.equal(result.adoption.adoptionRate, 0.8);
+  assert.equal(result.outcomes.started, 18);
+  assert.equal(result.outcomes.terminal, 15);
+  assert.equal(result.outcomes.completed, 11);
+  assert.equal(result.outcomes.cancelled, 2);
+  assert.equal(result.outcomes.successRate, 0.7333);
+  assert.equal(result.outcomes.cancellationRate, 0.1333);
+  assert.equal(result.satisfaction.feedbackResponses, 10);
+  assert.equal(result.satisfaction.satisfactionRate, 0.8);
+  assert.equal(result.satisfaction.feedbackCoverageRate, 0.1);
+  assert.equal(result.trend.length, 2);
+  assert.equal(result.trend[0].started, 10);
+  assert.equal(result.privacy.containsPii, false);
+  assert.equal(result.privacy.aggregationOnly, true);
+
+  const forbiddenKeys = new Set(['userId', 'email', 'name', 'prompt', 'content', 'cancelReason']);
+  const visit = (value) => {
+    if (!value || typeof value !== 'object') return;
+    for (const [key, nested] of Object.entries(value)) {
+      assert.equal(forbiddenKeys.has(key), false, `PII key leaked: ${key}`);
+      visit(nested);
+    }
+  };
+  visit(result);
+});
+
+test('aggregateProductQualityStats suppresses rates and daily micro-cohorts', async () => {
+  const prisma = {
+    user: { count: async () => 3 },
+    chatRun: {
+      groupBy: async () => [
+        { status: 'completed', _count: { _all: 2 } },
+        { status: 'cancelled', _count: { _all: 1 } },
+      ],
+    },
+    agentTask: { groupBy: async () => [] },
+    message: {
+      count: async () => 3,
+      groupBy: async () => [
+        { feedback: 'liked', _count: { _all: 1 } },
+        { feedback: 'disliked', _count: { _all: 1 } },
+      ],
+    },
+    $queryRaw: async () => [
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'started', count: 2n },
+      { day: new Date('2026-01-01T00:00:00.000Z'), metric: 'liked', count: 1n },
+    ],
+  };
+
+  const result = await aggregateProductQualityStats(prisma, {
+    from: '2026-01-01T00:00:00.000Z',
+    to: '2026-01-01T23:59:59.999Z',
+  });
+
+  assert.equal(result.adoption.adoptionRate, null);
+  assert.equal(result.outcomes.successRate, null);
+  assert.equal(result.outcomes.cancellationRate, null);
+  assert.equal(result.satisfaction.satisfactionRate, null);
+  assert.equal(result.satisfaction.feedbackCoverageRate, null);
+  assert.equal(result.satisfaction.liked, null);
+  assert.equal(result.satisfaction.disliked, null);
+  assert.equal(result.trend[0].started, null);
+  assert.equal(result.trend[0].liked, null);
+  assert.equal(result.trend[0].suppressed, true);
+  assert.equal(result.privacy.suppressed.dailyBuckets, 1);
+});
+
+test('aggregateProductQualityStats rejects unbounded dashboard ranges', async () => {
+  await assert.rejects(
+    aggregateProductQualityStats({}, {
+      from: '2020-01-01T00:00:00.000Z',
+      to: '2022-01-01T00:00:00.000Z',
+    }),
+    new RegExp(`${MAX_PRODUCT_QUALITY_WINDOW_DAYS} days`),
+  );
 });

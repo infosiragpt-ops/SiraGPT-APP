@@ -333,6 +333,7 @@ test('admin.js retains explicit super-admin gates on sensitive routes', () => {
     ['post', '/users/:id/reset-password'],
     ['post', '/users/:id/grant-credits'],
     ['delete', '/queues/:name/job/:id'],
+    ['get', '/stats/product-quality'],
     ['post', '/api-keys/purge'],
     ['post', '/maintenance/rotate-secret'],
   ]) {

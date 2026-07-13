@@ -2,6 +2,7 @@
 
 const {
   excludeRbacSystemPrincipalsWhere,
+  SYSTEM_ASSIGNMENT_TAG_PREFIX,
 } = require('./rbac-system-assignments');
 
 /**
@@ -16,6 +17,8 @@ const {
  */
 
 const DEFAULT_WINDOW_DAYS = 30;
+const MAX_PRODUCT_QUALITY_WINDOW_DAYS = 366;
+const PRODUCT_QUALITY_MINIMUM_COHORT = 5;
 
 // Approximate MRR per active subscription, in USD. Used as a fallback when
 // we cannot read the actual price from Stripe (the live Stripe lookup
@@ -50,6 +53,186 @@ function safeNumber(value) {
   if (typeof value === 'bigint') return Number(value);
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function roundedRatio(numerator, denominator) {
+  const safeDenominator = safeNumber(denominator);
+  if (safeDenominator <= 0) return null;
+  return Math.round((safeNumber(numerator) / safeDenominator) * 10000) / 10000;
+}
+
+function cohortRatio(numerator, denominator, minimumCohort = PRODUCT_QUALITY_MINIMUM_COHORT) {
+  return safeNumber(denominator) >= minimumCohort
+    ? roundedRatio(numerator, denominator)
+    : null;
+}
+
+function _summarizeOutcomeRows(rows) {
+  const successful = new Set(['completed', 'succeeded', 'done']);
+  const failed = new Set(['failed', 'error']);
+  const cancelled = new Set(['cancelled', 'canceled']);
+  const summary = {
+    started: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+    inProgress: 0,
+    terminal: 0,
+  };
+
+  for (const row of rows || []) {
+    const status = String(row?.status || '').toLowerCase();
+    const count = safeNumber(row?._count?._all ?? row?._count?.status ?? row?.count);
+    summary.started += count;
+    if (successful.has(status)) summary.completed += count;
+    else if (failed.has(status)) summary.failed += count;
+    else if (cancelled.has(status)) summary.cancelled += count;
+    else summary.inProgress += count;
+  }
+  summary.terminal = summary.completed + summary.failed + summary.cancelled;
+  return summary;
+}
+
+function _buildProductQualityTrend(rows, range, minimumCohort = PRODUCT_QUALITY_MINIMUM_COHORT) {
+  const start = new Date(Date.UTC(
+    range.from.getUTCFullYear(),
+    range.from.getUTCMonth(),
+    range.from.getUTCDate(),
+  ));
+  const end = new Date(Date.UTC(
+    range.to.getUTCFullYear(),
+    range.to.getUTCMonth(),
+    range.to.getUTCDate(),
+  ));
+  const buckets = new Map();
+  for (let cursor = start.getTime(); cursor <= end.getTime(); cursor += 24 * 60 * 60 * 1000) {
+    const date = new Date(cursor).toISOString().slice(0, 10);
+    buckets.set(date, {
+      started: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      liked: 0,
+      disliked: 0,
+    });
+  }
+
+  for (const row of rows || []) {
+    const day = row?.day ? new Date(row.day) : null;
+    if (!day || Number.isNaN(day.getTime())) continue;
+    const slot = buckets.get(day.toISOString().slice(0, 10));
+    const metric = String(row?.metric || '');
+    if (!slot || !Object.prototype.hasOwnProperty.call(slot, metric)) continue;
+    slot[metric] += safeNumber(row?.count);
+  }
+
+  let suppressedBuckets = 0;
+  const trend = Array.from(buckets.entries()).map(([date, values]) => {
+    const terminalEvents = values.completed + values.failed + values.cancelled;
+    const feedbackResponses = values.liked + values.disliked;
+    const suppressStarted = values.started > 0 && values.started < minimumCohort;
+    const suppressOutcomes = terminalEvents > 0 && terminalEvents < minimumCohort;
+    const suppressFeedback = feedbackResponses > 0 && feedbackResponses < minimumCohort;
+    if (suppressStarted || suppressOutcomes || suppressFeedback) suppressedBuckets += 1;
+    return {
+      date,
+      started: suppressStarted ? null : values.started,
+      completed: suppressOutcomes ? null : values.completed,
+      failed: suppressOutcomes ? null : values.failed,
+      cancelled: suppressOutcomes ? null : values.cancelled,
+      liked: suppressFeedback ? null : values.liked,
+      disliked: suppressFeedback ? null : values.disliked,
+      suppressed: suppressStarted || suppressOutcomes || suppressFeedback,
+    };
+  });
+
+  return { trend, suppressedBuckets };
+}
+
+async function _loadProductQualityTrendRows(prisma, range) {
+  const excludedPrincipalPattern = `${SYSTEM_ASSIGNMENT_TAG_PREFIX}%`;
+  return prisma.$queryRaw`
+    WITH eligible_users AS (
+      SELECT id
+      FROM users
+      WHERE "deletedAt" IS NULL
+        AND "isSuperAdmin" = FALSE
+        AND id NOT LIKE ${excludedPrincipalPattern}
+    ), event_counts AS (
+      SELECT date_trunc('day', cr."createdAt")::date AS day,
+             'started'::text AS metric,
+             COUNT(*)::bigint AS event_count
+      FROM chat_runs cr
+      JOIN eligible_users eu ON eu.id = cr."userId"
+      WHERE cr."createdAt" >= ${range.from} AND cr."createdAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', at."createdAt")::date, 'started'::text, COUNT(*)::bigint
+      FROM agent_tasks at
+      JOIN eligible_users eu ON eu.id = at."userId"
+      WHERE at."createdAt" >= ${range.from} AND at."createdAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', cr."completedAt")::date, 'completed'::text, COUNT(*)::bigint
+      FROM chat_runs cr
+      JOIN eligible_users eu ON eu.id = cr."userId"
+      WHERE cr."completedAt" >= ${range.from} AND cr."completedAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', at."completedAt")::date, 'completed'::text, COUNT(*)::bigint
+      FROM agent_tasks at
+      JOIN eligible_users eu ON eu.id = at."userId"
+      WHERE at."completedAt" >= ${range.from} AND at."completedAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', cr."updatedAt")::date, 'failed'::text, COUNT(*)::bigint
+      FROM chat_runs cr
+      JOIN eligible_users eu ON eu.id = cr."userId"
+      WHERE cr.status = 'failed'
+        AND cr."updatedAt" >= ${range.from} AND cr."updatedAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', at."failedAt")::date, 'failed'::text, COUNT(*)::bigint
+      FROM agent_tasks at
+      JOIN eligible_users eu ON eu.id = at."userId"
+      WHERE at."failedAt" >= ${range.from} AND at."failedAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', cr."cancelledAt")::date, 'cancelled'::text, COUNT(*)::bigint
+      FROM chat_runs cr
+      JOIN eligible_users eu ON eu.id = cr."userId"
+      WHERE cr."cancelledAt" >= ${range.from} AND cr."cancelledAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', at."cancelledAt")::date, 'cancelled'::text, COUNT(*)::bigint
+      FROM agent_tasks at
+      JOIN eligible_users eu ON eu.id = at."userId"
+      WHERE at."cancelledAt" >= ${range.from} AND at."cancelledAt" <= ${range.to}
+      GROUP BY 1
+
+      UNION ALL
+      SELECT date_trunc('day', m.timestamp)::date, m.feedback::text, COUNT(*)::bigint
+      FROM messages m
+      JOIN chats c ON c.id = m."chatId"
+      JOIN eligible_users eu ON eu.id = c."userId"
+      WHERE m.role = 'ASSISTANT'
+        AND m.feedback IN ('liked', 'disliked')
+        AND m."deletedAt" IS NULL
+        AND m.timestamp >= ${range.from} AND m.timestamp <= ${range.to}
+      GROUP BY 1, 2
+    )
+    SELECT day, metric, SUM(event_count)::bigint AS count
+    FROM event_counts
+    GROUP BY day, metric
+    ORDER BY day ASC, metric ASC
+  `;
 }
 
 function percentile(sorted, p) {
@@ -497,13 +680,199 @@ async function aggregateAgentStats(prisma, range) {
   };
 }
 
+async function aggregateProductQualityStats(prisma, range) {
+  const parsedRange = parseRange(range);
+  const spanDays = (parsedRange.to.getTime() - parsedRange.from.getTime()) / (24 * 60 * 60 * 1000);
+  if (spanDays > MAX_PRODUCT_QUALITY_WINDOW_DAYS) {
+    throw new RangeError(
+      `Product quality range cannot exceed ${MAX_PRODUCT_QUALITY_WINDOW_DAYS} days`,
+    );
+  }
+
+  const dateFilter = { gte: parsedRange.from, lte: parsedRange.to };
+  const eligibleUserWhere = excludeRbacSystemPrincipalsWhere({
+    isSuperAdmin: false,
+    deletedAt: null,
+  });
+  const activeUserWhere = excludeRbacSystemPrincipalsWhere({
+    isSuperAdmin: false,
+    deletedAt: null,
+    OR: [
+      { lastActiveAt: dateFilter },
+      { chatRuns: { some: { createdAt: dateFilter } } },
+      { agentTasks: { some: { createdAt: dateFilter } } },
+    ],
+  });
+  const assistantMessageWhere = {
+    role: 'ASSISTANT',
+    deletedAt: null,
+    timestamp: dateFilter,
+    chat: { user: eligibleUserWhere },
+  };
+
+  const [
+    eligibleUsers,
+    activeUsers,
+    adopters,
+    chatAdopters,
+    agentAdopters,
+    chatOutcomeRows,
+    agentOutcomeRows,
+    assistantMessages,
+    feedbackRows,
+    trendRows,
+  ] = await Promise.all([
+    prisma.user.count({ where: eligibleUserWhere }),
+    prisma.user.count({ where: activeUserWhere }),
+    prisma.user.count({
+      where: excludeRbacSystemPrincipalsWhere({
+        isSuperAdmin: false,
+        deletedAt: null,
+        OR: [
+          { chatRuns: { some: { createdAt: dateFilter } } },
+          { agentTasks: { some: { createdAt: dateFilter } } },
+        ],
+      }),
+    }),
+    prisma.user.count({
+      where: excludeRbacSystemPrincipalsWhere({
+        isSuperAdmin: false,
+        deletedAt: null,
+        chatRuns: { some: { createdAt: dateFilter } },
+      }),
+    }),
+    prisma.user.count({
+      where: excludeRbacSystemPrincipalsWhere({
+        isSuperAdmin: false,
+        deletedAt: null,
+        agentTasks: { some: { createdAt: dateFilter } },
+      }),
+    }),
+    prisma.chatRun.groupBy({
+      by: ['status'],
+      where: { createdAt: dateFilter, user: eligibleUserWhere },
+      _count: { _all: true },
+    }),
+    prisma.agentTask.groupBy({
+      by: ['status'],
+      where: { createdAt: dateFilter, user: eligibleUserWhere },
+      _count: { _all: true },
+    }),
+    prisma.message.count({ where: assistantMessageWhere }),
+    prisma.message.groupBy({
+      by: ['feedback'],
+      where: {
+        ...assistantMessageWhere,
+        feedback: { in: ['liked', 'disliked'] },
+      },
+      _count: { _all: true },
+    }),
+    _loadProductQualityTrendRows(prisma, parsedRange),
+  ]);
+
+  const chat = _summarizeOutcomeRows(chatOutcomeRows);
+  const agents = _summarizeOutcomeRows(agentOutcomeRows);
+  const combined = {
+    started: chat.started + agents.started,
+    completed: chat.completed + agents.completed,
+    failed: chat.failed + agents.failed,
+    cancelled: chat.cancelled + agents.cancelled,
+    inProgress: chat.inProgress + agents.inProgress,
+    terminal: chat.terminal + agents.terminal,
+  };
+  const outcomesSuppressed = combined.terminal < PRODUCT_QUALITY_MINIMUM_COHORT;
+  const withRates = (surface) => ({
+    ...surface,
+    successRate: cohortRatio(
+      surface.completed,
+      surface.terminal,
+      PRODUCT_QUALITY_MINIMUM_COHORT,
+    ),
+    failureRate: cohortRatio(
+      surface.failed,
+      surface.terminal,
+      PRODUCT_QUALITY_MINIMUM_COHORT,
+    ),
+    cancellationRate: cohortRatio(
+      surface.cancelled,
+      surface.terminal,
+      PRODUCT_QUALITY_MINIMUM_COHORT,
+    ),
+    suppressed: surface.terminal < PRODUCT_QUALITY_MINIMUM_COHORT,
+  });
+
+  const feedbackCounts = { liked: 0, disliked: 0 };
+  for (const row of feedbackRows || []) {
+    const feedback = String(row?.feedback || '').toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(feedbackCounts, feedback)) {
+      feedbackCounts[feedback] += safeNumber(row?._count?._all);
+    }
+  }
+  const feedbackResponses = feedbackCounts.liked + feedbackCounts.disliked;
+  const satisfactionSuppressed = feedbackResponses < PRODUCT_QUALITY_MINIMUM_COHORT;
+  const adoptionSuppressed = activeUsers < PRODUCT_QUALITY_MINIMUM_COHORT;
+  const { trend, suppressedBuckets } = _buildProductQualityTrend(
+    trendRows,
+    parsedRange,
+    PRODUCT_QUALITY_MINIMUM_COHORT,
+  );
+
+  return {
+    range: {
+      from: parsedRange.from.toISOString(),
+      to: parsedRange.to.toISOString(),
+    },
+    adoption: {
+      eligibleUsers,
+      activeUsers,
+      adopters,
+      chatAdopters,
+      agentAdopters,
+      adoptionRate: cohortRatio(adopters, activeUsers),
+      chatAdoptionRate: cohortRatio(chatAdopters, activeUsers),
+      agentAdoptionRate: cohortRatio(agentAdopters, activeUsers),
+      suppressed: adoptionSuppressed,
+    },
+    outcomes: withRates(combined),
+    surfaces: {
+      chat: withRates(chat),
+      agents: withRates(agents),
+    },
+    satisfaction: {
+      assistantMessages,
+      feedbackResponses,
+      liked: satisfactionSuppressed ? null : feedbackCounts.liked,
+      disliked: satisfactionSuppressed ? null : feedbackCounts.disliked,
+      satisfactionRate: cohortRatio(feedbackCounts.liked, feedbackResponses),
+      feedbackCoverageRate: cohortRatio(feedbackResponses, assistantMessages),
+      suppressed: satisfactionSuppressed,
+    },
+    trend,
+    privacy: {
+      containsPii: false,
+      aggregationOnly: true,
+      minimumCohort: PRODUCT_QUALITY_MINIMUM_COHORT,
+      suppressed: {
+        adoption: adoptionSuppressed,
+        outcomes: outcomesSuppressed,
+        satisfaction: satisfactionSuppressed,
+        dailyBuckets: suppressedBuckets,
+      },
+    },
+  };
+}
+
 module.exports = {
   PLAN_MRR_USD,
+  MAX_PRODUCT_QUALITY_WINDOW_DAYS,
+  PRODUCT_QUALITY_MINIMUM_COHORT,
   parseRange,
   percentile,
   safeNumber,
+  roundedRatio,
   aggregateUserStats,
   aggregateUsageStats,
   aggregateFileStats,
   aggregateAgentStats,
+  aggregateProductQualityStats,
 };
