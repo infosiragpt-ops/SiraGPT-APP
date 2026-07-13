@@ -42,6 +42,7 @@ const {
   strongerStatus,
 } = require("../research/source-integrity");
 const { resolvePaperDois } = require("../research/doi-resolver");
+const { orderProvidersForDiscipline } = require("../research/research-discipline-router");
 const {
   buildPrismaFlow,
   buildProtocol,
@@ -452,6 +453,7 @@ function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, provid
  * @property {number} [timeoutMs]
  * @property {string} [mailto]
  * @property {string} [language]
+ * @property {string} [discipline]
  * @property {AbortSignal} [signal]
  * @property {boolean} [resolveDois]
  * @property {object} [deps]                — { retrieve, rerank, callLLM, sleep } (test seams)
@@ -481,10 +483,11 @@ async function* runAgenticBatch(opts) {
   const target = Math.min(Math.max(Number(opts.target) || DEFAULT_TARGET, 10), 1000);
   const batchSize = Math.min(Math.max(Number(opts.batchSize) || DEFAULT_BATCH_SIZE, 5), 50);
   const topK = Math.min(Math.max(Number(opts.topK) || DEFAULT_TOP_K, 1), 100);
-  const requestedProviders = Array.isArray(opts.providers) && opts.providers.length > 0
+  const hasExplicitProviders = Array.isArray(opts.providers) && opts.providers.length > 0;
+  const requestedProviders = hasExplicitProviders
     ? opts.providers.filter((p) => p in REGISTRY)
     : DEFAULT_PROVIDERS.filter((p) => p in REGISTRY);
-  const providers = requestedProviders.length > 0 ? requestedProviders : DEFAULT_PROVIDERS;
+  let providers = requestedProviders.length > 0 ? requestedProviders : DEFAULT_PROVIDERS;
   const timeoutMs = Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS;
   const mailto = opts.mailto;
   const signal = opts.signal;
@@ -500,7 +503,10 @@ async function* runAgenticBatch(opts) {
     return;
   }
 
-  const plan = analyzeQuery(query, { maxQueries: 3 });
+  const plan = analyzeQuery(query, { maxQueries: 3, discipline: opts.discipline });
+  if (!hasExplicitProviders) {
+    providers = orderProvidersForDiscipline(providers, plan.discipline);
+  }
   const protocol = buildProtocol(query, plan, opts.protocol || {});
   const searchQueries = [];
   const queryKeys = new Set();
@@ -516,6 +522,16 @@ async function* runAgenticBatch(opts) {
   const filters = plan.filters || {};
   const conceptGroups = Array.isArray(plan.conceptGroups) ? plan.conceptGroups : [];
   const language = opts.language || filters.language || plan.language;
+  const minimumSearchRounds = Math.min(2, searchQueries.length);
+  const hardCollectionCap = Math.min(1200, target + providers.length * batchSize);
+  const searchLimits = {
+    requestedTarget: target,
+    batchSize,
+    maxCandidates: hardCollectionCap,
+    maxRounds: HARD_ROUND_CAP,
+    queryVariants: searchQueries.length,
+    providerCount: providers.length,
+  };
   const startedAt = Date.now();
   yield {
     type: "start",
@@ -528,6 +544,8 @@ async function* runAgenticBatch(opts) {
     filters,
     conceptGroups,
     language,
+    discipline: plan.discipline,
+    limits: searchLimits,
     protocol: protocol.active ? protocol : undefined,
     startedAt,
   };
@@ -551,6 +569,12 @@ async function* runAgenticBatch(opts) {
   const errors = Object.fromEntries(providers.map((p) => [p, 0]));
   const contributed = Object.fromEntries(providers.map((p) => [p, 0]));
   const confirmations = Object.fromEntries(providers.map((p) => [p, 0]));
+  const providerMetrics = Object.fromEntries(providers.map((p) => [p, {
+    calls: 0,
+    durationMs: 0,
+    received: 0,
+    filtered: 0,
+  }]));
   const exhausted = new Set();
   const providerDoneEmitted = new Set();
 
@@ -562,8 +586,8 @@ async function* runAgenticBatch(opts) {
   let totalMatches = 0;
   let totalFiltered = 0;
   const integrityFilteredKeys = new Set();
-  const minimumSearchRounds = Math.min(2, searchQueries.length);
-  const hardCollectionCap = Math.min(1200, target + providers.length * batchSize);
+  let roundsExecuted = 0;
+  let stopReason = "round_cap";
 
   const providerFinished = (provider) => searchQueries.every((_, queryIndex) => (
     lanes.get(laneKey(provider, queryIndex))?.exhausted
@@ -572,6 +596,44 @@ async function* runAgenticBatch(opts) {
   const providerOffset = (provider) => searchQueries.reduce((sum, _, queryIndex) => (
     sum + (lanes.get(laneKey(provider, queryIndex))?.offset || 0)
   ), 0);
+  const providerStatsSnapshot = (selected = []) => providers.reduce((acc, provider) => {
+    const selectedForProvider = selected.filter((source) => (
+      (Array.isArray(source.sources) ? source.sources : [source.source]).includes(provider)
+    ));
+    const qualityValues = selectedForProvider
+      .map((source) => Number(source.qualityScore ?? source.retrievalScore))
+      .filter(Number.isFinite);
+    acc[provider] = {
+      contributed: contributed[provider],
+      confirmations: confirmations[provider],
+      errors: errors[provider],
+      exhausted: exhausted.has(provider),
+      offset: providerOffset(provider),
+      calls: providerMetrics[provider].calls,
+      durationMs: providerMetrics[provider].durationMs,
+      received: providerMetrics[provider].received,
+      filtered: providerMetrics[provider].filtered,
+      selected: selectedForProvider.length,
+      meanSelectedQuality: qualityValues.length
+        ? Math.round((qualityValues.reduce((sum, value) => sum + value, 0) / qualityValues.length) * 1000) / 1000
+        : null,
+    };
+    return acc;
+  }, {});
+  const searchAuditSnapshot = (selected = []) => ({
+    stopReason,
+    target,
+    targetReached: collected.length >= target,
+    roundsExecuted,
+    requestedCalls: totalRequested,
+    returnedMatches: totalMatches,
+    uniqueCandidates: collected.length,
+    filtered: totalFiltered,
+    integrityFiltered: integrityFilteredKeys.size,
+    limits: searchLimits,
+    discipline: plan.discipline,
+    providers: providerStatsSnapshot(selected),
+  });
 
   const mergeIntoCollection = (rawItem, provider, laneQuery) => {
     const initialSources = Array.from(new Set([
@@ -621,8 +683,15 @@ async function* runAgenticBatch(opts) {
       yield { type: "aborted", reason: "client_disconnect", round };
       return;
     }
-    if (allLanesFinished()) break;
-    if (round >= minimumSearchRounds && collected.length >= target) break;
+    if (allLanesFinished()) {
+      stopReason = "providers_exhausted";
+      break;
+    }
+    if (round >= minimumSearchRounds && collected.length >= target) {
+      stopReason = "target_reached";
+      break;
+    }
+    roundsExecuted = round + 1;
 
     const queryIndex = round % searchQueries.length;
     const laneQuery = searchQueries[queryIndex];
@@ -633,6 +702,8 @@ async function* runAgenticBatch(opts) {
       if (!lane || lane.exhausted) continue;
       const offset = lane.offset;
       totalRequested++;
+      providerMetrics[provider].calls += 1;
+      const providerStartedAt = Date.now();
       const task = Promise.resolve()
         .then(() => retrieve({
           source: provider,
@@ -644,13 +715,14 @@ async function* runAgenticBatch(opts) {
           language,
           signal,
         }))
-        .then((batch) => ({ provider, lane, offset, batch, error: null }))
+        .then((batch) => ({ provider, lane, offset, batch, error: null, durationMs: Date.now() - providerStartedAt }))
         .catch((err) => ({
           provider,
           lane,
           offset,
           batch: [],
           error: err && err.message ? err.message : String(err),
+          durationMs: Date.now() - providerStartedAt,
         }));
       pending.set(provider, task);
     }
@@ -662,6 +734,7 @@ async function* runAgenticBatch(opts) {
       const result = await Promise.race(Array.from(pending.values()));
       pending.delete(result.provider);
       const { provider, lane, batch, error: providerError } = result;
+      providerMetrics[provider].durationMs += Number(result.durationMs) || 0;
 
       if (signal?.aborted) {
         yield { type: "aborted", reason: "client_disconnect", provider, round };
@@ -689,6 +762,7 @@ async function* runAgenticBatch(opts) {
       } else {
         lane.offset += batch.length;
         totalMatches += batch.length;
+        providerMetrics[provider].received += batch.length;
         const fresh = [];
         let duplicateCount = 0;
         let confirmationCount = 0;
@@ -718,6 +792,7 @@ async function* runAgenticBatch(opts) {
 
         contributed[provider] += fresh.length;
         confirmations[provider] += confirmationCount;
+        providerMetrics[provider].filtered += filteredCount;
         batchN++;
         yield {
           type: "batch",
@@ -765,13 +840,24 @@ async function* runAgenticBatch(opts) {
           contributed: contributed[provider],
           confirmations: confirmations[provider],
           reason,
+          calls: providerMetrics[provider].calls,
+          received: providerMetrics[provider].received,
+          filtered: providerMetrics[provider].filtered,
+          errors: errors[provider],
+          durationMs: providerMetrics[provider].durationMs,
         };
       }
     }
 
-    if (round + 1 >= minimumSearchRounds && collected.length >= target) break;
+    if (round + 1 >= minimumSearchRounds && collected.length >= target) {
+      stopReason = "target_reached";
+      break;
+    }
     try { await _sleep(120, signal); } catch { return; }
   }
+
+  if (stopReason === "round_cap" && allLanesFinished()) stopReason = "providers_exhausted";
+  else if (stopReason === "round_cap" && collected.length >= target) stopReason = "target_reached";
 
   const collectionDoneAt = Date.now();
   yield {
@@ -783,17 +869,12 @@ async function* runAgenticBatch(opts) {
     integrityFiltered: integrityFilteredKeys.size,
     queries: searchQueries,
     filters,
+    discipline: plan.discipline,
+    stopReason,
+    roundsExecuted,
+    limits: searchLimits,
     requestedCalls: totalRequested,
-    providerStats: providers.reduce((acc, p) => {
-      acc[p] = {
-        contributed: contributed[p],
-        confirmations: confirmations[p],
-        errors: errors[p],
-        exhausted: exhausted.has(p),
-        offset: providerOffset(p),
-      };
-      return acc;
-    }, {}),
+    providerStats: providerStatsSnapshot(),
     elapsedMs: collectionDoneAt - startedAt,
   };
 
@@ -830,7 +911,16 @@ async function* runAgenticBatch(opts) {
     if (systematicReview) yield { type: "systematic_review", ...systematicReview };
     const protocolSummary = buildSystematicSummary(systematicReview);
     yield { type: "summary", markdown: `## ⚠️ Sin resultados\n\nNo se recuperaron fuentes para "${query}".${protocolSummary ? `\n\n${protocolSummary}` : ""}` };
-    yield { type: "done", stats: { totalCollected: 0, dedupedCount: 0, selectedCount: 0, systematicReview: protocol.active } };
+    yield {
+      type: "done",
+      stats: {
+        totalCollected: 0,
+        dedupedCount: 0,
+        selectedCount: 0,
+        systematicReview: protocol.active,
+        searchAudit: searchAuditSnapshot(),
+      },
+    };
     return;
   }
 
@@ -949,6 +1039,7 @@ async function* runAgenticBatch(opts) {
       integrityFilteredCount: integrityFilteredKeys.size,
       elapsedMs: Date.now() - startedAt,
       rerankerWasUsed,
+      searchAudit: searchAuditSnapshot(top),
     },
   };
 }

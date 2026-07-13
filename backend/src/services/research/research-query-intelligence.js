@@ -1,5 +1,7 @@
 'use strict';
 
+const { routeDiscipline } = require('./research-discipline-router');
+
 /**
  * research-query-intelligence — turn a raw, natural-language research request
  * into a structured search plan: detected language, content terms, extracted
@@ -268,7 +270,16 @@ function analyzeQuery(rawQuery, opts = {}) {
   const terms = contentTerms(topicText);
   const filters = extractFilters(normalized);
   const fullLower = stripDiacritics(topicText.toLowerCase());
-  const expansions = expandTerms(terms, fullLower);
+  const discipline = routeDiscipline(normalized, opts.discipline);
+  const lexicalExpansions = expandTerms(terms, fullLower);
+  const expansionKeys = new Set();
+  const expansions = [];
+  for (const value of [...lexicalExpansions, ...(discipline.controlledVocabulary || [])]) {
+    const key = stripDiacritics(String(value).toLowerCase()).replace(/\s+/g, ' ').trim();
+    if (!key || expansionKeys.has(key) || ` ${fullLower} `.includes(` ${key} `)) continue;
+    expansionKeys.add(key);
+    expansions.push(value);
+  }
   const conceptGroups = matchedConceptGroups(terms, fullLower);
 
   // Build search-query variants:
@@ -297,6 +308,7 @@ function analyzeQuery(rawQuery, opts = {}) {
     language,
     terms,
     filters,
+    discipline,
     expansions,
     conceptGroups,
     searchQueries: searchQueries.slice(0, maxQueries),

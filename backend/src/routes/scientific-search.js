@@ -21,6 +21,11 @@ const { authenticateToken } = require('../middleware/auth');
 const { responseCache } = require('../middleware/response-cache');
 const scientificSearch = require('../services/scientific-search');
 const { buildLiteratureReview } = require('../services/research/literature-review-engine');
+const { analyzeQuery } = require('../services/research/research-query-intelligence');
+const {
+  DISCIPLINE_IDS,
+  orderProvidersForDiscipline,
+} = require('../services/research/research-discipline-router');
 
 const router = express.Router();
 
@@ -55,6 +60,7 @@ router.post(
       .withMessage('query must be 2-500 chars'),
     body('providers').optional().isArray({ max: 10 })
       .withMessage('providers must be an array of provider names'),
+    body('discipline').optional().isIn(DISCIPLINE_IDS),
     body('limit').optional().isInt({ min: 1, max: 50 }),
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
     body('diversify').optional().isBoolean()
@@ -67,13 +73,18 @@ router.post(
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-    const { query, providers, limit, timeoutMs, diversify, unpaywall } = req.body;
+    const { query, providers, discipline, limit, timeoutMs, diversify, unpaywall } = req.body;
     try {
-      const result = await scientificSearch.search(query, { providers, limit, timeoutMs, diversify, unpaywall });
+      const plan = analyzeQuery(query, { discipline });
+      const routedProviders = Array.isArray(providers) && providers.length
+        ? providers
+        : orderProvidersForDiscipline(scientificSearch.PROVIDERS, plan.discipline);
+      const result = await scientificSearch.search(query, { providers: routedProviders, limit, timeoutMs, diversify, unpaywall });
       return res.json({
         ...result,
         count: result.papers.length,
         query,
+        discipline: plan.discipline,
       });
     } catch (err) {
       console.error('[scientific-search] uncaught:', err);
@@ -98,6 +109,7 @@ router.post(
     body('query').isString().trim().isLength({ min: 2, max: 500 })
       .withMessage('query must be 2-500 chars'),
     body('providers').optional().isArray({ max: 10 }),
+    body('discipline').optional().isIn(DISCIPLINE_IDS),
     body('limit').optional().isInt({ min: 1, max: 50 }),
     body('maxPapers').optional().isInt({ min: 1, max: 50 }),
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
@@ -113,9 +125,9 @@ router.post(
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-    const { query, providers, limit, maxPapers, timeoutMs, resolveDois, protocol } = req.body;
+    const { query, providers, discipline, limit, maxPapers, timeoutMs, resolveDois, protocol } = req.body;
     try {
-      const review = await buildLiteratureReview(query, { providers, limit, maxPapers, timeoutMs, resolveDois, protocol });
+      const review = await buildLiteratureReview(query, { providers, discipline, limit, maxPapers, timeoutMs, resolveDois, protocol });
       return res.json(review);
     } catch (err) {
       console.error('[scientific-search/review] uncaught:', err);
@@ -135,6 +147,7 @@ router.post(
     body('query').isString().trim().isLength({ min: 2, max: 500 })
       .withMessage('query must be 2-500 chars'),
     body('providers').optional().isArray({ max: 10 }),
+    body('discipline').optional().isIn(DISCIPLINE_IDS),
     body('limit').optional().isInt({ min: 1, max: 50 }),
     body('maxPapers').optional().isInt({ min: 1, max: 50 }),
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
@@ -150,9 +163,9 @@ router.post(
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-    const { query, providers, limit, maxPapers, timeoutMs, resolveDois, protocol } = req.body;
+    const { query, providers, discipline, limit, maxPapers, timeoutMs, resolveDois, protocol } = req.body;
     try {
-      const review = await buildLiteratureReview(query, { providers, limit, maxPapers, timeoutMs, resolveDois, protocol });
+      const review = await buildLiteratureReview(query, { providers, discipline, limit, maxPapers, timeoutMs, resolveDois, protocol });
       if (!review.protocolExport) {
         return res.status(422).json({
           error: 'systematic_protocol_required',

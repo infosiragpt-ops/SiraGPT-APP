@@ -125,6 +125,29 @@ test('flushNow tolerates P2025 (row not found) without throwing', async () => {
   assert.equal(r.flushed, 0);
 });
 
+test('flushNow uses updateMany so a deleted telemetry row does not emit P2025', async () => {
+  const calls = [];
+  const errors = [];
+  const prisma = {
+    user: {
+      update: async () => { throw new Error('update should not be used when updateMany exists'); },
+      updateMany: async (args) => { calls.push(args); return { count: 0 }; },
+    },
+  };
+  const wbc = createWriteBehindCache({
+    prisma,
+    flushIntervalMs: 0,
+    onError: (stage, error) => errors.push({ stage, error }),
+  });
+  wbc.queueWrite('user', { id: 'deleted-user' }, { lastActiveAt: new Date('2026-07-12T00:00:00Z') });
+  const result = await wbc.flushNow();
+  assert.equal(calls.length, 1);
+  assert.equal(result.flushed, 0);
+  assert.equal(result.retried, 0);
+  assert.equal(wbc.size(), 0);
+  assert.deepEqual(errors, []);
+});
+
 test('threshold triggers an async flush', async () => {
   const prisma = fakePrisma();
   const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, flushThreshold: 3 });

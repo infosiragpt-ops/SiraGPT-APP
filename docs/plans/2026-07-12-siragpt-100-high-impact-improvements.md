@@ -12,6 +12,7 @@ validación en producción y evidencia de uso real.
 - `COVERED`: capacidad ya presente y verificada en el código base.
 - `DELIVERED-R1`: entregada en la primera liberación de este programa.
 - `DELIVERED-R2`: entregada en la segunda liberación de este programa.
+- `DELIVERED-R3`: entregada en la tercera liberación de este programa.
 - `PARTIAL`: existe una base útil, pero falta completar el criterio.
 - `PENDING`: todavía no cumple el criterio de aceptación.
 
@@ -26,9 +27,9 @@ validación en producción y evidencia de uso real.
 | 5 | arXiv, bioRxiv y medRxiv | COVERED | Recuperar preprints y conservar su procedencia. |
 | 6 | Semantic Scholar, CORE, DOAJ, DBLP y DataCite | COVERED | Consultar y normalizar todos los proveedores públicos. |
 | 7 | Scopus y Web of Science | COVERED | Activarse con credenciales y degradar sin interrumpir la búsqueda. |
-| 8 | Enrutamiento por disciplina | PARTIAL | Seleccionar índices y vocabularios según la carrera o área. |
+| 8 | Enrutamiento por disciplina | DELIVERED-R3 | Seleccionar índices y vocabularios según la carrera o área. |
 | 9 | Búsqueda bilingüe español-inglés | COVERED | Expandir conceptos sin desplazar el tema literal del usuario. |
-| 10 | Recuperación profunda de hasta 1,000 candidatos | PARTIAL | Paginar fuentes compatibles y detenerse con límites auditables. |
+| 10 | Recuperación profunda de hasta 1,000 candidatos | DELIVERED-R3 | Paginar fuentes compatibles y detenerse con límites auditables. |
 
 ## 11-20. Precisión y ranking
 
@@ -156,7 +157,7 @@ validación en producción y evidencia de uso real.
 |---:|---|---|---|
 | 91 | Health checks de disponibilidad | COVERED | Exponer readiness y validar servicios requeridos. |
 | 92 | Despliegue con backup y rollback | COVERED | Respaldar, desplegar sin volúmenes destructivos y revertir por SHA. |
-| 93 | Observabilidad de búsqueda | PARTIAL | Medir latencia, cobertura, errores, filtros y calidad por proveedor. |
+| 93 | Observabilidad de búsqueda | DELIVERED-R3 | Medir latencia, cobertura, errores, filtros y calidad por proveedor. |
 | 94 | Rate limits y colas | COVERED | Controlar abuso y mantener reintentos cancelables. |
 | 95 | Gestión segura de secretos | COVERED | Evitar claves en código, logs, commits y respuestas. |
 | 96 | Controles de seguridad automatizados | COVERED | Ejecutar validaciones de cadena de suministro y patrones inseguros. |
@@ -193,3 +194,21 @@ Incluye las mejoras 22, 31-34, 36, 39 y 40, y avanza 37-38. La liberación debe 
 10. Desplegar sin operaciones destructivas y validar el flujo autenticado en producción.
 
 Estado después de R2: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 21 `PARTIAL` y 16 `PENDING`.
+
+## Liberación R3: profundidad y enrutamiento científico
+
+Incluye las mejoras 8, 10 y 93, y elimina el ruido de telemetría posterior a
+la eliminación de cuentas. La liberación debe cumplir:
+
+1. Detectar la disciplina de forma determinista y admitir una selección explícita.
+2. Priorizar índices especializados sin retirar ningún proveedor mundial configurado.
+3. Añadir vocabulario controlado solo cuando el concepto aparece en la consulta.
+4. Aplicar el mismo plan al chat agéntico, búsqueda científica y revisión de literatura.
+5. Paginar hasta el objetivo solicitado, con límite máximo de 1,000 candidatos.
+6. Informar objetivo, rondas, llamadas, límites y razón exacta de finalización.
+7. Medir por proveedor latencia, recibidos, filtrados, errores, aportes y selección final.
+8. Registrar calidad media de las fuentes finalistas por proveedor.
+9. Evitar errores P2025 de telemetría cuando una cuenta desaparece antes del vaciado.
+10. Superar suites completas, tipado, lint, bloqueo visual, seguridad y validación en producción.
+
+Estado después de R3: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 18 `PARTIAL` y 16 `PENDING`.

@@ -777,7 +777,9 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         id: `${evt.type}-${at}-${index}`,
         title: "Preparando búsqueda profesional",
         body: `Consulta: ${evt.query}`,
-        meta: `Objetivo ${evt.target} · lotes de ${evt.batchSize} · top ${evt.topK} · ${evt.providers.join(", ")}`,
+        meta: `Objetivo ${evt.target} · lotes de ${evt.batchSize} · top ${evt.topK}` +
+          (evt.discipline && evt.discipline.id !== "general" ? ` · ${evt.discipline.label}` : "") +
+          ` · ${evt.providers.join(", ")}`,
         at,
         status: "running",
       }
@@ -805,7 +807,7 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         id: `${evt.type}-${evt.provider}-${at}`,
         title: `${evt.provider} completado`,
         body: `${evt.contributed} fuentes aportadas.`,
-        meta: evt.reason,
+        meta: `${evt.reason}` + (typeof evt.durationMs === "number" ? ` · ${formatActivityDuration(evt.durationMs)}` : ""),
         at,
         status: "complete",
       }
@@ -814,7 +816,7 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         id: `${evt.type}-${at}`,
         title: "Recopilación completada",
         body: `${evt.totalCollected} fuentes encontradas, ${evt.deduped} únicas.`,
-        meta: `${evt.requestedCalls} llamadas · ${formatActivityDuration(evt.elapsedMs)}`,
+        meta: `${evt.requestedCalls} llamadas · ${evt.stopReason || "completo"} · ${formatActivityDuration(evt.elapsedMs)}`,
         at,
         status: "complete",
       }

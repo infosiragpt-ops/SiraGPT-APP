@@ -27,6 +27,7 @@ const { body, validationResult } = require("express-validator");
 const { authenticateToken } = require("../middleware/auth");
 const { runAgenticBatch, DEFAULT_PROVIDERS } = require("../services/searchBrain/agenticBatch");
 const { REGISTRY } = require("../services/searchBrain/providers");
+const { DISCIPLINE_IDS } = require("../services/research/research-discipline-router");
 
 const prisma = (() => {
   try { return require("../config/database"); } catch { return null; }
@@ -68,6 +69,7 @@ router.post(
     body("topK").optional().isInt({ min: 1, max: 100 }),
     body("providers").optional().isArray(),
     body("language").optional().isString().isLength({ min: 2, max: 8 }),
+    body("discipline").optional().isIn(DISCIPLINE_IDS),
     body("mailto").optional().isString(),
     body("resolveDois").optional().isBoolean(),
   ],
@@ -111,6 +113,7 @@ router.post(
         topK: req.body.topK,
         providers: pickProviders(req.body.providers),
         language: typeof req.body.language === "string" ? req.body.language : undefined,
+        discipline: typeof req.body.discipline === "string" ? req.body.discipline : undefined,
         mailto: pickMailto(req),
         signal: controller.signal,
         resolveDois: req.body.resolveDois,

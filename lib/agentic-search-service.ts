@@ -86,12 +86,46 @@ export interface AgenticSystematicReview {
   screeningDecisions: Array<{ source: string; title: string; doi?: string | null; year?: number | null; screening: AgenticSource["screening"] }>
 }
 
+export interface AgenticDiscipline {
+  id: string
+  label: string
+  confidence: "explicit" | "high" | "medium" | "low" | "default"
+  score: number
+  matchedTerms: string[]
+  controlledVocabulary: string[]
+  providerPriority: string[]
+  explicit: boolean
+}
+
+export interface AgenticSearchLimits {
+  requestedTarget: number
+  batchSize: number
+  maxCandidates: number
+  maxRounds: number
+  queryVariants: number
+  providerCount: number
+}
+
+export interface AgenticProviderStats {
+  contributed: number
+  confirmations?: number
+  errors: number
+  exhausted: boolean
+  offset: number
+  calls: number
+  durationMs: number
+  received: number
+  filtered: number
+  selected: number
+  meanSelectedQuality: number | null
+}
+
 export type AgenticEvent =
-  | { type: "start"; query: string; target: number; batchSize: number; topK: number; providers: string[]; queries?: string[]; filters?: Record<string, unknown>; language?: string; protocol?: AgenticSystematicReview["protocol"]; startedAt: number }
+  | { type: "start"; query: string; target: number; batchSize: number; topK: number; providers: string[]; queries?: string[]; filters?: Record<string, unknown>; language?: string; discipline?: AgenticDiscipline; limits?: AgenticSearchLimits; protocol?: AgenticSystematicReview["protocol"]; startedAt: number }
   | { type: "batch"; batchN: number; round: number; provider: string; query?: string; requested: number; received: number; unique: number; duplicates: number; confirmations?: number; filtered?: number; totalCollected: number; target: number; sources: AgenticSource[] }
   | { type: "batch_error"; batchN: number; provider: string; error: string; totalCollected: number }
-  | { type: "provider_done"; provider: string; contributed: number; reason: string }
-  | { type: "collection_done"; totalCollected: number; totalMatches?: number; deduped: number; filtered?: number; integrityFiltered?: number; queries?: string[]; filters?: Record<string, unknown>; requestedCalls: number; providerStats: Record<string, { contributed: number; confirmations?: number; errors: number; exhausted: boolean; offset: number }>; elapsedMs: number }
+  | { type: "provider_done"; provider: string; contributed: number; reason: string; calls?: number; received?: number; filtered?: number; errors?: number; durationMs?: number }
+  | { type: "collection_done"; totalCollected: number; totalMatches?: number; deduped: number; filtered?: number; integrityFiltered?: number; queries?: string[]; filters?: Record<string, unknown>; discipline?: AgenticDiscipline; stopReason?: string; roundsExecuted?: number; limits?: AgenticSearchLimits; requestedCalls: number; providerStats: Record<string, AgenticProviderStats>; elapsedMs: number }
   | { type: "ranking_start"; message: string; pool: number; candidatePool?: number; topK: number }
   | { type: "rerank_error"; error: string }
   | { type: "validation_start"; message: string; candidates: number }
@@ -100,7 +134,7 @@ export type AgenticEvent =
   | ({ type: "systematic_review" } & AgenticSystematicReview)
   | { type: "selected"; topK: number; rerankerWasUsed: boolean; sources: AgenticSource[] }
   | { type: "summary"; markdown: string }
-  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; validDoiCount?: number; resolvedDoiCount?: number; unresolvedDoiCount?: number; preprintCount?: number; integrityFilteredCount?: number; systematicReview?: boolean; screeningExcludedCount?: number; screeningUncertainCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
+  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; validDoiCount?: number; resolvedDoiCount?: number; unresolvedDoiCount?: number; preprintCount?: number; integrityFilteredCount?: number; systematicReview?: boolean; screeningExcludedCount?: number; screeningUncertainCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean; searchAudit?: { stopReason: string; target: number; targetReached: boolean; roundsExecuted: number; requestedCalls: number; returnedMatches: number; uniqueCandidates: number; filtered: number; integrityFiltered: number; limits: AgenticSearchLimits; discipline: AgenticDiscipline; providers: Record<string, AgenticProviderStats> } } }
   | { type: "saved"; dbMessage: any }
   | { type: "persist_error"; error: string }
   | { type: "aborted"; reason: string; provider?: string; round?: number }
@@ -114,6 +148,7 @@ export interface AgenticRunArgs {
   topK?: number            // 1..100, default 25
   providers?: string[]     // subset of the worldwide scientific provider registry
   language?: string
+  discipline?: string
   resolveDois?: boolean
   signal?: AbortSignal
 }
@@ -179,6 +214,7 @@ export async function runStream(
           callbacks.onProgressText?.(
             `🤖 **Iniciando búsqueda agéntica:** "${evt.query}"\n` +
             `   Objetivo: ${evt.target} fuentes · Lote: ${evt.batchSize} · Top final: ${evt.topK}\n` +
+            (evt.discipline && evt.discipline.id !== "general" ? `   Área: ${evt.discipline.label} · vocabulario controlado: ${evt.discipline.controlledVocabulary.length}\n` : "") +
             `   Proveedores: ${evt.providers.join(", ")}\n\n`
           )
           break

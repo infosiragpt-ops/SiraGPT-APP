@@ -24,6 +24,7 @@ const { formatBibliography, inTextCitation } = require('./bibliography-formatter
 const scientificSearch = require('../scientific-search');
 const { annotateSource, passesIntegrityFilters } = require('./source-integrity');
 const { resolvePaperDois } = require('./doi-resolver');
+const { orderProvidersForDiscipline } = require('./research-discipline-router');
 const {
   buildPrismaFlow,
   buildProtocol,
@@ -301,7 +302,7 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
   const t0 = Date.now();
   const searchImpl = typeof opts.searchImpl === 'function' ? opts.searchImpl : scientificSearch.search;
   const maxPapers = Number.isFinite(opts.maxPapers) && opts.maxPapers > 0 ? opts.maxPapers : 15;
-  let qa = analyzeQuery(rawQuery, { maxQueries: opts.maxQueries });
+  let qa = analyzeQuery(rawQuery, { maxQueries: opts.maxQueries, discipline: opts.discipline });
   const protocol = buildProtocol(rawQuery, qa, opts.protocol || {});
   if (protocol.active && protocol.searchExpression) {
     qa = {
@@ -326,7 +327,13 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
     };
   }
 
-  const searchOpts = { providers: opts.providers, limit: opts.limit, timeoutMs: opts.timeoutMs };
+  const searchOpts = {
+    providers: Array.isArray(opts.providers) && opts.providers.length
+      ? opts.providers
+      : orderProvidersForDiscipline(scientificSearch.PROVIDERS, qa.discipline),
+    limit: opts.limit,
+    timeoutMs: opts.timeoutMs,
+  };
   const collected = [];
   const errors = [];
   const providersUsed = new Set();

@@ -230,10 +230,20 @@ function createWriteBehindCache(opts = {}) {
         for (const entry of entries) {
           const fieldKey = keyFor(entry.model, entry.where);
           try {
-            await prisma[model].update({
-              where: entry.where,
-              data: toPrismaData(entry.data),
-            });
+            const delegate = prisma[model];
+            // updateMany is intentionally preferred for telemetry writes. It
+            // returns count=0 when an account was deleted between queue and
+            // flush, avoiding Prisma's noisy P2025 error event while keeping
+            // the same non-fatal semantics. Test doubles and older delegates
+            // without updateMany retain the prior update() fallback.
+            const usedUpdateMany = typeof delegate.updateMany === 'function';
+            const result = usedUpdateMany
+              ? await delegate.updateMany({ where: entry.where, data: toPrismaData(entry.data) })
+              : await delegate.update({ where: entry.where, data: toPrismaData(entry.data) });
+            if (usedUpdateMany && Number(result?.count) === 0) {
+              redisClearFields.push(fieldKey);
+              continue;
+            }
             flushed += 1;
             redisClearFields.push(fieldKey);
           } catch (err) {
