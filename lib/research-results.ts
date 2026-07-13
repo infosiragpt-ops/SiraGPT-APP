@@ -175,3 +175,29 @@ export function dispatchResearchFollowUp(query: string, sources: ResearchResultS
     detail: { prompt: buildResearchFollowUpPrompt(query, sources) },
   }))
 }
+
+type ResearchCommandChat = { id?: string | null; title?: string | null; model?: string | null }
+
+export async function ensureResearchCommandChat(options: {
+  currentChat?: ResearchCommandChat | null
+  query: string
+  model: string
+  createChat: (data: { title: string; model: string }) => Promise<any>
+  addMessage: (chatId: string, data: { role: string; content: string }) => Promise<any>
+}) {
+  let chat = options.currentChat
+  if (!chat?.id) {
+    const created = await options.createChat({
+      title: `Investigación: ${options.query.slice(0, 60)}`,
+      model: options.model,
+    })
+    chat = created?.chat || created
+  }
+  if (!chat?.id) throw new Error("No se pudo crear la conversación de investigación")
+  await options.addMessage(chat.id, { role: "USER", content: options.query })
+  return chat as ResearchCommandChat & { id: string }
+}
+
+export function buildScientificPapersMessage(payload: unknown) {
+  return `\`\`\`scientific-papers\n${JSON.stringify(payload)}\n\`\`\``
+}

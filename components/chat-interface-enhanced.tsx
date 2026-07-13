@@ -153,7 +153,12 @@ import MusicGenerationComponent from "./MusicGenerationComponent"
 import VoiceCatalogModal from "./voice/voice-catalog-modal"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { isAcademicResearchPrompt } from "@/lib/academic-search-intent"
-import { RESEARCH_FOLLOW_UP_EVENT, type ResearchResultSource } from "@/lib/research-results"
+import {
+  RESEARCH_FOLLOW_UP_EVENT,
+  buildScientificPapersMessage,
+  ensureResearchCommandChat,
+  type ResearchResultSource,
+} from "@/lib/research-results"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
@@ -7954,13 +7959,10 @@ But first, you need to connect your Spotify account securely using the button be
 
   // ── Slash-command dispatcher ───────────────────────────────────────────
   // Routes parsed slash commands (/goal, /research) to dedicated backends.
-  // Streams progress events via SSE and shows the result in a toast (with a
-  // link to copy the full markdown report into the next chat reply).
+  // Streams progress events via SSE or persists scientific result cards.
   //
-  // Important: this function does NOT post the user's message into the
-  // chat history — slash commands are meta-actions, not regular messages.
-  // The result IS surfaced through toast + a final notification with
-  // the markdown body so the user can paste it back into the conversation.
+  // `/goal` remains a meta-action. `/research` creates or reuses a chat and
+  // persists both the query and the scientific result card.
   const runSlashCommand = React.useCallback(async (slash: { command: string; remainder: string }) => {
     const query = slash.remainder.trim();
     if (!query) {
@@ -7986,6 +7988,16 @@ But first, you need to connect your Spotify account securely using the button be
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
+          const researchModel = currentChatRef.current?.model || selectedModelRef.current
+          if (!researchModel) throw new Error("Selecciona un modelo antes de iniciar la investigación")
+          const researchChat = await ensureResearchCommandChat({
+            currentChat: currentChatRef.current,
+            query,
+            model: researchModel,
+            createChat: (data) => apiClient.createChat(data),
+            addMessage: (chatId, data) => apiClient.addMessage(chatId, data),
+          })
+          await selectChat(researchChat.id)
           // /research → one-shot POST over 16 sources; ask for a rich set and
           // free OA PDFs (Unpaywall, gated on SIRAGPT_RESEARCH_EMAIL server-side).
           const request = await apiClient.prepareMutatingFetch({
@@ -8011,19 +8023,12 @@ But first, you need to connect your Spotify account securely using the button be
           // Persist a rich, clear result card in the conversation instead of a
           // vanishing toast: an assistant message carrying a ```scientific-papers```
           // fenced block that MessageComponent renders as PapersResultCard.
-          if (ranked.length > 0 && currentChat?.id) {
-            const paperMsg = {
-              id: `msg-papers-${Date.now()}`,
-              chatId: currentChat.id,
-              role: "ASSISTANT" as const,
-              content:
-                "```scientific-papers\n" + JSON.stringify(payload) + "\n```",
-              timestamp: new Date().toISOString(),
-            };
-            setCurrentChat?.((prev: any) => {
-              if (!prev || prev.id !== currentChat.id) return prev;
-              return { ...prev, messages: [...(prev.messages || []), paperMsg] };
-            });
+          if (ranked.length > 0) {
+            await apiClient.addMessage(researchChat.id, {
+              role: "ASSISTANT",
+              content: buildScientificPapersMessage(payload),
+            })
+            await selectChat(researchChat.id)
             toast.success(`📚 ${payload.count} artículos · ${payload.providers.length} fuentes`, {
               id: toastId,
               duration: 4000,
@@ -8098,7 +8103,7 @@ But first, you need to connect your Spotify account securely using the button be
 
     toast.error(`Comando desconocido: /${slash.command}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectChat]);
 
   const handleSend = async () => {
     let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
@@ -8122,10 +8127,8 @@ But first, you need to connect your Spotify account securely using the button be
     if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
 
     // ── Slash-command intercept ────────────────────────────────────────
-    // When the message starts with /goal or /research (or any other known
-    // slash command), bypass the normal chat flow and dispatch to the
-    // dedicated backend route. The result is shown via toast + posted
-    // back as an assistant message into the conversation when complete.
+    // Slash commands use their dedicated backend routes. `/research` owns its
+    // chat persistence so new and existing conversations behave identically.
     const slash = parseSlashPrefix(rawMsg);
     if (slash) {
       setInput("");

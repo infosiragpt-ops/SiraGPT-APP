@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   DEFAULT_RESEARCH_FILTERS,
   applyResearchResultFilters,
+  buildScientificPapersMessage,
   buildResearchFollowUpPrompt,
+  ensureResearchCommandChat,
   researchKeyFinding,
   researchSampleSize,
   researchSourceIdentity,
@@ -49,5 +51,37 @@ describe("research result workbench helpers", () => {
     expect(researchSampleSize(enriched)).toBe("n=480")
     expect(researchKeyFinding(enriched)).toBe("Results showed a significant reduction.")
     expect(researchKeyFinding({ abstract: "Background context only." })).toBeNull()
+  })
+
+  it("creates a research chat when needed and persists the user query", async () => {
+    const calls: Array<{ kind: string; value: any }> = []
+    const chat = await ensureResearchCommandChat({
+      currentChat: null,
+      query: "telemedicine randomized trial",
+      model: "gpt-test",
+      createChat: async (data) => { calls.push({ kind: "create", value: data }); return { chat: { id: "chat-r5" } } },
+      addMessage: async (chatId, data) => { calls.push({ kind: "message", value: { chatId, ...data } }) },
+    })
+    expect(chat.id).toBe("chat-r5")
+    expect(calls).toEqual([
+      { kind: "create", value: { title: "Investigación: telemedicine randomized trial", model: "gpt-test" } },
+      { kind: "message", value: { chatId: "chat-r5", role: "USER", content: "telemedicine randomized trial" } },
+    ])
+  })
+
+  it("reuses an existing chat and serializes a persistent scientific card", async () => {
+    const addMessage = vi.fn(async () => ({}))
+    const createChat = vi.fn(async () => ({ chat: { id: "unused" } }))
+    const chat = await ensureResearchCommandChat({
+      currentChat: { id: "chat-existing" },
+      query: "hypertension",
+      model: "gpt-test",
+      createChat,
+      addMessage,
+    })
+    expect(chat.id).toBe("chat-existing")
+    expect(createChat).not.toHaveBeenCalled()
+    expect(addMessage).toHaveBeenCalledWith("chat-existing", { role: "USER", content: "hypertension" })
+    expect(buildScientificPapersMessage({ query: "hypertension", papers: [{ title: "Study" }] })).toContain("```scientific-papers")
   })
 })
