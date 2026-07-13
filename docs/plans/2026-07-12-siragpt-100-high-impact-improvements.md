@@ -15,6 +15,9 @@ validación en producción y evidencia de uso real.
 - `DELIVERED-R3`: entregada en la tercera liberación de este programa.
 - `DELIVERED-R4`: entregada en la cuarta liberación de este programa.
 - `DELIVERED-R5`: entregada en la quinta liberación de este programa.
+- `DELIVERED-R6`: entregada en la sexta liberación de este programa.
+- `DELIVERED-R7`: entregada en la séptima liberación de este programa.
+- `DELIVERED-R8`: entregada en la octava liberación de este programa.
 - `PARTIAL`: existe una base útil, pero falta completar el criterio.
 - `PENDING`: todavía no cumple el criterio de aceptación.
 
@@ -128,13 +131,13 @@ validación en producción y evidencia de uso real.
 | # | Mejora | Estado | Criterio de aceptación |
 |---:|---|---|---|
 | 71 | Nombre Empresas en toda la interfaz | COVERED | Mantener rutas/permisos y cambiar solo la denominación visible. |
-| 72 | Biblioteca científica por empresa | PENDING | Compartir fuentes dentro del tenant correcto. |
-| 73 | Colecciones compartidas | PENDING | Colaborar con permisos por colección. |
+| 72 | Biblioteca científica por empresa | DELIVERED-R7 | Compartir fuentes dentro del tenant correcto. |
+| 73 | Colecciones compartidas | DELIVERED-R7 | Colaborar con permisos por colección. |
 | 74 | Roles y permisos | COVERED | Aplicar permisos de propietario, administrador y miembro. |
-| 75 | Comentarios y menciones | PARTIAL | Comentar fuentes y artefactos notificando al destinatario. |
+| 75 | Comentarios y menciones | DELIVERED-R7 | Comentar fuentes y artefactos notificando al destinatario. |
 | 76 | Registro de actividad | COVERED | Auditar acciones relevantes sin exponer secretos. |
-| 77 | Historial de versiones de artefactos | PENDING | Restaurar versiones de documentos y presentaciones. |
-| 78 | Plantillas de investigación por empresa | PENDING | Reutilizar normas, marca, estructura y fuentes aprobadas. |
+| 77 | Historial de versiones de artefactos | DELIVERED-R7 | Restaurar versiones de documentos y presentaciones. |
+| 78 | Plantillas de investigación por empresa | DELIVERED-R7 | Reutilizar normas, marca, estructura y fuentes aprobadas. |
 | 79 | Memoria aislada por proyecto | COVERED | Mantener archivos, chats y contexto dentro del proyecto. |
 | 80 | Aislamiento multi-tenant | COVERED | Impedir acceso cruzado en datos, previews y artefactos. |
 
@@ -143,9 +146,9 @@ validación en producción y evidencia de uso real.
 | # | Mejora | Estado | Criterio de aceptación |
 |---:|---|---|---|
 | 81 | Agente de búsqueda federada | COVERED | Planificar, consultar, fusionar, ordenar y sintetizar. |
-| 82 | Agente crítico de evidencia | PARTIAL | Revisar calidad, contradicciones y soporte de afirmaciones. |
-| 83 | Agente verificador de citas | PENDING | Comprobar citas contra metadatos y texto disponible. |
-| 84 | Agente de revisión sistemática | PARTIAL | Coordinar estrategia, cribado, extracción y síntesis. |
+| 82 | Agente crítico de evidencia | DELIVERED-R8 | Revisar calidad, contradicciones y soporte de afirmaciones. |
+| 83 | Agente verificador de citas | DELIVERED-R8 | Comprobar citas contra metadatos y texto disponible. |
+| 84 | Agente de revisión sistemática | DELIVERED-R8 | Coordinar estrategia, cribado, extracción y síntesis. |
 | 85 | Agente editor de documentos | COVERED | Editar archivos reales con validaciones. |
 | 86 | Agente de presentaciones | COVERED | Crear PPTX y validar el artefacto. |
 | 87 | Paralelismo entre proveedores | COVERED | Consultar hosts independientes de forma concurrente. |
@@ -271,3 +274,41 @@ validación técnica ya disponibles en 62 y 70. La liberación debe cumplir:
 12. Validar paquete, cantidad de láminas, desbordes, render, citas, procedencia, tipado, lint y pruebas de interfaz.
 
 Estado después de R6: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 8 `DELIVERED-R6`, 4 `PARTIAL` y 5 `PENDING`.
+
+## Liberación R7: colaboración científica por Empresa
+
+Incluye las mejoras 72-73, 75 y 77-78, y conserva los controles de roles,
+auditoría, memoria y aislamiento ya disponibles en 71, 74, 76 y 79-80. La
+liberación debe cumplir:
+
+1. Separar la biblioteca personal de la biblioteca de cada Empresa.
+2. Compartir colecciones con permisos `VIEW` y `EDIT` sin duplicar referencias.
+3. Ocultar las notas privadas del propietario a los demás colaboradores.
+4. Validar membresía y fallar cerrado ante identificadores de otro tenant.
+5. Añadir conversaciones por colección, menciones limitadas a miembros y notificaciones profundas.
+6. Crear y reutilizar plantillas de investigación por Empresa.
+7. Restaurar una versión anterior como una nueva versión sin sobrescribir el historial inmutable.
+8. Auditar compartir, retirar, comentar y crear plantillas sin registrar contenido sensible.
+9. Superar migración aditiva, pruebas, tipado, compilación, bloqueo visual, seguridad y CI por SHA.
+10. Desplegar sin volúmenes destructivos y validar roles, privacidad y responsive con cuentas temporales eliminadas al finalizar.
+
+Estado después de R7: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 8 `DELIVERED-R6`, 5 `DELIVERED-R7`, 3 `PARTIAL` y 1 `PENDING`.
+
+## Liberación R8: agentes científicos verificables
+
+Incluye las mejoras 82-84 y se apoya en los agentes y controles ya disponibles
+en 81 y 85-90. La liberación debe cumplir:
+
+1. Puntuar la calidad de cada fuente usando integridad, texto, revisión por pares, diseño y riesgo de sesgo.
+2. Emitir por afirmación un veredicto `supported`, `partially_supported`, `contradicted`, `contradictory_evidence` o `unsupported`.
+3. Conservar la frase de evidencia, la fuente `[S#]`, discrepancias numéricas y conflictos de dirección.
+4. Verificar citas DOI, autor-año y etiquetas `[S#]` contra metadatos canónicos.
+5. Comparar el contexto de cada cita con resumen o texto completo y distinguir soporte, debilidad, ausencia y cifra incompatible.
+6. Detectar afirmaciones cuantitativas sin cita y devolver cobertura bibliográfica y textual separadas.
+7. Coordinar estrategia, recuperación, deduplicación, cribado, extracción, evaluación crítica, síntesis y citas en ocho etapas auditables.
+8. Crear una cola explícita de decisiones humanas para cribado incierto, afirmaciones débiles y citas no verificadas.
+9. Entregar un checkpoint estable y reanudable por conjunto de estudios y estado de etapas.
+10. Exponer los tres agentes por API e integrarlos automáticamente en cada revisión de literatura.
+11. Superar pruebas focalizadas, rutas, suite completa, tipado, lint, seguridad, CI y validación autenticada en producción.
+
+Estado después de R8: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 8 `DELIVERED-R6`, 5 `DELIVERED-R7`, 3 `DELIVERED-R8`, 1 `PARTIAL` y 0 `PENDING`.

@@ -32,6 +32,11 @@ const {
   preliminaryRiskOfBias,
   screenPaper,
 } = require('./systematic-review-protocol');
+const {
+  buildSystematicReviewAudit,
+  critiqueEvidence,
+  verifyScientificCitations,
+} = require('./research-quality-agents');
 
 function applyFilters(papers, filters = {}) {
   return papers.map(annotateSource).filter((p) => {
@@ -315,15 +320,40 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
   }
 
   if (!qa.normalized) {
-    return {
-      query: qa, papers: [], synthesis: synthesize([], qa),
-      bibliography: { apa: [], ieee: [], mla: [] }, comparisonTable: '',
+    const emptySynthesis = synthesize([], qa);
+    const emptyBibliography = { apa: [], ieee: [], mla: [] };
+    const emptyPrisma = protocol.active ? buildPrismaFlow({}) : null;
+    const emptyCertainty = protocol.active ? gradeEvidence([]) : null;
+    const emptyReport = buildMarkdownReport({
+      qa,
+      papers: [],
+      synthesis: emptySynthesis,
+      bibliography: emptyBibliography,
       protocol,
-      prisma: protocol.active ? buildPrismaFlow({}) : null,
-      certainty: protocol.active ? gradeEvidence([]) : null,
+      prisma: emptyPrisma,
+      certainty: emptyCertainty,
+    });
+    const emptyCore = {
+      query: qa, papers: [], synthesis: emptySynthesis,
+      bibliography: emptyBibliography, comparisonTable: '',
+      protocol,
+      prisma: emptyPrisma,
+      certainty: emptyCertainty,
       screeningDecisions: [],
-      report: buildMarkdownReport({ qa, papers: [], synthesis: synthesize([], qa), bibliography: { apa: [] }, protocol }),
+      report: emptyReport,
       meta: { providers: [], errors: [{ provider: 'input', message: 'query is empty' }], count: 0, durationMs: Date.now() - t0 },
+    };
+    const evidenceCritic = critiqueEvidence({ papers: [], synthesis: emptySynthesis });
+    const citationVerifier = verifyScientificCitations(emptyReport, []);
+    return {
+      ...emptyCore,
+      agents: {
+        evidenceCritic,
+        citationVerifier,
+        systematicReview: protocol.active
+          ? buildSystematicReviewAudit(emptyCore, { evidenceCritic, citationVerifier })
+          : null,
+      },
     };
   }
 
@@ -402,8 +432,22 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
   };
   const comparisonTable = buildComparisonTable(papers, qa.language === 'en' ? 'en' : 'es');
   const report = buildMarkdownReport({ qa, papers, synthesis, bibliography, protocol, prisma, certainty });
-
-  return {
+  const meta = {
+    providers: Array.from(providersUsed),
+    errors,
+    count: papers.length,
+    integrityExcluded,
+    screeningExcluded: protocol.active ? screened.filter((paper) => paper.screening.decision === 'exclude').length : 0,
+    screeningUncertain: protocol.active ? screened.filter((paper) => paper.screening.decision === 'uncertain').length : 0,
+    doiResolved: papers.filter((paper) => paper.doiResolutionStatus === 'resolved').length,
+    doiNotFound: papers.filter((paper) => paper.doiResolutionStatus === 'not_found').length,
+    doiResolutionError,
+    queriesRun: qa.searchQueries,
+    durationMs: Date.now() - t0,
+  };
+  const evidenceCritic = critiqueEvidence({ papers, synthesis });
+  const citationVerifier = verifyScientificCitations(report, papers);
+  const reviewCore = {
     query: qa,
     protocol: protocol.active ? protocol : null,
     prisma,
@@ -415,18 +459,16 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
     bibliography,
     comparisonTable,
     report,
-    meta: {
-      providers: Array.from(providersUsed),
-      errors,
-      count: papers.length,
-      integrityExcluded,
-      screeningExcluded: protocol.active ? screened.filter((paper) => paper.screening.decision === 'exclude').length : 0,
-      screeningUncertain: protocol.active ? screened.filter((paper) => paper.screening.decision === 'uncertain').length : 0,
-      doiResolved: papers.filter((paper) => paper.doiResolutionStatus === 'resolved').length,
-      doiNotFound: papers.filter((paper) => paper.doiResolutionStatus === 'not_found').length,
-      doiResolutionError,
-      queriesRun: qa.searchQueries,
-      durationMs: Date.now() - t0,
+    meta,
+  };
+  return {
+    ...reviewCore,
+    agents: {
+      evidenceCritic,
+      citationVerifier,
+      systematicReview: protocol.active
+        ? buildSystematicReviewAudit(reviewCore, { evidenceCritic, citationVerifier })
+        : null,
     },
   };
 }

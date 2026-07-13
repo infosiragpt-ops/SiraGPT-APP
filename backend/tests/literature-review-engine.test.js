@@ -9,6 +9,7 @@ require('./search-agentic-doi-resolution.test');
 require('./research-discipline-routing.test');
 require('./research-library.test');
 require('./research-saved-search-alerts.test');
+require('./research-quality-agents.test');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -202,6 +203,8 @@ test('buildLiteratureReview: full deliverable from an injected search', async ()
   // Synthesis stats are real.
   assert.equal(review.synthesis.stats.count, 3);
   assert.ok(review.meta.durationMs >= 0);
+  assert.equal(review.agents.evidenceCritic.agent, 'evidence_critic');
+  assert.equal(review.agents.citationVerifier.agent, 'citation_verifier');
 });
 
 test('buildLiteratureReview: applies a year filter from the query', async () => {

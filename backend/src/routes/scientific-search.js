@@ -31,6 +31,11 @@ const {
   extractEffectEstimates,
   gradeFullTextEvidence,
 } = require('../services/research/systematic-review-protocol');
+const {
+  critiqueEvidence,
+  verifyScientificCitations,
+} = require('../services/research/research-quality-agents');
+const { runSystematicReviewAgent } = require('../services/research/systematic-review-agent');
 
 const router = express.Router();
 
@@ -215,6 +220,69 @@ router.post(
       certainty: gradeFullTextEvidence(studies, req.body.grade || {}),
       meta: { scope: 'full_text', studiesAssessed: studies.length, reviewerOverridesSupported: true },
     });
+  },
+);
+
+router.post(
+  '/agents/evidence-critic',
+  authenticateToken,
+  [
+    body('papers').isArray({ min: 1, max: 100 }),
+    body('claims').optional().isArray({ max: 100 }),
+    body('synthesis').optional().isObject(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    return res.json(critiqueEvidence({
+      papers: req.body.papers,
+      claims: req.body.claims,
+      synthesis: req.body.synthesis,
+    }));
+  },
+);
+
+router.post(
+  '/agents/citation-verifier',
+  authenticateToken,
+  [
+    body('text').isString().isLength({ min: 1, max: 500_000 }),
+    body('references').isArray({ min: 1, max: 200 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    return res.json(verifyScientificCitations(req.body.text, req.body.references));
+  },
+);
+
+router.post(
+  '/agents/systematic-review',
+  authenticateToken,
+  [
+    body('query').isString().trim().isLength({ min: 2, max: 500 }),
+    body('providers').optional().isArray({ max: 16 }),
+    body('discipline').optional().isIn(DISCIPLINE_IDS),
+    body('limit').optional().isInt({ min: 1, max: 50 }),
+    body('maxPapers').optional().isInt({ min: 1, max: 50 }),
+    body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
+    body('resolveDois').optional().isBoolean(),
+    body('protocol').optional().isObject(),
+    body('protocol.framework').optional().isIn(['pico', 'spider']),
+    body('protocol.fields').optional().isObject(),
+    body('protocol.inclusionCriteria').optional().isArray({ max: 20 }),
+    body('protocol.exclusionCriteria').optional().isArray({ max: 20 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    const { query, ...options } = req.body;
+    try {
+      return res.json(await runSystematicReviewAgent(query, options));
+    } catch (err) {
+      console.error('[scientific-search/agents/systematic-review] uncaught:', err);
+      return res.status(500).json({ error: 'systematic_review_agent_failed', message: err.message });
+    }
   },
 );
 
