@@ -14,6 +14,7 @@ validación en producción y evidencia de uso real.
 - `DELIVERED-R2`: entregada en la segunda liberación de este programa.
 - `DELIVERED-R3`: entregada en la tercera liberación de este programa.
 - `DELIVERED-R4`: entregada en la cuarta liberación de este programa.
+- `DELIVERED-R5`: entregada en la quinta liberación de este programa.
 - `PARTIAL`: existe una base útil, pero falta completar el criterio.
 - `PENDING`: todavía no cumple el criterio de aceptación.
 
@@ -99,13 +100,13 @@ validación en producción y evidencia de uso real.
 | 51 | Progreso de búsqueda en tiempo real | COVERED | Mostrar fases, conteos y proveedores durante el SSE. |
 | 52 | Cancelación inmediata | COVERED | Detener proveedores, ranking y actualización visual. |
 | 53 | Estado por proveedor | COVERED | Mostrar contribución, errores y agotamiento sin bloquear el resto. |
-| 54 | Panel profesional de filtros | PENDING | Editar filtros sin reescribir el prompt. |
-| 55 | Tarjetas científicas expandibles | PARTIAL | Ver resumen, metadatos, integridad y acciones por fuente. |
-| 56 | Orden configurable | PENDING | Ordenar por pertinencia, fecha, citas, evidencia o acceso. |
-| 57 | Comparación de estudios | PARTIAL | Seleccionar fuentes y comparar diseño, muestra y hallazgos. |
-| 58 | Preguntas de seguimiento con contexto | PARTIAL | Reutilizar la selección sin repetir la búsqueda completa. |
-| 59 | Búsquedas guardadas y alertas | PENDING | Reejecutar consultas y notificar literatura nueva. |
-| 60 | Accesibilidad y móvil | PARTIAL | Operar búsqueda, filtros y fuentes con teclado y pantallas pequeñas. |
+| 54 | Panel profesional de filtros | DELIVERED-R5 | Editar filtros sin reescribir el prompt. |
+| 55 | Tarjetas científicas expandibles | DELIVERED-R5 | Ver resumen, metadatos, integridad y acciones por fuente. |
+| 56 | Orden configurable | DELIVERED-R5 | Ordenar por pertinencia, fecha, citas, evidencia o acceso. |
+| 57 | Comparación de estudios | DELIVERED-R5 | Seleccionar fuentes y comparar diseño, muestra y hallazgos. |
+| 58 | Preguntas de seguimiento con contexto | DELIVERED-R5 | Reutilizar la selección sin repetir la búsqueda completa. |
+| 59 | Búsquedas guardadas y alertas | DELIVERED-R5 | Reejecutar consultas y notificar literatura nueva. |
+| 60 | Accesibilidad y móvil | DELIVERED-R5 | Operar búsqueda, filtros y fuentes con teclado y pantallas pequeñas. |
 
 ## 61-70. Documentos y presentaciones
 
@@ -232,3 +233,21 @@ Incluye las mejoras 35, 37-38, 41-43, 46-47 y 49-50. La liberación debe cumplir
 12. Superar migración aditiva, pruebas, tipado, lint, bloqueo visual, seguridad y validación en producción.
 
 Estado después de R4: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 13 `PARTIAL` y 11 `PENDING`.
+
+## Liberación R5: banco de trabajo científico en chat
+
+Incluye las mejoras 54-60 y conserva el progreso, cancelación y estado por
+proveedor ya disponibles en 51-53. La liberación debe cumplir:
+
+1. Editar año, acceso, revisión por pares, diseño y proveedor sin reescribir la consulta.
+2. Ordenar el mismo conjunto por pertinencia, fecha, citas, evidencia o disponibilidad de acceso.
+3. Expandir cada estudio para consultar resumen, DOI, integridad, resolución y procedencia.
+4. Seleccionar y comparar hasta cuatro estudios en una tabla adaptable y accesible.
+5. Precargar preguntas de seguimiento con la consulta y fuentes elegidas sin repetir la búsqueda.
+6. Guardar, listar, pausar, ejecutar y eliminar búsquedas científicas por usuario.
+7. Programar alertas diarias o semanales con un despachador horario acotado y sin solapamientos.
+8. Crear una notificación solo cuando una ejecución posterior encuentre identidades científicas nuevas.
+9. Operar filtros, selección, expansión, comparación y alertas con controles nativos de teclado y diseño móvil.
+10. Superar migración aditiva, pruebas de servicio y rutas, pruebas de frontend, tipado, lint, seguridad y validación real en producción.
+
+Estado después de R5: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 9 `PARTIAL` y 8 `PENDING`.

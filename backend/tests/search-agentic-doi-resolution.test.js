@@ -15,7 +15,7 @@ test('agentic search resolves DOI only after ranking and exposes validation even
     year: 2024,
     journal: 'Evidence Journal',
     doi: `10.1234/telemedicine.${index}`,
-    abstract: 'Telemedicine evidence for adult patients.',
+    abstract: 'The sample size was n=420. Results showed improved blood pressure control.',
     citationCount: 10 - index,
   }));
 
@@ -44,6 +44,8 @@ test('agentic search resolves DOI only after ranking and exposes validation even
   assert.ok(events.some((event) => event.type === 'validation_start'));
   assert.equal(events.find((event) => event.type === 'validation_done').resolved, 2);
   assert.ok(events.find((event) => event.type === 'selected').sources.every((source) => source.doiResolutionStatus === 'resolved'));
+  assert.deepEqual(events.find((event) => event.type === 'selected').sources[0].sampleSizes, [420]);
+  assert.match(events.find((event) => event.type === 'selected').sources[0].keyFinding, /Results showed improved blood pressure control/);
   assert.equal(events.find((event) => event.type === 'done').stats.resolvedDoiCount, 2);
 });
 

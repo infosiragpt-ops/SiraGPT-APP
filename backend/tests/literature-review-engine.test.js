@@ -8,6 +8,7 @@ require('./systematic-review-protocol.test');
 require('./search-agentic-doi-resolution.test');
 require('./research-discipline-routing.test');
 require('./research-library.test');
+require('./research-saved-search-alerts.test');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

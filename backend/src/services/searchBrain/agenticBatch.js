@@ -43,12 +43,14 @@ const {
 } = require("../research/source-integrity");
 const { resolvePaperDois } = require("../research/doi-resolver");
 const { orderProvidersForDiscipline } = require("../research/research-discipline-router");
+const { extractEvidence } = require("../research/evidence-extractor");
 const {
   buildPrismaFlow,
   buildProtocol,
   gradeEvidence,
   preliminaryRiskOfBias,
   screenPaper,
+  extractEffectEstimates,
 } = require("../research/systematic-review-protocol");
 
 const DEFAULT_BATCH_SIZE = 10;
@@ -283,6 +285,8 @@ function rankDeterministically(items, queries, conceptGroups, filters = {}) {
 function compactSource(item) {
   // The SSE payload goes over the wire on every batch — keep it lean
   // by stripping the raw provider blob (often tens of KB).
+  const extractedEvidence = item.evidence || extractEvidence(item, [], { maxFindings: 1 });
+  const extractedEffects = item.effects || extractEffectEstimates(item.abstract || "");
   return {
     source: item.source,
     title: item.title,
@@ -319,6 +323,8 @@ function compactSource(item) {
     editorialStatus: item.editorialStatus,
     screening: item.screening,
     riskOfBias: item.riskOfBias,
+    sampleSizes: Array.isArray(extractedEffects?.sampleSizes) ? extractedEffects.sampleSizes.slice(0, 3) : [],
+    keyFinding: extractedEvidence?.topFinding || extractedEvidence?.findings?.[0]?.sentence || null,
   };
 }
 

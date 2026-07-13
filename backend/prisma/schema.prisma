@@ -679,16 +679,28 @@ model ChatRun {
 // `filters` is a free-form JSON bag (chatId, dateRange, role, etc.)
 // so the search panel can grow new knobs without a migration.
 model SavedSearch {
-  id        String   @id @default(cuid())
-  userId    String
-  name      String
-  query     String
-  filters   Json?
-  createdAt DateTime @default(now())
+  id               String    @id @default(cuid())
+  userId           String
+  name             String
+  query            String
+  filters          Json?
+  kind             String    @default("general")
+  schedule         String    @default("manual")
+  active           Boolean   @default(true)
+  notifyInApp      Boolean   @default(true)
+  lastRunAt        DateTime?
+  nextRunAt        DateTime?
+  lastResultCount  Int       @default(0)
+  lastNewCount     Int       @default(0)
+  resultIdentities Json?
+  lastError        String?   @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([kind, active, nextRunAt])
   @@map("saved_searches")
 }
 

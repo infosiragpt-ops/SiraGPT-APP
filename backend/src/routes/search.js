@@ -6,6 +6,12 @@ const fetch = require('node-fetch');
 const OpenAI = require('openai');
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
 const { semanticBoostForMessages, mergeHybridResults } = require('../services/chat-hybrid-search');
+const {
+  SCHEDULES: RESEARCH_ALERT_SCHEDULES,
+  executeSavedSearch,
+  nextRunForSchedule,
+  normalizeSavedSearchFilters,
+} = require('../services/research/saved-search-alerts');
 // runAgenticBatch is consumed by the POST /web streaming route below; it was
 // used without ever being imported → ReferenceError on every call.
 const { runAgenticBatch } = require('../services/searchBrain/agenticBatch');
@@ -717,15 +723,32 @@ router.post('/saved', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
-  const filters = req.body?.filters ?? null;
+  const kind = req.body?.kind === 'scientific' ? 'scientific' : 'general';
+  const filters = kind === 'scientific'
+    ? normalizeSavedSearchFilters(req.body?.filters)
+    : (req.body?.filters ?? null);
+  const schedule = RESEARCH_ALERT_SCHEDULES.has(req.body?.schedule) ? req.body.schedule : 'manual';
+  const active = req.body?.active !== false;
+  const notifyInApp = req.body?.notifyInApp !== false;
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (!query) return res.status(400).json({ error: 'query is required' });
   if (name.length > 120) return res.status(400).json({ error: 'name too long' });
   if (query.length > 2000) return res.status(400).json({ error: 'query too long' });
+  if (kind === 'scientific' && query.length > 500) return res.status(400).json({ error: 'scientific query too long' });
 
   try {
     const row = await prisma.savedSearch.create({
-      data: { userId, name, query, filters: filters || undefined },
+      data: {
+        userId,
+        name,
+        query,
+        filters: filters || undefined,
+        kind,
+        schedule: kind === 'scientific' ? schedule : 'manual',
+        active,
+        notifyInApp,
+        nextRunAt: kind === 'scientific' && active ? nextRunForSchedule(schedule) : null,
+      },
     });
     res.status(201).json(row);
   } catch (err) {
@@ -737,8 +760,9 @@ router.post('/saved', authenticateToken, async (req, res) => {
 router.get('/saved', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
+    const kind = req.query.kind === 'scientific' ? 'scientific' : null;
     const rows = await prisma.savedSearch.findMany({
-      where: { userId },
+      where: { userId, ...(kind ? { kind } : {}) },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
@@ -746,6 +770,42 @@ router.get('/saved', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[search/saved] list failed:', err.message);
     res.status(500).json({ error: 'failed to list saved searches' });
+  }
+});
+
+router.patch('/saved/:id', authenticateToken, async (req, res) => {
+  try {
+    const existing = await prisma.savedSearch.findFirst({ where: { id: req.params.id, userId: req.user.id } });
+    if (!existing) return res.status(404).json({ error: 'not found' });
+    const data = {};
+    if (typeof req.body?.name === 'string' && req.body.name.trim()) data.name = req.body.name.trim().slice(0, 120);
+    if (typeof req.body?.query === 'string' && req.body.query.trim()) data.query = req.body.query.trim().slice(0, existing.kind === 'scientific' ? 500 : 2000);
+    if (req.body?.filters && existing.kind === 'scientific') data.filters = normalizeSavedSearchFilters(req.body.filters);
+    if (typeof req.body?.notifyInApp === 'boolean') data.notifyInApp = req.body.notifyInApp;
+    if (typeof req.body?.active === 'boolean') data.active = req.body.active;
+    if (RESEARCH_ALERT_SCHEDULES.has(req.body?.schedule) && existing.kind === 'scientific') data.schedule = req.body.schedule;
+    const nextActive = Object.prototype.hasOwnProperty.call(data, 'active') ? data.active : existing.active;
+    const nextSchedule = data.schedule || existing.schedule;
+    if (Object.prototype.hasOwnProperty.call(data, 'active') || data.schedule) {
+      data.nextRunAt = nextActive ? nextRunForSchedule(nextSchedule) : null;
+    }
+    if (!Object.keys(data).length) return res.status(400).json({ error: 'no updatable fields' });
+    return res.json(await prisma.savedSearch.update({ where: { id: existing.id }, data }));
+  } catch (err) {
+    console.error('[search/saved] update failed:', err.message);
+    return res.status(500).json({ error: 'failed to update saved search' });
+  }
+});
+
+router.post('/saved/:id/run', authenticateToken, async (req, res) => {
+  try {
+    const existing = await prisma.savedSearch.findFirst({ where: { id: req.params.id, userId: req.user.id } });
+    if (!existing) return res.status(404).json({ error: 'not found' });
+    if (existing.kind !== 'scientific') return res.status(400).json({ error: 'scientific saved search required' });
+    return res.json(await executeSavedSearch(prisma, existing));
+  } catch (err) {
+    console.error('[search/saved] run failed:', err.message);
+    return res.status(502).json({ error: 'failed to run saved search' });
   }
 });
 

@@ -99,10 +99,12 @@ describe('system-cron', () => {
         'failed-email-retry',
         'hard-delete-deleted-users',
         'prune-api-usage',
+        'research-saved-search-alerts',
         'scrub-deleted-user-content',
         'sweep-expired-announcements',
         'sweep-expired-api-keys',
         'sweep-expired-partial-sessions',
+        'sweep-expired-pending-transfers',
         'sweep-expired-sessions',
         'sweep-expired-verification-tokens',
         'sweep-inactive-api-keys',
@@ -122,6 +124,7 @@ describe('system-cron', () => {
       const sweep = res.tasks.find((t) => t.name === 'sweep-expired-sessions');
       const evt = res.tasks.find((t) => t.name === 'sweep-expired-verification-tokens');
       const idleUsers = res.tasks.find((t) => t.name === 'detect-idle-users');
+      const researchAlerts = res.tasks.find((t) => t.name === 'research-saved-search-alerts');
       assert.equal(scrub.schedule, '30 2 * * *');
       assert.equal(hard.schedule, '0 3 * * *');
       assert.equal(prune.schedule, '30 3 * * *');
@@ -129,6 +132,7 @@ describe('system-cron', () => {
       assert.equal(sweep.schedule, '0 * * * *');
       assert.equal(evt.schedule, '30 4 * * *');
       assert.equal(idleUsers.schedule, '30 6 * * *');
+      assert.equal(researchAlerts.schedule, '30 * * * *');
       const costArchive = res.tasks.find((t) => t.name === 'cost-tracker-archive');
       assert.equal(costArchive.schedule, '30 5 * * *');
     } finally {

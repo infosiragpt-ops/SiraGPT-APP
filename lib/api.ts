@@ -265,6 +265,24 @@ export type ResearchLibraryEnvelope = {
   totalPages: number
 }
 
+export type ResearchSavedSearchRecord = {
+  id: string
+  name: string
+  query: string
+  kind: 'scientific' | 'general'
+  filters?: Record<string, unknown> | null
+  schedule: 'manual' | 'daily' | 'weekly'
+  active: boolean
+  notifyInApp: boolean
+  lastRunAt?: string | null
+  nextRunAt?: string | null
+  lastResultCount: number
+  lastNewCount: number
+  lastError?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export type MemoryItem = {
   id?: string
   fact: string
@@ -3034,6 +3052,37 @@ class ApiClient {
 
   async syncResearchCollectionToMendeley(data: { collectionId?: string; referenceIds?: string[]; accessToken: string; mendeleyFolderId?: string; collectionName?: string }) {
     return this.request('/research-library/sync/mendeley', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
+  }
+
+  async getResearchSavedSearches() {
+    return (await this.request('/search/saved?kind=scientific')) as { items: ResearchSavedSearchRecord[] };
+  }
+
+  async createResearchSavedSearch(data: { name: string; query: string; filters?: Record<string, unknown>; schedule?: 'manual' | 'daily' | 'weekly'; active?: boolean; notifyInApp?: boolean }) {
+    return (await this.request('/search/saved', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, kind: 'scientific' }),
+    })) as ResearchSavedSearchRecord;
+  }
+
+  async updateResearchSavedSearch(id: string, data: { name?: string; query?: string; filters?: Record<string, unknown>; schedule?: 'manual' | 'daily' | 'weekly'; active?: boolean; notifyInApp?: boolean }) {
+    return (await this.request(`/search/saved/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })) as ResearchSavedSearchRecord;
+  }
+
+  async deleteResearchSavedSearch(id: string) {
+    return this.request(`/search/saved/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async runResearchSavedSearch(id: string) {
+    return this.request(`/search/saved/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      timeoutMs: 60000,
+      maxRetries: 0,
+    });
   }
 
   // Fetch an agent-artifact (audio/music/web-app) as a Blob with the bearer
