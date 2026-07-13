@@ -51,19 +51,56 @@ export interface AgenticSource {
   studyType?: string
   integrityStatus?: "clear" | "corrected" | "expression_of_concern" | "withdrawn" | "retracted" | "unknown"
   integrityAlerts?: string[]
+  doiResolutionStatus?: "resolved" | "not_found" | "timeout" | "unavailable" | "aborted" | "invalid" | "missing"
+  doiResolvedUrl?: string
+  doiResolutionHttpStatus?: number
+  doiCheckedAt?: string
+  doiResolutionCacheHit?: boolean
+  editorialStatus?: string
+  screening?: { decision: "include" | "exclude" | "uncertain"; reasons: string[]; stage: string }
+  riskOfBias?: { level: "high" | "some_concerns" | "unknown"; basis: string; recommendedTool: string; requiresFullTextAssessment: boolean }
+}
+
+export interface AgenticSystematicReview {
+  protocol: {
+    active: boolean
+    framework?: "pico" | "spider" | null
+    fields: Record<string, string>
+    missingFields: string[]
+    searchExpression: string
+    inclusionCriteria: { automatic: string[]; manual: string[] }
+    exclusionCriteria: { automatic: string[]; manual: string[] }
+    scope: string
+    fullTextReviewRequired: boolean
+  }
+  prisma: {
+    scope: string
+    identification: { recordsIdentified: number }
+    deduplication: { uniqueRecords: number; duplicatesRemoved: number }
+    screening: { recordsScreened: number; recordsExcluded: number; recordsUncertain: number; exclusionReasons: Record<string, number> }
+    retrieval: { reportsSought: number; fullTextAssessmentPending: number }
+    eligibility: { fullTextReportsAssessed: number; fullTextReportsExcluded: number }
+    included: { studiesInPreliminarySynthesis: number }
+  }
+  certainty: { level: string; basis: string; reasons: string[]; requiresFullTextAssessment: boolean }
+  screeningDecisions: Array<{ source: string; title: string; doi?: string | null; year?: number | null; screening: AgenticSource["screening"] }>
 }
 
 export type AgenticEvent =
-  | { type: "start"; query: string; target: number; batchSize: number; topK: number; providers: string[]; queries?: string[]; filters?: Record<string, unknown>; language?: string; startedAt: number }
+  | { type: "start"; query: string; target: number; batchSize: number; topK: number; providers: string[]; queries?: string[]; filters?: Record<string, unknown>; language?: string; protocol?: AgenticSystematicReview["protocol"]; startedAt: number }
   | { type: "batch"; batchN: number; round: number; provider: string; query?: string; requested: number; received: number; unique: number; duplicates: number; confirmations?: number; filtered?: number; totalCollected: number; target: number; sources: AgenticSource[] }
   | { type: "batch_error"; batchN: number; provider: string; error: string; totalCollected: number }
   | { type: "provider_done"; provider: string; contributed: number; reason: string }
   | { type: "collection_done"; totalCollected: number; totalMatches?: number; deduped: number; filtered?: number; integrityFiltered?: number; queries?: string[]; filters?: Record<string, unknown>; requestedCalls: number; providerStats: Record<string, { contributed: number; confirmations?: number; errors: number; exhausted: boolean; offset: number }>; elapsedMs: number }
   | { type: "ranking_start"; message: string; pool: number; candidatePool?: number; topK: number }
   | { type: "rerank_error"; error: string }
+  | { type: "validation_start"; message: string; candidates: number }
+  | { type: "validation_done"; resolved: number; notFound: number; unavailable: number }
+  | { type: "validation_error"; error: string }
+  | ({ type: "systematic_review" } & AgenticSystematicReview)
   | { type: "selected"; topK: number; rerankerWasUsed: boolean; sources: AgenticSource[] }
   | { type: "summary"; markdown: string }
-  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; validDoiCount?: number; preprintCount?: number; integrityFilteredCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
+  | { type: "done"; stats: { totalCollected: number; totalMatches?: number; dedupedCount: number; selectedCount: number; validatedCount?: number; validDoiCount?: number; resolvedDoiCount?: number; unresolvedDoiCount?: number; preprintCount?: number; integrityFilteredCount?: number; systematicReview?: boolean; screeningExcludedCount?: number; screeningUncertainCount?: number; elapsedMs?: number; rerankerWasUsed?: boolean } }
   | { type: "saved"; dbMessage: any }
   | { type: "persist_error"; error: string }
   | { type: "aborted"; reason: string; provider?: string; round?: number }
@@ -77,6 +114,7 @@ export interface AgenticRunArgs {
   topK?: number            // 1..100, default 25
   providers?: string[]     // subset of the worldwide scientific provider registry
   language?: string
+  resolveDois?: boolean
   signal?: AbortSignal
 }
 
@@ -168,6 +206,21 @@ export async function runStream(
           break
         case "rerank_error":
           callbacks.onProgressText?.(`⚠️ Reranking parcial: ${evt.error} (se usa orden heurístico)\n`)
+          break
+        case "validation_start":
+          callbacks.onProgressText?.(`🔎 ${evt.message}\n`)
+          break
+        case "validation_done":
+          callbacks.onProgressText?.(`✓ DOI comprobados: ${evt.resolved} resueltos, ${evt.notFound} no localizados, ${evt.unavailable} no disponibles.\n\n`)
+          break
+        case "validation_error":
+          callbacks.onProgressText?.(`⚠️ La comprobación DOI no pudo completarse: ${evt.error}\n`)
+          break
+        case "systematic_review":
+          callbacks.onProgressText?.(
+            `📋 **Cribado sistemático:** ${evt.prisma.screening.recordsScreened} registros · ` +
+            `${evt.prisma.screening.recordsExcluded} excluidos · ${evt.prisma.screening.recordsUncertain} en duda.\n\n`
+          )
           break
         case "selected":
           callbacks.onSelected?.(evt.sources)

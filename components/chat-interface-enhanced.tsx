@@ -836,6 +836,42 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         at,
         status: "warning",
       }
+    case "validation_start":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Comprobando identificadores DOI",
+        body: evt.message,
+        meta: `${evt.candidates} DOI candidatos`,
+        at,
+        status: "running",
+      }
+    case "validation_done":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Comprobación DOI completada",
+        body: `${evt.resolved} resueltos, ${evt.notFound} no localizados.`,
+        meta: `${evt.unavailable} no disponibles`,
+        at,
+        status: evt.notFound > 0 ? "warning" : "complete",
+      }
+    case "validation_error":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Comprobación DOI parcial",
+        body: evt.error,
+        meta: "La búsqueda conserva los resultados y evita afirmar resolución.",
+        at,
+        status: "warning",
+      }
+    case "systematic_review":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Cribado sistemático completado",
+        body: `${evt.prisma.screening.recordsScreened} registros cribados; ${evt.prisma.screening.recordsExcluded} excluidos y ${evt.prisma.screening.recordsUncertain} en duda.`,
+        meta: `${evt.protocol.framework?.toUpperCase() || "Protocolo"} · certeza preliminar ${evt.certainty.level}`,
+        at,
+        status: "complete",
+      }
     case "selected":
       return {
         id: `${evt.type}-${at}`,
@@ -10356,7 +10392,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         const validate = (s: any) => {
           const checks: string[] = [];
           const hasDoi = s.doiStatus === "format_valid" || (!!s.doi && /^10\.\d{4,9}\//i.test(String(s.doi)));
-          if (hasDoi) checks.push("✓ DOI con formato válido");
+          if (s.doiResolutionStatus === "resolved") checks.push("✓ DOI resuelto en línea");
+          else if (s.doiResolutionStatus === "not_found") checks.push("⚠ DOI no localizado");
+          else if (hasDoi) checks.push("DOI con formato válido; resolución no confirmada");
           else if (s.url) checks.push("✓ URL");
           else checks.push("⚠ sin enlace");
           const yr = parseInt(String(s.year || s.published || ""), 10);
@@ -10386,7 +10424,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         }
         lines.push(``);
         sources.forEach((s: any, idx: number) => {
-          const link = s.doi ? `https://doi.org/${s.doi}` : (s.url || "");
+          const link = s.doiResolvedUrl || (s.doi ? `https://doi.org/${s.doi}` : (s.url || ""));
           const title = link ? `[${(s.title || "(sin título)").trim()}](${link})` : (s.title || "(sin título)").trim();
           const meta = [
             (s.authors && s.authors.length > 0) ? (Array.isArray(s.authors) ? s.authors.slice(0, 3).join(", ") : String(s.authors)) : null,
@@ -10447,6 +10485,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 progress.label = `Validando y rankeando ${evt.pool} fuentes`;
                 progress.counter = `top ${evt.topK}`;
                 progress.percent = 75;
+                updateBubble(renderProgress());
+                break;
+              case 'validation_start':
+                progress.phase = "validate";
+                progress.label = "Comprobando DOI en línea";
+                progress.counter = `${evt.candidates} candidatos`;
+                progress.percent = 82;
+                updateBubble(renderProgress());
+                break;
+              case 'validation_done':
+                progress.phase = "validate";
+                progress.label = "Comprobación DOI completada";
+                progress.counter = `${evt.resolved} resueltos`;
+                progress.percent = 86;
+                updateBubble(renderProgress());
+                break;
+              case 'validation_error':
+                progress.phase = "validate";
+                progress.label = "Comprobación DOI parcial";
+                progress.counter = "sin afirmaciones no verificadas";
+                progress.percent = 86;
+                updateBubble(renderProgress());
+                break;
+              case 'systematic_review':
+                progress.phase = "validate";
+                progress.label = "Cribado sistemático completado";
+                progress.counter = `${evt.prisma.screening.recordsExcluded} excluidos · ${evt.prisma.screening.recordsUncertain} en duda`;
+                progress.percent = 87;
                 updateBubble(renderProgress());
                 break;
               case 'selected':

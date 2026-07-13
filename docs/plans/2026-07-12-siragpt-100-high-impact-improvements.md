@@ -11,6 +11,7 @@ validación en producción y evidencia de uso real.
 
 - `COVERED`: capacidad ya presente y verificada en el código base.
 - `DELIVERED-R1`: entregada en la primera liberación de este programa.
+- `DELIVERED-R2`: entregada en la segunda liberación de este programa.
 - `PARTIAL`: existe una base útil, pero falta completar el criterio.
 - `PENDING`: todavía no cumple el criterio de aceptación.
 
@@ -49,7 +50,7 @@ validación en producción y evidencia de uso real.
 | # | Mejora | Estado | Criterio de aceptación |
 |---:|---|---|---|
 | 21 | Validación sintáctica de DOI | DELIVERED-R1 | Marcar formato válido sin afirmar resolución en línea. |
-| 22 | Resolución activa de DOI | PENDING | Confirmar HTTP, destino canónico y estado editorial con caché. |
+| 22 | Resolución activa de DOI | DELIVERED-R2 | Confirmar HTTP, destino canónico y estado editorial con caché. |
 | 23 | Detección de retractaciones y retiros | DELIVERED-R1 | Leer OpenAlex/Crossref y excluirlos por defecto. |
 | 24 | Correcciones y expresiones de preocupación | DELIVERED-R1 | Conservar y mostrar el evento editorial más riesgoso. |
 | 25 | Clasificación de preprints | DELIVERED-R1 | Identificar repositorios y tipos `posted-content`. |
@@ -63,16 +64,16 @@ validación en producción y evidencia de uso real.
 
 | # | Mejora | Estado | Criterio de aceptación |
 |---:|---|---|---|
-| 31 | Constructor PICO | PENDING | Convertir población, intervención, comparación y resultado en consultas. |
-| 32 | Constructor SPIDER | PENDING | Soportar investigación cualitativa y métodos mixtos. |
-| 33 | Flujo PRISMA | PENDING | Registrar identificación, cribado, elegibilidad e inclusión. |
-| 34 | Criterios de inclusión y exclusión | PENDING | Configurarlos, aplicarlos y explicar cada descarte. |
+| 31 | Constructor PICO | DELIVERED-R2 | Convertir población, intervención, comparación y resultado en consultas. |
+| 32 | Constructor SPIDER | DELIVERED-R2 | Soportar investigación cualitativa y métodos mixtos. |
+| 33 | Flujo PRISMA | DELIVERED-R2 | Registrar identificación, cribado, elegibilidad e inclusión. |
+| 34 | Criterios de inclusión y exclusión | DELIVERED-R2 | Configurarlos, aplicarlos y explicar cada descarte. |
 | 35 | Dedupe para revisión sistemática | PARTIAL | Fusionar DOI/título y permitir resolver conflictos manualmente. |
-| 36 | Cribado por título y resumen | PENDING | Aceptar, excluir o dejar en duda con motivos. |
-| 37 | Evaluación de riesgo de sesgo | PENDING | Aplicar listas por diseño con trazabilidad. |
-| 38 | Gradación de certeza de evidencia | PENDING | Resumir certeza con criterios explícitos. |
-| 39 | Síntesis de consenso y contradicciones | PARTIAL | Citar los estudios que sostienen cada conclusión. |
-| 40 | Exportación del protocolo | PENDING | Descargar estrategia, filtros, decisiones y diagrama. |
+| 36 | Cribado por título y resumen | DELIVERED-R2 | Aceptar, excluir o dejar en duda con motivos. |
+| 37 | Evaluación de riesgo de sesgo | PARTIAL | Ya orienta la lista por diseño y registra dominios; falta evaluar texto completo. |
+| 38 | Gradación de certeza de evidencia | PARTIAL | Ya expone dominios y motivos preliminares; falta evaluación con efectos y texto completo. |
+| 39 | Síntesis de consenso y contradicciones | DELIVERED-R2 | Citar los estudios que sostienen cada conclusión. |
+| 40 | Exportación del protocolo | DELIVERED-R2 | Descargar estrategia, filtros, decisiones y diagrama. |
 
 ## 41-50. Biblioteca y referencias
 
@@ -175,3 +176,20 @@ Incluye las mejoras 13, 14 y 21-29. La liberación debe cumplir:
 5. Suite completa sin fallos.
 6. CI verde para el SHA exacto.
 7. Despliegue no destructivo, health check y búsqueda autenticada real.
+
+## Liberación R2: revisión sistemática auditable
+
+Incluye las mejoras 22, 31-34, 36, 39 y 40, y avanza 37-38. La liberación debe cumplir:
+
+1. Resolver solo los DOI finalistas, con timeout, caché acotada y estados separados para resuelto, no localizado y no disponible.
+2. Convertir solicitudes PICO y SPIDER en expresiones booleanas sin inventar campos ausentes.
+3. Aplicar el mismo protocolo en la revisión especializada y en la búsqueda agéntica del chat.
+4. Registrar decisiones `include`, `exclude` y `uncertain` con motivos deterministas.
+5. Calcular el flujo PRISMA desde conteos reales de identificación, deduplicación y cribado.
+6. Vincular cada consenso o contradicción con las citas de los estudios que la sostienen.
+7. Descargar un Markdown con estrategia, criterios, decisiones y diagrama PRISMA.
+8. Mantener riesgo de sesgo y certeza como evaluaciones preliminares hasta revisar texto completo.
+9. Superar pruebas focalizadas, tipado, lint, bloqueo visual, escaneo de secretos y suite completa.
+10. Desplegar sin operaciones destructivas y validar el flujo autenticado en producción.
+
+Estado después de R2: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 21 `PARTIAL` y 16 `PENDING`.

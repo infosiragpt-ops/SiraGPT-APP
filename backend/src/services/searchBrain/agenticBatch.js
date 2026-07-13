@@ -41,6 +41,14 @@ const {
   passesIntegrityFilters,
   strongerStatus,
 } = require("../research/source-integrity");
+const { resolvePaperDois } = require("../research/doi-resolver");
+const {
+  buildPrismaFlow,
+  buildProtocol,
+  gradeEvidence,
+  preliminaryRiskOfBias,
+  screenPaper,
+} = require("../research/systematic-review-protocol");
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_TARGET = 500;
@@ -302,6 +310,14 @@ function compactSource(item) {
     studyType: item.studyType,
     integrityStatus: item.integrityStatus,
     integrityAlerts: Array.isArray(item.integrityAlerts) ? item.integrityAlerts : [],
+    doiResolutionStatus: item.doiResolutionStatus,
+    doiResolvedUrl: item.doiResolvedUrl,
+    doiResolutionHttpStatus: item.doiResolutionHttpStatus,
+    doiCheckedAt: item.doiCheckedAt,
+    doiResolutionCacheHit: item.doiResolutionCacheHit,
+    editorialStatus: item.editorialStatus,
+    screening: item.screening,
+    riskOfBias: item.riskOfBias,
   };
 }
 
@@ -347,13 +363,15 @@ function formatArticleCitation(source, index) {
   const year = source.year ? `(${source.year}).` : "(s. f.).";
   const title = ensureSentence(source.title || "Sin título");
   const venue = formatVenue(source);
-  const link = source.doi ? doiUrl(source.doi) : (source.url || source.pdfUrl || "");
+  const link = source.doiResolvedUrl || (source.doi ? doiUrl(source.doi) : (source.url || source.pdfUrl || ""));
   const metadata = [authors, year, title, venue].filter(Boolean).join(" ");
   const provenance = source.sourceCount >= 2
     ? `\n_Validado en ${source.sourceCount} índices: ${(source.sources || []).join(", ")}._`
     : "";
   const signals = [];
-  if (source.doiStatus === "format_valid") signals.push("DOI con formato válido");
+  if (source.doiResolutionStatus === "resolved") signals.push("DOI resuelto en línea");
+  else if (source.doiResolutionStatus === "not_found") signals.push("Alerta: DOI no localizado");
+  else if (source.doiStatus === "format_valid") signals.push("DOI con formato válido; resolución no confirmada");
   if (source.publicationStage === "preprint") signals.push("Preprint: revisión por pares no confirmada");
   else if (source.peerReviewStatus === "confirmed") signals.push("Revisión por pares confirmada por metadatos");
   else if (source.peerReviewStatus === "likely_peer_reviewed") signals.push("Publicado en revista; revisión por pares no confirmada");
@@ -361,11 +379,40 @@ function formatArticleCitation(source, index) {
   if (source.integrityStatus === "corrected") signals.push("Corrección registrada");
   if (source.integrityStatus === "expression_of_concern") signals.push("Alerta: expresión de preocupación");
   if (source.integrityStatus === "retracted") signals.push("Alerta: retractado");
+  if (source.screening?.decision === "uncertain") signals.push("Cribado: requiere revisión humana");
+  if (source.riskOfBias?.level) signals.push(`Sesgo preliminar: ${source.riskOfBias.level}`);
   const integrity = signals.length ? `\n_${signals.join(" · ")}._` : "";
   return `${index + 1}. ${metadata}${link ? `\n${link}` : ""}${provenance}${integrity}`;
 }
 
-function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, providerStats }) {
+function buildSystematicSummary(systematicReview) {
+  if (!systematicReview?.protocol?.active) return "";
+  const { protocol, prisma, certainty } = systematicReview;
+  const lines = ["## Protocolo de revisión sistemática", ""];
+  if (protocol.framework) lines.push(`- **Framework:** ${protocol.framework.toUpperCase()}`);
+  if (protocol.searchExpression) lines.push(`- **Estrategia:** \`${protocol.searchExpression}\``);
+  if (protocol.missingFields?.length) lines.push(`- **Campos pendientes:** ${protocol.missingFields.join(", ")}`);
+  const manual = (protocol.inclusionCriteria?.manual?.length || 0) + (protocol.exclusionCriteria?.manual?.length || 0);
+  if (manual) lines.push(`- **Criterios manuales registrados:** ${manual}; requieren confirmación humana.`);
+  lines.push("");
+  lines.push("### Flujo PRISMA preliminar");
+  lines.push(`- Identificados: ${prisma.identification.recordsIdentified}`);
+  lines.push(`- Duplicados eliminados: ${prisma.deduplication.duplicatesRemoved}`);
+  lines.push(`- Cribados: ${prisma.screening.recordsScreened}`);
+  lines.push(`- Excluidos: ${prisma.screening.recordsExcluded}`);
+  lines.push(`- En duda: ${prisma.screening.recordsUncertain}`);
+  lines.push(`- Incluidos en la síntesis preliminar: ${prisma.included.studiesInPreliminarySynthesis}`);
+  if (Object.keys(prisma.screening.exclusionReasons).length) {
+    lines.push(`- Motivos: ${Object.entries(prisma.screening.exclusionReasons).map(([reason, count]) => `${reason} (${count})`).join(", ")}`);
+  }
+  lines.push("");
+  lines.push(`### Certeza preliminar: ${certainty.level}`);
+  lines.push(`${certainty.reasons.join(", ")}. La evaluación definitiva requiere lectura del texto completo y listas específicas por diseño.`);
+  lines.push("");
+  return lines.join("\n");
+}
+
+function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, providerStats, systematicReview }) {
   const lines = [];
   const providersUsed = Object.entries(providerStats || {})
     .filter(([, stats]) => stats && stats.contributed > 0)
@@ -377,12 +424,19 @@ function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, provid
     lines.push("");
   });
   lines.push("---");
+  const systematic = buildSystematicSummary(systematicReview);
+  if (systematic) {
+    lines.push(systematic);
+    lines.push("---");
+  }
   const corroborated = top.filter((source) => source.sourceCount >= 2).length;
   const validDoi = top.filter((source) => source.doiStatus === "format_valid").length;
+  const resolvedDoi = top.filter((source) => source.doiResolutionStatus === "resolved").length;
   const preprints = top.filter((source) => source.publicationStage === "preprint").length;
   lines.push(`*Consulta: "${query}". Se localizaron ${dedupedCount || totalCollected} registros únicos y se seleccionaron ${top.length}.` +
     (corroborated ? ` ${corroborated} fueron corroborados en más de un índice.` : "") +
-    (validDoi ? ` ${validDoi} tienen DOI con formato válido.` : "") +
+    (resolvedDoi ? ` ${resolvedDoi} DOI fueron resueltos en línea.` : "") +
+    (validDoi > resolvedDoi ? ` ${validDoi - resolvedDoi} DOI adicionales solo tienen formato válido.` : "") +
     (preprints ? ` ${preprints} son preprints y se muestran sin afirmar revisión por pares.` : "") +
     (providersUsed.length ? ` Proveedores con resultados: ${providersUsed.join(", ")}.` : "") + "*");
   return lines.join("\n");
@@ -399,6 +453,7 @@ function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, provid
  * @property {string} [mailto]
  * @property {string} [language]
  * @property {AbortSignal} [signal]
+ * @property {boolean} [resolveDois]
  * @property {object} [deps]                — { retrieve, rerank, callLLM, sleep } (test seams)
  */
 
@@ -446,9 +501,10 @@ async function* runAgenticBatch(opts) {
   }
 
   const plan = analyzeQuery(query, { maxQueries: 3 });
+  const protocol = buildProtocol(query, plan, opts.protocol || {});
   const searchQueries = [];
   const queryKeys = new Set();
-  for (const candidate of plan.searchQueries || []) {
+  for (const candidate of [protocol.searchExpression, ...(plan.searchQueries || [])].slice(0, 3)) {
     const value = String(candidate || "").replace(/\s+/g, " ").trim();
     const key = normaliseText(value);
     if (value && key && !queryKeys.has(key)) {
@@ -472,6 +528,7 @@ async function* runAgenticBatch(opts) {
     filters,
     conceptGroups,
     language,
+    protocol: protocol.active ? protocol : undefined,
     startedAt,
   };
 
@@ -499,6 +556,7 @@ async function* runAgenticBatch(opts) {
 
   const collected = [];
   const aliases = new Map();
+  const systematicPool = new Map();
   let batchN = 0;
   let totalRequested = 0;
   let totalMatches = 0;
@@ -640,6 +698,11 @@ async function* runAgenticBatch(opts) {
         for (const rawItem of batch) {
           if (!rawItem || typeof rawItem !== "object") continue;
           const annotatedItem = annotateSource({ ...rawItem, source: rawItem.source || provider });
+          if (protocol.active) {
+            const key = dedupKey(annotatedItem);
+            const previous = systematicPool.get(key);
+            systematicPool.set(key, previous ? mergeCandidate(previous, annotatedItem) : annotatedItem);
+          }
           if (!passesFilters(annotatedItem, filters)) {
             filteredCount += 1;
             totalFiltered += 1;
@@ -734,14 +797,49 @@ async function* runAgenticBatch(opts) {
     elapsedMs: collectionDoneAt - startedAt,
   };
 
+  const screenedRecords = protocol.active
+    ? Array.from(systematicPool.values()).map((paper) => ({ ...paper, screening: screenPaper(paper, protocol, filters) }))
+    : [];
+  const systematicReviewFor = (includedPapers) => {
+    if (!protocol.active) return null;
+    const assessed = includedPapers.map((paper) => ({
+      ...paper,
+      riskOfBias: paper.riskOfBias || preliminaryRiskOfBias(paper),
+    }));
+    return {
+      protocol,
+      prisma: buildPrismaFlow({
+        identified: totalMatches,
+        deduped: systematicPool.size,
+        screened: screenedRecords,
+        included: assessed.length,
+      }),
+      certainty: gradeEvidence(assessed, { consensus: [], contradictions: [] }),
+      screeningDecisions: screenedRecords.map((paper) => ({
+        source: paper.source,
+        title: paper.title,
+        doi: paper.doi || null,
+        year: paper.year || null,
+        screening: paper.screening,
+      })),
+    };
+  };
+
   if (collected.length === 0) {
-    yield { type: "summary", markdown: `## ⚠️ Sin resultados\n\nNo se recuperaron fuentes para "${query}".` };
-    yield { type: "done", stats: { totalCollected: 0, dedupedCount: 0, selectedCount: 0 } };
+    const systematicReview = systematicReviewFor([]);
+    if (systematicReview) yield { type: "systematic_review", ...systematicReview };
+    const protocolSummary = buildSystematicSummary(systematicReview);
+    yield { type: "summary", markdown: `## ⚠️ Sin resultados\n\nNo se recuperaron fuentes para "${query}".${protocolSummary ? `\n\n${protocolSummary}` : ""}` };
+    yield { type: "done", stats: { totalCollected: 0, dedupedCount: 0, selectedCount: 0, systematicReview: protocol.active } };
     return;
   }
 
+  const screeningByKey = new Map(screenedRecords.map((paper) => [dedupKey(paper), paper.screening]));
+  const rankInput = protocol.active
+    ? collected.map((paper) => ({ ...paper, screening: screeningByKey.get(dedupKey(paper)) || screenPaper(paper, protocol, filters) }))
+    : collected;
   const deterministic = rankDeterministically(
-    collected,
+    rankInput,
     [searchQueries[0], query, ...searchQueries.slice(1)],
     conceptGroups,
     filters,
@@ -774,7 +872,38 @@ async function* runAgenticBatch(opts) {
     yield { type: "rerank_error", error: err && err.message ? err.message : String(err) };
   }
 
-  const top = ranked.slice(0, topK).map(compactSource);
+  let selected = ranked.slice(0, topK);
+  const doiResolutionEnabled = opts.resolveDois !== false && process.env.SCIENTIFIC_DOI_RESOLUTION_ENABLED !== "0";
+  if (doiResolutionEnabled) {
+    const resolver = deps.resolveDois || resolvePaperDois;
+    yield {
+      type: "validation_start",
+      message: `Comprobando hasta ${Math.min(selected.length, 15)} DOI seleccionados…`,
+      candidates: selected.filter((source) => source.doiStatus === "format_valid").slice(0, 15).length,
+    };
+    try {
+      selected = await resolver(selected, {
+        timeoutMs: Math.min(timeoutMs, 2_500),
+        maxPapers: 15,
+        concurrency: 4,
+        signal,
+      });
+      yield {
+        type: "validation_done",
+        resolved: selected.filter((source) => source.doiResolutionStatus === "resolved").length,
+        notFound: selected.filter((source) => source.doiResolutionStatus === "not_found").length,
+        unavailable: selected.filter((source) => ["timeout", "unavailable", "aborted"].includes(source.doiResolutionStatus)).length,
+      };
+    } catch (error) {
+      yield { type: "validation_error", error: error?.message || String(error) };
+    }
+  }
+  if (protocol.active) {
+    selected = selected.map((paper) => ({ ...paper, riskOfBias: preliminaryRiskOfBias(paper) }));
+  }
+  const systematicReview = systematicReviewFor(selected);
+  if (systematicReview) yield { type: "systematic_review", ...systematicReview };
+  const top = selected.map(compactSource);
   yield {
     type: "selected",
     topK: top.length,
@@ -798,6 +927,7 @@ async function* runAgenticBatch(opts) {
     dedupedCount: collected.length,
     top,
     providerStats,
+    systematicReview,
   });
   yield { type: "summary", markdown };
 
@@ -810,6 +940,11 @@ async function* runAgenticBatch(opts) {
       selectedCount: top.length,
       validatedCount: top.filter((source) => source.sourceCount >= 2).length,
       validDoiCount: top.filter((source) => source.doiStatus === "format_valid").length,
+      resolvedDoiCount: top.filter((source) => source.doiResolutionStatus === "resolved").length,
+      unresolvedDoiCount: top.filter((source) => source.doiStatus === "format_valid" && source.doiResolutionStatus !== "resolved").length,
+      systematicReview: protocol.active,
+      screeningExcludedCount: systematicReview?.prisma?.screening?.recordsExcluded || 0,
+      screeningUncertainCount: systematicReview?.prisma?.screening?.recordsUncertain || 0,
       preprintCount: top.filter((source) => source.publicationStage === "preprint").length,
       integrityFilteredCount: integrityFilteredKeys.size,
       elapsedMs: Date.now() - startedAt,
@@ -821,6 +956,7 @@ async function* runAgenticBatch(opts) {
 module.exports = {
   runAgenticBatch,
   buildSummaryMarkdown,
+  buildSystematicSummary,
   DEFAULT_PROVIDERS,
   DEFAULT_BATCH_SIZE,
   DEFAULT_TARGET,

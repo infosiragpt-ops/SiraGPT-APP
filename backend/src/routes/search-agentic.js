@@ -69,6 +69,7 @@ router.post(
     body("providers").optional().isArray(),
     body("language").optional().isString().isLength({ min: 2, max: 8 }),
     body("mailto").optional().isString(),
+    body("resolveDois").optional().isBoolean(),
   ],
   authenticateToken,
   async (req, res) => {
@@ -112,6 +113,7 @@ router.post(
         language: typeof req.body.language === "string" ? req.body.language : undefined,
         mailto: pickMailto(req),
         signal: controller.signal,
+        resolveDois: req.body.resolveDois,
       })) {
         send(evt);
         if (evt.type === "summary" && typeof evt.markdown === "string") {

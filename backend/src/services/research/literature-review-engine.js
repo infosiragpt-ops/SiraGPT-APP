@@ -23,6 +23,14 @@ const { synthesize } = require('./literature-synthesizer');
 const { formatBibliography, inTextCitation } = require('./bibliography-formatter');
 const scientificSearch = require('../scientific-search');
 const { annotateSource, passesIntegrityFilters } = require('./source-integrity');
+const { resolvePaperDois } = require('./doi-resolver');
+const {
+  buildPrismaFlow,
+  buildProtocol,
+  gradeEvidence,
+  preliminaryRiskOfBias,
+  screenPaper,
+} = require('./systematic-review-protocol');
 
 function applyFilters(papers, filters = {}) {
   return papers.map(annotateSource).filter((p) => {
@@ -52,19 +60,142 @@ function authorsShort(paper) {
 
 function buildComparisonTable(papers, lang = 'es') {
   const h = lang === 'es'
-    ? ['#', 'Autores', 'Año', 'Título', 'Tipo', 'Integridad', 'Citas', 'AA', 'Hallazgo clave']
-    : ['#', 'Authors', 'Year', 'Title', 'Type', 'Integrity', 'Cites', 'OA', 'Key finding'];
+    ? ['#', 'Autores', 'Año', 'Título', 'Tipo', 'Integridad', 'DOI', 'Citas', 'AA', 'Hallazgo clave']
+    : ['#', 'Authors', 'Year', 'Title', 'Type', 'Integrity', 'DOI', 'Cites', 'OA', 'Key finding'];
   const rows = papers.map((p, i) => {
     const t = p.evidence?.studyType || p.studyType || '—';
     const oa = p.openAccess === true ? '✓' : (p.openAccess === false ? '✗' : '?');
     const finding = truncate(p.evidence?.topFinding || p.abstract || '—', 90);
     const integrity = p.integrityStatus === 'unknown' ? '?' : p.integrityStatus;
-    return `| ${i + 1} | ${mdEscape(authorsShort(p))} | ${p.year || '—'} | ${mdEscape(truncate(p.title, 60))} | ${t} | ${integrity} | ${Number.isFinite(p.citations) ? p.citations : '—'} | ${oa} | ${mdEscape(finding)} |`;
+    const doi = p.doiResolutionStatus === 'resolved'
+      ? '✓'
+      : (p.doiResolutionStatus === 'not_found' ? '✗' : (p.doiStatus === 'format_valid' ? 'formato' : '—'));
+    return `| ${i + 1} | ${mdEscape(authorsShort(p))} | ${p.year || '—'} | ${mdEscape(truncate(p.title, 60))} | ${t} | ${integrity} | ${doi} | ${Number.isFinite(p.citations) ? p.citations : '—'} | ${oa} | ${mdEscape(finding)} |`;
   });
   return [`| ${h.join(' | ')} |`, `| ${h.map(() => '---').join(' | ')} |`, ...rows].join('\n');
 }
 
-function buildMarkdownReport({ qa, papers, synthesis, bibliography }) {
+function pushSystematicSections(out, { protocol, prisma, certainty, papers, es }) {
+  if (!protocol?.active) return;
+  out.push(`## ${es ? 'Protocolo de búsqueda' : 'Search protocol'}`);
+  out.push(`- **${es ? 'Alcance' : 'Scope'}:** ${protocol.scope}`);
+  if (protocol.framework) out.push(`- **Framework:** ${protocol.framework.toUpperCase()}`);
+  if (protocol.searchExpression) out.push(`- **${es ? 'Estrategia' : 'Strategy'}:** \`${protocol.searchExpression}\``);
+  if (protocol.missingFields?.length) out.push(`- **${es ? 'Campos pendientes' : 'Missing fields'}:** ${protocol.missingFields.join(', ')}`);
+  const inclusion = protocol.inclusionCriteria?.automatic || [];
+  const exclusion = protocol.exclusionCriteria?.automatic || [];
+  if (inclusion.length) out.push(`- **${es ? 'Inclusión automática' : 'Automatic inclusion'}:** ${inclusion.join('; ')}`);
+  if (exclusion.length) out.push(`- **${es ? 'Exclusión automática' : 'Automatic exclusion'}:** ${exclusion.join('; ')}`);
+  const manualCount = (protocol.inclusionCriteria?.manual?.length || 0) + (protocol.exclusionCriteria?.manual?.length || 0);
+  if (manualCount) {
+    out.push(`- **${es ? 'Criterios manuales registrados' : 'Registered manual criteria'}:** ${manualCount}. ${es ? 'Requieren confirmación humana.' : 'Human confirmation is required.'}`);
+  }
+  out.push('');
+
+  out.push(`## ${es ? 'Flujo PRISMA preliminar' : 'Preliminary PRISMA flow'}`);
+  out.push(`- ${es ? 'Registros identificados' : 'Records identified'}: ${prisma.identification.recordsIdentified}`);
+  out.push(`- ${es ? 'Duplicados eliminados' : 'Duplicates removed'}: ${prisma.deduplication.duplicatesRemoved}`);
+  out.push(`- ${es ? 'Registros cribados' : 'Records screened'}: ${prisma.screening.recordsScreened}`);
+  out.push(`- ${es ? 'Excluidos por título/resumen' : 'Excluded by title/abstract'}: ${prisma.screening.recordsExcluded}`);
+  out.push(`- ${es ? 'En duda' : 'Uncertain'}: ${prisma.screening.recordsUncertain}`);
+  out.push(`- ${es ? 'Incluidos en la síntesis preliminar' : 'Included in preliminary synthesis'}: ${prisma.included.studiesInPreliminarySynthesis}`);
+  if (Object.keys(prisma.screening.exclusionReasons).length) {
+    out.push(`- ${es ? 'Motivos' : 'Reasons'}: ${Object.entries(prisma.screening.exclusionReasons).map(([reason, count]) => `${reason} (${count})`).join(', ')}`);
+  }
+  out.push('');
+
+  out.push(`## ${es ? 'Riesgo de sesgo preliminar' : 'Preliminary risk of bias'}`);
+  out.push(`> ${es ? 'Evaluación orientativa basada en metadatos y resúmenes; no sustituye la lectura del texto completo ni la lista específica por diseño.' : 'Orientation based on metadata and abstracts; it does not replace full-text assessment or the design-specific checklist.'}`);
+  papers.forEach((paper, index) => {
+    out.push(`- ${index + 1}. **${paper.riskOfBias?.level || 'unknown'}** · ${paper.riskOfBias?.recommendedTool || 'design-specific checklist required'}`);
+  });
+  out.push('');
+
+  out.push(`## ${es ? 'Certeza preliminar de la evidencia' : 'Preliminary certainty of evidence'}`);
+  out.push(`- **${certainty.level}** — ${certainty.reasons.join(', ')}`);
+  out.push(`- ${es ? 'La certeza final requiere evaluación del texto completo.' : 'Final certainty requires full-text assessment.'}`);
+  out.push('');
+}
+
+function citationTrail(entry, papers) {
+  const refs = Array.from(new Set((entry?.paperIndexes || [])
+    .map((index) => papers[index])
+    .filter(Boolean)
+    .map(inTextCitation)));
+  return refs.length ? ` ${refs.join('; ')}` : '';
+}
+
+function protocolSlug(qa) {
+  const slug = String((qa.terms || []).slice(0, 6).join('-') || 'revision-sistematica')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 70);
+  return slug || 'revision-sistematica';
+}
+
+function buildProtocolExport({ qa, protocol, prisma, certainty, screeningDecisions }) {
+  if (!protocol?.active) return null;
+  const lines = [
+    `# Protocolo de revisión sistemática: ${(qa.terms || []).slice(0, 8).join(' ') || qa.normalized}`,
+    '',
+    '> Exportación auditable basada en metadatos y resúmenes. La elegibilidad, el riesgo de sesgo y la certeza definitivos requieren evaluación del texto completo.',
+    '',
+    '## Estrategia de búsqueda',
+    '',
+    `- Framework: ${protocol.framework ? protocol.framework.toUpperCase() : 'sin framework estructurado'}`,
+    `- Expresión: ${protocol.searchExpression || qa.searchQueries.join(' OR ')}`,
+    `- Consultas ejecutadas: ${qa.searchQueries.join(' | ')}`,
+    '',
+    '## Campos del framework',
+    '',
+    '| Campo | Valor |',
+    '|---|---|',
+    ...Object.entries(protocol.fields || {}).map(([field, value]) => `| ${mdEscape(field)} | ${mdEscape(value)} |`),
+    '',
+    '## Criterios',
+    '',
+    `- Inclusión automática: ${(protocol.inclusionCriteria?.automatic || []).join('; ') || 'ninguna adicional'}`,
+    `- Exclusión automática: ${(protocol.exclusionCriteria?.automatic || []).join('; ') || 'ninguna adicional'}`,
+    `- Inclusión manual registrada: ${(protocol.inclusionCriteria?.manual || []).join('; ') || 'ninguna'}`,
+    `- Exclusión manual registrada: ${(protocol.exclusionCriteria?.manual || []).join('; ') || 'ninguna'}`,
+    '',
+    '## Flujo PRISMA preliminar',
+    '',
+    '```mermaid',
+    'flowchart TD',
+    `  A["Identificados: ${prisma.identification.recordsIdentified}"] --> B["Únicos: ${prisma.deduplication.uniqueRecords}"]`,
+    `  B --> C["Cribados: ${prisma.screening.recordsScreened}"]`,
+    `  C --> D["Excluidos: ${prisma.screening.recordsExcluded}"]`,
+    `  C --> E["En duda: ${prisma.screening.recordsUncertain}"]`,
+    `  C --> F["Síntesis preliminar: ${prisma.included.studiesInPreliminarySynthesis}"]`,
+    '```',
+    '',
+    '## Decisiones de cribado',
+    '',
+    '| # | Decisión | Motivos | Año | DOI | Título |',
+    '|---:|---|---|---:|---|---|',
+    ...screeningDecisions.map((item, index) => (
+      `| ${index + 1} | ${item.screening.decision} | ${mdEscape((item.screening.reasons || []).join(', '))} | ${item.year || '—'} | ${mdEscape(item.doi || '—')} | ${mdEscape(truncate(item.title, 100))} |`
+    )),
+    '',
+    '## Certeza preliminar',
+    '',
+    `- Nivel: ${certainty.level}`,
+    `- Motivos: ${certainty.reasons.join(', ')}`,
+    `- Dominios: ${Object.entries(certainty.domains || {}).map(([key, value]) => `${key}=${value}`).join('; ')}`,
+    '',
+  ];
+  return {
+    filename: `protocolo-${protocolSlug(qa)}.md`,
+    contentType: 'text/markdown; charset=utf-8',
+    content: lines.join('\n'),
+  };
+}
+
+function buildMarkdownReport({ qa, papers, synthesis, bibliography, protocol, prisma, certainty }) {
   const es = qa.language !== 'en';
   const L = es
     ? {
@@ -88,7 +219,14 @@ function buildMarkdownReport({ qa, papers, synthesis, bibliography }) {
   const out = [];
   out.push(`# ${L.title}: ${topic}`);
   out.push('');
-  if (!papers.length) { out.push(`> ${L.none}`); return out.join('\n'); }
+  if (!papers.length) {
+    out.push(`> ${L.none}`);
+    out.push('');
+    if (protocol?.active && prisma && certainty) {
+      pushSystematicSections(out, { protocol, prisma, certainty, papers, es });
+    }
+    return out.join('\n');
+  }
 
   out.push(`## ${L.summary}`);
   out.push(synthesis.overview);
@@ -102,6 +240,8 @@ function buildMarkdownReport({ qa, papers, synthesis, bibliography }) {
     out.push(`- ${es ? 'Diseños' : 'Designs'}: ${Object.entries(s.studyTypes).map(([k, v]) => `${k} (${v})`).join(', ')}`);
   }
   out.push('');
+
+  pushSystematicSections(out, { protocol, prisma, certainty, papers, es });
 
   if (synthesis.themes.length) {
     out.push(`## ${L.themes}`);
@@ -121,8 +261,14 @@ function buildMarkdownReport({ qa, papers, synthesis, bibliography }) {
   }
 
   out.push(`## ${L.consensus}`);
+  const evidenceStatements = [
+    ...(synthesis.consensusEvidence || []),
+    ...(synthesis.contradictionEvidence || []),
+  ];
   const cc = [...synthesis.consensus, ...synthesis.contradictions];
-  if (cc.length) for (const c of cc) out.push(`- ${c}`);
+  if (evidenceStatements.length) {
+    for (const statement of evidenceStatements) out.push(`- ${statement.text}${citationTrail(statement, papers)}`);
+  } else if (cc.length) for (const c of cc) out.push(`- ${c}`);
   else out.push(`- ${L.noConsensus}`);
   out.push('');
 
@@ -155,13 +301,27 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
   const t0 = Date.now();
   const searchImpl = typeof opts.searchImpl === 'function' ? opts.searchImpl : scientificSearch.search;
   const maxPapers = Number.isFinite(opts.maxPapers) && opts.maxPapers > 0 ? opts.maxPapers : 15;
-  const qa = analyzeQuery(rawQuery, { maxQueries: opts.maxQueries });
+  let qa = analyzeQuery(rawQuery, { maxQueries: opts.maxQueries });
+  const protocol = buildProtocol(rawQuery, qa, opts.protocol || {});
+  if (protocol.active && protocol.searchExpression) {
+    qa = {
+      ...qa,
+      reviewMode: 'systematic',
+      searchQueries: Array.from(new Set([protocol.searchExpression, ...qa.searchQueries])).slice(0, opts.maxQueries || 3),
+    };
+  } else if (protocol.active) {
+    qa = { ...qa, reviewMode: 'systematic' };
+  }
 
   if (!qa.normalized) {
     return {
       query: qa, papers: [], synthesis: synthesize([], qa),
       bibliography: { apa: [], ieee: [], mla: [] }, comparisonTable: '',
-      report: buildMarkdownReport({ qa, papers: [], synthesis: synthesize([], qa), bibliography: { apa: [] } }),
+      protocol,
+      prisma: protocol.active ? buildPrismaFlow({}) : null,
+      certainty: protocol.active ? gradeEvidence([]) : null,
+      screeningDecisions: [],
+      report: buildMarkdownReport({ qa, papers: [], synthesis: synthesize([], qa), bibliography: { apa: [] }, protocol }),
       meta: { providers: [], errors: [{ provider: 'input', message: 'query is empty' }], count: 0, durationMs: Date.now() - t0 },
     };
   }
@@ -179,30 +339,70 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
     for (const pr of (r.providers || [])) providersUsed.add(pr);
   }
 
-  let papers = scientificSearch._internal.dedupeByDoi(collected);
-  const integrityExcluded = papers
-    .map(annotateSource)
+  const deduped = scientificSearch._internal.dedupeByDoi(collected).map(annotateSource);
+  const integrityExcluded = deduped
     .filter((paper) => !passesIntegrityFilters(paper, qa.filters))
     .length;
-  papers = applyFilters(papers, qa.filters);
+  const screened = protocol.active
+    ? deduped.map((paper) => ({ ...paper, screening: screenPaper(paper, protocol, qa.filters) }))
+    : [];
+  let papers = protocol.active
+    ? screened.filter((paper) => paper.screening.decision !== 'exclude')
+    : applyFilters(deduped, qa.filters);
   papers = scientificSearch._internal.rankPapers(papers, qa.normalized).slice(0, maxPapers);
+
+  const doiResolutionEnabled = opts.resolveDois !== false && process.env.SCIENTIFIC_DOI_RESOLUTION_ENABLED !== '0';
+  let doiResolutionError = null;
+  if (doiResolutionEnabled) {
+    const resolver = typeof opts.doiResolver === 'function' ? opts.doiResolver : resolvePaperDois;
+    try {
+      papers = await resolver(papers, {
+        timeoutMs: opts.doiTimeoutMs,
+        maxPapers: Math.min(maxPapers, Number.isFinite(opts.maxDoiResolutions) ? opts.maxDoiResolutions : 15),
+        signal: opts.signal,
+      });
+    } catch (error) {
+      doiResolutionError = error?.message || String(error);
+      errors.push({ provider: 'doi-resolver', message: doiResolutionError });
+    }
+  }
 
   for (const p of papers) {
     p.evidence = extractEvidence(p, qa.terms);
     p.inTextCitation = inTextCitation(p);
+    if (protocol.active) p.riskOfBias = preliminaryRiskOfBias(p);
   }
 
   const synthesis = synthesize(papers, qa);
+  const certainty = protocol.active ? gradeEvidence(papers, synthesis) : null;
+  const prisma = protocol.active
+    ? buildPrismaFlow({ identified: collected.length, deduped: deduped.length, screened, included: papers.length })
+    : null;
+  const screeningDecisions = protocol.active ? screened.map((paper) => ({
+    source: paper.source,
+    title: paper.title,
+    doi: paper.doi || null,
+    year: paper.year || null,
+    screening: paper.screening,
+  })) : [];
+  const protocolExport = protocol.active
+    ? buildProtocolExport({ qa, protocol, prisma, certainty, screeningDecisions })
+    : null;
   const bibliography = {
     apa: formatBibliography(papers, 'apa'),
     ieee: formatBibliography(papers, 'ieee'),
     mla: formatBibliography(papers, 'mla'),
   };
   const comparisonTable = buildComparisonTable(papers, qa.language === 'en' ? 'en' : 'es');
-  const report = buildMarkdownReport({ qa, papers, synthesis, bibliography });
+  const report = buildMarkdownReport({ qa, papers, synthesis, bibliography, protocol, prisma, certainty });
 
   return {
     query: qa,
+    protocol: protocol.active ? protocol : null,
+    prisma,
+    certainty,
+    screeningDecisions,
+    protocolExport,
     papers,
     synthesis,
     bibliography,
@@ -213,6 +413,11 @@ async function buildLiteratureReview(rawQuery, opts = {}) {
       errors,
       count: papers.length,
       integrityExcluded,
+      screeningExcluded: protocol.active ? screened.filter((paper) => paper.screening.decision === 'exclude').length : 0,
+      screeningUncertain: protocol.active ? screened.filter((paper) => paper.screening.decision === 'uncertain').length : 0,
+      doiResolved: papers.filter((paper) => paper.doiResolutionStatus === 'resolved').length,
+      doiNotFound: papers.filter((paper) => paper.doiResolutionStatus === 'not_found').length,
+      doiResolutionError,
       queriesRun: qa.searchQueries,
       durationMs: Date.now() - t0,
     },
@@ -224,4 +429,6 @@ module.exports = {
   applyFilters,
   buildComparisonTable,
   buildMarkdownReport,
+  buildProtocolExport,
+  pushSystematicSections,
 };

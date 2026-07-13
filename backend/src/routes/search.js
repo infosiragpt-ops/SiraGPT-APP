@@ -432,6 +432,15 @@ router.post(
           case 'rerank_error':
             append(`⚠️ Reranking parcial: ${evt.error}\n`);
             break;
+          case 'validation_start':
+            append(`🔎 ${evt.message}\n`);
+            break;
+          case 'validation_done':
+            append(`✓ DOI comprobados: ${evt.resolved} resueltos, ${evt.notFound} no localizados, ${evt.unavailable} no disponibles.\n\n`);
+            break;
+          case 'validation_error':
+            append(`⚠️ Comprobación DOI parcial: ${evt.error}\n`);
+            break;
           case 'selected':
             selectedSources = Array.isArray(evt.sources) ? evt.sources : [];
             append(`✨ **Top ${evt.topK} seleccionado**${evt.rerankerWasUsed ? ' con reranker LLM' : ' (heurístico)'}.\n\n---\n\n`);

@@ -101,19 +101,70 @@ router.post(
     body('limit').optional().isInt({ min: 1, max: 50 }),
     body('maxPapers').optional().isInt({ min: 1, max: 50 }),
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
+    body('resolveDois').optional().isBoolean(),
+    body('protocol').optional().isObject(),
+    body('protocol.framework').optional().isIn(['pico', 'spider']),
+    body('protocol.fields').optional().isObject(),
+    body('protocol.inclusionCriteria').optional().isArray({ max: 20 }),
+    body('protocol.exclusionCriteria').optional().isArray({ max: 20 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-    const { query, providers, limit, maxPapers, timeoutMs } = req.body;
+    const { query, providers, limit, maxPapers, timeoutMs, resolveDois, protocol } = req.body;
     try {
-      const review = await buildLiteratureReview(query, { providers, limit, maxPapers, timeoutMs });
+      const review = await buildLiteratureReview(query, { providers, limit, maxPapers, timeoutMs, resolveDois, protocol });
       return res.json(review);
     } catch (err) {
       console.error('[scientific-search/review] uncaught:', err);
       return res.status(500).json({ error: 'literature_review_failed', message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/scientific-search/review/export — run the same auditable review
+ * pipeline and return its protocol as a downloadable Markdown artifact.
+ */
+router.post(
+  '/review/export',
+  authenticateToken,
+  [
+    body('query').isString().trim().isLength({ min: 2, max: 500 })
+      .withMessage('query must be 2-500 chars'),
+    body('providers').optional().isArray({ max: 10 }),
+    body('limit').optional().isInt({ min: 1, max: 50 }),
+    body('maxPapers').optional().isInt({ min: 1, max: 50 }),
+    body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
+    body('resolveDois').optional().isBoolean(),
+    body('protocol').optional().isObject(),
+    body('protocol.framework').optional().isIn(['pico', 'spider']),
+    body('protocol.fields').optional().isObject(),
+    body('protocol.inclusionCriteria').optional().isArray({ max: 20 }),
+    body('protocol.exclusionCriteria').optional().isArray({ max: 20 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    const { query, providers, limit, maxPapers, timeoutMs, resolveDois, protocol } = req.body;
+    try {
+      const review = await buildLiteratureReview(query, { providers, limit, maxPapers, timeoutMs, resolveDois, protocol });
+      if (!review.protocolExport) {
+        return res.status(422).json({
+          error: 'systematic_protocol_required',
+          message: 'Use PICO, SPIDER, PRISMA or request a systematic review before exporting a protocol.',
+        });
+      }
+      res.setHeader('Content-Type', review.protocolExport.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${review.protocolExport.filename}"`);
+      return res.send(review.protocolExport.content);
+    } catch (err) {
+      console.error('[scientific-search/review/export] uncaught:', err);
+      return res.status(500).json({ error: 'protocol_export_failed', message: err.message });
     }
   }
 );
