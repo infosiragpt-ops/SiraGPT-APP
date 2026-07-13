@@ -112,15 +112,15 @@ validación en producción y evidencia de uso real.
 
 | # | Mejora | Estado | Criterio de aceptación |
 |---:|---|---|---|
-| 61 | Convertir investigación en DOCX | PARTIAL | Generar un Word real con estructura y referencias. |
+| 61 | Convertir investigación en DOCX | DELIVERED-R6 | Generar un Word real con estructura y referencias. |
 | 62 | Editar el DOCX original | COVERED | Devolver el mismo archivo con estructura preservada. |
-| 63 | Convertir investigación en PPTX | PARTIAL | Crear una presentación descargable desde fuentes seleccionadas. |
-| 64 | Fidelidad al prompt y número de diapositivas | PARTIAL | Cumplir tema, audiencia, extensión y restricciones exactas. |
-| 65 | Citas y referencias por diapositiva | PENDING | Vincular cada afirmación a sus fuentes. |
-| 66 | Tablas de evidencia editables | PARTIAL | Insertar matrices con estudio, método, muestra y resultados. |
-| 67 | Esquema editable antes de generar | PENDING | Aprobar y reorganizar capítulos o diapositivas. |
-| 68 | Regeneración focalizada | PARTIAL | Modificar una sección o diapositiva sin rehacer todo. |
-| 69 | Procedencia de gráficos y cifras | PENDING | Adjuntar fuente, unidad y fecha a cada visualización. |
+| 63 | Convertir investigación en PPTX | DELIVERED-R6 | Crear una presentación descargable desde fuentes seleccionadas. |
+| 64 | Fidelidad al prompt y número de diapositivas | DELIVERED-R6 | Cumplir tema, audiencia, extensión y restricciones exactas. |
+| 65 | Citas y referencias por diapositiva | DELIVERED-R6 | Vincular cada afirmación a sus fuentes. |
+| 66 | Tablas de evidencia editables | DELIVERED-R6 | Insertar matrices con estudio, método, muestra y resultados. |
+| 67 | Esquema editable antes de generar | DELIVERED-R6 | Aprobar y reorganizar capítulos o diapositivas. |
+| 68 | Regeneración focalizada | DELIVERED-R6 | Modificar una sección o diapositiva sin rehacer todo. |
+| 69 | Procedencia de gráficos y cifras | DELIVERED-R6 | Adjuntar fuente, unidad y fecha a cada visualización. |
 | 70 | Validación técnica del artefacto | COVERED | Abrir, renderizar y comprobar DOCX/PPTX antes de entregar. |
 
 ## 71-80. Empresas y colaboración
@@ -242,7 +242,7 @@ proveedor ya disponibles en 51-53. La liberación debe cumplir:
 1. Editar año, acceso, revisión por pares, diseño y proveedor sin reescribir la consulta.
 2. Ordenar el mismo conjunto por pertinencia, fecha, citas, evidencia o disponibilidad de acceso.
 3. Expandir cada estudio para consultar resumen, DOI, integridad, resolución y procedencia.
-4. Seleccionar y comparar hasta cuatro estudios en una tabla adaptable y accesible.
+4. Seleccionar y comparar hasta doce estudios en una tabla adaptable y accesible.
 5. Precargar preguntas de seguimiento con la consulta y fuentes elegidas sin repetir la búsqueda.
 6. Guardar, listar, pausar, ejecutar y eliminar búsquedas científicas por usuario.
 7. Programar alertas diarias o semanales con un despachador horario acotado y sin solapamientos.
@@ -251,3 +251,23 @@ proveedor ya disponibles en 51-53. La liberación debe cumplir:
 10. Superar migración aditiva, pruebas de servicio y rutas, pruebas de frontend, tipado, lint, seguridad y validación real en producción.
 
 Estado después de R5: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 9 `PARTIAL` y 8 `PENDING`.
+
+## Liberación R6: documentos y presentaciones con evidencia
+
+Incluye las mejoras 61 y 63-69, y se apoya en la edición preservadora y la
+validación técnica ya disponibles en 62 y 70. La liberación debe cumplir:
+
+1. Crear Word o PowerPoint desde los estudios elegidos en el banco de trabajo científico.
+2. Permitir editar el título y el esquema antes de iniciar la generación.
+3. Reordenar capítulos o láminas con controles accesibles de teclado.
+4. Interpretar el número pedido como total exacto de diapositivas, incluyendo portada, agenda y fuentes.
+5. Etiquetar hasta doce fuentes como `[S1]` a `[S12]` y tratarlas como datos no confiables frente a inyección de instrucciones.
+6. Insertar en Word una matriz editable con estudio, diseño, muestra, hallazgo y DOI.
+7. Mostrar en cada lámina científica las etiquetas de evidencia que sostienen su contenido.
+8. Mostrar procedencia en cifras protagonistas y gráficos, con unidad y fecha de corte cuando estén disponibles.
+9. Rechazar métricas no sustentadas y reconocer equivalencias como `Muestra: 420` y `420 participantes`.
+10. Mantener variedad de layouts incluso cuando el diseñador LLM se degrade al planificador local.
+11. Hacer cancelable la generación desde el botón Detener y persistir el artefacto real en la conversación.
+12. Validar paquete, cantidad de láminas, desbordes, render, citas, procedencia, tipado, lint y pruebas de interfaz.
+
+Estado después de R6: 45 `COVERED`, 10 `DELIVERED-R1`, 8 `DELIVERED-R2`, 3 `DELIVERED-R3`, 10 `DELIVERED-R4`, 7 `DELIVERED-R5`, 8 `DELIVERED-R6`, 4 `PARTIAL` y 5 `PENDING`.

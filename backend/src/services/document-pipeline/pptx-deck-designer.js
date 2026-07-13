@@ -72,6 +72,7 @@ function sanitizeChart(raw, { evidenceText = '' } = {}) {
     values,
     unit: clean(raw.unit || '', 16),
     source: clean(raw.source || '', 90),
+    asOf: clean(raw.asOf || raw.date || raw.period || '', 40),
   };
 }
 
@@ -210,7 +211,7 @@ async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], refer
             '- Cada lámina lleva "notes": 2-3 frases de guion para el orador.',
             '- La última lámina es un cierre accionable (layout bullets, próximos pasos con dueño/criterio).',
             '- Todo texto visible debe dirigirse a la audiencia final. No menciones prompts, pipelines, agentes, validaciones ni el proceso de generación.',
-            'Esquema: {"deckTitle":string,"thesis":string,"slides":[{"layout":"section|bullets|two_column|stat|quote|chart","title":string,"kicker":string,"summary":string?,"bullets":[{"label":string?,"text":string}]?,"columns":[{"heading":string,"items":[string]}]?,"stat":{"value":string,"caption":string,"source":string}?,"support":[string]?,"quote":string?,"attribution":string?,"chart":{"title":string,"labels":[string],"values":[number],"unit":string?,"source":string}?,"insight":string?,"takeaway":string?,"notes":string}]}',
+            'Esquema: {"deckTitle":string,"thesis":string,"slides":[{"layout":"section|bullets|two_column|stat|quote|chart","title":string,"kicker":string,"summary":string?,"bullets":[{"label":string?,"text":string}]?,"columns":[{"heading":string,"items":[string]}]?,"stat":{"value":string,"caption":string,"source":string}?,"support":[string]?,"quote":string?,"attribution":string?,"chart":{"title":string,"labels":[string],"values":[number],"unit":string?,"source":string,"asOf":string?}?,"insight":string?,"takeaway":string?,"notes":string}]}',
           ].join('\n'),
         },
         {

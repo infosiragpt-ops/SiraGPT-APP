@@ -67,6 +67,51 @@ function visibleSlideText(slide = {}) {
   return slideText({ ...slide, notes: '' });
 }
 
+const CITATION_TOKEN_STOPWORDS = new Set([
+  'para', 'como', 'desde', 'sobre', 'entre', 'este', 'esta', 'estos', 'estas', 'that', 'with', 'from',
+  'resultados', 'estudio', 'evidencia', 'analisis', 'conclusiones', 'datos', 'fuente', 'sources', 'study',
+]);
+
+function sourceLabel(reference = {}) {
+  const match = String(reference?.name || '').match(/^\[(S\d{1,2})\]/i);
+  return match ? `[${match[1].toUpperCase()}]` : null;
+}
+
+function citationTokens(value = '') {
+  return normalize(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4 && !CITATION_TOKEN_STOPWORDS.has(token));
+}
+
+function attachSourceCitations(plan = {}, { referenceBriefs = [] } = {}) {
+  const references = (Array.isArray(referenceBriefs) ? referenceBriefs : [])
+    .map((reference) => ({
+      label: sourceLabel(reference),
+      tokens: new Set(citationTokens(`${reference?.name || ''} ${reference?.excerpt || ''}`)),
+    }))
+    .filter((reference) => reference.label);
+  if (!references.length) return plan;
+  const knownLabels = new Set(references.map((reference) => reference.label));
+  const slides = (Array.isArray(plan.slides) ? plan.slides : []).map((slide, index) => {
+    if ((slide.layout || 'bullets') === 'section') return { ...slide, sourceCitations: [] };
+    const explicit = (Array.isArray(slide.sourceCitations) ? slide.sourceCitations : Array.isArray(slide.citations) ? slide.citations : [])
+      .map((citation) => String(citation || '').toUpperCase())
+      .filter((citation) => knownLabels.has(citation));
+    if (explicit.length) return { ...slide, sourceCitations: Array.from(new Set(explicit)).slice(0, 3) };
+    const tokens = new Set(citationTokens(visibleSlideText(slide)));
+    const ranked = references.map((reference) => ({
+      label: reference.label,
+      score: Array.from(tokens).reduce((score, token) => score + (reference.tokens.has(token) ? 1 : 0), 0),
+    })).sort((left, right) => right.score - left.score);
+    const matched = ranked.filter((item) => item.score > 0).slice(0, 2).map((item) => item.label);
+    return {
+      ...slide,
+      sourceCitations: matched.length ? matched : [references[index % references.length].label],
+    };
+  });
+  return { ...plan, slides };
+}
+
 function uniqueSlides(slides = []) {
   const seen = new Set();
   const result = [];
@@ -164,10 +209,28 @@ function ensureLayoutVariety(slides, sourceSlides) {
   if (slides.length < 4 || new Set(slides.map((slide) => slide.layout || 'bullets')).size >= 2) return slides;
   const currentLayout = slides[0]?.layout || 'bullets';
   const alternative = sourceSlides.find((slide) => (slide.layout || 'bullets') !== currentLayout);
-  if (!alternative) return slides;
   const replaceIndex = Math.min(Math.max(1, Math.floor(slides.length / 2)), slides.length - 2);
   const next = slides.slice();
-  next[replaceIndex] = alternative;
+  if (alternative) {
+    next[replaceIndex] = alternative;
+  } else {
+    const source = next[replaceIndex];
+    const items = (source.bullets || []).map((bullet) => clean(bullet?.text || bullet, 90)).filter(Boolean);
+    const midpoint = Math.max(1, Math.ceil(items.length / 2));
+    const leftItems = items.slice(0, midpoint);
+    const rightItems = items.slice(midpoint);
+    if (!rightItems.length && source.summary) rightItems.push(clean(source.summary, 90));
+    if (!leftItems.length && source.takeaway) leftItems.push(clean(source.takeaway, 90));
+    if (!leftItems.length || !rightItems.length) return slides;
+    next[replaceIndex] = {
+      ...source,
+      layout: 'two_column',
+      columns: [
+        { heading: clean(source.bullets?.[0]?.label || 'Evidencia', 36), items: leftItems },
+        { heading: clean(source.bullets?.[midpoint]?.label || 'Implicancia', 36), items: rightItems },
+      ],
+    };
+  }
   return uniqueSlides(next).length === next.length ? next : slides;
 }
 
@@ -268,7 +331,10 @@ function extractStrongNumericClaims(value = '') {
 function claimIsGrounded(claim, evidenceText) {
   const normalizedClaim = normalizeEvidence(claim);
   if (!normalizedClaim) return true;
-  return normalizeEvidence(evidenceText).includes(normalizedClaim);
+  const normalizedEvidenceText = normalizeEvidence(evidenceText);
+  if (normalizedEvidenceText.includes(normalizedClaim)) return true;
+  const numericTokens = normalizedClaim.match(/\d+(?:[.,]\d+)?%?/g) || [];
+  return numericTokens.length > 0 && numericTokens.every((token) => normalizedEvidenceText.includes(token));
 }
 
 function valueIsGrounded(value, evidenceText) {
@@ -326,6 +392,16 @@ function auditPptxPlan(plan = {}, {
     .filter((item) => !requirementIsPresent(item, visibleContent));
   const presentForbiddenItems = (Array.isArray(forbiddenItems) ? forbiddenItems : [])
     .filter((item) => requirementIsPresent(item, visibleContent));
+  const scientificLabels = new Set((Array.isArray(referenceBriefs) ? referenceBriefs : []).map(sourceLabel).filter(Boolean));
+  const missingSourceCitations = scientificLabels.size === 0 ? [] : slides
+    .filter((slide) => (slide.layout || 'bullets') !== 'section')
+    .filter((slide) => !(Array.isArray(slide.sourceCitations)
+      && slide.sourceCitations.some((citation) => scientificLabels.has(String(citation || '').toUpperCase()))))
+    .map((slide) => slide.title || 'Lámina sin título');
+  const missingFigureProvenance = slides
+    .filter((slide) => slide.chart || slide.stat)
+    .filter((slide) => !clean(slide.chart?.source || slide.stat?.source))
+    .map((slide) => slide.title || 'Lámina sin título');
   const checks = {
     exactContentCount: slides.length === expectedContent,
     uniqueTitles: new Set(titles).size === titles.length,
@@ -335,6 +411,8 @@ function auditPptxPlan(plan = {}, {
     notesPresent: slides.every((slide) => clean(slide.notes).length > 0),
     requiredItems: missingRequiredItems.length === 0,
     forbiddenItems: presentForbiddenItems.length === 0,
+    sourceCitations: missingSourceCitations.length === 0,
+    figureProvenance: missingFigureProvenance.length === 0,
   };
   return {
     passed: Object.values(checks).every(Boolean),
@@ -342,6 +420,8 @@ function auditPptxPlan(plan = {}, {
     unsupportedNumericClaims,
     missingRequiredItems,
     presentForbiddenItems,
+    missingSourceCitations,
+    missingFigureProvenance,
     layoutCount,
     plannedTotalSlides: (plan.manifest?.shellSlides || 0) + slides.length,
   };
@@ -354,6 +434,7 @@ module.exports = {
   GENERIC_META_RE,
   STRONG_NUMERIC_CLAIM_RE,
   buildPptxDeckManifest,
+  attachSourceCitations,
   reconcilePptxPlan,
   buildEvidenceText,
   extractStrongNumericClaims,
@@ -373,6 +454,8 @@ module.exports = {
     ensureClosingSlide,
     ensureLayoutVariety,
     ensureRequiredItems,
+    sourceLabel,
+    citationTokens,
     normalizeEvidence,
   },
 };

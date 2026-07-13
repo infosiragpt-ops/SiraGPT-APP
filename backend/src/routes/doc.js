@@ -31,6 +31,12 @@ const {
   findPreviousAssistantContent,
   isPreviousContentExportRequest,
 } = require('../services/document-followup-context');
+const {
+  MAX_OUTLINE_ITEMS,
+  MAX_RESEARCH_SOURCES,
+  appendResearchGroundingInstructions,
+  normalizeResearchArtifactInput,
+} = require('../services/document-pipeline/research-artifact-input');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -192,6 +198,13 @@ router.post(
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
     body('fileIds').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('fileIds.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
+    body('outline').optional().isArray({ max: MAX_OUTLINE_ITEMS }),
+    body('outline.*').optional().isString().trim().isLength({ min: 3, max: 120 }),
+    body('researchSources').optional().isArray({ max: MAX_RESEARCH_SOURCES }),
+    body('researchSources.*').optional().isObject(),
+    body('researchSources.*.title').optional().isString().trim().isLength({ min: 1, max: 320 }),
+    body('researchSources.*.abstract').optional({ nullable: true }).isString().isLength({ max: 6000 }),
+    body('researchSources.*.doi').optional({ nullable: true }).isString().isLength({ max: 220 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -223,6 +236,10 @@ router.post(
     let content = null, file = null, format = null, errorMsg = null;
 
     try {
+      const researchArtifact = normalizeResearchArtifactInput({
+        researchSources: req.body.researchSources,
+        outline: req.body.outline,
+      });
       const shouldUsePreviousAssistantContent = isPreviousContentExportRequest(prompt);
       const requestedFileIds = normalizeRequestedFileIds(req.body);
       const [explicitReferenceFiles, projectContext, previousAssistantContent] = await Promise.all([
@@ -233,6 +250,7 @@ router.post(
           : Promise.resolve(null),
       ]);
       const referenceFiles = [
+        ...researchArtifact.referenceFiles,
         ...(projectContext?.referenceFiles || []),
         ...explicitReferenceFiles,
       ].filter((file, index, arr) => {
@@ -290,13 +308,16 @@ router.post(
           const projectPrompt = projectContext?.promptPrefix
             ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${effectivePrompt}`
             : effectivePrompt;
+          const groundedPrompt = appendResearchGroundingInstructions(projectPrompt, researchArtifact.sources);
           const pipelineOptions = {
-            prompt: projectPrompt,
+            prompt: groundedPrompt,
             model: req.body.model,
             format: req.body.format,
             template: req.body.template,
             complexity: req.body.complexity || 'standard',
             referenceFiles,
+            outline: researchArtifact.outline,
+            researchSources: researchArtifact.sources,
             outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
             telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
             signal: controller.signal,

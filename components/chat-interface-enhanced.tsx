@@ -159,6 +159,11 @@ import {
   ensureResearchCommandChat,
   type ResearchResultSource,
 } from "@/lib/research-results"
+import {
+  RESEARCH_ARTIFACT_EVENT,
+  buildResearchArtifactPrompt,
+  type ResearchArtifactRequest,
+} from "@/lib/research-artifacts"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
@@ -6002,6 +6007,87 @@ But first, you need to connect your Spotify account securely using the button be
     document.addEventListener(RESEARCH_FOLLOW_UP_EVENT, onResearchFollowUp)
     return () => document.removeEventListener(RESEARCH_FOLLOW_UP_EVENT, onResearchFollowUp)
   }, [])
+
+  React.useEffect(() => {
+    const onResearchArtifact = (event: Event) => {
+      const request = (event as CustomEvent<ResearchArtifactRequest>).detail
+      if (!request?.sources?.length || !request?.outline?.length) return
+
+      void (async () => {
+        const model = currentChatRef.current?.model || selectedModelRef.current
+        if (!model) {
+          toast.error("Selecciona un modelo antes de crear el archivo")
+          return
+        }
+
+        let chatId = currentChatRef.current?.id as string | undefined
+        const controller = new AbortController()
+        const toastId = toast.loading(request.format === "pptx" ? "Preparando presentación científica…" : "Preparando documento científico…", { duration: Infinity })
+
+        try {
+          if (!chatId) {
+            const created = await apiClient.createChat({
+              title: request.title.slice(0, 80),
+              model,
+            })
+            chatId = (created?.chat || created)?.id
+            if (!chatId) throw new Error("No se pudo crear la conversación")
+            await selectChat(chatId)
+          }
+
+          markLocalJobBusy(chatId, controller)
+          let streamError = ""
+          let completed = false
+          const prompt = buildResearchArtifactPrompt(request)
+
+          await apiClient.generateDocStream({
+            prompt,
+            displayPrompt: request.format === "pptx"
+              ? `Crear PowerPoint científico: ${request.title}`
+              : `Crear Word científico: ${request.title}`,
+            chatId,
+            model,
+            format: request.format,
+            template: "academic",
+            complexity: "high",
+            outline: request.outline,
+            researchSources: request.sources,
+          }, (streamEvent) => {
+            if (streamEvent?.type === "stage") {
+              toast.loading(streamEvent.label || "Construyendo archivo…", {
+                id: toastId,
+                duration: Infinity,
+                description: Number.isFinite(streamEvent.pct) ? `${streamEvent.pct}%` : undefined,
+              })
+            } else if (streamEvent?.type === "error") {
+              streamError = streamEvent.error || "No se pudo generar el archivo"
+            } else if (streamEvent?.type === "final") {
+              completed = true
+            }
+          }, { signal: controller.signal })
+
+          if (streamError) throw new Error(streamError)
+          if (!completed) throw new Error("La generación terminó sin entregar un archivo")
+          await selectChat(chatId)
+          toast.success(request.format === "pptx" ? "Presentación científica lista" : "Documento científico listo", {
+            id: toastId,
+            description: "Disponible para revisar y descargar",
+          })
+        } catch (error: any) {
+          if (controller.signal.aborted || error?.name === "AbortError") {
+            toast.info("Generación de documento detenida", { id: toastId })
+          } else {
+            toast.error(error?.message || "No se pudo crear el archivo", { id: toastId })
+          }
+        } finally {
+          if (chatId) markLocalJobIdle(chatId, controller)
+        }
+      })()
+    }
+
+    document.addEventListener(RESEARCH_ARTIFACT_EVENT, onResearchArtifact)
+    return () => document.removeEventListener(RESEARCH_ARTIFACT_EVENT, onResearchArtifact)
+  }, [markLocalJobBusy, markLocalJobIdle, selectChat])
 
   const handleMessageAreaClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target instanceof HTMLElement ? event.target : null;

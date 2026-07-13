@@ -5,8 +5,10 @@ const assert = require('node:assert/strict');
 
 const {
   buildPptxDeckManifest,
+  attachSourceCitations,
   reconcilePptxPlan,
   auditPptxPlan,
+  claimIsGrounded,
   extractStrongNumericClaims,
   valueIsGrounded,
 } = require('../src/services/document-pipeline/pptx-prompt-contract');
@@ -110,6 +112,7 @@ test('numeric evidence gate detects the unsupported 68% failure from production'
   assert.deepEqual(extractStrongNumericClaims('Próximos pasos con un plan 30-60-90 Implementación'), []);
   assert.equal(valueIsGrounded('68%', 'Solicitud general sobre gestión de empresas'), false);
   assert.equal(valueIsGrounded('68%', 'La fuente adjunta reporta 68% de empresas'), true);
+  assert.equal(claimIsGrounded('420 participantes', 'Muestra: 420'), true);
 });
 
 test('reconcile injects visible fallback content for explicitly required topics', () => {
@@ -203,4 +206,30 @@ test('audit tracks required and forbidden prompt content', () => {
   assert.deepEqual(report.missingRequiredItems, ['cronograma de implementación']);
   assert.equal(report.checks.forbiddenItems, false);
   assert.deepEqual(report.presentForbiddenItems, ['procesos simples']);
+});
+
+test('scientific slides receive deterministic source citations and figure provenance is audited', () => {
+  const referenceBriefs = [
+    { name: '[S1] Telemedicine trial.txt', excerpt: 'Randomized trial with improved follow-up and n=420.' },
+    { name: '[S2] Systematic review.txt', excerpt: 'Systematic review of remote care outcomes.' },
+  ];
+  const raw = reconcilePptxPlan({
+    topic: 'Telemedicina',
+    thesis: 'La evidencia orienta decisiones clínicas.',
+    references: referenceBriefs,
+    slides: sampleSlides().map((slide, index) => index === 0 ? {
+      ...slide,
+      layout: 'stat',
+      stat: { value: '420', caption: '420 participantes en el ensayo', source: '[S1]' },
+      summary: 'El ensayo aleatorizado evaluó seguimiento remoto.',
+    } : slide),
+  }, { slideTarget: 8 });
+  const plan = attachSourceCitations(raw, { referenceBriefs });
+  assert.equal(plan.slides.filter((slide) => slide.layout !== 'section').every((slide) => slide.sourceCitations.length > 0), true);
+  const report = auditPptxPlan(plan, {
+    prompt: 'El ensayo incluyó 420 participantes.',
+    referenceBriefs,
+  });
+  assert.equal(report.checks.sourceCitations, true);
+  assert.equal(report.checks.figureProvenance, true);
 });

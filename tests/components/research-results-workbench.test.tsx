@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { RESEARCH_FOLLOW_UP_EVENT, type ResearchResultSource } from "@/lib/research-results"
+import { RESEARCH_ARTIFACT_EVENT } from "@/lib/research-artifacts"
 
 const sources: ResearchResultSource[] = [
   { title: "Systematic review", abstract: "The review included n=420 participants. Results showed lower blood pressure.", doi: "10.1000/review", year: 2019, citations: 120, openAccess: true, source: "pubmed", studyType: "systematic_review", peerReviewStatus: "confirmed", integrityStatus: "clear" },
@@ -51,5 +52,26 @@ describe("ResearchResultsWorkbench", () => {
     await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
     expect(onSave.mock.calls[0][0].map((source) => source.title)).toEqual(["Recent trial"])
     document.removeEventListener(RESEARCH_FOLLOW_UP_EVENT, listener)
+  })
+
+  it("opens an editable artifact outline and dispatches an exact PowerPoint request", () => {
+    const listener = vi.fn()
+    document.addEventListener(RESEARCH_ARTIFACT_EVENT, listener)
+    render(<ResearchResultsWorkbench query="hypertension" sources={sources} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Crear archivo" }))
+    fireEvent.click(screen.getByRole("button", { name: "PowerPoint" }))
+    fireEvent.change(screen.getByLabelText("Diapositivas totales"), { target: { value: "8" } })
+    expect(screen.getAllByLabelText(/Sección \d+/)).toHaveLength(5)
+    fireEvent.change(screen.getByLabelText("Sección 1"), { target: { value: "Pregunta clínica" } })
+    fireEvent.click(screen.getByRole("button", { name: "Crear PowerPoint" }))
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    const detail = (listener.mock.calls[0][0] as CustomEvent).detail
+    expect(detail.format).toBe("pptx")
+    expect(detail.slideCount).toBe(8)
+    expect(detail.outline[0]).toBe("Pregunta clínica")
+    expect(detail.sources).toHaveLength(3)
+    document.removeEventListener(RESEARCH_ARTIFACT_EVENT, listener)
   })
 })

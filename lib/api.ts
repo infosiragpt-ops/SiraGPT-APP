@@ -3151,6 +3151,29 @@ class ApiClient {
       template?: string;
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];
+      outline?: string[];
+      researchSources?: Array<{
+        title?: string | null;
+        abstract?: string | null;
+        authors?: Array<{ name?: string | null } | string> | null;
+        year?: number | null;
+        journal?: string | null;
+        venue?: string | null;
+        doi?: string | null;
+        url?: string | null;
+        htmlUrl?: string | null;
+        pdfUrl?: string | null;
+        citations?: number | null;
+        citationCount?: number | null;
+        studyType?: string | null;
+        peerReviewStatus?: string | null;
+        integrityStatus?: string | null;
+        sampleSize?: number | string | null;
+        sampleSizes?: Array<number | string> | null;
+        keyFinding?: string | null;
+        keyFindings?: Array<string | { sentence?: string | null }> | null;
+        evidence?: { topFinding?: string | null; findings?: Array<{ sentence?: string | null }> | null } | null;
+      }>;
     },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},

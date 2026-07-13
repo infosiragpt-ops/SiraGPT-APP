@@ -11,6 +11,11 @@ import {
   sortResearchResults,
   type ResearchResultSource,
 } from "@/lib/research-results"
+import {
+  buildResearchArtifactPrompt,
+  fitResearchOutline,
+  researchArtifactContentSlides,
+} from "@/lib/research-artifacts"
 
 const sources: ResearchResultSource[] = [
   { title: "Systematic review", doi: "https://doi.org/10.1000/ABC", year: 2019, citations: 120, openAccess: true, source: "pubmed", studyType: "systematic_review", peerReviewStatus: "confirmed", integrityStatus: "clear", qualityScore: 0.8 },
@@ -83,5 +88,21 @@ describe("research result workbench helpers", () => {
     expect(createChat).not.toHaveBeenCalled()
     expect(addMessage).toHaveBeenCalledWith("chat-existing", { role: "USER", content: "hypertension" })
     expect(buildScientificPapersMessage({ query: "hypertension", papers: [{ title: "Study" }] })).toContain("```scientific-papers")
+  })
+
+  it("builds an exact scientific artifact request with an approved outline", () => {
+    expect(researchArtifactContentSlides(8, true)).toBe(5)
+    expect(fitResearchOutline(["Hallazgos", "Conclusiones"], 5)).toHaveLength(5)
+    const prompt = buildResearchArtifactPrompt({
+      query: "telemedicine randomized trial",
+      title: "Telemedicina basada en evidencia",
+      format: "pptx",
+      slideCount: 8,
+      outline: ["Pregunta", "Método", "Hallazgos", "Implicancias", "Conclusiones"],
+      sources: sources.slice(0, 2),
+    })
+    expect(prompt).toContain("exactamente 8 diapositivas en total")
+    expect(prompt).toContain("1. Pregunta")
+    expect(prompt).toContain("citas [S#] visibles")
   })
 })

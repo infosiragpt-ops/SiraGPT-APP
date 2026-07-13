@@ -10,9 +10,12 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  FileDown,
   FileText,
   GitCompareArrows,
   Play,
+  Plus,
+  Presentation,
   Save,
   Send,
   ShieldCheck,
@@ -35,6 +38,14 @@ import {
   type ResearchResultSource,
   type ResearchSortMode,
 } from "@/lib/research-results"
+import {
+  DEFAULT_RESEARCH_DOCX_OUTLINE,
+  DEFAULT_RESEARCH_PPTX_OUTLINE,
+  dispatchResearchArtifact,
+  fitResearchOutline,
+  researchArtifactContentSlides,
+  type ResearchArtifactFormat,
+} from "@/lib/research-artifacts"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -110,6 +121,11 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
   const [schedule, setSchedule] = React.useState<"manual" | "daily" | "weekly">("manual")
   const [notifyInApp, setNotifyInApp] = React.useState(true)
   const [savedBusy, setSavedBusy] = React.useState<string | null>(null)
+  const [artifactOpen, setArtifactOpen] = React.useState(false)
+  const [artifactFormat, setArtifactFormat] = React.useState<ResearchArtifactFormat>("docx")
+  const [artifactTitle, setArtifactTitle] = React.useState("")
+  const [artifactSlideCount, setArtifactSlideCount] = React.useState(8)
+  const [artifactOutline, setArtifactOutline] = React.useState<string[]>(DEFAULT_RESEARCH_DOCX_OUTLINE)
 
   React.useEffect(() => {
     setLiveSources(sources)
@@ -142,8 +158,8 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
     setSelected((current) => {
       const next = new Set(current)
       if (next.has(identity)) next.delete(identity)
-      else if (next.size < 4) next.add(identity)
-      else toast.error("Puedes comparar hasta cuatro estudios")
+      else if (next.size < 12) next.add(identity)
+      else toast.error("Puedes seleccionar hasta doce estudios")
       return next
     })
   }
@@ -158,6 +174,54 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
     } finally {
       setSaving(false)
     }
+  }
+
+  const artifactSources = selectedSources.length ? selectedSources : filtered.slice(0, 6)
+  const artifactContentSlides = researchArtifactContentSlides(artifactSlideCount, artifactSources.length > 0)
+
+  const openArtifactBuilder = () => {
+    setArtifactTitle(query.trim() ? `Síntesis científica: ${query.trim()}` : "Síntesis científica")
+    setArtifactFormat("docx")
+    setArtifactOutline([...DEFAULT_RESEARCH_DOCX_OUTLINE])
+    setArtifactOpen(true)
+  }
+
+  const changeArtifactFormat = (format: ResearchArtifactFormat) => {
+    setArtifactFormat(format)
+    setArtifactOutline(format === "pptx"
+      ? fitResearchOutline(DEFAULT_RESEARCH_PPTX_OUTLINE, researchArtifactContentSlides(artifactSlideCount, artifactSources.length > 0))
+      : [...DEFAULT_RESEARCH_DOCX_OUTLINE])
+  }
+
+  const updateOutlineItem = (index: number, value: string) => {
+    setArtifactOutline((current) => current.map((item, itemIndex) => itemIndex === index ? value : item))
+  }
+
+  const moveOutlineItem = (index: number, direction: -1 | 1) => {
+    setArtifactOutline((current) => {
+      const nextIndex = index + direction
+      if (nextIndex < 0 || nextIndex >= current.length) return current
+      const next = [...current]
+      ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+      return next
+    })
+  }
+
+  const createResearchArtifact = () => {
+    const outline = artifactOutline.map((item) => item.trim()).filter((item) => item.length >= 3)
+    if (!artifactTitle.trim() || !outline.length || !artifactSources.length) {
+      toast.error("Completa el título, el esquema y las fuentes")
+      return
+    }
+    dispatchResearchArtifact({
+      query,
+      title: artifactTitle.trim(),
+      format: artifactFormat,
+      slideCount: artifactFormat === "pptx" ? artifactSlideCount : undefined,
+      outline: artifactFormat === "pptx" ? fitResearchOutline(outline, artifactContentSlides) : outline,
+      sources: artifactSources.slice(0, 12),
+    })
+    setArtifactOpen(false)
   }
 
   const createSavedSearch = async () => {
@@ -247,6 +311,9 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
         </Button>
         <Button type="button" variant="outline" size="sm" onClick={() => setSavedOpen(true)}>
           <Bell className="mr-2 h-4 w-4" />Búsquedas
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={!filtered.length} onClick={openArtifactBuilder}>
+          <FileDown className="mr-2 h-4 w-4" />Crear archivo
         </Button>
         {onSave ? (
           <Button type="button" variant="outline" size="sm" disabled={!filtered.length || saving} onClick={saveVisible}>
@@ -373,6 +440,77 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
             </table>
           </div>
           <DialogFooter><Button type="button" variant="outline" onClick={() => setCompareOpen(false)}>Cerrar</Button><Button type="button" onClick={() => { dispatchResearchFollowUp(query, selectedSources); setCompareOpen(false); toast.success("Comparación añadida al chat") }}><Send className="mr-2 h-4 w-4" />Preguntar sobre la comparación</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={artifactOpen} onOpenChange={setArtifactOpen}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Crear desde la evidencia</DialogTitle>
+            <DialogDescription>{artifactSources.length} fuentes seleccionadas para un archivo editable.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Formato del archivo">
+              <Button type="button" variant={artifactFormat === "docx" ? "default" : "outline"} onClick={() => changeArtifactFormat("docx")}>
+                <FileText className="mr-2 h-4 w-4" />Word
+              </Button>
+              <Button type="button" variant={artifactFormat === "pptx" ? "default" : "outline"} onClick={() => changeArtifactFormat("pptx")}>
+                <Presentation className="mr-2 h-4 w-4" />PowerPoint
+              </Button>
+            </div>
+
+            <label className="block space-y-1.5 text-sm font-medium">
+              Título
+              <Input value={artifactTitle} maxLength={180} onChange={(event) => setArtifactTitle(event.target.value)} />
+            </label>
+
+            {artifactFormat === "pptx" ? (
+              <label className="block space-y-1.5 text-sm font-medium">
+                Diapositivas totales
+                <Input
+                  type="number"
+                  min={2}
+                  max={40}
+                  aria-label="Diapositivas totales"
+                  value={artifactSlideCount}
+                  onChange={(event) => {
+                    const next = Math.max(2, Math.min(40, Number(event.target.value) || 8))
+                    setArtifactSlideCount(next)
+                    setArtifactOutline((current) => fitResearchOutline(current, researchArtifactContentSlides(next, artifactSources.length > 0)))
+                  }}
+                />
+                <span className="block text-xs font-normal text-muted-foreground">{artifactContentSlides} láminas de contenido, más portada{artifactSlideCount >= 5 ? ", agenda" : ""}{artifactSlideCount >= 7 && artifactSources.length ? " y fuentes" : ""}.</span>
+              </label>
+            ) : null}
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium">Esquema aprobado</span>
+                {artifactFormat === "docx" ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setArtifactOutline((current) => [...current, `Sección ${current.length + 1}`])}>
+                    <Plus className="mr-2 h-4 w-4" />Añadir
+                  </Button>
+                ) : null}
+              </div>
+              <div className="space-y-2">
+                {artifactOutline.map((item, index) => (
+                  <div key={`outline-${index}`} className="grid grid-cols-[32px_minmax(0,1fr)_32px_32px_32px] items-center gap-2">
+                    <span className="text-center text-xs font-semibold text-muted-foreground">{index + 1}</span>
+                    <Input value={item} maxLength={120} onChange={(event) => updateOutlineItem(index, event.target.value)} aria-label={`Sección ${index + 1}`} />
+                    <Button type="button" variant="ghost" size="icon" disabled={index === 0} onClick={() => moveOutlineItem(index, -1)} aria-label={`Subir sección ${index + 1}`} title="Subir"><ChevronUp className="h-4 w-4" /></Button>
+                    <Button type="button" variant="ghost" size="icon" disabled={index === artifactOutline.length - 1} onClick={() => moveOutlineItem(index, 1)} aria-label={`Bajar sección ${index + 1}`} title="Bajar"><ChevronDown className="h-4 w-4" /></Button>
+                    <Button type="button" variant="ghost" size="icon" disabled={artifactFormat === "pptx" || artifactOutline.length <= 1} onClick={() => setArtifactOutline((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Eliminar sección ${index + 1}`} title="Eliminar"><Trash2 className="h-4 w-4" /></Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setArtifactOpen(false)}>Cancelar</Button>
+            <Button type="button" onClick={createResearchArtifact}><FileDown className="mr-2 h-4 w-4" />Crear {artifactFormat === "pptx" ? "PowerPoint" : "Word"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -26,9 +26,15 @@ const { parseDocumentRequest } = require('./content/parse-document-request');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const { pickPptxTheme, pickChartType } = require('./pptx-design-system');
 const {
+  attachSourceCitations,
   reconcilePptxPlan,
   auditPptxPlan,
 } = require('./pptx-prompt-contract');
+const {
+  buildResearchEvidenceTable,
+  normalizeArtifactOutline,
+  normalizeResearchSources,
+} = require('./research-artifact-input');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -320,6 +326,11 @@ function buildDocxMarkdown(plan) {
     lines.push('', OPENXML_PAGE_BREAK, '');
   }
 
+  if (plan.researchEvidenceTable?.rows?.length) {
+    lines.push('# Matriz de evidencia científica', '');
+    lines.push(markdownTable(plan.researchEvidenceTable.headers, plan.researchEvidenceTable.rows), '');
+  }
+
   if (plan.referenceFiles?.length) {
     lines.push('# Material de referencia incorporado', '');
     lines.push(`Se registraron ${plan.referenceFiles.length} archivo(s) de referencia con verificacion de propiedad y metadatos tecnicos.`, '');
@@ -527,6 +538,16 @@ function normalizeReferenceFiles(referenceFiles = []) {
         excerpt: extractedText.slice(0, 600),
       };
     });
+}
+
+function referenceDisplayExcerpt(reference = {}, max = 240) {
+  const lines = String(reference.excerpt || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const scientific = lines.filter((line) => /^(?:Año|Revista|Diseño|Muestra|Hallazgo principal|DOI):/i.test(line));
+  const summary = (scientific.length ? scientific : lines).slice(0, 4).join(' · ');
+  return summary.length <= max ? summary : `${summary.slice(0, max - 1).trimEnd()}…`;
 }
 
 function uniqueStrings(values = []) {
@@ -956,7 +977,7 @@ function sectionBudgetForWords(wordTarget) {
   return null; // large asks keep the full template skeleton
 }
 
-function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
+function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [], outline = [], researchSources = [] }) {
   const rawUserRequest = extractUserDocumentRequest(prompt);
   const sourceContent = extractSourceContent(rawUserRequest);
   const userRequest = stripSourceContent(rawUserRequest);
@@ -975,12 +996,18 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones'],
   };
   const sections = baseSections[template] || baseSections.premium;
-  let plannedSections = sourceContent ? ['Contenido convertido'] : [...sections];
-  for (const section of inferPromptSections(userRequest)) {
-    plannedSections = addUniqueSection(plannedSections, section);
-  }
-  for (const section of inferProfessionalSections(userRequest, complexity)) {
-    plannedSections = addUniqueSection(plannedSections, section);
+  const approvedOutline = normalizeArtifactOutline(outline);
+  const normalizedResearchSources = normalizeResearchSources(researchSources);
+  let plannedSections = approvedOutline.length
+    ? [...approvedOutline]
+    : sourceContent ? ['Contenido convertido'] : [...sections];
+  if (!approvedOutline.length) {
+    for (const section of inferPromptSections(userRequest)) {
+      plannedSections = addUniqueSection(plannedSections, section);
+    }
+    for (const section of inferProfessionalSections(userRequest, complexity)) {
+      plannedSections = addUniqueSection(plannedSections, section);
+    }
   }
   // Honour an explicit length request BEFORE padding with reference material:
   // "en 200 palabras" must not fan out into an 8-section template skeleton.
@@ -989,7 +1016,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
   const slideTarget = sourceContent ? null : parseRequestedSlides(userRequest);
   const presentationBrief = format === 'pptx' ? buildDeterministicPresentationBrief(userRequest) : undefined;
   const sectionBudget = sectionBudgetForWords(wordTarget);
-  if (sectionBudget && plannedSections.length > sectionBudget) {
+  if (!approvedOutline.length && sectionBudget && plannedSections.length > sectionBudget) {
     const userSections = inferPromptSections(userRequest);
     const keep = [];
     for (const section of userSections) {
@@ -1001,7 +1028,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     }
     plannedSections = keep.length > 0 ? keep : plannedSections.slice(0, sectionBudget);
   }
-  if (normalizedReferenceFiles.length > 0) {
+  if (!approvedOutline.length && normalizedReferenceFiles.length > 0) {
     plannedSections = addUniqueSection(plannedSections, 'Material de referencia incorporado');
   }
   const referenceBriefs = normalizedReferenceFiles
@@ -1016,6 +1043,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     format,
     template,
     complexity,
+    outlineApproved: approvedOutline.length > 0,
     sourceContent,
     wordTarget,
     slideTarget,
@@ -1024,6 +1052,8 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
     referenceBriefs,
+    researchEvidenceTable: buildResearchEvidenceTable(normalizedResearchSources),
+    researchSourceLabels: normalizedResearchSources.map((source) => source.label),
     slidePlan: buildPptxContentPlan({
       title,
       prompt: userRequest,
@@ -1859,8 +1889,17 @@ async function buildDocx(plan, outputPath) {
     dateLine,
     ...staticIndex,
   ];
+  const evidenceChildren = plan.researchEvidenceTable?.rows?.length ? [
+    new Paragraph({ text: 'Matriz de evidencia científica', heading: HeadingLevel.HEADING_1 }),
+    makeTable(
+      plan.researchEvidenceTable.headers,
+      plan.researchEvidenceTable.rows,
+      [720, 2040, 1160, 960, 3200, 1280],
+    ),
+  ] : [];
   const children = [
     ...openingChildren,
+    ...evidenceChildren,
     ...(plan.referenceFiles?.length ? [
       new Paragraph({ text: 'Material de referencia incorporado', heading: HeadingLevel.HEADING_1 }),
       new Paragraph(`Se registraron ${plan.referenceFiles.length} archivo(s) de referencia con verificación de propiedad y metadatos técnicos.`),
@@ -2187,11 +2226,11 @@ async function buildPptx(plan, outputPath) {
   const rawContentPlan = (plan.slidePlan && Array.isArray(plan.slidePlan.slides) && plan.slidePlan.slides.length > 0)
     ? plan.slidePlan
     : fallbackPlan;
-  const contentPlan = reconcilePptxPlan(rawContentPlan, {
+  const contentPlan = attachSourceCitations(reconcilePptxPlan(rawContentPlan, {
     slideTarget: plan.slideTarget,
     fallbackSlides: fallbackPlan.slides,
     requiredItems: plan.presentationBrief?.mustInclude,
-  });
+  }), { referenceBriefs: plan.referenceBriefs });
   plan.slidePlan = contentPlan;
   const theme = pickPptxTheme({
     template: plan.template,
@@ -2289,8 +2328,8 @@ async function buildPptx(plan, outputPath) {
     slide = pptx.addSlide();
     addTitle(slide, 'Material de referencia', 'Archivos adjuntos considerados en la planificación');
     contentPlan.references.slice(0, 5).forEach((ref, i) => {
-      slide.addText(`${i + 1}. ${ref.name}`, { x: 0.9, y: 2.0 + i * 0.78, w: 4.1, h: 0.32, fontSize: 16, bold: true, color: palette.dark });
-      slide.addText(ref.excerpt || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.78, w: 6.8, h: 0.52, fontSize: 14, color: palette.muted, fit: 'shrink' });
+      slide.addText(`${i + 1}. ${String(ref.name || '').replace(/\.txt$/i, '')}`, { x: 0.9, y: 2.0 + i * 0.78, w: 4.1, h: 0.32, fontSize: 16, bold: true, color: palette.dark, fit: 'shrink' });
+      slide.addText(referenceDisplayExcerpt(ref) || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.78, w: 6.8, h: 0.52, fontSize: 13, color: palette.muted, fit: 'shrink' });
     });
     slide.addNotes('Confirmar qué archivos adjuntos fueron usados como referencia.');
   }
@@ -2300,9 +2339,13 @@ async function buildPptx(plan, outputPath) {
   // legado (sin layout) renderiza como 'bullets' y solo muestra gráfico si
   // trae métricas propias — nunca datos decorativos inventados.
   const totalSlides = contentPlan.slides.length;
-  const addFooter = (target, pageIndex) => {
+  const addFooter = (target, pageIndex, slideSpec = {}) => {
+    const citations = Array.isArray(slideSpec.sourceCitations) ? slideSpec.sourceCitations.filter(Boolean).slice(0, 3) : [];
     target.addShape(pptx.ShapeType.rect, { x: 0, y: 7.18, w: 13.333, h: 0.02, fill: { color: palette.line }, line: { color: palette.line, transparency: 100 } });
-    target.addText(contentPlan.topic || plan.title, { x: 0.65, y: 7.24, w: 6.4, h: 0.2, fontSize: 9, color: palette.muted, margin: 0 });
+    target.addText(contentPlan.topic || plan.title, { x: 0.65, y: 7.24, w: citations.length ? 4.6 : 6.4, h: 0.2, fontSize: 9, color: palette.muted, margin: 0 });
+    if (citations.length) {
+      target.addText(`Evidencia: ${citations.join(' · ')}`, { x: 5.2, y: 7.24, w: 6.5, h: 0.2, fontSize: 8.5, bold: true, color: palette.accent, align: 'right', margin: 0 });
+    }
     target.addText(`${pageIndex}`, { x: 12.45, y: 7.24, w: 0.5, h: 0.2, fontSize: 9, color: palette.muted, align: 'right', margin: 0 });
   };
   const addTakeaway = (target, text) => {
@@ -2344,7 +2387,7 @@ async function buildPptx(plan, outputPath) {
     }
 
     addTitle(slide, slideSpec.title, slideSpec.kicker || '');
-    addFooter(slide, pageIndex);
+    addFooter(slide, pageIndex, slideSpec);
 
     if (layout === 'two_column' && Array.isArray(slideSpec.columns) && slideSpec.columns.length >= 2) {
       slideSpec.columns.slice(0, 2).forEach((column, columnIndex) => {
@@ -2380,6 +2423,7 @@ async function buildPptx(plan, outputPath) {
         slide.addShape(pptx.ShapeType.rect, { x: 7.3, y, w: 0.08, h: 1.32, fill: { color: palette.cyan }, line: { color: palette.cyan } });
         slide.addText(item, { x: 7.56, y: y + 0.18, w: 4.75, h: 0.96, fontSize: 16, color: palette.body, fit: 'shrink', margin: 0 });
       });
+      if (slideSpec.stat.source) slide.addText(`Fuente: ${slideSpec.stat.source}`, { x: 7.34, y: 6.58, w: 4.95, h: 0.2, fontSize: 9, italic: true, color: palette.muted, margin: 0 });
       slide.addNotes(slideSpec.notes);
       continue;
     }
@@ -2402,7 +2446,14 @@ async function buildPptx(plan, outputPath) {
         showLegend: false, showValue: true, dataLabelFontSize: 12,
         chartColors: theme.chartColors,
       });
-      if (slideSpec.chart.source) slide.addText(`Fuente: ${slideSpec.chart.source}`, { x: 0.78, y: 6.55, w: 6.8, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
+      if (slideSpec.chart.source) {
+        const provenance = [
+          `Fuente: ${slideSpec.chart.source}`,
+          slideSpec.chart.unit ? `Unidad: ${slideSpec.chart.unit}` : '',
+          slideSpec.chart.asOf ? `Corte: ${slideSpec.chart.asOf}` : '',
+        ].filter(Boolean).join(' · ');
+        slide.addText(provenance, { x: 0.78, y: 6.55, w: 6.8, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
+      }
       addTakeaway(slide, slideSpec.insight || slideSpec.takeaway);
       slide.addNotes(slideSpec.notes);
       continue;
@@ -2456,11 +2507,11 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const rawContentPlan = (plan.slidePlan && Array.isArray(plan.slidePlan.slides) && plan.slidePlan.slides.length > 0)
     ? plan.slidePlan
     : fallbackPlan;
-  const contentPlan = reconcilePptxPlan(rawContentPlan, {
+  const contentPlan = attachSourceCitations(reconcilePptxPlan(rawContentPlan, {
     slideTarget: plan.slideTarget,
     fallbackSlides: fallbackPlan.slides,
     requiredItems: plan.presentationBrief?.mustInclude,
-  });
+  }), { referenceBriefs: plan.referenceBriefs });
   const theme = pickPptxTheme({
     template: plan.template,
     prompt: plan.userRequest || plan.title,
@@ -2488,10 +2539,13 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     <div style="position:relative;width:100%;max-width:860px;margin:0 auto 26px;aspect-ratio:16/9;border-radius:14px;border:1px solid ${dark ? SECTION_BG : LINE};background:${dark ? SECTION_BG : token('bg')};box-shadow:0 18px 44px -22px rgba(15,23,42,.28);overflow:hidden;font-family:Inter,system-ui,sans-serif;">
       ${inner}
     </div>`;
-  const footer = (n) => `
+  const footer = (n, spec = null) => {
+    const citations = Array.isArray(spec?.sourceCitations) ? spec.sourceCitations.filter(Boolean).slice(0, 3) : [];
+    return `
     <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;padding:8px 22px;border-top:1px solid ${LINE};font-size:10px;color:${MUTED};background:${SURFACE};">
-      <span>${deckTitle}</span><span>${n}</span>
+      <span>${deckTitle}</span>${citations.length ? `<span style="font-weight:800;color:${ACCENT};">Evidencia: ${citations.map(xmlEscape).join(' · ')}</span>` : ''}<span>${n}</span>
     </div>`;
+  };
   const kickerHtml = (kicker) => kicker ? `<div style="font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:${ACCENT};margin-bottom:6px;">${xmlEscape(kicker)}</div>` : '';
   const titleHtml = (title) => `<div style="font-size:30px;font-weight:800;color:${INK};line-height:1.12;">${xmlEscape(title)}</div>`;
 
@@ -2513,12 +2567,13 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
           <div style="flex:1;">
             <div style="font-size:88px;font-weight:900;color:${ACCENT};line-height:1;">${xmlEscape(spec.stat.value)}</div>
             <div style="margin-top:10px;font-size:15px;color:${INK};max-width:340px;">${xmlEscape(spec.stat.caption)}</div>
+            ${spec.stat.source ? `<div style="margin-top:14px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.stat.source)}</div>` : ''}
           </div>
           <div style="flex:1;display:flex;flex-direction:column;gap:10px;padding-top:8px;">
             ${(spec.support || []).slice(0, 3).map((item) => `<div style="border:1px solid ${LINE};background:${SURFACE};border-radius:10px;padding:12px 14px;font-size:14px;color:${BODY};">${xmlEscape(item)}</div>`).join('')}
           </div>
         </div>
-        ${footer(pageNum)}`);
+        ${footer(pageNum, spec)}`);
     }
     if (layout === 'two_column' && Array.isArray(spec.columns) && spec.columns.length >= 2) {
       return slideShell(`
@@ -2532,7 +2587,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
               </div>
             </div>`).join('')}
         </div>
-        ${footer(pageNum)}`);
+        ${footer(pageNum, spec)}`);
     }
     if (layout === 'quote' && spec.quote) {
       return slideShell(`
@@ -2541,7 +2596,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
           <div style="font-size:22px;font-style:italic;font-weight:600;color:${INK};line-height:1.4;max-width:640px;">${xmlEscape(spec.quote)}</div>
           ${spec.attribution ? `<div style="margin-top:14px;font-size:13px;font-weight:700;color:${MUTED};">— ${xmlEscape(spec.attribution)}</div>` : ''}
         </div>
-        ${footer(pageNum)}`);
+        ${footer(pageNum, spec)}`);
     }
     if (layout === 'chart' && spec.chart) {
       const max = Math.max(...spec.chart.values, 1);
@@ -2555,7 +2610,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
                 <div style="flex:1;background:${SURFACE_ALT};border-radius:6px;height:18px;overflow:hidden;"><div style="width:${Math.round((spec.chart.values[i] / max) * 100)}%;height:100%;background:${ACCENT};border-radius:6px;"></div></div>
                 <span style="width:40px;font-size:11px;color:${MUTED};">${xmlEscape(String(spec.chart.values[i]))}${xmlEscape(spec.chart.unit || '')}</span>
               </div>`).join('')}
-            ${spec.chart.source ? `<div style="margin-top:6px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.chart.source)}</div>` : ''}
+            ${spec.chart.source ? `<div style="margin-top:6px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.chart.source)}${spec.chart.unit ? ` · Unidad: ${xmlEscape(spec.chart.unit)}` : ''}${spec.chart.asOf ? ` · Corte: ${xmlEscape(spec.chart.asOf)}` : ''}</div>` : ''}
           </div>
           ${spec.insight ? `
           <div style="flex:1;border-left:3px solid ${ACCENT};background:${SURFACE_ALT};border-radius:10px;padding:14px 16px;align-self:flex-start;">
@@ -2563,7 +2618,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
             <div style="font-size:14px;font-weight:700;color:${INK};">${xmlEscape(spec.insight)}</div>
           </div>` : ''}
         </div>
-        ${footer(pageNum)}`);
+        ${footer(pageNum, spec)}`);
     }
     // bullets / forma legada
     const bullets = (spec.bullets || []).slice(0, 4);
@@ -2586,7 +2641,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
           <div style="font-size:14px;font-weight:700;color:${INK};">${xmlEscape(takeaway)}</div>
         </div>` : ''}
       </div>
-      ${footer(pageNum)}`);
+      ${footer(pageNum, spec)}`);
   };
 
   const cover = slideShell(`
@@ -2615,8 +2670,8 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     <div style="padding:18px 40px 0;display:flex;flex-direction:column;gap:10px;">
       ${(contentPlan.references || []).slice(0, 5).map((ref, index) => `
         <div style="display:grid;grid-template-columns:210px 1fr;gap:18px;border-bottom:1px solid ${LINE};padding:0 0 10px;">
-          <div style="font-size:14px;font-weight:800;color:${INK};">${index + 1}. ${xmlEscape(ref.name)}</div>
-          <div style="font-size:13px;color:${BODY};">${xmlEscape(ref.excerpt || 'Sin texto extraído disponible.')}</div>
+          <div style="font-size:14px;font-weight:800;color:${INK};">${index + 1}. ${xmlEscape(String(ref.name || '').replace(/\.txt$/i, ''))}</div>
+          <div style="font-size:13px;color:${BODY};">${xmlEscape(referenceDisplayExcerpt(ref) || 'Sin texto extraído disponible.')}</div>
         </div>`).join('')}
     </div>
     ${footer(referencePage)}`) : '';
@@ -2913,11 +2968,11 @@ function repairPlan(plan, validation) {
     referenceBriefs: plan.referenceBriefs,
   });
   const repairedSlidePlan = plan.format === 'pptx'
-    ? reconcilePptxPlan(fallbackPptxPlan, {
+    ? attachSourceCitations(reconcilePptxPlan(fallbackPptxPlan, {
       slideTarget: plan.slideTarget,
       fallbackSlides: fallbackPptxPlan.slides,
       requiredItems: plan.presentationBrief?.mustInclude,
-    })
+    }), { referenceBriefs: plan.referenceBriefs })
     : fallbackPptxPlan;
   const repaired = {
     ...plan,
@@ -2945,6 +3000,10 @@ async function writeTelemetry(record, telemetryDir) {
   const scrubPlan = record.plan ? {
     ...record.plan,
     referenceBriefs: undefined,
+    researchEvidenceTable: undefined,
+    researchSourceLabels: Array.isArray(record.plan.researchSourceLabels)
+      ? record.plan.researchSourceLabels
+      : undefined,
     pandocReferenceImages: undefined,
     referenceFiles: Array.isArray(record.plan.referenceFiles)
       ? record.plan.referenceFiles.map(({ localPath, ...ref }) => ref)
@@ -2972,6 +3031,8 @@ async function runAdvancedDocumentPipeline({
   maxRepairAttempts = 1,
   signal,
   referenceFiles = [],
+  outline = [],
+  researchSources = [],
   userId,
   chatId,
 } = {}) {
@@ -2986,7 +3047,15 @@ async function runAdvancedDocumentPipeline({
   const detectedTemplate = detectTemplate(userPromptText, template);
   emit(events, 'orchestrator', 'complete', `Formato detectado: ${detectedFormat}`, { format: detectedFormat });
   emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(userPromptText) });
-  let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity, referenceFiles });
+  let plan = buildPlan({
+    prompt: promptText,
+    format: detectedFormat,
+    template: detectedTemplate,
+    complexity,
+    referenceFiles,
+    outline,
+    researchSources,
+  });
   // Intent refinement (the "brain" layer): an LLM pass separates the CORE
   // TOPIC from delivery CONDITIONS and repairs constraint typos. Without it,
   // "crea una ppt de la gestión administrativa en 10 Landin porfavor de
@@ -3018,7 +3087,7 @@ async function runAdvancedDocumentPipeline({
         if (refinedWords && !plan.wordTarget) {
           plan.wordTarget = refinedWords;
           const budget = sectionBudgetForWords(refinedWords);
-          if (budget && plan.sections.length > budget) plan.sections = plan.sections.slice(0, budget);
+          if (!plan.outlineApproved && budget && plan.sections.length > budget) plan.sections = plan.sections.slice(0, budget);
         }
         emit(events, 'orchestrator', 'complete', 'Intención interpretada: tema y condiciones separados', {
           title: plan.title,
@@ -3093,11 +3162,14 @@ async function runAdvancedDocumentPipeline({
     referenceBriefs: plan.referenceBriefs,
   });
   if (plan.format === 'pptx') {
-    plan.slidePlan = reconcilePptxPlan(llmDeck || fallbackPptxPlan, {
-      slideTarget: plan.slideTarget,
-      fallbackSlides: fallbackPptxPlan.slides,
-      requiredItems: plan.presentationBrief?.mustInclude,
-    });
+    plan.slidePlan = attachSourceCitations(
+      reconcilePptxPlan(llmDeck || fallbackPptxPlan, {
+        slideTarget: plan.slideTarget,
+        fallbackSlides: fallbackPptxPlan.slides,
+        requiredItems: plan.presentationBrief?.mustInclude,
+      }),
+      { referenceBriefs: plan.referenceBriefs },
+    );
     plan.presentationTheme = pickPptxTheme({
       template: plan.template,
       prompt: `${plan.userRequest || plan.title} ${plan.presentationBrief?.visualStyle || ''}`,
