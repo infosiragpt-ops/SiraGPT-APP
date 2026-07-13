@@ -295,7 +295,7 @@ export default function ResearchResultsWorkbench({ query, sources, compact = fal
       </div>
 
       {visible.length ? (
-        <ol className="min-w-0 space-y-2 px-2 pb-3 sm:px-3">
+        <ol className="min-w-0 list-none space-y-2 px-2 pb-3 sm:px-3">
           {visible.map((source, index) => {
             const identity = researchSourceIdentity(source, index)
             const isExpanded = expanded.has(identity)
