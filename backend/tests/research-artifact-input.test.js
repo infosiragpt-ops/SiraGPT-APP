@@ -42,6 +42,11 @@ test('normalizes scientific sources into labeled evidence files and blocks unsaf
   assert.deepEqual(input.evidenceTable.headers, ['Fuente', 'Estudio', 'Diseño', 'Muestra', 'Hallazgo principal', 'DOI']);
 });
 
+test('accepts the complete editable outline required by a 40-slide presentation', () => {
+  const outline = Array.from({ length: 37 }, (_, index) => `Contenido ${index + 1}`);
+  assert.deepEqual(normalizeArtifactOutline(outline), outline);
+});
+
 test('keeps source text as evidence while appending an explicit anti-injection contract', () => {
   const input = normalizeResearchArtifactInput({ researchSources: sources });
   const prompt = appendResearchGroundingInstructions('Crea un informe', input.sources);

@@ -3,7 +3,9 @@
 const crypto = require('crypto');
 
 const MAX_RESEARCH_SOURCES = 12;
-const MAX_OUTLINE_ITEMS = 30;
+// The research builder supports up to 40 total slides. With cover, agenda and
+// references reserved, that can require 37 editable content headings.
+const MAX_OUTLINE_ITEMS = 40;
 
 function clean(value, max = 500) {
   const text = String(value == null ? '' : value)
