@@ -114,7 +114,7 @@ jobs:
 
     steps:
       - name: Deploy via SSH (with auto-rollback)
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         env:
           # Ephemeral job token for the VPS-side git fetch. The VPS checkout
           # keeps NO stored GitHub credentials (its old origin URL may even
