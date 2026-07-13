@@ -16,6 +16,7 @@ import {
   shouldRouteWorkModePromptThroughAgentTask,
   isImageAnalysisPrompt,
   isImageOnlyAttachmentTurn,
+  SEMANTIC_INTENT_BUDGET_MS,
   shouldUseFastTextRoute,
   shouldAnswerFromExistingDocument,
   shouldEditExistingDocument,
@@ -23,6 +24,10 @@ import {
 } from "../lib/ai-service"
 
 describe("ai-service · deterministic intent routing", () => {
+  it("keeps semantic routing outside the user's three-second critical path", () => {
+    assert.ok(SEMANTIC_INTENT_BUDGET_MS <= 750)
+  })
+
   it("routes research plus a deliverable file to the long-running agent", async () => {
     const intent = await aiService.classifyIntent(
       "investiga 30 artículos científicos sobre ansiedad adolescente y dame un Word con citas APA",

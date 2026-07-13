@@ -4750,6 +4750,130 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
 const WORK_MODE_STORAGE_KEY = 'sira:chat:work-mode';
 
+const EMPTY_CHAT_MESSAGES: any[] = []
+
+type ChatMessageListProps = {
+  messages: any[]
+  isStreaming: boolean
+  radixViewport: HTMLElement | null
+  user: any
+  onRegenerate: (messageId: string) => void | Promise<void>
+  onBranch: (messageId: string) => void | Promise<void>
+  updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void
+  onToggleSplitView: (content: any) => void
+  onDocumentPreview: (target: DocumentPreviewTarget) => void
+  onAttachmentPreview: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void
+  onOpenSources: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void
+}
+
+// The transcript is intentionally isolated from composer state. Typing used
+// to reconcile every message (including Markdown and artifact renderers) on
+// each keystroke because the list lived inside ChatInterfaceContent. Keeping
+// stable callback props lets React skip that entire subtree until messages or
+// streaming state actually change.
+const ChatMessageList = React.memo(function ChatMessageList({
+  messages: rawMessages,
+  isStreaming,
+  radixViewport,
+  user,
+  onRegenerate,
+  onBranch,
+  updateMessageInChat,
+  onToggleSplitView,
+  onDocumentPreview,
+  onAttachmentPreview,
+  onOpenSources,
+}: ChatMessageListProps) {
+  const { stableMessages, streamingMessage } = React.useMemo(() => {
+    // Two passes are deliberate: the first collapses optimistic/server twins;
+    // the second catches duplicates that become adjacent after hidden tool and
+    // metadata messages are removed.
+    const messages = dedupeMessages(rawMessages)
+    const stable = dedupeMessages(
+      isStreaming
+        ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
+        : messages.filter((message) => shouldRenderChatMessage(message))
+    )
+    const streamingCandidate = isStreaming ? messages[messages.length - 1] : null
+    const streaming = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
+      ? streamingCandidate
+      : null
+
+    return { stableMessages: stable, streamingMessage: streaming }
+  }, [isStreaming, rawMessages])
+
+  return (
+    <>
+      {radixViewport && stableMessages.length > 40 ? (
+        <Virtuoso
+          data={stableMessages}
+          customScrollParent={radixViewport}
+          computeItemKey={(_, message) => message.id}
+          increaseViewportBy={400}
+          itemContent={(_, message) => (
+            <ErrorBoundary key={message.id} label={`message:${message.id}`}>
+              <MessageComponent
+                message={message}
+                user={user}
+                onRegenerate={onRegenerate}
+                onBranch={onBranch}
+                updateMessageInChat={updateMessageInChat}
+                isStreaming={false}
+                onToggleSplitView={onToggleSplitView}
+                onDocumentPreview={onDocumentPreview}
+                onAttachmentPreview={onAttachmentPreview}
+                onOpenSources={onOpenSources}
+              />
+            </ErrorBoundary>
+          )}
+        />
+      ) : (
+        stableMessages.map((message) => (
+          <ErrorBoundary key={message.id} label={`message:${message.id}`}>
+            <MessageComponent
+              message={message}
+              user={user}
+              onRegenerate={onRegenerate}
+              onBranch={onBranch}
+              updateMessageInChat={updateMessageInChat}
+              isStreaming={false}
+              onToggleSplitView={onToggleSplitView}
+              onDocumentPreview={onDocumentPreview}
+              onAttachmentPreview={onAttachmentPreview}
+              onOpenSources={onOpenSources}
+            />
+          </ErrorBoundary>
+        ))
+      )}
+      {streamingMessage && (
+        <div
+          className="streaming-message"
+          role="region"
+          aria-live="polite"
+          aria-atomic="false"
+          aria-label="Respuesta del asistente en progreso"
+        >
+          <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
+            <MessageComponent
+              key={streamingMessage.id}
+              message={streamingMessage}
+              user={user}
+              onRegenerate={onRegenerate}
+              updateMessageInChat={updateMessageInChat}
+              isStreaming={true}
+              onToggleSplitView={onToggleSplitView}
+              onDocumentPreview={onDocumentPreview}
+              onAttachmentPreview={onAttachmentPreview}
+            />
+          </ErrorBoundary>
+        </div>
+      )}
+    </>
+  )
+})
+
+ChatMessageList.displayName = "ChatMessageList"
+
 export default function ChatInterface() {
   return <ChatInterfaceContent />
 }
@@ -6250,17 +6374,18 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     syncChatLayoutVars();
-    if (composerResizeFrameRef.current !== null) {
-      window.cancelAnimationFrame(composerResizeFrameRef.current);
+    if (heightChanged && document.activeElement === textarea) {
+      scrollToBottom();
     }
+  }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+
+  const scheduleComposerTextareaResize = React.useCallback(() => {
+    if (composerResizeFrameRef.current !== null) return;
     composerResizeFrameRef.current = window.requestAnimationFrame(() => {
       composerResizeFrameRef.current = null;
-      syncChatLayoutVars();
-      if (heightChanged && document.activeElement === textarea) {
-        scrollToBottom();
-      }
+      resizeComposerTextarea();
     });
-  }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+  }, [resizeComposerTextarea]);
 
   React.useEffect(() => {
     return () => {
@@ -6326,8 +6451,8 @@ But first, you need to connect your Spotify account securely using the button be
   }, [setComposerInputFocused, syncChatLayoutVars]);
 
   React.useEffect(() => {
-    resizeComposerTextarea();
-  }, [input, resizeComposerTextarea]);
+    scheduleComposerTextareaResize();
+  }, [input, scheduleComposerTextareaResize]);
 
   // Instant upgrade function — restringido a super-admins.
   // Para usuarios normales el endpoint devuelve 403, así que evitamos el
@@ -6411,15 +6536,15 @@ But first, you need to connect your Spotify account securely using the button be
     };
   }, [setSubscribeOpen, isMonthlyLimitError]);
 
-  const handleToggleSplitView = (content: any) => {
+  const handleToggleSplitView = React.useCallback((content: any) => {
     setDocumentPreviewUrl(null)
     setComposerPreviewIndex(null)
     setSidePreviewAttachment(null)
     setSidePreviewSiblings([])
     setSplitViewContent(content)
-  }
+  }, [])
 
-  const handleDocumentPreview = (url: DocumentPreviewTarget) => {
+  const handleDocumentPreview = React.useCallback((url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
     setSourcesPanelData(null)
     setComposerPreviewIndex(null)
@@ -6431,7 +6556,7 @@ But first, you need to connect your Spotify account securely using the button be
       return balanced
     })
     setDocumentPreviewUrl(url);
-  };
+  }, []);
 
   const handleAttachmentPreview = React.useCallback((attachment: AttachmentLike, siblings: AttachmentLike[] = [], index = 0) => {
     setSplitViewContent(null);
@@ -12024,113 +12149,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
                     <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
-                      {(() => {
-                        // dedupeMessages is the render-layer safety net against
-                        // the optimistic-UI duplication bug: even if an optimistic
-                        // message and its server twin both reach state, only one
-                        // bubble is ever rendered (server id wins). See
-                        // lib/message-preservation.ts.
-                        // dedupeMessages runs TWICE: once on the raw list to
-                        // collapse id-level and optimistic/server twin duplicates,
-                        // then again on the *filtered* list so messages that are
-                        // hidden by shouldRenderChatMessage (tool-use, metadata,
-                        // etc.) cannot mask adjacent duplicates from Pass C.
-                        const messages = dedupeMessages(currentChat?.messages || []);
-                        const stableMessages = dedupeMessages(
-                          isCurrentChatStreaming
-                            ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
-                            : messages.filter((message) => shouldRenderChatMessage(message))
-                        );
-                        const streamingCandidate = isCurrentChatStreaming ? messages[messages.length - 1] : null;
-                        const streamingMessage = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
-                          ? streamingCandidate
-                          : null;
-
-                        return (
-                          <>
-
-                            {radixViewport && stableMessages.length > 40 ? (
-                              // Virtualized path — only items inside the
-                              // visible window (plus a 400px overscan
-                              // buffer) get reconciled. customScrollParent
-                              // hands Virtuoso the existing Radix viewport
-                              // so scrollToBottom() above keeps working.
-                              <Virtuoso
-                                data={stableMessages}
-                                customScrollParent={radixViewport}
-                                computeItemKey={(_, m) => m.id}
-                                increaseViewportBy={400}
-                                itemContent={(_, message) => (
-                                  <ErrorBoundary
-                                    key={message.id}
-                                    label={`message:${message.id}`}
-                                  >
-                                    <MessageComponent
-                                      message={message}
-                                      user={user}
-                                      onRegenerate={regenerateMessage}
-                                      onBranch={branchMessage}
-                                      updateMessageInChat={editAndRegenerateRouter}
-                                      isStreaming={false}
-                                      onToggleSplitView={handleToggleSplitView}
-                                      onDocumentPreview={handleDocumentPreview}
-                                      onAttachmentPreview={handleAttachmentPreview}
-                                      onOpenSources={handleOpenSources}
-                                    />
-                                  </ErrorBoundary>
-                                )}
-                              />
-                            ) : (
-                              // First render before viewport ref resolves —
-                              // identical to the previous non-virtualized
-                              // path. Per-message ErrorBoundary preserved.
-                              stableMessages.map((message) => (
-                                <ErrorBoundary key={message.id} label={`message:${message.id}`}>
-                                  <MessageComponent
-                                    message={message}
-                                    user={user}
-                                    onRegenerate={regenerateMessage}
-                                    onBranch={branchMessage}
-                                    updateMessageInChat={editAndRegenerateRouter}
-                                    isStreaming={false}
-                                    onToggleSplitView={handleToggleSplitView}
-                                    onDocumentPreview={handleDocumentPreview}
-                                    onAttachmentPreview={handleAttachmentPreview}
-                                    onOpenSources={handleOpenSources}
-                                  />
-                                </ErrorBoundary>
-                              ))
-                            )}
-                            {streamingMessage && (
-                              // Isolate layout for the streaming bubble so
-                              // each token delta doesn't relayout the whole
-                              // message list above. See .streaming-message
-                              // in globals.css (contain: layout style).
-                              <div
-                                className="streaming-message"
-                                role="region"
-                                aria-live="polite"
-                                aria-atomic="false"
-                                aria-label="Respuesta del asistente en progreso"
-                              >
-                                <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
-                                  <MessageComponent
-                                    key={streamingMessage.id}
-                                    message={streamingMessage}
-                                    user={user}
-                                    onRegenerate={regenerateMessage}
-                                    updateMessageInChat={editAndRegenerateRouter}
-                                    isStreaming={true}
-                                    onToggleSplitView={handleToggleSplitView}
-                                    onDocumentPreview={handleDocumentPreview}
-                                    onAttachmentPreview={handleAttachmentPreview}
-                                  />
-                                </ErrorBoundary>
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
+                      <ChatMessageList
+                        messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
+                        isStreaming={isCurrentChatStreaming}
+                        radixViewport={radixViewport}
+                        user={user}
+                        onRegenerate={regenerateMessage}
+                        onBranch={branchMessage}
+                        updateMessageInChat={editAndRegenerateRouter}
+                        onToggleSplitView={handleToggleSplitView}
+                        onDocumentPreview={handleDocumentPreview}
+                        onAttachmentPreview={handleAttachmentPreview}
+                        onOpenSources={handleOpenSources}
+                      />
                     </div>
                   </ScrollArea>
 

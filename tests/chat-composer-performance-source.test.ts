@@ -47,13 +47,47 @@ describe("chat composer typing performance source contract", () => {
     )
   })
 
+  it("isolates the transcript from high-frequency composer state", () => {
+    const transcriptStart = chatInterface.indexOf("const ChatMessageList =")
+    const chatContentStart = chatInterface.indexOf("function ChatInterfaceContent()")
+
+    assert.ok(transcriptStart >= 0, "the transcript component must exist")
+    assert.ok(chatContentStart > transcriptStart, "the transcript must be declared outside the chat shell")
+    assert.match(
+      chatInterface.slice(transcriptStart, chatContentStart),
+      /const\s+ChatMessageList\s*=\s*React\.memo\(/,
+      "typing must not reconcile historical message renderers"
+    )
+    assert.match(
+      chatInterface.slice(chatContentStart),
+      /<ChatMessageList[\s\S]*messages=\{currentChat\?\.messages\s*\?\?\s*EMPTY_CHAT_MESSAGES\}/,
+      "the chat shell must pass a stable empty-list fallback"
+    )
+    assert.doesNotMatch(
+      chatInterface.slice(chatContentStart),
+      /const\s+messages\s*=\s*dedupeMessages/,
+      "deduplication must not run in the composer-owning parent"
+    )
+  })
+
   it("does not schedule duplicate textarea resize work per input event", () => {
     const changeBody = functionBody("handleTextareaChange")
+    const resizeBody = functionBody("resizeComposerTextarea")
 
     assert.doesNotMatch(
       changeBody,
       /requestAnimationFrame\s*\(\s*resizeComposerTextarea\s*\)/,
       "native typing should not schedule resize in both onChange and the input effect"
+    )
+    assert.match(
+      chatInterface,
+      /const\s+scheduleComposerTextareaResize\s*=\s*React\.useCallback\(/,
+      "textarea measurements must be coalesced to one animation frame"
+    )
+    assert.doesNotMatch(
+      resizeBody,
+      /requestAnimationFrame/,
+      "the measured resize must not enqueue a second layout frame"
     )
   })
 
