@@ -367,6 +367,21 @@ function requirementIsPresent(value, content) {
   return tokens.every((token) => normalizedContent.includes(token));
 }
 
+function contentRequirements(requiredItems = []) {
+  const items = (Array.isArray(requiredItems) ? requiredItems : []).filter(Boolean);
+  const hasProvenanceDirective = items.some((item) => /\b(?:procedencia|origen)\b.*\b(?:graf|cifra|figura)/i.test(normalize(item)));
+  return items.filter((item) => {
+    const normalized = normalize(item);
+    // Citation visibility and figure provenance have dedicated structural
+    // checks below. They are delivery controls, not literal slide copy.
+    if (/\b(?:citas?|citations?)\b.*(?:\[s\d*\]|visibl)/i.test(normalized)) return false;
+    if (/\b(?:etiquetas?|fuentes?)\b.*\[s\d*\]/i.test(normalized)) return false;
+    if (/\b(?:procedencia|origen)\b.*\b(?:graf|cifra|figura)/i.test(normalized)) return false;
+    if (hasProvenanceDirective && /^cifras?$/.test(normalized.trim())) return false;
+    return true;
+  });
+}
+
 function auditPptxPlan(plan = {}, {
   prompt = '',
   referenceBriefs = [],
@@ -388,7 +403,7 @@ function auditPptxPlan(plan = {}, {
   const layoutCount = new Set(slides.map((slide) => slide.layout || 'bullets')).size;
   const expectedContent = plan.manifest?.contentSlides || slides.length;
   const visibleContent = slides.map(visibleSlideText).join(' ');
-  const missingRequiredItems = (Array.isArray(requiredItems) ? requiredItems : [])
+  const missingRequiredItems = contentRequirements(requiredItems)
     .filter((item) => !requirementIsPresent(item, visibleContent));
   const presentForbiddenItems = (Array.isArray(forbiddenItems) ? forbiddenItems : [])
     .filter((item) => requirementIsPresent(item, visibleContent));
@@ -442,6 +457,7 @@ module.exports = {
   valueIsGrounded,
   quoteIsGrounded,
   requirementIsPresent,
+  contentRequirements,
   auditPptxPlan,
   slideText,
   visibleSlideText,

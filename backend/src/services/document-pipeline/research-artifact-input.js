@@ -6,6 +6,7 @@ const MAX_RESEARCH_SOURCES = 12;
 // The research builder supports up to 40 total slides. With cover, agenda and
 // references reserved, that can require 37 editable content headings.
 const MAX_OUTLINE_ITEMS = 40;
+const EMBEDDED_INSTRUCTION_RE = /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+)?(?:previous|prior|above|system|developer)?\s*(?:instructions?|prompts?|rules?)\b|\b(?:ignora|omite|olvida|anula)\s+(?:todas?\s+|cualquier\s+)?(?:las\s+)?(?:instrucciones|indicaciones|reglas)\s*(?:anteriores|previas|del\s+sistema)?\b/i;
 
 function clean(value, max = 500) {
   const text = String(value == null ? '' : value)
@@ -37,6 +38,10 @@ function normalizeAuthors(value) {
     .slice(0, 20);
 }
 
+function containsEmbeddedInstruction(value) {
+  return EMBEDDED_INSTRUCTION_RE.test(String(value || ''));
+}
+
 function normalizeArtifactOutline(value) {
   const seen = new Set();
   const outline = [];
@@ -66,13 +71,14 @@ function normalizeResearchSources(value) {
         || (Array.isArray(raw.effects?.sampleSizes) ? raw.effects.sampleSizes[0] : ''),
       120,
     );
-    const finding = clean(
+    const rawFinding = clean(
       raw.keyFinding
         || (Array.isArray(raw.keyFindings) ? raw.keyFindings[0]?.sentence || raw.keyFindings[0] : '')
         || raw.evidence?.topFinding
         || (Array.isArray(raw.evidence?.findings) ? raw.evidence.findings[0]?.sentence : ''),
       900,
     );
+    const finding = containsEmbeddedInstruction(rawFinding) ? '' : rawFinding;
     sources.push({
       label: `S${index}`,
       title,
@@ -128,6 +134,26 @@ function researchSourcesToReferenceFiles(sources) {
   });
 }
 
+function researchSourcesToReferenceBriefs(sources) {
+  return (Array.isArray(sources) ? sources : []).map((source) => {
+    const authors = Array.isArray(source.authors) ? source.authors : [];
+    return {
+      name: `[${source.label}] ${source.title}`,
+      excerpt: [
+        authors.length ? `Autores: ${authors.join(', ')}` : '',
+        source.year ? `Año: ${source.year}` : '',
+        source.journal ? `Revista: ${source.journal}` : '',
+        source.studyType ? `Diseño: ${source.studyType}` : '',
+        source.sampleSize ? `Muestra: ${source.sampleSize}` : '',
+        source.keyFinding ? `Hallazgo principal: ${source.keyFinding}` : '',
+        source.doi ? `DOI: ${source.doi}` : '',
+        source.url ? `URL: ${source.url}` : '',
+        `Citas registradas: ${source.citations}`,
+      ].filter(Boolean).join('\n'),
+    };
+  });
+}
+
 function buildResearchEvidenceTable(sources) {
   if (!Array.isArray(sources) || sources.length === 0) return null;
   return {
@@ -177,5 +203,9 @@ module.exports = {
   normalizeArtifactOutline,
   normalizeResearchArtifactInput,
   normalizeResearchSources,
+  researchSourcesToReferenceBriefs,
   researchSourcesToReferenceFiles,
+  INTERNAL: {
+    containsEmbeddedInstruction,
+  },
 };

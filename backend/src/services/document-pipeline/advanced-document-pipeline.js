@@ -34,7 +34,9 @@ const {
   buildResearchEvidenceTable,
   normalizeArtifactOutline,
   normalizeResearchSources,
+  researchSourcesToReferenceBriefs,
 } = require('./research-artifact-input');
+const { buildGroundedResearchPptxPlan } = require('./research-pptx-plan');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -136,6 +138,12 @@ function stripSourceContent(prompt = '') {
   return String(prompt || '')
     .replace(/<SIRAGPT_SOURCE_CONTENT>[\s\S]*?<\/SIRAGPT_SOURCE_CONTENT>/gi, '')
     .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function stripResearchEvidenceContract(prompt = '') {
+  return String(prompt || '')
+    .replace(/\n\s*CONTRATO DE EVIDENCIA CIENT[IÍ]FICA:[\s\S]*$/i, '')
     .trim();
 }
 
@@ -479,6 +487,7 @@ function titleFromPrompt(prompt, fallback = 'Documento profesional') {
     // Courtesy and quality phrasing are conditions, not topic.
     .replace(/\b(?:por\s*favor|porfa(?:vor)?|gracias|please)\b/gi, ' ')
     .replace(/\bde\s+(?:forma|manera)\s+(?:muy\s+)?\w+\b/gi, ' ')
+    .replace(/\bcient[ií]fic[oa](?=\s+de\b)/gi, ' ')
     .replace(/\b(?:muy\s+)?(?:profesionali?(?:smo)?|profe\w*|bonito|bien\s+(?:elaborad[oa]|hech[oa])|executive|ejecutiv[oa]|minimalis\w*|corporativ[oa]|acad[eé]mic[oa])\b/gi, ' ')
     .replace(/\bpara\s+(?:un\s+|una\s+|el\s+|la\s+|los\s+|las\s+)?(?:directorio|directivos?|ejecutivos?|estudiantes?|clientes?|inversionistas?|equipo)\b/gi, ' ')
     .replace(/\b(?:sobre|about)\s*$/gi, ' ')
@@ -982,7 +991,7 @@ function sectionBudgetForWords(wordTarget) {
 function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [], outline = [], researchSources = [] }) {
   const rawUserRequest = extractUserDocumentRequest(prompt);
   const sourceContent = extractSourceContent(rawUserRequest);
-  const userRequest = stripSourceContent(rawUserRequest);
+  const userRequest = stripResearchEvidenceContract(stripSourceContent(rawUserRequest));
   const title = sourceContent
     ? titleFromSourceContent(sourceContent, 'Contenido convertido')
     : titleFromPrompt(userRequest, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
@@ -1033,12 +1042,20 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
   if (!approvedOutline.length && normalizedReferenceFiles.length > 0) {
     plannedSections = addUniqueSection(plannedSections, 'Material de referencia incorporado');
   }
-  const referenceBriefs = normalizedReferenceFiles
+  const uploadedReferenceBriefs = normalizedReferenceFiles
+    .filter((file) => !file.id.startsWith('research-'))
     .filter((file) => file.excerpt || file.isImage)
     .map((file) => ({
       name: file.name,
       excerpt: file.excerpt || (file.isImage ? 'Imagen adjunta incorporada como referencia visual en el documento.' : ''),
     }));
+  // Scientific source files retain the full abstract for DOCX generation, but
+  // their visible PPTX references use only structured metadata. This prevents
+  // untrusted instructions embedded in abstracts from reaching slide copy.
+  const referenceBriefs = [
+    ...researchSourcesToReferenceBriefs(normalizedResearchSources),
+    ...uploadedReferenceBriefs,
+  ];
   return {
     title,
     userRequest,
@@ -1054,6 +1071,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
     referenceBriefs,
+    researchSources: normalizedResearchSources,
     researchEvidenceTable: buildResearchEvidenceTable(normalizedResearchSources),
     researchSourceLabels: normalizedResearchSources.map((source) => source.label),
     slidePlan: buildPptxContentPlan({
@@ -2326,16 +2344,6 @@ async function buildPptx(plan, outputPath) {
   slide.addNotes('Explicar la ruta de navegación y anticipar que cada lámina aterriza una decisión o aprendizaje.');
   }
 
-  if (contentPlan.manifest.includeReferences && contentPlan.references?.length) {
-    slide = pptx.addSlide();
-    addTitle(slide, 'Material de referencia', 'Archivos adjuntos considerados en la planificación');
-    contentPlan.references.slice(0, 5).forEach((ref, i) => {
-      slide.addText(`${i + 1}. ${String(ref.name || '').replace(/\.txt$/i, '')}`, { x: 0.9, y: 2.0 + i * 0.78, w: 4.1, h: 0.32, fontSize: 16, bold: true, color: palette.dark, fit: 'shrink' });
-      slide.addText(referenceDisplayExcerpt(ref) || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.78, w: 6.8, h: 0.52, fontSize: 13, color: palette.muted, fit: 'shrink' });
-    });
-    slide.addNotes('Confirmar qué archivos adjuntos fueron usados como referencia.');
-  }
-
   // ── Láminas de contenido — layouts profesionales por tipo ────────────
   // El diseñador LLM marca cada slide con un layout; el plan heurístico
   // legado (sin layout) renderiza como 'bullets' y solo muestra gráfico si
@@ -2357,11 +2365,41 @@ async function buildPptx(plan, outputPath) {
     target.addText('IDEA CLAVE', { x: 8.62, y: 2.28, w: 3.6, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
     target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
   };
+  const addReferencesSlide = () => {
+    const references = (contentPlan.references || []).slice(0, 12);
+    if (!contentPlan.manifest.includeReferences || references.length === 0) return;
+    slide = pptx.addSlide();
+    addTitle(slide, 'Material de referencia', 'Fuentes incorporadas al guion y a las citas visibles');
+    const columnCount = references.length > 6 ? 2 : 1;
+    const rowsPerColumn = Math.ceil(references.length / columnCount);
+    const rowHeight = Math.min(0.84, 4.9 / Math.max(1, rowsPerColumn));
+    references.forEach((ref, index) => {
+      const column = Math.floor(index / rowsPerColumn);
+      const row = index % rowsPerColumn;
+      const x = 0.82 + column * 6.22;
+      const y = 1.92 + row * rowHeight;
+      slide.addText(`${index + 1}. ${String(ref.name || '').replace(/\.txt$/i, '')}`, {
+        x, y, w: columnCount === 1 ? 5.45 : 5.65, h: 0.3,
+        fontSize: columnCount === 1 ? 14 : 12.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0,
+      });
+      slide.addText(referenceDisplayExcerpt(ref, columnCount === 1 ? 220 : 145) || 'Sin metadatos estructurados disponibles.', {
+        x: columnCount === 1 ? x + 5.55 : x,
+        y: columnCount === 1 ? y - 0.02 : y + 0.34,
+        w: columnCount === 1 ? 5.95 : 5.65,
+        h: columnCount === 1 ? 0.5 : Math.max(0.28, rowHeight - 0.39),
+        fontSize: columnCount === 1 ? 11.5 : 9.5,
+        color: palette.muted, fit: 'shrink', margin: 0,
+      });
+    });
+    slide.addNotes('Cerrar con la trazabilidad de las fuentes utilizadas y recomendar la consulta del texto completo.');
+  };
+
+  const contentStartPage = 1 + (contentPlan.manifest.includeAgenda ? 1 : 0);
 
   for (const [i, slideSpec] of contentPlan.slides.entries()) {
     const layout = slideSpec.layout || 'bullets';
     slide = pptx.addSlide();
-    const pageIndex = contentPlan.manifest.shellSlides + i + 1;
+    const pageIndex = contentStartPage + i + 1;
 
     if (layout === 'section') {
       // Divider with presence: giant translucent section number, kicker,
@@ -2493,6 +2531,7 @@ async function buildPptx(plan, outputPath) {
     addTakeaway(slide, slideSpec.takeaway || (slideSpec.bullets?.[0] ? `${slideSpec.bullets[0].label ? `${slideSpec.bullets[0].label}: ` : ''}${slideSpec.bullets[0].text}` : ''));
     slide.addNotes(slideSpec.notes);
   }
+  addReferencesSlide();
   await pptx.writeFile({ fileName: outputPath });
   return await fsp.readFile(outputPath);
 }
@@ -2666,7 +2705,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     </div>
     ${footer(2)}`) : '';
 
-  const referencePage = 2 + (contentPlan.manifest.includeAgenda ? 1 : 0);
+  const referencePage = contentPlan.manifest.totalSlides;
   const references = contentPlan.manifest.includeReferences ? slideShell(`
     <div style="padding:30px 40px 0;">${titleHtml('Material de referencia')}<div style="font-size:12px;color:${MUTED};margin-top:4px;">Fuentes incorporadas al guion</div></div>
     <div style="padding:18px 40px 0;display:flex;flex-direction:column;gap:10px;">
@@ -2681,8 +2720,9 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const passed = validation?.passed === true || validation?.checks
     ? Object.values(validation.checks || {}).every((value) => value === true)
     : true;
+  const contentStartPage = 1 + (contentPlan.manifest.includeAgenda ? 1 : 0);
   const slidesHtml = contentPlan.slides
-    .map((spec, index) => renderSlide(spec, contentPlan.manifest.shellSlides + index + 1))
+    .map((spec, index) => renderSlide(spec, contentStartPage + index + 1))
     .join('');
 
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlEscape(plan.title)}</title></head>
@@ -2698,8 +2738,8 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   </div>
   ${cover}
   ${agenda}
-  ${references}
   ${slidesHtml}
+  ${references}
   <div style="max-width:860px;margin:0 auto;text-align:center;color:${MUTED};font-size:11px;">La vista previa replica el guion del archivo PowerPoint nativo. Descarga el .pptx para presentar.</div>
 </body></html>`;
 }
@@ -2961,6 +3001,9 @@ async function buildDocumentFile({ plan, outputDir }) {
 
 function repairPlan(plan, validation) {
   const sections = Array.from(new Set(plan.sections));
+  const groundedResearchDeck = plan.format === 'pptx'
+    && Array.isArray(plan.researchSources)
+    && plan.researchSources.length > 0;
   const fallbackPptxPlan = buildPptxContentPlan({
     title: plan.title,
     prompt: plan.userRequest || plan.title,
@@ -2969,13 +3012,21 @@ function repairPlan(plan, validation) {
     blocks: plan.blocks,
     referenceBriefs: plan.referenceBriefs,
   });
-  const repairedSlidePlan = plan.format === 'pptx'
-    ? attachSourceCitations(reconcilePptxPlan(fallbackPptxPlan, {
+  const repairedSlidePlan = groundedResearchDeck
+    ? buildGroundedResearchPptxPlan({
+      title: plan.title,
+      sections,
       slideTarget: plan.slideTarget,
-      fallbackSlides: fallbackPptxPlan.slides,
-      requiredItems: plan.presentationBrief?.mustInclude,
-    }), { referenceBriefs: plan.referenceBriefs })
-    : fallbackPptxPlan;
+      researchSources: plan.researchSources,
+      referenceBriefs: plan.referenceBriefs,
+    })
+    : plan.format === 'pptx'
+      ? attachSourceCitations(reconcilePptxPlan(fallbackPptxPlan, {
+        slideTarget: plan.slideTarget,
+        fallbackSlides: fallbackPptxPlan.slides,
+        requiredItems: plan.presentationBrief?.mustInclude,
+      }), { referenceBriefs: plan.referenceBriefs })
+      : fallbackPptxPlan;
   const repaired = {
     ...plan,
     complexity: plan.complexity === 'standard' ? 'high' : plan.complexity,
@@ -3002,6 +3053,7 @@ async function writeTelemetry(record, telemetryDir) {
   const scrubPlan = record.plan ? {
     ...record.plan,
     referenceBriefs: undefined,
+    researchSources: undefined,
     researchEvidenceTable: undefined,
     researchSourceLabels: Array.isArray(record.plan.researchSourceLabels)
       ? record.plan.researchSourceLabels
@@ -3103,44 +3155,57 @@ async function runAdvancedDocumentPipeline({
   const contentPromptText = plan.sourceContent
     ? `${plan.userRequest}\n\nContenido fuente a preservar:\n${plan.sourceContent}`
     : stripSourceContent(userPromptText);
+  const groundedResearchDeck = plan.format === 'pptx'
+    && Array.isArray(plan.researchSources)
+    && plan.researchSources.length > 0;
   emit(events, 'document_design', 'complete', 'Plantilla premium seleccionada', { template: detectedTemplate, palette: plan.qualityTargets.palette });
-  emit(events, 'content_generation', 'running', 'Generando contenido por sección con LLM', { sections: plan.sections.length });
+  emit(events, 'content_generation', 'running', groundedResearchDeck
+    ? 'Estructurando evidencia científica seleccionada'
+    : 'Generando contenido por sección con LLM', { sections: plan.sections.length });
   // Per-section content generation. Without this step every slide falls
   // back to a hardcoded "Bloque N generado por la pipeline documental…"
   // placeholder regardless of what the user asked for. The call runs all
   // sections in parallel, swallows per-section errors via fallbackBlock,
   // and never aborts the wider pipeline — a content failure degrades to
   // the old shape rather than killing delivery.
-  try {
-    plan.blocks = await generateSectionContent({
-      prompt: contentPromptText,
-      plan,
-      signal,
-      language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
-      // Explicit "en N palabras" requests: split the budget across sections
-      // so the writer honours the asked length instead of the schema's
-      // default 80-160 words per section.
-      targetWordsPerSection: plan.wordTarget
-        ? Math.max(40, Math.round(plan.wordTarget / Math.max(1, plan.sections.length)))
-        : null,
+  if (groundedResearchDeck) {
+    plan.blocks = [];
+    emit(events, 'content_generation', 'complete', 'Contenido limitado a metadatos y hallazgos reportados', {
+      sections: plan.sections.length,
+      sources: plan.researchSources.length,
     });
-    const failed = plan.blocks.filter((b) => b._error).length;
-    emit(
-      events,
-      'content_generation',
-      failed === 0 ? 'complete' : 'warning',
-      failed === 0 ? 'Contenido por sección generado' : `Contenido generado con ${failed} sección(es) en fallback`,
-      { sections: plan.sections.length, failed }
-    );
-  } catch (err) {
-    plan.blocks = plan.sections.map((s) => fallbackBlock(s));
-    emit(events, 'content_generation', 'warning', 'Generador de contenido no disponible — fallback aplicado', { error: err.message });
+  } else {
+    try {
+      plan.blocks = await generateSectionContent({
+        prompt: contentPromptText,
+        plan,
+        signal,
+        language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+        // Explicit "en N palabras" requests: split the budget across sections
+        // so the writer honours the asked length instead of the schema's
+        // default 80-160 words per section.
+        targetWordsPerSection: plan.wordTarget
+          ? Math.max(40, Math.round(plan.wordTarget / Math.max(1, plan.sections.length)))
+          : null,
+      });
+      const failed = plan.blocks.filter((b) => b._error).length;
+      emit(
+        events,
+        'content_generation',
+        failed === 0 ? 'complete' : 'warning',
+        failed === 0 ? 'Contenido por sección generado' : `Contenido generado con ${failed} sección(es) en fallback`,
+        { sections: plan.sections.length, failed }
+      );
+    } catch (err) {
+      plan.blocks = plan.sections.map((s) => fallbackBlock(s));
+      emit(events, 'content_generation', 'warning', 'Generador de contenido no disponible — fallback aplicado', { error: err.message });
+    }
   }
   // Diseñador LLM de decks (nivel Cowork): guion con layouts variados, una
   // idea por lámina y cifras solo reales, alimentado por los blocks recién
   // generados. Fail-open al planner heurístico.
   let llmDeck = null;
-  if (plan.format === 'pptx') {
+  if (plan.format === 'pptx' && !groundedResearchDeck) {
     try {
       const { planPptxDeckWithLLM } = require('./pptx-deck-designer');
       llmDeck = await planPptxDeckWithLLM({
@@ -3164,14 +3229,22 @@ async function runAdvancedDocumentPipeline({
     referenceBriefs: plan.referenceBriefs,
   });
   if (plan.format === 'pptx') {
-    plan.slidePlan = attachSourceCitations(
-      reconcilePptxPlan(llmDeck || fallbackPptxPlan, {
+    plan.slidePlan = groundedResearchDeck
+      ? buildGroundedResearchPptxPlan({
+        title: plan.title,
+        sections: plan.sections,
         slideTarget: plan.slideTarget,
-        fallbackSlides: fallbackPptxPlan.slides,
-        requiredItems: plan.presentationBrief?.mustInclude,
-      }),
-      { referenceBriefs: plan.referenceBriefs },
-    );
+        researchSources: plan.researchSources,
+        referenceBriefs: plan.referenceBriefs,
+      })
+      : attachSourceCitations(
+        reconcilePptxPlan(llmDeck || fallbackPptxPlan, {
+          slideTarget: plan.slideTarget,
+          fallbackSlides: fallbackPptxPlan.slides,
+          requiredItems: plan.presentationBrief?.mustInclude,
+        }),
+        { referenceBriefs: plan.referenceBriefs },
+      );
     plan.presentationTheme = pickPptxTheme({
       template: plan.template,
       prompt: `${plan.userRequest || plan.title} ${plan.presentationBrief?.visualStyle || ''}`,
@@ -3292,6 +3365,13 @@ async function runAdvancedDocumentPipeline({
     durationMs: Date.now() - startedAt,
   };
   const telemetryPath = await writeTelemetry(record, telemetryDir);
+
+  if (groundedResearchDeck && !validation.passed) {
+    try {
+      if (artifact.outputPath) await fsp.unlink(artifact.outputPath);
+    } catch { /* best effort cleanup before blocking delivery */ }
+    throw new Error('La presentación científica no superó los controles de fidelidad y no se entregó. Revisa las fuentes seleccionadas o reduce el alcance.');
+  }
 
   // ArtifactUrlResolver — persist the bytes once and hand the chat
   // a real URL instead of an inline `data:base64` blob. data URLs
@@ -3553,6 +3633,7 @@ module.exports = {
     writeTelemetry,
     extractSourceContent,
     stripSourceContent,
+    stripResearchEvidenceContract,
     parseSourceContentBlocks,
   },
 };

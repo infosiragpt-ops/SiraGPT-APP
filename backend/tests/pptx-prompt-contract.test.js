@@ -9,6 +9,7 @@ const {
   reconcilePptxPlan,
   auditPptxPlan,
   claimIsGrounded,
+  contentRequirements,
   extractStrongNumericClaims,
   valueIsGrounded,
 } = require('../src/services/document-pipeline/pptx-prompt-contract');
@@ -144,6 +145,16 @@ test('speaker notes alone do not satisfy visible prompt requirements', () => {
   });
   assert.equal(report.checks.requiredItems, false);
   assert.deepEqual(report.missingRequiredItems, ['riesgos']);
+});
+
+test('citation and provenance instructions use structural gates instead of literal slide copy', () => {
+  assert.deepEqual(contentRequirements([
+    'citas [S#] visibles',
+    'procedencia en gráficos',
+    'cifras',
+    'citas [S1] y [S2]',
+    'riesgos clínicos',
+  ]), ['riesgos clínicos']);
 });
 
 test('audit rejects an unsupported headcount even when it is not a percentage', () => {
