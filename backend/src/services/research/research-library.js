@@ -212,7 +212,9 @@ async function resolveConflict(prisma, userId, conflictId, action) {
   const keepCandidate = action === 'keep_candidate';
   const winner = keepCandidate ? conflict.candidate : conflict.existing;
   const loser = keepCandidate ? conflict.existing : conflict.candidate;
-  const winnerData = action === 'merge' ? mergeReferenceData(winner, loser) : {};
+  const winnerData = action === 'merge'
+    ? { ...mergeReferenceData(winner, loser), doi: winner.doi || null }
+    : {};
 
   await prisma.$transaction(async (tx) => {
     if (action === 'merge') await tx.researchReference.update({ where: { id: winner.id }, data: winnerData });

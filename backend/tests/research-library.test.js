@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { identityKeyFor, mergeReferenceData, sourceToData } = require('../src/services/research/research-library');
+const { identityKeyFor, mergeReferenceData, resolveConflict, sourceToData } = require('../src/services/research/research-library');
 const { toBibTeX, toRIS } = require('../src/services/research/reference-export');
 const { auditReferences } = require('../src/services/research/reference-audit');
 const { buildCitationGraph } = require('../src/services/research/citation-graph');
@@ -38,6 +38,52 @@ test('source normalization and merge preserve richer metadata and union tags/pro
   assert.equal(merged.citationCount, 20);
   assert.deepEqual(merged.tags.sort(), ['hypertension', 'old', 'saved']);
   assert.ok(merged.sources.includes('openalex'));
+});
+
+test('conflict merge preserves the winning canonical DOI while enriching metadata', async () => {
+  const referenceUpdates = [];
+  const conflict = {
+    id: 'conflict-1',
+    existing: {
+      id: 'existing-1',
+      doi: '10.1000/canonical',
+      title: 'Canonical study',
+      authors: [{ name: 'Ana Ruiz' }],
+      tags: ['verified'],
+      sources: ['pubmed'],
+      metadata: {},
+      collectionItems: [],
+    },
+    candidate: {
+      id: 'candidate-1',
+      doi: '10.1000/conflicting',
+      title: 'Canonical study',
+      abstract: 'Richer abstract from the candidate source.',
+      authors: [{ name: 'Ana Ruiz' }, { name: 'Luis Pérez' }],
+      tags: ['candidate'],
+      sources: ['crossref'],
+      metadata: {},
+      collectionItems: [],
+    },
+  };
+  const tx = {
+    researchReference: {
+      update: async (args) => { referenceUpdates.push(args); return args; },
+    },
+    researchCollectionItem: { upsert: async () => ({}) },
+    researchReferenceConflict: { update: async () => ({}) },
+  };
+  const prismaMock = {
+    researchReferenceConflict: { findFirst: async () => conflict },
+    $transaction: async (callback) => callback(tx),
+  };
+
+  const result = await resolveConflict(prismaMock, 'user-1', conflict.id, 'merge');
+
+  assert.equal(result.winnerId, 'existing-1');
+  assert.equal(referenceUpdates[0].data.doi, '10.1000/canonical');
+  assert.equal(referenceUpdates[0].data.abstract, 'Richer abstract from the candidate source.');
+  assert.deepEqual(referenceUpdates[0].data.sources.sort(), ['crossref', 'pubmed']);
 });
 
 test('BibTeX and RIS exports preserve DOI, authors, title and tags', () => {
