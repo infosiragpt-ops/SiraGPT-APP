@@ -171,7 +171,6 @@ import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { SourcesPanel } from "@/components/sources-panel"
-import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
 import { CodePreview } from "./code-preview"
@@ -11452,22 +11451,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="w-full max-w-[860px] px-4">
                   <div className="space-y-3">
-                  {/* Empty-state hero — greeting + rotating capability chips.
-                      Clicking a chip seeds the composer with a starter prompt
-                      and focuses it so the user only has to complete the idea. */}
-                  <ChatEmptyStateHero
-                    userName={user?.name || user?.email || null}
-                    onSelectPrompt={(prompt) => {
-                      setInput(prompt)
-                      window.setTimeout(() => {
-                        const el = textareaRef.current
-                        if (el) {
-                          el.focus()
-                          try { el.setSelectionRange(prompt.length, prompt.length) } catch { /* old Safari */ }
-                        }
-                      }, 0)
-                    }}
-                  />
                   {/*
                     Composer — premium production UI.
                     In DARK mode, inherits `composer-surface` from globals.css
