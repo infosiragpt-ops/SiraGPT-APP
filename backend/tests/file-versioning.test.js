@@ -7,7 +7,12 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { recordFileVersion, listFileVersions, getFileVersion } = require('../src/services/document-editing/versioning');
+const {
+  getFileVersion,
+  listFileVersions,
+  recordFileVersion,
+  restoreFileVersion,
+} = require('../src/services/document-editing/versioning');
 
 // In-memory fake of the subset of prisma.fileVersion the service uses.
 function makeFakePrisma({ failCreate = false } = {}) {
@@ -68,6 +73,29 @@ describe('versioning', () => {
     const v = await recordFileVersion(prisma, { fileId: 'file-a', userId: 'u1', artifactId: 'a', filename: 'a.docx' });
     assert.ok(await getFileVersion(prisma, { versionId: v.id, userId: 'u1' }));
     assert.equal(await getFileVersion(prisma, { versionId: v.id, userId: 'intruder' }), null);
+  });
+
+  test('restore creates a new head pointing at the selected immutable artifact', async () => {
+    const prisma = makeFakePrisma();
+    const first = await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: 'artifact-original-edit', filename: 'tesis.docx', summary: 'Versión revisada',
+    });
+    await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: 'artifact-second-edit', filename: 'tesis.docx', summary: 'Cambios posteriores',
+    });
+
+    const result = await restoreFileVersion(prisma, {
+      fileId: 'file-a', versionId: first.id, userId: 'u1', createdByChatId: 'chat-1',
+    });
+
+    assert.equal(result.source.version, 1);
+    assert.equal(result.restored.version, 3);
+    assert.equal(result.restored.artifactId, 'artifact-original-edit');
+    assert.equal(result.restored.editPlan.type, 'restore');
+    assert.match(result.restored.summary, /Restaurada desde la versión 1/);
+    assert.equal(await restoreFileVersion(prisma, {
+      fileId: 'file-a', versionId: first.id, userId: 'intruder',
+    }), null);
   });
 
   test('best-effort: create failure returns null, never throws', async () => {

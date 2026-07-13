@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Download,
   Globe,
+  History,
   Eye,
   FileCheck2,
   Pause,
@@ -39,6 +40,7 @@ import {
   type AgentActivityStatus,
 } from "@/lib/agent-task-presentation"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
+import { FileVersionHistoryDialog } from "@/components/doc/file-version-history-dialog"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface Props {
@@ -753,6 +755,7 @@ function ArtifactCard({
   const displayName = artifactDisplayName(artifact)
   const format = artifactFormat(artifact)
   const formatLabel = format === "bin" ? "archivo" : format.toUpperCase()
+  const [historyOpen, setHistoryOpen] = React.useState(false)
 
   const preview = React.useCallback(() => {
     if (!onDocumentPreview) {
@@ -772,6 +775,7 @@ function ArtifactCard({
   }, [artifact.filename, artifact.previewHtml, href, onDocumentPreview])
 
   return (
+    <>
     <div className="my-2 w-full max-w-xl rounded-2xl border border-border/70 bg-background p-4 shadow-sm">
       <div className="flex min-w-0 items-center justify-between gap-5">
         <div className="flex min-w-0 items-center gap-3">
@@ -791,6 +795,17 @@ function ArtifactCard({
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-4">
+          {artifact.sourceFileId && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
+              title="Historial de versiones"
+              aria-label="Historial de versiones"
+            >
+              <History className="h-7 w-7 stroke-[2]" />
+            </button>
+          )}
           <button
             type="button"
             onClick={preview}
@@ -804,6 +819,14 @@ function ArtifactCard({
         </div>
       </div>
     </div>
+    {artifact.sourceFileId && (
+      <FileVersionHistoryDialog
+        fileId={artifact.sourceFileId}
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+      />
+    )}
+    </>
   )
 }
 

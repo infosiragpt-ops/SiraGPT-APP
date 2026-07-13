@@ -32,6 +32,8 @@ export interface AgentArtifact {
   downloadUrl: string
   previewHtml?: string | null
   validation?: Record<string, unknown> | null
+  sourceFileId?: string | null
+  documentVersion?: { id: string; version: number; sourceFileId: string } | null
 }
 
 export interface DocumentPolicy {

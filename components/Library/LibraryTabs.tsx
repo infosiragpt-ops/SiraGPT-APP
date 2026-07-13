@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import apiClient from '@/lib/api';
 import {
     Download,
@@ -92,6 +92,11 @@ const MediaLibrary: React.FC = () => {
     // Surfaced alongside chat-generated artifacts in the "Apps web" tab.
     const [webappProjects, setWebappProjects] = useState<Project[]>([]);
     const router = useRouter();
+    const searchParams = useSearchParams();
+
+    useEffect(() => {
+        if (searchParams.get('tab') === 'research') setFilterType('references');
+    }, [searchParams]);
 
     const fetchMediaItems = async (page: number, typeFilter: FilterType) => {
         if (typeFilter === 'references') {

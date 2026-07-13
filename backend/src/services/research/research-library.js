@@ -122,7 +122,16 @@ function mergeReferenceData(existing, incoming) {
   };
 }
 
-async function ensureOwnedCollection(prisma, userId, { collectionId, collectionName, folder, tags = [] } = {}) {
+async function ensureOwnedCollection(prisma, userId, {
+  collectionId,
+  collectionName,
+  folder,
+  tags = [],
+  authorizedCollection = null,
+} = {}) {
+  if (authorizedCollection && (!collectionId || authorizedCollection.id === collectionId)) {
+    return authorizedCollection;
+  }
   if (collectionId) {
     return prisma.researchCollection.findFirst({ where: { id: collectionId, userId } });
   }

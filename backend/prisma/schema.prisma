@@ -150,6 +150,9 @@ model User {
   researchCollections     ResearchCollection[]
   researchReferences      ResearchReference[]
   researchReferenceConflicts ResearchReferenceConflict[]
+  researchCollectionShares   ResearchCollectionShare[]   @relation("ResearchCollectionSharedBy")
+  researchCollectionComments ResearchCollectionComment[] @relation("ResearchCollectionCommentAuthor")
+  researchTemplates          ResearchTemplate[]          @relation("ResearchTemplateCreator")
   webhookEndpoints        WebhookEndpoint[]
   slackIntegrations       SlackIntegration[]
   policyAcceptances       PolicyAcceptance[]
@@ -742,10 +745,85 @@ model ResearchCollection {
 
   user  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   items ResearchCollectionItem[]
+  shares   ResearchCollectionShare[]
+  comments ResearchCollectionComment[]
 
   @@unique([userId, name])
   @@index([userId, folder, updatedAt])
   @@map("research_collections")
+}
+
+enum ResearchCollectionShareAccess {
+  VIEW
+  EDIT
+}
+
+// A personal collection can be published into one or more organization
+// libraries without duplicating references. Membership remains the tenant
+// boundary; access controls whether regular members can only read or edit.
+model ResearchCollectionShare {
+  id             String                        @id @default(cuid())
+  collectionId   String
+  organizationId String
+  sharedById     String
+  access         ResearchCollectionShareAccess @default(VIEW)
+  createdAt      DateTime                      @default(now())
+  updatedAt      DateTime                      @updatedAt
+
+  collection   ResearchCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sharedBy     User               @relation("ResearchCollectionSharedBy", fields: [sharedById], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, organizationId])
+  @@index([organizationId, access, updatedAt])
+  @@index([sharedById])
+  @@map("research_collection_shares")
+}
+
+// Team discussion attached to a shared collection. Mention ids are validated
+// against current organization membership before being stored or notified.
+model ResearchCollectionComment {
+  id               String   @id @default(cuid())
+  collectionId     String
+  organizationId   String
+  authorId         String
+  body             String   @db.Text
+  mentionedUserIds String[] @default([])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  collection   ResearchCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  author       User               @relation("ResearchCollectionCommentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([collectionId, organizationId, createdAt])
+  @@index([authorId, createdAt])
+  @@map("research_collection_comments")
+}
+
+// Reusable organization-level research briefs. They preserve the query,
+// filters and methodology contract so teams can repeat a rigorous search.
+model ResearchTemplate {
+  id             String   @id @default(cuid())
+  organizationId String
+  createdById    String
+  name           String
+  description    String?  @db.Text
+  query          String   @db.Text
+  filters        Json?
+  methodology    Json?
+  tags           String[] @default([])
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("ResearchTemplateCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@index([organizationId, updatedAt])
+  @@index([createdById])
+  @@map("research_templates")
 }
 
 model ResearchReference {
@@ -2178,6 +2256,9 @@ model Organization {
   apiKeys           ApiKey[]
   announcements     OrgAnnouncement[]
   pendingTransfers  OrgPendingTransfer[]
+  researchCollectionShares   ResearchCollectionShare[]
+  researchCollectionComments ResearchCollectionComment[]
+  researchTemplates          ResearchTemplate[]
 
   @@index([ownerId])
   @@index([slug])

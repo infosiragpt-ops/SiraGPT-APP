@@ -2293,6 +2293,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           downloadUrl: preserved.artifact.downloadUrl,
           previewHtml: preserved.previewHtml,
           validation: preserved.validation,
+          sourceFileId: preserved.version?.sourceFileId || null,
+          documentVersion: preserved.version || null,
         };
         artifacts.push(artifactEvent);
         emit({ type: 'file_artifact', artifact: artifactEvent });

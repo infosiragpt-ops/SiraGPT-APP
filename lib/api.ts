@@ -228,7 +228,13 @@ export type ResearchCollectionRecord = {
   tags: string[]
   createdAt: string
   updatedAt: string
-  _count?: { items: number }
+  _count?: { items: number; comments?: number }
+  scope?: 'personal' | 'organization'
+  organizationId?: string | null
+  accessLevel?: 'VIEW' | 'EDIT'
+  canEdit?: boolean
+  isOwner?: boolean
+  user?: { id: string; name: string; avatar?: string | null } | null
 }
 
 export type ResearchReferenceRecord = {
@@ -253,6 +259,7 @@ export type ResearchReferenceRecord = {
   integrityStatus?: string | null
   collectionItems?: Array<{ collectionId: string }>
   updatedAt: string
+  isOwned?: boolean
 }
 
 export type ResearchLibraryEnvelope = {
@@ -263,6 +270,46 @@ export type ResearchLibraryEnvelope = {
   limit: number
   total: number
   totalPages: number
+  scope?: 'personal' | 'organization'
+  organizationId?: string | null
+  role?: OrganizationRole | null
+}
+
+export type ResearchCollectionCommentRecord = {
+  id: string
+  collectionId: string
+  organizationId: string
+  body: string
+  mentionedUserIds: string[]
+  createdAt: string
+  updatedAt: string
+  author: { id: string; name: string; avatar?: string | null }
+}
+
+export type ResearchTemplateRecord = {
+  id: string
+  organizationId: string
+  name: string
+  description?: string | null
+  query: string
+  filters?: Record<string, unknown> | null
+  methodology?: Record<string, unknown> | null
+  tags: string[]
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+  createdBy?: { id: string; name: string; avatar?: string | null } | null
+  canManage?: boolean
+}
+
+export type FileVersionRecord = {
+  id: string
+  version: number
+  filename: string
+  summary?: string | null
+  validationPassed: boolean
+  createdAt: string
+  downloadUrl?: string | null
 }
 
 export type ResearchSavedSearchRecord = {
@@ -514,6 +561,13 @@ export type OrganizationSummary = {
 
 export type MyOrganizationsEnvelope = {
   items: OrganizationSummary[]
+}
+
+export type OrganizationMember = {
+  id: string
+  role: OrganizationRole
+  joinedAt: string
+  user: { id: string; email: string; name: string; avatar?: string | null } | null
 }
 
 export type OrganizationInvitation = {
@@ -1323,6 +1377,17 @@ class ApiClient {
     }
 
     return response.text();
+  }
+
+  async getFileVersions(id: string): Promise<{ fileId: string; versions: FileVersionRecord[] }> {
+    return (await this.request(`/files/${encodeURIComponent(id)}/versions`)) as { fileId: string; versions: FileVersionRecord[] };
+  }
+
+  async restoreFileVersion(fileId: string, versionId: string, chatId?: string): Promise<{ sourceVersion: number; version: FileVersionRecord }> {
+    return (await this.request(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId: chatId || undefined }),
+    })) as { sourceVersion: number; version: FileVersionRecord };
   }
 
   // AI endpoints
@@ -2204,6 +2269,10 @@ class ApiClient {
     return (await this.request('/orgs/me')) as MyOrganizationsEnvelope;
   }
 
+  async listOrganizationMembers(orgId: string): Promise<{ items: OrganizationMember[] }> {
+    return (await this.request(`/orgs/${encodeURIComponent(orgId)}/members`)) as { items: OrganizationMember[] };
+  }
+
   async createOrganization(data: { name: string; slug?: string }): Promise<OrganizationSummary> {
     return (await this.request('/orgs', {
       method: 'POST',
@@ -2986,12 +3055,12 @@ class ApiClient {
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
   }
 
-  async getResearchLibrary(params?: { page?: number; limit?: number; search?: string; collectionId?: string }) {
+  async getResearchLibrary(params?: { page?: number; limit?: number; search?: string; collectionId?: string; organizationId?: string }) {
     const query = new URLSearchParams(Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)])).toString();
     return (await this.request(`/research-library${query ? `?${query}` : ''}`)) as ResearchLibraryEnvelope;
   }
 
-  async saveResearchReferences(data: { sources: unknown[]; collectionId?: string; collectionName?: string; folder?: string; tags?: string[]; note?: string }) {
+  async saveResearchReferences(data: { sources: unknown[]; collectionId?: string; collectionName?: string; folder?: string; tags?: string[]; note?: string; organizationId?: string }) {
     return this.request('/research-library/references', { method: 'POST', body: JSON.stringify(data) });
   }
 
@@ -3003,23 +3072,62 @@ class ApiClient {
     return this.request(`/research-library/references/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  async createResearchCollection(data: { name: string; description?: string; folder?: string; tags?: string[] }) {
+  async createResearchCollection(data: { name: string; description?: string; folder?: string; tags?: string[]; organizationId?: string }) {
     return this.request('/research-library/collections', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateResearchCollection(id: string, data: { name?: string; description?: string | null; folder?: string | null; tags?: string[] }) {
+  async updateResearchCollection(id: string, data: { name?: string; description?: string | null; folder?: string | null; tags?: string[]; organizationId?: string }) {
     return this.request(`/research-library/collections/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
   }
 
-  async deleteResearchCollection(id: string) {
-    return this.request(`/research-library/collections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  async deleteResearchCollection(id: string, organizationId?: string) {
+    const query = organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : '';
+    return this.request(`/research-library/collections/${encodeURIComponent(id)}${query}`, { method: 'DELETE' });
   }
 
-  async addReferencesToResearchCollection(collectionId: string, referenceIds: string[]) {
-    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/references`, { method: 'POST', body: JSON.stringify({ referenceIds }) });
+  async addReferencesToResearchCollection(collectionId: string, referenceIds: string[], organizationId?: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/references`, { method: 'POST', body: JSON.stringify({ referenceIds, organizationId }) });
   }
 
-  async exportResearchReferences(data: { collectionId?: string; referenceIds?: string[]; format: 'bibtex' | 'ris' }) {
+  async shareResearchCollection(collectionId: string, organizationId: string, access: 'VIEW' | 'EDIT') {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/share`, {
+      method: 'POST',
+      body: JSON.stringify({ organizationId, access }),
+    });
+  }
+
+  async unshareResearchCollection(collectionId: string, organizationId: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/share/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+  }
+
+  async getResearchCollectionComments(collectionId: string, organizationId: string): Promise<{ items: ResearchCollectionCommentRecord[]; canComment: boolean; canEdit: boolean }> {
+    return (await this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments?organizationId=${encodeURIComponent(organizationId)}`)) as { items: ResearchCollectionCommentRecord[]; canComment: boolean; canEdit: boolean };
+  }
+
+  async createResearchCollectionComment(collectionId: string, data: { organizationId: string; body: string; mentionedUserIds?: string[] }) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }) as Promise<ResearchCollectionCommentRecord>;
+  }
+
+  async deleteResearchCollectionComment(collectionId: string, commentId: string, organizationId: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments/${encodeURIComponent(commentId)}?organizationId=${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+  }
+
+  async getResearchTemplates(organizationId: string): Promise<{ items: ResearchTemplateRecord[]; role: OrganizationRole }> {
+    return (await this.request(`/research-library/templates?organizationId=${encodeURIComponent(organizationId)}`)) as { items: ResearchTemplateRecord[]; role: OrganizationRole };
+  }
+
+  async createResearchTemplate(data: { organizationId: string; name: string; description?: string; query: string; filters?: Record<string, unknown>; methodology?: Record<string, unknown>; tags?: string[]; isDefault?: boolean }) {
+    return this.request('/research-library/templates', { method: 'POST', body: JSON.stringify(data) }) as Promise<ResearchTemplateRecord>;
+  }
+
+  async deleteResearchTemplate(id: string, organizationId: string) {
+    return this.request(`/research-library/templates/${encodeURIComponent(id)}?organizationId=${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+  }
+
+  async exportResearchReferences(data: { collectionId?: string; referenceIds?: string[]; format: 'bibtex' | 'ris'; organizationId?: string }) {
     const response = await this.authenticatedFetch(`${this.baseURL}/research-library/export`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3030,11 +3138,11 @@ class ApiClient {
     return response.blob();
   }
 
-  async auditResearchReferences(data: { text: string; collectionId?: string; referenceIds?: string[] }) {
+  async auditResearchReferences(data: { text: string; collectionId?: string; referenceIds?: string[]; organizationId?: string }) {
     return this.request('/research-library/audit', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async getResearchCitationGraph(data: { collectionId?: string; referenceIds?: string[]; limit?: number }) {
+  async getResearchCitationGraph(data: { collectionId?: string; referenceIds?: string[]; limit?: number; organizationId?: string }) {
     return this.request('/research-library/citation-graph', { method: 'POST', body: JSON.stringify(data), timeoutMs: 60000 });
   }
 
@@ -3046,11 +3154,11 @@ class ApiClient {
     return this.request(`/research-library/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
   }
 
-  async syncResearchCollectionToZotero(data: { collectionId?: string; referenceIds?: string[]; apiKey: string; zoteroUserId: string; zoteroCollectionKey?: string; collectionName?: string }) {
+  async syncResearchCollectionToZotero(data: { collectionId?: string; referenceIds?: string[]; apiKey: string; zoteroUserId: string; zoteroCollectionKey?: string; collectionName?: string; organizationId?: string }) {
     return this.request('/research-library/sync/zotero', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
   }
 
-  async syncResearchCollectionToMendeley(data: { collectionId?: string; referenceIds?: string[]; accessToken: string; mendeleyFolderId?: string; collectionName?: string }) {
+  async syncResearchCollectionToMendeley(data: { collectionId?: string; referenceIds?: string[]; accessToken: string; mendeleyFolderId?: string; collectionName?: string; organizationId?: string }) {
     return this.request('/research-library/sync/mendeley', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
   }
 

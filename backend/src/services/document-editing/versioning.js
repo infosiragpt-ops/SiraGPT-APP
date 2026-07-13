@@ -83,4 +83,35 @@ async function getFileVersion(prisma, { versionId, userId } = {}) {
   }
 }
 
-module.exports = { recordFileVersion, listFileVersions, getFileVersion };
+// Restore is non-destructive: it creates a new head that points to the exact
+// immutable artifact from an earlier version. The original upload and every
+// intermediate edit remain available in the history.
+async function restoreFileVersion(prisma, { fileId, versionId, userId, createdByChatId = null } = {}) {
+  if (!prisma?.fileVersion || !fileId || !versionId || !userId) return null;
+  const source = await prisma.fileVersion.findFirst({
+    where: { id: versionId, fileId, userId },
+  }).catch(() => null);
+  if (!source?.artifactId) return null;
+  const restored = await recordFileVersion(prisma, {
+    fileId,
+    userId,
+    artifactId: source.artifactId,
+    filename: source.filename,
+    summary: `Restaurada desde la versión ${source.version}${source.summary ? `: ${source.summary}` : ''}`,
+    editPlan: {
+      type: 'restore',
+      sourceVersionId: source.id,
+      sourceVersion: source.version,
+    },
+    validationPassed: source.validationPassed,
+    createdByChatId,
+  });
+  return restored ? { source, restored } : null;
+}
+
+module.exports = {
+  getFileVersion,
+  listFileVersions,
+  recordFileVersion,
+  restoreFileVersion,
+};
