@@ -124,6 +124,7 @@ const _hashUserIdForSpan = (_otelSpans && _otelSpans.hashUserId)
   ? _otelSpans.hashUserId
   : (() => null);
 const operationalRag = require('../services/rag/operational-runtime');
+const chatLatencyPolicy = require('../services/chat-latency-policy');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
 const documentBlockBudget = require('../services/document-block-budget');
@@ -2535,27 +2536,47 @@ router.post(
       if (userId) {
         const _crossChatMod = (() => { try { return require('../services/cross-chat-retrieval'); } catch { return null; } })();
         const _crossChatEnabled = _crossChatMod && _crossChatMod.isEnabled && _crossChatMod.isEnabled();
+        const _useSemanticEnrichment = chatLatencyPolicy.shouldUseSemanticEnrichment({
+          prompt,
+          files: processedFiles,
+          project,
+          customGpt,
+        });
+        const _enrichmentBudgetMs = chatLatencyPolicy.enrichmentBudgetMs();
+        const _memoryPromise = _useSemanticEnrichment
+          ? longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
+              console.warn('[ai] memory recall failed (continuing without):', e.message); return [];
+            })
+          : Promise.resolve([]);
+        const _crossChatPromise = _useSemanticEnrichment && _crossChatEnabled
+          ? _crossChatMod.recallSimilarTurns({
+              userId,
+              currentPrompt: prompt,
+              excludeChatId: canPersist ? chatId : null,
+              embedder: texts => rag.embed(texts),
+              prismaClient: prisma,
+            }).catch((e) => { console.warn('[cross-chat] recall failed (continuing without):', e?.message || e); return []; })
+          : Promise.resolve([]);
+        const _feedbackPromise = _useSemanticEnrichment
+          ? feedbackLedger.findExemplars({
+              userId,
+              request: prompt,
+              embedder: texts => rag.embed(texts),
+              k: 2,
+              onlyHelpful: true,
+              agent: 'chat',
+            }).catch((e) => { console.warn('[ai] feedback exemplars unavailable (continuing without):', e.message || e); return []; })
+          : Promise.resolve([]);
         const [_memRecalled, _crossChatTurns, _exemplars] = await Promise.all([
-          longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
-            console.warn('[ai] memory recall failed (continuing without):', e.message); return [];
+          chatLatencyPolicy.resolveWithinBudget(_memoryPromise, {
+            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'memory-recall',
           }),
-          _crossChatEnabled
-            ? _crossChatMod.recallSimilarTurns({
-                userId,
-                currentPrompt: prompt,
-                excludeChatId: canPersist ? chatId : null,
-                embedder: texts => rag.embed(texts),
-                prismaClient: prisma,
-              }).catch((e) => { console.warn('[cross-chat] recall failed (continuing without):', e?.message || e); return []; })
-            : Promise.resolve([]),
-          feedbackLedger.findExemplars({
-            userId,
-            request: prompt,
-            embedder: texts => rag.embed(texts),
-            k: 2,
-            onlyHelpful: true,
-            agent: 'chat',
-          }).catch((e) => { console.warn('[ai] feedback exemplars unavailable (continuing without):', e.message || e); return []; }),
+          chatLatencyPolicy.resolveWithinBudget(_crossChatPromise, {
+            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'cross-chat-recall',
+          }),
+          chatLatencyPolicy.resolveWithinBudget(_feedbackPromise, {
+            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'feedback-exemplars',
+          }),
         ]);
         recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
         memoryBlock = longTermMemory.buildMemoryBlock(_memRecalled);
@@ -4267,8 +4288,14 @@ router.post(
           try {
             const __effortOverride = reasoningOrchestrator.computeForEffort(req.body && req.body.reasoningEffort);
             if (__effortOverride && cognitiveDecision) {
-              cognitiveDecision.compute = __effortOverride;
-              console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+              const __defaultMediumOnTrivial = cognitiveDecision.difficulty?.bucket === 'trivial'
+                && __effortOverride.reasoningEffort === 'medium';
+              if (__defaultMediumOnTrivial) {
+                console.log('[reasoning-effort] trivial turn kept on direct mode; default Medio override skipped');
+              } else {
+                cognitiveDecision.compute = __effortOverride;
+                console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+              }
             }
           } catch (_) { /* effort override must never break the turn */ }
           try {

@@ -84,26 +84,33 @@ function writeWithBackpressure(res, frame) {
 /**
  * Resolve the fallback model chain from env. Comma-separated names,
  * e.g. FALLBACK_MODELS=gpt-4o-mini,anthropic/claude-3.5-sonnet,gpt-3.5-turbo.
- * Empty / missing returns a sensible default that favors cheap+fast OpenAI
- * models so a degraded reply still reaches the user.
+ * Empty / missing returns a provider-diverse chain. Independent providers are
+ * tried before another model on the same account so billing/auth outages fail
+ * over without serial dead hops.
  */
-function getFallbackChain() {
+function getFallbackChain(primaryProvider = '') {
     const raw = (process.env.FALLBACK_MODELS || '').trim();
-    if (!raw) {
-        const defaults = ['gpt-4o-mini'];
-        if (process.env.OPENROUTER_API_KEY) {
-            defaults.push('moonshotai/kimi-k2.6');
-        }
-        if (process.env.DEEPSEEK_API_KEY) {
-            defaults.push('deepseek-v4-flash');
-        }
-        if (process.env.GEMINI_API_KEY) {
-            defaults.push('gemini-2.5-flash');
-        }
-        defaults.push('gpt-3.5-turbo');
-        return [...new Set(defaults)];
+    if (raw) return raw.split(',').map(s => s.trim()).filter(Boolean);
+
+    const primary = String(primaryProvider || '').trim().toLowerCase();
+    const candidates = [
+        { provider: 'gemini', model: 'gemini-2.5-flash', enabled: !!process.env.GEMINI_API_KEY },
+        { provider: 'openai', model: 'gpt-4o-mini', enabled: !!process.env.OPENAI_API_KEY },
+        { provider: 'deepseek', model: 'deepseek-v4-flash', enabled: !!process.env.DEEPSEEK_API_KEY },
+        { provider: 'openrouter', model: 'moonshotai/kimi-k2.6', enabled: !!process.env.OPENROUTER_API_KEY },
+    ];
+    const defaults = [];
+    // Cross-provider recovery comes first. A provider-wide billing or auth
+    // outage should not send the request through another model on the same
+    // account before trying a configured independent provider.
+    for (const candidate of candidates) {
+        if (candidate.enabled && candidate.provider !== primary) defaults.push(candidate.model);
     }
-    return raw.split(',').map(s => s.trim()).filter(Boolean);
+    for (const candidate of candidates) {
+        if (candidate.enabled && candidate.provider === primary) defaults.push(candidate.model);
+    }
+    if (process.env.OPENAI_API_KEY) defaults.push('gpt-3.5-turbo');
+    return [...new Set(defaults)];
 }
 
 // ── Siragpt 1.0 — modelo combinado ──────────────────────────
@@ -651,7 +658,7 @@ class AIService {
 
             // Build the model chain: primary first, then env-configured
             // fallbacks. Deduped so the primary doesn't get tried twice.
-            const fallbackModels = getFallbackChain().filter(m => m !== model);
+            const fallbackModels = getFallbackChain(provider).filter(m => m !== model);
             const modelChain = [model, ...fallbackModels];
 
             console.log(`🤖 Generating with primary=${provider}:${model}, fallback=[${fallbackModels.join(', ') || 'none'}]`);
@@ -1517,6 +1524,7 @@ service.__test = {
     providerForModel,
     normalizeChatProvider,
     normalizeModelForProvider,
+    getFallbackChain,
 };
 service.modelSupportsVision = modelSupportsVision;
 service.selectVisionRuntime = selectVisionRuntime;

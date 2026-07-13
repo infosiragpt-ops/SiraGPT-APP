@@ -316,9 +316,9 @@ function promptedToolsEnabled() {
   return envFlagEnabled(process.env.SIRAGPT_PROMPTED_TOOLS, true);
 }
 
-/** Agent-first chat (every non-trivial turn enters the agentic loop) — default ON. */
+/** Optional agent-first chat (every non-trivial turn enters the agentic loop). */
 function agentFirstEnabled() {
-  return envFlagEnabled(process.env.SIRAGPT_AGENT_FIRST, true);
+  return envFlagEnabled(process.env.SIRAGPT_AGENT_FIRST, false);
 }
 
 /**
@@ -345,25 +345,26 @@ function resolveToolCallMode(provider, model) {
 }
 
 const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
+const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\s*:?[\s\S]{1,120}$/i;
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
 /**
  * Decide whether a normal chat turn should enter the agentic loop.
  *
- * AGENT-FIRST (default since 2026-06): every chat turn IS an agent turn —
- * search, write, summarize, create images/video/diagrams/documents — except
- * the cases where the plain stream is strictly better:
+ * Tool-intent routing keeps ordinary conversation on the lower-latency plain
+ * stream and enters the agent only when the request needs search, tools,
+ * artifacts, files, browser work, or an explicit operator opt-in:
  *   - greetings / trivial smalltalk (SIMPLE_CHAT_PROMPT),
+ *   - exact short-answer directives (DIRECT_ONLY_PROMPT),
  *   - plain Q&A over an attached document (its text is already injected
  *     into the prompt; the loop adds latency without adding capability).
- * The route still falls back to the plain stream on ANY degraded loop run,
- * so being agent-first never costs the user a real answer. Operators can
- * restore the legacy heuristic routing with SIRAGPT_AGENT_FIRST=0.
+ * Operators can restore agent-first behavior with SIRAGPT_AGENT_FIRST=1.
  */
 function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return false;
   if (SIMPLE_CHAT_PROMPT.test(text)) return false;
+  if (DIRECT_ONLY_PROMPT.test(text)) return false;
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (isCognitionUpgradeRequest(text)) return true;
   // ── Attachment turns ──────────────────────────────────────────────────
@@ -419,9 +420,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     return true;
   }
 
-  // Agent-first default: anything that reached this point is a normal chat
-  // turn with no special signals — it still gets the full agent (tools,
-  // web search, artifact creation) unless the operator opted out.
+  // Normal chat stays on the plain stream unless the operator explicitly
+  // opts into agent-first behavior.
   return agentFirstEnabled();
 }
 
@@ -1519,9 +1519,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
 
   /**
    * Read the runtime feature flag for the agentic chat path. Agentic chat
-   * is now the default for tool-capable models because otherwise normal
-   * chat silently behaves like a plain completion. Operators can still
-   * disable it without a deploy by setting either flag to false/0/off/no.
+   * remains available for tool-capable models. The turn-level policy above
+   * decides whether tools are warranted; operators can still disable the
+   * runtime entirely without a deploy.
    */
   function isEnabled() {
     const explicit = process.env.SIRAGPT_AGENTIC_CHAT_ENABLED;

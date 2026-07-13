@@ -132,27 +132,26 @@ test('modelSupportsFunctionCalling allowlist', () => {
 test('shouldUseAgenticChat skips greetings and trivial smalltalk', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'gracias!' }), false);
-  // Agent-first default: a real question IS an agent turn (the route still
-  // falls back to the plain stream on any degraded loop run).
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'Responde únicamente: OK' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
 });
 
-test('shouldUseAgenticChat agent-first default routes plain chat turns through the agent', () => {
-  assert.equal(agenticStream.agentFirstEnabled(), true);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), true);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), true);
+test('shouldUseAgenticChat keeps ordinary chat on the plain stream by default', () => {
+  assert.equal(agenticStream.agentFirstEnabled(), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
 });
 
-test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=0 restores the legacy heuristic routing', () => {
+test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=1 enables agent-first routing', () => {
   const prev = process.env.SIRAGPT_AGENT_FIRST;
-  process.env.SIRAGPT_AGENT_FIRST = '0';
+  process.env.SIRAGPT_AGENT_FIRST = '1';
   try {
-    assert.equal(agenticStream.agentFirstEnabled(), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
-    // Tool-heavy turns still enter the loop with agent-first off.
+    assert.equal(agenticStream.agentFirstEnabled(), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), true);
+    // Tool-heavy turns stay agentic regardless of the default.
     assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
   } finally {
     if (prev === undefined) delete process.env.SIRAGPT_AGENT_FIRST;

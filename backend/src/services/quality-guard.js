@@ -31,6 +31,7 @@ const REFUSAL_PATTERNS = [
 const YES_NO_HINT = /^\s*(¿|¡)?(si|sí|no|yes|yeah|nope|ok|vale|claro|seguro|of\s+course)\b/i;
 const SIMPLE_QUESTION_HINT = /^(¿|¡)?(is|are|was|were|do|does|did|can|will|should|has|have)\b/i;
 const LIGHTWEIGHT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no)[.!?¡¿\s]*$/i;
+const EXPLICIT_SHORT_RESPONSE_PROMPT = /(?:\b(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\b|\b(?:en|con|using|in)\s+(?:una|one|dos|two|tres|three|\d+)\s+(?:palabras?|words?|frases?|sentences?)\b)/i;
 const SUBSTANTIAL_PROMPT_PATTERNS = [
   /\b(explica|expl[ií]came|explain|describe|desarrolla|analiza|analysis|argumenta|compara|eval[uú]a)\b/i,
   /\b(c[oó]mo|como|how\s+to|por\s+qu[eé]|why|qu[eé]\s+debo|what\s+should)\b/i,
@@ -69,6 +70,11 @@ function looksLightweightPrompt(userPrompt) {
   const text = normalizeText(userPrompt);
   if (!text) return false;
   return text.length <= 80 && LIGHTWEIGHT_PROMPT.test(text);
+}
+
+function expectsShortResponse(userPrompt) {
+  const text = normalizeText(userPrompt);
+  return text.length > 0 && text.length <= 180 && EXPLICIT_SHORT_RESPONSE_PROMPT.test(text);
 }
 
 function looksSubstantialPrompt(userPrompt) {
@@ -119,6 +125,7 @@ function evaluateResponse({ response, userPrompt }) {
 
   const lightweightPrompt = looksLightweightPrompt(userPrompt);
   if (lightweightPrompt) return { weak: false, reason: null };
+  if (expectsShortResponse(userPrompt)) return { weak: false, reason: null };
 
   // Too short for a question that likely wants a real answer.
   if (trimmed.length < MIN_USEFUL_LENGTH) {
@@ -195,4 +202,5 @@ module.exports = {
   MIN_SUBSTANTIAL_PROMPT_LENGTH,
   looksLightweightPrompt,
   looksSubstantialPrompt,
+  expectsShortResponse,
 };
