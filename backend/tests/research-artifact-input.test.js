@@ -77,7 +77,10 @@ test('scientific PPTX keeps the exact total, visible source citations and a matc
     outline: ['Pregunta clínica', 'Método', 'Resultados', 'Limitaciones', 'Conclusiones'],
   });
   const result = await runAdvancedDocumentPipeline({
-    prompt: 'Crea una presentación científica de telemedicina en 8 diapositivas',
+    prompt: appendResearchGroundingInstructions(
+      'Crea una presentación científica de telemedicina en 8 diapositivas',
+      input.sources,
+    ),
     format: 'pptx',
     template: 'academic',
     complexity: 'high',

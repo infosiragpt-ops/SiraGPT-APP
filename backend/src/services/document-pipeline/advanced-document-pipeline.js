@@ -433,10 +433,12 @@ function safeFilename(value, ext) {
 
 function detectFormat(prompt = '', requestedFormat) {
   const p = String(prompt).toLowerCase();
+  // An explicit format comes from a deliberate UI/API selection and must win
+  // over incidental format names inside grounding or reference instructions.
+  if (requestedFormat) return requestedFormat === 'markdown' ? 'md' : requestedFormat;
   const wordOutput = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito)\b[^.?!]{0,160}\b(?:word|docx|documento\s+word)\b|\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento\s+word)\b/i.test(p);
   const wordToOther = /\b(?:convierte|convertir|exporta(?:r|me)?|pasa(?:r|me)?|transforma(?:r|me)?)\b[^.?!]{0,140}\b(?:(?:mi|este|ese|el|la|su)\s+)?(?:documento\s+)?(?:word|docx|documento\s+word)\b[^.?!]{0,100}\b(?:a|como|en|formato|formato\s+de)\s+(?:pdf|excel|xlsx|pptx?|power\s*point|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/i.test(p);
   if (wordOutput && !wordToOther) return 'docx';
-  if (requestedFormat) return requestedFormat === 'markdown' ? 'md' : requestedFormat;
   if (/\b(pptx?|power\s*point|presentaci[oó]n|diapositivas|slides?)\b/.test(p)) return 'pptx';
   if (/\b(xlsx?|excel|hoja de c[aá]lculo|dashboard)\b/.test(p)) return 'xlsx';
   if (/\b(pdf)\b/.test(p)) return 'pdf';
