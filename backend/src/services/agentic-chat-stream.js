@@ -499,6 +499,30 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     return SENTINEL_FENCE_OPEN + JSON.stringify(state) + SENTINEL_FENCE_CLOSE;
   }
 
+  function buildPersistedContent(state, finalAnswer) {
+    const answer = String(finalAnswer || '').trim();
+    const artifacts = Array.isArray(state?.artifacts) ? state.artifacts : [];
+    if (artifacts.length === 0) return answer;
+
+    // The live sentinel contains the complete, frequently-updated timeline.
+    // History already hydrates that timeline from agent_metadata, so persist
+    // only the deliverables required to rebuild preview/download cards after a
+    // reload. This keeps the message compact and avoids billing UI state as
+    // model output tokens.
+    const persistedState = {
+      meta: state?.meta || {},
+      steps: [],
+      artifacts,
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: answer,
+      done: true,
+    };
+    return `${serializeSentinel(persistedState)}\n\n${answer}`;
+  }
+
   async function writeSse(res, payload) {
     if (res.writableEnded) return;
     try {
@@ -1217,6 +1241,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     return {
       finalAnswer,
+      persistedContent: buildPersistedContent(state, finalAnswer),
       stoppedReason: result?.stoppedReason || 'finalized',
       steps: result?.steps || [],
       artifacts: state.artifacts,
@@ -1629,6 +1654,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     _internal: {
       freshState,
       serializeSentinel,
+      buildPersistedContent,
       extractObservationError,
       stageLabelFor,
       buildThreadWorkContext,

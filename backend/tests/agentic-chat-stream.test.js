@@ -477,7 +477,7 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
   ]);
   const { res, frames } = makeFakeRes();
 
-  await agenticStream.runAgenticChat({
+  const result = await agenticStream.runAgenticChat({
     openai,
     model: 'gpt-4o-mini',
     userQuery: 'créame una imagen de prueba',
@@ -517,6 +517,21 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
   assert.equal(state.artifacts[0].kind, 'music');
   assert.equal(state.artifacts[0].durationSeconds, 30);
   assert.equal(state.artifacts[0].prompt, 'lofi test');
+
+  assert.match(result.persistedContent, /^```agent-task-state\n/);
+  assert.match(result.persistedContent, /\n\nImagen lista\.$/);
+  const persistedJson = result.persistedContent.match(/^```agent-task-state\n([\s\S]*?)\n```/)?.[1];
+  assert.ok(persistedJson, 'expected a persisted artifact envelope');
+  const persistedState = JSON.parse(persistedJson);
+  assert.equal(persistedState.done, true);
+  assert.deepEqual(persistedState.steps, []);
+  assert.equal(persistedState.artifacts.length, 1);
+  assert.equal(persistedState.artifacts[0].id, 'art1');
+});
+
+test('buildPersistedContent leaves non-artifact answers as plain text', () => {
+  const { buildPersistedContent, freshState } = agenticStream._internal;
+  assert.equal(buildPersistedContent(freshState(), 'Respuesta simple.'), 'Respuesta simple.');
 });
 
 test('runAgenticChat blocks finalize until every requested artifact is created and verified', async () => {

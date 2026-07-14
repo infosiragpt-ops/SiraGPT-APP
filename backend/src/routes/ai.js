@@ -5756,6 +5756,15 @@ router.post(
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
                   req._agentRun = agenticResult.agentRun || null;
+                  // The live stream already contains artifact cards. Keep the
+                  // compact persistence envelope separately from the model
+                  // answer so post-processing and token accounting continue to
+                  // operate on real model text only.
+                  req._agentPersistedContent = Array.isArray(agenticResult.artifacts)
+                    && agenticResult.artifacts.length > 0
+                    && typeof agenticResult.persistedContent === 'string'
+                    ? agenticResult.persistedContent
+                    : null;
                   return agenticResult.finalAnswer;
                 }
                 // Stop button / client abort: keep the partial trace and mark
@@ -6497,6 +6506,14 @@ router.post(
           finalContent = (fullResponseContent && fullResponseContent.trim().length > 0)
             ? fullResponseContent
             : finalContent;
+        }
+
+        // Artifact-producing agent turns stream a fenced state envelope that
+        // mounts the existing preview/download cards. Persist that same compact
+        // envelope after all text/document post-processing so a chat reload
+        // cannot downgrade real deliverables to plain filenames.
+        if (typeof req._agentPersistedContent === 'string' && req._agentPersistedContent.trim()) {
+          finalContent = req._agentPersistedContent;
         }
 
         const codexMeta = req._codexRunId
