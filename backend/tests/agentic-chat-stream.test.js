@@ -142,6 +142,24 @@ test('shouldUseAgenticChat keeps ordinary chat on the plain stream by default', 
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
 });
 
+test('shouldUseAgenticChat routes a custom GPT auto-agent without slowing greetings', () => {
+  const capabilities = { agentMode: 'auto', skillsEnabled: true, skillIds: ['openalex_search'] };
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'Ayúdame a estructurar el marco teórico de mi investigación',
+    customGptCapabilities: capabilities,
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola', customGptCapabilities: capabilities }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'Busca artículos científicos para contrastar este documento adjunto',
+    files: [{ id: 'f1' }],
+    customGptCapabilities: capabilities,
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'Ayúdame a estructurar este texto',
+    customGptCapabilities: { ...capabilities, agentMode: 'off' },
+  }), false);
+});
+
 test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=1 enables agent-first routing', () => {
   const prev = process.env.SIRAGPT_AGENT_FIRST;
   process.env.SIRAGPT_AGENT_FIRST = '1';
@@ -499,6 +517,53 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
   assert.equal(state.artifacts[0].kind, 'music');
   assert.equal(state.artifacts[0].durationSeconds, 30);
   assert.equal(state.artifacts[0].prompt, 'lofi test');
+});
+
+test('runAgenticChat blocks finalize until every requested artifact is created and verified', async () => {
+  const openai = makeFakeOpenAI([
+    toolCallMessage('create_document', { filename: 'informe.docx' }, 'create_word'),
+    toolCallMessage('verify_artifact', { artifactId: 'word1' }, 'verify_word'),
+    finalizeMessage('Entregables listos.'),
+    toolCallMessage('create_document', { filename: 'informe.pdf' }, 'create_pdf'),
+    toolCallMessage('verify_artifact', { artifactId: 'pdf1' }, 'verify_pdf'),
+    finalizeMessage('Entregables listos.'),
+  ]);
+  const { res } = makeFakeRes();
+  const artifacts = {
+    'informe.docx': { id: 'word1', filename: 'informe.docx', format: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', downloadUrl: '/word1' },
+    'informe.pdf': { id: 'pdf1', filename: 'informe.pdf', format: 'pdf', mime: 'application/pdf', downloadUrl: '/pdf1' },
+  };
+
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'Crea el informe en Word y PDF',
+    res,
+    customGptCapabilities: { agentMode: 'auto', multipleArtifacts: true, maxArtifactsPerTurn: 6 },
+    toolsOverride: [
+      {
+        name: 'create_document',
+        description: 'create file',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+        execute: async ({ filename }, ctx) => {
+          const artifact = artifacts[filename];
+          ctx.onEvent({ type: 'file_artifact', artifact });
+          return { ok: true, ...artifact };
+        },
+      },
+      {
+        name: 'verify_artifact',
+        description: 'verify file',
+        parameters: { type: 'object', properties: { artifactId: { type: 'string' } }, required: ['artifactId'] },
+        execute: async ({ artifactId }) => ({ ok: true, artifactId }),
+      },
+    ],
+  });
+
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.artifacts.length, 2);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.format).sort(), ['docx', 'pdf']);
+  assert.ok(result.steps.length >= 6, 'guard should force the missing PDF workflow before finalizing');
 });
 
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {

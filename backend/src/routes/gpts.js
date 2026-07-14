@@ -11,6 +11,7 @@ const {
   getCerebrasConfig,
 } = require('../services/ai/cerebras-client');
 const gptActions = require('../services/gpts/gpt-actions');
+const { mergeCustomGptCapabilities } = require('../services/agents/custom-gpt-agent-policy');
 
 const router = express.Router();
 const prisma = require('../config/database');
@@ -489,7 +490,9 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
         visibility: visibility || 'PRIVATE',
         category,
         actions: gptActions.normalizeActionsForStore(actions, []),
-        capabilities: capabilities ?? null,
+        capabilities: capabilities === undefined
+          ? null
+          : mergeCustomGptCapabilities(null, capabilities),
       },
       include: {
         creator: {
@@ -605,7 +608,9 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
         ...(actions !== undefined && {
           actions: gptActions.normalizeActionsForStore(actions, existingGpt.actions || []),
         }),
-        ...(capabilities !== undefined && { capabilities }),
+        ...(capabilities !== undefined && {
+          capabilities: mergeCustomGptCapabilities(existingGpt.capabilities, capabilities),
+        }),
       },
       include: {
         creator: {

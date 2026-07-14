@@ -87,6 +87,15 @@ describe('runSkill', () => {
     assert.equal(r.ok, false);
     assert.match(r.error, /unavailable/);
   });
+
+  test('execution allow-list blocks an otherwise policy-visible skill', async () => {
+    const r = await runner.runSkill('sched', {}, {
+      clearance: 'enterprise',
+      allowedSkillIds: ['echo'],
+    }, D);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /skill_not_allowed/);
+  });
 });
 
 describe('listSkillDescriptors', () => {
@@ -99,6 +108,13 @@ describe('listSkillDescriptors', () => {
   test('enterprise sees all', () => {
     const ids = runner.listSkillDescriptors({ clearance: 'enterprise' }, D).map((s) => s.id);
     assert.ok(ids.includes('sched'));
+  });
+  test('allow-list exposes only configured skills', () => {
+    const ids = runner.listSkillDescriptors({
+      clearance: 'enterprise',
+      allowedSkillIds: ['echo', 'scholar'],
+    }, D).map((s) => s.id);
+    assert.deepEqual(ids.sort(), ['echo', 'scholar']);
   });
 });
 
@@ -122,6 +138,20 @@ describe('buildRunSkillTool', () => {
   test('returns null when no skills are available', () => {
     const empty = { get: () => ({ skills: new Map() }), createPolicy: () => ({ mode: 'sandbox' }), wrapSkillsWithPolicy: () => ({ skills: [], hidden: [] }) };
     assert.equal(runner.buildRunSkillTool({ ctx: {} }, empty), null);
+  });
+
+  test('advertises and enforces only allowed skills, with recommendations first', async () => {
+    const tool = runner.buildRunSkillTool({
+      ctx: { clearance: 'enterprise' },
+      allowedSkillIds: ['echo', 'sched'],
+      recommendedSkillIds: ['sched'],
+    }, D);
+    assert.deepEqual(tool.parameters.properties.skillId.enum, ['sched', 'echo']);
+    assert.match(tool.description, /RECOMENDADA sched/);
+    assert.match(tool.description, /msg\*:string/);
+    const denied = await tool.execute({ skillId: 'scholar', args: {} }, { clearance: 'enterprise' });
+    assert.equal(denied.ok, false);
+    assert.match(denied.error, /skill_not_allowed/);
   });
 });
 

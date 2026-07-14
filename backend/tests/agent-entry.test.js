@@ -84,6 +84,18 @@ test('buildAllTools returns a non-empty array of unique tool objects', () => {
   // Task tools that should be available
   assert.ok(toolNames.has('python_exec'), 'python_exec tool missing');
   assert.ok(toolNames.has('create_document'), 'create_document tool missing');
+  assert.ok(toolNames.has('run_skill'), 'run_skill tool missing');
+});
+
+test('buildAllTools enforces the declared skillIds allow-list', () => {
+  const { buildAllTools } = require('../src/services/agents/agent-entry');
+  const tools = buildAllTools('low', {
+    skillIds: ['apa7_format'],
+    clearance: 'enterprise',
+  });
+  const runSkill = tools.find((tool) => tool.name === 'run_skill');
+  assert.ok(runSkill, 'run_skill tool missing');
+  assert.deepEqual(runSkill.parameters.properties.skillId.enum, ['apa7_format']);
 });
 
 test('buildAllTools deduplicates by name', () => {

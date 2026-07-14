@@ -150,6 +150,7 @@ const {
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
+const { resolveUserSkillClearance } = require('../services/agents/custom-gpt-agent-policy');
 const { triageIntent } = require('../services/agents/intent-triage');
 const {
   makeGeminiJudge,
@@ -5595,6 +5596,7 @@ router.post(
                 prompt,
                 history: priorHistory,
                 files: filesForVision || [],
+                customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
               });
               // Tool-calling fallback ladder: 'native' (OpenAI-style
               // tool_calls), 'prompted' (tools described in the system prompt,
@@ -5666,6 +5668,11 @@ router.post(
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
+                  customGptSkillPlan: {
+                    selectedSkillIds: Array.isArray(semanticIntentAnalysis?.skill_plan?.selected_skills)
+                      ? semanticIntentAnalysis.skill_plan.selected_skills.map((skill) => skill?.id).filter(Boolean)
+                      : [],
+                  },
                   // Actions execute with the CREATOR's encrypted auth secret, so
                   // only inject them when the current user IS the creator. This
                   // prevents a non-owner (incl. anyone using a PUBLIC GPT, or a
@@ -5696,7 +5703,7 @@ router.post(
                     activeOrganizationId: __orgIdForAi,
                     chatId: canPersist ? chatId : null,
                     userEmail: req.user?.email || null,
-                    clearance: req.user?.clearance || null,
+                    clearance: resolveUserSkillClearance(req.user),
                     prisma,
                     openai: agenticClient,
                     collection: 'default',

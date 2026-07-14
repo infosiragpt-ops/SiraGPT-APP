@@ -10,6 +10,7 @@
     "test:health": "node --test tests/sira-health-and-metrics.test.js tests/probe-scheduler.test.js tests/health-mount.test.js tests/health-index-lifecycle.test.js tests/health-route-queues.test.js",
     "test:release-provenance": "node --test tests/version-route.test.js tests/release-provenance.test.js",
     "test:security-documents": "node --test tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js",
+    "test:custom-gpt-skills": "node --test tests/custom-gpt-agent-policy.test.js tests/artifact-delivery-contract.test.js",
     "test:shard": "bash scripts/test-shard.sh",
     "test:coverage": "c8 --reporter=text-summary --reporter=lcov --reporter=json-summary --check-coverage --lines 60 --functions 60 --branches 50 --statements 60 npm test",
     "vercel-build": "node scripts/start-with-migrations.js --migrate-only",

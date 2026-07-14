@@ -52,6 +52,15 @@
     buildExecutionProfilePrompt,
     validateFinalize,
   } = require('./agents/agentic-execution-profile');
+  const {
+    buildSkillExecutionPrompt,
+    resolveCustomGptAgentPolicy,
+  } = require('./agents/custom-gpt-agent-policy');
+  const {
+    buildArtifactDeliveryContract,
+    buildArtifactDeliveryPrompt,
+    validateArtifactDelivery,
+  } = require('./agents/artifact-delivery-contract');
 
   const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
   const SENTINEL_FENCE_CLOSE = '\n```';
@@ -75,6 +84,7 @@
     'memory_recall', 'rag_retrieve', 'self_rag_answer',
     'python_exec', 'run_tests',
     'create_document', 'verify_artifact', 'document_edit',
+    'run_skill',
     'session_search', 'session_list', 'session_history',
   ];
 
@@ -117,6 +127,7 @@
     generate_music: (args) => `Componiendo música${args?.prompt ? `: ${truncate(args.prompt, 36)}` : ''}`,
     create_chart: (args) => `Creando gráfica${args?.title ? `: ${truncate(args.title, 40)}` : ''}`,
     verify_artifact: () => 'Verificando archivo generado',
+    run_skill: (args) => `Aplicando skill ${truncate(args?.skillId || 'especializada', 44)}`,
     run_tests: () => 'Ejecutando pruebas',
     npm_install: () => 'Instalando dependencias',
     commit_changes: () => 'Haciendo commit de cambios',
@@ -360,11 +371,15 @@ const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|
  *     into the prompt; the loop adds latency without adding capability).
  * Operators can restore agent-first behavior with SIRAGPT_AGENT_FIRST=1.
  */
-function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
+function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapabilities = null } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return false;
   if (SIMPLE_CHAT_PROMPT.test(text)) return false;
   if (DIRECT_ONLY_PROMPT.test(text)) return false;
+  const customGptPolicy = resolveCustomGptAgentPolicy({
+    prompt: text,
+    capabilities: customGptCapabilities,
+  });
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (isCognitionUpgradeRequest(text)) return true;
   // ── Attachment turns ──────────────────────────────────────────────────
@@ -390,7 +405,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       const { isDocumentMergeRequest } = require('./agents/document-merge');
       if (isDocumentMergeRequest(text, { fileCount: files.length })) return true;
     } catch (_) { /* detector is best-effort */ }
-    return isArtifactDeliverableRequest(text) || isDocumentEditRequest(text);
+    return isArtifactDeliverableRequest(text)
+      || isDocumentEditRequest(text)
+      || customGptPolicy.requiresSkill;
   }
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
   // Auto web-search routing: send freshness / live-data / factual-lookup
@@ -419,6 +436,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       && /\b(sigue|contin[uú]a|hazlo|dale|arregla|corrige|eso|todav[ií]a|no.?funciona|no.?sirve)\b/i.test(text)) {
     return true;
   }
+
+  // Custom GPTs can opt into an automatic agent runtime. This routes every
+  // non-trivial turn through the bounded ReAct loop while still letting the
+  // model decide whether a skill is actually necessary. Greetings, exact
+  // short-answer directives and simple attachment Q&A remain on the fast path.
+  if (customGptPolicy.routeNonTrivial) return true;
 
   // Normal chat stays on the plain stream unless the operator explicitly
   // opts into agent-first behavior.
@@ -531,6 +554,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       customGptPersona = '',
       // Per-GPT tool capability toggles (null = legacy GPT → no gating).
       customGptCapabilities = null,
+      // Semantic skill-plan ids from the preflight router. These are advisory
+      // and are mapped to concrete filesystem skills by the custom-GPT policy.
+      customGptSkillPlan = null,
       // Creator-defined external API Actions (CustomGpt.actions, stored shape
       // WITH the encrypted auth secret). Built into agent tools below.
       customGptActions = null,
@@ -611,7 +637,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       }
     }
 
-    let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance, capabilities: customGptCapabilities });
+    const customGptAgentPolicy = resolveCustomGptAgentPolicy({
+      prompt: userQuery,
+      capabilities: customGptCapabilities,
+      semanticSkillIds: Array.isArray(customGptSkillPlan?.selectedSkillIds)
+        ? customGptSkillPlan.selectedSkillIds
+        : [],
+    });
+    const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
+
+    let tools = toolsOverride || buildDefaultTools({
+      userQuery,
+      selection,
+      clearance: toolContext && toolContext.clearance,
+      capabilities: customGptCapabilities,
+      skillPolicy: customGptAgentPolicy,
+    });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
     // AFTER buildDefaultTools (so the per-turn selector cannot drop them) and
@@ -738,6 +779,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if ((documentEditIntent || documentMergeIntent) && Array.isArray(tools)) {
       tools = tools.filter((t) => t && t.name !== 'create_document');
     }
+    // A strong specialized-skill intent gets one deterministic first call. The
+    // model still selects the concrete id/args and can chain further skills
+    // after observing the first result.
+    if (!initialToolChoice && customGptAgentPolicy.requiresSkill && availableToolNames.has('run_skill')) {
+      initialToolChoice = 'run_skill';
+    }
     // Aggressive auto-search: when the question clearly needs fresh/live/factual
     // web data and no media tool was force-selected, force the FIRST step to be
     // a web_search so the model cannot answer "no tengo información" from stale
@@ -756,6 +803,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
       availableToolNames,
     });
+    if (customGptAgentPolicy.requiresSkill && availableToolNames.has('run_skill')) {
+      executionProfile.requiredTools = Array.from(new Set([...(executionProfile.requiredTools || []), 'run_skill']));
+      executionProfile.minimumToolCalls = { ...(executionProfile.minimumToolCalls || {}), run_skill: 1 };
+    }
     const openclawProfile = openclawCapabilityKernel.buildCapabilityProfile({
       prompt: userQuery,
       userId: toolContext.userId || null,
@@ -790,6 +841,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       requiredTools: executionProfile.requiredTools,
       minimumToolCalls: executionProfile.minimumToolCalls,
     };
+    state.meta.skillPolicy = {
+      enabled: customGptAgentPolicy.skillsEnabled,
+      recommendedSkillIds: customGptAgentPolicy.recommendedSkillIds,
+      requiresSkill: customGptAgentPolicy.requiresSkill,
+    };
+    if (artifactDeliveryContract.active) state.meta.artifactDelivery = artifactDeliveryContract;
 
     // Initial sentinel — gives the UI an immediate step indicator even
     // before the first model call returns.
@@ -834,6 +891,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
+      buildSkillExecutionPrompt(customGptAgentPolicy),
+      buildArtifactDeliveryPrompt(artifactDeliveryContract),
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
       'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
       initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',
@@ -861,7 +920,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `web_extract` o `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
-      'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
+      'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
       attachedDocuments
@@ -942,6 +1001,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     const composedFinalizeGuard = planVerify.composeFinalizeGuards([
       executionProfile.requiredTools.length
         ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
+        : null,
+      artifactDeliveryContract.active
+        ? ({ steps, unavailableTools }) => validateArtifactDelivery(artifactDeliveryContract, {
+          artifacts: state.artifacts,
+          steps,
+          unavailableTools,
+        })
         : null,
       planVerify.createAnswerVerifier({ openai, model, userQuery }),
     ]);
@@ -1151,6 +1217,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       finalAnswer,
       stoppedReason: result?.stoppedReason || 'finalized',
       steps: result?.steps || [],
+      artifacts: state.artifacts,
       agentRun,
     };
   }
@@ -1441,8 +1508,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // user's clearance. Skipped when SIRAGPT_SKILLS_IN_CHAT=0 or unavailable.
     try {
       const skillRunner = require('./agents/skill-runner');
-      const runSkillTool = skillRunner.buildRunSkillTool({ ctx: { clearance: (opts && opts.clearance) || null } });
-      if (runSkillTool) base.push(runSkillTool);
+      const skillPolicy = opts?.skillPolicy || null;
+      if (opts?.capabilities?.skillsEnabled !== false) {
+        const runSkillTool = skillRunner.buildRunSkillTool({
+          ctx: {
+            clearance: (opts && opts.clearance) || null,
+            ...(Array.isArray(skillPolicy?.allowedSkillIds)
+              ? { allowedSkillIds: skillPolicy.allowedSkillIds }
+              : {}),
+          },
+          allowedSkillIds: Array.isArray(skillPolicy?.allowedSkillIds) ? skillPolicy.allowedSkillIds : null,
+          recommendedSkillIds: Array.isArray(skillPolicy?.recommendedSkillIds) ? skillPolicy.recommendedSkillIds : [],
+        });
+        if (runSkillTool) base.push(runSkillTool);
+      }
     } catch (skillToolErr) {
       console.warn('[skills-in-chat] run_skill tool unavailable:', skillToolErr && skillToolErr.message);
     }

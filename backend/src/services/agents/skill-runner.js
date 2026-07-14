@@ -56,14 +56,26 @@ function getSkillsMap(d) {
   } catch (_) { return null; }
 }
 
+function normalizeAllowedSkillIds(value) {
+  if (!Array.isArray(value)) return null;
+  return new Set(value.map((id) => String(id || '').trim()).filter(Boolean));
+}
+
 /** Skills the given clearance is allowed to see/run (policy static-filter). */
 function listSkillDescriptors(ctx = {}, d = null) {
   const D = deps(d);
   const map = getSkillsMap(d);
   if (!D || !map) return [];
+  const allowed = normalizeAllowedSkillIds(ctx.allowedSkillIds);
+  const candidates = allowed
+    ? [...map.values()].filter((skill) => allowed.has(String(skill.id)))
+    : [...map.values()];
   try {
-    const pol = D.createPolicy({ mode: policyModeForClearance(ctx.clearance) });
-    const { skills: visible } = D.wrapSkillsWithPolicy([...map.values()], pol);
+    const pol = D.createPolicy({
+      mode: policyModeForClearance(ctx.clearance),
+      ...(allowed ? { skills: { allow: Array.from(allowed) } } : {}),
+    });
+    const { skills: visible } = D.wrapSkillsWithPolicy(candidates, pol);
     return visible.map((s) => ({
       id: s.id,
       description: s.description || s.name || s.id,
@@ -71,7 +83,7 @@ function listSkillDescriptors(ctx = {}, d = null) {
       params: s.params || null,
     }));
   } catch (_) {
-    return [...map.values()].map((s) => ({ id: s.id, description: s.description || s.id, capabilities: s.capabilities || [], params: s.params || null }));
+    return candidates.map((s) => ({ id: s.id, description: s.description || s.id, capabilities: s.capabilities || [], params: s.params || null }));
   }
 }
 
@@ -89,6 +101,20 @@ function validateArgs(paramsSchema, args) {
   }
 }
 
+function describeParams(paramsSchema) {
+  if (!paramsSchema || typeof paramsSchema !== 'object') return 'args: {}';
+  const required = new Set(Array.isArray(paramsSchema.required) ? paramsSchema.required : []);
+  const properties = paramsSchema.properties && typeof paramsSchema.properties === 'object'
+    ? paramsSchema.properties
+    : {};
+  const fields = Object.entries(properties).map(([name, schema]) => {
+    const type = Array.isArray(schema?.type) ? schema.type.join('|') : (schema?.type || 'any');
+    const choices = Array.isArray(schema?.enum) ? `=${schema.enum.join('|')}` : '';
+    return `${name}${required.has(name) ? '*' : ''}:${type}${choices}`;
+  });
+  return `args: {${fields.join(', ')}}`;
+}
+
 /**
  * Execute a skill by id under the clearance-derived policy. Returns a flat
  * result object; never throws (errors become { ok:false, error }).
@@ -96,6 +122,8 @@ function validateArgs(paramsSchema, args) {
 async function runSkill(skillId, args, ctx = {}, d = null) {
   const id = String(skillId || '').trim();
   if (!id) return { ok: false, error: 'missing_skill_id' };
+  const allowed = normalizeAllowedSkillIds(ctx.allowedSkillIds);
+  if (allowed && !allowed.has(id)) return { ok: false, skillId: id, error: `skill_not_allowed: ${id}` };
   const D = deps(d);
   const map = getSkillsMap(d);
   if (!D || !map) return { ok: false, error: 'skills_subsystem_unavailable' };
@@ -106,7 +134,10 @@ async function runSkill(skillId, args, ctx = {}, d = null) {
   // Policy gate (capabilities + per-call budget + timeout via wrapSkill).
   let wrapped;
   try {
-    const pol = D.createPolicy({ mode: policyModeForClearance(ctx.clearance) });
+    const pol = D.createPolicy({
+      mode: policyModeForClearance(ctx.clearance),
+      ...(allowed ? { skills: { allow: Array.from(allowed) } } : {}),
+    });
     const { skills: wrappedList, hidden } = D.wrapSkillsWithPolicy([skill], pol);
     if (!wrappedList || wrappedList.length === 0) {
       const reason = (hidden && hidden[0] && hidden[0].reason) || 'denied_by_policy';
@@ -122,9 +153,13 @@ async function runSkill(skillId, args, ctx = {}, d = null) {
   if (!validation.ok) return { ok: false, error: `invalid_args: ${validation.error}` };
 
   try {
+    const startedAt = Date.now();
+    try { ctx.onEvent?.({ type: 'skill_start', skillId: id }); } catch (_) { /* observability is best-effort */ }
     const result = await wrapped.execute(args || {}, ctx);
+    try { ctx.onEvent?.({ type: 'skill_result', skillId: id, ok: true, durationMs: Date.now() - startedAt }); } catch (_) { /* noop */ }
     return { ok: true, skillId: id, result };
   } catch (e) {
+    try { ctx.onEvent?.({ type: 'skill_result', skillId: id, ok: false, error: e && e.message ? e.message : String(e) }); } catch (_) { /* noop */ }
     return { ok: false, skillId: id, error: e && e.message ? e.message : String(e) };
   }
 }
@@ -136,9 +171,20 @@ async function runSkill(skillId, args, ctx = {}, d = null) {
  */
 function buildRunSkillTool(opts = {}, d = null) {
   if (SKILLS_DISABLED) return null;
-  const descriptors = listSkillDescriptors(opts.ctx || {}, d);
+  const allowedSkillIds = Array.isArray(opts.allowedSkillIds)
+    ? opts.allowedSkillIds
+    : opts.ctx?.allowedSkillIds;
+  const ctx = { ...(opts.ctx || {}), ...(allowedSkillIds ? { allowedSkillIds } : {}) };
+  const recommended = new Set((opts.recommendedSkillIds || []).map(String));
+  const descriptors = listSkillDescriptors(ctx, d).sort((a, b) => {
+    const ar = recommended.has(a.id) ? 1 : 0;
+    const br = recommended.has(b.id) ? 1 : 0;
+    return br - ar || a.id.localeCompare(b.id);
+  });
   if (descriptors.length === 0) return null;
-  const lines = descriptors.slice(0, 30).map((s) => `- ${s.id}: ${s.description}`).join('\n');
+  const lines = descriptors.slice(0, 32).map((s) => (
+    `${recommended.has(s.id) ? '- RECOMENDADA ' : '- '}${s.id}: ${s.description} ${describeParams(s.params)}`
+  )).join('\n');
   return {
     name: 'run_skill',
     description:
@@ -151,15 +197,18 @@ function buildRunSkillTool(opts = {}, d = null) {
       required: ['skillId'],
       additionalProperties: false,
       properties: {
-        skillId: { type: 'string', description: 'The id of the skill to run (see list).' },
+        skillId: { type: 'string', enum: descriptors.map((item) => item.id), description: 'The id of the skill to run (see list).' },
         args: { type: 'object', description: 'Arguments for the skill (matching its schema).', additionalProperties: true },
       },
     },
     execute: async (callArgs, runCtx) => {
       const a = callArgs || {};
-      return runSkill(a.skillId, a.args || {}, runCtx || opts.ctx || {}, d);
+      const executionCtx = { ...ctx, ...(runCtx || {}), ...(allowedSkillIds ? { allowedSkillIds } : {}) };
+      return runSkill(a.skillId, a.args || {}, executionCtx, d);
     },
     __skillRunner: true,
+    __allowedSkillIds: descriptors.map((item) => item.id),
+    __recommendedSkillIds: descriptors.filter((item) => recommended.has(item.id)).map((item) => item.id),
   };
 }
 
@@ -169,4 +218,6 @@ module.exports = {
   buildRunSkillTool,
   policyModeForClearance,
   validateArgs,
+  describeParams,
+  normalizeAllowedSkillIds,
 };
