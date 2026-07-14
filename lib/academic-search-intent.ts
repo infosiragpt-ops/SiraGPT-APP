@@ -15,6 +15,28 @@ export function isAcademicResearchPrompt(value: string): boolean {
   return PUBLICATION_PATTERN.test(text) && SEARCH_ACTION_PATTERN.test(text)
 }
 
+type CustomGptRoutingContext = {
+  id?: string | null
+  capabilities?: {
+    agentMode?: string | null
+  } | null
+} | null | undefined
+
+export function shouldUseDedicatedAcademicSearch(
+  value: string,
+  options: { attachmentCount?: number; customGpt?: CustomGptRoutingContext } = {},
+): boolean {
+  if (Math.max(0, Number(options.attachmentCount) || 0) > 0) return false
+
+  const customGpt = options.customGpt
+  const agentMode = String(customGpt?.capabilities?.agentMode || "").trim().toLowerCase()
+  if (customGpt?.id && (agentMode === "auto" || agentMode === "always")) {
+    return false
+  }
+
+  return isAcademicResearchPrompt(value)
+}
+
 export const ACADEMIC_SEARCH_PATTERNS = {
   source: SOURCE_PATTERN,
   identifier: IDENTIFIER_PATTERN,

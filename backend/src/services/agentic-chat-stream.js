@@ -734,6 +734,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
         const pinned = [
           ...mediaIntents.map((intent) => intent && intent.tool),
+          ...(customGptAgentPolicy.requiresSkill ? ['run_skill'] : []),
+          ...(artifactDeliveryContract.active ? ['create_document', 'verify_artifact'] : []),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),

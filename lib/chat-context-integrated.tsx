@@ -547,6 +547,17 @@ interface Chat {
     conversationStarters?: string[]
     modelName?: string
     temperature?: number
+    capabilities?: {
+      webBrowsing?: boolean
+      dataAnalysis?: boolean
+      imageGeneration?: boolean
+      codeInterpreter?: boolean
+      agentMode?: "off" | "auto" | "always"
+      skillsEnabled?: boolean
+      skillIds?: string[]
+      multipleArtifacts?: boolean
+      maxArtifactsPerTurn?: number
+    }
     visibility?: string
     shareId?: string
     creator?: {

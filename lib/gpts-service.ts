@@ -21,6 +21,11 @@ export interface CustomGPT {
     dataAnalysis?: boolean
     imageGeneration?: boolean
     codeInterpreter?: boolean
+    agentMode?: 'off' | 'auto' | 'always'
+    skillsEnabled?: boolean
+    skillIds?: string[]
+    multipleArtifacts?: boolean
+    maxArtifactsPerTurn?: number
   }
   visibility: 'PRIVATE' | 'UNLISTED' | 'PUBLIC'
   shareId: string
@@ -60,6 +65,11 @@ export interface CreateGPTData {
     dataAnalysis?: boolean
     imageGeneration?: boolean
     codeInterpreter?: boolean
+    agentMode?: 'off' | 'auto' | 'always'
+    skillsEnabled?: boolean
+    skillIds?: string[]
+    multipleArtifacts?: boolean
+    maxArtifactsPerTurn?: number
   }
 }
 

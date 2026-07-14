@@ -724,6 +724,7 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
             greetingMessage: true,
             modelName: true,
             temperature: true,
+            capabilities: true,
             conversationStarters: true,
             visibility: true,
             shareId: true
@@ -772,6 +773,7 @@ router.get('/chat/:chatId', authenticateToken, async (req, res) => {
             greetingMessage: true,
             modelName: true,
             temperature: true,
+            capabilities: true,
             conversationStarters: true,
             visibility: true,
             shareId: true,

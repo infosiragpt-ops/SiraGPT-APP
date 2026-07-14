@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { isAcademicResearchPrompt } from "../lib/academic-search-intent"
+import {
+  isAcademicResearchPrompt,
+  shouldUseDedicatedAcademicSearch,
+} from "../lib/academic-search-intent"
 
 describe("academic search intent", () => {
   it("routes scientific discovery prompts to the federated academic search", () => {
@@ -17,5 +20,20 @@ describe("academic search intent", () => {
     assert.equal(isAcademicResearchPrompt("estudio por las noches"), false)
     assert.equal(isAcademicResearchPrompt("redacta un informe académico profesional"), false)
     assert.equal(isAcademicResearchPrompt("resume este artículo científico"), false)
+  })
+
+  it("lets an agent-enabled custom GPT own academic research and artifact delivery", () => {
+    const prompt = "Busca artículos científicos, verifica DOI y crea Word y PDF"
+    assert.equal(shouldUseDedicatedAcademicSearch(prompt), true)
+    assert.equal(shouldUseDedicatedAcademicSearch(prompt, { attachmentCount: 1 }), false)
+    assert.equal(shouldUseDedicatedAcademicSearch(prompt, {
+      customGpt: { id: "gpt-1", capabilities: { agentMode: "auto" } },
+    }), false)
+    assert.equal(shouldUseDedicatedAcademicSearch(prompt, {
+      customGpt: { id: "gpt-1", capabilities: { agentMode: "always" } },
+    }), false)
+    assert.equal(shouldUseDedicatedAcademicSearch(prompt, {
+      customGpt: { id: "gpt-1", capabilities: { agentMode: "off" } },
+    }), true)
   })
 })

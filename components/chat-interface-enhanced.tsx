@@ -152,7 +152,7 @@ import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import VoiceCatalogModal from "./voice/voice-catalog-modal"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
-import { isAcademicResearchPrompt } from "@/lib/academic-search-intent"
+import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
   RESEARCH_FOLLOW_UP_EVENT,
   buildScientificPapersMessage,
@@ -8877,7 +8877,10 @@ REWRITTEN TEXT:`;
       && !hasDedicatedConnector
       && !hasMediaGenerator
       && shouldRouteWorkModePromptThroughAgentTask(msg, filesToSend);
-    const shouldUseAcademicSearch = filesToSend.length === 0 && isAcademicResearchPrompt(msg);
+    const shouldUseAcademicSearch = shouldUseDedicatedAcademicSearch(msg, {
+      attachmentCount: filesToSend.length,
+      customGpt: currentChat?.customGpt,
+    });
     // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
     // enter the durable agent-task path. That backend path owns the current
     // source-preserving Office/PDF editor, artifact persistence and validation.
