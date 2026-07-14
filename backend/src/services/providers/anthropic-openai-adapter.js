@@ -10,6 +10,7 @@
  */
 
 const DEFAULT_MAX_TOKENS = Number(process.env.ANTHROPIC_AGENT_MAX_TOKENS) || 16384;
+const modelsWithoutTemperature = new Set();
 
 let sdkClassPromise = null;
 
@@ -151,6 +152,24 @@ function mapStopReason(reason, hasToolCalls) {
   return reason || 'stop';
 }
 
+function modelRejectsTemperature(model) {
+  const clean = String(model || '').trim().toLowerCase();
+  if (!clean) return false;
+  if (modelsWithoutTemperature.has(clean)) return true;
+  // Claude 5 reasoning models reject sampling controls instead of ignoring
+  // them. Keep aliases explicit so older Claude families still honour a
+  // custom GPT's configured temperature.
+  return /^claude-(?:fable|opus|sonnet|haiku)-5(?:[-.]|$)/.test(clean);
+}
+
+function isDeprecatedTemperatureError(error) {
+  const status = Number(error?.status || error?.statusCode || error?.response?.status);
+  const message = String(error?.message || error?.error?.message || '');
+  return status === 400
+    && /temperature/i.test(message)
+    && /deprecated|not supported|unsupported|not allowed/i.test(message);
+}
+
 /** Convert a native Anthropic message into an OpenAI chat completion. */
 function toOpenAICompletion(response, requestedModel) {
   const text = [];
@@ -247,15 +266,29 @@ function createAnthropicOpenAIAdapter({
             ...(transcript.system ? { system: transcript.system } : {}),
             ...(tools.length ? { tools } : {}),
             ...(toolChoice ? { tool_choice: toolChoice } : {}),
-            ...(Number.isFinite(Number(payload.temperature)) ? { temperature: Number(payload.temperature) } : {}),
+            ...(!modelRejectsTemperature(model) && Number.isFinite(Number(payload.temperature))
+              ? { temperature: Number(payload.temperature) }
+              : {}),
             ...(Array.isArray(payload.stop) ? { stop_sequences: payload.stop } : {}),
           };
 
           const sdk = await getClient();
-          const response = await sdk.messages.create(
-            request,
-            requestOptions?.signal ? { signal: requestOptions.signal } : undefined,
-          );
+          const options = requestOptions?.signal ? { signal: requestOptions.signal } : undefined;
+          let response;
+          try {
+            response = await sdk.messages.create(request, options);
+          } catch (error) {
+            // Anthropic can deprecate sampling controls per model before a
+            // stable alias is known to this service. Retry once without the
+            // rejected field, then remember the capability for this process.
+            if (!Object.prototype.hasOwnProperty.call(request, 'temperature') || !isDeprecatedTemperatureError(error)) {
+              throw error;
+            }
+            modelsWithoutTemperature.add(model.toLowerCase());
+            const compatibleRequest = { ...request };
+            delete compatibleRequest.temperature;
+            response = await sdk.messages.create(compatibleRequest, options);
+          }
           return toOpenAICompletion(response, model);
         },
       },
@@ -270,4 +303,6 @@ module.exports = {
   toAnthropicToolChoice,
   toOpenAICompletion,
   mapStopReason,
+  modelRejectsTemperature,
+  isDeprecatedTemperatureError,
 };

@@ -99,9 +99,42 @@ test('adapter calls Anthropic with native forced tool choice and preserves abort
   assert.equal(capturedRequest.tool_choice.type, 'tool');
   assert.equal(capturedRequest.tool_choice.name, 'run_skill');
   assert.equal(capturedRequest.tool_choice.disable_parallel_tool_use, true);
+  assert.equal('temperature' in capturedRequest, false, 'Claude 5 rejects temperature');
   assert.equal(capturedOptions.signal, signal);
   assert.equal(result.choices[0].message.content, 'Done.');
   assert.equal(result.choices[0].finish_reason, 'stop');
+});
+
+test('adapter retries once without temperature when Anthropic deprecates it for a new alias', async () => {
+  const requests = [];
+  const client = {
+    messages: {
+      create: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) {
+          const error = new Error('`temperature` is deprecated for this model.');
+          error.status = 400;
+          throw error;
+        }
+        return {
+          id: 'msg_retry', model: request.model, stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'Recovered.' }], usage: {},
+        };
+      },
+    },
+  };
+  const adapter = createAnthropicOpenAIAdapter({ client });
+
+  const result = await adapter.chat.completions.create({
+    model: 'claude-future-reasoner',
+    messages: [{ role: 'user', content: 'Continue.' }],
+    temperature: 0.2,
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].temperature, 0.2);
+  assert.equal('temperature' in requests[1], false);
+  assert.equal(result.choices[0].message.content, 'Recovered.');
 });
 
 test('native Claude adapter drives a multi-step skill and multi-artifact ReAct run', async () => {
