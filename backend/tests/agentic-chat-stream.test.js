@@ -292,14 +292,14 @@ test('resolveToolCallMode: native for allowlisted models, prompted for the rest'
   assert.equal(agenticStream.resolveToolCallMode('Cerebras', 'llama-3.1-8b'), 'native');
   // Models WITHOUT native function calling now reach the loop via prompted
   // tool-calling (tools described in the system prompt, fenced-JSON calls).
-  assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'prompted');
+  assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'native');
   assert.equal(agenticStream.resolveToolCallMode('Mistral', 'mistral-large-2'), 'prompted');
   assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'davinci-002'), 'prompted');
   // Env kill-switch restores the legacy hard gate.
   const prev = process.env.SIRAGPT_PROMPTED_TOOLS;
   process.env.SIRAGPT_PROMPTED_TOOLS = '0';
   try {
-    assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'none');
+    assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'native');
     assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'gpt-4o-mini'), 'native');
   } finally {
     if (prev === undefined) delete process.env.SIRAGPT_PROMPTED_TOOLS;

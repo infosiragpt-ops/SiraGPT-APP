@@ -302,11 +302,9 @@ function supportsNativeTools(provider, model, opts = {}) {
 
 // Direct-SDK providers whose chat client in THIS backend does not speak
 // OpenAI-style `tool_calls` (their slugged OpenRouter forms do — OpenRouter
-// normalises tools). Model capability ≠ transport capability: a Claude model
-// "supports tools", but the direct Anthropic client here drives the loop via
-// the prompted ladder. Mirrors the legacy allowlist behavior the
-// agentic-chat-stream tests pin.
-const NON_OPENAI_TOOL_TRANSPORTS = new Set(['anthropic', 'mistral']);
+// normalises tools). Direct Anthropic is intentionally absent: the native
+// adapter translates Claude `tool_use` blocks to the loop's OpenAI envelope.
+const NON_OPENAI_TOOL_TRANSPORTS = new Set(['mistral']);
 
 /**
  * Transport-aware gate used by resolveToolCallMode: native only when BOTH

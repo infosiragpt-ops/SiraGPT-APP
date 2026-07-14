@@ -276,6 +276,11 @@ function hasEnv(name) {
 const { inferProviderFromModelId } = require('../services/ai/provider-inference');
 
 function createProviderClient(provider) {
+  if (provider === "Anthropic") {
+    const { createAnthropicOpenAIAdapter } = require('../services/providers/anthropic-openai-adapter');
+    return createAnthropicOpenAIAdapter();
+  }
+
   if (provider === "Gemini") {
     return new OpenAI({
       apiKey: process.env.GEMINI_API_KEY,
@@ -5618,6 +5623,13 @@ router.post(
                 // chosen provider/model drives every step (plan → tools →
                 // finalize) in its own tool-call mode.
                 const agenticClient = createProviderClient(actualProvider);
+                // Direct Claude uses a native Anthropic adapter to drive the
+                // ReAct loop. RAG helpers still expect a real OpenAI client and
+                // may hard-code embedding/judge model ids, so keep that
+                // auxiliary dependency separate from the loop transport.
+                const agenticToolOpenAI = actualProvider === 'Anthropic'
+                  ? createProviderClient('OpenAI')
+                  : agenticClient;
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
@@ -5705,7 +5717,7 @@ router.post(
                     userEmail: req.user?.email || null,
                     clearance: resolveUserSkillClearance(req.user),
                     prisma,
-                    openai: agenticClient,
+                    openai: agenticToolOpenAI,
                     collection: 'default',
                     fileIds: agenticFileIds,
                     // Lets media-intent treat edit phrasings ("mejora la
