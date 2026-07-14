@@ -24,13 +24,17 @@ type CustomGptRoutingContext = {
 
 export function shouldUseDedicatedAcademicSearch(
   value: string,
-  options: { attachmentCount?: number; customGpt?: CustomGptRoutingContext } = {},
+  options: {
+    attachmentCount?: number
+    customGptId?: string | null
+    customGpt?: CustomGptRoutingContext
+  } = {},
 ): boolean {
   if (Math.max(0, Number(options.attachmentCount) || 0) > 0) return false
 
   const customGpt = options.customGpt
-  const agentMode = String(customGpt?.capabilities?.agentMode || "").trim().toLowerCase()
-  if (customGpt?.id && (agentMode === "auto" || agentMode === "always")) {
+  const customGptId = String(options.customGptId || customGpt?.id || "").trim()
+  if (customGptId) {
     return false
   }
 

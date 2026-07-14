@@ -22,10 +22,13 @@ describe("academic search intent", () => {
     assert.equal(isAcademicResearchPrompt("resume este artículo científico"), false)
   })
 
-  it("lets an agent-enabled custom GPT own academic research and artifact delivery", () => {
+  it("lets a custom GPT own academic research and artifact delivery", () => {
     const prompt = "Busca artículos científicos, verifica DOI y crea Word y PDF"
     assert.equal(shouldUseDedicatedAcademicSearch(prompt), true)
     assert.equal(shouldUseDedicatedAcademicSearch(prompt, { attachmentCount: 1 }), false)
+    assert.equal(shouldUseDedicatedAcademicSearch(prompt, {
+      customGptId: "gpt-1",
+    }), false)
     assert.equal(shouldUseDedicatedAcademicSearch(prompt, {
       customGpt: { id: "gpt-1", capabilities: { agentMode: "auto" } },
     }), false)
@@ -34,6 +37,6 @@ describe("academic search intent", () => {
     }), false)
     assert.equal(shouldUseDedicatedAcademicSearch(prompt, {
       customGpt: { id: "gpt-1", capabilities: { agentMode: "off" } },
-    }), true)
+    }), false)
   })
 })

@@ -8879,6 +8879,7 @@ REWRITTEN TEXT:`;
       && shouldRouteWorkModePromptThroughAgentTask(msg, filesToSend);
     const shouldUseAcademicSearch = shouldUseDedicatedAcademicSearch(msg, {
       attachmentCount: filesToSend.length,
+      customGptId: currentChat?.customGptId,
       customGpt: currentChat?.customGpt,
     });
     // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
