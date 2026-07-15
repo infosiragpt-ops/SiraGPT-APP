@@ -81,12 +81,16 @@ function assetMatchesPlatform(name: string, platform: DesktopReleasePlatform): b
   if (/\.blockmap$/i.test(name)) return false
   if (platform === "macos-arm64") return /SiraGPT-.*-arm64\.dmg$/i.test(name)
   if (platform === "macos-x64") return /SiraGPT-.*\.dmg$/i.test(name) && !/-arm64\.dmg$/i.test(name)
-  return /^SiraGPT(?:-| )Setup(?:-| ).+\.exe$/i.test(name)
+  return /^SiraGPT[ .-]Setup[ .-].+\.exe$/i.test(name)
 }
 
 function checksumForPlatform(release: GitHubDesktopRelease, platform: DesktopReleasePlatform): string | null {
   const prefix = platform.startsWith("macos") ? "macos-" : "windows-"
-  return release.assets.find((asset) => asset.name.toLowerCase().startsWith(prefix) && /sha256sums\.txt$/i.test(asset.name))?.browser_download_url || null
+  const platformManifest = release.assets.find(
+    (asset) => asset.name.toLowerCase().startsWith(prefix) && /sha256sums\.txt$/i.test(asset.name),
+  )
+  const sharedManifest = release.assets.find((asset) => /^sha256sums\.txt$/i.test(asset.name))
+  return platformManifest?.browser_download_url || sharedManifest?.browser_download_url || null
 }
 
 function versionFromAsset(name: string, tag: string): string {
