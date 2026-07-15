@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>SiraGPT sin conexión</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #f7f7f8; color: #171717; padding: 24px; }
+      main { width: min(100%, 420px); padding: 32px; border: 1px solid #dedede; border-radius: 12px; background: #fff; box-shadow: 0 18px 50px rgba(0,0,0,.08); }
+      .brand { font-size: 15px; font-weight: 700; }
+      h1 { margin: 32px 0 10px; font-size: 24px; letter-spacing: 0; }
+      p { margin: 0; color: #666; line-height: 1.55; }
+      button { width: 100%; min-height: 44px; margin-top: 26px; border: 0; border-radius: 8px; background: #111; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+      button:focus-visible { outline: 3px solid rgba(89, 78, 255, .28); outline-offset: 2px; }
+      .status { margin-top: 14px; font-size: 12px; color: #888; text-align: center; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #111; color: #f5f5f5; }
+        main { border-color: #333; background: #1b1b1b; box-shadow: none; }
+        p, .status { color: #aaa; }
+        button { background: #f5f5f5; color: #111; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">SiraGPT</div>
+      <h1>No hay conexión</h1>
+      <p>No pudimos conectar con SiraGPT. Revisa tu red y vuelve a intentarlo; tu cuenta y tus conversaciones permanecen seguras.</p>
+      <button id="retry" type="button">Intentar de nuevo</button>
+      <div class="status" id="status" role="status" aria-live="polite">Esperando conexión</div>
+    </main>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const target = params.get('target') || 'https://siragpt.com/chat';
+      const retry = () => {
+        document.getElementById('status').textContent = 'Conectando…';
+        window.location.replace(target);
+      };
+      document.getElementById('retry').addEventListener('click', retry);
+      window.addEventListener('online', retry, { once: true });
+    </script>
+  </body>
+</html>

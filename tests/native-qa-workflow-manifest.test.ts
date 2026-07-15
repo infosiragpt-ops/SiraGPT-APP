@@ -32,7 +32,9 @@ describe("Native QA GitHub Actions artifact manifests", () => {
     assert.match(workflow, /\$files = Get-ChildItem -Path "output\/desktop" -File/)
 
     const manifestCalls = workflow.match(/scripts\/generate-native-release-manifest\.js/g) || []
-    assert.equal(manifestCalls.length, 2)
+    assert.equal(manifestCalls.length, 3)
+    assert.match(workflow, /Publish desktop beta prerelease/)
+    assert.match(workflow, /desktop-beta-v\$\{version\}-\$\{short_sha\}/)
     assert.match(workflow, /output\/native-qa\/native-release-manifest\.json/)
     assert.match(workflow, /output\/native-qa\/native-release-manifest\.md/)
     assert.match(workflow, /output\/native-qa\/SHA256SUMS\.txt/)

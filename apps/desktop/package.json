@@ -1,7 +1,7 @@
 {
   "name": "siragpt-desktop",
-  "version": "0.4.3",
-  "description": "SiraGPT native desktop app shell.",
+  "version": "0.4.4",
+  "description": "SiraGPT desktop app for macOS and Windows.",
   "private": true,
   "productName": "SiraGPT",
   "main": "main.cjs",
@@ -16,21 +16,53 @@
     },
     "files": [
       "main.cjs",
+      "runtime.cjs",
+      "offline.html",
       "README.md",
       "assets/**/*",
       "package.json"
     ],
     "asar": true,
+    "afterPack": "apps/desktop/after-pack.cjs",
+    "protocols": [
+      {
+        "name": "SiraGPT",
+        "schemes": [
+          "siragpt"
+        ]
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
       "hardenedRuntime": true,
+      "minimumSystemVersion": "11.0",
       "notarize": true,
+      "extendInfo": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        },
+        "NSCameraUsageDescription": "SiraGPT usa la cámara únicamente cuando eliges adjuntar una foto o iniciar una función visual.",
+        "NSMicrophoneUsageDescription": "SiraGPT usa el micrófono únicamente cuando activas voz o dictado.",
+        "NSScreenCaptureUsageDescription": "SiraGPT comparte la pantalla únicamente cuando inicias esa acción desde la aplicación."
+      },
       "entitlements": "assets/entitlements.mac.plist",
       "entitlementsInherit": "assets/entitlements.mac.inherit.plist",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ]
     },
     "win": {
@@ -43,7 +75,10 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
     }
   }
 }

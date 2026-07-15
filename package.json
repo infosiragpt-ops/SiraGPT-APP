@@ -1,6 +1,6 @@
 {
   "name": "my-v0-project",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -66,7 +66,7 @@
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",
     "desktop:pack:mac": "electron-builder --projectDir apps/desktop --mac dir --publish never",
     "desktop:pack:win": "electron-builder --projectDir apps/desktop --win dir --x64 --publish never",
-    "desktop:dist:mac": "electron-builder --projectDir apps/desktop --mac dmg zip --publish never",
+    "desktop:dist:mac": "electron-builder --projectDir apps/desktop --mac dmg zip --arm64 --x64 --publish never",
     "desktop:dist:win": "electron-builder --projectDir apps/desktop --win nsis portable --x64 --publish never",
     "type-check": "tsc --noEmit --skipLibCheck",
     "docker:up": "docker compose up -d",
