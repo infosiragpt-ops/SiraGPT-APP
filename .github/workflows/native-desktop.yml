@@ -2,6 +2,12 @@ name: Native desktop builds
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_prerelease:
+        description: 'Publish durable unsigned desktop beta assets to GitHub Releases'
+        required: true
+        default: true
+        type: boolean
   pull_request:
     branches: [production-main]
     paths:
@@ -22,6 +28,9 @@ on:
 env:
   NODE_VERSION: '24'
   CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+permissions:
+  contents: read
 
 jobs:
   macos:
@@ -46,6 +55,8 @@ jobs:
         run: |
           npm run native:version:check
           node -c apps/desktop/main.cjs
+          node -c apps/desktop/runtime.cjs
+          test -f apps/desktop/offline.html
           sh -n scripts/build-desktop.sh
 
       - name: Build macOS artifacts
@@ -103,6 +114,8 @@ jobs:
         run: |
           npm run native:version:check
           node -c apps/desktop/main.cjs
+          node -c apps/desktop/runtime.cjs
+          if (-not (Test-Path "apps/desktop/offline.html")) { throw "offline.html is required" }
 
       - name: Build Windows artifacts
         run: npm run desktop:dist:win
@@ -138,3 +151,92 @@ jobs:
             output/native-qa/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error
+
+  publish-beta:
+    name: Publish desktop beta prerelease
+    needs: [macos, windows]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: siragpt-desktop-macos
+          path: output/desktop-beta-input/macos
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: siragpt-desktop-windows-x64
+          path: output/desktop-beta-input/windows
+
+      - name: Assemble auditable prerelease
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          short_sha="${GITHUB_SHA::7}"
+          release_tag="desktop-beta-v${version}-${short_sha}"
+          staging="output/desktop-beta-release"
+          mkdir -p "$staging"
+
+          find output/desktop-beta-input/macos -type f \( -name '*.dmg' -o -name '*-mac.zip' -o -name '*.blockmap' \) -exec cp {} "$staging"/ \;
+          find output/desktop-beta-input/windows -type f \( -name '*.exe' -o -name '*.blockmap' \) -exec cp {} "$staging"/ \;
+          if ! find "$staging" -type f -name '*.dmg' -print -quit | grep -q .; then
+            echo "macOS DMG missing from desktop beta" >&2
+            exit 1
+          fi
+          if ! find "$staging" -type f -name '*.exe' -print -quit | grep -q .; then
+            echo "Windows installer missing from desktop beta" >&2
+            exit 1
+          fi
+
+          node scripts/generate-native-release-manifest.js \
+            --dir="$staging" \
+            --out="$staging/native-release-manifest.json" \
+            --markdown-out="$staging/native-release-manifest.md" \
+            --checksums-out="$staging/SHA256SUMS.txt" \
+            --release-tag="$release_tag" \
+            --git-sha="$GITHUB_SHA"
+
+          cat > "$staging/RELEASE_NOTES.md" <<EOF
+          ## SiraGPT Desktop beta ${version}
+
+          Aplicación de evaluación para macOS (Apple Silicon e Intel) y Windows x64.
+
+          - Canal: beta sin firma pública.
+          - Código: ${GITHUB_SHA}.
+          - Verificación: consulta \`SHA256SUMS.txt\` y \`native-release-manifest.json\`.
+          - Producción general: espera la versión firmada y notarizada.
+          EOF
+
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "staging=$staging" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          STAGING: ${{ steps.release.outputs.staging }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find "$STAGING" -maxdepth 1 -type f ! -name 'RELEASE_NOTES.md' -print0 | sort -z)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --prerelease --title "SiraGPT Desktop beta ${RELEASE_TAG#desktop-beta-v}" --notes-file "$STAGING/RELEASE_NOTES.md"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --prerelease --title "SiraGPT Desktop beta ${RELEASE_TAG#desktop-beta-v}" --notes-file "$STAGING/RELEASE_NOTES.md"
+          fi

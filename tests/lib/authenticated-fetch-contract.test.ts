@@ -124,6 +124,15 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     required: true,
   },
   {
+    file: "components/desktop/desktop-download-card.tsx",
+    reason: "Public same-origin desktop release catalog GET used before login.",
+    accepts: (text) =>
+      text === 'fetch("/api/desktop/releases?channel=beta", { signal: controller.signal })'
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
+  },
+  {
     file: "components/design/design-composer.tsx",
     reason: "Public optional-auth AI model catalog GET.",
     accepts: (text) =>
@@ -227,6 +236,15 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     reason: "Public deployments feature-flag health GET.",
     accepts: (text) =>
       text.includes("${BASE}/health")
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
+  },
+  {
+    file: "lib/desktop-releases.ts",
+    reason: "Server-side public GitHub release catalog GET with no Sira credentials.",
+    accepts: (text) =>
+      text === "fetch(RELEASES_API, requestInit)"
       && isNonMutatingFetchCall(text)
       && isCredentialFreePublicFetch(text),
     required: true,

@@ -11,7 +11,7 @@ case "$TARGET" in
     npx electron-builder --projectDir apps/desktop --dir --publish never
     ;;
   mac)
-    npx electron-builder --projectDir apps/desktop --mac dmg zip --publish never
+    npx electron-builder --projectDir apps/desktop --mac dmg zip --arm64 --x64 --publish never
     ;;
   mac-dir)
     npx electron-builder --projectDir apps/desktop --mac dir --publish never
