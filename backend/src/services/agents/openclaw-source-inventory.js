@@ -9,7 +9,15 @@ const {
 } = require('./openclaw-playbook-bridge');
 
 const DEFAULT_REPOSITORY = 'https://github.com/openclaw/openclaw';
-const INVENTORY_VERSION = 'openclaw-source-inventory-2026-06';
+const INVENTORY_VERSION = 'openclaw-source-inventory-2026-07';
+const AUDITED_OPENCLAW_RELEASE = Object.freeze({
+  release: 'v2026.7.1',
+  commit: '2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4',
+  trackedFiles: 21922,
+  license: 'MIT',
+  inventoryMode: 'git_tree',
+  activationPolicy: 'native_rewrite_only',
+});
 const SKIP_DIRS = new Set([
   '.git',
   '.next',
@@ -106,25 +114,93 @@ function detectGitCommit(rootDir) {
   }
 }
 
-function detectLicense(rootDir) {
-  const licensePath = path.join(rootDir || '', 'LICENSE');
-  const raw = safeReadText(licensePath, 64 * 1024);
+function isOwnGitRepository(rootDir) {
+  if (!rootDir) return false;
+  const marker = path.join(rootDir, '.git');
+  return fs.existsSync(marker);
+}
+
+function normalizeGitRevision(value) {
+  const revision = String(value || 'HEAD').trim();
+  if (revision === 'HEAD' || /^[0-9a-f]{7,64}$/i.test(revision)) return revision;
+  throw new Error('OpenClaw inventory requires HEAD or a hexadecimal commit SHA');
+}
+
+function readGitTree(rootDir, revisionInput) {
+  if (!isOwnGitRepository(rootDir)) return null;
+  try {
+    const revision = normalizeGitRevision(revisionInput);
+    const commit = childProcess.execFileSync('git', ['-C', rootDir, 'rev-parse', `${revision}^{commit}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 1024 * 1024,
+    }).trim();
+    // Do not request `-l`: in a partial clone Git must download every blob to
+    // compute sizes. Paths + object IDs are sufficient for 100% tree coverage.
+    const raw = childProcess.execFileSync('git', ['-C', rootDir, 'ls-tree', '-r', '-z', commit, '--'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const entries = [];
+    for (const record of raw.split('\0')) {
+      if (!record) continue;
+      const tab = record.indexOf('\t');
+      if (tab < 0) continue;
+      const metadata = record.slice(0, tab).trim().split(/\s+/);
+      if (metadata.length < 3 || metadata[1] !== 'blob') continue;
+      entries.push({
+        mode: metadata[0],
+        type: metadata[1],
+        object: metadata[2],
+        size: null,
+        path: record.slice(tab + 1),
+      });
+    }
+    return { commit, entries };
+  } catch {
+    return null;
+  }
+}
+
+function readGitBlob(rootDir, commit, relativePath, maxBytes = 1024 * 1024) {
+  try {
+    const raw = childProcess.execFileSync('git', ['-C', rootDir, 'show', `${commit}:${relativePath}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: maxBytes,
+    });
+    return raw.length <= maxBytes ? raw : '';
+  } catch {
+    return '';
+  }
+}
+
+function detectLicenseText(raw, file = 'LICENSE') {
   if (!raw) {
     return {
       id: 'unknown',
-      file: fs.existsSync(licensePath) ? 'LICENSE' : null,
+      file: file || null,
       attributionRequired: true,
       confidence: 'missing_or_unreadable',
     };
   }
   const firstLine = raw.split(/\r?\n/).find(Boolean) || '';
+  const isMit = /\bMIT\b/i.test(raw.slice(0, 4096));
   return {
-    id: /\bMIT\b/i.test(raw.slice(0, 4096)) ? 'MIT' : 'unknown',
-    file: 'LICENSE',
+    id: isMit ? 'MIT' : 'unknown',
+    file,
     attributionRequired: true,
-    confidence: /\bMIT\b/i.test(raw.slice(0, 4096)) ? 'high' : 'manual_review_required',
+    confidence: isMit ? 'high' : 'manual_review_required',
     headline: firstLine.slice(0, 120),
   };
+}
+
+function detectLicense(rootDir) {
+  const licensePath = path.join(rootDir || '', 'LICENSE');
+  const raw = safeReadText(licensePath, 64 * 1024);
+  if (!raw) return detectLicenseText('', fs.existsSync(licensePath) ? 'LICENSE' : null);
+  return detectLicenseText(raw, 'LICENSE');
 }
 
 function isTextPath(filePath) {
@@ -249,6 +325,61 @@ function finalizeScan(scan) {
     configFiles: [...scan.configFiles].sort().slice(0, 18),
     sampleFiles: scan.sampleFiles,
   };
+}
+
+function absorbGitEntry(scan, entry) {
+  scan.fileCount += 1;
+  scan.byteCount += Number(entry.size) || 0;
+  const ext = path.posix.extname(entry.path).toLowerCase() || '[no_ext]';
+  scan.extensionCounts.set(ext, (scan.extensionCounts.get(ext) || 0) + 1);
+  if (scan.sampleFiles.length < 12) scan.sampleFiles.push(entry.path);
+  const base = path.posix.basename(entry.path).toLowerCase();
+  if (base === 'package.json') {
+    scan.packageManifests.push({
+      path: entry.path,
+      name: null,
+      private: null,
+      scripts: [],
+      dependencyCounts: {},
+      dependencySamples: {},
+      materialized: false,
+    });
+  }
+  if (/\b(test|spec|vitest|playwright|qa|fixture|mock)\b/i.test(entry.path)) {
+    scan.testSurfaces.add(entry.path.split('/').slice(0, 3).join('/'));
+  }
+  if (/\b(tsconfig|eslint|prettier|vitest|playwright|docker|compose|package|pnpm|npm|turbo)\b/i.test(base)) {
+    scan.configFiles.add(entry.path);
+  }
+}
+
+function scanGitEntries(entries, folder) {
+  const scan = createEmptyScan();
+  const selected = entries.filter((entry) => {
+    if (folder === 'root-config') {
+      return !entry.path.includes('/') && ROOT_CONFIG_FILES.includes(entry.path);
+    }
+    return entry.path.startsWith(`${folder}/`);
+  });
+  for (const entry of selected) absorbGitEntry(scan, entry);
+  return {
+    ...finalizeScan(scan),
+    lineCountMode: 'not_materialized',
+    byteCountMode: 'not_materialized',
+  };
+}
+
+function listGitInventoryTargets(entries) {
+  const mapped = FOLDER_CAPABILITY_MAP.map((entry) => entry.openclaw);
+  const topLevelDirs = uniq(entries
+    .map((entry) => entry.path.split('/'))
+    .filter((parts) => parts.length > 1)
+    .map((parts) => parts[0]));
+  return uniq(['root-config', ...mapped, ...topLevelDirs]).sort((a, b) => {
+    if (a === 'root-config') return -1;
+    if (b === 'root-config') return 1;
+    return a.localeCompare(b);
+  });
 }
 
 function listInventoryTargets(rootDir) {
@@ -399,6 +530,36 @@ function analyzeFolder(rootDir, folder) {
   };
 }
 
+function analyzeGitFolder(entries, folder) {
+  const mapping = getMapping(folder);
+  const scan = scanGitEntries(entries, folder);
+  const exists = scan.fileCount > 0;
+  const riskFlags = buildRiskFlags(folder, mapping, scan);
+  const activationPolicy = pickActivationPolicy(folder, mapping, riskFlags, scan);
+  const activationRank = rankActivation(folder, mapping, scan, riskFlags, activationPolicy);
+  return {
+    folder,
+    exists,
+    siraSurface: mapping.sira,
+    status: mapping.status,
+    strategy: mapping.strategy,
+    activationPolicy,
+    activationRank,
+    fileCount: scan.fileCount,
+    lineCount: null,
+    lineCountMode: scan.lineCountMode,
+    byteCount: null,
+    byteCountMode: scan.byteCountMode,
+    extensionSummary: scan.extensionSummary,
+    packageManifests: scan.packageManifests,
+    testSurfaces: scan.testSurfaces,
+    configFiles: scan.configFiles,
+    sampleFiles: scan.sampleFiles,
+    riskFlags,
+    qualityGates: buildQualityGates(activationPolicy, riskFlags),
+  };
+}
+
 function buildActivationBudget(folders, opts = {}) {
   const maxActiveSlicesPerPass = Number(opts.maxActiveSlicesPerPass || 3);
   const candidates = folders
@@ -437,9 +598,84 @@ function buildTotals(folders) {
   };
 }
 
+function buildGitTreeTotals(folders, entries) {
+  const present = folders.filter((folder) => folder.exists);
+  const packageManifests = entries.filter((entry) => path.posix.basename(entry.path) === 'package.json').length;
+  const testSurfaces = new Set(entries
+    .filter((entry) => /\b(test|spec|vitest|playwright|qa|fixture|mock)\b/i.test(entry.path))
+    .map((entry) => entry.path.split('/').slice(0, 3).join('/')));
+  return {
+    foldersInventoried: folders.length,
+    foldersPresent: present.length,
+    files: entries.length,
+    trackedFiles: entries.length,
+    inventoriedFiles: entries.length,
+    coveragePercent: 100,
+    lines: null,
+    lineCountMode: 'not_materialized',
+    bytes: null,
+    byteCountMode: 'not_materialized',
+    packageManifests,
+    testSurfaces: testSurfaces.size,
+    nativeRewriteCandidates: present.filter((folder) => folder.activationPolicy === 'native_rewrite_candidate').length,
+    blockedOrReferenceOnly: present.filter((folder) => folder.activationPolicy !== 'native_rewrite_candidate').length,
+  };
+}
+
 function buildOpenClawSourceInventory(opts = {}) {
   const upstreamRepoRoot = opts.upstreamRepoRoot || path.join(process.cwd(), '.agents', 'openclaw-upstream');
   const sourceRoot = path.resolve(upstreamRepoRoot);
+  const gitTree = opts.preferGitTree === false
+    ? null
+    : readGitTree(sourceRoot, opts.upstreamCommit || 'HEAD');
+  if (opts.requireGitTree === true && !gitTree) {
+    throw new Error(`Unable to inventory the requested OpenClaw Git tree at ${sourceRoot}`);
+  }
+
+  if (gitTree) {
+    const licenseEntry = gitTree.entries.find((entry) => entry.path === 'LICENSE');
+    const licenseRaw = licenseEntry ? readGitBlob(sourceRoot, gitTree.commit, 'LICENSE', 64 * 1024) : '';
+    const license = licenseEntry
+      ? detectLicenseText(licenseRaw, 'LICENSE')
+      : detectLicenseText('', null);
+    const folders = listGitInventoryTargets(gitTree.entries)
+      .map((folder) => analyzeGitFolder(gitTree.entries, folder));
+    return {
+      version: INVENTORY_VERSION,
+      source: {
+        repository: DEFAULT_REPOSITORY,
+        commit: gitTree.commit,
+        requestedCommit: opts.upstreamCommit || null,
+        license: license.id,
+        licenseFile: license.file,
+        licenseConfidence: license.confidence,
+        licenseHeadline: license.headline || null,
+        attributionRequired: license.attributionRequired,
+        snapshot: 'external-reference-only',
+        inventoryMode: 'git_tree',
+        auditRoot: sourceRoot,
+        auditedReleaseMatch: gitTree.commit === AUDITED_OPENCLAW_RELEASE.commit
+          && gitTree.entries.length === AUDITED_OPENCLAW_RELEASE.trackedFiles,
+      },
+      coverage: {
+        mode: 'git_tree',
+        trackedFiles: gitTree.entries.length,
+        inventoriedFiles: gitTree.entries.length,
+        percent: 100,
+        workingTreeMaterializationRequired: false,
+      },
+      totals: buildGitTreeTotals(folders, gitTree.entries),
+      attribution: {
+        required: true,
+        sourceRepository: DEFAULT_REPOSITORY,
+        sourceCommit: gitTree.commit,
+        rule: 'MIT notice must remain attached to reference snapshots; active runtime behavior must be SiraGPT-native unless separately reviewed.',
+      },
+      activationBudget: buildActivationBudget(folders, opts),
+      folders,
+    };
+  }
+
   const license = detectLicense(sourceRoot);
   const folders = listInventoryTargets(sourceRoot).map((folder) => analyzeFolder(sourceRoot, folder));
   return {
@@ -453,7 +689,15 @@ function buildOpenClawSourceInventory(opts = {}) {
       licenseHeadline: license.headline || null,
       attributionRequired: license.attributionRequired,
       snapshot: 'external-reference-only',
+      inventoryMode: 'working_tree',
       auditRoot: sourceRoot,
+    },
+    coverage: {
+      mode: 'working_tree',
+      trackedFiles: null,
+      inventoriedFiles: buildTotals(folders).files,
+      percent: null,
+      workingTreeMaterializationRequired: true,
     },
     totals: buildTotals(folders),
     attribution: {
@@ -468,6 +712,7 @@ function buildOpenClawSourceInventory(opts = {}) {
 }
 
 module.exports = {
+  AUDITED_OPENCLAW_RELEASE,
   INVENTORY_VERSION,
   buildOpenClawSourceInventory,
 };

@@ -194,10 +194,95 @@ describe('PluginRegistry', () => {
     assert.ok(results[0].error.includes('handler error'));
   });
 
+  it('redacts credentials from hook errors and health snapshots', async () => {
+    const registry = new PluginRegistry();
+    const secret = `sk-${'a'.repeat(24)}`;
+    await registry.register(
+      { id: 'secret-error', name: 'Secret Error', version: '1.0.0', description: 'Redaction test', author: 'test' },
+      async (api) => {
+        api.on('agent:error', async () => { throw new Error(`provider failed: ${secret}`); });
+        return {};
+      }
+    );
+    const dispatched = await registry.dispatch('agent:error', {});
+    assert.equal(dispatched.results[0].error.includes(secret), false);
+    assert.match(dispatched.results[0].error, /redacted/);
+    assert.equal(registry.hookHealth()[0].lastError.includes(secret), false);
+  });
+
   it('emit returns empty array when no plugins listen', async () => {
     const registry = new PluginRegistry();
     const results = await registry.emit('agent:beforeRun', {});
     assert.strictEqual(results.length, 0);
+  });
+
+  it('dispatch orders hooks by priority and preserves protected context keys', async () => {
+    const registry = new PluginRegistry();
+    const order = [];
+    await registry.register(
+      { id: 'low-priority', name: 'Low', version: '1.0.0', description: 'Low priority', author: 'test' },
+      async (api) => {
+        api.on('agent:beforeRun', async (ctx) => { order.push('low'); ctx.userId = 'changed'; }, { priority: 1 });
+        return {};
+      }
+    );
+    await registry.register(
+      { id: 'high-priority', name: 'High', version: '1.0.0', description: 'High priority', author: 'test' },
+      async (api) => {
+        api.on('agent:beforeRun', async () => { order.push('high'); }, { priority: 100 });
+        return {};
+      }
+    );
+
+    const context = { userId: 'owner' };
+    const dispatched = await registry.dispatch('agent:beforeRun', context, { protectedKeys: ['userId'] });
+    assert.deepEqual(order, ['high', 'low']);
+    assert.equal(dispatched.context.userId, 'owner');
+  });
+
+  it('allows only trusted plugins to block lifecycle execution', async () => {
+    const registry = new PluginRegistry();
+    await registry.register(
+      { id: 'untrusted-blocker', name: 'Untrusted', version: '1.0.0', description: 'Cannot block', author: 'test' },
+      async (api) => {
+        api.on('agent:toolCall', async () => ({ block: true, reason: 'untrusted' }), { priority: 100 });
+        return {};
+      }
+    );
+    await registry.register(
+      { id: 'trusted-blocker', name: 'Trusted', version: '1.0.0', description: 'Can block', author: 'test', trusted: true },
+      async (api) => {
+        api.on('agent:toolCall', async () => ({ block: true, reason: 'policy denied' }), { priority: 10 });
+        return {};
+      }
+    );
+
+    const dispatched = await registry.dispatch('agent:toolCall', {});
+    assert.equal(dispatched.blocked, true);
+    assert.equal(dispatched.reason, 'policy denied');
+    assert.equal(dispatched.results.length, 2);
+  });
+
+  it('times out stalled hooks and opens a breaker after repeated failures', async () => {
+    const registry = new PluginRegistry();
+    await registry.register(
+      { id: 'slow-hook', name: 'Slow', version: '1.0.0', description: 'Times out', author: 'test' },
+      async (api) => {
+        api.on('agent:beforeRun', async () => new Promise(() => {}), { timeoutMs: 50 });
+        return {};
+      }
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const dispatched = await registry.dispatch('agent:beforeRun', {});
+      assert.equal(dispatched.results[0].timedOut, true);
+    }
+    const skipped = await registry.dispatch('agent:beforeRun', {});
+    assert.equal(skipped.results[0].skipped, 'circuit_open');
+    const health = registry.hookHealth().find((entry) => entry.pluginId === 'slow-hook');
+    assert.equal(health.timeouts, 3);
+    assert.equal(health.consecutiveFailures, 3);
+    assert.ok(health.breakerUntil);
   });
 
   it('unregister removes plugin', async () => {

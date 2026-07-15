@@ -43,6 +43,7 @@
   const { listDirTool, globFilesTool, codeGrepTool } = require('./agents/host-code-search-tool');
   const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
+  const { prepareAgentPluginLifecycle } = require('./agents/agent-plugin-lifecycle');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
   const { isAgenticActionRequest, isArtifactDeliverableRequest, isDocumentEditRequest } = require('./agents/agentic-trigger');
@@ -701,6 +702,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         }
       }
     }
+
+    // Activate backend plugins inside the real chat loop. Plugins can add
+    // tools and observe lifecycle events, while identity, tool arguments,
+    // results, and the AbortSignal remain immutable at the plugin boundary.
+    // Boot failures are fail-open; explicit blocks from trusted system
+    // plugins and user cancellation remain authoritative.
+    let pluginLifecycle = null;
+    if (!toolsOverride) {
+      try {
+        pluginLifecycle = await prepareAgentPluginLifecycle({
+          userId: toolContext.userId || null,
+          chatId: toolContext.chatId || null,
+          organizationId: toolContext.activeOrganizationId || toolContext.requestedOrganizationId || null,
+          signal,
+        });
+        tools = pluginLifecycle.addPluginTools(tools);
+      } catch (pluginBootError) {
+        if (pluginBootError?.code === 'ABORT_ERR') throw pluginBootError;
+        console.warn('[agentic-chat] plugin lifecycle unavailable (continuing without plugins):', pluginBootError?.message || pluginBootError);
+      }
+    }
     // Bilingual media-intent detection: when the user asks to create an
     // image / video / audio / music in the chat bar, this pre-extracts the
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a
@@ -913,10 +935,29 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
     }
 
+    let pluginPromptBlock = '';
+    if (pluginLifecycle) {
+      try {
+        const pluginBeforeRun = await pluginLifecycle.beforeRun({
+          query: userQuery,
+          model,
+          toolNames: tools.map((tool) => tool?.name).filter(Boolean),
+        });
+        pluginPromptBlock = pluginBeforeRun.promptBlock;
+        state.meta.plugins = pluginLifecycle.summary();
+      } catch (pluginBeforeError) {
+        if (pluginBeforeError?.code === 'ABORT_ERR' || pluginBeforeError?.code === 'PLUGIN_RUN_BLOCKED') {
+          throw pluginBeforeError;
+        }
+        console.warn('[agentic-chat] plugin beforeRun failed (continuing):', pluginBeforeError?.message || pluginBeforeError);
+      }
+    }
+
     const extraSystem = [
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
+      pluginPromptBlock,
       buildSkillExecutionPrompt(customGptAgentPolicy),
       buildArtifactDeliveryPrompt(artifactDeliveryContract),
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
@@ -1010,6 +1051,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       getState: () => state,
       emit: async () => { await writeSse(res, { replace: true, content: serializeSentinel(state) }); },
     })]);
+    if (pluginLifecycle) tools = pluginLifecycle.wrapTools(tools);
 
     let coreTools = tools;
     let deferredAgentTools = [];
@@ -1049,32 +1091,34 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* capability registry unavailable → omit the param */ }
 
     let stepCounter = 0;
-    const result = await reactAgent.run(openai, {
-      query: userQuery,
-      tools: coreTools,
-      deferredTools: deferredAgentTools,
-      model,
-      maxSteps: maxStepsOverride,
-      maxRuntimeMs: maxRuntimeOverride,
-      extraSystem,
-      initialToolChoice,
-      toolCallMode,
-      parallelToolCalls: __parallelToolCalls,
-      ctx: {
-        ...toolContext,
-        signal,
-        onEvent,
-        toolGate,
-        toolAuthCtx: {
-          userId: toolContext.userId || null,
-          clearance: toolContext.clearance || null,
+    let result;
+    try {
+      result = await reactAgent.run(openai, {
+        query: userQuery,
+        tools: coreTools,
+        deferredTools: deferredAgentTools,
+        model,
+        maxSteps: maxStepsOverride,
+        maxRuntimeMs: maxRuntimeOverride,
+        extraSystem,
+        initialToolChoice,
+        toolCallMode,
+        parallelToolCalls: __parallelToolCalls,
+        ctx: {
+          ...toolContext,
+          signal,
+          onEvent,
+          toolGate,
+          toolAuthCtx: {
+            userId: toolContext.userId || null,
+            clearance: toolContext.clearance || null,
+          },
         },
-      },
-      finalizeGuard: composedFinalizeGuard,
-      onCompact: ({ step, removedMessages, chars }) => {
-        try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
-      },
-      onStepStart: async (stepRec) => {
+        finalizeGuard: composedFinalizeGuard,
+        onCompact: ({ step, removedMessages, chars }) => {
+          try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
+        },
+        onStepStart: async (stepRec) => {
         // Harness first (synchronous prefix): registers the step's planned
         // tool calls and emits typed tool_call_start frames BEFORE the
         // sentinel replace below, so the AgentTrace timeline leads the UI.
@@ -1121,8 +1165,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           });
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
-      },
-      onStepDone: async (stepRec) => {
+        },
+        onStepDone: async (stepRec) => {
         // Harness first: settle tool calls that never reached execute()
         // (duplicate-cache hits, exhausted tools, invalid args) from their
         // observations so every tool_call_start gets its tool_result.
@@ -1159,8 +1203,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           }
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
-      },
-    });
+        },
+      });
+    } catch (agentRunError) {
+      if (pluginLifecycle && agentRunError?.code !== 'ABORT_ERR') {
+        try { await pluginLifecycle.error(agentRunError, { phase: 'run' }); } catch (_) { /* plugin telemetry must not mask the run error */ }
+      }
+      throw agentRunError;
+    }
+
+    if (pluginLifecycle && !signal?.aborted) {
+      try {
+        await pluginLifecycle.afterRun(result);
+        state.meta.plugins = pluginLifecycle.summary();
+      } catch (pluginAfterError) {
+        if (pluginAfterError?.code !== 'ABORT_ERR') {
+          console.warn('[agentic-chat] plugin afterRun failed (continuing):', pluginAfterError?.message || pluginAfterError);
+        }
+      }
+    }
 
     // Mark any leftover running steps as done — react-agent guarantees a
     // finalize on the last step, but defensive coding keeps stale running

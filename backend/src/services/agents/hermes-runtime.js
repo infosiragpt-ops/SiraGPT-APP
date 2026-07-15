@@ -21,6 +21,7 @@ const toolsetRegistry = require('./toolset-registry');
 const { buildPlatformFolderReport } = require('./platform-folder-parity');
 const { buildExtensionCatalogReport } = require('./platform-extension-catalog');
 const { buildOpsReadinessReport } = require('./platform-ops-readiness');
+const { AUDITED_OPENCLAW_RELEASE } = require('./openclaw-source-inventory');
 
 let _booted = false;
 let _gcTimer = null;
@@ -74,6 +75,7 @@ function getHermesRuntimeStatus() {
     disabled: isDisabled(),
     version: 'hermes-runtime-siragpt-2026-05',
     upstream: buildHermesIntegrationMap().source,
+    openclawAudit: AUDITED_OPENCLAW_RELEASE,
     cron: cronBridge.status(),
     gateway: getHermesGateway().status(),
     memory: memoryBridge.status(),

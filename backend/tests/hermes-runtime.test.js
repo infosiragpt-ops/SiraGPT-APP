@@ -67,6 +67,8 @@ test('hermes runtime boots and reports status', () => {
   const status = getHermesRuntimeStatus();
   assert.equal(status.booted, true);
   assert.ok(status.cliCommands.includes('gateway'));
+  assert.equal(status.openclawAudit.release, 'v2026.7.1');
+  assert.equal(status.openclawAudit.trackedFiles, 21922);
   shutdownHermesRuntime();
   if (prev) process.env.HERMES_RUNTIME_DISABLED = prev;
 });
@@ -84,6 +86,9 @@ test('plugin bridge lists Hermes plugin catalog', () => {
   const plugins = pluginBridge.listHermesPlugins();
   assert.ok(plugins.length >= 5);
   assert.ok(plugins.some((p) => p.id === 'hermes-memory'));
+  const status = pluginBridge.status();
+  assert.equal(typeof status.lifecycle.totalRuns, 'number');
+  assert.equal(typeof status.lifecycle.circuitsOpen, 'number');
 });
 
 test('optional skills bridge searches upstream catalog', () => {

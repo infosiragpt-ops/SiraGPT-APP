@@ -7,6 +7,8 @@
 const { getPluginRegistry } = require('./plugin-registry');
 const memoryBridge = require('./hermes-memory-bridge');
 
+let _bootPromise = null;
+
 const HERMES_PLUGIN_CATALOG = Object.freeze([
   {
     id: 'hermes-memory',
@@ -98,7 +100,7 @@ function buildFactory(catalogEntry) {
   };
 }
 
-async function bootHermesPlugins(opts = {}) {
+async function runBootHermesPlugins(opts = {}) {
   const registry = getPluginRegistry();
   const registered = [];
   const skipped = [];
@@ -118,6 +120,8 @@ async function bootHermesPlugins(opts = {}) {
       author: catalogEntry.author,
       hooks: catalogEntry.hooks,
       capabilities: catalogEntry.capabilities,
+      trusted: true,
+      hookDefaults: { timeoutMs: 750 },
     };
 
     try {
@@ -135,6 +139,16 @@ async function bootHermesPlugins(opts = {}) {
   return { registered, skipped, total: HERMES_PLUGIN_CATALOG.length };
 }
 
+async function bootHermesPlugins(opts = {}) {
+  if (_bootPromise) return _bootPromise;
+  _bootPromise = runBootHermesPlugins(opts);
+  try {
+    return await _bootPromise;
+  } finally {
+    _bootPromise = null;
+  }
+}
+
 function listHermesPlugins() {
   const registry = getPluginRegistry();
   return HERMES_PLUGIN_CATALOG.map((entry) => {
@@ -149,9 +163,18 @@ function listHermesPlugins() {
 
 function status() {
   const plugins = listHermesPlugins();
+  const hookHealth = getPluginRegistry().hookHealth();
   return {
     catalog: plugins.length,
     enabled: plugins.filter((p) => p.enabled).length,
+    lifecycle: {
+      hooksObserved: hookHealth.length,
+      totalRuns: hookHealth.reduce((sum, hook) => sum + hook.totalRuns, 0),
+      successfulRuns: hookHealth.reduce((sum, hook) => sum + hook.successfulRuns, 0),
+      errors: hookHealth.reduce((sum, hook) => sum + hook.errors, 0),
+      timeouts: hookHealth.reduce((sum, hook) => sum + hook.timeouts, 0),
+      circuitsOpen: hookHealth.filter((hook) => hook.breakerUntil && new Date(hook.breakerUntil).getTime() > Date.now()).length,
+    },
     plugins,
   };
 }
