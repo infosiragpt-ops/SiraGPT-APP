@@ -145,6 +145,13 @@ function toAnthropicToolChoice(choice) {
   return { type: 'auto' };
 }
 
+function normalizeAnthropicModelId(model) {
+  return String(model || '')
+    .trim()
+    .replace(/^anthropic\//i, '')
+    .replace(/(\d+)\.(\d+)/g, '$1-$2');
+}
+
 function mapStopReason(reason, hasToolCalls) {
   if (hasToolCalls || reason === 'tool_use') return 'tool_calls';
   if (reason === 'max_tokens') return 'length';
@@ -254,7 +261,7 @@ function createAnthropicOpenAIAdapter({
             throw error;
           }
 
-          const model = String(payload.model || '').trim();
+          const model = normalizeAnthropicModelId(payload.model);
           if (!model) throw new Error('Anthropic agent adapter requires a model');
           const transcript = toAnthropicTranscript(payload.messages);
           const tools = toAnthropicTools(payload.tools);
@@ -302,6 +309,7 @@ module.exports = {
   toAnthropicTools,
   toAnthropicToolChoice,
   toOpenAICompletion,
+  normalizeAnthropicModelId,
   mapStopReason,
   modelRejectsTemperature,
   isDeprecatedTemperatureError,

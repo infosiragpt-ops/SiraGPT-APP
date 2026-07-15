@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const {
   createAnthropicOpenAIAdapter,
+  normalizeAnthropicModelId,
   toAnthropicTranscript,
   toAnthropicTools,
   toOpenAICompletion,
@@ -48,6 +49,34 @@ test('projects OpenAI tools to Anthropic input schemas', () => {
   }]);
   assert.equal(tools[0].name, 'create_document');
   assert.equal(tools[0].input_schema.required[0], 'filename');
+});
+
+test('normalizes catalog and dotted Anthropic model ids for the native API', async () => {
+  assert.equal(normalizeAnthropicModelId('anthropic/claude-sonnet-4.5'), 'claude-sonnet-4-5');
+  assert.equal(normalizeAnthropicModelId('claude-3.5-sonnet'), 'claude-3-5-sonnet');
+  assert.equal(normalizeAnthropicModelId('claude-sonnet-4-5'), 'claude-sonnet-4-5');
+
+  let capturedModel = null;
+  const adapter = createAnthropicOpenAIAdapter({
+    client: {
+      messages: {
+        create: async (request) => {
+          capturedModel = request.model;
+          return {
+            id: 'msg_normalized', model: request.model, stop_reason: 'end_turn',
+            content: [{ type: 'text', text: 'Done.' }], usage: {},
+          };
+        },
+      },
+    },
+  });
+
+  await adapter.chat.completions.create({
+    model: 'anthropic/claude-sonnet-4.5',
+    messages: [{ role: 'user', content: 'Continue.' }],
+  });
+
+  assert.equal(capturedModel, 'claude-sonnet-4-5');
 });
 
 test('maps native tool_use blocks and token usage to OpenAI completion shape', () => {
