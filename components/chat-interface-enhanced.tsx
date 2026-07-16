@@ -453,9 +453,6 @@ const shouldRenderChatMessage = (message: any, allowEmptyStreamingAssistant = fa
   return allowEmptyStreamingAssistant && role === "ASSISTANT"
 }
 
-const isAssistantMessage = (message: any): boolean =>
-  String(message?.role || "").toUpperCase() === "ASSISTANT"
-
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -4792,15 +4789,12 @@ const ChatMessageList = React.memo(function ChatMessageList({
     // the second catches duplicates that become adjacent after hidden tool and
     // metadata messages are removed.
     const messages = dedupeMessages(rawMessages)
-    const lastMessage = messages[messages.length - 1]
-    const streamingCandidate = isStreaming && isAssistantMessage(lastMessage)
-      ? lastMessage
-      : null
     const stable = dedupeMessages(
-      streamingCandidate
+      isStreaming
         ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
         : messages.filter((message) => shouldRenderChatMessage(message))
     )
+    const streamingCandidate = isStreaming ? messages[messages.length - 1] : null
     const streaming = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
       ? streamingCandidate
       : null
