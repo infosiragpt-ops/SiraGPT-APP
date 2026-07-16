@@ -18,6 +18,10 @@ siragpt.com, www.siragpt.com, office.siragpt.com {
 		reverse_proxy frontend:3000
 	}
 
+	handle /api/desktop/* {
+		reverse_proxy frontend:3000
+	}
+
 	handle /api/* {
 		reverse_proxy backend:5000
 	}
