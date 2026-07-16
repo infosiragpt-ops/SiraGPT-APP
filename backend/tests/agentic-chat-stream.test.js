@@ -259,6 +259,8 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('host_file'));
   assert.ok(names.includes('check_ci_status'));
   assert.ok(names.includes('monitor_ci'));
+  assert.ok(names.includes('run_skill'));
+  assert.ok(names.includes('run_skill_pipeline'));
 });
 
 test('default toolset now ships creation tools on every turn (media-always default)', () => {

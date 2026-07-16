@@ -86,7 +86,7 @@
     'memory_recall', 'rag_retrieve', 'self_rag_answer',
     'python_exec', 'run_tests',
     'create_document', 'verify_artifact', 'document_edit',
-    'run_skill',
+    'run_skill', 'run_skill_pipeline',
     'session_search', 'session_list', 'session_history',
   ];
 
@@ -130,6 +130,7 @@
     create_chart: (args) => `Creando gráfica${args?.title ? `: ${truncate(args.title, 40)}` : ''}`,
     verify_artifact: () => 'Verificando archivo generado',
     run_skill: (args) => `Aplicando skill ${truncate(args?.skillId || 'especializada', 44)}`,
+    run_skill_pipeline: (args) => `Aplicando ${Array.isArray(args?.steps) ? args.steps.length : 'varias'} skills`,
     run_tests: () => 'Ejecutando pruebas',
     npm_install: () => 'Instalando dependencias',
     commit_changes: () => 'Haciendo commit de cambios',
@@ -802,7 +803,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
         const pinned = [
           ...mediaIntents.map((intent) => intent && intent.tool),
-          ...(customGptAgentPolicy.requiresSkill ? ['run_skill'] : []),
+          ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
           ...(artifactDeliveryContract.active ? ['create_document', 'verify_artifact'] : []),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
@@ -1620,7 +1621,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       const skillRunner = require('./agents/skill-runner');
       const skillPolicy = opts?.skillPolicy || null;
       if (opts?.capabilities?.skillsEnabled !== false) {
-        const runSkillTool = skillRunner.buildRunSkillTool({
+        const skillToolOptions = {
           ctx: {
             clearance: (opts && opts.clearance) || null,
             ...(Array.isArray(skillPolicy?.allowedSkillIds)
@@ -1629,8 +1630,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           },
           allowedSkillIds: Array.isArray(skillPolicy?.allowedSkillIds) ? skillPolicy.allowedSkillIds : null,
           recommendedSkillIds: Array.isArray(skillPolicy?.recommendedSkillIds) ? skillPolicy.recommendedSkillIds : [],
-        });
+        };
+        const runSkillTool = skillRunner.buildRunSkillTool(skillToolOptions);
         if (runSkillTool) base.push(runSkillTool);
+        const runSkillPipelineTool = skillRunner.buildRunSkillPipelineTool(skillToolOptions);
+        if (runSkillPipelineTool) base.push(runSkillPipelineTool);
       }
     } catch (skillToolErr) {
       console.warn('[skills-in-chat] run_skill tool unavailable:', skillToolErr && skillToolErr.message);

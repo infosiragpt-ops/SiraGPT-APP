@@ -159,7 +159,8 @@ function buildSkillExecutionPrompt(policy) {
     `- Skills permitidas: ${allowed}.`,
     `- Skills recomendadas para este turno: ${recommended}.`,
     '- Usa `run_skill` solo cuando una habilidad especializada aporte evidencia, cálculo, formato o acceso que una respuesta directa no aporte.',
-    '- Puedes encadenar varias skills en el mismo turno. Observa el resultado de cada una antes de decidir la siguiente y no inventes resultados de skills no ejecutadas.',
+    '- Usa `run_skill_pipeline` cuando necesites una cadena determinista de 2 a 6 skills, por ejemplo buscar -> verificar -> formatear. Usa `run_skill` para una sola skill o cuando debas decidir el siguiente paso después de observar un resultado.',
+    '- Si encadenas skills, observa el resultado de cada una antes de decidir la siguiente y no inventes resultados de skills no ejecutadas.',
     policy.requiresSkill
       ? '- Este pedido requiere al menos una skill especializada antes de finalizar.'
       : '- Si ninguna skill es necesaria, responde directamente; no ejecutes herramientas por rutina.',

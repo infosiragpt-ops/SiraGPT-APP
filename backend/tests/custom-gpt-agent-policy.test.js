@@ -63,4 +63,16 @@ describe('custom GPT agent policy', () => {
     assert.equal(policy.resolveUserSkillClearance({ id: 'u1', plan: 'PRO_MAX' }), 'paid');
     assert.equal(policy.resolveUserSkillClearance({ id: 'u1', plan: 'FREE', isSuperAdmin: true }), 'enterprise');
   });
+
+  test('skill execution prompt advertises pipeline usage for deterministic chains', () => {
+    const prompt = policy.buildSkillExecutionPrompt({
+      skillsEnabled: true,
+      allowedSkillIds: ['openalex_search', 'crossref_verify', 'apa7_format'],
+      recommendedSkillIds: ['openalex_search', 'crossref_verify'],
+      requiresSkill: true,
+    });
+    assert.match(prompt, /run_skill_pipeline/);
+    assert.match(prompt, /2 a 6 skills/);
+    assert.match(prompt, /buscar -> verificar -> formatear/);
+  });
 });

@@ -98,24 +98,46 @@ class AgentPluginLifecycle {
     const merged = Array.isArray(tools) ? [...tools] : [];
     if (options.enabled === false) return merged;
     const runSkillIndex = merged.findIndex((tool) => tool?.name === 'run_skill');
-    if (runSkillIndex < 0) return merged;
+    const runPipelineIndex = merged.findIndex((tool) => tool?.name === 'run_skill_pipeline');
+    if (runSkillIndex < 0 && runPipelineIndex < 0) return merged;
 
     const pluginSkills = this.registry.getAllPluginSkills({ trustedOnly: true });
     if (pluginSkills.size === 0) return merged;
 
     const skillRunner = options.skillRunner || require('./skill-runner');
-    const enhanced = skillRunner.buildRunSkillTool({
+    const toolOptions = {
       ctx: options.ctx || {},
       allowedSkillIds: Array.isArray(options.allowedSkillIds) ? options.allowedSkillIds : null,
       recommendedSkillIds: Array.isArray(options.recommendedSkillIds) ? options.recommendedSkillIds : [],
       pluginSkills,
-    }, options.skillsModule || null);
-    if (!enhanced) return merged;
+    };
+    const seenPluginIds = new Set();
+    const seenConflicts = new Set();
+    const seenInvalid = new Set();
 
-    merged[runSkillIndex] = enhanced;
-    this._stats.pluginSkillsAdded += enhanced.__pluginSkillIds?.length || 0;
-    this._stats.pluginSkillConflicts += enhanced.__pluginSkillConflicts?.length || 0;
-    this._stats.invalidPluginSkills += enhanced.__invalidPluginSkillIds?.length || 0;
+    if (runSkillIndex >= 0) {
+      const enhanced = skillRunner.buildRunSkillTool(toolOptions, options.skillsModule || null);
+      if (enhanced) {
+        merged[runSkillIndex] = enhanced;
+        for (const id of enhanced.__pluginSkillIds || []) seenPluginIds.add(id);
+        for (const id of enhanced.__pluginSkillConflicts || []) seenConflicts.add(id);
+        for (const id of enhanced.__invalidPluginSkillIds || []) seenInvalid.add(id);
+      }
+    }
+
+    if (runPipelineIndex >= 0 && typeof skillRunner.buildRunSkillPipelineTool === 'function') {
+      const enhancedPipeline = skillRunner.buildRunSkillPipelineTool(toolOptions, options.skillsModule || null);
+      if (enhancedPipeline) {
+        merged[runPipelineIndex] = enhancedPipeline;
+        for (const id of enhancedPipeline.__pluginSkillIds || []) seenPluginIds.add(id);
+        for (const id of enhancedPipeline.__pluginSkillConflicts || []) seenConflicts.add(id);
+        for (const id of enhancedPipeline.__invalidPluginSkillIds || []) seenInvalid.add(id);
+      }
+    }
+
+    this._stats.pluginSkillsAdded += seenPluginIds.size;
+    this._stats.pluginSkillConflicts += seenConflicts.size;
+    this._stats.invalidPluginSkills += seenInvalid.size;
     return merged;
   }
 

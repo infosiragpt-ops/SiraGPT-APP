@@ -13,6 +13,8 @@ function mockD() {
     ['scholar', { id: 'scholar', description: 'Scholarly search', capabilities: ['net:outbound'], params: null, execute: async () => ({ hits: 3 }) }],
     ['sched', { id: 'sched', description: 'Schedule a job', capabilities: ['schedule'], params: null, execute: async () => ({ scheduled: true }) }],
     ['boom', { id: 'boom', description: 'Always throws', capabilities: [], params: null, execute: async () => { throw new Error('kaboom'); } }],
+    ['source_list', { id: 'source_list', description: 'List sources', capabilities: [], params: null, execute: async () => ({ sources: [{ doi: '10.1/a' }, { doi: null }, { doi: '10.1/b' }] }) }],
+    ['collect', { id: 'collect', description: 'Collect DOI values', capabilities: [], params: { type: 'object', required: ['dois'], properties: { dois: { type: 'array' } }, additionalProperties: false }, execute: async (a) => ({ dois: a.dois }) }],
   ]);
   const SANDBOX = new Set(['llm:call', 'net:outbound:llm', 'fs:read', 'agent:read']);
   return {
@@ -95,6 +97,130 @@ describe('runSkill', () => {
     }, D);
     assert.equal(r.ok, false);
     assert.match(r.error, /skill_not_allowed/);
+  });
+
+  test('throws AbortError when the caller signal is already cancelled', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      () => runner.runSkill('echo', { msg: 'late' }, { clearance: 'enterprise', signal: controller.signal }, D),
+      { name: 'AbortError', code: 'ABORT_ERR' },
+    );
+  });
+});
+
+describe('runSkillPipeline', () => {
+  test('runs sequential skills and passes references from prior results', async () => {
+    const out = await runner.runSkillPipeline([
+      { skillId: 'echo', args: { msg: 'hola' } },
+      { skillId: 'echo', args: { msg: { $fromStep: 0, path: ['result', 'echoed'] } } },
+    ], { clearance: 'enterprise' }, D);
+    assert.equal(out.ok, true);
+    assert.equal(out.completed, 2);
+    assert.deepEqual(out.results[1].result, { echoed: 'hola' });
+  });
+
+  test('maps and compacts array values from an earlier skill result', async () => {
+    const out = await runner.runSkillPipeline([
+      { skillId: 'source_list', args: {} },
+      { skillId: 'collect', args: { dois: { $fromStep: 0, path: ['result', 'sources'], mapPath: ['doi'], compact: true } } },
+    ], { clearance: 'enterprise' }, D);
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.results[1].result, { dois: ['10.1/a', '10.1/b'] });
+  });
+
+  test('stops on the first failed step by default', async () => {
+    const out = await runner.runSkillPipeline([
+      { skillId: 'boom', args: {} },
+      { skillId: 'echo', args: { msg: 'should not run' } },
+    ], { clearance: 'enterprise' }, D);
+    assert.equal(out.ok, false);
+    assert.equal(out.completed, 1);
+    assert.equal(out.failed, 1);
+    assert.equal(out.stoppedAt, 0);
+    assert.match(out.results[0].error, /kaboom/);
+  });
+
+  test('can continue after a failed independent step', async () => {
+    const out = await runner.runSkillPipeline([
+      { skillId: 'boom', args: {} },
+      { skillId: 'echo', args: { msg: 'continua' } },
+    ], { clearance: 'enterprise' }, D, null, { continueOnError: true });
+    assert.equal(out.ok, false);
+    assert.equal(out.completed, 2);
+    assert.equal(out.failed, 1);
+    assert.equal(out.stoppedAt, null);
+    assert.deepEqual(out.results[1].result, { echoed: 'continua' });
+  });
+
+  test('rejects references to future, failed, or dangerous paths', async () => {
+    const future = await runner.runSkillPipeline([
+      { skillId: 'echo', args: { msg: { $fromStep: 1, path: ['result'] } } },
+      { skillId: 'echo', args: { msg: 'later' } },
+    ], { clearance: 'enterprise' }, D);
+    assert.equal(future.ok, false);
+    assert.match(future.results[0].error, /invalid_reference_step/);
+
+    const failed = await runner.runSkillPipeline([
+      { skillId: 'boom', args: {} },
+      { skillId: 'echo', args: { msg: { $fromStep: 0, path: ['result'] } } },
+    ], { clearance: 'enterprise' }, D, null, { continueOnError: true });
+    assert.match(failed.results[1].error, /invalid_reference_failed_step/);
+
+    const dangerous = await runner.runSkillPipeline([
+      { skillId: 'echo', args: { msg: 'x' } },
+      { skillId: 'echo', args: { msg: { $fromStep: 0, path: ['result', '__proto__'] } } },
+    ], { clearance: 'enterprise' }, D);
+    assert.match(dangerous.results[1].error, /path_forbidden_segment/);
+  });
+
+  test('applies the same allow-list and policy gates to every step', async () => {
+    const deniedByAllowList = await runner.runSkillPipeline([
+      { skillId: 'echo', args: { msg: 'ok' } },
+      { skillId: 'sched', args: {} },
+    ], { clearance: 'enterprise', allowedSkillIds: ['echo'] }, D);
+    assert.equal(deniedByAllowList.ok, false);
+    assert.match(deniedByAllowList.results[1].error, /skill_not_allowed/);
+
+    const deniedByPolicy = await runner.runSkillPipeline([
+      { skillId: 'echo', args: { msg: 'ok' } },
+      { skillId: 'sched', args: {} },
+    ], { clearance: 'authenticated' }, D);
+    assert.match(deniedByPolicy.results[1].error, /skill_denied/);
+  });
+
+  test('validates pipeline length and supports trusted plugin skills', async () => {
+    const tooShort = await runner.runSkillPipeline([{ skillId: 'echo', args: { msg: 'x' } }], { clearance: 'enterprise' }, D);
+    assert.equal(tooShort.ok, false);
+    assert.match(tooShort.error, /steps_out_of_range/);
+
+    const pluginSkills = new Map([
+      ['plugin_lookup', {
+        id: 'plugin_lookup',
+        description: 'Lookup from plugin',
+        capabilities: [],
+        params: { type: 'object', required: ['q'], properties: { q: { type: 'string' } } },
+        execute: async ({ q }) => ({ found: q }),
+      }],
+    ]);
+    const out = await runner.runSkillPipeline([
+      { skillId: 'plugin_lookup', args: { q: 'paper' } },
+      { skillId: 'echo', args: { msg: { $fromStep: 0, path: ['result', 'found'] } } },
+    ], { clearance: 'enterprise' }, D, pluginSkills);
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.results[1].result, { echoed: 'paper' });
+  });
+
+  test('throws AbortError when cancelled before pipeline execution', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      () => runner.runSkillPipeline([
+        { skillId: 'echo', args: { msg: 'a' } },
+        { skillId: 'echo', args: { msg: 'b' } },
+      ], { clearance: 'enterprise', signal: controller.signal }, D),
+      { name: 'AbortError', code: 'ABORT_ERR' },
+    );
   });
 });
 
@@ -203,6 +329,23 @@ describe('buildRunSkillTool', () => {
     assert.ok(!sandbox.parameters.properties.skillId.enum.includes('plugin_schedule'));
     const enterprise = runner.buildRunSkillTool({ ctx: { clearance: 'enterprise' }, pluginSkills }, D);
     assert.ok(enterprise.parameters.properties.skillId.enum.includes('plugin_schedule'));
+  });
+});
+
+describe('buildRunSkillPipelineTool', () => {
+  test('builds and executes the pipeline tool', async () => {
+    const tool = runner.buildRunSkillPipelineTool({ ctx: { clearance: 'enterprise' } }, D);
+    assert.equal(tool.name, 'run_skill_pipeline');
+    assert.equal(tool.parameters.properties.steps.minItems, runner.PIPELINE_MIN_STEPS);
+    assert.ok(tool.parameters.properties.steps.items.properties.skillId.enum.includes('echo'));
+    const out = await tool.execute({
+      steps: [
+        { skillId: 'echo', args: { msg: 'hi' } },
+        { skillId: 'echo', args: { msg: { $fromStep: 0, path: ['result', 'echoed'] } } },
+      ],
+    }, { clearance: 'enterprise' });
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.results[1].result, { echoed: 'hi' });
   });
 });
 

@@ -187,17 +187,30 @@ test('AgentPluginLifecycle exposes only trusted plugin skills through run_skill'
     wrapSkillsWithPolicy: (skills) => ({ skills: skills.map((skill) => ({ ...skill })), hidden: [] }),
   };
   const lifecycle = new AgentPluginLifecycle({ registry, userId: 'owner' });
-  const tools = lifecycle.addPluginSkills([{ name: 'run_skill', execute: async () => null }], {
+  const tools = lifecycle.addPluginSkills([
+    { name: 'run_skill', execute: async () => null },
+    { name: 'run_skill_pipeline', execute: async () => null },
+  ], {
     ctx: { clearance: 'enterprise' },
     recommendedSkillIds: ['trusted_plugin_skill'],
     skillsModule,
   });
-  const runSkill = tools[0];
+  const runSkill = tools.find((tool) => tool.name === 'run_skill');
+  const runPipeline = tools.find((tool) => tool.name === 'run_skill_pipeline');
   assert.equal(runSkill.parameters.properties.skillId.enum[0], 'trusted_plugin_skill');
   assert.ok(runSkill.parameters.properties.skillId.enum.includes('core_skill'));
   assert.ok(runSkill.parameters.properties.skillId.enum.includes('trusted_plugin_skill'));
   assert.ok(!runSkill.parameters.properties.skillId.enum.includes('untrusted_plugin_skill'));
+  assert.ok(runPipeline.parameters.properties.steps.items.properties.skillId.enum.includes('trusted_plugin_skill'));
   const out = await runSkill.execute({ skillId: 'trusted_plugin_skill', args: {} }, {});
   assert.deepEqual(out.result, { trusted: true });
+  const pipelineOut = await runPipeline.execute({
+    steps: [
+      { skillId: 'trusted_plugin_skill', args: {} },
+      { skillId: 'core_skill', args: {} },
+    ],
+  }, {});
+  assert.equal(pipelineOut.ok, true);
+  assert.deepEqual(pipelineOut.results.map((entry) => entry.skillId), ['trusted_plugin_skill', 'core_skill']);
   assert.equal(lifecycle.summary().pluginSkillsAdded, 1);
 });
