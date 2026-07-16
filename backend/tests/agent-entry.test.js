@@ -7,10 +7,17 @@
  *   - MAX_SPAWN_DEPTH is exported so skills can reason about it
  */
 
-const { test } = require('node:test');
+const { after, test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { runAgent, MAX_SPAWN_DEPTH } = require('../src/services/agents/agent-entry');
+
+after(async () => {
+  // CI provides REDIS_URL, so enqueueDelegatedTask opens the real BullMQ
+  // producer. Close it explicitly or this focused test process never exits.
+  const { closeAgentTaskQueue } = require('../src/services/agents/agent-task-queue');
+  await closeAgentTaskQueue({ force: true });
+});
 
 test('MAX_SPAWN_DEPTH is a sane positive integer', () => {
   assert.equal(typeof MAX_SPAWN_DEPTH, 'number');
