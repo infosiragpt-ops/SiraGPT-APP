@@ -194,6 +194,16 @@ jobs:
 
           find output/desktop-beta-input/macos -type f \( -name '*.dmg' -o -name '*-mac.zip' -o -name '*.blockmap' \) -exec cp {} "$staging"/ \;
           find output/desktop-beta-input/windows -type f \( -name '*.exe' -o -name '*.blockmap' \) -exec cp {} "$staging"/ \;
+          while IFS= read -r -d '' artifact; do
+            file_name="$(basename "$artifact")"
+            normalized_name="${file_name// /.}"
+            normalized_path="$(dirname "$artifact")/$normalized_name"
+            if [[ -e "$normalized_path" ]]; then
+              echo "Release artifact name collision: $normalized_name" >&2
+              exit 1
+            fi
+            mv "$artifact" "$normalized_path"
+          done < <(find "$staging" -maxdepth 1 -type f -name '* *' -print0)
           if ! find "$staging" -type f -name '*.dmg' -print -quit | grep -q .; then
             echo "macOS DMG missing from desktop beta" >&2
             exit 1
