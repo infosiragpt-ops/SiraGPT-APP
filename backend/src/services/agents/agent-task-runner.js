@@ -1916,7 +1916,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     executionProfile,
     universalTaskContract,
   });
-  const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
+  const tools = buildTaskTools({
+    skillContext: {
+      clearance: user.clearance || 'authenticated',
+      userId: user.id,
+      chatId,
+    },
+  }).filter((tool) => !forbiddenToolNames.has(tool.name));
   const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
   emit({
     type: 'framework_status',
@@ -2854,6 +2860,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const toolCtx = {
       userId: user.id,
       userEmail: user.email,
+      clearance: user.clearance || 'authenticated',
       openai,
       signal: controller.signal,
       chatId,

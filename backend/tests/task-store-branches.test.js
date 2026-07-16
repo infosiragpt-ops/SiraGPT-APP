@@ -67,6 +67,13 @@ test('sanitizeTaskRecord: applies sane defaults for missing fields', () => {
   assert.equal(out.lastEventSeq, 0);
 });
 
+test('sanitizeTaskRecord: preserves known clearance and rejects privilege-like unknown values', () => {
+  const paid = taskStore.sanitizeTaskRecord({ taskId: 't-paid', userId: 'u', userClearance: 'PAID' });
+  const unknown = taskStore.sanitizeTaskRecord({ taskId: 't-unknown', userId: 'u', userClearance: 'superuser' });
+  assert.equal(paid.userClearance, 'paid');
+  assert.equal(unknown.userClearance, 'authenticated');
+});
+
 test('sanitizeTaskRecord: truncates very long agentGoal/displayGoal/systemContract', () => {
   const huge = 'x'.repeat(10000);
   const out = taskStore.sanitizeTaskRecord({

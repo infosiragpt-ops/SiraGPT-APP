@@ -3,6 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
+const {
+  buildPublicSkillCatalog,
+  countPublicSkillCoverage,
+} = require('./openclaw-public-skill-adapter');
 
 const DEFAULT_SNAPSHOT_SHA = 'b56ddcc6ffdfc5be78c1c9c93926518367b876eb';
 
@@ -172,15 +176,6 @@ function scanFolderAudit(upstreamRepoRoot) {
   });
 }
 
-function summarizePublicSkillCatalog(skills) {
-  return skills.slice(0, 80).map((skill) => ({
-    upstream: skill.id,
-    description: skill.description,
-    status: 'reference_catalog',
-    sira_surface: 'backend/skills or .agents/skills after native rewrite',
-  }));
-}
-
 function buildOpenClawIntegrationMap(opts = {}) {
   const repoRoot = opts.repoRoot || process.cwd();
   const upstreamRepoRoot = opts.upstreamRepoRoot || null;
@@ -216,6 +211,7 @@ function buildOpenClawIntegrationMap(opts = {}) {
     acc[item.status] = (acc[item.status] || 0) + 1;
     return acc;
   }, {});
+  const publicSkillCatalog = buildPublicSkillCatalog(upstreamPublicSkills, { repoRoot });
 
   return {
     source: {
@@ -231,10 +227,11 @@ function buildOpenClawIntegrationMap(opts = {}) {
       siraSkills: siraSkills.length,
       foldersMapped: FOLDER_CAPABILITY_MAP.length,
       coverage: coverageCounts,
+      publicSkillCoverage: countPublicSkillCoverage(publicSkillCatalog),
     },
     folders: scanFolderAudit(upstreamRepoRoot),
     skills: skillCoverage,
-    public_skills: summarizePublicSkillCatalog(upstreamPublicSkills),
+    public_skills: publicSkillCatalog,
   };
 }
 
@@ -267,6 +264,25 @@ function recommendAdaptedPlaybooks(query, opts = {}) {
       adaptedSkills: item.availableSkills,
       score: matched.length + (item.status === 'covered' ? 1 : 0),
       matchedTerms: matched,
+    });
+  }
+  for (const item of matrix.public_skills || []) {
+    const haystack = [
+      item.upstream,
+      item.description,
+      item.status,
+      item.reason,
+      ...(item.adaptedSkills || []),
+      ...(item.availableSkills || []),
+    ].join(' ').toLowerCase();
+    const matched = terms.filter((term) => haystack.includes(term));
+    if (matched.length === 0) continue;
+    scored.push({
+      upstream: item.upstream,
+      adaptedSkills: item.availableSkills || [],
+      score: matched.length + (item.status === 'covered' ? 2 : item.status === 'adapted' ? 1 : 0),
+      matchedTerms: matched,
+      status: item.status,
     });
   }
 

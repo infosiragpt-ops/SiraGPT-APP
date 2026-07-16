@@ -12,7 +12,7 @@ describe('workspace-workflow-orchestrator', () => {
   it('builds queued payload with plan phases and chain sub-tasks', () => {
     const built = buildWorkspaceWorkflowJob({
       goal: 'Implement auth module with tests and deploy to staging',
-      user: { id: 'user-1', email: 'a@test.com' },
+      user: { id: 'user-1', email: 'a@test.com', plan: 'PRO' },
       maxRuntimeMs: MAX_RUNTIME_MS,
       model: 'claude-opus-4-20250514',
     });
@@ -22,6 +22,7 @@ describe('workspace-workflow-orchestrator', () => {
     assert.ok(Array.isArray(built.plan?.phases));
     assert.ok(built.subTasks.length >= 1);
     assert.equal(built.payload.maxRuntimeMs, MAX_RUNTIME_MS);
+    assert.equal(built.payload.user.clearance, 'paid');
     assert.equal(built.payload.workflow.pattern, 'chain');
   });
 

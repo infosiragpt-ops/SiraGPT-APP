@@ -78,6 +78,7 @@ const {
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
 const { buildForbiddenToolNames } = require('../services/agents/agent-tool-policy');
+const { resolveUserSkillClearance } = require('../services/agents/custom-gpt-agent-policy');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
 const documentAnalysisQuality = require('../services/document-analysis-quality');
@@ -859,7 +860,14 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
     const job = await enqueueAgentTask({
       taskId: snapshot.taskId,
       traceId: snapshot.traceId || crypto.randomUUID(),
-      user: { id: req.user?.id, email: req.user?.email },
+      user: {
+        id: req.user?.id,
+        email: req.user?.email,
+        // A manual retry runs under the caller's current plan. Persisted
+        // clearance is only for boot recovery, where no live user session is
+        // available and the task must resume with its original boundary.
+        clearance: resolveUserSkillClearance(req.user),
+      },
       goal: snapshot.agentGoal || snapshot.displayGoal,
       displayGoal: snapshot.displayGoal,
       systemContract: snapshot.systemContract || '',
@@ -1030,6 +1038,7 @@ router.post(
     taskStore.writeTaskSnapshot({
       taskId,
       userId: req.user?.id,
+      userClearance: payload.user?.clearance || resolveUserSkillClearance(req.user),
       chatId: payload.chatId,
       displayGoal,
       agentGoal: payload.goal,
@@ -1341,6 +1350,7 @@ router.post(
     const task = createTaskRecord({
       taskId,
       userId: req.user?.id,
+      userClearance: resolveUserSkillClearance(req.user),
       chatId,
       displayGoal,
       model,
@@ -1466,7 +1476,14 @@ router.post(
       executionProfile,
       universalTaskContract,
     });
-    const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
+    const userClearance = resolveUserSkillClearance(req.user);
+    const tools = buildTaskTools({
+      skillContext: {
+        clearance: userClearance,
+        userId: req.user?.id,
+        chatId,
+      },
+    }).filter((tool) => !forbiddenToolNames.has(tool.name));
     const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
     const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
     const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
@@ -1595,6 +1612,7 @@ router.post(
     const toolCtx = {
       userId: req.user?.id,
       userEmail: req.user?.email,
+      clearance: userClearance,
       openai,
       signal: controller.signal,
       chatId,
@@ -2104,7 +2122,11 @@ async function handleQueuedTaskRequest(req, res) {
   const payload = {
     taskId,
     traceId,
-    user: { id: req.user?.id, email: req.user?.email },
+    user: {
+      id: req.user?.id,
+      email: req.user?.email,
+      clearance: resolveUserSkillClearance(req.user),
+    },
     goal: agentGoal,
     displayGoal,
     systemContract,
@@ -2150,6 +2172,7 @@ async function handleQueuedTaskRequest(req, res) {
   const snapshot = {
     taskId,
     userId: req.user?.id,
+    userClearance: payload.user?.clearance || resolveUserSkillClearance(req.user),
     chatId,
     displayGoal,
     agentGoal,
@@ -2316,6 +2339,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const snapshot = {
     taskId,
     userId: req.user?.id,
+    userClearance: resolveUserSkillClearance(req.user),
     chatId,
     displayGoal,
     agentGoal,
@@ -2386,7 +2410,11 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const payload = {
     taskId,
     traceId,
-    user: { id: req.user?.id, email: req.user?.email },
+    user: {
+      id: req.user?.id,
+      email: req.user?.email,
+      clearance: snapshot.userClearance || resolveUserSkillClearance(req.user),
+    },
     goal: agentGoal,
     displayGoal,
     systemContract,
@@ -2849,6 +2877,7 @@ function buildAgentSystemPrompt(
 function createTaskRecord({
   taskId,
   userId,
+  userClearance = 'authenticated',
   chatId,
   displayGoal,
   model,
@@ -2879,6 +2908,7 @@ function createTaskRecord({
   const record = {
     taskId,
     userId: String(userId || ''),
+    userClearance: existingSnapshot?.userClearance || userClearance,
     chatId,
     displayGoal,
     model,

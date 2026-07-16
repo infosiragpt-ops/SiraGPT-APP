@@ -144,7 +144,10 @@ function buildAllTools(thinking = 'low', opts = {}) {
     const taskTools = require('./task-tools');
     // buildTaskTools() returns the array of tool objects with
     // {name, description, parameters, execute} shape — direct match
-    const taskToolArray = taskTools.buildTaskTools();
+    // Skills are added below with this sub-agent's own clearance and allow-list.
+    // Keeping them out of the generic task bundle prevents an earlier,
+    // unrestricted run_skill tool from winning during name deduplication.
+    const taskToolArray = taskTools.buildTaskTools({ includeSkills: false });
     if (Array.isArray(taskToolArray)) {
       tools.push(...taskToolArray);
     }
@@ -167,15 +170,18 @@ function buildAllTools(thinking = 'low', opts = {}) {
   // prompt hint: the runner enforces it again when the model calls run_skill.
   try {
     const skillRunner = require('./skill-runner');
-    const runSkillTool = skillRunner.buildRunSkillTool({
+    const skillOptions = {
       ctx: {
         clearance: opts.clearance || 'authenticated',
         ...(Array.isArray(opts.skillIds) ? { allowedSkillIds: opts.skillIds } : {}),
       },
       allowedSkillIds: Array.isArray(opts.skillIds) ? opts.skillIds : null,
       recommendedSkillIds: Array.isArray(opts.skillIds) ? opts.skillIds : [],
-    });
+    };
+    const runSkillTool = skillRunner.buildRunSkillTool(skillOptions);
+    const runSkillPipelineTool = skillRunner.buildRunSkillPipelineTool(skillOptions);
     if (runSkillTool) tools.push(runSkillTool);
+    if (runSkillPipelineTool) tools.push(runSkillPipelineTool);
   } catch (err) {
     console.warn('[agent-entry] skill-runner unavailable:', err?.message);
   }

@@ -85,6 +85,7 @@ test('buildAllTools returns a non-empty array of unique tool objects', () => {
   assert.ok(toolNames.has('python_exec'), 'python_exec tool missing');
   assert.ok(toolNames.has('create_document'), 'create_document tool missing');
   assert.ok(toolNames.has('run_skill'), 'run_skill tool missing');
+  assert.ok(toolNames.has('run_skill_pipeline'), 'run_skill_pipeline tool missing');
 });
 
 test('buildAllTools enforces the declared skillIds allow-list', () => {
@@ -96,6 +97,9 @@ test('buildAllTools enforces the declared skillIds allow-list', () => {
   const runSkill = tools.find((tool) => tool.name === 'run_skill');
   assert.ok(runSkill, 'run_skill tool missing');
   assert.deepEqual(runSkill.parameters.properties.skillId.enum, ['apa7_format']);
+  const runPipeline = tools.find((tool) => tool.name === 'run_skill_pipeline');
+  assert.ok(runPipeline, 'run_skill_pipeline tool missing');
+  assert.deepEqual(runPipeline.parameters.properties.steps.items.properties.skillId.enum, ['apa7_format']);
 });
 
 test('buildAllTools deduplicates by name', () => {

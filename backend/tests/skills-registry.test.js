@@ -233,4 +233,11 @@ test('bundled skills load cleanly from the real skills dir', () => {
   assert.ok(skills.has('openalex_search'), 'openalex_search should be bundled');
   assert.ok(skills.has('crossref_verify'), 'crossref_verify should be bundled');
   assert.ok(skills.has('apa7_format'), 'apa7_format should be bundled');
+  // OpenClaw-inspired capabilities rewritten as native SiraGPT skills:
+  assert.ok(skills.has('summarize'), 'summarize should be bundled');
+  assert.ok(skills.has('weather'), 'weather should be bundled');
+  assert.ok(skills.has('task_flow_create'), 'task_flow_create should be bundled');
+  assert.ok(skills.has('task_flow_list'), 'task_flow_list should be bundled');
+  assert.ok(skills.has('task_flow_get'), 'task_flow_get should be bundled');
+  assert.ok(skills.has('task_flow_update'), 'task_flow_update should be bundled');
 });

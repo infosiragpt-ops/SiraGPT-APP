@@ -60,6 +60,9 @@ function sanitizeTaskRecord(record = {}) {
   return {
     taskId: String(record.taskId || ''),
     userId: String(record.userId || ''),
+    userClearance: ['enterprise', 'paid', 'authenticated', 'public', 'sandbox'].includes(String(record.userClearance || '').toLowerCase())
+      ? String(record.userClearance).toLowerCase()
+      : 'authenticated',
     chatId: record.chatId || null,
     assistantMessageId: record.assistantMessageId || null,
     jobId: record.jobId || null,

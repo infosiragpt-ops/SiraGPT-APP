@@ -1,0 +1,20 @@
+{
+  "id": "summarize",
+  "name": "Summarize content",
+  "version": "1.0.0",
+  "description": "Summarize supplied text, a public URL, or a file in the user's knowledge collection. Returns a concise structured result and can extract source text without summarizing when requested.",
+  "capabilities": ["llm:call", "net:outbound", "fs:read"],
+  "timeoutMs": 90000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string", "description": "Text to summarize." },
+      "url": { "type": "string", "description": "Public http(s) URL to read and summarize." },
+      "source": { "type": "string", "description": "Exact source id from the user's knowledge collection." },
+      "length": { "type": "string", "enum": ["short", "medium", "long"], "description": "Desired summary length. Default medium." },
+      "language": { "type": "string", "description": "Output language. Default Spanish." },
+      "extractOnly": { "type": "boolean", "description": "Return extracted source text without an LLM summary." }
+    },
+    "additionalProperties": false
+  }
+}

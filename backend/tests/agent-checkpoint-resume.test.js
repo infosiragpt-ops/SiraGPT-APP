@@ -164,7 +164,7 @@ test('boot recovery re-enqueues checkpointed tasks with resume payload', async (
     // one task WITH checkpoint, one WITHOUT
     taskStore.writeTaskSnapshot({
       taskId: 'boot-a', userId: 'u1', status: 'error', agentGoal: 'do the thing', displayGoal: 'do the thing',
-      model: 'gpt-4o', maxSteps: 40,
+      model: 'gpt-4o', maxSteps: 40, userClearance: 'paid',
       runnerCheckpoint: { v: 1, stepsCompleted: 5, messages: [{ role: 'user', content: 'q' }] },
     });
     taskStore.writeTaskSnapshot({ taskId: 'boot-b', userId: 'u1', status: 'error', agentGoal: 'other', displayGoal: 'other' });
@@ -182,6 +182,7 @@ test('boot recovery re-enqueues checkpointed tasks with resume payload', async (
     assert.equal(result.resumed, 1, 'only the checkpointed task is re-enqueued');
     assert.equal(enqueued.length, 1);
     assert.equal(enqueued[0].payload.taskId, 'boot-a');
+    assert.equal(enqueued[0].payload.user.clearance, 'paid');
     assert.equal(enqueued[0].payload.resumeCheckpoint.stepsCompleted, 5);
     assert.ok(/boot-resume-/.test(enqueued[0].opts.jobId), 'fresh jobId avoids BullMQ collision');
     const after = taskStore.readTaskSnapshot('boot-a');

@@ -66,7 +66,7 @@ async function resumeCheckpointedTasks({
       const job = await enqueueAgentTask({
         taskId: snapshot.taskId,
         traceId: snapshot.traceId || null,
-        user: { id: snapshot.userId },
+        user: { id: snapshot.userId, clearance: snapshot.userClearance || 'authenticated' },
         goal: snapshot.agentGoal || snapshot.displayGoal,
         displayGoal: snapshot.displayGoal,
         systemContract: snapshot.systemContract || '',

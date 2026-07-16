@@ -1,0 +1,38 @@
+{
+  "id": "task_flow_update",
+  "name": "Advance durable task flow",
+  "version": "1.0.0",
+  "description": "Revision-checked lifecycle control for a durable flow: wait, block, resume, link a child task, finish, fail, or cancel.",
+  "capabilities": ["agent:spawn"],
+  "timeoutMs": 5000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "flowId": { "type": "string", "minLength": 1, "maxLength": 120 },
+      "expectedRevision": { "type": "integer", "minimum": 1, "description": "Latest revision read from the flow. Prevents lost updates." },
+      "action": { "type": "string", "enum": ["set_waiting", "block", "resume", "link_task", "finish", "fail", "request_cancel", "cancel"] },
+      "currentStep": { "type": "string", "maxLength": 200 },
+      "stateJson": { "type": "object" },
+      "waitJson": { "type": "object" },
+      "blockedSummary": { "type": "string", "maxLength": 2000 },
+      "reason": { "type": "string", "maxLength": 1000 },
+      "childTask": {
+        "type": "object",
+        "properties": {
+          "taskId": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "status": { "type": "string", "maxLength": 40 },
+          "runtime": { "type": "string", "maxLength": 80 },
+          "sessionId": { "type": "string", "maxLength": 160 },
+          "runId": { "type": "string", "maxLength": 160 },
+          "startedAt": { "type": "string" },
+          "lastEventAt": { "type": "string" },
+          "completedAt": { "type": "string" }
+        },
+        "required": ["taskId"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["flowId", "expectedRevision", "action"],
+    "additionalProperties": false
+  }
+}

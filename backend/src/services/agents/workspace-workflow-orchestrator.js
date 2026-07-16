@@ -11,6 +11,7 @@ const { buildUserIntentAlignmentProfile, buildUserIntentAlignmentPrompt } = requ
 const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
 const { listManifests } = require('./tool-manifest');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
+const { resolveUserSkillClearance } = require('./custom-gpt-agent-policy');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -140,7 +141,11 @@ function buildWorkspaceWorkflowJob(params = {}) {
   const payload = {
     taskId,
     traceId,
-    user: { id: userId, email: params.user?.email },
+    user: {
+      id: userId,
+      email: params.user?.email,
+      clearance: resolveUserSkillClearance(params.user),
+    },
     goal,
     displayGoal,
     systemContract,
