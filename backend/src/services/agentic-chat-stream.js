@@ -55,6 +55,7 @@
   } = require('./agents/agentic-execution-profile');
   const {
     buildSkillExecutionPrompt,
+    inferRecommendedSkills,
     resolveCustomGptAgentPolicy,
   } = require('./agents/custom-gpt-agent-policy');
   const {
@@ -669,6 +670,17 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ? customGptSkillPlan.selectedSkillIds
         : [],
     });
+    const allowedSkillSet = Array.isArray(customGptAgentPolicy.allowedSkillIds)
+      ? new Set(customGptAgentPolicy.allowedSkillIds)
+      : null;
+    const runtimeRecommendedSkillIds = Array.from(new Set([
+      ...(customGptAgentPolicy.recommendedSkillIds || []),
+      ...inferRecommendedSkills(userQuery, customGptSkillPlan?.selectedSkillIds || []),
+    ])).filter((skillId) => !allowedSkillSet || allowedSkillSet.has(skillId));
+    const runtimeSkillPolicy = {
+      ...customGptAgentPolicy,
+      recommendedSkillIds: runtimeRecommendedSkillIds,
+    };
     const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
 
     let tools = toolsOverride || buildDefaultTools({
@@ -676,7 +688,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       selection,
       clearance: toolContext && toolContext.clearance,
       capabilities: customGptCapabilities,
-      skillPolicy: customGptAgentPolicy,
+      skillPolicy: runtimeSkillPolicy,
     });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
@@ -716,6 +728,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           chatId: toolContext.chatId || null,
           organizationId: toolContext.activeOrganizationId || toolContext.requestedOrganizationId || null,
           signal,
+        });
+        tools = pluginLifecycle.addPluginSkills(tools, {
+          enabled: customGptCapabilities?.skillsEnabled !== false,
+          ctx: { clearance: toolContext?.clearance || null },
+          allowedSkillIds: Array.isArray(customGptAgentPolicy.allowedSkillIds)
+            ? customGptAgentPolicy.allowedSkillIds
+            : null,
+          recommendedSkillIds: Array.isArray(runtimeSkillPolicy.recommendedSkillIds)
+            ? runtimeSkillPolicy.recommendedSkillIds
+            : [],
         });
         tools = pluginLifecycle.addPluginTools(tools);
       } catch (pluginBootError) {
@@ -891,7 +913,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     };
     state.meta.skillPolicy = {
       enabled: customGptAgentPolicy.skillsEnabled,
-      recommendedSkillIds: customGptAgentPolicy.recommendedSkillIds,
+      recommendedSkillIds: runtimeSkillPolicy.recommendedSkillIds,
       requiresSkill: customGptAgentPolicy.requiresSkill,
     };
     if (artifactDeliveryContract.active) state.meta.artifactDelivery = artifactDeliveryContract;

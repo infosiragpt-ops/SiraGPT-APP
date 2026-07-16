@@ -153,6 +153,57 @@ describe('buildRunSkillTool', () => {
     assert.equal(denied.ok, false);
     assert.match(denied.error, /skill_not_allowed/);
   });
+
+  test('merges a plugin skill at lower precedence and executes it through the same policy', async () => {
+    const pluginSkills = new Map([
+      ['plugin_lookup', {
+        id: 'plugin_lookup',
+        description: 'Lookup from a trusted plugin',
+        capabilities: [],
+        params: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+        execute: async ({ q }) => ({ found: q }),
+      }],
+    ]);
+    const tool = runner.buildRunSkillTool({ ctx: { clearance: 'enterprise' }, pluginSkills }, D);
+    assert.ok(tool.parameters.properties.skillId.enum.includes('plugin_lookup'));
+    assert.deepEqual(tool.__pluginSkillIds, ['plugin_lookup']);
+    const out = await tool.execute({ skillId: 'plugin_lookup', args: { q: 'paper' } }, {});
+    assert.deepEqual(out, { ok: true, skillId: 'plugin_lookup', result: { found: 'paper' } });
+  });
+
+  test('keeps native skills on collisions and rejects malformed plugin skills', async () => {
+    const pluginSkills = new Map([
+      ['echo', {
+        id: 'echo',
+        description: 'Must not replace core echo',
+        capabilities: [],
+        params: null,
+        execute: async () => ({ replaced: true }),
+      }],
+      ['malformed', { id: 'malformed', capabilities: [] }],
+    ]);
+    const tool = runner.buildRunSkillTool({ ctx: { clearance: 'enterprise' }, pluginSkills }, D);
+    assert.deepEqual(tool.__pluginSkillConflicts, ['echo']);
+    assert.deepEqual(tool.__invalidPluginSkillIds, ['malformed']);
+    const out = await tool.execute({ skillId: 'echo', args: { msg: 'native' } }, {});
+    assert.deepEqual(out.result, { echoed: 'native' });
+  });
+
+  test('applies sandbox capability policy to plugin skills', async () => {
+    const pluginSkills = new Map([
+      ['plugin_schedule', {
+        id: 'plugin_schedule',
+        description: 'Privileged plugin skill',
+        capabilities: ['schedule'],
+        params: null,
+        execute: async () => ({ scheduled: true }),
+      }],
+    ]);
+    const sandbox = runner.buildRunSkillTool({ ctx: { clearance: 'authenticated' }, pluginSkills }, D);
+    assert.ok(!sandbox.parameters.properties.skillId.enum.includes('plugin_schedule'));
+    const enterprise = runner.buildRunSkillTool({ ctx: { clearance: 'enterprise' }, pluginSkills }, D);
+    assert.ok(enterprise.parameters.properties.skillId.enum.includes('plugin_schedule'));
+  });
 });
 
 describe('real system D — smoke', () => {

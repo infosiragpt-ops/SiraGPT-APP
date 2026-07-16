@@ -107,7 +107,7 @@ function inferRecommendedSkills(prompt, semanticSkillIds = []) {
   for (const semanticId of semanticSkillIds || []) {
     recommended.push(...(SEMANTIC_SKILL_MAP[String(semanticId)] || []));
   }
-  if (ACADEMIC_RESEARCH.test(text)) recommended.push('openalex_search');
+  if (ACADEMIC_RESEARCH.test(text)) recommended.push('scientific_federated_search', 'openalex_search');
   if (DOI_VERIFY.test(text) || /\bdoi\b/i.test(text)) recommended.push('crossref_verify');
   if (CITATION_FORMAT.test(text)) recommended.push('apa7_format');
   if (LIVE_WEB.test(text) || (SEARCH_ACTION.test(text) && !ACADEMIC_RESEARCH.test(text))) {

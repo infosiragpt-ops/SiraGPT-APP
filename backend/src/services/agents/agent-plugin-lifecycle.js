@@ -72,6 +72,9 @@ class AgentPluginLifecycle {
       blocked: 0,
       pluginToolsAdded: 0,
       pluginToolConflicts: 0,
+      pluginSkillsAdded: 0,
+      pluginSkillConflicts: 0,
+      invalidPluginSkills: 0,
     };
   }
 
@@ -88,6 +91,31 @@ class AgentPluginLifecycle {
       names.add(name);
       this._stats.pluginToolsAdded += 1;
     }
+    return merged;
+  }
+
+  addPluginSkills(tools = [], options = {}) {
+    const merged = Array.isArray(tools) ? [...tools] : [];
+    if (options.enabled === false) return merged;
+    const runSkillIndex = merged.findIndex((tool) => tool?.name === 'run_skill');
+    if (runSkillIndex < 0) return merged;
+
+    const pluginSkills = this.registry.getAllPluginSkills({ trustedOnly: true });
+    if (pluginSkills.size === 0) return merged;
+
+    const skillRunner = options.skillRunner || require('./skill-runner');
+    const enhanced = skillRunner.buildRunSkillTool({
+      ctx: options.ctx || {},
+      allowedSkillIds: Array.isArray(options.allowedSkillIds) ? options.allowedSkillIds : null,
+      recommendedSkillIds: Array.isArray(options.recommendedSkillIds) ? options.recommendedSkillIds : [],
+      pluginSkills,
+    }, options.skillsModule || null);
+    if (!enhanced) return merged;
+
+    merged[runSkillIndex] = enhanced;
+    this._stats.pluginSkillsAdded += enhanced.__pluginSkillIds?.length || 0;
+    this._stats.pluginSkillConflicts += enhanced.__pluginSkillConflicts?.length || 0;
+    this._stats.invalidPluginSkills += enhanced.__invalidPluginSkillIds?.length || 0;
     return merged;
   }
 

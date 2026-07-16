@@ -56,15 +56,69 @@ function getSkillsMap(d) {
   } catch (_) { return null; }
 }
 
+function normalizePluginSkills(value) {
+  const input = value instanceof Map
+    ? Array.from(value.entries())
+    : Array.isArray(value)
+      ? value.map((skill) => [skill?.id, skill])
+      : [];
+  const skills = new Map();
+  const invalid = [];
+
+  for (const [rawId, candidate] of input) {
+    const id = String(candidate?.id || rawId || '').trim();
+    const valid = id
+      && typeof candidate?.execute === 'function'
+      && Array.isArray(candidate?.capabilities)
+      && (candidate?.params == null || typeof candidate.params === 'object');
+    if (!valid) {
+      if (id) invalid.push(id);
+      continue;
+    }
+    skills.set(id, {
+      ...candidate,
+      id,
+      name: String(candidate.name || id),
+      description: String(candidate.description || candidate.name || id),
+      capabilities: candidate.capabilities.map(String),
+      params: candidate.params || null,
+      __pluginSkill: true,
+    });
+  }
+
+  return { skills, invalid };
+}
+
+function buildSkillsCatalog(d, pluginSkills = null) {
+  const core = getSkillsMap(d);
+  if (!core) return { skills: null, pluginSkillIds: [], conflicts: [], invalid: [] };
+
+  const skills = new Map(core);
+  const normalized = normalizePluginSkills(pluginSkills);
+  const pluginSkillIds = [];
+  const conflicts = [];
+  for (const [id, skill] of normalized.skills) {
+    // Plugin skills intentionally have the lowest precedence. A bundled or
+    // workspace-owned SiraGPT skill with the same id always wins.
+    if (skills.has(id)) {
+      conflicts.push(id);
+      continue;
+    }
+    skills.set(id, skill);
+    pluginSkillIds.push(id);
+  }
+  return { skills, pluginSkillIds, conflicts, invalid: normalized.invalid };
+}
+
 function normalizeAllowedSkillIds(value) {
   if (!Array.isArray(value)) return null;
   return new Set(value.map((id) => String(id || '').trim()).filter(Boolean));
 }
 
 /** Skills the given clearance is allowed to see/run (policy static-filter). */
-function listSkillDescriptors(ctx = {}, d = null) {
+function listSkillDescriptors(ctx = {}, d = null, pluginSkills = null) {
   const D = deps(d);
-  const map = getSkillsMap(d);
+  const map = buildSkillsCatalog(d, pluginSkills).skills;
   if (!D || !map) return [];
   const allowed = normalizeAllowedSkillIds(ctx.allowedSkillIds);
   const candidates = allowed
@@ -119,13 +173,13 @@ function describeParams(paramsSchema) {
  * Execute a skill by id under the clearance-derived policy. Returns a flat
  * result object; never throws (errors become { ok:false, error }).
  */
-async function runSkill(skillId, args, ctx = {}, d = null) {
+async function runSkill(skillId, args, ctx = {}, d = null, pluginSkills = null) {
   const id = String(skillId || '').trim();
   if (!id) return { ok: false, error: 'missing_skill_id' };
   const allowed = normalizeAllowedSkillIds(ctx.allowedSkillIds);
   if (allowed && !allowed.has(id)) return { ok: false, skillId: id, error: `skill_not_allowed: ${id}` };
   const D = deps(d);
-  const map = getSkillsMap(d);
+  const map = buildSkillsCatalog(d, pluginSkills).skills;
   if (!D || !map) return { ok: false, error: 'skills_subsystem_unavailable' };
 
   const skill = map.get(id);
@@ -176,7 +230,8 @@ function buildRunSkillTool(opts = {}, d = null) {
     : opts.ctx?.allowedSkillIds;
   const ctx = { ...(opts.ctx || {}), ...(allowedSkillIds ? { allowedSkillIds } : {}) };
   const recommended = new Set((opts.recommendedSkillIds || []).map(String));
-  const descriptors = listSkillDescriptors(ctx, d).sort((a, b) => {
+  const catalog = buildSkillsCatalog(d, opts.pluginSkills);
+  const descriptors = listSkillDescriptors(ctx, d, opts.pluginSkills).sort((a, b) => {
     const ar = recommended.has(a.id) ? 1 : 0;
     const br = recommended.has(b.id) ? 1 : 0;
     return br - ar || a.id.localeCompare(b.id);
@@ -204,11 +259,14 @@ function buildRunSkillTool(opts = {}, d = null) {
     execute: async (callArgs, runCtx) => {
       const a = callArgs || {};
       const executionCtx = { ...ctx, ...(runCtx || {}), ...(allowedSkillIds ? { allowedSkillIds } : {}) };
-      return runSkill(a.skillId, a.args || {}, executionCtx, d);
+      return runSkill(a.skillId, a.args || {}, executionCtx, d, opts.pluginSkills);
     },
     __skillRunner: true,
     __allowedSkillIds: descriptors.map((item) => item.id),
     __recommendedSkillIds: descriptors.filter((item) => recommended.has(item.id)).map((item) => item.id),
+    __pluginSkillIds: catalog.pluginSkillIds.filter((id) => descriptors.some((item) => item.id === id)),
+    __pluginSkillConflicts: catalog.conflicts,
+    __invalidPluginSkillIds: catalog.invalid,
   };
 }
 
@@ -220,4 +278,6 @@ module.exports = {
   validateArgs,
   describeParams,
   normalizeAllowedSkillIds,
+  normalizePluginSkills,
+  buildSkillsCatalog,
 };

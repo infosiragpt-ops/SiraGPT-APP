@@ -6,6 +6,10 @@ const assert = require('node:assert/strict');
 const policy = require('../src/services/agents/custom-gpt-agent-policy');
 
 describe('custom GPT agent policy', () => {
+  test('federated scientific search is preferred while OpenAlex remains available', () => {
+    const recommendations = policy.inferRecommendedSkills('Busca artículos científicos recientes sobre diabetes');
+    assert.deepEqual(recommendations.slice(0, 2), ['scientific_federated_search', 'openalex_search']);
+  });
   test('routes non-trivial turns in auto mode and recommends academic skills', () => {
     const resolved = policy.resolveCustomGptAgentPolicy({
       prompt: 'Busca artículos científicos recientes, verifica sus DOI y formatea las referencias en APA 7',

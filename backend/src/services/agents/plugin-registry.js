@@ -595,10 +595,15 @@ class PluginRegistry extends EventEmitter {
   /**
    * Get all skills registered by all plugins.
    */
-  getAllPluginSkills() {
+  getAllPluginSkills(options = {}) {
     const skills = new Map();
     for (const plugin of this.getEnabled()) {
+      if (options.trustedOnly === true && plugin.manifest.trusted !== true) continue;
       for (const [id, skill] of plugin.skills) {
+        if (skills.has(id)) {
+          log.warn('duplicate plugin skill', { skillId: id, pluginId: plugin.id });
+          continue;
+        }
         skills.set(id, skill);
       }
     }

@@ -6,6 +6,7 @@
 
 const { getPluginRegistry } = require('./plugin-registry');
 const memoryBridge = require('./hermes-memory-bridge');
+const { redactString } = require('../../utils/secret-redactor');
 
 let _bootPromise = null;
 
@@ -96,7 +97,85 @@ function buildFactory(catalogEntry) {
         ctx.observed = true;
       });
     }
+    if (catalogEntry.id === 'hermes-web') {
+      api.registerSkill(buildScientificFederatedSearchSkill());
+    }
     return { catalog: catalogEntry };
+  };
+}
+
+function buildScientificFederatedSearchSkill() {
+  return {
+    id: 'scientific_federated_search',
+    name: 'Scientific federated search',
+    description: 'Search and rank scientific literature across SiraGPT federated sources, deduplicate records, preserve provider provenance, and return DOI/open-access links.',
+    capabilities: ['net:outbound'],
+    timeoutMs: 25000,
+    params: {
+      type: 'object',
+      required: ['query'],
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', minLength: 2, maxLength: 500, description: 'Scientific topic or research question.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum deduplicated papers to return. Default 20.' },
+        providers: {
+          type: 'array',
+          maxItems: 16,
+          uniqueItems: true,
+          items: {
+            type: 'string',
+            enum: ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite', 'scielo', 'scopus', 'wos', 'redalyc', 'biorxiv', 'medrxiv'],
+          },
+          description: 'Optional provider allowlist. Omit to fan out across all configured sources.',
+        },
+        yearFrom: { type: 'integer', minimum: 1900, maximum: 2100 },
+        yearTo: { type: 'integer', minimum: 1900, maximum: 2100 },
+        openAccessOnly: { type: 'boolean', description: 'Return only records marked open access.' },
+      },
+    },
+    async execute(args = {}, ctx = {}) {
+      const scientificSearch = require('../scientific-search');
+      const query = String(args.query || '').replace(/\s+/g, ' ').trim();
+      if (!query) return { count: 0, papers: [], errors: [{ provider: 'input', message: 'query is empty' }] };
+      const limit = Math.max(1, Math.min(50, Number(args.limit) || 20));
+      const providers = Array.isArray(args.providers)
+        ? args.providers.filter((provider) => scientificSearch.PROVIDERS.includes(provider))
+        : undefined;
+      const result = await scientificSearch.search(query, {
+        limit: Math.min(10, limit),
+        ...(providers?.length ? { providers } : {}),
+        totalTimeoutMs: 20000,
+        signal: ctx.signal,
+      });
+      let papers = Array.isArray(result.papers) ? result.papers : [];
+      const yearFrom = Number(args.yearFrom) || null;
+      const yearTo = Number(args.yearTo) || null;
+      if (yearFrom) papers = papers.filter((paper) => Number(paper.year) >= yearFrom);
+      if (yearTo) papers = papers.filter((paper) => Number(paper.year) <= yearTo);
+      if (args.openAccessOnly === true) papers = papers.filter((paper) => paper.openAccess === true);
+      papers = papers.slice(0, limit).map((paper) => ({
+        title: String(paper.title || '').slice(0, 500),
+        doi: paper.doi || null,
+        year: paper.year || null,
+        venue: paper.venue || null,
+        authors: (paper.authors || []).slice(0, 8).map((author) => author?.name || author).filter(Boolean),
+        citations: paper.citations ?? null,
+        openAccess: paper.openAccess ?? null,
+        pdfUrl: paper.pdfUrl || null,
+        htmlUrl: paper.htmlUrl || null,
+        sources: Array.from(new Set([paper.source, ...(paper.sources || [])].filter(Boolean))),
+        abstract: paper.abstract ? String(paper.abstract).slice(0, 1200) : null,
+      }));
+      return {
+        count: papers.length,
+        providers: result.providers || providers || [],
+        errors: (result.errors || []).slice(0, 16).map((error) => ({
+          provider: String(error.provider || 'unknown').slice(0, 40),
+          message: redactString(String(error.message || 'provider failed')).slice(0, 240),
+        })),
+        papers,
+      };
+    },
   };
 }
 
@@ -184,4 +263,5 @@ module.exports = {
   bootHermesPlugins,
   listHermesPlugins,
   status,
+  buildScientificFederatedSearchSkill,
 };

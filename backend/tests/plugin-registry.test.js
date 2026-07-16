@@ -310,6 +310,32 @@ describe('PluginRegistry', () => {
     assert.ok(tools.has('search_web'));
   });
 
+  it('getAllPluginSkills can restrict runtime activation to trusted plugins', async () => {
+    const registry = new PluginRegistry();
+    for (const trusted of [true, false]) {
+      await registry.register(
+        {
+          id: trusted ? 'trusted-skill-source' : 'untrusted-skill-source',
+          name: trusted ? 'Trusted Skill Source' : 'Untrusted Skill Source',
+          version: '1.0.0',
+          description: 'Skill provider',
+          author: 'test',
+          trusted,
+        },
+        async (api) => {
+          api.registerSkill({
+            id: trusted ? 'trusted_skill' : 'untrusted_skill',
+            capabilities: [],
+            execute: async () => trusted,
+          });
+          return {};
+        }
+      );
+    }
+    assert.deepEqual(Array.from(registry.getAllPluginSkills().keys()).sort(), ['trusted_skill', 'untrusted_skill']);
+    assert.deepEqual(Array.from(registry.getAllPluginSkills({ trustedOnly: true }).keys()), ['trusted_skill']);
+  });
+
   it('snapshot returns array of plugin infos', async () => {
     const registry = new PluginRegistry();
     await registry.register(

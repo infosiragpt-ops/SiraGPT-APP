@@ -129,3 +129,75 @@ test('AgentPluginLifecycle gives cancellation precedence over plugin execution',
     (error) => error.code === 'ABORT_ERR' && error.name === 'AbortError'
   );
 });
+
+test('AgentPluginLifecycle exposes only trusted plugin skills through run_skill', async () => {
+  const registry = new PluginRegistry();
+  await registry.register(
+    {
+      id: 'trusted-skills',
+      name: 'Trusted Skills',
+      version: '1.0.0',
+      description: 'Trusted skill source',
+      author: 'test',
+      trusted: true,
+    },
+    async (api) => {
+      api.registerSkill({
+        id: 'trusted_plugin_skill',
+        description: 'Trusted plugin skill',
+        capabilities: [],
+        params: { type: 'object', properties: {} },
+        execute: async () => ({ trusted: true }),
+      });
+      return {};
+    }
+  );
+  await registry.register(
+    {
+      id: 'untrusted-skills',
+      name: 'Untrusted Skills',
+      version: '1.0.0',
+      description: 'Untrusted skill source',
+      author: 'test',
+    },
+    async (api) => {
+      api.registerSkill({
+        id: 'untrusted_plugin_skill',
+        description: 'Untrusted plugin skill',
+        capabilities: [],
+        params: null,
+        execute: async () => ({ trusted: false }),
+      });
+      return {};
+    }
+  );
+
+  const coreSkills = new Map([
+    ['core_skill', {
+      id: 'core_skill',
+      description: 'Core skill',
+      capabilities: [],
+      params: null,
+      execute: async () => ({ core: true }),
+    }],
+  ]);
+  const skillsModule = {
+    get: () => ({ skills: coreSkills }),
+    createPolicy: ({ mode }) => ({ mode }),
+    wrapSkillsWithPolicy: (skills) => ({ skills: skills.map((skill) => ({ ...skill })), hidden: [] }),
+  };
+  const lifecycle = new AgentPluginLifecycle({ registry, userId: 'owner' });
+  const tools = lifecycle.addPluginSkills([{ name: 'run_skill', execute: async () => null }], {
+    ctx: { clearance: 'enterprise' },
+    recommendedSkillIds: ['trusted_plugin_skill'],
+    skillsModule,
+  });
+  const runSkill = tools[0];
+  assert.equal(runSkill.parameters.properties.skillId.enum[0], 'trusted_plugin_skill');
+  assert.ok(runSkill.parameters.properties.skillId.enum.includes('core_skill'));
+  assert.ok(runSkill.parameters.properties.skillId.enum.includes('trusted_plugin_skill'));
+  assert.ok(!runSkill.parameters.properties.skillId.enum.includes('untrusted_plugin_skill'));
+  const out = await runSkill.execute({ skillId: 'trusted_plugin_skill', args: {} }, {});
+  assert.deepEqual(out.result, { trusted: true });
+  assert.equal(lifecycle.summary().pluginSkillsAdded, 1);
+});
