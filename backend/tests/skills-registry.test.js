@@ -236,6 +236,9 @@ test('bundled skills load cleanly from the real skills dir', () => {
   // OpenClaw-inspired capabilities rewritten as native SiraGPT skills:
   assert.ok(skills.has('summarize'), 'summarize should be bundled');
   assert.ok(skills.has('weather'), 'weather should be bundled');
+  assert.ok(skills.has('audio_transcribe'), 'audio_transcribe should be bundled');
+  assert.ok(skills.has('audio_spectrogram'), 'audio_spectrogram should be bundled');
+  assert.ok(skills.has('video_frames'), 'video_frames should be bundled');
   assert.ok(skills.has('task_flow_create'), 'task_flow_create should be bundled');
   assert.ok(skills.has('task_flow_list'), 'task_flow_list should be bundled');
   assert.ok(skills.has('task_flow_get'), 'task_flow_get should be bundled');

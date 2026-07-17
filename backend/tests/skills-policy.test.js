@@ -146,6 +146,7 @@ test('MAIN_ALLOW excludes shell but includes LLM+net+browser+schedule', () => {
   assert.ok(!MAIN_ALLOW.includes(CAPABILITIES.SHELL));
   assert.ok(MAIN_ALLOW.includes(CAPABILITIES.LLM));
   assert.ok(MAIN_ALLOW.includes(CAPABILITIES.BROWSER));
+  assert.ok(MAIN_ALLOW.includes(CAPABILITIES.MEDIA_PROCESS));
   assert.ok(MAIN_ALLOW.includes(CAPABILITIES.SCHEDULE));
 });
 
@@ -153,6 +154,7 @@ test('SANDBOX_ALLOW is the minimum useful set — LLM + fs:read', () => {
   assert.ok(SANDBOX_ALLOW.includes(CAPABILITIES.LLM));
   assert.ok(SANDBOX_ALLOW.includes(CAPABILITIES.FS_READ));
   assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.BROWSER));
+  assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.MEDIA_PROCESS));
   assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.SCHEDULE));
   assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.AGENT_SPAWN));
   assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.SHELL));

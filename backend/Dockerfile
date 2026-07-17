@@ -47,6 +47,7 @@ RUN apk add --no-cache \
     font-liberation \
     font-noto \
     freetype \
+    ffmpeg \
     ghostscript \
     git \
     harfbuzz \

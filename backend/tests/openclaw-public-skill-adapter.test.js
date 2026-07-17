@@ -31,11 +31,30 @@ test('covered public skills require concrete SiraGPT runtime evidence', () => {
     { id: 'summarize', description: 'summary' },
     { id: 'weather', description: 'weather' },
     { id: 'session-logs', description: 'sessions' },
+    { id: 'openai-whisper', description: 'transcribe' },
+    { id: 'openai-whisper-api', description: 'transcribe api' },
+    { id: 'songsee', description: 'spectrogram' },
+    { id: 'video-frames', description: 'frames' },
   ], { repoRoot });
 
-  assert.deepEqual(catalog.map((entry) => entry.status), ['covered', 'covered', 'covered']);
+  assert.deepEqual(catalog.map((entry) => entry.status), Array(catalog.length).fill('covered'));
   assert.ok(catalog.every((entry) => entry.evidence.length > 0));
   assert.ok(catalog.every((entry) => entry.source_policy === 'native-rewrite-no-active-upstream-code'));
+});
+
+test('current public catalog counts match the audited capability matrix', () => {
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const catalog = buildPublicSkillCatalog(
+    Object.keys(PUBLIC_SKILL_ADAPTATIONS).map((id) => ({ id, description: id })),
+    { repoRoot },
+  );
+  assert.deepEqual(countPublicSkillCoverage(catalog), {
+    'not-applicable': 12,
+    adapted: 17,
+    partial: 8,
+    'reference-only': 6,
+    covered: 8,
+  });
 });
 
 test('nominal active capability is downgraded when its SiraGPT evidence is missing', () => {

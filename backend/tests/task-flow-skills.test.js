@@ -137,6 +137,9 @@ test('background task tools expose policy-scoped native skills and execute them'
   assert.equal(authenticatedIds.has('task_flow_get'), true);
   assert.equal(authenticatedIds.has('task_flow_create'), false);
   assert.equal(authenticatedIds.has('weather'), false);
+  assert.equal(authenticatedIds.has('audio_transcribe'), true);
+  assert.equal(authenticatedIds.has('audio_spectrogram'), false);
+  assert.equal(authenticatedIds.has('video_frames'), false);
 
   const paidTools = buildTaskTools({
     skillContext: { clearance: 'paid', userId: 'user-a', chatId: 'chat-a' },
@@ -147,6 +150,9 @@ test('background task tools expose policy-scoped native skills and execute them'
   assert.equal(paidIds.has('task_flow_update'), true);
   assert.equal(paidIds.has('summarize'), true);
   assert.equal(paidIds.has('weather'), true);
+  assert.equal(paidIds.has('audio_transcribe'), true);
+  assert.equal(paidIds.has('audio_spectrogram'), true);
+  assert.equal(paidIds.has('video_frames'), true);
 
   const created = await paidRunSkill.execute({
     skillId: 'task_flow_create',
