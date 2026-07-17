@@ -5,7 +5,7 @@
 # mounted as a volume by docker-compose.override.yml.
 # ──────────────────────────────────────────────────────────────
 
-FROM node:22-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 
