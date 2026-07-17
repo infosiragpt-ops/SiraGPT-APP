@@ -688,6 +688,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   background: transparent;
 }
 
+.chat-conversation-column {
+  max-width: min(100%, 64rem);
+}
+
 .chat-user-bubble {
   max-width: min(70%, 32rem);
 }

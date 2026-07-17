@@ -10357,6 +10357,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
+  const effectiveSplitRatio = searchActivityPanelOpen ? Math.max(splitRatio, 66) : splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
   // tenant, so if any other viewer becomes active while it's open, close it.
@@ -12158,7 +12159,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       (mobile) viewport — the "la barra de chat desaparece"
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
+                    <div className="chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full">
                       <ChatMessageList
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
                         isStreaming={isCurrentChatStreaming}
@@ -12178,7 +12179,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="relative max-w-3xl mx-auto space-y-2 bg-background">
+                    <div className="chat-conversation-column relative mx-auto space-y-2 bg-background">
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
@@ -12585,8 +12586,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div
               style={{
                 width: showAudioPanel
-                  ? `clamp(320px, ${100 - splitRatio}%, 420px)`
-                  : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - splitRatio}%, 62%)`,
+                  ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
+                  : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,
                 transition: isDraggingSplit ? undefined : 'width 300ms ease',
               }}
               className="h-full min-w-0 overflow-hidden shrink-0"
