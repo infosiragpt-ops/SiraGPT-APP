@@ -1,0 +1,20 @@
+{
+  "id": "audio_spectrogram",
+  "name": "Create audio spectrogram",
+  "version": "1.0.0",
+  "description": "Create a deterministic spectrogram image from an audio or video file owned by the current user. Uses an attached media file by default.",
+  "capabilities": ["fs:read", "fs:write", "media:process"],
+  "timeoutMs": 120000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "fileId": { "type": "string", "description": "Optional id of an audio or video file owned by the user. Defaults to attached media." },
+      "startSeconds": { "type": "number", "minimum": 0, "description": "Start position in seconds. Default 0." },
+      "durationSeconds": { "type": "number", "minimum": 0.1, "maximum": 120, "description": "Analyzed duration in seconds. Default up to 30 seconds." },
+      "width": { "type": "integer", "minimum": 640, "maximum": 1600, "description": "Image width. Default 1280." },
+      "height": { "type": "integer", "minimum": 320, "maximum": 1000, "description": "Image height. Default 640." },
+      "style": { "type": "string", "enum": ["magma", "viridis", "plasma", "rainbow", "channel", "intensity"], "description": "Color scale. Default magma." }
+    },
+    "additionalProperties": false
+  }
+}

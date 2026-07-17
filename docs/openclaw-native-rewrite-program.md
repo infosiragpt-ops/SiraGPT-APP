@@ -32,9 +32,9 @@ security and deployment model.
 
 | Status | Count | Meaning |
 |---|---:|---|
-| covered | 4 | Direct runtime skill available to the SiraGPT agent. |
-| adapted | 20 | Equivalent SiraGPT service or workflow is active under a different contract. |
-| partial | 9 | Foundations exist, but the user-facing contract or proof is incomplete. |
+| covered | 8 | Direct runtime skill available to the SiraGPT agent. |
+| adapted | 17 | Equivalent SiraGPT service or workflow is active under a different contract. |
+| partial | 8 | Foundations exist, but the user-facing contract or proof is incomplete. |
 | reference-only | 6 | Requires a new scoped connector, OAuth grant, or explicit write approval. |
 | not-applicable | 12 | Device-local or private-LAN control that must not run in the cloud core. |
 
@@ -61,8 +61,11 @@ npm run agent:openclaw:map -- \
    authorized inbox sources to this runtime.
 4. Authorized connectors: Google Workspace, Notion, Trello, email, X, and
    secrets providers with per-user scopes and audit logs.
-5. Media parity: transcription, TTS, video frames, spectrograms, and generated
-   artifacts with format validation.
+5. Media parity: owner-scoped transcription, bounded video-frame extraction,
+   deterministic spectrograms, TTS, and generated artifacts are active. The
+   media inspection tools run without shell access and enforce source size,
+   artifact size, process output, count, and deadline limits. Next, route local
+   transcription providers through the same contract when provisioned.
 6. Device bridge: optional signed desktop/mobile node for local apps and LAN
    hardware. None of these permissions belong in the production server.
 7. Release proof: focused tests, capability validation, secret scan, UI lock,
@@ -71,7 +74,8 @@ npm run agent:openclaw:map -- \
 The focused CI gate is `npm --prefix backend run test:openclaw-native`. It
 validates the public capability matrix, runtime registry, policy separation,
 durable-flow ownership and concurrency, queued-agent tool exposure,
-summarization, weather normalization, and workspace orchestration.
+   summarization, weather normalization, media ownership and process limits,
+   transcription and artifact contracts, and workspace orchestration.
 
 ## Completion Rule
 
