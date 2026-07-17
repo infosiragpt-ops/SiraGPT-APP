@@ -8034,6 +8034,8 @@ But first, you need to connect your Spotify account securely using the button be
   const SPLIT_STORAGE_KEY = 'siraGPT-split-ratio';
   const SPLIT_LEFT_MIN_PX = 420;
   const SPLIT_RIGHT_MIN_PX = 460;
+  const SEARCH_ACTIVITY_RIGHT_MIN_PX = 480;
+  const SEARCH_ACTIVITY_RIGHT_MAX_PX = 640;
   const SPLIT_MIN_RATIO = 34;
   const SPLIT_MAX_RATIO = 66;
   const [splitRatio, setSplitRatio] = React.useState<number>(50);
@@ -10357,7 +10359,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
-  const effectiveSplitRatio = searchActivityPanelOpen ? Math.max(splitRatio, 66) : splitRatio;
+  const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
   // tenant, so if any other viewer becomes active while it's open, close it.
@@ -12587,6 +12589,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               style={{
                 width: showAudioPanel
                   ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
+                  : searchActivityPanelOpen
+                    ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
                   : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,
                 transition: isDraggingSplit ? undefined : 'width 300ms ease',
               }}
