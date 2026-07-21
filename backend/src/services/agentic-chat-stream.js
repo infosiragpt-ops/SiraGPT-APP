@@ -587,6 +587,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // Creator-defined external API Actions (CustomGpt.actions, stored shape
       // WITH the encrypted auth secret). Built into agent tools below.
       customGptActions = null,
+      // U3: optional turn-policy snapshot (observe/enforce). Observe mode only
+      // attaches telemetry + shadow diffs; never changes tool/routing behaviour.
+      turnPolicy = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -919,6 +922,41 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     };
     if (artifactDeliveryContract.active) state.meta.artifactDelivery = artifactDeliveryContract;
 
+    const isGoalCommand = /^\s*(\/goal|\/plan)\b/i.test(userQuery);
+    const isRepoTask = /\b(clon|repo|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige)\b/i.test(userQuery);
+    const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
+
+    let maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
+    const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
+    // Prompted mode: budgets enforced in code, not prompts. Weak models drift
+    // on long horizons; a tighter step budget converges to finalize sooner
+    // (the loop already force-narrows to finalize on the last step).
+    if (toolCallMode === 'prompted') {
+      const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
+      maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
+    }
+
+    // U3 observe/enforce: attach policy summary + non-fatal shadow diffs before
+    // the first sentinel so telemetry is visible from the first UI frame.
+    if (turnPolicy && typeof turnPolicy === 'object') {
+      try {
+        const turnPolicyService = require('./turn-policy');
+        const diffs = turnPolicyService.diffTurnPolicyAgainstRuntime(turnPolicy, {
+          toolCallMode,
+          model,
+          provider,
+          maxSteps: maxStepsOverride,
+        });
+        state.meta.runtime.turnPolicy = turnPolicyService.summarizeTurnPolicy(turnPolicy);
+        if (diffs.length > 0) {
+          state.meta.runtime.turnPolicyShadowDiffs = diffs.slice(0, 8);
+        }
+        try {
+          require('./cognitive-metrics').recordTurnPolicy(turnPolicy);
+        } catch (_) { /* metrics never block */ }
+      } catch (_) { /* turn-policy is best-effort */ }
+    }
+
     // Initial sentinel — gives the UI an immediate step indicator even
     // before the first model call returns.
     state.steps.push({
@@ -943,20 +981,6 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         return `${tag}: ${truncate(txt, 800)}`;
       })
       .join('\n');
-
-    const isGoalCommand = /^\s*(\/goal|\/plan)\b/i.test(userQuery);
-    const isRepoTask = /\b(clon|repo|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige)\b/i.test(userQuery);
-    const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
-
-    let maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
-    const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
-    // Prompted mode: budgets enforced in code, not prompts. Weak models drift
-    // on long horizons; a tighter step budget converges to finalize sooner
-    // (the loop already force-narrows to finalize on the last step).
-    if (toolCallMode === 'prompted') {
-      const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
-      maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
-    }
 
     let pluginPromptBlock = '';
     if (pluginLifecycle) {

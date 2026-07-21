@@ -21,7 +21,8 @@ const {
  *
  * Public API:
  *   recordRoutingDecision(decision)   recordFaithfulness({grade,action,model})
- *   recordCompute({mode})             snapshot()   toPrometheusText()   reset()
+ *   recordCompute({mode})             recordTurnPolicy(policy)
+ *   snapshot()   toPrometheusText()   reset()
  */
 
 const MAX_MODEL_LABELS = Number(process.env.SIRAGPT_COGNITIVE_METRICS_MAX_MODELS) || 40;
@@ -47,6 +48,13 @@ function freshState() {
     compute: {
       total: 0,
       byMode: Object.create(null),         // direct | extended | self_consistency | best_of_n
+    },
+    turnPolicy: {
+      total: 0,
+      byMode: Object.create(null),         // observe | enforce
+      agentic: 0,
+      byToolCallMode: Object.create(null), // native | prompted | none
+      shadowDiffs: 0,
     },
   };
 }
@@ -113,6 +121,23 @@ function recordCompute({ mode = null } = {}) {
   } catch (_) { /* swallow */ }
 }
 
+function recordTurnPolicy(policy) {
+  try {
+    if (!policy || typeof policy !== 'object') return;
+    state.turnPolicy.total += 1;
+    bump(state.turnPolicy.byMode, policy.mode || 'observe');
+    if (policy.routing && policy.routing.shouldRunAgentic) state.turnPolicy.agentic += 1;
+    bump(
+      state.turnPolicy.byToolCallMode,
+      (policy.capabilities && policy.capabilities.toolCallMode) || 'native',
+    );
+    const diffs = policy.telemetry && Array.isArray(policy.telemetry.shadowDiffs)
+      ? policy.telemetry.shadowDiffs.length
+      : 0;
+    if (diffs > 0) state.turnPolicy.shadowDiffs += diffs;
+  } catch (_) { /* swallow */ }
+}
+
 function snapshot() {
   return {
     uptimeMs: Date.now() - state.startedAt,
@@ -136,6 +161,16 @@ function snapshot() {
     compute: {
       total: state.compute.total,
       byMode: { ...state.compute.byMode },
+    },
+    turnPolicy: {
+      total: state.turnPolicy.total,
+      agentic: state.turnPolicy.agentic,
+      agenticRate: state.turnPolicy.total
+        ? round(state.turnPolicy.agentic / state.turnPolicy.total)
+        : 0,
+      shadowDiffs: state.turnPolicy.shadowDiffs,
+      byMode: { ...state.turnPolicy.byMode },
+      byToolCallMode: { ...state.turnPolicy.byToolCallMode },
     },
   };
 }
@@ -179,6 +214,11 @@ function toPrometheusText() {
     Object.entries(s.faithfulness.byGrade).map(([k, v]) => [`grade="${esc(k)}"`, v]));
   push('sira_cognitive_compute_mode', 'Turns by test-time compute mode', 'counter',
     Object.entries(s.compute.byMode).map(([k, v]) => [`mode="${esc(k)}"`, v]));
+  push('sira_cognitive_turn_policy_total', 'Turn policy snapshots recorded', 'counter', [['', s.turnPolicy.total]]);
+  push('sira_cognitive_turn_policy_agentic_total', 'Turn policies that selected agentic loop', 'counter', [['', s.turnPolicy.agentic]]);
+  push('sira_cognitive_turn_policy_shadow_diffs_total', 'Shadow mismatches vs runtime', 'counter', [['', s.turnPolicy.shadowDiffs]]);
+  push('sira_cognitive_turn_policy_tool_call_mode', 'Turn policies by tool-call mode', 'counter',
+    Object.entries(s.turnPolicy.byToolCallMode).map(([k, v]) => [`mode="${esc(k)}"`, v]));
   return `${lines.join('\n')}\n`;
 }
 
@@ -190,6 +230,7 @@ module.exports = {
   recordRoutingDecision,
   recordFaithfulness,
   recordCompute,
+  recordTurnPolicy,
   snapshot,
   toPrometheusText,
   reset,
