@@ -1097,3 +1097,56 @@ test('runAgenticChat forces document_edit and drops create_document on attachmen
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
   }
 });
+
+test('turnPolicy observe mode attaches summary without changing behaviour', async () => {
+  const cognitiveMetrics = require('../src/services/cognitive-metrics');
+  const turnPolicy = require('../src/services/turn-policy');
+  cognitiveMetrics.reset();
+  const { res, frames } = makeFakeRes();
+  const openai = makeFakeOpenAI([finalizeMessage('ok shadow')]);
+  const policy = turnPolicy.buildTurnPolicy({
+    model: 'gpt-4o-mini',
+    provider: 'OpenAI',
+    toolCallMode: 'native',
+    routing: { shouldRunAgentic: true },
+    capabilities: { toolCallMode: 'native' },
+  });
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    provider: 'OpenAI',
+    userQuery: 'busca fuentes recientes sobre Prisma migrate',
+    history: [],
+    res,
+    toolCallMode: 'native',
+    turnPolicy: policy,
+    toolsOverride: [{
+      name: 'finalize',
+      description: 'finalize',
+      parameters: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+      execute: async ({ answer }) => ({ answer }),
+    }],
+  });
+  assert.match(String(result.finalAnswer || ''), /ok shadow/);
+  const snap = cognitiveMetrics.snapshot();
+  assert.equal(snap.turnPolicy.total, 1);
+  let foundPolicy = null;
+  for (const frame of frames()) {
+    if (!frame || typeof frame.content !== 'string') continue;
+    const match = frame.content.match(/```agent-task-state\n([\s\S]*?)\n```/);
+    if (!match) continue;
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed?.meta?.runtime?.turnPolicy) {
+        foundPolicy = parsed.meta.runtime.turnPolicy;
+        break;
+      }
+    } catch {
+      // keep scanning
+    }
+  }
+  assert.ok(foundPolicy, 'sentinel should include turnPolicy summary');
+  assert.equal(foundPolicy.toolCallMode, 'native');
+  assert.equal(foundPolicy.shouldRunAgentic, true);
+  cognitiveMetrics.reset();
+});

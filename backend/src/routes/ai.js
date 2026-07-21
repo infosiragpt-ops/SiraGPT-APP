@@ -5608,7 +5608,7 @@ router.post(
               // fenced-JSON calls parsed back — lets ANY model drive the
               // loop), or 'none' (prompted disabled via env → legacy gate).
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
-              if (
+              const __agenticWillRun = (
                 agenticStream.isEnabled()
                 && shouldRunAgentic
                 // Callers that want a plain LLM stream (e.g. the /code chat,
@@ -5617,7 +5617,62 @@ router.post(
                 && req.body.disableAgentic !== true
                 && __toolCallMode !== 'none'
                 && !hasImages
-              ) {
+              );
+              // U3: shadow turn-policy snapshot (observe by default). Never
+              // overrides routing/tool decisions in this unit.
+              let __turnPolicy = null;
+              try {
+                const turnPolicyService = require('../services/turn-policy');
+                const __disabledReason = !agenticStream.isEnabled()
+                  ? 'agentic_disabled'
+                  : (req.body.disableAgentic === true
+                    ? 'caller_disabled'
+                    : (__toolCallMode === 'none'
+                      ? 'tool_call_mode_none'
+                      : (hasImages
+                        ? 'images_attached'
+                        : (shouldRunAgentic ? null : 'routing_gate'))));
+                __turnPolicy = turnPolicyService.buildTurnPolicy({
+                  model: actualModel,
+                  provider: actualProvider,
+                  plan: (req.user && req.user.plan) || 'FREE',
+                  cognitiveDecision: req._cognitiveDecision || null,
+                  toolCallMode: __toolCallMode,
+                  routing: {
+                    shouldRunAgentic: __agenticWillRun,
+                    disabledReason: __agenticWillRun ? null : __disabledReason,
+                  },
+                  capabilities: {
+                    toolCallMode: __toolCallMode,
+                    supportsImages: hasImages,
+                  },
+                  tools: {
+                    hasFiles: Array.isArray(processedFiles) && processedFiles.some(
+                      (file) => file && !isImageMime(file.mimeType || file.type),
+                    ),
+                    hasCode: !!(req._cognitiveDecision
+                      && req._cognitiveDecision.difficulty
+                      && req._cognitiveDecision.difficulty.hasCode),
+                  },
+                  skills: {
+                    clearance: resolveUserSkillClearance(req.user),
+                    recommendedSkillIds: Array.isArray(semanticIntentAnalysis?.skill_plan?.selected_skills)
+                      ? semanticIntentAnalysis.skill_plan.selected_skills.map((skill) => skill?.id).filter(Boolean)
+                      : [],
+                  },
+                  reasons: [
+                    `routing:${__agenticWillRun ? 'agentic' : 'plain'}`,
+                    `toolCallMode:${__toolCallMode}`,
+                  ],
+                });
+                req._turnPolicy = __turnPolicy;
+                if (__turnPolicy && !__agenticWillRun) {
+                  try {
+                    require('../services/cognitive-metrics').recordTurnPolicy(__turnPolicy);
+                  } catch (_) { /* metrics never block */ }
+                }
+              } catch (_) { __turnPolicy = null; }
+              if (__agenticWillRun) {
                 // The agentic loop ALWAYS runs on the model the user picked —
                 // no silent substitution of a stronger model underneath. The
                 // chosen provider/model drives every step (plan → tools →
@@ -5699,6 +5754,7 @@ router.post(
                   res,
                   signal,
                   toolCallMode: __toolCallMode,
+                  turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision
                   // (intent/difficulty) lets the agentic loop hand the model a
                   // small, relevant tool subset instead of all ~37-73 tools.
