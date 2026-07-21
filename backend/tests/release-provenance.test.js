@@ -108,18 +108,18 @@ test('production deploy supports an explicit release tag without enabling branch
   assert.match(workflow, /github\.event\.forced == false/);
 });
 
-test('equivalent-schema compatibility is explicit per release tag and never global', () => {
+test('U0 migration baseline is explicit per release tag and never global', () => {
   const workflow = read('.github/workflows/deploy.yml');
 
-  assert.match(workflow, /startsWith\(github\.ref_name, 'deploy-production-equivalent-'\)/);
-  assert.match(workflow, /ALLOW_EQUIVALENT_UNBASELINED:\s+\$\{\{/);
-  assert.match(workflow, /envs: DEPLOY_GH_TOKEN,TARGET_SHA,ALLOW_EQUIVALENT_UNBASELINED/);
-  assert.match(
-    workflow,
-    /-e MIGRATION_ALLOW_EQUIVALENT_UNBASELINED="\$\{ALLOW_EQUIVALENT_UNBASELINED\}"/,
-  );
-  assert.match(workflow, /\[\[ "\$\{ALLOW_EQUIVALENT_UNBASELINED\}" =~ \^\(0\|1\)\$ \]\]/);
-  assert.doesNotMatch(workflow, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED=1\s+backend/);
+  assert.match(workflow, /startsWith\(github\.ref_name, 'deploy-production-baseline-'\)/);
+  assert.match(workflow, /ALLOW_MIGRATION_BASELINE:\s+\$\{\{/);
+  assert.match(workflow, /envs: DEPLOY_GH_TOKEN,TARGET_SHA,ALLOW_MIGRATION_BASELINE/);
+  assert.match(workflow, /baseline-migration-history\.js/);
+  assert.match(workflow, /MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA/);
+  assert.match(workflow, /\[\[ "\$\{ALLOW_MIGRATION_BASELINE\}" =~ \^\(0\|1\)\$ \]\]/);
+  assert.doesNotMatch(workflow, /ALLOW_EQUIVALENT_UNBASELINED/);
+  assert.doesNotMatch(workflow, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
+  assert.doesNotMatch(workflow, /deploy-production-equivalent-/);
 });
 
 test('production deploy proves the exact commit and restores rollback provenance', () => {

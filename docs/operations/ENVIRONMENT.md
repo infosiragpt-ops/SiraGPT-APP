@@ -64,7 +64,8 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot-time `pg` client query deadline | `15000` |
 | `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | PostgreSQL server statement timeout requested by boot-time `pg` clients | `15000` |
 | `MIGRATION_LOCK_TIMEOUT_MS` | Total advisory-lock acquisition deadline, including connect and lock queries | `120000` |
-| `MIGRATION_ALLOW_EQUIVALENT_UNBASELINED` | Temporary no-schema U1 compatibility. A bounded zero diff may accept P3005 without changing migration history. | `0` |
+| `MIGRATION_BASELINE_CONFIRM` | Exact phrase required by the reviewed U0 one-off `scripts/baseline-migration-history.js` (`I_REVIEWED_PRODUCTION_SCHEMA`). Never read by boot or `--migrate-only`. | — |
+| `MIGRATION_BASELINE_DRY_RUN` | When `1`, the U0 baseline script inventories and proves schema equivalence without calling `migrate resolve` | `0` |
 | `SKIP_MIGRATIONS` | Skip migration execution for normal local boot only. Release `--migrate-only` rejects it. | `0` |
 | `MIGRATION_NONFATAL` | Permit normal server boot to start degraded after a non-configuration migration failure. Never affects `--migrate-only`. | `0` |
 | `DATABASE_POOL_MIN` | Informational lower pool bound used by instrumentation; clamped to `1..DATABASE_POOL_MAX` | `2` |
@@ -114,14 +115,15 @@ non-zero. It also rejects `SKIP_MIGRATIONS=1` with configuration exit 78.
 Normal local server boot may skip migrations or use the documented
 `MIGRATION_NONFATAL=1` degraded policy, but neither weakens release migrations.
 
-P3005 never invokes `prisma migrate resolve` in either path. For this no-schema
-U1 rollout only, `MIGRATION_ALLOW_EQUIVALENT_UNBASELINED=1` runs a bounded
-`prisma migrate diff --exit-code` from the direct datasource to
-`schema.prisma`. A zero diff returns the distinct logged
-`schema_equivalent_unbaselined` success without retrying migration or modifying
-history; any drift or diff error fails. U0 must perform a reviewed one-off
-migration-history baseline before schema-bearing units. Do not use the U1
-compatibility mode as a substitute for that reviewed release operation.
+P3005 never invokes `prisma migrate resolve` from boot or `--migrate-only`.
+After the U0 cutover, an unbaselined database fails closed with
+`MIGRATION_HISTORY_BASELINE_REQUIRED`. The reviewed one-off
+`backend/scripts/baseline-migration-history.js` (triggered only by a
+`deploy-production-baseline-*` tag, with
+`MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA`) proves schema
+equivalence and then marks existing migration directories as applied without
+replaying historical DDL. Perform this reviewed one-off before schema-bearing units.
+Do not reintroduce silent P3005 acceptance.
 
 For direct `postgres:` and `postgresql:` runtime URLs, the runtime builder
 preserves unrelated parameters such as `schema`, `sslmode`, and `pgbouncer`,

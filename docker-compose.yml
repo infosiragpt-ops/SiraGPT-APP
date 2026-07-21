@@ -116,9 +116,6 @@ services:
       MIGRATION_LOCK_TIMEOUT_MS: "${MIGRATION_LOCK_TIMEOUT_MS:-120000}"
       # Local normal boot may skip; release --migrate-only rejects this value.
       SKIP_MIGRATIONS: "${SKIP_MIGRATIONS:-0}"
-      # Temporary no-schema rollout compatibility; proves equality only and
-      # never writes Prisma migration history.
-      MIGRATION_ALLOW_EQUIVALENT_UNBASELINED: "${MIGRATION_ALLOW_EQUIVALENT_UNBASELINED:-0}"
       # Normal boot only; --migrate-only remains strict regardless.
       MIGRATION_NONFATAL: "${MIGRATION_NONFATAL:-0}"
       REDIS_URL: "redis://redis:6379"

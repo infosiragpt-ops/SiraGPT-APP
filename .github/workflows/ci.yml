@@ -280,18 +280,20 @@ jobs:
       - name: Prisma · generate client
         run: npx prisma generate --schema prisma/schema.prisma
 
-      # Using `db push` (not `migrate deploy`) because the repo has no
-      # migration history yet — push materializes the schema directly
-      # from `schema.prisma`. Switch to `migrate deploy` once migrations
-      # start shipping from the team's workflow.
-      # `db push` won't run CREATE EXTENSION for Unsupported() columns,
-      # so the vector extension is created explicitly first.
+      # CI and production share the same `prisma migrate deploy` path (U0).
+      # `db push` alone is intentionally not used — it skips migration history
+      # and would hide P3005 / baseline gaps that production must surface.
+      # After migrate deploy succeeds on an empty service DB, align residual
+      # schema.prisma drift additively so the test suite sees the same models
+      # production already has from the reviewed U0 baseline.
       - name: Prisma · enable pgvector on service DB
         run: |
           npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
           CREATE EXTENSION IF NOT EXISTS vector;
           SQL
-      - name: Prisma · push schema to Postgres service
+      - name: Prisma · migrate deploy on Postgres service
+        run: npx prisma migrate deploy --schema prisma/schema.prisma
+      - name: Prisma · align residual schema.prisma drift for tests
         run: npx prisma db push --schema prisma/schema.prisma --accept-data-loss --skip-generate
 
       - name: Release provenance contracts

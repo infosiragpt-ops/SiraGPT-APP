@@ -16,7 +16,26 @@ CREATE INDEX IF NOT EXISTS "chats_projectId_idx" ON "chats"("projectId");
 -- agent_tasks: FK on chatId (chat -> tasks listings)
 CREATE INDEX IF NOT EXISTS "agent_tasks_chatId_idx" ON "agent_tasks"("chatId");
 
--- message_shares: lookups by messageId / chatId
+-- message_shares: historically created via db push only (U0 empty-DB fix)
+CREATE TABLE IF NOT EXISTS "message_shares" (
+    "id"                 TEXT NOT NULL,
+    "messageId"          TEXT NOT NULL,
+    "chatId"             TEXT NOT NULL,
+    "userMessageId"      TEXT NOT NULL,
+    "assistantMessageId" TEXT NOT NULL,
+    "sharedAt"           TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "message_shares_pkey" PRIMARY KEY ("id")
+);
+
+DO $$ BEGIN
+  ALTER TABLE "message_shares"
+    ADD CONSTRAINT "message_shares_chatId_fkey"
+    FOREIGN KEY ("chatId") REFERENCES "chats"("id")
+    ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 CREATE INDEX IF NOT EXISTS "message_shares_messageId_idx" ON "message_shares"("messageId");
 CREATE INDEX IF NOT EXISTS "message_shares_chatId_idx" ON "message_shares"("chatId");
 

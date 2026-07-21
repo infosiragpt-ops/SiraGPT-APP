@@ -533,7 +533,6 @@ test('both Compose backends pass through database roles and boot timeout control
       'MIGRATION_DB_QUERY_TIMEOUT_MS',
       'MIGRATION_DB_STATEMENT_TIMEOUT_MS',
       'MIGRATION_LOCK_TIMEOUT_MS',
-      'MIGRATION_ALLOW_EQUIVALENT_UNBASELINED',
       'MIGRATION_NONFATAL',
     ]) {
       assert.match(
@@ -652,7 +651,6 @@ test('database role and boot timeout variables are documented in examples and en
     'MIGRATION_DB_QUERY_TIMEOUT_MS',
     'MIGRATION_DB_STATEMENT_TIMEOUT_MS',
     'MIGRATION_LOCK_TIMEOUT_MS',
-    'MIGRATION_ALLOW_EQUIVALENT_UNBASELINED',
     'SKIP_MIGRATIONS',
     'MIGRATION_NONFATAL',
   ];
@@ -660,5 +658,9 @@ test('database role and boot timeout variables are documented in examples and en
   for (const contents of files) {
     for (const variable of variables) assert.match(contents, new RegExp(`\\b${variable}\\b`));
     assert.doesNotMatch(contents, /PRISMA_BASELINE_(?:ON_P3005|MIGRATION)/);
+    assert.doesNotMatch(contents, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
   }
+  assert.match(files[2], /baseline-migration-history\.js/);
+  assert.match(files[2], /I_REVIEWED_PRODUCTION_SCHEMA/);
+  assert.match(files[3], /baseline-migration-history\.js/);
 });

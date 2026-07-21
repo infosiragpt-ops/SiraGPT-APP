@@ -10,7 +10,8 @@ ALTER TABLE "user_memories" ADD COLUMN IF NOT EXISTS "embedding" vector(1536);
 -- The service writes via raw INSERT without id/updated_at (Prisma normally
 -- supplies both app-side). Defaults keep raw writes valid without affecting
 -- Prisma-managed writes, which always send explicit values.
-ALTER TABLE "user_memories" ALTER COLUMN "id" SET DEFAULT gen_random_uuid()::text;
+-- id is UUID in the durable pgvector memory table; keep a UUID default.
+ALTER TABLE "user_memories" ALTER COLUMN "id" SET DEFAULT gen_random_uuid();
 ALTER TABLE "user_memories" ALTER COLUMN "updated_at" SET DEFAULT CURRENT_TIMESTAMP;
 
 -- ON CONFLICT (user_id, content_hash) requires a UNIQUE index. Postgres

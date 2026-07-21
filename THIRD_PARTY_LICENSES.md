@@ -804,7 +804,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `accepts` | 1.3.8, 2.0.0 | MIT | [link](https://github.com/jshttp/accepts) |
 | `acorn` | 8.16.0 | MIT | [link](https://github.com/acornjs/acorn) |
 | `acorn-import-attributes` | 1.9.5 | MIT | [link](https://github.com/xtuc/acorn-import-attributes) |
-| `adm-zip` | 0.5.18 | MIT | [link](https://github.com/cthackers/adm-zip) |
+| `adm-zip` | 0.6.0 | MIT | [link](https://github.com/cthackers/adm-zip) |
 | `agent-base` | 6.0.2, 7.1.4 | MIT | [link](https://github.com/TooTallNate/node-agent-base) |
 | `ajv` | 8.20.0 | MIT | [link](https://github.com/ajv-validator/ajv) |
 | `ajv-formats` | 3.0.1 | MIT | [link](https://github.com/ajv-validator/ajv-formats) |
@@ -844,7 +844,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `boolean` | 3.2.0 | MIT | [link](https://github.com/thenativeweb/boolean) |
 | `bottleneck` | 2.19.5 | MIT | [link](https://github.com/SGrondin/bottleneck) |
 | `bowser` | 2.14.1 | MIT | [link](https://github.com/bowser-js/bowser) |
-| `brace-expansion` | 1.1.14, 2.1.0, 2.1.1 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
+| `brace-expansion` | 1.1.14, 1.1.16, 2.1.0, 2.1.2 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
 | `braces` | 3.0.3 | MIT | [link](https://github.com/micromatch/braces) |
 | `brotli` | 1.3.3 | MIT | [link](https://github.com/devongovett/brotli.js) |
 | `browserslist` | 4.28.2 | MIT | [link](https://github.com/browserslist/browserslist) |
