@@ -58,6 +58,7 @@ test('deploy workflow wires deploy-production-baseline-* to the reviewed one-off
   assert.match(workflow, /envs: DEPLOY_GH_TOKEN,TARGET_SHA,ALLOW_MIGRATION_BASELINE/);
   assert.match(workflow, /baseline-migration-history\.js/);
   assert.match(workflow, /MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA/);
+  assert.match(workflow, /MIGRATION_BASELINE_SYNC_SCHEMA=1/);
   assert.doesNotMatch(workflow, /ALLOW_EQUIVALENT_UNBASELINED/);
   assert.doesNotMatch(workflow, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
   assert.doesNotMatch(workflow, /deploy-production-equivalent-/);
