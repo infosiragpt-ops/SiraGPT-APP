@@ -39,6 +39,26 @@ unless the migration file contains an explicit marker:
 Override at the workflow level by setting the env var
 `MIGRATION_SAFETY_OVERRIDE=1` (use with care — break-glass only).
 
+### U0 Prisma migration baseline
+
+Production must use the same `prisma migrate deploy` path as CI. If the
+live database is schema-equivalent but has no `_prisma_migrations` history
+(P3005), do **not** accept that from boot. Instead:
+
+1. Merge the U0 commit to `production-main` and wait for green CI
+   (`migrate deploy` on an empty service database).
+2. Push an annotated tag `deploy-production-baseline-<shortsha>` at that
+   exact SHA. The deploy workflow runs the reviewed one-off
+   `backend/scripts/baseline-migration-history.js` (confirm phrase
+   `I_REVIEWED_PRODUCTION_SCHEMA`) which proves zero schema drift and marks
+   existing migration directories as applied **without replaying DDL**.
+3. The same deploy then runs `--migrate-only`. Subsequent
+   `deploy-production-*` tags use strict `migrate deploy` only.
+4. Schema-bearing units must not ship until this baseline is green in
+   production. Rollback of later schema migrations is constrained by
+   additive-only migration safety; historical DDL is never replayed by the
+   baseline script.
+
 ### Post-deploy health check
 
 After `deploy-with-rollback.sh` returns, the workflow polls

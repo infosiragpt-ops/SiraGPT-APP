@@ -274,7 +274,8 @@ so a Redis incident does not brick unrelated API reads.
 | `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot `pg` query timeout (default `15000`) |
 | `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | Boot PostgreSQL statement timeout (default `15000`) |
 | `MIGRATION_LOCK_TIMEOUT_MS` | Total lock deadline including connect/query (default `120000`) |
-| `MIGRATION_ALLOW_EQUIVALENT_UNBASELINED` | Temporary no-schema U1 compatibility: P3005 may return `schema_equivalent_unbaselined` only after a bounded zero diff; never changes migration history (default `0`) |
+| `MIGRATION_BASELINE_CONFIRM` | Exact confirm phrase for reviewed U0 one-off `scripts/baseline-migration-history.js` (`I_REVIEWED_PRODUCTION_SCHEMA`); never read by boot/`--migrate-only` |
+| `MIGRATION_BASELINE_DRY_RUN` | Inventory + equivalence check only for the U0 baseline script (default `0`) |
 | `SKIP_MIGRATIONS` | Skip migrations during normal local boot only; rejected by `--migrate-only` (default `0`) |
 | `MIGRATION_NONFATAL` | Explicit degraded policy for normal boot only; `--migrate-only` remains strict |
 | `DATABASE_POOL_MIN` | Instrumentation lower bound (default `2`, capped by max) |
@@ -315,14 +316,14 @@ material fails with a stable value-free code, and contents/paths are never
 logged. Insecure or conflicting URL modes fail closed unless
 `DATABASE_SSL_REJECT_UNAUTHORIZED=false` is explicit.
 
-P3005 never auto-baselines or invokes `prisma migrate resolve`. The temporary
-`MIGRATION_ALLOW_EQUIVALENT_UNBASELINED=1` path is limited to the no-schema U1
-rollout: a bounded zero diff returns the logged
-`schema_equivalent_unbaselined` result without retrying migration or changing
-history; drift fails. U0 must perform a reviewed one-off migration-history
-baseline before schema-bearing units. Release `--migrate-only` fails non-zero
-on preflight, lock, migration, release, or `SKIP_MIGRATIONS=1`; only normal
-local boot may skip or use `MIGRATION_NONFATAL=1`.
+P3005 never auto-baselines from boot or `--migrate-only` and never invokes
+`prisma migrate resolve` on those paths. After U0, unbaselined databases fail
+closed with `MIGRATION_HISTORY_BASELINE_REQUIRED`. The reviewed one-off
+`scripts/baseline-migration-history.js` (via `deploy-production-baseline-*`)
+proves schema equivalence and marks existing directories applied without
+replaying DDL — do this before schema-bearing units. Release `--migrate-only`
+fails non-zero on preflight, lock, migration, release, or `SKIP_MIGRATIONS=1`;
+only normal local boot may skip or use `MIGRATION_NONFATAL=1`.
 
 ---
 

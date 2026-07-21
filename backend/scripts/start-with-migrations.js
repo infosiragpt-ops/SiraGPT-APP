@@ -41,7 +41,10 @@ const MIGRATION_COMMAND_OUTPUT_LIMIT_EXIT_STATUS = 125;
 const MIGRATION_PROCESS_TREE_NOT_TERMINATED_EXIT_STATUS = 126;
 const MIGRATION_CONFIGURATION_EXIT_STATUS = 78;
 const MIGRATION_LIFECYCLE_EXIT_STATUS = 75;
-const MIGRATION_EQUIVALENT_UNBASELINED_ENV = "MIGRATION_ALLOW_EQUIVALENT_UNBASELINED";
+// U0 cutover: P3005 must be resolved via the reviewed one-off
+// `scripts/baseline-migration-history.js`. Boot and `--migrate-only` never
+// accept an unbaselined database and never call `migrate resolve`.
+
 const DATABASE_SSL_URL_KEYS = new Set([
   "ssl",
   "sslcert",
@@ -811,49 +814,6 @@ async function rollbackSafeFailedMigrations() {
   }
 }
 
-async function verifyEquivalentUnbaselinedSchema(options = {}) {
-  const env = options.env || process.env;
-  const runPrismaImpl = options.runPrismaImpl || ((args, prismaOptions = {}) => runPrisma(
-    args,
-    { ...prismaOptions, env },
-  ));
-  const logFn = options.logFn || log;
-
-  // The schema datasource reads DATABASE_URL. runPrisma synchronizes that
-  // child-only variable to the resolved direct migration datasource. The
-  // compatibility path proves equivalence only; it never edits migration
-  // history and is therefore safe only for this no-schema rollout.
-  const diffArgs = [
-    "migrate",
-    "diff",
-    "--from-schema-datasource",
-    "prisma/schema.prisma",
-    "--to-schema-datamodel",
-    "prisma/schema.prisma",
-    "--exit-code",
-  ];
-  logFn("verifying_equivalent_unbaselined_schema");
-  const diff = await runPrismaImpl(diffArgs, {
-    signal: options.signal,
-    timeoutMs: resolveMigrationCommandTimeoutMs(env),
-  });
-  const diffStatus = diff.error
-    ? Math.max(1, prismaCommandExitStatus(diff))
-    : prismaCommandExitStatus(diff);
-  if (diff.error || diffStatus !== 0) {
-    logFn("schema_drift_or_diff_failure", {
-      code: diff.migrationCode || diff.error?.code || "MIGRATION_SCHEMA_NOT_EQUIVALENT",
-      status: diffStatus,
-    });
-    return diffStatus;
-  }
-
-  logFn("schema_equivalent_unbaselined", {
-    migrationHistoryChanged: false,
-  });
-  return 0;
-}
-
 function sleep(ms, signal) {
   return new Promise((resolve) => {
     if (signal?.aborted) {
@@ -1292,19 +1252,12 @@ async function runMigrations(options = {}) {
   if (prismaCommandExitStatus(result) !== 0) {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     if (output.includes("P3005")) {
-      if (env[MIGRATION_EQUIVALENT_UNBASELINED_ENV] !== "1") {
-        logFn("P3005_unbaselined_migration_history", {
-          code: "MIGRATION_HISTORY_BASELINE_REQUIRED",
-          compatibilityMode: false,
-        });
-        return prismaCommandExitStatus(result);
-      }
-      return verifyEquivalentUnbaselinedSchema({
-        env,
-        signal,
-        runPrismaImpl: invokePrisma,
-        logFn,
+      logFn("P3005_unbaselined_migration_history", {
+        code: "MIGRATION_HISTORY_BASELINE_REQUIRED",
+        hint: "Run reviewed U0 baseline via scripts/baseline-migration-history.js (deploy-production-baseline-* tag)",
+        compatibilityMode: false,
       });
+      return prismaCommandExitStatus(result);
     }
   }
   if (prismaCommandExitStatus(result) !== 0 && env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
@@ -1928,7 +1881,6 @@ module.exports = {
   closePgClient,
   runMigrations,
   runMigrationOnly,
-  verifyEquivalentUnbaselinedSchema,
   isMigrationOnlyMode,
   clearStalePortProcess,
   sanitizePgFailure,

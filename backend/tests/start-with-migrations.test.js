@@ -348,14 +348,17 @@ test("strict migrations return the transient Prisma failure after retries are ex
   assert.equal(status, 1);
 });
 
-test("P3005 fails without explicitly named equivalent-unbaselined compatibility mode", async () => {
+test("P3005 fails closed after U0 cutover even if legacy equivalent env is set", async () => {
   const calls = [];
+  const logs = [];
   const status = await runMigrations({
     strict: true,
     env: {
       DIRECT_DATABASE_URL: "postgres://migration.invalid/app",
       MIGRATION_TRANSIENT_RETRIES: "1",
+      MIGRATION_ALLOW_EQUIVALENT_UNBASELINED: "1",
     },
+    logFn: (msg, extra = {}) => logs.push({ msg, ...extra }),
     runPrismaImpl: async (args, options) => {
       calls.push({ args, options });
       return { status: 1, stdout: "", stderr: "Error: P3005" };
@@ -365,11 +368,16 @@ test("P3005 fails without explicitly named equivalent-unbaselined compatibility 
   assert.notEqual(status, 0);
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].args, ["migrate", "deploy"]);
+  assert.equal(
+    logs.some((entry) => entry.code === "MIGRATION_HISTORY_BASELINE_REQUIRED"),
+    true,
+  );
+  assert.equal(calls.some((call) => call.args.includes("diff")), false);
+  assert.equal(calls.some((call) => call.args.includes("resolve")), false);
 });
 
-test("explicit equivalent-unbaselined mode accepts a zero diff without resolve or migrate retry", async () => {
+test("legacy equivalent-unbaselined mode is removed from the migration wrapper", async () => {
   const calls = [];
-  const logs = [];
   const status = await runMigrations({
     strict: true,
     env: {
@@ -378,38 +386,17 @@ test("explicit equivalent-unbaselined mode accepts a zero diff without resolve o
       MIGRATION_ALLOW_EQUIVALENT_UNBASELINED: "1",
       MIGRATION_COMMAND_TIMEOUT_MS: "4321",
     },
-    logFn: (msg, extra = {}) => logs.push({ msg, ...extra }),
-    runPrismaImpl: async (args, options) => {
-      calls.push({ args, options });
-      if (args[1] === "deploy") {
-        return { status: 1, stdout: "", stderr: "Error: P3005" };
-      }
-      return { status: 0, stdout: "", stderr: "" };
+    runPrismaImpl: async (args) => {
+      calls.push(args);
+      return { status: 1, stdout: "", stderr: "Error: P3005" };
     },
   });
 
-  assert.equal(status, 0);
-  assert.deepEqual(calls.map((call) => call.args), [
-    ["migrate", "deploy"],
-    [
-      "migrate",
-      "diff",
-      "--from-schema-datasource",
-      "prisma/schema.prisma",
-      "--to-schema-datamodel",
-      "prisma/schema.prisma",
-      "--exit-code",
-    ],
-  ]);
-  assert.equal(calls[1].options.timeoutMs, 4321);
-  assert.equal(calls.some((call) => call.args.includes("resolve")), false);
-  assert.equal(
-    logs.some((entry) => entry.msg === "schema_equivalent_unbaselined"),
-    true,
-  );
+  assert.notEqual(status, 0);
+  assert.deepEqual(calls, [["migrate", "deploy"]]);
 });
 
-test("equivalent-unbaselined mode rejects schema drift without resolve or migrate retry", async () => {
+test("P3005 never falls through to schema-diff compatibility", async () => {
   const calls = [];
   const status = await runMigrations({
     strict: true,
@@ -420,19 +407,12 @@ test("equivalent-unbaselined mode rejects schema drift without resolve or migrat
     },
     runPrismaImpl: async (args) => {
       calls.push(args);
-      if (args[1] === "deploy") {
-        return { status: 1, stdout: "", stderr: "Error: P3005" };
-      }
-      return { status: 2, stdout: "schema differs", stderr: "" };
+      return { status: 1, stdout: "", stderr: "Error: P3005" };
     },
   });
 
-  assert.equal(status, 2);
-  assert.deepEqual(calls.map((args) => args.slice(0, 2)), [
-    ["migrate", "deploy"],
-    ["migrate", "diff"],
-  ]);
-  assert.equal(calls.some((args) => args.includes("resolve")), false);
+  assert.notEqual(status, 0);
+  assert.deepEqual(calls, [["migrate", "deploy"]]);
 });
 
 test("migration wrapper contains no automatic migrate resolve path or legacy baseline env", () => {
@@ -448,9 +428,12 @@ test("migration wrapper contains no automatic migrate resolve path or legacy bas
 
   for (const source of [wrapperSource, startAll, deployScript, deployWorkflow]) {
     assert.doesNotMatch(source, /PRISMA_BASELINE_(?:ON_P3005|MIGRATION)/);
+    assert.doesNotMatch(source, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
   }
   assert.doesNotMatch(wrapperSource, /["']migrate["']\s*,\s*["']resolve["']/);
   assert.match(deployWorkflow, /-e\s+SKIP_MIGRATIONS=0/);
+  assert.match(deployWorkflow, /baseline-migration-history\.js/);
+  assert.match(deployWorkflow, /deploy-production-baseline-/);
 
   const standardCompose = fs.readFileSync(
     path.join(__dirname, "..", "..", "docker-compose.yml"),
