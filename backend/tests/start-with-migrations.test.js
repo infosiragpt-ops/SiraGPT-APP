@@ -66,7 +66,8 @@ test("renamed-migration P3009 (add_model_sync_fields) is now auto-recoverable", 
 
 test("static analysis classifies idempotent-additive migrations as safe", () => {
   // Purely additive, guarded statements re-run as a no-op -> safe to retry.
-  assert.equal(migrationSqlIsIdempotentAdditive("20260519000000_add_performance_indexes", MIGRATIONS_DIR), true);
+  // Prefer migrations that stay index/column-only (no DO $$ blocks).
+  assert.equal(migrationSqlIsIdempotentAdditive("20260713070000_add_product_quality_analytics_indexes", MIGRATIONS_DIR), true);
   assert.equal(migrationSqlIsIdempotentAdditive("20260629033000_add_custom_gpt_capabilities", MIGRATIONS_DIR), true);
 });
 

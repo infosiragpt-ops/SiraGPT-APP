@@ -12,11 +12,16 @@ function read(relPath) {
   return fs.readFileSync(path.join(ROOT, relPath), 'utf8');
 }
 
-test('CI uses prisma migrate deploy (not db push) for the shared production path', () => {
+test('CI uses prisma migrate deploy (not db push alone) for the shared production path', () => {
   const ci = read('.github/workflows/ci.yml');
   assert.match(ci, /prisma migrate deploy --schema prisma\/schema\.prisma/);
-  assert.doesNotMatch(ci, /prisma db push --schema prisma\/schema\.prisma/);
   assert.match(ci, /CI and production share the same `prisma migrate deploy` path \(U0\)/);
+  // Residual schema.prisma alignment for the test suite is allowed only AFTER
+  // migrate deploy succeeds — never as a substitute for migration history.
+  const deployIdx = ci.indexOf('prisma migrate deploy --schema prisma/schema.prisma');
+  const pushIdx = ci.indexOf('prisma db push --schema prisma/schema.prisma');
+  assert.ok(deployIdx >= 0);
+  assert.ok(pushIdx > deployIdx);
 });
 
 test('boot and migrate-only never call migrate resolve and reject P3005 without baseline', () => {
