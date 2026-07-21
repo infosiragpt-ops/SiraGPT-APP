@@ -12,25 +12,62 @@ const crypto = require('crypto');
  *
  * Commands:
  *   /start, /help            → usage
- *   /code <goal>             → start a codex run (alias: /build, /agent, or
- *                              a plain message)
+ *   <plain text>             → conversational chat with the siraGPT assistant
+ *   /code <goal>             → start a codex run (alias: /build, /agent)
  *   /status <runId>          → report a run's status/phase/percent
  */
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
 const HELP = [
-  '🤖 *siraGPT Dev Agent*',
+  '🤖 *siraGPT*',
   '',
-  'Controla tu agente de código desde Telegram:',
+  'Escríbeme como a un asistente: pregunta lo que quieras y te respondo aquí mismo.',
   '',
+  'Comandos de agente de código:',
   '`/code <instrucción>` — inicia una tarea de desarrollo',
   '   ej: `/code crea una landing page con Tailwind y un formulario`',
   '`/status <runId>` — progreso de una tarea',
   '`/help` — esta ayuda',
-  '',
-  'También puedes escribir la instrucción directamente, sin comando.',
 ].join('\n');
+
+/**
+ * Tiny per-chat conversation memory so the Telegram bridge holds a real
+ * dialogue (follow-ups resolve pronouns, "y eso cómo se hace?" works).
+ * Pure + bounded: at most `maxTurns` messages per chat, `maxChats` chats
+ * (least-recently-used chat evicted first). No TTL — process-lifetime only.
+ */
+function createChatMemory({ maxTurns = 12, maxChats = 200 } = {}) {
+  const chats = new Map(); // chatId → [{ role, content }]
+  function history(chatId) {
+    const key = String(chatId);
+    const list = chats.get(key) || [];
+    if (chats.has(key)) {
+      // refresh recency (Map iteration order = insertion order)
+      chats.delete(key);
+      chats.set(key, list);
+    }
+    return list.slice();
+  }
+  function remember(chatId, role, content) {
+    const key = String(chatId);
+    const text = String(content || '').trim();
+    if (!text) return;
+    const list = chats.get(key) || [];
+    chats.delete(key);
+    list.push({ role: role === 'assistant' ? 'assistant' : 'user', content: text });
+    while (list.length > maxTurns) list.shift();
+    chats.set(key, list);
+    while (chats.size > maxChats) {
+      const oldest = chats.keys().next().value;
+      chats.delete(oldest);
+    }
+  }
+  function reset(chatId) {
+    chats.delete(String(chatId));
+  }
+  return { history, remember, reset, size: () => chats.size };
+}
 
 function getTelegramConfig(env = process.env) {
   const token = String(env.TELEGRAM_BOT_TOKEN || '').trim();
@@ -151,7 +188,7 @@ async function setTelegramWebhook(config) {
  *   - readRun(runId): async → run record (or null)
  */
 async function handleTelegramUpdate(update, deps = {}) {
-  const { config = {}, send, resolveUser, enqueueRun, readRun } = deps;
+  const { config = {}, send, resolveUser, enqueueRun, readRun, chatReply } = deps;
   const message = update && update.message;
   if (!message || !message.chat) return { handled: false };
 
@@ -176,7 +213,26 @@ async function handleTelegramUpdate(update, deps = {}) {
     return { handled: true, action: 'status', runId: args.trim() };
   }
 
-  if (command === 'code' || command === 'build' || command === 'agent' || command === 'message') {
+  // Plain text = talk to the assistant (OpenClaw-style inbox). Dev runs stay
+  // behind explicit /code|/build|/agent so a greeting can never launch one.
+  if (command === 'message') {
+    const text = String(args || '').trim();
+    if (!chatReply) {
+      await reply('💬 El chat conversacional no está disponible en este despliegue. Usa `/code <instrucción>` o `/help`.');
+      return { handled: true, action: 'chat_unavailable' };
+    }
+    try {
+      const user = resolveUser ? await resolveUser() : null;
+      const answer = await chatReply({ user, text, chatId });
+      await reply(String(answer || '').trim() || '🤖 (sin respuesta)');
+      return { handled: true, action: 'chat' };
+    } catch (err) {
+      await reply(`❌ No pude responder ahora mismo: ${err && err.message ? err.message : 'error'}. Intenta de nuevo en un momento.`);
+      return { handled: true, action: 'chat_error' };
+    }
+  }
+
+  if (command === 'code' || command === 'build' || command === 'agent') {
     const goal = String(args || '').trim();
     if (goal.length < 8) {
       await reply('✍️ Dame una instrucción más detallada (mín. 8 caracteres).\nEj: `/code crea una landing con Tailwind`');
@@ -213,4 +269,5 @@ module.exports = {
   sendTelegramMessage,
   setTelegramWebhook,
   handleTelegramUpdate,
+  createChatMemory,
 };

@@ -138,3 +138,71 @@ test('handleTelegramUpdate — /status reports run state', async () => {
   assert.match(sent[0], /run-9/);
   assert.match(sent[0], /plan/);
 });
+
+// ── Conversational relay (plain text = chat with the assistant) ──────────────
+
+test('handleTelegramUpdate — plain text routes to chatReply, not enqueueRun', async () => {
+  const sent = [];
+  const runs = [];
+  const chats = [];
+  const out = await tg.handleTelegramUpdate(
+    { message: { chat: { id: 1 }, text: 'hola, ¿qué es un ORM?' } },
+    {
+      config: { allowedChatIds: [] },
+      send: (id, t) => sent.push(t),
+      resolveUser: async () => ({ id: 'u1', name: 'Luis' }),
+      enqueueRun: async (p) => { runs.push(p); return { runId: 'nope' }; },
+      chatReply: async ({ user, text, chatId }) => { chats.push({ user, text, chatId }); return 'Un ORM mapea objetos a tablas.'; },
+    },
+  );
+  assert.equal(out.action, 'chat');
+  assert.equal(runs.length, 0, 'a greeting must NEVER launch a codex run');
+  assert.equal(chats.length, 1);
+  assert.equal(chats[0].text, 'hola, ¿qué es un ORM?');
+  assert.equal(chats[0].chatId, 1);
+  assert.equal(chats[0].user.name, 'Luis');
+  assert.equal(sent[0], 'Un ORM mapea objetos a tablas.');
+});
+
+test('handleTelegramUpdate — chatReply failure yields a polite retry message', async () => {
+  const sent = [];
+  const out = await tg.handleTelegramUpdate(
+    { message: { chat: { id: 1 }, text: 'hola' } },
+    {
+      config: { allowedChatIds: [] },
+      send: (id, t) => sent.push(t),
+      chatReply: async () => { throw new Error('all providers failed'); },
+    },
+  );
+  assert.equal(out.action, 'chat_error');
+  assert.match(sent[0], /No pude responder/);
+});
+
+test('handleTelegramUpdate — plain text without chatReply explains and suggests /code', async () => {
+  const sent = [];
+  const out = await tg.handleTelegramUpdate(
+    { message: { chat: { id: 1 }, text: 'hola' } },
+    { config: { allowedChatIds: [] }, send: (id, t) => sent.push(t) },
+  );
+  assert.equal(out.action, 'chat_unavailable');
+  assert.match(sent[0], /\/code/);
+});
+
+test('createChatMemory — caps turns per chat and evicts the least-recent chat', () => {
+  const mem = tg.createChatMemory({ maxTurns: 4, maxChats: 2 });
+  for (let i = 1; i <= 6; i++) mem.remember('a', i % 2 ? 'user' : 'assistant', `m${i}`);
+  const hist = mem.history('a');
+  assert.equal(hist.length, 4, 'oldest turns dropped at the cap');
+  assert.equal(hist[0].content, 'm3');
+  assert.equal(hist[3].content, 'm6');
+
+  mem.remember('b', 'user', 'hi');
+  mem.history('a'); // refresh 'a' recency → 'b' is now least-recent
+  mem.remember('c', 'user', 'yo'); // maxChats=2 → evicts 'b'
+  assert.equal(mem.history('b').length, 0, 'least-recent chat evicted');
+  assert.equal(mem.history('a').length, 4, 'recently-used chat survives');
+
+  mem.reset('a');
+  assert.equal(mem.history('a').length, 0);
+  assert.equal(typeof mem.size(), 'number');
+});

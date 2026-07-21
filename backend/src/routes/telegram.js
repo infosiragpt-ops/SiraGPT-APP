@@ -1,12 +1,14 @@
 'use strict';
 
 /**
- * /api/telegram — Telegram remote control for siraGPT dev agents.
+ * /api/telegram — siraGPT on Telegram: conversational assistant (plain text →
+ * LLM ladder reply, per-chat rolling memory) + remote control for dev agents
+ * (/code, /status).
  *
  * Mounted WITHOUT CSRF (external POST from Telegram, gated by a secret token
  * header). Inert unless TELEGRAM_BOT_TOKEN is configured. Heavy deps
- * (orchestrator, prisma) are lazy-required inside handlers so requiring this
- * route never affects boot.
+ * (orchestrator, prisma, LLM provider) are lazy-required inside handlers so
+ * requiring this route never affects boot.
  */
 
 const express = require('express');
@@ -14,6 +16,38 @@ const crypto = require('crypto');
 const tg = require('../services/telegram/telegram-control');
 
 const router = express.Router();
+
+// Per-chat rolling memory for the conversational relay (process-lifetime).
+const chatMemory = tg.createChatMemory({ maxTurns: 12, maxChats: 200 });
+
+const CHAT_SYSTEM_PROMPT = [
+  'Eres siraGPT, el asistente personal de IA de siragpt.com, respondiendo por Telegram.',
+  'Responde en el idioma del usuario (por defecto español), de forma útil, directa y concisa',
+  '(es una app de mensajería: evita muros de texto; usa listas cortas cuando ayuden).',
+  'Si el usuario pide construir software, sugiérele el comando /code <instrucción>.',
+  'No inventes datos; si no sabes algo, dilo.',
+].join(' ');
+
+// Conversational relay: plain Telegram text → LLM ladder → reply. Lazy-requires
+// the provider so an unconfigured deployment never pays the import.
+async function telegramChatReply({ user, text, chatId }) {
+  const { chatComplete } = require('../services/codex/llm-provider');
+  const system = user && (user.name || user.email)
+    ? `${CHAT_SYSTEM_PROMPT} Hablas con ${user.name || user.email}.`
+    : CHAT_SYSTEM_PROMPT;
+  const messages = [
+    { role: 'system', content: system },
+    ...chatMemory.history(chatId),
+    { role: 'user', content: text },
+  ];
+  const out = await chatComplete({ messages, temperature: 0.4, maxTokens: 700 });
+  const answer = String(out?.content || '').trim();
+  if (answer) {
+    chatMemory.remember(chatId, 'user', text);
+    chatMemory.remember(chatId, 'assistant', answer);
+  }
+  return answer;
+}
 
 // Best-effort: poll a run and push milestone updates back to Telegram.
 function startRunPoller(config, chatId, runId) {
@@ -84,6 +118,7 @@ router.post('/webhook', async (req, res) => {
     await tg.handleTelegramUpdate(req.body, {
       config: cfg,
       send: (chatId, text) => tg.sendTelegramMessage(cfg.token, chatId, text),
+      chatReply: telegramChatReply,
       resolveUser: async () => {
         if (!cfg.agentUserId) return null;
         try {
