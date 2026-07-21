@@ -385,12 +385,15 @@ jobs:
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
             if [[ "${ALLOW_MIGRATION_BASELINE}" == "1" ]]; then
-              echo "[deploy-workflow] U0 reviewed migration-history baseline (no DDL replay)"
-              # Confirms schema equivalence, then marks existing migration
-              # directories as applied. Never invoked from boot/--migrate-only.
+              echo "[deploy-workflow] U0 reviewed migration-history baseline (sync residual schema, then mark applied)"
+              # 1) prisma db push WITHOUT --accept-data-loss aligns residual
+              #    db-push-era drift to schema.prisma under the confirm gate
+              # 2) mark migration directories applied (no DDL replay of history)
+              # Never invoked from boot/--migrate-only.
               BASELINE_STATUS=0
               BASELINE_OUTPUT="$(${COMPOSE} run -T --rm \
                 -e MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA \
+                -e MIGRATION_BASELINE_SYNC_SCHEMA=1 \
                 backend node scripts/baseline-migration-history.js </dev/null 2>&1)" \
                 || BASELINE_STATUS="$?"
               printf '%s\n' "${BASELINE_OUTPUT}"

@@ -135,6 +135,103 @@ test('divergent schema blocks baseline without rewriting history', async () => {
   }
 });
 
+test('syncSchema applies db push without accept-data-loss then baselines', async () => {
+  const root = makeMigrationsFixture([
+    '20250101010101_alpha',
+    '20250202020202_beta',
+  ]);
+  const calls = [];
+  let diffPasses = false;
+  try {
+    const status = await baseline.baselineMigrationHistory({
+      migrationsDir: root,
+      syncSchema: true,
+      env: {
+        DIRECT_DATABASE_URL: 'postgres://migration.invalid/app',
+        [baseline.CONFIRM_ENV]: baseline.CONFIRM_PHRASE,
+        [baseline.SYNC_SCHEMA_ENV]: '1',
+      },
+      runPrismaImpl: async (args) => {
+        calls.push(args);
+        if (args[0] === 'migrate' && args[1] === 'diff') {
+          if (!diffPasses) {
+            return { status: 2, stdout: '[+] Added tables\n  - file_versions\n', stderr: '' };
+          }
+          return { status: 0, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'db' && args[1] === 'push') {
+          assert.equal(args.includes('--accept-data-loss'), false);
+          assert.deepEqual(args, ['db', 'push', '--schema', 'prisma/schema.prisma', '--skip-generate']);
+          diffPasses = true;
+          return { status: 0, stdout: 'synced', stderr: '' };
+        }
+        if (args[1] === 'resolve') {
+          return { status: 0, stdout: '', stderr: '' };
+        }
+        throw new Error(`unexpected prisma args: ${args.join(' ')}`);
+      },
+      readHistoryImpl: async () => ({
+        tableMissing: true,
+        applied: [],
+        failed: [],
+        pendingIncomplete: [],
+      }),
+    });
+    assert.equal(status, 0);
+    assert.deepEqual(
+      calls.map((args) => args.slice(0, 2)),
+      [
+        ['migrate', 'diff'],
+        ['db', 'push'],
+        ['migrate', 'diff'],
+        ['migrate', 'resolve'],
+        ['migrate', 'resolve'],
+      ],
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('syncSchema dry-run does not push or resolve', async () => {
+  const root = makeMigrationsFixture(['20250101010101_alpha']);
+  const calls = [];
+  const logs = [];
+  try {
+    const status = await baseline.baselineMigrationHistory({
+      migrationsDir: root,
+      dryRun: true,
+      syncSchema: true,
+      env: {
+        DIRECT_DATABASE_URL: 'postgres://migration.invalid/app',
+        [baseline.CONFIRM_ENV]: baseline.CONFIRM_PHRASE,
+        [baseline.SYNC_SCHEMA_ENV]: '1',
+        [baseline.DRY_RUN_ENV]: '1',
+      },
+      logFn: (msg, extra = {}) => logs.push({ msg, ...extra }),
+      runPrismaImpl: async (args) => {
+        calls.push(args);
+        if (args[1] === 'diff') {
+          return { status: 2, stdout: 'drift', stderr: '' };
+        }
+        throw new Error(`dry-run must not run ${args.join(' ')}`);
+      },
+      readHistoryImpl: async () => ({
+        tableMissing: true,
+        applied: [],
+        failed: [],
+        pendingIncomplete: [],
+      }),
+    });
+    assert.equal(status, 0);
+    assert.deepEqual(calls.map((args) => args.slice(0, 2)), [['migrate', 'diff']]);
+    assert.equal(logs.some((entry) => entry.msg === 'baseline_schema_sync_dry_run'), true);
+    assert.equal(logs.some((entry) => entry.msg === 'baseline_dry_run_complete'), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('failed migration history blocks baseline', async () => {
   const root = makeMigrationsFixture(['20250101010101_alpha']);
   try {
