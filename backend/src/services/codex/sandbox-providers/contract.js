@@ -12,6 +12,7 @@
 
 const PROVIDER_SCHEMA_VERSION = 'sira.sandbox-provider.v1';
 const ATTESTATION_SCHEMA_VERSION = 'sira.sandbox-attestation.v1';
+const INSTANCE_ATTESTATION_SCHEMA_VERSION = 'sira.sandbox-instance-attestation.v1';
 const SECRET_REF_SCHEMA_VERSION = 'sira.sandbox-secret-ref.v1';
 
 class SandboxContractError extends Error {
@@ -166,6 +167,107 @@ function normalizeSecretRef(candidate, { nowMs = Date.now() } = {}) {
   });
 }
 
+function requiredBoolean(value, field) {
+  if (typeof value !== 'boolean') fail('invalid_instance_attestation', `${field} must be boolean`);
+  return value;
+}
+
+function requiredPositiveInteger(value, field) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail('invalid_instance_attestation', `${field} must be a positive integer`);
+  }
+  return value;
+}
+
+/**
+ * Validate evidence collected from Docker inspect for one concrete sandbox.
+ * Unlike the provider's boot posture, this is checked after every lifecycle
+ * operation and cannot grant public access or secret handling in v1.
+ */
+function normalizeInstanceAttestation(candidate, { nowMs = Date.now() } = {}) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    fail('invalid_instance_attestation', 'sandbox instance attestation must be an object');
+  }
+  if (candidate.schemaVersion !== INSTANCE_ATTESTATION_SCHEMA_VERSION) {
+    fail('invalid_instance_attestation', `instance attestation schema must be ${INSTANCE_ATTESTATION_SCHEMA_VERSION}`);
+  }
+  const observedAt = nonEmptyString(candidate.observedAt, 'instanceAttestation.observedAt');
+  const expiresAt = nonEmptyString(candidate.expiresAt, 'instanceAttestation.expiresAt');
+  if (!Number.isFinite(Date.parse(observedAt)) || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= nowMs) {
+    fail('invalid_instance_attestation', 'instance attestation timestamps are invalid or expired');
+  }
+  const sandboxRef = nonEmptyString(candidate.sandboxRef, 'instanceAttestation.sandboxRef');
+  const workspaceRef = nonEmptyString(candidate.workspaceRef, 'instanceAttestation.workspaceRef');
+  if (!/^sb_[A-Za-z0-9_-]{32}$/.test(sandboxRef) || !/^ws_[A-Za-z0-9_-]{43}$/.test(workspaceRef)) {
+    fail('invalid_instance_attestation', 'instance attestation references are invalid');
+  }
+  if (providerId(candidate.provider?.id) !== 'runsc-workspace'
+    || nonEmptyString(candidate.provider?.version, 'instanceAttestation.provider.version') !== '0.1.0') {
+    fail('invalid_instance_attestation', 'instance attestation provider is not the pinned runsc provider');
+  }
+
+  const normalized = {
+    schemaVersion: INSTANCE_ATTESTATION_SCHEMA_VERSION,
+    provider: { id: 'runsc-workspace', version: '0.1.0' },
+    sandboxRef,
+    workspaceRef,
+    observedAt,
+    expiresAt,
+    isolation: {
+      isolated: requiredBoolean(candidate.isolation?.isolated, 'isolation.isolated'),
+      boundary: nonEmptyString(candidate.isolation?.boundary, 'isolation.boundary'),
+      tenantScope: nonEmptyString(candidate.isolation?.tenantScope, 'isolation.tenantScope'),
+    },
+    runtime: {
+      name: nonEmptyString(candidate.runtime?.name, 'runtime.name'),
+      verifiedBy: nonEmptyString(candidate.runtime?.verifiedBy, 'runtime.verifiedBy'),
+    },
+    filesystem: {
+      rootReadonly: requiredBoolean(candidate.filesystem?.rootReadonly, 'filesystem.rootReadonly'),
+      workspaceVolumeExclusive: requiredBoolean(candidate.filesystem?.workspaceVolumeExclusive, 'filesystem.workspaceVolumeExclusive'),
+      hostBinds: requiredBoolean(candidate.filesystem?.hostBinds, 'filesystem.hostBinds'),
+    },
+    network: {
+      internal: requiredBoolean(candidate.network?.internal, 'network.internal'),
+      exclusive: requiredBoolean(candidate.network?.exclusive, 'network.exclusive'),
+      publishedPorts: requiredBoolean(candidate.network?.publishedPorts, 'network.publishedPorts'),
+    },
+    process: {
+      user: nonEmptyString(candidate.process?.user, 'process.user'),
+      capDropAll: requiredBoolean(candidate.process?.capDropAll, 'process.capDropAll'),
+      noNewPrivileges: requiredBoolean(candidate.process?.noNewPrivileges, 'process.noNewPrivileges'),
+    },
+    resources: {
+      memoryBytes: requiredPositiveInteger(candidate.resources?.memoryBytes, 'resources.memoryBytes'),
+      nanoCpus: requiredPositiveInteger(candidate.resources?.nanoCpus, 'resources.nanoCpus'),
+      pidsLimit: requiredPositiveInteger(candidate.resources?.pidsLimit, 'resources.pidsLimit'),
+      idleTimeoutMs: requiredPositiveInteger(candidate.resources?.idleTimeoutMs, 'resources.idleTimeoutMs'),
+    },
+    capabilities: {
+      publicMultiTenant: requiredBoolean(candidate.capabilities?.publicMultiTenant, 'capabilities.publicMultiTenant'),
+      secretRefs: requiredBoolean(candidate.capabilities?.secretRefs, 'capabilities.secretRefs'),
+    },
+  };
+  const safe = normalized.isolation.isolated === true
+    && normalized.isolation.boundary === 'gvisor-systrap'
+    && normalized.isolation.tenantScope === 'workspace'
+    && normalized.runtime.name === 'runsc-systrap'
+    && normalized.runtime.verifiedBy === 'docker-info+docker-inspect'
+    && normalized.filesystem.rootReadonly === true
+    && normalized.filesystem.workspaceVolumeExclusive === true
+    && normalized.filesystem.hostBinds === false
+    && normalized.network.internal === true
+    && normalized.network.exclusive === true
+    && normalized.network.publishedPorts === false
+    && normalized.process.user === '10001:10001'
+    && normalized.process.capDropAll === true
+    && normalized.process.noNewPrivileges === true
+    && normalized.capabilities.publicMultiTenant === false
+    && normalized.capabilities.secretRefs === false;
+  if (!safe) fail('unsafe_instance_attestation', 'sandbox instance evidence does not satisfy the runsc v1 policy');
+  return deepFreeze(normalized);
+}
+
 function hasSecretRefInput(options) {
   if (!options || typeof options !== 'object') return false;
   return Object.prototype.hasOwnProperty.call(options, 'secretRef')
@@ -185,6 +287,7 @@ function requireCapability(attestation, capability, operation) {
 module.exports = {
   PROVIDER_SCHEMA_VERSION,
   ATTESTATION_SCHEMA_VERSION,
+  INSTANCE_ATTESTATION_SCHEMA_VERSION,
   SECRET_REF_SCHEMA_VERSION,
   SandboxContractError,
   SandboxPolicyError,
@@ -192,6 +295,7 @@ module.exports = {
   normalizeProvider,
   normalizeAttestation,
   normalizeSecretRef,
+  normalizeInstanceAttestation,
   hasSecretRefInput,
   requireCapability,
 };
