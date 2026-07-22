@@ -35,11 +35,16 @@ function makeDeps({ run, project } = {}) {
 
 test('build run: queued → running → done with run_status events in order', async () => {
   const d = makeDeps();
-  const loop = async () => ({ status: 'done' });
+  let nativeInput;
+  const loop = async (args) => { nativeInput = args; return { status: 'done' }; };
   const res = await processCodexRunJob({ runId: 'run-1', prisma: d.prisma, eventStore: d.eventStore, runAgentLoop: loop, clock: d.clock });
   assert.equal(res.status, 'done');
   assert.equal(d.runRow.status, 'done');
   assert.ok(d.runRow.startedAt && d.runRow.finishedAt);
+  assert.equal(nativeInput.run.userId, 'u1');
+  assert.equal(nativeInput.project.name, 'Demo');
+  assert.equal(nativeInput.deps.prisma, d.prisma);
+  assert.equal(nativeInput.deps.eventStore, d.eventStore);
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running', 'done']);
 });
@@ -146,4 +151,82 @@ test('missing run returns not_found', async () => {
   const d = makeDeps();
   const res = await processCodexRunJob({ runId: 'nope', prisma: d.prisma, eventStore: d.eventStore, runAgentLoop: async () => ({ status: 'done' }) });
   assert.equal(res.status, 'not_found');
+});
+
+test('processor executes the selected adapter with the v1 envelope and owned lifecycle context', async () => {
+  const d = makeDeps();
+  let selectedEnv;
+  let received;
+  const agentAdapterRegistry = {
+    resolveImplementer({ env }) {
+      selectedEnv = env;
+      return {
+        execute(request, context) {
+          received = { request, context };
+          return { status: 'done' };
+        },
+      };
+    },
+  };
+  const env = { CODEX_IMPLEMENTER_ADAPTER: 'native', CODEX_RUN_TIMEOUT_MS: '60000', CODEX_MAX_STEPS: '7' };
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    agentAdapterRegistry,
+    clock: d.clock,
+    env,
+  });
+
+  assert.equal(res.status, 'done');
+  assert.equal(selectedEnv, env);
+  assert.equal(received.request.schemaVersion, 'sira.agent.v1');
+  assert.equal(received.request.role, 'implementer');
+  assert.equal(received.request.run.id, 'run-1');
+  assert.equal(received.request.project.id, 'p1');
+  assert.equal(Object.hasOwn(received.request.run, 'userId'), false);
+  assert.equal(Object.hasOwn(received.request.project, 'workspacePath'), false);
+  assert.deepEqual(received.request.budget, { timeoutMs: 60_000, maxSteps: 7 });
+  assert.deepEqual(received.context.deps, {});
+  assert.equal(received.context.nativeRun, undefined);
+  assert.equal(received.context.nativeProject, undefined);
+  assert.equal(typeof received.context.isCancelled, 'function');
+  assert.equal(received.context.signal.aborted, false);
+});
+
+test('unknown implementer configuration fails the run closed without calling native loop', async () => {
+  const d = makeDeps();
+  let loopCalled = false;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: async () => { loopCalled = true; return { status: 'done' }; },
+    clock: d.clock,
+    env: { CODEX_IMPLEMENTER_ADAPTER: 'not-installed' },
+  });
+
+  assert.equal(loopCalled, false);
+  assert.equal(res.status, 'error');
+  assert.match(res.error, /CODEX_IMPLEMENTER_ADAPTER=not-installed is unsupported/);
+  assert.deepEqual(
+    d.events.filter((event) => event.type === 'run_status').map((event) => event.data.status),
+    ['running', 'error'],
+  );
+});
+
+test('malformed adapter outcomes fail closed as error instead of defaulting to done', async () => {
+  for (const malformed of [undefined, null, { status: 'mystery' }]) {
+    const d = makeDeps();
+    const res = await processCodexRunJob({
+      runId: 'run-1',
+      prisma: d.prisma,
+      eventStore: d.eventStore,
+      runAgentLoop: async () => malformed,
+      clock: d.clock,
+    });
+    assert.equal(res.status, 'error');
+    assert.match(res.error, /AgentAdapter\.execute\(\)|unsupported outcome status/);
+    assert.equal(d.runRow.status, 'error');
+  }
 });

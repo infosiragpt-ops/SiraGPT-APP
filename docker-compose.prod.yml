@@ -346,6 +346,9 @@ services:
       CODE_RUNNER_INSTALL_TIMEOUT_MS: ${CODE_RUNNER_INSTALL_TIMEOUT_MS:-180000}
       CODE_RUNNER_READY_TIMEOUT_MS: ${CODE_RUNNER_READY_TIMEOUT_MS:-120000}
       CODEX_AGENT_V2: ${CODEX_AGENT_V2:-true}
+      # AgentAdapter v1 selection is validated at worker boot; unknown ids do
+      # not silently fall back to the native loop.
+      CODEX_IMPLEMENTER_ADAPTER: ${CODEX_IMPLEMENTER_ADAPTER:-native}
       CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
       # Public execution remains closed while the provider is the interim
       # shared container. Set an isolated mode (opensandbox/gvisor/kata/e2b)

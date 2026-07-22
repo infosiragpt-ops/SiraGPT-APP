@@ -3,7 +3,7 @@
 /**
  * codex/run-queue — BullMQ queue + worker for Codex V2 runs (spec §3, §7,
  * feature 05). Each run is a job on the `codex-runs` queue; the worker drives
- * the agent loop (feature 06) and persists the lifecycle to `codex_runs` +
+ * the configured AgentAdapter and persists the lifecycle to `codex_runs` +
  * `codex_events`. Mirrors the queue/worker/recovery shape of goal-queue.js.
  *
  * The worker is registered ONLY when the flag is on (see startCodexWorker).
@@ -14,6 +14,10 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 const { attachRedisListeners, reconnectDelay, isTransientRedisError } = require('../agents/redis-resilience');
 const { isCodexV2Enabled } = require('./flags');
+const {
+  IMPLEMENTER_ADAPTER_ENV,
+  assertImplementerAdapterConfigured,
+} = require('./agent-adapters/registry');
 
 const QUEUE_NAME = process.env.CODEX_QUEUE_NAME || 'codex-runs';
 
@@ -103,6 +107,23 @@ let worker;
 let workerConnection;
 
 /**
+ * Build the default BullMQ handler with the adapter id that passed boot
+ * validation pinned into every job. Production still snapshots process.env at
+ * job time so dynamically applied provider keys remain visible; injected envs
+ * are captured once for deterministic tests/embedders.
+ */
+function createDefaultCodexJobHandler({ env = process.env, processRun } = {}) {
+  const adapter = assertImplementerAdapterConfigured(env);
+  const capturedEnv = env === process.env ? null : Object.freeze({ ...env });
+  const runJob = processRun || ((args) => require('./run-processor').processCodexRunJob(args));
+  return (job) => {
+    const sourceEnv = capturedEnv || process.env;
+    const jobEnv = Object.freeze({ ...sourceEnv, [IMPLEMENTER_ADAPTER_ENV]: adapter.id });
+    return runJob({ runId: job.data?.runId, env: jobEnv });
+  };
+}
+
+/**
  * Start the codex worker. No-op (returns null) when the flag is off — the
  * worker simply does not exist, so enqueued jobs never run. `processor` is
  * injectable for tests; defaults to the run-processor.
@@ -110,12 +131,16 @@ let workerConnection;
 function startCodexWorker({ env = process.env, processor } = {}) {
   if (worker) return worker;
   if (!isCodexV2Enabled(env)) return null;
+  // Unknown adapter ids must never fall back to native implicitly. Resolve the
+  // configured implementation before touching Redis/starting a worker so a
+  // typo fails closed during backend boot.
+  assertImplementerAdapterConfigured(env);
   if (!process.env.REDIS_URL) {
     console.warn('[codex-runs] REDIS_URL not set — worker not started');
     return null;
   }
   const concurrency = Math.max(1, Number.parseInt(env.CODEX_WORKER_CONCURRENCY || '2', 10) || 2);
-  const handler = processor || ((job) => require('./run-processor').processCodexRunJob({ runId: job.data?.runId }));
+  const handler = processor || createDefaultCodexJobHandler({ env });
 
   workerConnection = createRedisConnection({ label: 'codex-runs-worker' });
   worker = new Worker(QUEUE_NAME, handler, {
@@ -200,6 +225,7 @@ module.exports = {
   cancelQueuedCodexRun,
   peekCodexJob,
   peekLiveCodexJob,
+  createDefaultCodexJobHandler,
   startCodexWorker,
   getCodexQueueHealth,
   closeCodexWorker,

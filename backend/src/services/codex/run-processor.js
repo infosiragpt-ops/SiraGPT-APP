@@ -3,7 +3,8 @@
 /**
  * codex/run-processor — the BullMQ job handler body (feature 05). Owns the run
  * LIFECYCLE: load the queued run, flip it to `running` (+ run_status event),
- * delegate the actual work to the agent loop (feature 06), then persist the
+ * delegate the actual work through AgentAdapter v1 (the native adapter wraps
+ * the feature 06 agent loop), then persist the
  * terminal transition (`waiting_approval | done | error | cancelled`) with its
  * run_status event. The agent loop emits all DOMAIN events (plan_proposed,
  * narrative, actions, checkpoint, run_summary); the processor owns only the
@@ -21,8 +22,12 @@ const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
 })();
 const eventStoreDefault = require('./event-store');
+const { createImplementerRequest, assertAgentOutcome } = require('./agent-adapters/contract');
+const { getDefaultAgentAdapterRegistry } = require('./agent-adapters/registry');
+const { nativeCodexAdapter } = require('./agent-adapters/native-codex-adapter');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
+const DEFAULT_MAX_STEPS = 24;
 
 function nowIso(clock) {
   return (clock ? clock() : new Date()).toISOString();
@@ -31,6 +36,26 @@ function nowIso(clock) {
 function readTimeoutMs(env) {
   const v = Number.parseInt((env || process.env).CODEX_RUN_TIMEOUT_MS || '', 10);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_TIMEOUT_MS;
+}
+
+function readMaxSteps(env) {
+  const v = Number.parseInt((env || process.env).CODEX_MAX_STEPS || '', 10);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_STEPS;
+}
+
+function executionContextForAdapter({ adapter, signal, isCancelled, run, project, deps, runAgentLoop }) {
+  const context = { signal, isCancelled, deps: {} };
+  // Database/event-store handles and full Prisma snapshots belong to the
+  // control plane. Only the exact built-in singleton needs them to preserve the
+  // current loop. External adapters must operate on the path-free request and
+  // their own bounded clients.
+  if (adapter === nativeCodexAdapter) {
+    context.deps = deps;
+    context.nativeRun = run;
+    context.nativeProject = project;
+    if (runAgentLoop) context.runAgentLoop = runAgentLoop;
+  }
+  return context;
 }
 
 class TimeoutError extends Error {
@@ -47,6 +72,7 @@ async function processCodexRunJob({
   prisma = defaultPrisma,
   eventStore = eventStoreDefault,
   runAgentLoop,
+  agentAdapterRegistry,
   clock,
   env = process.env,
 } = {}) {
@@ -65,7 +91,6 @@ async function processCodexRunJob({
   await prisma.codexRun.update({ where: { id: runId }, data: { status: 'running', startedAt: new Date(nowIso(clock)) } });
   await eventStore.appendEvent(runId, 'run_status', { status: 'running' }, { prisma });
 
-  const loop = runAgentLoop || ((args) => require('./agent-loop').runAgentLoop(args));
   const timeoutMs = readTimeoutMs(env);
   const controller = new AbortController();
 
@@ -77,16 +102,33 @@ async function processCodexRunJob({
   let outcome;
   let timer;
   try {
-    const work = Promise.resolve(
-      loop({ run, project, signal: controller.signal, isCancelled, deps: { prisma, eventStore, env, clock } }),
-    );
+    const registry = agentAdapterRegistry || getDefaultAgentAdapterRegistry();
+    const adapter = registry.resolveImplementer({ env });
+    const request = createImplementerRequest({
+      run,
+      project,
+      timeoutMs,
+      maxSteps: readMaxSteps(env),
+    });
+    const context = executionContextForAdapter({
+      adapter,
+      signal: controller.signal,
+      isCancelled,
+      run,
+      project,
+      deps: { prisma, eventStore, env, clock },
+      // Test injection remains at the native boundary; production lazily
+      // resolves agent-loop inside native-codex-adapter.
+      runAgentLoop,
+    });
+    const work = Promise.resolve(adapter.execute(request, context));
     const timeout = new Promise((_, reject) => {
       // Reject BEFORE aborting so the timeout deterministically wins the race
       // even if the loop resolves synchronously inside its abort handler.
       timer = setTimeout(() => { reject(new TimeoutError(timeoutMs)); controller.abort(); }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    outcome = await Promise.race([work, timeout]);
+    outcome = assertAgentOutcome(await Promise.race([work, timeout]));
   } catch (err) {
     outcome = { status: 'error', error: err?.isTimeout ? err.message : String(err?.message || err) };
   } finally {
@@ -103,9 +145,7 @@ async function processCodexRunJob({
     return { status: 'cancelled' };
   }
 
-  const status = ['waiting_approval', 'done', 'error', 'cancelled'].includes(outcome?.status)
-    ? outcome.status
-    : 'done';
+  const status = outcome.status;
   const errorMsg = status === 'error' ? String(outcome?.error || 'run failed').slice(0, 2000) : null;
 
   // Guard the terminal transition against a concurrent cancelRun / boot-recovery
@@ -136,4 +176,10 @@ async function processCodexRunJob({
   return { status, error: errorMsg };
 }
 
-module.exports = { processCodexRunJob, TimeoutError, readTimeoutMs };
+module.exports = {
+  processCodexRunJob,
+  TimeoutError,
+  readTimeoutMs,
+  readMaxSteps,
+  executionContextForAdapter,
+};

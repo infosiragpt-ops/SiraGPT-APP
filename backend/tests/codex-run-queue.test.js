@@ -26,12 +26,24 @@ test('getRuntimeOptions skips the version check for Upstash and when forced', ()
 
 test('startCodexWorker is a no-op (null) when the flag is off', () => {
   delete process.env.CODEX_AGENT_V2;
-  assert.equal(runQueue.startCodexWorker({ env: { CODEX_AGENT_V2: '' } }), null);
+  assert.equal(runQueue.startCodexWorker({
+    env: { CODEX_AGENT_V2: '', CODEX_IMPLEMENTER_ADAPTER: 'not-installed' },
+  }), null);
 });
 
 test('startCodexWorker is a no-op (null) when the flag is on but REDIS_URL is absent', () => {
   delete process.env.REDIS_URL;
   assert.equal(runQueue.startCodexWorker({ env: { CODEX_AGENT_V2: '1' } }), null);
+});
+
+test('startCodexWorker fails closed before Redis for an unknown implementer adapter', () => {
+  delete process.env.REDIS_URL;
+  assert.throws(
+    () => runQueue.startCodexWorker({
+      env: { CODEX_AGENT_V2: '1', CODEX_IMPLEMENTER_ADAPTER: 'not-installed' },
+    }),
+    /CODEX_IMPLEMENTER_ADAPTER=not-installed is unsupported/,
+  );
 });
 
 test('requireRedisUrl throws when REDIS_URL is missing', () => {
@@ -57,4 +69,25 @@ test('enqueueCodexRun forwards an explicit jobId to BullMQ in every call shape',
   } finally {
     runQueue.__setQueueForTests(null);
   }
+});
+
+test('default handler pins the adapter id validated at boot and captures injected env', async () => {
+  const env = {
+    CODEX_AGENT_V2: '1',
+    CODEX_IMPLEMENTER_ADAPTER: 'native',
+    CODEX_RUN_TIMEOUT_MS: '1234',
+  };
+  const calls = [];
+  const handler = runQueue.createDefaultCodexJobHandler({
+    env,
+    processRun: async (args) => { calls.push(args); return { status: 'done' }; },
+  });
+  env.CODEX_IMPLEMENTER_ADAPTER = 'not-installed';
+  env.CODEX_RUN_TIMEOUT_MS = '9999';
+
+  await handler({ data: { runId: 'run-1' } });
+  assert.equal(calls[0].runId, 'run-1');
+  assert.equal(calls[0].env.CODEX_IMPLEMENTER_ADAPTER, 'native');
+  assert.equal(calls[0].env.CODEX_RUN_TIMEOUT_MS, '1234');
+  assert.equal(Object.isFrozen(calls[0].env), true);
 });

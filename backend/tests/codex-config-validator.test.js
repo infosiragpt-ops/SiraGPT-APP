@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const { validateCodexConfig } = require('../src/services/codex/config-validator');
 
 test('flag off → inert, ok, no warnings', () => {
-  const r = validateCodexConfig({});
+  const r = validateCodexConfig({ CODEX_IMPLEMENTER_ADAPTER: 'not-installed' });
   assert.equal(r.enabled, false);
   assert.equal(r.ok, true);
   assert.equal(r.warnings.length, 0);
@@ -33,6 +33,18 @@ test('an invalid CODE_RUNNER_URL is an error (ok=false)', () => {
   const r = validateCodexConfig({ CODEX_AGENT_V2: '1', REDIS_URL: 'redis://x', CEREBRAS_API_KEY: 'k', CODE_RUNNER_URL: 'not a url' });
   assert.equal(r.ok, false);
   assert.ok(r.errors.some((e) => /CODE_RUNNER_URL/.test(e)));
+});
+
+test('an unknown implementer adapter is a fail-closed config error', () => {
+  const r = validateCodexConfig({
+    CODEX_AGENT_V2: '1',
+    REDIS_URL: 'redis://x',
+    CEREBRAS_API_KEY: 'k',
+    CODE_RUNNER_URL: 'http://runner:4097',
+    CODEX_IMPLEMENTER_ADAPTER: 'opencode',
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => /CODEX_IMPLEMENTER_ADAPTER=opencode is unsupported/.test(e)));
 });
 
 test('out-of-range numeric envs warn', () => {
