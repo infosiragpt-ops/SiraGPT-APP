@@ -34,7 +34,15 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { CODE_OPEN_TOOL_EVENT, getActiveCodexProject, setActiveCodexProject, setActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_OPEN_TOOL_EVENT,
+  CODE_PREVIEW_STATE_EVENT,
+  getActiveCodexProject,
+  setActiveCodexProject,
+  setActiveHostRunId,
+  type CodePreviewState,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
 import { codexApi } from "@/lib/codex/codex-api"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
@@ -831,6 +839,19 @@ export function PreviewPane() {
     const clean = `/${(navPath || "/").replace(/^\/+/, "")}`
     return liveRun.devUrl.replace(/\/+$/, "") + clean
   }, [liveRun.devUrl, navPath])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const detail: CodePreviewState = {
+      phase: liveRun.phase,
+      src: liveSrc,
+      staticHtml: result.html,
+      note: liveRun.note,
+      kind: result.kind,
+      entry: result.entry,
+    }
+    window.dispatchEvent(new CustomEvent<CodePreviewState>(CODE_PREVIEW_STATE_EVENT, { detail }))
+  }, [liveRun.note, liveRun.phase, liveSrc, result.entry, result.html, result.kind])
 
   previewMetaRef.current = {
     activePath,

@@ -81,6 +81,16 @@ export const CODE_OPEN_TOOL_LAUNCHER_EVENT = "siragpt:code-open-tool-launcher"
 // { runId: string | null } — null means no live host run (fall back to the
 // client-side pseudo-shell).
 export const CODE_RUNNER_ACTIVE_EVENT = "siragpt:code-runner-active"
+export const CODE_PREVIEW_STATE_EVENT = "siragpt:code-preview-state"
+
+export type CodePreviewState = {
+  phase: "idle" | "starting" | "ready" | "error" | "stuck"
+  src: string
+  staticHtml: string
+  note: string
+  kind: string
+  entry: string | null
+}
 
 // The event is fire-and-forget, so a tool that mounts AFTER the run started
 // (e.g. opening the Shell once the preview is already live) would miss it. Keep
@@ -211,7 +221,7 @@ export type CodeWorkspaceContextValue = {
   codeChatSessions: CodeChatSession[]
   activeCodeChatSessionId: string | null
   activeCodeChatSession: CodeChatSession | null
-  createCodeChatSession: () => string
+  createCodeChatSession: (opts?: { title?: string }) => string
   setActiveCodeChatSession: (sessionId: string) => void
   patchCodeChatSessionTurns: (
     sessionId: string,
@@ -810,8 +820,8 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     [chatSessionStore],
   )
 
-  const createCodeChatSession = React.useCallback(() => {
-    const { store, session } = createCodeChatSessionRecord(workspaceSessionKey, undefined, chatSessionStore)
+  const createCodeChatSession = React.useCallback((opts?: { title?: string }) => {
+    const { store, session } = createCodeChatSessionRecord(workspaceSessionKey, opts, chatSessionStore)
     setChatSessionStore(store)
     focusChat()
     return session.id

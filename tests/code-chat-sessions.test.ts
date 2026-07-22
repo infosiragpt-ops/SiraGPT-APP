@@ -55,6 +55,7 @@ describe("code-chat-sessions", () => {
     assert.ok(firstId)
     store = setActiveCodeChatSession("ws-a", firstId!, store)
     assert.equal(store.activeByWorkspace["ws-a"], firstId)
+    assert.equal(second.session.titleLocked, true)
   })
 
   it("normalizes bare project UUID to project: prefix for sessions", () => {
