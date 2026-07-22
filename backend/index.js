@@ -513,7 +513,8 @@ const { closeGoalQueue } = require('./src/services/goal-queue');
 const { recoverGoalRunsAfterBoot, stopGoalRecovery } = require('./src/services/goal-boot-recovery');
 const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-cleanup');
 // Codex Agent V2 run engine (feature 05). startCodexWorker self-gates on the
-// CODEX_AGENT_V2 flag (no-op when off), so it's always safe to call.
+// CODEX_AGENT_V2 flag (no-op when off) and deliberately fails boot when the
+// configured implementer adapter is unknown.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
@@ -1541,7 +1542,8 @@ async function startServer() {
     startAgentTaskWorker();
     startGoalWorker();
     // Codex V2: validate config, recover interrupted runs, then start the worker
-    // (all no-op when the flag is off). Fire-and-forget recovery never throws.
+    // (all no-op when the flag is off). Fire-and-forget recovery never throws;
+    // invalid adapter selection is a fail-closed worker-start error.
     try { logCodexConfig(process.env, logger); } catch { /* never blocks boot */ }
     // Attribution stack config coherence check (CLAUDE.md mandates running it on
     // boot). Warnings only — never blocks boot.

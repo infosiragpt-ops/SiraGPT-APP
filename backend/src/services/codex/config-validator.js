@@ -10,6 +10,7 @@
  */
 
 const { isCodexV2Enabled } = require('./flags');
+const { assertImplementerAdapterConfigured } = require('./agent-adapters/registry');
 
 function parseIntOr(value, fallback) {
   const n = Number.parseInt(value, 10);
@@ -48,6 +49,15 @@ function validateCodexConfig(env = process.env) {
   // An LLM provider is needed to actually run agent loops.
   if (!env.CEREBRAS_API_KEY && !env.OPENROUTER_API_KEY) {
     warnings.push('No CEREBRAS_API_KEY or OPENROUTER_API_KEY — agent runs will fail at the LLM step (plan/build cannot proceed).');
+  }
+
+  // Adapter selection is a security boundary: an unknown id is an error and
+  // startCodexWorker performs the same resolution as a fail-closed boot gate.
+  try {
+    const adapter = assertImplementerAdapterConfigured(env);
+    info.push(`Codex implementer adapter: ${adapter.id}@${adapter.version}.`);
+  } catch (err) {
+    errors.push(String(err?.message || err));
   }
 
   // Numeric envs must be sane when provided.

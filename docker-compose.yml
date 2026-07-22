@@ -264,6 +264,7 @@ services:
       # Codex Agent V2 — flag + runner endpoint. Flag off (default) keeps /code
       # identical to today; the runner (perfil opencode) provisiona el workspace.
       CODEX_AGENT_V2: "${CODEX_AGENT_V2:-}"
+      CODEX_IMPLEMENTER_ADAPTER: "${CODEX_IMPLEMENTER_ADAPTER:-native}"
       CODE_RUNNER_URL: "${CODE_RUNNER_URL:-http://runner:4097}"
       # Host-visible base dir the runner's /export bind-mount maps to (display
       # only; shown to the user so they can find the mirrored project on disk).
