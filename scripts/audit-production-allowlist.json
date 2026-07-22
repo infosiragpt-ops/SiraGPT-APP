@@ -31,6 +31,12 @@
       "source": 1118962,
       "title": "Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n",
       "reason": "Tracked as framework migration debt pending a zero-UI-change Next major migration."
+    },
+    {
+      "package": "sharp",
+      "source": 1124066,
+      "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
+      "reason": "Sharp 0.35 is a breaking native-image upgrade and Next.js plus Transformers currently resolve 0.34.x; keep this time-bounded exception visible until a dedicated compatibility upgrade is validated."
     }
   ]
 }

@@ -495,6 +495,7 @@ const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
 const hermesRoutes = require('./src/routes/hermes');
 const webhooksRoutes = require('./src/routes/webhooks');
+const platformImprovementsRoutes = require('./src/routes/platform-improvements');
 const slackIntegrationRoutes = require('./src/routes/integrations/slack');
 const {
     authenticateToken,
@@ -1327,6 +1328,7 @@ app.use('/api/memory', memoryRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
 app.use('/api/orchestration', orchestrationRoutes);
 app.use('/api/hermes', hermesRoutes);
+app.use('/api/platform-improvements', platformImprovementsRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/integrations/slack', slackIntegrationRoutes);
 app.use('/api/telemetry', telemetryRoutes);
