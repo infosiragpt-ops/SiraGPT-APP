@@ -42,6 +42,16 @@ const SENSITIVE_KEYS = new Set([
   'secret_access_key',
   'webhooksecret',
   'webhook_secret',
+  // Database DSNs are credentials even when the password is absent (remote
+  // host/database names and signed Prisma URLs are still sensitive).
+  'databaseurl',
+  'database_url',
+  'directdatabaseurl',
+  'direct_database_url',
+  'prismadatabaseurl',
+  'prisma_database_url',
+  'codexdatabasevaultkeys',
+  'codex_database_vault_keys',
 ]);
 
 function normalizeKey(key) {

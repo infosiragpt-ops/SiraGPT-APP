@@ -30,16 +30,30 @@ describe('secret-redactor', () => {
     assert.doesNotMatch(redacted, /secret|user:pass|abc/);
   });
 
-  test('redactString strips credentials from database and cache URLs', () => {
+  test('redactString removes full database DSNs and strips cache credentials', () => {
     const redacted = redactString(
       'db=postgres://dbuser:dbpass@db.internal/app cache=redis://default:redispass@redis:6379',
     );
 
     assert.equal(
       redacted,
-      'db=postgres://db.internal/app cache=redis://redis:6379',
+      'db=[REDACTED_DATABASE_URL] cache=redis://redis:6379',
     );
-    assert.doesNotMatch(redacted, /dbuser|dbpass|redispass/);
+    assert.doesNotMatch(redacted, /dbuser|dbpass|db\.internal|app|redispass/);
+  });
+
+  test('redactString removes unlabeled direct and signed Prisma DSNs completely', () => {
+    const redacted = redactString([
+      'dial failed postgresql://project.internal/tenant_123',
+      'auth failed postgres://runtime:secret@private-db.internal/app',
+      'remote prisma+postgres://accelerate.invalid/?api_key=signed-secret',
+    ].join(' | '));
+
+    assert.equal((redacted.match(/\[REDACTED_DATABASE_URL\]/g) || []).length, 3);
+    assert.doesNotMatch(
+      redacted,
+      /project\.internal|tenant_123|runtime|secret|private-db|accelerate\.invalid|signed-secret/,
+    );
   });
 
   test('redactUrl handles relative URLs without leaking query secrets', () => {

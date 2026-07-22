@@ -34,6 +34,9 @@ const REDACT_PATHS = [
   'req.body.clientSecret',
   'req.body.client_secret',
   'req.body.secret',
+  'req.body.DATABASE_URL',
+  'req.body.DIRECT_DATABASE_URL',
+  'req.body.PRISMA_DATABASE_URL',
   // Top-level fields when payloads are passed directly to logger
   'password',
   'token',
@@ -48,6 +51,9 @@ const REDACT_PATHS = [
   'secret',
   'authorization',
   'cookie',
+  'DATABASE_URL',
+  'DIRECT_DATABASE_URL',
+  'PRISMA_DATABASE_URL',
   // One-level wildcards catch `{ user: { password } }`, `{ creds: { token } }`
   // and similar nested shapes without paying the deep-wildcard cost.
   '*.password',
@@ -63,6 +69,9 @@ const REDACT_PATHS = [
   '*.secret',
   '*.authorization',
   '*.cookie',
+  '*.DATABASE_URL',
+  '*.DIRECT_DATABASE_URL',
+  '*.PRISMA_DATABASE_URL',
 ];
 
 // Structured JSON logger. Output goes to stdout in every environment

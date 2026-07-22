@@ -2337,15 +2337,110 @@ model CodexProject {
   previewUrl    String?
   brief         Json?
   error         String?  @db.Text
+  // Lifecycle tombstone used by the future database/workspace reconciler.
+  // These columns are inert until CODEX_PROJECT_DATABASES is enabled.
+  deletedAt     DateTime?
+  deleteAfter   DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   runs        CodexRun[]
   checkpoints CodexCheckpoint[]
+  database    CodexProjectDatabase?
 
   @@index([userId, updatedAt])
+  @@index([userId, deleteAfter])
   @@map("codex_projects")
+}
+
+// Metadata for a future PostgreSQL resource dedicated to one Codex project.
+// There is deliberately no provisioning implementation in this migration.
+// projectId is nullable and SET NULL so an external resource survives as a
+// cleanup tombstone if a project/user row is hard-deleted before reconciliation.
+model CodexProjectDatabase {
+  id        String        @id @default(cuid())
+  projectId String?       @unique
+  project   CodexProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  provider    String  @default("sira_postgres")
+  clusterRef  String
+  resourceRef String? @unique
+
+  databaseName String
+  ownerRole    String
+  migratorRole String
+  runtimeRole  String
+
+  status               String    @default("pending") // pending | provisioning | ready | rotating | deleting | deleted | error
+  desiredState         String    @default("ready")
+  operationId          String?
+  operationLeaseUntil  DateTime?
+  credentialGeneration Int       @default(1)
+
+  quotaMb        Int   @default(512)
+  maxConnections Int   @default(10)
+  backupPolicy   Json?
+
+  lastBackupAt      DateTime?
+  lastRestoreTestAt DateTime?
+  provisionedAt     DateTime?
+  rotationDueAt     DateTime?
+  deleteRequestedAt DateTime?
+  deletedAt         DateTime?
+  lastError         String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  secret CodexProjectDatabaseSecret?
+  leases CodexDatabaseLease[]
+
+  @@unique([clusterRef, databaseName])
+  @@unique([clusterRef, ownerRole])
+  @@unique([clusterRef, migratorRole])
+  @@unique([clusterRef, runtimeRole])
+  @@index([status, operationLeaseUntil])
+  @@index([desiredState, status])
+  @@map("codex_project_databases")
+}
+
+// Authenticated ciphertext only. `envelope` is AES-256-GCM and binds the
+// database id + credential generation as AAD; plaintext/DSNs never belong in
+// this table's metadata projections.
+model CodexProjectDatabaseSecret {
+  databaseId String               @id
+  database   CodexProjectDatabase @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+
+  keyId     String
+  envelope  String   @db.Text
+  version   Int      @default(1)
+  rotatedAt DateTime @default(now())
+
+  @@index([keyId])
+  @@map("codex_project_database_secrets")
+}
+
+// Lease metadata intentionally excludes passwords, URLs and ciphertext. A
+// future isolated SandboxProvider may exchange a short-lived secret out of
+// band; the control database records only its lifecycle.
+model CodexDatabaseLease {
+  id         String               @id @default(cuid())
+  databaseId String
+  database   CodexProjectDatabase @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+
+  sandboxRef String
+  runId      String?
+  scope      String // migrate | seed | runtime
+  roleName   String
+  generation Int
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([databaseId, expiresAt])
+  @@index([expiresAt, revokedAt])
+  @@index([runId])
+  @@map("codex_database_leases")
 }
 
 // Persistent key-value store for GENERATED apps (SiraGPT Apps). Apps built by

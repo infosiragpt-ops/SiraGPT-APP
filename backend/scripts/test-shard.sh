@@ -34,8 +34,9 @@ fi
 
 cd "$(dirname "$0")/.."
 
-# Extract the canonical file list from package.json `test` script (regex
-# picks every tests/*.test.js token), falling back to a directory scan.
+# Extract the canonical file list from package.json `test` plus the focused
+# project-database suite (regex picks every tests/*.test.js token), falling
+# back to a directory scan.
 # `mapfile` isn't on macOS' bash 3.2, so we use a portable read loop.
 FILES=()
 while IFS= read -r line; do
@@ -43,7 +44,10 @@ while IFS= read -r line; do
 done < <(
   node -e "
     const p = require('./package.json');
-    const cmd = (p.scripts && p.scripts.test) || '';
+    const cmd = [
+      p.scripts && p.scripts.test,
+      p.scripts && p.scripts['test:codex-project-database'],
+    ].filter(Boolean).join(' ');
     const m = cmd.match(/tests\\/[A-Za-z0-9._\\-\\/]+\\.test\\.js/g) || [];
     if (m.length) { console.log(m.join('\\n')); }
   "
