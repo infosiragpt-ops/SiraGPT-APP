@@ -319,7 +319,7 @@ let lastStartedKey = null; // legacy GET /status (no project) mirrors this one
 
 // `setsid` makes the spawned dev command a process-group leader (it execs in
 // place when the caller isn't already a group leader, so the pid is stable),
-// which lets us kill the WHOLE tree (bunx → vite → esbuild...) on evict/stop.
+// which lets us kill the WHOLE tree (npm/node → vite → esbuild...) on evict/stop.
 // Same pattern as host-runner.js killGroup. sandboxCommand always places
 // setsid first, so proc.pid is also the process-group id.
 
@@ -572,18 +572,18 @@ async function runDev(entry, projectId) {
   // Dev command per framework. Host 0.0.0.0 so it's reachable from the proxy.
   let cmd;
   if (isNext) {
-    cmd = ["bunx", "next", "dev", "-H", "0.0.0.0", "-p", String(port)];
+    cmd = ["node", "node_modules/next/dist/bin/next", "dev", "-H", "0.0.0.0", "-p", String(port)];
   } else if (isCompositeDev) {
     // Full-stack starter: concurrently boots API + web; flags can't reach the
     // inner vite, so it reads PORT/VITE_BASE/API_PORT from the env below.
-    cmd = ["bun", "run", "dev"];
+    cmd = ["npm", "run", "dev"];
   } else if (deps.vite || (hasDevScript && /vite/.test(devScript))) {
-    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
+    cmd = ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0", "--port", String(port)];
     if (entry.basePath) cmd.push("--base", entry.basePath);
   } else if (hasDevScript) {
-    cmd = ["bun", "run", "dev"];
+    cmd = ["npm", "run", "dev"];
   } else {
-    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
+    cmd = ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0", "--port", String(port)];
     if (entry.basePath) cmd.push("--base", entry.basePath);
   }
   pushLog(entry, `$ ${cmd.join(" ")}`);

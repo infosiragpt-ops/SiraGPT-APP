@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/gvisor-runner-compat.yml'), 'utf8');
 const dockerfile = fs.readFileSync(path.join(ROOT, 'scripts/runner.Dockerfile'), 'utf8');
 const smoke = fs.readFileSync(path.join(ROOT, 'scripts/gvisor-runner-smoke.mjs'), 'utf8');
+const runner = fs.readFileSync(path.join(ROOT, 'scripts/code-runner.js'), 'utf8');
 
 test('gVisor compatibility job is manual and path-gated on an ephemeral Ubuntu runner', () => {
   assert.match(workflow, /workflow_dispatch:/);
@@ -77,4 +78,11 @@ test('gVisor smoke exercises the authenticated project lifecycle and a real Node
   assert.match(smoke, /uid\)\s*&&\s*nodeResult\.uid\s*>\s*0/);
   assert.match(smoke, /controlTokenVisible,\s*false/);
   assert.match(smoke, /node --watch server\.mjs/);
+  // Bun 1.3.14 cannot execute `bun run` below non-listable ancestor
+  // directories. Installation remains Bun-powered, while runtime scripts and
+  // local CLIs use the pinned Node/npm toolchain under the project UID.
+  assert.match(runner, /cmd = \["npm", "run", "dev"\]/);
+  assert.match(runner, /node_modules\/vite\/bin\/vite\.js/);
+  assert.match(runner, /node_modules\/next\/dist\/bin\/next/);
+  assert.doesNotMatch(runner, /cmd = \["bun", "run", "dev"\]/);
 });

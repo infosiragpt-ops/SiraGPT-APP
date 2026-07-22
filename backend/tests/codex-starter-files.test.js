@@ -83,13 +83,13 @@ test('project name is escaped everywhere (anti-injection)', () => {
   assert.equal(escapeHtml(`a&<>"'b`), 'a&amp;&lt;&gt;&quot;&#39;b');
 });
 
-test('full-stack starter runs on the Bun runner AND behind the tokenized base', () => {
+test('full-stack starter runs on the pinned Node/npm preview runtime AND behind the tokenized base', () => {
   const { fullStackStarterFiles } = require('../src/services/codex/starter-files');
   const files = fullStackStarterFiles({ projectName: 'Demo FS' });
   const by = (path) => files.find((f) => f.path === path);
   const pkg = JSON.parse(by('package.json').content);
   // No native deps (better-sqlite3's build script exits 127 in the slim Bun
-  // image) and no `npm run` nesting (the runner has no npm).
+  // image) and no package-manager nesting inside the portable dev script.
   assert.equal(pkg.dependencies['better-sqlite3'], undefined);
   assert.match(pkg.scripts.dev, /concurrently/);
   assert.doesNotMatch(pkg.scripts.dev, /npm run/);
@@ -98,7 +98,7 @@ test('full-stack starter runs on the Bun runner AND behind the tokenized base', 
   assert.match(db, /bun:sqlite/);
   assert.match(db, /node:sqlite/);
   assert.match(by('server/index.js').content, /from '\.\/db\.js'/);
-  // Vite reads port/base from env (the runner launches `bun run dev`, no CLI
+  // Vite reads port/base from env (the runner launches `npm run dev`, no CLI
   // flags reach the inner vite) and the /api proxy matches under ANY base.
   const vite = by('vite.config.ts').content;
   assert.match(vite, /process\.env\.PORT/);
