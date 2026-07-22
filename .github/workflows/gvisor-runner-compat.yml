@@ -114,6 +114,7 @@ jobs:
             --env NODE_ENV=production \
             --env CODE_RUNNER_CONTROL_TOKEN=gvisor-smoke-control-token \
             --env CODE_RUNNER_DEV_PORT_POOL=5173-5174 \
+            --env CODE_RUNNER_RLIMIT_AS_BYTES=17179869184 \
             --env CODE_RUNNER_INSTALL_TIMEOUT_MS=30000 \
             --env CODE_RUNNER_DEV_READY_TIMEOUT_MS=30000 \
             --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner.js",dst=/scripts/code-runner.js,readonly \

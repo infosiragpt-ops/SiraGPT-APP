@@ -176,6 +176,10 @@ test('sandboxCommand applies setsid, prlimit, and a no-root setpriv identity wit
     'bun',
     'install',
   ]);
+  assert.ok(
+    sandboxCommand(['node', '-v'], { uid: 20_001, gid: 30_001 }).includes('--as=17179869184:17179869184'),
+    'default virtual-address limit must leave room for the V8 reservation; cgroups cap RSS',
+  );
   assert.throws(() => sandboxCommand(['node', '-v'], { uid: 0, gid: 0 }), /non-root/);
   assert.throws(() => sandboxCommand('node -v', { uid: 20_001, gid: 20_001 }), /non-empty string array/);
 });

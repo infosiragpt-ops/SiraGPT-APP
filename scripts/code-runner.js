@@ -99,7 +99,11 @@ const WRITE_MAX_TOTAL_BYTES = boundedPositiveEnv("CODE_RUNNER_WRITE_MAX_TOTAL_BY
 const EXPORT_MAX_FILES = boundedPositiveEnv("CODE_RUNNER_EXPORT_MAX_FILES", 5_000, 1, 20_000);
 const EXPORT_MAX_BYTES = boundedPositiveEnv("CODE_RUNNER_EXPORT_MAX_BYTES", 20_000_000, 1_000_000, 100_000_000);
 const SANDBOX_LIMITS = Object.freeze({
-  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 4 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
+  // V8 reserves a large virtual cage before allocating real pages. A 2-4 GiB
+  // RLIMIT_AS lets simple node:http/node:sqlite apps start but then fail while
+  // instantiating llhttp WebAssembly. RSS remains hard-capped by the container
+  // cgroup; this limit only prevents unbounded virtual mappings.
+  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 16 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
   maxProcesses: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NPROC", 128, 8, 4096),
   maxOpenFiles: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NOFILE", 256, 32, 65_536),
   maxFileBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_FSIZE_BYTES", 512 * 1024 * 1024, 1024 * 1024, 16 * 1024 * 1024 * 1024),
