@@ -2978,7 +2978,7 @@ export function AICodeChatPanel() {
         }
         if (!projectId) {
           const title = compactGeneratedTitle(text)
-          const project = await codexApi.createProject(title)
+          const project = await codexApi.createProject(title, text)
           projectId = project.id
         }
         codexProjectRef.current[sid] = projectId

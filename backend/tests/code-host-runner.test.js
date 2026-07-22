@@ -30,11 +30,29 @@ async function withEnv(vars, fn) {
 }
 
 test('enabled() honours the explicit flag (truthy + falsy spellings)', async () => {
-  await withEnv({ CODE_HOST_RUNNER: '1', NODE_ENV: 'production' }, () => assert.equal(runner.enabled(), true));
-  await withEnv({ CODE_HOST_RUNNER: 'true', NODE_ENV: 'production' }, () => assert.equal(runner.enabled(), true));
-  await withEnv({ CODE_HOST_RUNNER: 'on', NODE_ENV: 'production' }, () => assert.equal(runner.enabled(), true));
+  await withEnv({ CODE_HOST_RUNNER: '1', NODE_ENV: 'development' }, () => assert.equal(runner.enabled(), true));
+  await withEnv({ CODE_HOST_RUNNER: 'true', NODE_ENV: 'test' }, () => assert.equal(runner.enabled(), true));
+  await withEnv({ CODE_HOST_RUNNER: 'on', NODE_ENV: 'development' }, () => assert.equal(runner.enabled(), true));
   await withEnv({ CODE_HOST_RUNNER: '0', NODE_ENV: 'development' }, () => assert.equal(runner.enabled(), false));
   await withEnv({ CODE_HOST_RUNNER: 'off', NODE_ENV: 'development' }, () => assert.equal(runner.enabled(), false));
+});
+
+test('enabled() fails closed in production even when a stale flag says on', async () => {
+  await withEnv({
+    CODE_HOST_RUNNER: '1',
+    NODE_ENV: 'production',
+    CODE_HOST_RUNNER_UNSAFE_PRODUCTION_ACK: undefined,
+  }, () => assert.equal(runner.enabled(), false));
+  await withEnv({
+    CODE_HOST_RUNNER: '1',
+    NODE_ENV: 'production',
+    CODE_HOST_RUNNER_UNSAFE_PRODUCTION_ACK: 'yes',
+  }, () => assert.equal(runner.enabled(), false));
+  await withEnv({
+    CODE_HOST_RUNNER: '1',
+    NODE_ENV: 'production',
+    CODE_HOST_RUNNER_UNSAFE_PRODUCTION_ACK: 'I_UNDERSTAND_THIS_EXECUTES_UNTRUSTED_CODE_ON_THE_API_HOST',
+  }, () => assert.equal(runner.enabled(), true));
 });
 
 test('enabled() default: on in dev, off in production', async () => {

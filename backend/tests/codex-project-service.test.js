@@ -2,7 +2,12 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createProject, listProjects, getProject } = require('../src/services/codex/project-service');
+const {
+  createProject,
+  listProjects,
+  getProject,
+  hasFullStackIntent,
+} = require('../src/services/codex/project-service');
 
 function fakeDb() {
   const rows = new Map();
@@ -39,6 +44,60 @@ function okRunner() {
         : { ok: true, exitCode: 0, stdout: '', stderr: '' },
   };
 }
+
+test('hasFullStackIntent detects Spanish and English server/data product briefs', () => {
+  const fullStackBriefs = [
+    'Crea una app con base de datos para guardar clientes',
+    'Build a dashboard connected to a database',
+    'Necesito PostgreSQL con migraciones',
+    'Construye un producto 100% real, no una maqueta',
+    'Agrega un backend y endpoints para pedidos',
+    'Build a REST API for inventory',
+    'Add authentication and user accounts',
+    'Debe ser multiusuario con roles',
+    'Create a multi-user production-ready application',
+    'Ship this as a full-stack application',
+  ];
+
+  for (const brief of fullStackBriefs) {
+    assert.equal(hasFullStackIntent(brief), true, `expected full-stack intent: ${brief}`);
+  }
+});
+
+test('hasFullStackIntent leaves visual-only and invalid briefs on the SPA starter', () => {
+  for (const brief of [
+    'Crea una landing page estática para una cafetería',
+    'Build a portfolio with a hero and contact links',
+    '',
+    null,
+    undefined,
+    { product: 'landing' },
+  ]) {
+    assert.equal(hasFullStackIntent(brief), false, `expected SPA intent: ${String(brief)}`);
+  }
+});
+
+test('createProject provisions the full-stack starter from its persisted brief', async () => {
+  const db = fakeDb();
+  let writtenFiles = [];
+  const runner = okRunner();
+  runner.writeFiles = async (_project, files) => {
+    writtenFiles = files;
+    return { ok: true, written: files.length };
+  };
+
+  await createProject({
+    userId: 'u1',
+    name: 'CRM',
+    brief: 'Quiero un CRM multiusuario con autenticación y PostgreSQL',
+    runner,
+    db,
+    env: {},
+  });
+
+  assert.equal(db.rows.get('p1').brief, 'Quiero un CRM multiusuario con autenticación y PostgreSQL');
+  assert.ok(writtenFiles.some((file) => file.path === 'server/index.js'), 'full-stack server must be provisioned');
+});
 
 test('createProject provisions and returns a ready public projection', async () => {
   const db = fakeDb();

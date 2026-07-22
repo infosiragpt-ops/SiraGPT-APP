@@ -188,6 +188,18 @@ test('container deploy: runs prisma migrate when a schema is present', async () 
   assert.ok(sshHas(calls, /docker exec app-my-app sh -lc .*prisma migrate deploy/));
 });
 
+test('container deploy: a failed database migration blocks promotion', async () => {
+  const { args, calls } = run({
+    hasPrismaSchema: true,
+    codeFor: (command) => (/prisma migrate deploy/.test(command) ? 1 : 0),
+  });
+  const res = await deployNodeContainer(args);
+  assert.equal(res.promoted, false);
+  assert.equal(res.failedPhase, 'bundle');
+  assert.match(res.failureMessage, /migraciones/i);
+  assert.equal(sshHas(calls, /caddy validate|caddy reload/), false, 'a broken schema is never promoted');
+});
+
 test('container deploy: no domain → runs but url is null', async () => {
   const { args, calls } = run({ hostname: null });
   const res = await deployNodeContainer(args);

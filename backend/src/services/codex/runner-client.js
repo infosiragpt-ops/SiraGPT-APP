@@ -20,6 +20,10 @@ function runnerBaseUrl(env = process.env) {
   return String(env.CODE_RUNNER_URL || 'http://runner:4097').replace(/\/+$/, '');
 }
 
+function runnerControlToken(env = process.env) {
+  return String(env.CODE_RUNNER_CONTROL_TOKEN || '').trim();
+}
+
 /**
  * Base URL of the runner's dev server. With `port` (multi-project pool, audit
  * B1) the configured URL's port is swapped for the project's assigned one;
@@ -50,15 +54,23 @@ function codexExportHostPath(projectId, env = process.env) {
   return `${codexExportHostDir(env)}${sep}${projectId}`;
 }
 
-function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), timeoutMs = 30_000 } = {}) {
+function createRunnerClient({
+  fetchImpl = fetch,
+  baseUrl = runnerBaseUrl(),
+  timeoutMs = 30_000,
+  controlToken = runnerControlToken(),
+} = {}) {
   async function call(method, path, body, { callTimeoutMs } = {}) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), callTimeoutMs || timeoutMs);
     let res;
     try {
+      const headers = {};
+      if (body) headers['Content-Type'] = 'application/json';
+      if (controlToken) headers.Authorization = `Bearer ${controlToken}`;
       res = await fetchImpl(`${baseUrl}${path}`, {
         method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body ? JSON.stringify(body) : undefined,
         signal: ctrl.signal,
       });
@@ -96,4 +108,12 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
   };
 }
 
-module.exports = { createRunnerClient, RunnerError, runnerBaseUrl, runnerDevUrl, codexExportHostDir, codexExportHostPath };
+module.exports = {
+  createRunnerClient,
+  RunnerError,
+  runnerBaseUrl,
+  runnerControlToken,
+  runnerDevUrl,
+  codexExportHostDir,
+  codexExportHostPath,
+};

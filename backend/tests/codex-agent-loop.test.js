@@ -439,7 +439,10 @@ test('a turn of ONLY run_subagent calls runs the delegations in parallel', async
     return { text: `informe de ${/PLANNER/.test(sys) ? 'planner' : 'qa'}`, toolCalls: [] };
   };
 
-  const f = fakeDeps({ llmTurn });
+  const f = fakeDeps({
+    llmTurn,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_PARALLEL_WRITE_SUBAGENTS: '1' },
+  });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'haz una app' }, project: { id: 'p1' }, deps: f.deps });
   assert.equal(res.status, 'done');
 
@@ -449,6 +452,37 @@ test('a turn of ONLY run_subagent calls runs the delegations in parallel', async
   const ends = f.events.filter((e) => e.type === 'action_end');
   assert.ok(ends.every((e) => e.data.status === 'done'), JSON.stringify(ends.map((e) => e.data.outputSummary)));
   assert.ok(ends.some((e) => /planner: completado/.test(e.data.outputSummary || '')));
+});
+
+test('subagent delegations are serialized by default on a shared checkout', async () => {
+  let mainCalls = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const llmTurn = async ({ messages }) => {
+    const sys = messages[0].content;
+    if (/agente de software senior/.test(sys)) {
+      if (mainCalls++ === 0) {
+        return {
+          text: 'Delego dos revisiones.',
+          toolCalls: [
+            { name: 'run_subagent', args: { agent: 'planner', task: 'planea la UI' } },
+            { name: 'run_subagent', args: { agent: 'qa_reviewer', task: 'revisa el estado' } },
+          ],
+        };
+      }
+      return { text: 'fin', toolCalls: [] };
+    }
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    inFlight -= 1;
+    return { text: 'informe', toolCalls: [] };
+  };
+
+  const f = fakeDeps({ llmTurn });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'haz una app' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.equal(maxInFlight, 1);
 });
 
 // ── Plan-aware budget extension (auto-continue) ──────────────────────────────
