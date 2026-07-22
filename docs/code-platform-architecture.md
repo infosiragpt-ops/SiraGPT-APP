@@ -100,6 +100,13 @@ control PostgreSQL/Redis services and remain limited to trusted canaries.
 Writer subagents stay serialized with `CODEX_PARALLEL_WRITE_SUBAGENTS=false`
 until the provider assigns a separate Git worktree and sandbox to each writer.
 
+The path-gated/manual `gVisor runner compatibility` workflow installs a
+version-and-SHA512-pinned `runsc` only on an ephemeral GitHub Ubuntu runner. It
+builds the production runner image and verifies Node, Bun, Git, the Docker
+runtime identity, a read-only root filesystem and resource caps under systrap.
+It does not install or configure anything on the production VPS; host rollout
+still requires staging, a maintenance window and explicit rollback.
+
 ## PostgreSQL contract
 
 The Sira control database and user-created application databases are separate

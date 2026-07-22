@@ -1,6 +1,6 @@
 FROM oven/bun:1
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git tini util-linux \
+  && apt-get install -y --no-install-recommends ca-certificates git nodejs tini util-linux \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /workspace/projects /runner-cache /runner-home /runner-tmp \
   && chmod 0711 /workspace/projects /runner-cache /runner-home /runner-tmp
