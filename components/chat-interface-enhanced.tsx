@@ -6321,18 +6321,6 @@ But first, you need to connect your Spotify account securely using the button be
     syncComposerHighlightScroll();
   }, [input, hasDetectedLinks, syncComposerHighlightScroll]);
 
-  const getComposerTextareaMaxHeight = React.useCallback(() => {
-    if (typeof window === "undefined") return 200;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight || 720;
-    const isMobileViewport = window.matchMedia("(max-width: 767px)").matches;
-    if (!isMobileViewport) {
-      // ChatGPT-style composer: grows up to ~45% of the viewport so a long
-      // paste reads inline; beyond that the textarea scrolls internally.
-      return Math.max(200, Math.min(560, Math.floor(viewportHeight * 0.45)));
-    }
-    return Math.max(96, Math.min(180, Math.floor(viewportHeight * 0.28)));
-  }, []);
-
   const syncChatLayoutVars = React.useCallback(() => {
     const root = chatViewportRef.current;
     if (!root) return;
@@ -6346,8 +6334,8 @@ But first, you need to connect your Spotify account securely using the button be
 
     setPx("--chat-header-height", chatHeaderRef.current?.getBoundingClientRect().height || 64);
     setPx("--chat-composer-height", chatComposerDockRef.current?.getBoundingClientRect().height || 96);
-    setPx("--chat-textarea-max-height", getComposerTextareaMaxHeight());
-  }, [getComposerTextareaMaxHeight]);
+    setPx("--chat-textarea-max-height", textareaRef.current?.clientHeight || 36);
+  }, []);
 
   const setComposerInputFocused = React.useCallback((focused: boolean) => {
     const root = chatViewportRef.current;
@@ -6359,16 +6347,16 @@ But first, you need to connect your Spotify account securely using the button be
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    const maxHeight = getComposerTextareaMaxHeight();
-    textarea.style.height = "auto";
+    // The approved composer is a stable-size control. Long prompts scroll
+    // inside the textarea instead of resizing the surrounding surface.
+    textarea.style.removeProperty("height");
     const scrollHeight = textarea.scrollHeight;
-    const nextHeight = Math.min(scrollHeight, maxHeight);
-    const nextOverflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+    const nextHeight = textarea.clientHeight;
+    const nextOverflowY = scrollHeight > textarea.clientHeight + 1 ? "auto" : "hidden";
     const previousLayout = textareaLayoutRef.current;
     const heightChanged = previousLayout.height !== nextHeight;
     const overflowChanged = previousLayout.overflowY !== nextOverflowY;
 
-    textarea.style.height = `${nextHeight}px`;
     if (overflowChanged) {
       textarea.style.overflowY = nextOverflowY;
     }
@@ -6380,10 +6368,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     syncChatLayoutVars();
-    if (heightChanged && document.activeElement === textarea) {
-      scrollToBottom();
-    }
-  }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+  }, [syncChatLayoutVars]);
 
   const scheduleComposerTextareaResize = React.useCallback(() => {
     if (composerResizeFrameRef.current !== null) return;
@@ -6411,7 +6396,7 @@ But first, you need to connect your Spotify account securely using the button be
   };
 
   // Insert text at the textarea caret (replacing any selection), keeping
-  // the draft, the auto-grow height and the caret position consistent.
+  // the draft, internal scroll position and caret position consistent.
   // Used by the universal paste router for orchestrated (non-native)
   // insertions: markdown from rich HTML, link URLs, multi-item pastes.
   const insertTextAtCaret = React.useCallback((snippet: string) => {
@@ -10287,12 +10272,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isCurrentChatMediaBusy;
   const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
-  const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
-  const composerIsExpanded =
-    composerHasInlineContext ||
-    input.length > 120 ||
-    input.includes("\n");
-
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
   // but the prop contract is identical, so centralising it avoids
@@ -11723,7 +11702,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
           {isInitial ? (
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
-              <div className="w-full max-w-[860px] px-4">
+              <div className="chat-composer-frame">
                   <div className="space-y-3">
                   {/*
                     Composer — premium production UI.
@@ -11733,14 +11712,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     violet without adding another ring, so its thickness stays
                     fixed. Idle never glows.
                   */}
-                  {/*
-                    Composer — pill-styled card. rounded-3xl gives the
-                    single-row state a pill feel AND looks balanced when
-                    chips/tools push it taller. All ingestion artifacts
-                    (file chips, selected-text, active tools) live INSIDE
-                    the same surface so the user sees one coherent input
-                    area, not stacked floating elements above the bar.
-                  */}
+                  {/* The input surface keeps one approved size. Attachments and
+                      connector context use the independent tray above it. */}
                   <div className="relative">
                     {pasteCapture.Overlay}
                     {/* Slash-command menu — appears when the input starts with "/" */}
@@ -11762,7 +11735,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onClose={() => setSlashMenuOpen(false)}
                     />
                     <CredentialWarning text={input} />
+                    <div className="composer-context-tray">
+                      <ActiveOptionsDisplay
+                        uploadedFiles={uploadedFiles}
+                        removeFile={removeFile}
+                        uploadProgress={uploadProgress}
+                        retryUpload={retryUpload}
+                        restoreLongPasteToInput={restoreLongPasteToInput}
+                        moveFile={moveFile}
+                        onPreviewAttachment={handleComposerAttachmentPreview}
+                        onFileProcessingStatusChange={handleFileProcessingStatusChange}
+                      />
+                      <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                      {hasActiveTools && !shouldInlineActiveTools && (
+                        <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
+                          <ActiveToolsDisplay {...activeToolsProps} />
+                        </div>
+                      )}
+                    </div>
                     <div
+                      data-testid="chat-composer-surface"
                       className={cn(
                         "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
@@ -11772,27 +11764,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                     )}
                   >
-                    {/* Chips zone — rendered ABOVE the input row, INSIDE
-                        the same rounded card. Hidden entirely when there
-                        are no files / selected text / active tools, so
-                        empty composer stays as a clean single line. */}
-                    <ActiveOptionsDisplay
-                      uploadedFiles={uploadedFiles}
-                      removeFile={removeFile}
-                      uploadProgress={uploadProgress}
-                      retryUpload={retryUpload}
-                      restoreLongPasteToInput={restoreLongPasteToInput}
-                      moveFile={moveFile}
-                      onPreviewAttachment={handleComposerAttachmentPreview}
-                      onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                    />
-                    <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    {/* Media controls stay inline with the attach button; other
-                        active tools fall back to the secondary row below. */}
+                    {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
                         className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
-                        data-expanded={composerIsExpanded ? "true" : undefined}
                       >
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
@@ -11854,7 +11829,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         )}
 
-                        {/* CENTER — single-line textarea, expands vertically up to ~45% viewport (ChatGPT-style) */}
+                        {/* CENTER — stable-height textarea with internal scrolling. */}
                         <div className="composer-textarea-shell min-w-0 flex-1">
                           {hasDetectedLinks && input ? (
                             <div
@@ -12035,14 +12010,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       </div>
                     </TooltipProvider>
 
-                    {/* Secondary row — active tool / connector pills.
-                        Only rendered when something is active, so the
-                        composer stays a clean pill in the idle state. */}
-                    {hasActiveTools && !shouldInlineActiveTools && (
-                      <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
-                        <ActiveToolsDisplay {...activeToolsProps} />
-                      </div>
-                    )}
                   </div>
                   </div>
 
@@ -12177,7 +12144,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="chat-conversation-column relative mx-auto space-y-2 bg-background">
+                    <div className="chat-composer-frame relative space-y-2 bg-background">
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
@@ -12245,12 +12212,30 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       {/* Input Area */}
 
-                      {/* Same composer as the initial state — chips
-                          render INSIDE the same rounded card. */}
+                      {/* Same fixed-size composer as the initial state. */}
                       <CredentialWarning text={input} />
                       <div className="relative">
                         {pasteCapture.Overlay}
+                        <div className="composer-context-tray">
+                          <ActiveOptionsDisplay
+                            uploadedFiles={uploadedFiles}
+                            removeFile={removeFile}
+                            uploadProgress={uploadProgress}
+                            retryUpload={retryUpload}
+                            restoreLongPasteToInput={restoreLongPasteToInput}
+                            moveFile={moveFile}
+                            onPreviewAttachment={handleComposerAttachmentPreview}
+                            onFileProcessingStatusChange={handleFileProcessingStatusChange}
+                          />
+                          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                          {hasActiveTools && !shouldInlineActiveTools && (
+                            <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
+                              <ActiveToolsDisplay {...activeToolsProps} />
+                            </div>
+                          )}
+                        </div>
                         <div
+                          data-testid="chat-composer-surface"
                           className={cn(
                             "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
@@ -12260,24 +12245,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                         )}
                       >
-                        <ActiveOptionsDisplay
-                          uploadedFiles={uploadedFiles}
-                          removeFile={removeFile}
-                          uploadProgress={uploadProgress}
-                          retryUpload={retryUpload}
-                          restoreLongPasteToInput={restoreLongPasteToInput}
-                          moveFile={moveFile}
-                          onPreviewAttachment={handleComposerAttachmentPreview}
-                          onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                        />
-                        <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                        {/* Tool pills relocated below the input — see
-                            the matching block after the TooltipProvider
-                            closes. Top surface is reserved for drop-zone. */}
                         <TooltipProvider>
                           <div
                             className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
-                            data-expanded={composerIsExpanded ? "true" : undefined}
                           >
                             <ActionsDropdown
                               chatType={chatType}
@@ -12513,14 +12483,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         </TooltipProvider>
 
-                        {/* Secondary row — active tool / connector pills.
-                            Mirrors the in-chat composer above so both
-                            states feel identical to the user. */}
-                        {hasActiveTools && !shouldInlineActiveTools && (
-                          <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
-                            <ActiveToolsDisplay {...activeToolsProps} />
-                          </div>
-                        )}
                       </div>
                       </div>
                     </div>
