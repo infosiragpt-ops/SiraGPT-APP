@@ -548,7 +548,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
 | `@napi-rs/canvas` | 0.1.100 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@neondatabase/serverless` | 1.1.0 | MIT | [link](https://github.com/neondatabase/serverless) |
-| `@next/env` | 15.5.18 | MIT | [link](https://github.com/vercel/next.js) |
+| `@next/env` | 15.5.21 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
 | `@node-saml/node-saml` | 5.1.0 | MIT | [link](https://github.com/node-saml/node-saml) |
@@ -1246,7 +1246,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
 | `netmask` | 2.0.2 | MIT | [link](https://github.com/rs/node-netmask) |
-| `next` | 15.5.18 | MIT | [link](https://github.com/vercel/next.js) |
+| `next` | 15.5.21 | MIT | [link](https://github.com/vercel/next.js) |
 | `next-intl` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-intl-swc-plugin-extractor` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
