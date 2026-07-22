@@ -105,7 +105,7 @@ test('third-party Actions used by the deploy workflow are immutable SHA pins', (
 
 test('every SSH and SCP action authenticates the production host key', () => {
   const appleboyActions = WORKFLOW.match(/uses:\s*appleboy\/(?:ssh|scp)-action@[0-9a-f]{40}/g) || [];
-  const pinnedFingerprints = WORKFLOW.match(/fingerprint:\s*SHA256:6LAHynq\+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA/g) || [];
+  const pinnedFingerprints = WORKFLOW.match(/fingerprint:\s*SHA256:q4vQZUVATVx7FQJLTU0SZ8\/uQdceLdtVt0D\+t0hVs6c/g) || [];
   assert.ok(appleboyActions.length >= 4, 'expected reserve, transfer, deploy, and failure cleanup actions');
   assert.equal(pinnedFingerprints.length, appleboyActions.length);
 });

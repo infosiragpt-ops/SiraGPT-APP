@@ -161,7 +161,8 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          # drone-ssh 1.8.0 (x/crypto v0.29.0) negotiates the VPS ECDSA key.
+          fingerprint: SHA256:q4vQZUVATVx7FQJLTU0SZ8/uQdceLdtVt0D+t0hVs6c
           timeout: 60s
           command_timeout: 1m
           envs: DEPLOY_TRANSFER_DIR
@@ -184,7 +185,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          fingerprint: SHA256:q4vQZUVATVx7FQJLTU0SZ8/uQdceLdtVt0D+t0hVs6c
           source: ".deploy-artifact/deploy.bundle,.deploy-artifact/deploy.bundle.sha256"
           target: ${{ env.DEPLOY_TRANSFER_DIR }}
           # drone-scp concatenates tar_tmp_path + filename without adding '/'.
@@ -206,7 +207,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          fingerprint: SHA256:q4vQZUVATVx7FQJLTU0SZ8/uQdceLdtVt0D+t0hVs6c
           # Remote Docker builds can exceed 12m when Next.js and npm
           # pruning run cold; keep enough headroom for deploy + rollback.
           timeout: 60s
@@ -634,7 +635,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          fingerprint: SHA256:q4vQZUVATVx7FQJLTU0SZ8/uQdceLdtVt0D+t0hVs6c
           timeout: 60s
           command_timeout: 1m
           envs: DEPLOY_TRANSFER_DIR
