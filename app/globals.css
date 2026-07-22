@@ -5066,7 +5066,7 @@ footer {
 
 .composer-surface {
   isolation: isolate;
-  border: 1px solid hsl(220 13% 86% / 0.86);
+  border: 0.5px solid hsl(220 13% 86% / 0.86);
   border-radius: 1.5rem;
   background-color: hsl(0 0% 100%);
   box-shadow:
@@ -5083,9 +5083,8 @@ footer {
 }
 
 .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.46);
+  border-color: hsl(var(--accent-violet) / 0.65);
   box-shadow:
-    0 0 0 3px hsl(var(--accent-violet) / 0.08),
     0 1px 2px hsl(220 28% 14% / 0.045),
     0 16px 38px -24px hsl(220 30% 18% / 0.32);
 }
@@ -5552,7 +5551,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
 /* ─── Composer — premium dark surface ────────────────────────────── */
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
-  border: 1px solid hsl(var(--composer-border) / 0.88);
+  border: 0.5px solid hsl(var(--composer-border) / 0.88);
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.32),
     0 16px 36px -24px rgba(0, 0, 0, 0.86);
@@ -5561,9 +5560,8 @@ button.anti-bribery-context-chip:not(:disabled):active {
               background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .dark .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.5);
+  border-color: hsl(var(--accent-violet) / 0.8);
   box-shadow:
-    0 0 0 3px hsl(var(--accent-violet) / 0.12),
     0 18px 42px -24px rgba(0, 0, 0, 0.92);
 }
 

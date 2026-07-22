@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [Next production release] — 2026-07-22
+
+### Changed
+
+- Reduced the chat composer outline to a single `0.5px` hairline in light and
+  dark themes, including hover and focus states.
+
 ## [0.4.3 / backend 1.3.3] — Cycles 171-180 milestone — 2026-05-20
 
 Eighth decade past the centenarian. **PATCH** bumps (root

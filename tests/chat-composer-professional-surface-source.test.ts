@@ -5,14 +5,43 @@ import path from "node:path"
 
 const globalsPath = path.join(process.cwd(), "app", "globals.css")
 const globals = fs.readFileSync(globalsPath, "utf8")
+const chatInterfacePath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
+const chatInterface = fs.readFileSync(chatInterfacePath, "utf8")
 
 describe("professional chat composer surface source contract", () => {
-  it("uses one calm static focus treatment instead of the animated double ring", () => {
+  it("uses one hairline focus treatment instead of stacked rings", () => {
     assert.match(
       globals,
-      /\.composer-surface:focus-within\s*\{[\s\S]{0,320}0 0 0 3px hsl\(var\(--accent-violet\) \/ 0\.08\)/,
-      "the composer should keep a visible but restrained keyboard focus ring"
+      /\.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(220 13% 86% \/ 0\.86\)/,
+      "the light composer should use a half-pixel hairline border"
     )
+    assert.match(
+      globals,
+      /\.dark \.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(var\(--composer-border\) \/ 0\.88\)/,
+      "the dark composer should use the same half-pixel hairline border"
+    )
+    assert.doesNotMatch(
+      globals,
+      /\.composer-surface:focus-within\s*\{[\s\S]{0,320}0 0 0 [\d.]+px/,
+      "focus should recolor the hairline instead of adding a thick outer halo"
+    )
+    const composerClassBlocks = [
+      ...chatInterface.matchAll(
+        /className=\{cn\(\s*"composer-surface composer-liquid-surface composer-focus-glow group\/composer relative rounded-3xl",([\s\S]*?)\n\s*\)\}/g
+      ),
+    ]
+    assert.equal(
+      composerClassBlocks.length,
+      2,
+      "the initial and in-chat composers should share the same surface contract"
+    )
+    for (const [, classBlock] of composerClassBlocks) {
+      assert.doesNotMatch(
+        classBlock,
+        /(?:^|:|\s)ring(?:-\d|-\[)/,
+        "composer class utilities should not stack another ring over the hairline border"
+      )
+    }
     assert.match(
       globals,
       /\.composer-focus-glow::before\s*\{\s*content: none;\s*display: none;/,
