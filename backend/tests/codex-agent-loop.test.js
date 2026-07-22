@@ -450,3 +450,62 @@ test('a turn of ONLY run_subagent calls runs the delegations in parallel', async
   assert.ok(ends.every((e) => e.data.status === 'done'), JSON.stringify(ends.map((e) => e.data.outputSummary)));
   assert.ok(ends.some((e) => /planner: completado/.test(e.data.outputSummary || '')));
 });
+
+// ── Plan-aware budget extension (auto-continue) ──────────────────────────────
+
+function endlessToolLlm() {
+  let calls = 0;
+  const fn = async () => { calls += 1; return { text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] }; };
+  fn.count = () => calls;
+  return fn;
+}
+
+test('build loop extends the step budget when the plan still has pending tasks', async () => {
+  const llm = endlessToolLlm();
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '1' },
+    plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'Construir el dashboard' }] },
+  });
+  // Neutral prompt: 'crm'/'tienda' would trigger the big-playbook doubled
+  // budget (CODEX_MAX_STEPS_LARGE) and change the arithmetic under test.
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea una landing simple' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  // base 2 steps + one extension of max(4, ceil(2/2)) = 4 → 6 turns total.
+  assert.equal(llm.count(), 6, 'the loop must keep working through the extension');
+  const ext = f.events.find((e) => e.type === 'narrative_delta' && /extensión 1\/1/.test(e.data.text || ''));
+  assert.ok(ext, 'an extension narrative must be emitted');
+  const close = f.events.filter((e) => e.type === 'narrative_delta').map((e) => e.data.text).join('\n');
+  assert.match(close, /pendiente/, 'the final close mentions the still-pending plan');
+});
+
+test('CODEX_PLAN_EXTENSIONS=0 disables the extension (explicit falsy-0 respected)', async () => {
+  const llm = endlessToolLlm();
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '0' },
+    plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'algo' }] },
+  });
+  await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(llm.count(), 2, 'no extension: exactly the base budget');
+  assert.ok(!f.events.some((e) => e.type === 'narrative_delta' && /extensión/.test(e.data.text || '')));
+});
+
+test('no extension when the plan is fully completed (update_plan marks all done)', async () => {
+  let calls = 0;
+  const llm = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'update_plan', args: { tasks: [{ id: 't1', title: 'algo', status: 'completed' }] } }] };
+    }
+    return { text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] };
+  };
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '2' },
+    plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'algo' }] },
+  });
+  await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(calls, 2, 'completed plan → no extension');
+  assert.ok(!f.events.some((e) => e.type === 'narrative_delta' && /extensión/.test(e.data.text || '')));
+});

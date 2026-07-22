@@ -51,6 +51,14 @@ function readPosInt(raw, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** Plan tasks not yet completed → titles (plan-mode tasks carry no status: pending). */
+function pendingPlanTasks(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  return tasks
+    .filter((t) => t && t.status !== 'completed')
+    .map((t) => String(t.title || t.id || 'tarea'));
+}
+
 function isAppsPrompt(text) {
   return /MODO APPS TIPO CODEX/i.test(String(text || ''));
 }
@@ -558,6 +566,15 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // would close with the file never written. Count retries so a chronically
   // overrunning model still terminates.
   let truncationRetries = 0;
+  // Plan-aware budget extension ("auto-continue"): when the step budget runs
+  // out while the approved plan still has pending tasks, extend the budget a
+  // bounded number of times instead of closing a half-built app — the agent
+  // keeps working until the plan is done (or the extensions/timeout cap it).
+  // NaN-only parse: an explicit CODEX_PLAN_EXTENSIONS=0 disables the feature.
+  const _rawPlanExt = Number.parseInt(env.CODEX_PLAN_EXTENSIONS ?? '', 10);
+  const maxPlanExtensions = Number.isFinite(_rawPlanExt) && _rawPlanExt >= 0 ? _rawPlanExt : 2;
+  let planExtensionsUsed = 0;
+  let latestPlanTasks = Array.isArray(plan?.tasks) ? plan.tasks : null;
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
@@ -654,6 +671,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (tool && call.name === 'update_plan') {
         const result = await tool.execute(call.args, { env });
         if (!result.isError && Array.isArray(result.planTasks)) {
+          latestPlanTasks = result.planTasks;
           await eventStore.appendEvent(run.id, 'plan_updated', { tasks: result.planTasks }, { prisma }).catch(() => {});
         }
         return { message: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}`, blocking: null };
@@ -782,6 +800,30 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blocked.blocking.pattern, blocked.blocking.detail), { prisma }).catch(() => {});
       return { status: 'error', error: blocked.blocking.pattern.title };
     }
+
+    // ── Plan-aware budget extension: this was the last budgeted step and the
+    // plan is still unfinished → extend (bounded) so the agent keeps working
+    // instead of closing a half-built app. `maxSteps` is re-read by the for
+    // condition, so bumping it here naturally continues the loop. The hard
+    // run timeout (abort signal) still caps total wall time.
+    if (step === maxSteps - 1 && !aborted && !signal?.aborted) {
+      const pending = pendingPlanTasks(latestPlanTasks);
+      if (pending.length > 0 && planExtensionsUsed < maxPlanExtensions) {
+        planExtensionsUsed += 1;
+        const extraSteps = Math.max(4, Math.ceil(baseMaxSteps / 2));
+        maxSteps += extraSteps;
+        await eventStore.appendEvent(
+          run.id,
+          'narrative_delta',
+          { text: `El plan aún tiene ${pending.length} tarea(s) pendiente(s); sigo trabajando (extensión ${planExtensionsUsed}/${maxPlanExtensions}).` },
+          { prisma },
+        ).catch(() => {});
+        messages.push({
+          role: 'user',
+          content: `[CONTINUACIÓN] Presupuesto de pasos extendido porque el plan sigue incompleto. Tareas pendientes: ${pending.slice(0, 8).join(' · ')}. Continúa con la siguiente tarea pendiente y mantén update_plan al día. Si en realidad ya está todo terminado, marca las tareas como completed con update_plan y deja de llamar herramientas.`,
+        });
+      }
+    }
   }
 
   // Budget exhausted (or aborted by the hard timeout signal): close honestly,
@@ -789,7 +831,13 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   await eventStore.appendEvent(
     run.id,
     'narrative_delta',
-    { text: aborted ? 'Me detuve por el límite de tiempo de la corrida.' : 'Alcancé el límite de pasos de esta corrida; cierro con lo construido hasta aquí.' },
+    {
+      text: aborted
+        ? 'Me detuve por el límite de tiempo de la corrida.'
+        : (pendingPlanTasks(latestPlanTasks).length
+          ? `Alcancé el límite de pasos con ${pendingPlanTasks(latestPlanTasks).length} tarea(s) del plan aún pendiente(s); cierro con lo construido hasta aquí. Escríbeme "continúa" para seguir donde quedé.`
+          : 'Alcancé el límite de pasos de esta corrida; cierro con lo construido hasta aquí.'),
+    },
     { prisma },
   ).catch(() => {});
   await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
