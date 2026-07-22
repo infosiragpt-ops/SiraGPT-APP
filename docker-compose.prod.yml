@@ -108,7 +108,9 @@ services:
       CODE_RUNNER_GID_SPAN: "${CODE_RUNNER_GID_SPAN:-1000000000}"
       CODE_RUNNER_RLIMIT_NPROC: "${CODE_RUNNER_RLIMIT_NPROC:-96}"
       CODE_RUNNER_RLIMIT_NOFILE: "${CODE_RUNNER_RLIMIT_NOFILE:-1024}"
-      CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-2147483648}"
+      # Virtual address space is not RSS: Node/V8 reserves a multi-GiB cage.
+      # The 2 GiB container cgroup below is still the hard physical-memory cap.
+      CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-17179869184}"
       CODE_RUNNER_RLIMIT_FSIZE_BYTES: "${CODE_RUNNER_RLIMIT_FSIZE_BYTES:-536870912}"
       CODE_RUNNER_RLIMIT_CPU_SECONDS: "${CODE_RUNNER_RLIMIT_CPU_SECONDS:-1800}"
       # Multi-project dev-server pool (audit B1): one dev server per project.
@@ -350,10 +352,12 @@ services:
       # not silently fall back to the native loop.
       CODEX_IMPLEMENTER_ADAPTER: ${CODEX_IMPLEMENTER_ADAPTER:-native}
       CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
-      # Public execution remains closed while the provider is the interim
-      # shared container. Set an isolated mode (opensandbox/gvisor/kata/e2b)
-      # before deliberately enabling CODEX_AGENT_OPEN_TO_ALL.
+      # Public execution remains closed while the boot-selected provider is the
+      # interim shared runner. An env isolation label alone cannot open access.
       CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-false}
+      CODEX_SANDBOX_PROVIDER: ${CODEX_SANDBOX_PROVIDER:-shared-runner}
+      # Kept for operational visibility/backward compatibility only. Access
+      # policy trusts the provider attestation, never this string.
       CODEX_RUNNER_ISOLATION_MODE: ${CODEX_RUNNER_ISOLATION_MODE:-shared-container}
       CODEX_PARALLEL_WRITE_SUBAGENTS: ${CODEX_PARALLEL_WRITE_SUBAGENTS:-false}
       CODE_RUNNER_URL: ${CODE_RUNNER_URL:-http://runner:4097}

@@ -19,6 +19,7 @@ function serviceBlock(name, nextName) {
 test('production keeps public Codex closed on the interim shared runner', () => {
   const backend = serviceBlock('backend', 'frontend');
   assert.match(backend, /CODEX_AGENT_OPEN_TO_ALL:\s*\$\{CODEX_AGENT_OPEN_TO_ALL:-false\}/);
+  assert.match(backend, /CODEX_SANDBOX_PROVIDER:\s*\$\{CODEX_SANDBOX_PROVIDER:-shared-runner\}/);
   assert.match(backend, /CODEX_RUNNER_ISOLATION_MODE:\s*\$\{CODEX_RUNNER_ISOLATION_MODE:-shared-container\}/);
   assert.match(backend, /CODE_HOST_RUNNER:\s*\$\{CODE_HOST_RUNNER:-false\}/);
   assert.match(backend, /CODEX_PARALLEL_WRITE_SUBAGENTS:\s*\$\{CODEX_PARALLEL_WRITE_SUBAGENTS:-false\}/);

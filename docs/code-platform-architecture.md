@@ -77,7 +77,9 @@ project branch.
 
 The legacy shared Bun runner is a canary bridge, not a multi-tenant security
 boundary. Public execution remains disabled while
-`CODEX_RUNNER_ISOLATION_MODE=shared-container`.
+`CODEX_SANDBOX_PROVIDER=shared-runner`. `CODEX_RUNNER_ISOLATION_MODE` is only an
+operational label: access policy trusts the provider's immutable, validated
+boot attestation and never treats an environment string as proof of isolation.
 
 The production sandbox provider must supply, per workspace:
 
@@ -97,6 +99,13 @@ kill process groups on timeout, apply `prlimit`, live on a network without the
 control PostgreSQL/Redis services and remain limited to trusted canaries.
 Writer subagents stay serialized with `CODEX_PARALLEL_WRITE_SUBAGENTS=false`
 until the provider assigns a separate Git worktree and sandbox to each writer.
+
+The path-gated/manual `gVisor runner compatibility` workflow installs a
+version-and-SHA512-pinned `runsc` only on an ephemeral GitHub Ubuntu runner. It
+builds the production runner image and verifies Node, Bun, Git, the Docker
+runtime identity, a read-only root filesystem and resource caps under systrap.
+It does not install or configure anything on the production VPS; host rollout
+still requires staging, a maintenance window and explicit rollback.
 
 ## PostgreSQL contract
 

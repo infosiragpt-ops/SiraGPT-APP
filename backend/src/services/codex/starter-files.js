@@ -501,9 +501,9 @@ function fullStackStarterFiles({ projectName } = {}) {
     version: '0.0.1',
     type: 'module',
     scripts: {
-      // Direct commands (no `npm run` nesting): the preview runner is a Bun
-      // image without npm; its node shim handles `node --watch` fine and the
-      // same script works verbatim on real Node after an export.
+      // Direct commands (no nested package-manager calls): the preview runner
+      // invokes this script with npm while Bun remains the fast installer.
+      // The same commands work verbatim on real Node after an export.
       dev: 'concurrently -n api,web -c blue,green "node --watch server/index.js" "vite"',
       'dev:api': 'node --watch server/index.js',
       'dev:web': 'vite',
@@ -535,7 +535,7 @@ function fullStackStarterFiles({ projectName } = {}) {
   };
 
   // Vite config with proxy to the Express API. The runner launches this
-  // project with `bun run dev` (concurrently: API + web) instead of the vite
+  // project with `npm run dev` (concurrently: API + web) instead of the vite
   // CLI, so port/base come from ENV, not flags. The proxy key is a REGEX so
   // `/api` also matches under SiraGPT's tokenized preview base (the frontend
   // calls `${import.meta.env.BASE_URL}api/...`); the rewrite strips the base

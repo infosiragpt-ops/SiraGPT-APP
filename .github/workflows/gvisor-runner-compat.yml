@@ -1,0 +1,161 @@
+name: gVisor runner compatibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, production-main]
+    paths:
+      - '.github/workflows/gvisor-runner-compat.yml'
+      - 'scripts/runner.Dockerfile'
+      - 'scripts/code-runner*.js'
+      - 'scripts/gvisor-runner-smoke.mjs'
+      - 'backend/src/services/codex/sandbox-provider.js'
+      - 'backend/src/services/codex/sandbox-providers/**'
+      - 'backend/tests/codex-gvisor-workflow-contract.test.js'
+      - 'docker-compose.prod.yml'
+  push:
+    branches: [production-main]
+    paths:
+      - '.github/workflows/gvisor-runner-compat.yml'
+      - 'scripts/runner.Dockerfile'
+      - 'scripts/code-runner*.js'
+      - 'scripts/gvisor-runner-smoke.mjs'
+      - 'backend/src/services/codex/sandbox-provider.js'
+      - 'backend/src/services/codex/sandbox-providers/**'
+      - 'docker-compose.prod.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gvisor-runner-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Deliberately pinned. Upgrade the version and digest together after review.
+  RUNSC_VERSION: release-20260714.0
+  RUNSC_SHA512_X86_64: 75c092fe87d84078f06ac40937cb5207fb5a1a92511b38b4790c915801555daadc59fef33de8db4dd92e1892a6de390c8a2e390a7a3bd0e2d3731d9ed6a3a6e8
+  RUNSC_RUNTIME: runsc-systrap
+  RUNNER_IMAGE: siragpt-runner:gvisor-compat
+
+jobs:
+  compatibility:
+    name: runsc systrap · runner smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install the pinned runsc binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Git tags include the release- prefix, while the signed binary
+          # bucket stores immutable versions below release/<date.version>/.
+          URL="https://storage.googleapis.com/gvisor/releases/release/${RUNSC_VERSION#release-}/x86_64/runsc"
+          curl --proto '=https' --tlsv1.2 -fsSLo /tmp/runsc "${URL}"
+          echo "${RUNSC_SHA512_X86_64}  /tmp/runsc" | sha512sum -c -
+          sudo install -o root -g root -m 0755 /tmp/runsc /usr/local/bin/runsc
+          /usr/local/bin/runsc --version
+
+      - name: Register systrap on this ephemeral runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE="$(mktemp)"
+          TARGET="$(mktemp)"
+          if sudo test -s /etc/docker/daemon.json; then
+            sudo cat /etc/docker/daemon.json > "${SOURCE}"
+          else
+            printf '{}\n' > "${SOURCE}"
+          fi
+          jq \
+            --arg runtime "${RUNSC_RUNTIME}" \
+            '.runtimes = (.runtimes // {})
+             | .runtimes[$runtime] = {
+                 "path": "/usr/local/bin/runsc",
+                 "runtimeArgs": ["--platform=systrap", "--network=sandbox"]
+               }' \
+            "${SOURCE}" > "${TARGET}"
+          sudo install -o root -g root -m 0644 "${TARGET}" /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | jq -e --arg runtime "${RUNSC_RUNTIME}" 'has($runtime)'
+
+      - name: Build the production runner image
+        run: docker build --file scripts/runner.Dockerfile --tag "${RUNNER_IMAGE}" scripts
+
+      - name: Exercise tools, runtime identity, and containment
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach \
+            --name siragpt-gvisor-compat \
+            --runtime "${RUNSC_RUNTIME}" \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+            --tmpfs /workspace:rw,nosuid,nodev,size=256m,mode=0711 \
+            --tmpfs /export:rw,nosuid,nodev,size=64m,mode=0700 \
+            --tmpfs /runner-cache:rw,nosuid,nodev,size=128m,mode=0711 \
+            --tmpfs /runner-home:rw,nosuid,nodev,size=64m,mode=0711 \
+            --tmpfs /runner-tmp:rw,nosuid,nodev,size=64m,mode=0711 \
+            --cap-drop ALL \
+            --cap-add CHOWN \
+            --cap-add DAC_OVERRIDE \
+            --cap-add FOWNER \
+            --cap-add KILL \
+            --cap-add SETGID \
+            --cap-add SETUID \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --cpus 1 \
+            --memory 1g \
+            --env NODE_ENV=production \
+            --env CODE_RUNNER_CONTROL_TOKEN=gvisor-smoke-control-token \
+            --env CODE_RUNNER_DEV_PORT_POOL=5173-5174 \
+            --env CODE_RUNNER_RLIMIT_AS_BYTES=17179869184 \
+            --env CODE_RUNNER_INSTALL_TIMEOUT_MS=30000 \
+            --env CODE_RUNNER_DEV_READY_TIMEOUT_MS=30000 \
+            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner.js",dst=/scripts/code-runner.js,readonly \
+            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner-utils.js",dst=/scripts/code-runner-utils.js,readonly \
+            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/gvisor-runner-smoke.mjs",dst=/smoke/gvisor-runner-smoke.mjs,readonly \
+            "${RUNNER_IMAGE}" bun /scripts/code-runner.js
+
+          docker exec siragpt-gvisor-compat bun /smoke/gvisor-runner-smoke.mjs
+
+          docker inspect siragpt-gvisor-compat > /tmp/gvisor-inspect.json
+          jq '.[0] | {
+            Runtime: .HostConfig.Runtime,
+            ReadonlyRootfs: .HostConfig.ReadonlyRootfs,
+            NetworkMode: .HostConfig.NetworkMode,
+            PidsLimit: .HostConfig.PidsLimit,
+            NanoCpus: .HostConfig.NanoCpus,
+            Memory: .HostConfig.Memory,
+            CapDrop: .HostConfig.CapDrop,
+            CapAdd: .HostConfig.CapAdd,
+            SecurityOpt: .HostConfig.SecurityOpt,
+            MountDestinations: [.Mounts[].Destination]
+          }' /tmp/gvisor-inspect.json
+          jq -e --arg runtime "${RUNSC_RUNTIME}" '
+            .[0].HostConfig.Runtime == $runtime
+            and .[0].HostConfig.ReadonlyRootfs == true
+            and .[0].HostConfig.NetworkMode == "none"
+            and .[0].HostConfig.PidsLimit == 128
+            and .[0].HostConfig.NanoCpus == 1000000000
+            and .[0].HostConfig.Memory == 1073741824
+            and (.[0].HostConfig.CapDrop | index("ALL") != null)
+            and ([.[0].HostConfig.CapAdd[] | sub("^CAP_"; "")] | sort == ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID"])
+            and (.[0].HostConfig.SecurityOpt | index("no-new-privileges:true") != null)
+            and ([.[0].Mounts[].Destination] | index("/var/run/docker.sock") == null)
+          ' /tmp/gvisor-inspect.json
+
+          if docker exec siragpt-gvisor-compat sh -ceu 'touch /rootfs-write-probe'; then
+            echo '::error ::read-only root filesystem was writable'
+            exit 1
+          fi
+          docker exec siragpt-gvisor-compat sh -ceu 'touch /tmp/tmpfs-write-probe && test -f /tmp/tmpfs-write-probe'
+
+      - name: Cleanup ephemeral smoke container
+        if: always()
+        run: docker rm --force siragpt-gvisor-compat 2>/dev/null || true

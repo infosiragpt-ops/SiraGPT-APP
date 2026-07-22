@@ -8,6 +8,8 @@
  * create/cancel runs, and start/export previews.
  */
 
+const { getSandboxRuntime } = require('./sandbox-provider');
+
 function parseAllowlist(env = process.env) {
   return String(env.CODEX_AGENT_ALLOWED_USER_IDS || '')
     .split(',')
@@ -15,26 +17,17 @@ function parseAllowlist(env = process.env) {
     .filter(Boolean);
 }
 
-const ISOLATED_RUNNER_MODES = new Set([
-  'sandbox',
-  'opensandbox',
-  'kubernetes',
-  'gvisor',
-  'kata',
-  'microvm',
-  'e2b',
-]);
-
 /**
  * Public multi-tenant execution is only safe when each workspace is backed by
  * an actual isolation boundary. A shared process/container is still useful for
  * trusted canaries, but CODEX_AGENT_OPEN_TO_ALL must never turn it into a
  * public remote-code-execution service by itself.
  */
-function multiTenantIsolationReady(env = process.env) {
-  if (String(env.NODE_ENV || '').trim().toLowerCase() !== 'production') return true;
-  const mode = String(env.CODEX_RUNNER_ISOLATION_MODE || '').trim().toLowerCase();
-  return ISOLATED_RUNNER_MODES.has(mode);
+function multiTenantIsolationReady(_env = process.env, runtime = getSandboxRuntime()) {
+  const attestation = runtime?.attestation;
+  return attestation?.isolation?.isolated === true
+    && attestation.isolation.tenantScope === 'workspace'
+    && attestation.capabilities?.publicMultiTenant === true;
 }
 
 function openToAllRequested(env = process.env) {
@@ -42,25 +35,25 @@ function openToAllRequested(env = process.env) {
   return v === '1' || v === 'true' || v === 'on';
 }
 
-// Effective public access: the operator must request it AND production must
-// advertise a real sandbox provider. Default off — reversible without deploy.
-function openToAll(env = process.env) {
-  return openToAllRequested(env) && multiTenantIsolationReady(env);
+// Effective public access: the operator must request it AND the boot-selected
+// provider must attest a real workspace boundary. Default off.
+function openToAll(env = process.env, runtime = getSandboxRuntime()) {
+  return openToAllRequested(env) && multiTenantIsolationReady(env, runtime);
 }
 
-function canUseCodexAgent(user, env = process.env) {
+function canUseCodexAgent(user, env = process.env, runtime = getSandboxRuntime()) {
   if (!user) return false;
-  if (openToAll(env)) return true;
+  if (openToAll(env, runtime)) return true;
   if (user.isSuperAdmin || user.isAdmin) return true;
   const ids = parseAllowlist(env);
   if (ids.length === 0) return false;
   return ids.includes(String(user.id));
 }
 
-function publicAccess(user, env = process.env) {
+function publicAccess(user, env = process.env, runtime = getSandboxRuntime()) {
   return {
-    canRun: canUseCodexAgent(user, env),
-    allowlistConfigured: parseAllowlist(env).length > 0 || openToAll(env),
+    canRun: canUseCodexAgent(user, env, runtime),
+    allowlistConfigured: parseAllowlist(env).length > 0 || openToAll(env, runtime),
   };
 }
 
@@ -71,5 +64,4 @@ module.exports = {
   openToAll,
   openToAllRequested,
   multiTenantIsolationReady,
-  ISOLATED_RUNNER_MODES,
 };

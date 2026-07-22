@@ -174,7 +174,9 @@ function sandboxCommand(cmd, identity, limits = {}) {
   if (!Number.isInteger(uid) || uid <= 0 || !Number.isInteger(gid) || gid <= 0) {
     throw new TypeError('sandbox identity must use non-root integer uid/gid values');
   }
-  const addressSpaceBytes = positiveLimit(limits.addressSpaceBytes, 4 * 1024 * 1024 * 1024);
+  // Node/V8 reserves substantially more virtual address space than its RSS;
+  // the container memory cgroup remains the real physical-memory boundary.
+  const addressSpaceBytes = positiveLimit(limits.addressSpaceBytes, 16 * 1024 * 1024 * 1024);
   const maxProcesses = positiveLimit(limits.maxProcesses, 128);
   const maxOpenFiles = positiveLimit(limits.maxOpenFiles, 256);
   const maxFileBytes = positiveLimit(limits.maxFileBytes, 512 * 1024 * 1024);

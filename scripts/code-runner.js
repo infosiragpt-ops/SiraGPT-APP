@@ -99,7 +99,11 @@ const WRITE_MAX_TOTAL_BYTES = boundedPositiveEnv("CODE_RUNNER_WRITE_MAX_TOTAL_BY
 const EXPORT_MAX_FILES = boundedPositiveEnv("CODE_RUNNER_EXPORT_MAX_FILES", 5_000, 1, 20_000);
 const EXPORT_MAX_BYTES = boundedPositiveEnv("CODE_RUNNER_EXPORT_MAX_BYTES", 20_000_000, 1_000_000, 100_000_000);
 const SANDBOX_LIMITS = Object.freeze({
-  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 4 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
+  // V8 reserves a large virtual cage before allocating real pages. A 2-4 GiB
+  // RLIMIT_AS lets simple node:http/node:sqlite apps start but then fail while
+  // instantiating llhttp WebAssembly. RSS remains hard-capped by the container
+  // cgroup; this limit only prevents unbounded virtual mappings.
+  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 16 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
   maxProcesses: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NPROC", 128, 8, 4096),
   maxOpenFiles: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NOFILE", 256, 32, 65_536),
   maxFileBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_FSIZE_BYTES", 512 * 1024 * 1024, 1024 * 1024, 16 * 1024 * 1024 * 1024),
@@ -319,7 +323,7 @@ let lastStartedKey = null; // legacy GET /status (no project) mirrors this one
 
 // `setsid` makes the spawned dev command a process-group leader (it execs in
 // place when the caller isn't already a group leader, so the pid is stable),
-// which lets us kill the WHOLE tree (bunx → vite → esbuild...) on evict/stop.
+// which lets us kill the WHOLE tree (npm/node → vite → esbuild...) on evict/stop.
 // Same pattern as host-runner.js killGroup. sandboxCommand always places
 // setsid first, so proc.pid is also the process-group id.
 
@@ -572,18 +576,18 @@ async function runDev(entry, projectId) {
   // Dev command per framework. Host 0.0.0.0 so it's reachable from the proxy.
   let cmd;
   if (isNext) {
-    cmd = ["bunx", "next", "dev", "-H", "0.0.0.0", "-p", String(port)];
+    cmd = ["node", "node_modules/next/dist/bin/next", "dev", "-H", "0.0.0.0", "-p", String(port)];
   } else if (isCompositeDev) {
     // Full-stack starter: concurrently boots API + web; flags can't reach the
     // inner vite, so it reads PORT/VITE_BASE/API_PORT from the env below.
-    cmd = ["bun", "run", "dev"];
+    cmd = ["npm", "run", "dev"];
   } else if (deps.vite || (hasDevScript && /vite/.test(devScript))) {
-    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
+    cmd = ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0", "--port", String(port)];
     if (entry.basePath) cmd.push("--base", entry.basePath);
   } else if (hasDevScript) {
-    cmd = ["bun", "run", "dev"];
+    cmd = ["npm", "run", "dev"];
   } else {
-    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
+    cmd = ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0", "--port", String(port)];
     if (entry.basePath) cmd.push("--base", entry.basePath);
   }
   pushLog(entry, `$ ${cmd.join(" ")}`);
