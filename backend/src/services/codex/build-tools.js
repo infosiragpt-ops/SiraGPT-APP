@@ -468,7 +468,7 @@ const TOOLS = {
 
   run_subagent: {
     kind: 'agent',
-    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH), más los agentes custom que el proyecto defina en .sira/agents.json. Puedes emitir VARIOS run_subagent en el mismo turno y correrán en paralelo. Recibes solo su informe final.',
+    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH), más los agentes custom que el proyecto defina en .sira/agents.json. La política del workspace decide si varias delegaciones se serializan o ejecutan en paralelo. Recibes solo su informe final.',
     parameters: {
       type: 'object',
       properties: {

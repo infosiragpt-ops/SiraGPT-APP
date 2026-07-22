@@ -51,6 +51,11 @@ function readPosInt(raw, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function flagEnabled(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'on';
+}
+
 /** Plan tasks not yet completed → titles (plan-mode tasks carry no status: pending). */
 function pendingPlanTasks(tasks) {
   if (!Array.isArray(tasks)) return [];
@@ -203,7 +208,7 @@ async function defaultWebSearch(query) {
   }
 }
 
-function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes }) {
+function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes, parallelSubagents = false }) {
   const appsMode = isAppsPrompt(sourcePrompt);
   const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
   const lines = [
@@ -223,7 +228,9 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
     require('./skills').skillsPromptLine(),
     'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de negocio). Si el proyecto define agentes custom en .sira/agents.json también puedes delegarles.',
-    'Los subagentes son independientes: cuando dos tareas no dependen entre sí (p.ej. frontend_builder para la UI y db_architect para el modelo), emite VARIOS run_subagent en el MISMO turno y correrán en paralelo.',
+    parallelSubagents
+      ? 'Los subagentes son independientes: cuando dos tareas no dependen entre sí, puedes emitir VARIOS run_subagent en el MISMO turno y correrán en paralelo.'
+      : 'Delega a los subagentes de uno en uno. Este workspace aún no usa worktrees separados, así que las delegaciones se serializan para impedir escrituras concurrentes sobre el mismo checkout.',
     'Si el usuario pide software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, punto de venta, gestión de clientes/proveedores/proyectos), delega PRIMERO en enterprise_analyst para convertir el pedido en módulos, entidades, roles y flujos; luego construye una app multi-módulo con navegación lateral, dashboard con KPIs y datos de ejemplo realistas del dominio.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
@@ -526,6 +533,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
   const maxSameFileWrites = readPosInt(env.CODEX_MAX_SAME_FILE_WRITES, DEFAULT_MAX_SAME_FILE_WRITES);
+  // Parallel specialists are unsafe while they share one checkout: several
+  // built-in and custom agents can write/edit the same files. Keep them
+  // serialized until the sandbox provider assigns an independent worktree to
+  // every writer. The opt-in exists only for controlled development/tests.
+  const parallelSubagents = flagEnabled(env.CODEX_PARALLEL_WRITE_SUBAGENTS);
   const registry = buildTools.toolRegistry();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
@@ -543,7 +555,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes }) },
+    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes, parallelSubagents }) },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
   ];
 
@@ -786,7 +798,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     // calls runs them concurrently (independent specialists; writes are
     // per-file via the runner). Mixed turns stay sequential to preserve
     // read-after-write ordering between tools.
-    const allDelegations = calls.length > 1 && calls.every((c) => c.name === 'run_subagent');
+    const allDelegations = parallelSubagents && calls.length > 1 && calls.every((c) => c.name === 'run_subagent');
     const outcomes = [];
     if (allDelegations) {
       outcomes.push(...await Promise.all(calls.map((call) => executeCall(call))));

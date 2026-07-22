@@ -79,21 +79,38 @@ services:
         max-file: "3"
 
   # ── Codex/APPS Runner ─────────────────────────────────────
-  # Isolated workspace runner for APPS/Codex V2. The backend talks to the
+  # Canary workspace runner for APPS/Codex V2. This shared container is
+  # contained but is not the final hostile multi-tenant isolation boundary.
+  # The backend talks to the
   # control API on 4097 and proxies the dev server on 5173 through same-origin
   # tokenized URLs; no dynamic public ports are exposed.
   runner:
     build:
       context: ./scripts
       dockerfile: runner.Dockerfile
+    image: siragpt-runner:latest
     restart: unless-stopped
     working_dir: /workspace
     command: ["bun", "/scripts/code-runner.js"]
     environment:
+      NODE_ENV: production
       DEV_PORT: "5173"
       CTRL_PORT: "4097"
       RUNNER_WORKDIR: "/workspace"
       EXPORT_DIR: "/export"
+      # Service-to-service credential for the control plane. Generated code
+      # never receives this value; the runner strips its own environment before
+      # spawning install/dev/exec children.
+      CODE_RUNNER_CONTROL_TOKEN: "${CODE_RUNNER_CONTROL_TOKEN:-}"
+      CODE_RUNNER_UID_BASE: "${CODE_RUNNER_UID_BASE:-100000}"
+      CODE_RUNNER_UID_SPAN: "${CODE_RUNNER_UID_SPAN:-1000000000}"
+      CODE_RUNNER_GID_BASE: "${CODE_RUNNER_GID_BASE:-100000}"
+      CODE_RUNNER_GID_SPAN: "${CODE_RUNNER_GID_SPAN:-1000000000}"
+      CODE_RUNNER_RLIMIT_NPROC: "${CODE_RUNNER_RLIMIT_NPROC:-96}"
+      CODE_RUNNER_RLIMIT_NOFILE: "${CODE_RUNNER_RLIMIT_NOFILE:-1024}"
+      CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-2147483648}"
+      CODE_RUNNER_RLIMIT_FSIZE_BYTES: "${CODE_RUNNER_RLIMIT_FSIZE_BYTES:-536870912}"
+      CODE_RUNNER_RLIMIT_CPU_SECONDS: "${CODE_RUNNER_RLIMIT_CPU_SECONDS:-1800}"
       # Multi-project dev-server pool (audit B1): one dev server per project.
       # Traffic reaches these ports through the backend's same-origin preview
       # proxy over the internal docker network — nothing is published to the
@@ -103,15 +120,39 @@ services:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/scripts/code-runner.js:ro
       - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
-      - runner_bun_cache:/root/.bun/install/cache
+      - runner_bun_cache:/runner-cache
       - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/export
     expose:
       - "4097"
       # Dev-server port pool (expose is documentational on the internal
       # network; kept in sync with CODE_RUNNER_DEV_PORT_POOL above).
       - "5173-5182"
+    # Interim shared-runner containment while per-workspace OpenSandbox/gVisor
+    # replaces it. These controls reduce blast radius but are NOT advertised as
+    # a complete hostile multi-tenant sandbox.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    cpus: 4.0
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+      - /runner-home:rw,nosuid,nodev,size=128m,mode=0711
+      - /runner-tmp:rw,nosuid,nodev,size=512m,mode=0711
+    networks:
+      - runner_control
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4097/status'); if(!r.ok) process.exit(1)"]
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4097/health'); if(!r.ok) process.exit(1)"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -119,7 +160,9 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "4.0"
           memory: 2G
+          pids: 512
         reservations:
           memory: 256M
     logging:
@@ -297,14 +340,21 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0}
       CODE_HOST_RUNNER: ${CODE_HOST_RUNNER:-false}
+      CODE_HOST_RUNNER_UNSAFE_PRODUCTION_ACK: ""
       CODE_RUNNER_PROXY_URLS: ${CODE_RUNNER_PROXY_URLS:-true}
       CODE_RUNNER_MAX_CONCURRENT: ${CODE_RUNNER_MAX_CONCURRENT:-2}
       CODE_RUNNER_INSTALL_TIMEOUT_MS: ${CODE_RUNNER_INSTALL_TIMEOUT_MS:-180000}
       CODE_RUNNER_READY_TIMEOUT_MS: ${CODE_RUNNER_READY_TIMEOUT_MS:-120000}
       CODEX_AGENT_V2: ${CODEX_AGENT_V2:-true}
       CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
-      CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-true}
+      # Public execution remains closed while the provider is the interim
+      # shared container. Set an isolated mode (opensandbox/gvisor/kata/e2b)
+      # before deliberately enabling CODEX_AGENT_OPEN_TO_ALL.
+      CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-false}
+      CODEX_RUNNER_ISOLATION_MODE: ${CODEX_RUNNER_ISOLATION_MODE:-shared-container}
+      CODEX_PARALLEL_WRITE_SUBAGENTS: ${CODEX_PARALLEL_WRITE_SUBAGENTS:-false}
       CODE_RUNNER_URL: ${CODE_RUNNER_URL:-http://runner:4097}
+      CODE_RUNNER_CONTROL_TOKEN: "${CODE_RUNNER_CONTROL_TOKEN:-}"
       CODE_RUNNER_DEV_INTERNAL_URL: ${CODE_RUNNER_DEV_INTERNAL_URL:-http://runner:5173}
       CODEX_EXPORT_HOST_DIR: ${CODEX_EXPORT_HOST_DIR:-/opt/siragpt/.codex-workspaces}
       CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
@@ -362,6 +412,9 @@ services:
       - projects_data:/root/Desktop/sira-projects
     ports:
       - "127.0.0.1:5000:5000"   # Reverse proxy (nginx/caddy) in front
+    networks:
+      - default
+      - runner_control
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health/live"]
       interval: 15s
@@ -445,3 +498,10 @@ volumes:
     driver: local
   runner_bun_cache:
     driver: local
+
+networks:
+  # Contains only the backend control plane and the interim runner. PostgreSQL,
+  # Redis, Caddy, frontend and user deployments stay on the default network, so
+  # generated code cannot resolve or connect to production data services.
+  runner_control:
+    driver: bridge

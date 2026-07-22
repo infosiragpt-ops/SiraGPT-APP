@@ -2,12 +2,24 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createRunnerClient, RunnerError, runnerDevUrl, codexExportHostDir, codexExportHostPath } = require('../src/services/codex/runner-client');
+const {
+  createRunnerClient,
+  RunnerError,
+  runnerControlToken,
+  runnerDevUrl,
+  codexExportHostDir,
+  codexExportHostPath,
+} = require('../src/services/codex/runner-client');
 
 function fakeFetch(handler) {
   const calls = [];
   const impl = async (url, init = {}) => {
-    calls.push({ url: String(url), method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+    calls.push({
+      url: String(url),
+      method: init.method || 'GET',
+      headers: init.headers || undefined,
+      body: init.body ? JSON.parse(init.body) : null,
+    });
     return handler(calls[calls.length - 1]);
   };
   return { impl, calls };
@@ -25,6 +37,32 @@ test('initWorkspace POSTs { project } to /workspace/init', async () => {
   assert.equal(calls[0].url, 'http://runner:4097/workspace/init');
   assert.equal(calls[0].method, 'POST');
   assert.deepEqual(calls[0].body, { project: 'p1' });
+});
+
+test('every control call sends the configured bearer token, including GETs', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true }));
+  const client = createRunnerClient({
+    fetchImpl: impl,
+    baseUrl: 'http://runner:4097',
+    controlToken: 'control-secret',
+  });
+  await client.initWorkspace('p1');
+  await client.readFile('p1', 'package.json');
+  await client.devStatus('p1');
+
+  assert.equal(calls.length, 3);
+  for (const call of calls) assert.equal(call.headers.Authorization, 'Bearer control-secret');
+  assert.equal(calls[0].headers['Content-Type'], 'application/json');
+  assert.equal(calls[1].headers['Content-Type'], undefined);
+});
+
+test('tokenless development remains compatible and token lookup trims the env value', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true }));
+  const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097', controlToken: '' });
+  await client.devStatus();
+  assert.equal(calls[0].headers, undefined);
+  assert.equal(runnerControlToken({ CODE_RUNNER_CONTROL_TOKEN: '  abc  ' }), 'abc');
+  assert.equal(runnerControlToken({}), '');
 });
 
 test('exec POSTs { project, cmd, timeoutMs } and returns the runner payload verbatim', async () => {

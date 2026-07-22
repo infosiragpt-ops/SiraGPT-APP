@@ -7,6 +7,25 @@
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
+// Only boring, non-secret process settings may cross the control-plane ->
+// generated-code boundary. Project-specific HOME/cache/tmp and runtime values
+// (PORT, HOST, etc.) are supplied explicitly by code-runner.js.
+const RUNNER_ENV_ALLOWLIST = Object.freeze([
+  'PATH',
+  'LANG',
+  'LANGUAGE',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'BUN_INSTALL',
+]);
+
+// Defense in depth: even an accidental future addition to the allowlist (or
+// an unsafe override at a call site) must not leak control-plane credentials.
+const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|(?:^|[_-])KEY(?:$|[_-])|CREDENTIAL|AUTHORIZATION|OAUTH|COOKIE|SESSION|DATABASE[_-]?URL|REDIS[_-]?URL|SSH[_-]?)/i;
+
 // Sandbox-internal allowlist: the agent's terminal goes through the runner,
 // but only via these binaries (extended deliberately, per phase).
 const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'ls', 'cat', 'wc']);
@@ -43,6 +62,141 @@ function resolveProjectRelPath(relPath) {
 
 function isAllowedCommand(cmd) {
   return commandRejectionReason(cmd) === null;
+}
+
+function isSensitiveEnvKey(key) {
+  return SENSITIVE_ENV_KEY_RE.test(String(key || ''));
+}
+
+/**
+ * Build the complete environment visible to generated code.
+ *
+ * This intentionally starts from an empty object instead of cloning the
+ * runner's process.env. `overrides` is still filtered so a refactor cannot
+ * accidentally pass CODE_RUNNER_CONTROL_TOKEN (or another secret) through.
+ */
+function buildRunnerEnv(source = {}, overrides = {}) {
+  const result = {};
+  for (const key of RUNNER_ENV_ALLOWLIST) {
+    if (isSensitiveEnvKey(key)) continue;
+    const value = source && source[key];
+    if (typeof value === 'string' && value.length > 0) result[key] = value;
+  }
+  for (const [key, value] of Object.entries(overrides || {})) {
+    if (isSensitiveEnvKey(key) || value == null) continue;
+    result[key] = String(value);
+  }
+  return result;
+}
+
+/** Constant-work comparison for the short bearer tokens used by the API. */
+function constantTimeEqual(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+  const length = Math.max(a.length, b.length, 1);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < length; i++) {
+    diff |= (a.charCodeAt(i % Math.max(a.length, 1)) || 0)
+      ^ (b.charCodeAt(i % Math.max(b.length, 1)) || 0);
+  }
+  return diff === 0;
+}
+
+/**
+ * /health is deliberately unauthenticated for container health checks. In
+ * development an absent token preserves the old local workflow; production
+ * rejects an absent token at boot in code-runner.js.
+ */
+function isControlRequestAuthorized({ pathname, authorization, token } = {}) {
+  if (pathname === '/health') return true;
+  const expected = String(token || '').trim();
+  if (!expected) return true;
+  const match = String(authorization || '').match(/^Bearer[ \t]+(.+)$/i);
+  return Boolean(match && constantTimeEqual(match[1], expected));
+}
+
+function controlTokenForEnv(env = {}) {
+  const token = String(env.CODE_RUNNER_CONTROL_TOKEN || '').trim();
+  if (String(env.NODE_ENV || '').toLowerCase() === 'production' && !token) {
+    throw new Error('CODE_RUNNER_CONTROL_TOKEN is required when NODE_ENV=production');
+  }
+  return token;
+}
+
+/** FNV-1a: stable across Bun/Node restarts and cheap for short project ids. */
+function stableProjectHash(value) {
+  let hash = 0x811c9dc5;
+  for (const char of String(value || '')) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Give each project a stable, unprivileged Linux identity. The large default
+ * span makes collisions vanishingly unlikely while keeping ids below 2^31.
+ */
+function projectIdentity(projectId, {
+  uidBase = 100_000,
+  uidSpan = 1_000_000,
+  gidBase = uidBase,
+  gidSpan = uidSpan,
+} = {}) {
+  const id = String(projectId || '__legacy__');
+  const hash = stableProjectHash(id);
+  const cleanUidBase = Math.max(1, Math.trunc(Number(uidBase) || 100_000));
+  const cleanUidSpan = Math.max(1, Math.trunc(Number(uidSpan) || 1_000_000));
+  const cleanGidBase = Math.max(1, Math.trunc(Number(gidBase) || cleanUidBase));
+  const cleanGidSpan = Math.max(1, Math.trunc(Number(gidSpan) || cleanUidSpan));
+  return {
+    uid: cleanUidBase + (hash % cleanUidSpan),
+    gid: cleanGidBase + (hash % cleanGidSpan),
+  };
+}
+
+function positiveLimit(value, fallback) {
+  const parsed = Math.trunc(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Wrap a generated-code command in a new session, resource limits, and an
+ * irreversible uid/gid + capability drop. The returned argv is passed to
+ * Bun.spawn directly (never through a shell).
+ */
+function sandboxCommand(cmd, identity, limits = {}) {
+  if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((part) => typeof part === 'string')) {
+    throw new TypeError('sandbox command must be a non-empty string array');
+  }
+  const uid = Math.trunc(Number(identity && identity.uid));
+  const gid = Math.trunc(Number(identity && identity.gid));
+  if (!Number.isInteger(uid) || uid <= 0 || !Number.isInteger(gid) || gid <= 0) {
+    throw new TypeError('sandbox identity must use non-root integer uid/gid values');
+  }
+  const addressSpaceBytes = positiveLimit(limits.addressSpaceBytes, 4 * 1024 * 1024 * 1024);
+  const maxProcesses = positiveLimit(limits.maxProcesses, 128);
+  const maxOpenFiles = positiveLimit(limits.maxOpenFiles, 256);
+  const maxFileBytes = positiveLimit(limits.maxFileBytes, 512 * 1024 * 1024);
+  const cpuSeconds = positiveLimit(limits.cpuSeconds, 7200);
+
+  return [
+    'setsid',
+    'prlimit',
+    `--as=${addressSpaceBytes}:${addressSpaceBytes}`,
+    `--nproc=${maxProcesses}:${maxProcesses}`,
+    `--nofile=${maxOpenFiles}:${maxOpenFiles}`,
+    `--fsize=${maxFileBytes}:${maxFileBytes}`,
+    `--cpu=${cpuSeconds}:${cpuSeconds}`,
+    '--core=0:0',
+    'setpriv',
+    `--reuid=${uid}`,
+    `--regid=${gid}`,
+    '--clear-groups',
+    '--no-new-privs',
+    '--',
+    ...cmd,
+  ];
 }
 
 // Dirs never mirrored to the user's disk on export: generated/heavy trees the
@@ -217,4 +371,13 @@ module.exports = {
   createDevPool,
   EVICTABLE_STATES,
   DEFAULT_DEV_POOL_SIZE,
+  RUNNER_ENV_ALLOWLIST,
+  isSensitiveEnvKey,
+  buildRunnerEnv,
+  constantTimeEqual,
+  isControlRequestAuthorized,
+  controlTokenForEnv,
+  stableProjectHash,
+  projectIdentity,
+  sandboxCommand,
 };

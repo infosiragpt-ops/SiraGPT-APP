@@ -147,6 +147,45 @@ jobs:
             VERSION_URL="${VERSION_URL:-https://api.siragpt.com/api/version}"
             FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com}"
             READY_WAIT_SECONDS="${READY_WAIT_SECONDS:-180}"
+            RUNNER_WAIT_SECONDS="${RUNNER_WAIT_SECONDS:-120}"
+
+            dump_runner_diagnostics() {
+              echo "[deploy-workflow] Runner container state"
+              ${COMPOSE} ps runner || true
+              local container_id
+              container_id="$(${COMPOSE} ps -q runner 2>/dev/null || true)"
+              if [[ -n "${container_id}" ]]; then
+                docker inspect --format \
+                  'status={{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}} error={{.State.Error}}' \
+                  "${container_id}" || true
+              fi
+              echo "[deploy-workflow] Redacted runner log tail"
+              ${COMPOSE} logs --no-color --tail=100 runner 2>&1 \
+                | docker run --rm -i siragpt-backend:latest node scripts/redact-log-stream.js \
+                || true
+            }
+
+            wait_runner() {
+              local deadline container_id health state
+              deadline=$(( $(date +%s) + RUNNER_WAIT_SECONDS ))
+              while [[ $(date +%s) -lt "${deadline}" ]]; do
+                container_id="$(${COMPOSE} ps -q runner 2>/dev/null || true)"
+                if [[ -n "${container_id}" ]]; then
+                  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "${container_id}" 2>/dev/null || true)"
+                  state="$(docker inspect --format '{{.State.Status}}' "${container_id}" 2>/dev/null || true)"
+                  if [[ "${state}" == "running" && "${health}" == "healthy" ]]; then
+                    return 0
+                  fi
+                  if [[ "${state}" == "exited" || "${state}" == "dead" ]]; then
+                    break
+                  fi
+                fi
+                sleep 3
+              done
+              echo "[deploy-workflow] Runner failed to become healthy (state=${state:-missing}, health=${health:-missing})"
+              dump_runner_diagnostics
+              return 1
+            }
 
             dump_backend_diagnostics() {
               echo "[deploy-workflow] Backend container state"
@@ -262,34 +301,42 @@ jobs:
             }
 
             preserve_rollback_images() {
-              local backend_container frontend_container backend_image frontend_image
+              local backend_container frontend_container runner_container backend_image frontend_image runner_image
               backend_container="$(${COMPOSE} ps -q backend)" || return 1
               frontend_container="$(${COMPOSE} ps -q frontend)" || return 1
-              if [[ -z "${backend_container}" || -z "${frontend_container}" ]]; then
-                echo "[deploy-workflow] Running backend/frontend containers are required for rollback snapshot"
+              runner_container="$(${COMPOSE} ps -q runner)" || return 1
+              if [[ -z "${backend_container}" || -z "${frontend_container}" || -z "${runner_container}" ]]; then
+                echo "[deploy-workflow] Running backend/frontend/runner containers are required for rollback snapshot"
                 return 1
               fi
               backend_image="$(docker inspect --format '{{.Image}}' "${backend_container}")" || return 1
               frontend_image="$(docker inspect --format '{{.Image}}' "${frontend_container}")" || return 1
+              runner_image="$(docker inspect --format '{{.Image}}' "${runner_container}")" || return 1
               docker image inspect "${backend_image}" >/dev/null 2>&1 || return 1
               docker image inspect "${frontend_image}" >/dev/null 2>&1 || return 1
+              docker image inspect "${runner_image}" >/dev/null 2>&1 || return 1
               docker tag "${backend_image}" "${ROLLBACK_BACKEND_IMAGE}" || return 1
               docker tag "${frontend_image}" "${ROLLBACK_FRONTEND_IMAGE}" || return 1
+              docker tag "${runner_image}" "${ROLLBACK_RUNNER_IMAGE}" || return 1
             }
 
             restore_rollback_images() {
               docker image inspect "${ROLLBACK_BACKEND_IMAGE}" >/dev/null 2>&1 || return 1
               docker image inspect "${ROLLBACK_FRONTEND_IMAGE}" >/dev/null 2>&1 || return 1
+              docker image inspect "${ROLLBACK_RUNNER_IMAGE}" >/dev/null 2>&1 || return 1
               docker tag "${ROLLBACK_BACKEND_IMAGE}" siragpt-backend:latest || return 1
               docker tag "${ROLLBACK_FRONTEND_IMAGE}" siragpt-frontend:latest || return 1
+              docker tag "${ROLLBACK_RUNNER_IMAGE}" siragpt-runner:latest || return 1
             }
 
             cleanup_old_rollback_images() {
               local image
               while IFS= read -r image; do
                 case "${image}" in
-                  siragpt-backend:rollback-*|siragpt-frontend:rollback-*)
-                    if [[ "${image}" != "${ROLLBACK_BACKEND_IMAGE}" && "${image}" != "${ROLLBACK_FRONTEND_IMAGE}" ]]; then
+                  siragpt-backend:rollback-*|siragpt-frontend:rollback-*|siragpt-runner:rollback-*)
+                    if [[ "${image}" != "${ROLLBACK_BACKEND_IMAGE}" &&
+                          "${image}" != "${ROLLBACK_FRONTEND_IMAGE}" &&
+                          "${image}" != "${ROLLBACK_RUNNER_IMAGE}" ]]; then
                       docker image rm "${image}" >/dev/null 2>&1 || true
                     fi
                     ;;
@@ -301,6 +348,7 @@ jobs:
             resolve_previous_release
             ROLLBACK_BACKEND_IMAGE="siragpt-backend:rollback-${PREV_SHA}"
             ROLLBACK_FRONTEND_IMAGE="siragpt-frontend:rollback-${PREV_SHA}"
+            ROLLBACK_RUNNER_IMAGE="siragpt-runner:rollback-${PREV_SHA}"
             printf '%s\n' "${PREV_SHA}" > .deploy-prev-sha
 
             rollback() {
@@ -325,6 +373,14 @@ jobs:
               fi
               if ! restore_rollback_images; then
                 echo "[deploy-workflow] Rollback image restoration failed"
+                exit "${status}"
+              fi
+              if ! ${COMPOSE} up -d --no-deps --force-recreate runner; then
+                echo "[deploy-workflow] Rollback runner start failed"
+                exit "${status}"
+              fi
+              if ! wait_runner; then
+                echo "[deploy-workflow] Rollback runner health check failed"
                 exit "${status}"
               fi
               if ! ${COMPOSE} up -d --no-deps --force-recreate backend frontend; then
@@ -382,6 +438,8 @@ jobs:
             set_release_metadata "${TARGET_SHA}"
             echo "[deploy-workflow] Checked out ${TARGET_SHA}"
             ${COMPOSE} config -q
+            echo "[deploy-workflow] Building runner image"
+            ${COMPOSE} build runner
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
             if [[ "${ALLOW_MIGRATION_BASELINE}" == "1" ]]; then
@@ -423,6 +481,10 @@ jobs:
             ${COMPOSE} run -T --rm backend node scripts/reset-prod-admin-password.js </dev/null \
               || echo "[deploy-workflow] WARNING: admin reset skipped (RESET_ADMIN_PASSWORD not configured) — continuing"
             ${COMPOSE} build frontend
+            echo "[deploy-workflow] Recreating runner before the API"
+            ${COMPOSE} up -d --no-deps --force-recreate runner
+            wait_runner
+            echo "[deploy-workflow] Runner health check passed"
             ${COMPOSE} up -d --no-deps backend frontend
             wait_ready
             echo "[deploy-workflow] Deploy health check passed: ${READY_URL}"

@@ -42,6 +42,42 @@ function requireDb(db) {
   return db;
 }
 
+/**
+ * Return whether a project brief asks for capabilities that need the
+ * full-stack starter. Keep this classifier deterministic and dependency-free:
+ * project creation must make the same provisioning decision in every worker.
+ */
+function hasFullStackIntent(brief) {
+  if (typeof brief !== 'string') return false;
+
+  const text = brief
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return false;
+
+  return [
+    // Persistent data / PostgreSQL, in Spanish and English.
+    /\b(?:bases? de datos|data\s*bases?|postgres(?:ql)?|prisma|sql)\b/,
+    // Server-side application surface.
+    /\b(?:full ?stack|backend|back end|server side|servidor(?:es)?|servers?)\b/,
+    /\b(?:apis?|endpoints?|restful)\b/,
+    // Identity and access generally require a server and persistent storage.
+    /\b(?:auth|authentication|authorization|autenticacion|autorizacion|login|sign in|inicio de sesion)\b/,
+    // Shared products need server-owned state even if no database is named.
+    /\b(?:multiusuarios?|multi users?|multiuser|multi tenants?|multitenant|multiple users?|varios usuarios)\b/,
+    // Users often distinguish an operational product from a visual mockup.
+    /\b(?:producto(?:s)?|aplicacion(?:es)?|app(?:s)?|software|sistema(?:s)?)\s+(?:100\s*%\s*)?(?:real(?:es)?|de verdad)\b/,
+    /\b(?:real|production ready)\s+(?:products?|applications?|apps?|software|systems?)\b/,
+    // Preserve the useful persistence phrases handled by the previous detector.
+    /\b(?:que guarde|guardar datos|persistencia|persistente|persistir|store data|persist data)\b/,
+  ].some((pattern) => pattern.test(text));
+}
+
 async function createProject({ userId, name, brief = null, runner, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   const runnerClient = runner || createRunnerClient();
@@ -49,10 +85,14 @@ async function createProject({ userId, name, brief = null, runner, db = defaultP
     data: { userId, name, brief, status: 'provisioning' },
   });
   try {
-    // Detect "backend real" intent from the brief so we provision the
-    // full-stack starter (Express + SQLite) instead of the SPA-only one.
-    const wantsBackend = typeof brief === 'string' && /\b(base de datos|backend|api real|que guarde|con servidor)\b/i.test(brief);
-    const { workspacePath } = await provisionWorkspace({ project: row.id, projectName: name, runner: runnerClient, fullStack: wantsBackend });
+    // Detect full-stack intent from the original user brief so we provision
+    // the server-backed starter instead of the SPA-only one.
+    const { workspacePath } = await provisionWorkspace({
+      project: row.id,
+      projectName: name,
+      runner: runnerClient,
+      fullStack: hasFullStackIntent(brief),
+    });
     const ready = await prisma.codexProject.update({
       where: { id: row.id },
       // The browser must never receive the runner's private localhost URL in
@@ -86,4 +126,4 @@ async function getProject({ userId, id, db = defaultPrisma }) {
   return row ? publicProject(row) : null;
 }
 
-module.exports = { createProject, listProjects, getProject, publicProject };
+module.exports = { createProject, listProjects, getProject, publicProject, hasFullStackIntent };
