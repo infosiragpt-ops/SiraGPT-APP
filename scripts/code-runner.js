@@ -129,7 +129,10 @@ function ensureRootDir(path, mode = 0o711) {
 for (const path of [PROJECTS_DIR, CACHE_ROOT, HOME_ROOT, TMP_ROOT]) ensureRootDir(path);
 ensureRootDir(EXPORT_DIR, 0o700);
 
-const REQUIRED_SANDBOX_TOOLS = ["setsid", "prlimit", "setpriv"];
+// `concurrently` uses `ps` to discover and terminate its Vite/Express child
+// tree. Keep it as a boot requirement so a slim-image regression fails before
+// accepting preview work instead of timing out after the first full-stack run.
+const REQUIRED_SANDBOX_TOOLS = ["setsid", "prlimit", "setpriv", "ps"];
 for (const tool of REQUIRED_SANDBOX_TOOLS) {
   let ok = false;
   try {

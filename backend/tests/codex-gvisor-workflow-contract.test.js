@@ -86,8 +86,10 @@ test('the real runner image is exercised under runsc with tools and containment 
   assert.match(workflow, /read-only root filesystem was writable/);
   assert.match(dockerfile, /FROM node:22\.17\.0-bookworm-slim@sha256:[a-f0-9]{64} AS node-runtime/);
   assert.match(dockerfile, /FROM oven\/bun:1\.3\.14@sha256:[a-f0-9]{64}/);
+  assert.match(dockerfile, /apt-get install[^\n]*\bprocps\b/);
   assert.doesNotMatch(dockerfile, /apt-get install[^\n]*\bnodejs\b/);
   assert.match(dockerfile, /^WORKDIR \/workspace$/m);
+  assert.match(runner, /REQUIRED_SANDBOX_TOOLS = \["setsid", "prlimit", "setpriv", "ps"\]/);
 });
 
 test('the exact generated full-stack starter and frozen dependencies are prepared under runsc', (t) => {
