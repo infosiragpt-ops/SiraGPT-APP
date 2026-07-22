@@ -67,6 +67,7 @@ function main() {
   const desktopPackagePath = path.join(root, "apps/desktop/package.json")
   const androidBuildPath = path.join(root, "android/app/build.gradle")
   const iosProjectPath = path.join(root, "ios/App/App.xcodeproj/project.pbxproj")
+  const nativeReleaseWorkflowPath = path.join(root, ".github/workflows/native-release.yml")
   const packageJson = readJson(packagePath)
   const versionName = String(process.env.SIRAGPT_NATIVE_VERSION_NAME || packageJson.version || "").trim()
 
@@ -124,6 +125,16 @@ function main() {
     desktopPackage.version = versionName
     stageJsonUpdate(desktopPackagePath, desktopPackage, changedFiles)
   }
+
+  const nativeReleaseWorkflow = readText(nativeReleaseWorkflowPath)
+  const nextNativeReleaseWorkflow = replaceRequired(
+    nativeReleaseWorkflow,
+    /(^ {6}release_tag:\s*\n(?:^ {8}.*\n)*?^ {8}default:\s*)['"]?[^'"\s#]+['"]?/m,
+    `$1native-v${versionName}`,
+    nativeReleaseWorkflowPath,
+    "signed release workflow default tag",
+  )
+  stageTextUpdate(nativeReleaseWorkflowPath, nextNativeReleaseWorkflow, changedFiles)
 
   if (changedFiles.length > 0) {
     const fileList = changedFiles.join(", ")

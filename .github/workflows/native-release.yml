@@ -17,7 +17,7 @@ on:
       release_tag:
         description: GitHub Release tag to create or update when enabled
         required: true
-        default: native-v0.4.3
+        default: native-v0.4.4
         type: string
       create_github_release:
         description: Create or update the GitHub Release with built artifacts

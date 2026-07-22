@@ -68,8 +68,10 @@ function runPreflight(env: NodeJS.ProcessEnv) {
 describe("native-release-preflight-summary", () => {
   it("is wired into the signed native release workflow", () => {
     const workflow = readFileSync(".github/workflows/native-release.yml", "utf8")
+    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string
     const preflightStep = workflow.slice(workflow.indexOf("- name: Validate selected signing secrets"))
 
+    assert.match(workflow, new RegExp(`default: native-v${packageVersion.replace(/\./g, "\\.")}`))
     assert.match(preflightStep, /RELEASE_TAG:\s*\$\{\{\s*inputs\.release_tag\s*\}\}/)
     assert.match(preflightStep, /npm run native:version:check/)
     assert.match(preflightStep, /npm run native:release:preflight/)
