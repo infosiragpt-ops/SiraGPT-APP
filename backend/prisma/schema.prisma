@@ -1725,7 +1725,8 @@ model CustomGpt {
   conversationStarters Json?
 
   // Per-GPT tool capability toggles: { webBrowsing, dataAnalysis,
-  // imageGeneration, codeInterpreter }. null = legacy GPT (no gating).
+  // imageGeneration, codeInterpreter, documents, skillsEnabled }.
+  // null = legacy GPT (no gating).
   capabilities         Json?
 
   // Publishing

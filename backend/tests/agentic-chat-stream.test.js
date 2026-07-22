@@ -263,6 +263,43 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('run_skill_pipeline'));
 });
 
+test('custom GPT capability gates keep Docs, Skills and Canvas independent', () => {
+  const { buildDefaultTools, applyCustomGptCapabilityGates } = agenticStream._internal;
+
+  const docsDisabled = buildDefaultTools({
+    userQuery: 'crea un informe y una gráfica',
+    capabilities: { documents: false, skillsEnabled: false },
+  }).map((tool) => tool.name);
+  assert.ok(!docsDisabled.includes('create_document'));
+  assert.ok(!docsDisabled.includes('rag_retrieve'));
+  assert.ok(!docsDisabled.includes('run_skill'));
+  assert.ok(docsDisabled.includes('create_chart'));
+
+  const canvasDisabled = buildDefaultTools({
+    userQuery: 'crea un informe y una gráfica',
+    capabilities: { documents: true, dataAnalysis: false },
+  }).map((tool) => tool.name);
+  assert.ok(canvasDisabled.includes('create_document'));
+  assert.ok(!canvasDisabled.includes('create_chart'));
+
+  const postHarness = applyCustomGptCapabilityGates(
+    [
+      { name: 'web_fetch' },
+      { name: 'run_javascript' },
+      { name: 'document_edit' },
+      { name: 'run_skill_pipeline' },
+      { name: 'finalize' },
+    ],
+    {
+      webBrowsing: false,
+      codeInterpreter: false,
+      documents: false,
+      skillsEnabled: false,
+    },
+  ).map((tool) => tool.name);
+  assert.deepEqual(postHarness, ['finalize']);
+});
+
 test('default toolset now ships creation tools on every turn (media-always default)', () => {
   // Mid-conversation "ahora hazme un diagrama de eso" must work even when the
   // opening turn had no media intent — creation tools are always available.

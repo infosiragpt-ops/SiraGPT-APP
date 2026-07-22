@@ -13,6 +13,7 @@ const LEGACY_BOOLEAN_KEYS = [
   'dataAnalysis',
   'imageGeneration',
   'codeInterpreter',
+  'documents',
 ];
 const AGENT_BOOLEAN_KEYS = ['skillsEnabled', 'multipleArtifacts'];
 const AGENT_MODES = new Set(['off', 'auto', 'always']);
