@@ -110,7 +110,7 @@ test('startRun() rejects with code "disabled" when the flag is off', async () =>
 });
 
 test('startRun() rejects with code "no_package" for a project without package.json', async () => {
-  await withEnv({ CODE_HOST_RUNNER: '1' }, async () => {
+  await withEnv({ CODE_HOST_RUNNER: '1', NODE_ENV: 'test' }, async () => {
     await assert.rejects(
       () => runner.startRun({ runId: 'r2', userId: 'u1', files: { 'index.js': 'console.log(1)' } }),
       (e) => e && e.code === 'no_package',
@@ -191,7 +191,7 @@ test('errored/dead runs do not hold the global concurrency slots (cross-user DoS
   runner._seedRunForTest({ runId: 'dead-1', userId: 'alice', port: null, phase: 'error', previewToken: null });
   runner._seedRunForTest({ runId: 'dead-2', userId: 'alice', port: null, phase: 'error', previewToken: null });
 
-  await withEnv({ CODE_HOST_RUNNER: '1' }, async () => {
+  await withEnv({ CODE_HOST_RUNNER: '1', NODE_ENV: 'test' }, async () => {
     // User B (owns none of the errored runs) must NOT be denied capacity.
     const res = await runner.startRun({
       runId: 'bob-run',
