@@ -123,7 +123,7 @@ describe("native release status traceability", () => {
 
     assert.equal(status.latestTraceabilityCommit.sha, status.latestTraceabilityCommit.validatedManagementSha)
     assert.equal(status.latestTraceabilityCommit.message, status.latestTraceabilityCommit.validatedManagementCommit)
-    assert.equal(status.distributionMilestone.title, "Native Store Distribution v0.4.3")
+    assert.equal(status.distributionMilestone.title, "Native Store Distribution v0.4.4")
     assert.match(status.distributionMilestone.url, /\/milestone\/1$/)
     assert.equal(status.distributionMilestone.status, "open")
     assert.equal(status.distributionMilestone.openIssues, 5)

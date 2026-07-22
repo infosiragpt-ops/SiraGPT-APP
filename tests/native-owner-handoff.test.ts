@@ -164,7 +164,7 @@ describe("generate-native-owner-handoff", () => {
       assert.match(markdown, /Latest Signed Android Release/)
       assert.match(markdown, /Latest Secret-Name Audit/)
       assert.match(markdown, /Distribution Work Queue/)
-      assert.match(markdown, /Native Store Distribution v0\.4\.3/)
+      assert.match(markdown, /Native Store Distribution v0\.4\.4/)
       assert.match(markdown, /#5 Android \/ Google Play publishing owner actions/)
       assert.match(markdown, /#6 iPhone \/ App Store Connect signing and upload owner actions/)
       assert.match(markdown, /#7 macOS Developer ID signing and notarization owner actions/)
