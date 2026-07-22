@@ -79,4 +79,50 @@ describe("professional chat composer surface source contract", () => {
       "phones should keep the same compact hierarchy without oversized rounding"
     )
   })
+
+  it("preserves the approved width and height across chat states", () => {
+    assert.match(
+      globals,
+      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), 51\.75rem\);[\s\S]{0,80}margin-inline: auto;/,
+      "the empty composer should retain its approved 828px content width"
+    )
+    assert.match(
+      globals,
+      /\.chat-composer-dock \.chat-composer-frame\s*\{[\s\S]{0,100}width: min\(100%, 51\.75rem\);/,
+      "the in-chat composer should use the same approved width"
+    )
+    assert.match(
+      globals,
+      /\.composer-textarea-shell\s*\{[\s\S]{0,160}height: 2\.2rem;[\s\S]{0,80}max-height: 2\.2rem;[\s\S]{0,80}overflow: hidden;/,
+      "long prompts should scroll internally instead of resizing the surface"
+    )
+    assert.match(
+      globals,
+      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,220}height: 2\.2rem !important;[\s\S]{0,100}max-height: 2\.2rem !important;[\s\S]{0,100}overflow-y: auto !important;/,
+      "the textarea height must remain fixed in every text state"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /data-expanded=|getComposerTextareaMaxHeight|composerIsExpanded/,
+      "no runtime state should opt the composer back into auto expansion"
+    )
+    assert.equal(
+      (chatInterface.match(/data-testid="chat-composer-surface"/g) || []).length,
+      2,
+      "both composer render paths should expose the same measurable surface"
+    )
+  })
+
+  it("keeps attachments and connector context outside the fixed input surface", () => {
+    assert.match(
+      globals,
+      /\.composer-context-tray:empty\s*\{\s*display: none;/,
+      "an unused context tray should reserve no space"
+    )
+    assert.equal(
+      (chatInterface.match(/className="composer-context-tray"/g) || []).length,
+      2,
+      "both composer render paths should use the independent context tray"
+    )
+  })
 })

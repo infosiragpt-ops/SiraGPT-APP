@@ -688,6 +688,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   background: transparent;
 }
 
+/* The composer keeps the exact width of the approved empty-chat state in
+   every lifecycle state. The dock already supplies the mobile gutters, while
+   the empty stage needs its own 1rem gutter on either side. */
+.chat-composer-frame {
+  width: min(calc(100% - 2rem), 51.75rem);
+  margin-inline: auto;
+}
+
+.chat-composer-dock .chat-composer-frame {
+  width: min(100%, 51.75rem);
+}
+
 .chat-conversation-column {
   max-width: min(100%, 64rem);
 }
@@ -5092,12 +5104,40 @@ footer {
 .composer-input-row {
   display: grid !important;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: minmax(1.5rem, auto) auto;
+  grid-template-rows: 2.2rem auto;
   align-items: end;
   column-gap: 0.625rem;
   row-gap: 0.25rem;
   min-height: 5.5rem;
   padding: 0.625rem 0.75rem 0.5rem !important;
+}
+
+/* Attachments and connector controls remain fully available without changing
+   the approved composer dimensions. They use a separate tray above the fixed
+   input surface, so adding context never causes the bar itself to jump. */
+.composer-context-tray:empty {
+  display: none;
+}
+
+.composer-context-tray {
+  max-height: min(12rem, 28vh);
+  margin-bottom: 0.5rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 0.5px solid hsl(220 13% 86% / 0.78);
+  border-radius: 1rem;
+  background: hsl(0 0% 100% / 0.98);
+  box-shadow: 0 12px 30px -26px hsl(220 30% 18% / 0.28);
+  scrollbar-width: thin;
+}
+
+.composer-context-tray > .bg-background {
+  background: transparent;
+}
+
+.composer-context-tray .composer-media-controls-row {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
 }
 
 .composer-input-row > :first-child {
@@ -5261,52 +5301,6 @@ footer {
   box-shadow: none;
 }
 
-.composer-input-row[data-expanded="true"] {
-  display: grid !important;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: minmax(0, auto) auto;
-  align-items: end;
-  column-gap: 0.625rem;
-  row-gap: 0.375rem;
-  padding: 0.75rem 0.75rem 0.5rem !important;
-}
-
-.composer-input-row[data-expanded="true"] > :first-child {
-  grid-column: 1;
-  grid-row: 2;
-  align-self: center;
-}
-
-.composer-input-row[data-expanded="true"] .composer-textarea-shell {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  min-width: 0;
-  width: 100%;
-}
-
-.composer-input-row[data-expanded="true"] .composer-textarea {
-  min-height: 4.5rem;
-  padding: 0.25rem 0.375rem 0.5rem !important;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.composer-input-row[data-expanded="true"] .composer-textarea-highlights {
-  min-height: 4.5rem;
-  padding: 0.25rem 0.375rem 0.5rem;
-}
-
-.composer-input-row[data-expanded="true"] .composer-toolbar-actions {
-  grid-column: 3;
-  grid-row: 2;
-  justify-self: end;
-  align-self: center;
-}
-
-.composer-input-row[data-expanded="true"] .composer-model-inline {
-  max-width: min(42vw, 13rem);
-}
-
 .composer-textarea {
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -5315,12 +5309,18 @@ footer {
 .composer-textarea-shell {
   position: relative;
   min-width: 0;
+  height: 2.2rem;
+  max-height: 2.2rem;
+  overflow: hidden;
 }
 
 .composer-textarea-shell .composer-textarea {
   position: relative;
   z-index: 2;
+  height: 2.2rem !important;
   min-height: 2.2rem !important;
+  max-height: 2.2rem !important;
+  overflow-y: auto !important;
   padding: 0.18rem 0.2rem 0.1rem !important;
   font-size: 1rem;
   line-height: 1.5;
@@ -5332,6 +5332,8 @@ footer {
   inset: 0;
   z-index: 1;
   box-sizing: border-box;
+  height: 2.2rem;
+  max-height: 2.2rem;
   overflow: hidden;
   padding: 0.375rem 0.25rem;
   color: hsl(var(--foreground));
@@ -5531,9 +5533,16 @@ button.anti-bribery-context-chip:not(:disabled):active {
     min-height: 2.75rem;
   }
   .composer-textarea-shell .composer-textarea {
+    height: 2.35rem !important;
     min-height: 2.35rem !important;
+    max-height: 2.35rem !important;
     font-size: 1rem;
     line-height: 1.5;
+  }
+  .composer-textarea-shell,
+  .composer-textarea-highlights {
+    height: 2.35rem;
+    max-height: 2.35rem;
   }
   .composer-textarea-highlights {
     font-size: 1rem;
@@ -5546,6 +5555,12 @@ button.anti-bribery-context-chip:not(:disabled):active {
     max-width: 6.25rem;
     padding-inline: 0.5rem;
   }
+}
+
+.dark .composer-context-tray {
+  border-color: hsl(var(--composer-border) / 0.78);
+  background: hsl(var(--composer-bg) / 0.98);
+  box-shadow: 0 14px 32px -24px rgba(0, 0, 0, 0.78);
 }
 
 /* ─── Composer — premium dark surface ────────────────────────────── */
