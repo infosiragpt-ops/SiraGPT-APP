@@ -45,4 +45,5 @@ test('the real runner image is exercised under runsc with tools and containment 
   assert.match(workflow, /\/var\/run\/docker\.sock/);
   assert.match(workflow, /read-only root filesystem was writable/);
   assert.match(dockerfile, /apt-get install[^\n]*nodejs/);
+  assert.match(dockerfile, /^WORKDIR \/workspace$/m);
 });

@@ -9,6 +9,11 @@ ENV RUNNER_CACHE_ROOT=/runner-cache \
     RUNNER_HOME_ROOT=/runner-home \
     RUNNER_TMP_ROOT=/runner-tmp
 
+# The upstream Bun image defaults to /home/bun/app. Under runsc that inherited
+# directory is not traversable by the root sandbox process, so make the real
+# runner workspace the image-level default as well as the Compose default.
+WORKDIR /workspace
+
 # Unlike the bind-mounted control script, this helper is baked into the image,
 # root-owned and non-writable. Generated code only reaches it after setpriv has
 # dropped to that project's uid.
