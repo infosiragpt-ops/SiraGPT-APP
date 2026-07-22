@@ -11727,13 +11727,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   <div className="space-y-3">
                   {/*
                     Composer — premium production UI.
-                    In DARK mode, inherits `composer-surface` from globals.css
-                    which applies the design-spec tokens (#0B1118 bg, #1C2430
-                    border, 0 12px 32px rgba(0,0,0,0.28) shadow) with a
-                    violet-tinted focus ring. In LIGHT mode it uses the Tailwind
-                    classes below (soft white surface with layered shadow).
-                    The focus state is the ONLY place accent color appears —
-                    idle never glows.
+                    Light and dark modes inherit `composer-surface` from
+                    globals.css, which owns the half-pixel border, background,
+                    and layered shadow. Focus recolors that same hairline
+                    violet without adding another ring, so its thickness stays
+                    fixed. Idle never glows.
                   */}
                   {/*
                     Composer — pill-styled card. rounded-3xl gives the
@@ -11769,11 +11767,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                         "bg-background",
-                        "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
                         "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                        "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
-                        "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                        "focus-within:ring-[0.75px] focus-within:ring-[hsl(var(--accent-violet))]/30 focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)] dark:focus-within:ring-[0.75px] dark:focus-within:ring-[hsl(var(--accent-violet))]/30",
+                        "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
+                        "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                     )}
                   >
                     {/* Chips zone — rendered ABOVE the input row, INSIDE
@@ -12259,11 +12255,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                             "bg-background",
-                            "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
                             "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                            "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
-                            "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                            "focus-within:ring-[0.75px] focus-within:ring-[hsl(var(--accent-violet))]/30 focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)] dark:focus-within:ring-[0.75px] dark:focus-within:ring-[hsl(var(--accent-violet))]/30",
+                            "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
+                            "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                         )}
                       >
                         <ActiveOptionsDisplay
