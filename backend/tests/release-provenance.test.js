@@ -89,7 +89,9 @@ test('production deploy accepts only a green production-main commit', () => {
   assert.match(workflow, /actions:\s+read/);
   assert.match(workflow, /git merge-base --is-ancestor "\$\{TARGET_SHA\}" origin\/production-main/);
   assert.match(workflow, /gh run list --workflow CI --branch production-main --commit "\$\{TARGET_SHA\}"/);
-  assert.match(workflow, /envs: DEPLOY_GH_TOKEN,TARGET_SHA/);
+  assert.match(workflow, /envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR/);
+  assert.doesNotMatch(workflow, /envs:[^\n]*(?:GITHUB_TOKEN|GH_TOKEN|DEPLOY_GH_TOKEN)/);
+  assert.match(workflow, /git fetch --no-tags "\$\{DEPLOY_BUNDLE\}" HEAD/);
   assert.doesNotMatch(sshScript[1], /\$\{\{\s*inputs\.target_sha/);
 });
 
@@ -113,7 +115,8 @@ test('U0 migration baseline is explicit per release tag and never global', () =>
 
   assert.match(workflow, /startsWith\(github\.ref_name, 'deploy-production-baseline-'\)/);
   assert.match(workflow, /ALLOW_MIGRATION_BASELINE:\s+\$\{\{/);
-  assert.match(workflow, /envs: DEPLOY_GH_TOKEN,TARGET_SHA,ALLOW_MIGRATION_BASELINE/);
+  assert.match(workflow, /envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR/);
+  assert.doesNotMatch(workflow, /envs:[^\n]*(?:GITHUB_TOKEN|GH_TOKEN|DEPLOY_GH_TOKEN)/);
   assert.match(workflow, /baseline-migration-history\.js/);
   assert.match(workflow, /MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA/);
   assert.match(workflow, /MIGRATION_BASELINE_SYNC_SCHEMA=1/);

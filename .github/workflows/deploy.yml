@@ -43,7 +43,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: production-main
           fetch-depth: 0
@@ -107,27 +107,106 @@ jobs:
     name: SSH to VPS · Docker Compose deploy
     needs: [pre-check]
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 65
     env:
       TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
       ALLOW_MIGRATION_BASELINE: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'deploy-production-baseline-') && '1' || '0' }}
 
     steps:
-      - name: Deploy via SSH (with auto-rollback)
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Checkout exact approved release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.pre-check.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and verify credential-free deploy bundle
+        id: bundle
         env:
-          # Ephemeral job token for the VPS-side git fetch. The VPS checkout
-          # keeps NO stored GitHub credentials (its old origin URL may even
-          # point at a dead repo); every fetch below goes through this token
-          # on the command line only, so nothing persists after the run.
-          DEPLOY_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
-          ALLOW_MIGRATION_BASELINE: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'deploy-production-baseline-') && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "${TARGET_SHA}" ]]; then
+            echo "::error::Checkout does not match approved target ${TARGET_SHA}"
+            exit 1
+          fi
+
+          if [[ -e .deploy-artifact ]]; then
+            echo "::error::.deploy-artifact must not exist in the approved source tree"
+            exit 1
+          fi
+          mkdir .deploy-artifact
+          git bundle create .deploy-artifact/deploy.bundle HEAD
+          git bundle verify .deploy-artifact/deploy.bundle
+          BUNDLE_SHA="$(git bundle list-heads .deploy-artifact/deploy.bundle | awk '$2 == "HEAD" { print $1 }')"
+          if [[ "${BUNDLE_SHA}" != "${TARGET_SHA}" ]]; then
+            echo "::error::Bundle HEAD mismatch: expected=${TARGET_SHA} actual=${BUNDLE_SHA:-missing}"
+            exit 1
+          fi
+          (
+            cd .deploy-artifact
+            sha256sum deploy.bundle > deploy.bundle.sha256
+            sha256sum --check --strict deploy.bundle.sha256
+          )
+          TRANSFER_NONCE="$(openssl rand -hex 16)"
+          echo "transfer_dir=/tmp/siragpt-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TRANSFER_NONCE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Reserve remote transfer directory
+        id: reserve
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        env:
+          DEPLOY_TRANSFER_DIR: ${{ steps.bundle.outputs.transfer_dir }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
+          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          timeout: 60s
+          command_timeout: 1m
+          envs: DEPLOY_TRANSFER_DIR
+          script: |
+            set -euo pipefail
+            if ! [[ "${DEPLOY_TRANSFER_DIR}" =~ ^/tmp/siragpt-deploy-[0-9]+-[0-9]+-[0-9a-f]{32}$ ]]; then
+              echo "[deploy-workflow] Refusing invalid transfer directory"
+              exit 1
+            fi
+            umask 077
+            mkdir -- "${DEPLOY_TRANSFER_DIR}"
+            chmod 0700 -- "${DEPLOY_TRANSFER_DIR}"
+
+      - name: Transfer verified deploy bundle
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
+        env:
+          DEPLOY_TRANSFER_DIR: ${{ steps.bundle.outputs.transfer_dir }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          source: ".deploy-artifact/deploy.bundle,.deploy-artifact/deploy.bundle.sha256"
+          target: ${{ env.DEPLOY_TRANSFER_DIR }}
+          # drone-scp concatenates tar_tmp_path + filename without adding '/'.
+          tar_tmp_path: ${{ env.DEPLOY_TRANSFER_DIR }}/
+          strip_components: 1
+          overwrite: false
+          timeout: 60s
+          command_timeout: 15m
+          version: 1.8.0
+
+      - name: Deploy via SSH (with auto-rollback)
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        env:
+          TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
+          ALLOW_MIGRATION_BASELINE: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'deploy-production-baseline-') && '1' || '0' }}
+          DEPLOY_TRANSFER_DIR: ${{ steps.bundle.outputs.transfer_dir }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
           # Remote Docker builds can exceed 12m when Next.js and npm
           # pruning run cold; keep enough headroom for deploy + rollback.
           timeout: 60s
@@ -137,11 +216,16 @@ jobs:
           # run. The heredoc below owns its error handling (set -Eeuo
           # pipefail + rollback trap), so let it.
           script_stop: false
-          envs: DEPLOY_GH_TOKEN,TARGET_SHA,ALLOW_MIGRATION_BASELINE
+          # Only non-secret release metadata crosses into the remote process
+          # environment. Source bytes arrive separately over SCP as a verified
+          # Git bundle, so no GitHub credential ever appears in remote env/argv.
+          envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR
           script: |
             bash <<'SIRAGPT_DEPLOY'
             set -Eeuo pipefail
             APP_DIR="/opt/siragpt"
+            DEPLOY_BUNDLE="${DEPLOY_TRANSFER_DIR}/deploy.bundle"
+            DEPLOY_BUNDLE_CHECKSUM="${DEPLOY_TRANSFER_DIR}/deploy.bundle.sha256"
             COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env"
             READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
             VERSION_URL="${VERSION_URL:-https://api.siragpt.com/api/version}"
@@ -344,7 +428,51 @@ jobs:
               done < <(docker image ls --format '{{.Repository}}:{{.Tag}}')
             }
 
+            cleanup_transfer() {
+              if [[ "${DEPLOY_TRANSFER_DIR}" =~ ^/tmp/siragpt-deploy-[0-9]+-[0-9]+-[0-9a-f]{32}$ ]]; then
+                if [[ -L "${DEPLOY_TRANSFER_DIR}" || ! -d "${DEPLOY_TRANSFER_DIR}" ]]; then
+                  echo "[deploy-workflow] WARNING: transfer directory is missing or unsafe during cleanup"
+                  return 0
+                fi
+                if ! find "${DEPLOY_TRANSFER_DIR}" -mindepth 1 -maxdepth 1 -type f -delete; then
+                  echo "[deploy-workflow] WARNING: could not remove transferred files"
+                fi
+                rmdir -- "${DEPLOY_TRANSFER_DIR}" 2>/dev/null || true
+              else
+                echo "[deploy-workflow] Refusing unsafe transfer cleanup path: ${DEPLOY_TRANSFER_DIR}"
+              fi
+              return 0
+            }
+
+            if ! [[ "${DEPLOY_TRANSFER_DIR}" =~ ^/tmp/siragpt-deploy-[0-9]+-[0-9]+-[0-9a-f]{32}$ ]]; then
+              echo "[deploy-workflow] Refusing invalid transfer directory"
+              exit 1
+            fi
+            if [[ -L "${DEPLOY_TRANSFER_DIR}" || ! -d "${DEPLOY_TRANSFER_DIR}" ||
+                  -L "${DEPLOY_BUNDLE}" || ! -f "${DEPLOY_BUNDLE}" ||
+                  -L "${DEPLOY_BUNDLE_CHECKSUM}" || ! -f "${DEPLOY_BUNDLE_CHECKSUM}" ]]; then
+              echo "[deploy-workflow] Deploy bundle or checksum is missing/unsafe"
+              exit 1
+            fi
+            if [[ "$(stat -c '%u:%a' "${DEPLOY_TRANSFER_DIR}")" != "$(id -u):700" ]]; then
+              echo "[deploy-workflow] Deploy transfer directory owner/mode mismatch"
+              exit 1
+            fi
+            trap cleanup_transfer EXIT
+
             cd "${APP_DIR}"
+            CHECKSUM_LINE="$(cat "${DEPLOY_BUNDLE_CHECKSUM}")"
+            if ! [[ "${CHECKSUM_LINE}" =~ ^[0-9a-f]{64}[[:space:]][[:space:]]deploy\.bundle$ ]]; then
+              echo "[deploy-workflow] Invalid deploy bundle checksum manifest"
+              exit 1
+            fi
+            (cd "${DEPLOY_TRANSFER_DIR}" && sha256sum --check --strict deploy.bundle.sha256)
+            git bundle verify "${DEPLOY_BUNDLE}"
+            BUNDLE_SHA="$(git bundle list-heads "${DEPLOY_BUNDLE}" | awk '$2 == "HEAD" { print $1 }')"
+            if [[ "${BUNDLE_SHA}" != "${TARGET_SHA}" ]]; then
+              echo "[deploy-workflow] Bundle HEAD mismatch: expected=${TARGET_SHA} actual=${BUNDLE_SHA:-missing}"
+              exit 1
+            fi
             resolve_previous_release
             ROLLBACK_BACKEND_IMAGE="siragpt-backend:rollback-${PREV_SHA}"
             ROLLBACK_FRONTEND_IMAGE="siragpt-frontend:rollback-${PREV_SHA}"
@@ -353,12 +481,13 @@ jobs:
 
             rollback() {
               local status="$?"
+              set +e
+              cleanup_transfer
               if [[ "${status}" -eq 0 ]]; then
                 return 0
               fi
 
               echo "[deploy-workflow] Deploy failed; rolling back to ${PREV_SHA}"
-              set +e
               if ! git reset --hard "${PREV_SHA}"; then
                 echo "[deploy-workflow] Rollback checkout failed"
                 exit "${status}"
@@ -421,12 +550,11 @@ jobs:
             fi
             trap rollback EXIT
             echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
-            REPO_URL="https://x-access-token:${DEPLOY_GH_TOKEN}@github.com/${{ github.repository }}.git"
             # Keep the persisted origin URL credential-free and pointing at
             # the repo this workflow actually deploys from.
             git remote set-url origin "https://github.com/${{ github.repository }}.git"
-            git fetch "${REPO_URL}" main
-            git fetch "${REPO_URL}" "${TARGET_SHA}"
+            git fetch --no-tags "${DEPLOY_BUNDLE}" HEAD
+            git cat-file -e "${TARGET_SHA}^{commit}"
             # A deploy checkout needs no merge semantics: the exact SHA is
             # already fetched, so hard-reset to it. `merge --ff-only` dies
             # with a session-aborting fatal when the VPS sits on an
@@ -494,6 +622,29 @@ jobs:
             echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA} version=${SIRAGPT_VERSION}"
             cleanup_old_rollback_images
             SIRAGPT_DEPLOY
+
+      - name: Cleanup transferred bundle
+        if: always() && steps.bundle.outputs.transfer_dir != '' && steps.reserve.outcome == 'success'
+        continue-on-error: true
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        env:
+          DEPLOY_TRANSFER_DIR: ${{ steps.bundle.outputs.transfer_dir }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          fingerprint: SHA256:6LAHynq+d0qaQczONpBPj4O3qAYbknmSLNJqNo7FDcA
+          timeout: 60s
+          command_timeout: 1m
+          envs: DEPLOY_TRANSFER_DIR
+          script: |
+            set +e
+            if [[ "${DEPLOY_TRANSFER_DIR}" =~ ^/tmp/siragpt-deploy-[0-9]+-[0-9]+-[0-9a-f]{32}$ &&
+                  ! -L "${DEPLOY_TRANSFER_DIR}" && -d "${DEPLOY_TRANSFER_DIR}" ]]; then
+              find "${DEPLOY_TRANSFER_DIR}" -mindepth 1 -maxdepth 1 -type f -delete
+              rmdir -- "${DEPLOY_TRANSFER_DIR}" 2>/dev/null || true
+            fi
 
       - name: Surface deploy result
         if: always()
@@ -569,14 +720,15 @@ jobs:
             exit 0
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: env.SENTRY_AUTH_TOKEN != ''
         with:
           ref: ${{ needs.pre-check.outputs.target_sha }}
+          persist-credentials: false
 
       - name: Setup Node
         if: env.SENTRY_AUTH_TOKEN != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
