@@ -185,7 +185,7 @@ jobs:
             --env NODE_ENV=production \
             --env CODE_RUNNER_CONTROL_TOKEN=gvisor-smoke-control-token \
             --env CODE_RUNNER_DEV_PORT_POOL=5173-5174 \
-            --env CODE_RUNNER_RLIMIT_AS_BYTES=17179869184 \
+            --env CODE_RUNNER_RLIMIT_AS_BYTES=68719476736 \
             --env CODE_RUNNER_INSTALL_TIMEOUT_MS=180000 \
             --env CODE_RUNNER_DEV_READY_TIMEOUT_MS=90000 \
             --env GVISOR_SMOKE_PROJECT_UID="${GVS_PROJECT_UID}" \

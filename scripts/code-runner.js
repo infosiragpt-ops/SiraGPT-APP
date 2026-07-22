@@ -103,7 +103,7 @@ const SANDBOX_LIMITS = Object.freeze({
   // RLIMIT_AS lets simple node:http/node:sqlite apps start but then fail while
   // instantiating llhttp WebAssembly. RSS remains hard-capped by the container
   // cgroup; this limit only prevents unbounded virtual mappings.
-  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 16 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
+  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 64 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
   maxProcesses: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NPROC", 128, 8, 4096),
   maxOpenFiles: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NOFILE", 256, 32, 65_536),
   maxFileBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_FSIZE_BYTES", 512 * 1024 * 1024, 1024 * 1024, 16 * 1024 * 1024 * 1024),

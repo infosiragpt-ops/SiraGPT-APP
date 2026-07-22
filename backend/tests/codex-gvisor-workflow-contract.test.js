@@ -69,7 +69,7 @@ test('the real runner image is exercised under runsc with tools and containment 
   assert.match(workflow, /bun \/scripts\/code-runner\.js/);
   assert.match(workflow, /bun \/smoke\/gvisor-runner-smoke\.mjs/);
   assert.match(workflow, /CODE_RUNNER_CONTROL_TOKEN=gvisor-smoke-control-token/);
-  assert.match(workflow, /CODE_RUNNER_RLIMIT_AS_BYTES=17179869184/);
+  assert.match(workflow, /CODE_RUNNER_RLIMIT_AS_BYTES=68719476736/);
   assert.match(workflow, /CODE_RUNNER_INSTALL_TIMEOUT_MS=180000/);
   assert.match(workflow, /CODE_RUNNER_DEV_READY_TIMEOUT_MS=90000/);
   assert.match(workflow, /code-runner\.js.*readonly/);
