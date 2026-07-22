@@ -125,6 +125,18 @@ jobs:
           docker exec siragpt-gvisor-compat bun /smoke/gvisor-runner-smoke.mjs
 
           docker inspect siragpt-gvisor-compat > /tmp/gvisor-inspect.json
+          jq '.[0] | {
+            Runtime: .HostConfig.Runtime,
+            ReadonlyRootfs: .HostConfig.ReadonlyRootfs,
+            NetworkMode: .HostConfig.NetworkMode,
+            PidsLimit: .HostConfig.PidsLimit,
+            NanoCpus: .HostConfig.NanoCpus,
+            Memory: .HostConfig.Memory,
+            CapDrop: .HostConfig.CapDrop,
+            CapAdd: .HostConfig.CapAdd,
+            SecurityOpt: .HostConfig.SecurityOpt,
+            MountDestinations: [.Mounts[].Destination]
+          }' /tmp/gvisor-inspect.json
           jq -e --arg runtime "${RUNSC_RUNTIME}" '
             .[0].HostConfig.Runtime == $runtime
             and .[0].HostConfig.ReadonlyRootfs == true
@@ -133,7 +145,7 @@ jobs:
             and .[0].HostConfig.NanoCpus == 1000000000
             and .[0].HostConfig.Memory == 1073741824
             and (.[0].HostConfig.CapDrop | index("ALL") != null)
-            and ([.[0].HostConfig.CapAdd[]] | sort == ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID"])
+            and ([.[0].HostConfig.CapAdd[] | sub("^CAP_"; "")] | sort == ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID"])
             and (.[0].HostConfig.SecurityOpt | index("no-new-privileges:true") != null)
             and ([.[0].Mounts[].Destination] | index("/var/run/docker.sock") == null)
           ' /tmp/gvisor-inspect.json
