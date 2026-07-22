@@ -36,7 +36,7 @@ import {
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
-import { AICodeChatPanel } from "./ai-code-chat-panel"
+import { AgentCompanyPanel } from "./agent-company-panel"
 import { CodeHub } from "./code-hub"
 import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
@@ -46,7 +46,7 @@ import { PreviewPane } from "./preview-pane"
 // opening the "+" picker, palettes, tab toggles — re-rendered BOTH on every
 // click, which read as input lag. They take no props (context-driven), so a
 // module-level memo makes those interactions skip them entirely.
-const MemoAICodeChatPanel = React.memo(AICodeChatPanel)
+const MemoAgentCompanyPanel = React.memo(AgentCompanyPanel)
 const MemoPreviewPane = React.memo(PreviewPane)
 import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
@@ -580,7 +580,7 @@ export function CodeWorkspace() {
               <div className="flex h-full min-h-0 flex-col">
                 <div className="relative min-h-0 flex-1 overflow-hidden">
                   <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
-                    <MemoAICodeChatPanel />
+                    <MemoAgentCompanyPanel />
                   </div>
                   <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
                     {mainArea}
@@ -588,7 +588,7 @@ export function CodeWorkspace() {
                 </div>
                 <div className="flex shrink-0 border-t border-border/60 bg-background">
                   {([
-                    { id: "chat", label: "Agente" },
+                    { id: "chat", label: "Empresa" },
                     { id: "preview", label: "Preview" },
                   ] as const).map((tab) => (
                     <button
@@ -625,7 +625,7 @@ export function CodeWorkspace() {
                 onExpand={() => setChatOpen(true)}
                 className="min-w-0"
               >
-                <MemoAICodeChatPanel />
+                <MemoAgentCompanyPanel />
               </ResizablePanel>
               <ResizableHandle withHandle />
 

@@ -23,6 +23,7 @@
 import * as React from "react"
 import {
   AlertTriangle,
+  ArrowLeft,
   ArrowUp,
   BookOpen,
   BrainCircuit,
@@ -943,7 +944,13 @@ function collectWorkspaceFilesForImport(
   return out
 }
 
-export function AICodeChatPanel() {
+export type AICodeChatPanelProps = {
+  embedded?: boolean
+  title?: string
+  onBack?: () => void
+}
+
+export function AICodeChatPanel({ embedded = false, title, onBack }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -3694,6 +3701,7 @@ export function AICodeChatPanel() {
   const activeSessionTitle =
     codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
     "Nuevo chat"
+  const visibleSessionTitle = title?.trim() || activeSessionTitle
 
   // Replit-style "Plan" pill: flips the composer into plan mode and back to
   // whatever mode was active before (defaults to "app").
@@ -3718,11 +3726,24 @@ export function AICodeChatPanel() {
       {/* Replit-style panel header: current thread title + history / new-chat
           actions (the session tabs collapsed into the history dropdown). */}
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
+        {onBack ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="-ml-1 h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+            aria-label="Volver a la empresa"
+            title="Volver a la empresa"
+            onClick={onBack}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        ) : null}
         <span
           className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
-          title={activeSessionTitle}
+          title={visibleSessionTitle}
         >
-          {activeSessionTitle}
+          {visibleSessionTitle}
         </span>
         {activeFileLabel ? (
           <span
@@ -3732,7 +3753,7 @@ export function AICodeChatPanel() {
             {activeFileLabel}
           </span>
         ) : null}
-        <DropdownMenu>
+        {!embedded ? <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
@@ -3765,8 +3786,8 @@ export function AICodeChatPanel() {
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
+        </DropdownMenu> : null}
+        {!embedded ? <Button
           type="button"
           variant="ghost"
           size="icon"
@@ -3776,7 +3797,7 @@ export function AICodeChatPanel() {
           onClick={() => createCodeChatSession()}
         >
           <Plus className="h-3.5 w-3.5" />
-        </Button>
+        </Button> : null}
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">

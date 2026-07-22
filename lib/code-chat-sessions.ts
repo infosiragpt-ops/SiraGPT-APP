@@ -314,6 +314,7 @@ export function createCodeChatSession(
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    titleLocked: Boolean(opts?.title?.trim()),
     agent: defaultAgentState(),
   }
   let sessions = [...ensured.sessions, session]
