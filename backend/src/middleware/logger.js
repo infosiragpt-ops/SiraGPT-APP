@@ -34,6 +34,9 @@ const REDACT_PATHS = [
   'req.body.clientSecret',
   'req.body.client_secret',
   'req.body.secret',
+  'req.body.DATABASE_URL',
+  'req.body.DIRECT_DATABASE_URL',
+  'req.body.PRISMA_DATABASE_URL',
   // Top-level fields when payloads are passed directly to logger
   'password',
   'token',
@@ -48,6 +51,9 @@ const REDACT_PATHS = [
   'secret',
   'authorization',
   'cookie',
+  'DATABASE_URL',
+  'DIRECT_DATABASE_URL',
+  'PRISMA_DATABASE_URL',
   // One-level wildcards catch `{ user: { password } }`, `{ creds: { token } }`
   // and similar nested shapes without paying the deep-wildcard cost.
   '*.password',
@@ -63,6 +69,9 @@ const REDACT_PATHS = [
   '*.secret',
   '*.authorization',
   '*.cookie',
+  '*.DATABASE_URL',
+  '*.DIRECT_DATABASE_URL',
+  '*.PRISMA_DATABASE_URL',
 ];
 
 // Structured JSON logger. Output goes to stdout in every environment
@@ -99,6 +108,14 @@ function traceCorrelationMixin() {
   }
 }
 
+// Pino's `formatters.log` only receives the structured object. Positional
+// messages (`logger.error('...')`) and the `msg` Pino derives from an Error
+// bypass it, so sanitize every argument before Pino chooses its overload and
+// serializes the final record.
+function redactLogMethod(inputArgs, method) {
+  return method.apply(this, inputArgs.map(arg => redactPayloadDeep(arg)));
+}
+
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   redact: {
@@ -110,6 +127,9 @@ const logger = pino({
     log(object) {
       return redactPayloadDeep(object);
     },
+  },
+  hooks: {
+    logMethod: redactLogMethod,
   },
   mixin: traceCorrelationMixin,
 });
@@ -175,5 +195,6 @@ module.exports = {
   REDACT_PATHS,
   REDACTION_CENSOR,
   redactPayloadDeep,
+  redactLogMethod,
   traceCorrelationMixin,
 };

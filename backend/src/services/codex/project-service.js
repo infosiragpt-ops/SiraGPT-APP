@@ -12,6 +12,7 @@ const defaultPrisma = (() => {
 const { createSandboxClient } = require('./sandbox-provider');
 const { provisionWorkspace } = require('./workspace');
 const { classifyText } = require('./error-patterns');
+const { publicProjectDatabase } = require('./project-database-serializer');
 
 /** Enrich a provisioning failure message with a remediation hint when the
  *  error matches a known blocking pattern (e.g. runner unreachable). */
@@ -25,7 +26,7 @@ function describeProvisionError(raw) {
 }
 
 function publicProject(row) {
-  return {
+  const project = {
     id: row.id,
     name: row.name,
     status: row.status,
@@ -35,6 +36,11 @@ function publicProject(row) {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+  // Existing queries do not include this relation. If a future query does,
+  // keep the response allowlisted instead of serializing Prisma's nested
+  // secret/lease records by accident.
+  if (row.database) project.database = publicProjectDatabase(row.database);
+  return project;
 }
 
 function requireDb(db) {

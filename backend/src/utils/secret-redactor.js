@@ -9,6 +9,8 @@
  * where data crosses into logs/traces, not mutate the request that is sent.
  */
 
+const { redactDatabaseUrls } = require('../config/database-url');
+
 const DEFAULT_MAX_STRING_LENGTH = 500;
 
 const BASE_SENSITIVE_QUERY_KEYS = Object.freeze([
@@ -68,6 +70,18 @@ const TOKEN_PATTERNS = Object.freeze([
   { name: 'slack-token', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g },
   { name: 'google-api-key', pattern: /\bAIza[A-Za-z0-9_-]{35}\b/g },
 ]);
+
+const DATABASE_URL_KEYS = Object.freeze([
+  'DATABASE_URL',
+  'DIRECT_DATABASE_URL',
+  'PRISMA_DATABASE_URL',
+]);
+
+const DATABASE_URL_ASSIGNMENT_PATTERN = new RegExp(
+  `(["']?\\b(?:${DATABASE_URL_KEYS.join('|')})\\b["']?\\s*[:=]\\s*)`
+    + '(?:"[^"\\r\\n]*"|\'[^\'\\r\\n]*\'|[^\\s,;}\\]]+)',
+  'giu',
+);
 
 function csvSet(raw) {
   if (!raw) return [];
@@ -171,6 +185,11 @@ function redactString(input, opts = {}) {
   }
 
   value = redactQueryFragments(value);
+  value = value.replace(DATABASE_URL_ASSIGNMENT_PATTERN, '$1[REDACTED_DATABASE_URL]');
+  // A DSN can surface in a driver error without an environment-variable
+  // label. Redact the entire PostgreSQL/Prisma URL, including host/database
+  // metadata and signed query strings, through the canonical sanitizer.
+  value = redactDatabaseUrls(value);
   value = value.replace(
     /\b((?:https?|postgres(?:ql)?|prisma\+postgres|redis(?:s)?|mysql|mongodb(?:\+srv)?):\/\/)[^\s/?#@]+:[^\s/?#@]+@/giu,
     '$1',
@@ -272,4 +291,5 @@ module.exports = {
   DENY_HEADERS: BASE_DENY_HEADERS,
   TRACE_HEADERS,
   TOKEN_PATTERNS,
+  DATABASE_URL_KEYS,
 };
