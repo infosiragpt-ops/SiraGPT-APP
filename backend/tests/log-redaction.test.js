@@ -108,19 +108,34 @@ test('redactPayloadDeep guards against circular references', () => {
   assert.equal(out.self, '[circular]');
 });
 
-test('redactPayloadDeep passes through Date / Error / Buffer instances unchanged', () => {
+test('redactPayloadDeep preserves Date and Buffer instances', () => {
   const now = new Date('2026-01-01T00:00:00Z');
-  const err = new Error('boom');
   const buf = Buffer.from('binary');
-  const input = { ts: now, error: err, payload: buf, password: 'secret' };
+  const input = { ts: now, payload: buf, password: 'secret' };
   const out = redactPayloadDeep(input);
   assert.equal(out.ts, now, 'Date instance preserved');
-  assert.equal(out.error, err, 'Error instance preserved');
   assert.equal(out.payload, buf, 'Buffer instance preserved');
   assert.equal(out.password, '[REDACTED]');
 });
 
-test('redactPayloadDeep returns primitives unchanged', () => {
+test('redactPayloadDeep recursively sanitizes strings and Error fields without changing Error type', () => {
+  const dsn = 'postgresql://project-user:secret@project-db.internal/tenant_123';
+  const err = new TypeError(`driver failed for ${dsn}`);
+  err.context = { detail: `retrying ${dsn}`, password: 'another-secret' };
+
+  const out = redactPayloadDeep({ detail: `opening ${dsn}`, err });
+
+  assert.equal(out.detail, 'opening [REDACTED_DATABASE_URL]');
+  assert.ok(out.err instanceof TypeError);
+  assert.notEqual(out.err, err);
+  assert.equal(out.err.message, 'driver failed for [REDACTED_DATABASE_URL]');
+  assert.doesNotMatch(out.err.stack, /project-user|secret|project-db|tenant_123/);
+  assert.equal(out.err.context.detail, 'retrying [REDACTED_DATABASE_URL]');
+  assert.equal(out.err.context.password, '[REDACTED]');
+  assert.match(err.message, /project-user/, 'the caller-owned Error is not mutated');
+});
+
+test('redactPayloadDeep preserves non-string primitives and benign strings', () => {
   assert.equal(redactPayloadDeep(null), null);
   assert.equal(redactPayloadDeep(undefined), undefined);
   assert.equal(redactPayloadDeep('hello'), 'hello');

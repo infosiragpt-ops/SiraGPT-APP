@@ -108,6 +108,14 @@ function traceCorrelationMixin() {
   }
 }
 
+// Pino's `formatters.log` only receives the structured object. Positional
+// messages (`logger.error('...')`) and the `msg` Pino derives from an Error
+// bypass it, so sanitize every argument before Pino chooses its overload and
+// serializes the final record.
+function redactLogMethod(inputArgs, method) {
+  return method.apply(this, inputArgs.map(arg => redactPayloadDeep(arg)));
+}
+
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   redact: {
@@ -119,6 +127,9 @@ const logger = pino({
     log(object) {
       return redactPayloadDeep(object);
     },
+  },
+  hooks: {
+    logMethod: redactLogMethod,
   },
   mixin: traceCorrelationMixin,
 });
@@ -184,5 +195,6 @@ module.exports = {
   REDACT_PATHS,
   REDACTION_CENSOR,
   redactPayloadDeep,
+  redactLogMethod,
   traceCorrelationMixin,
 };

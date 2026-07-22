@@ -16,6 +16,8 @@
 
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
 const { Writable } = require("node:stream");
 const pino = require("pino");
 
@@ -60,6 +62,34 @@ function lastLine(lines) {
 }
 
 describe("logger redaction", () => {
+  test("production logger sanitizes DSNs in object messages, Errors, and positional msg", () => {
+    const backendRoot = path.resolve(__dirname, "..");
+    const child = spawnSync(process.execPath, ["-e", `
+      const { logger } = require('./src/middleware/logger');
+      const dsn = 'postgresql://project-user:secret@project-db.internal/tenant_123';
+      logger.error({ message: \`failed \${dsn}\` });
+      logger.error({ err: new Error(\`failed \${dsn}\`) });
+      logger.error(\`failed \${dsn}\`);
+    `], {
+      cwd: backendRoot,
+      encoding: "utf8",
+      env: { ...process.env, LOG_LEVEL: "error" },
+    });
+
+    assert.equal(child.status, 0, child.stderr);
+    const records = child.stdout.trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(records.length, 3);
+    assert.equal(records[0].message, "failed [REDACTED_DATABASE_URL]");
+    assert.equal(records[1].err.message, "failed [REDACTED_DATABASE_URL]");
+    assert.equal(records[1].msg, "failed [REDACTED_DATABASE_URL]");
+    assert.equal(records[2].msg, "failed [REDACTED_DATABASE_URL]");
+    assert.doesNotMatch(
+      child.stdout,
+      /project-user|secret|project-db\.internal|tenant_123/,
+      "the serialized logger output must not contain any DSN component",
+    );
+  });
+
   test("censors auth headers on the req shape", () => {
     const { logger, lines } = buildBufferedLogger();
     logger.info({
