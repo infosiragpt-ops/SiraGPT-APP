@@ -39,7 +39,7 @@ function fakeProvider({
     schemaVersion: SECRET_REF_SCHEMA_VERSION,
     ref: 'vault:opaque',
     sandboxRef: 'sb-1',
-    expiresAt: '2030-01-01T00:00:00.000Z',
+    expiresAt: '2099-01-01T00:00:00.000Z',
   }),
   acceptSecretRef = () => ({ accepted: true }),
 } = {}) {
@@ -198,4 +198,26 @@ test('isolated provider secret refs are normalized and validated before acceptan
   assert.deepEqual(runtime.acceptSecretRef(issued), { accepted: true });
   assert.deepEqual(accepted, issued);
   assert.equal(Object.isFrozen(accepted), true);
+});
+
+test('expired secret refs fail closed before provider acceptance', () => {
+  let accepted = false;
+  const provider = fakeProvider({
+    acceptSecretRef: () => { accepted = true; return { accepted: true }; },
+  });
+  const runtime = createSandboxRuntime({
+    env: { CODEX_SANDBOX_PROVIDER: 'fake-isolated' },
+    registry: createSandboxProviderRegistry([provider]),
+  });
+
+  assert.throws(
+    () => runtime.acceptSecretRef({
+      schemaVersion: SECRET_REF_SCHEMA_VERSION,
+      ref: 'vault:expired',
+      sandboxRef: 'sb-1',
+      expiresAt: '2020-01-01T00:00:00.000Z',
+    }),
+    (error) => error instanceof SandboxContractError && error.code === 'expired_secret_ref',
+  );
+  assert.equal(accepted, false);
 });

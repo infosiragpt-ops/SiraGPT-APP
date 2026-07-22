@@ -145,7 +145,7 @@ function normalizeAttestation(candidate, expectedProvider) {
   return deepFreeze(normalized);
 }
 
-function normalizeSecretRef(candidate) {
+function normalizeSecretRef(candidate, { nowMs = Date.now() } = {}) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     fail('invalid_secret_ref', 'sandbox secret ref must be an object');
   }
@@ -153,7 +153,11 @@ function normalizeSecretRef(candidate) {
     fail('invalid_secret_ref', `sandbox secret ref schema must be ${SECRET_REF_SCHEMA_VERSION}`);
   }
   const expiresAt = nonEmptyString(candidate.expiresAt, 'secretRef.expiresAt');
-  if (!Number.isFinite(Date.parse(expiresAt))) fail('invalid_secret_ref', 'secretRef.expiresAt must be an ISO timestamp');
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) fail('invalid_secret_ref', 'secretRef.expiresAt must be an ISO timestamp');
+  if (!Number.isFinite(nowMs) || expiresAtMs <= nowMs) {
+    fail('expired_secret_ref', 'sandbox secret ref is expired');
+  }
   return deepFreeze({
     schemaVersion: SECRET_REF_SCHEMA_VERSION,
     ref: nonEmptyString(candidate.ref, 'secretRef.ref'),

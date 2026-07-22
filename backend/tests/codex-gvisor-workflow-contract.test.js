@@ -21,6 +21,10 @@ test('gVisor compatibility job is manual and path-gated on an ephemeral Ubuntu r
 test('runsc is version-and-SHA512 pinned and registered as systrap, never as Docker default', () => {
   assert.match(workflow, /RUNSC_VERSION:\s*release-\d{8}\.\d+/);
   assert.match(workflow, /RUNSC_SHA512_X86_64:\s*[a-f0-9]{128}\b/);
+  assert.ok(
+    workflow.includes('gvisor/releases/release/${RUNSC_VERSION#release-}/x86_64/runsc'),
+    'version-pinned binary URL must use the immutable release/<version> bucket path',
+  );
   assert.match(workflow, /sha512sum -c -/);
   assert.match(workflow, /"--platform=systrap"/);
   assert.match(workflow, /"--network=sandbox"/);
