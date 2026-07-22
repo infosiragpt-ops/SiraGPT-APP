@@ -421,14 +421,15 @@ async function readProjectJson(projectId, relPath) {
   }
 }
 
-/** Is the dev server on `port` actually accepting connections yet? */
-async function probeReady(port) {
+/** Is the configured preview base returning a successful HTTP response? */
+async function probeReady(port, basePath = null) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch(`http://127.0.0.1:${port}/`, { signal: ctrl.signal });
+    const probePath = safeBasePath(basePath) || "/";
+    const r = await fetch(`http://127.0.0.1:${port}${probePath}`, { signal: ctrl.signal });
     clearTimeout(t);
-    return r.status > 0;
+    return r.ok;
   } catch {
     return false;
   }
@@ -484,7 +485,12 @@ async function startDev(projectId = null, basePath = null) {
   // Reuse: same project, already serving with the same base path → no restart
   // (vite watches files, edits are picked up by HMR without a re-run).
   const existing = devPool.get(key);
-  if (existing && existing.state === "ready" && (existing.basePath || null) === normBase && (await probeReady(existing.port))) {
+  if (
+    existing
+    && existing.state === "ready"
+    && (existing.basePath || null) === normBase
+    && (await probeReady(existing.port, existing.basePath))
+  ) {
     devPool.touch(key);
     lastStartedKey = key;
     return { port: existing.port, project: projectId, reused: true };
@@ -625,7 +631,7 @@ async function runDev(entry, projectId) {
   while (Date.now() < readyDeadline) {
     await Bun.sleep(1500);
     if (stale()) return;
-    if (await probeReady(port)) {
+    if (await probeReady(port, entry.basePath)) {
       entry.state = "ready";
       pushLog(entry, `[runner] dev server ready on ${port}`);
       return;
@@ -820,7 +826,7 @@ Bun.serve({
       const st = entryStatus(entry);
       // Legacy contract: `ready` is a LIVE probe while the server is running
       // (it can flip true during "starting", as soon as the port answers).
-      const ready = st.running ? await probeReady(st.port) : false;
+      const ready = st.running ? await probeReady(st.port, st.basePath) : false;
       const { log, ...rest } = st;
       return Response.json({
         ...rest,
