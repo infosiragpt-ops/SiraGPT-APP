@@ -41,6 +41,7 @@ describe('custom GPT agent policy', () => {
     const merged = policy.mergeCustomGptCapabilities(
       {
         webBrowsing: true,
+        documents: true,
         agentMode: 'auto',
         skillsEnabled: true,
         skillIds: ['openalex_search', 'crossref_verify'],
@@ -51,11 +52,22 @@ describe('custom GPT agent policy', () => {
     );
 
     assert.equal(merged.webBrowsing, false);
+    assert.equal(merged.documents, true);
     assert.equal(merged.agentMode, 'auto');
     assert.equal(merged.skillsEnabled, true);
     assert.deepEqual(merged.skillIds, ['openalex_search', 'crossref_verify']);
     assert.equal(merged.multipleArtifacts, true);
     assert.equal(merged.maxArtifactsPerTurn, 6);
+  });
+
+  test('persists the Docs capability alongside the existing tool toggles', () => {
+    const merged = policy.mergeCustomGptCapabilities(
+      { documents: true, skillsEnabled: true },
+      { documents: false, skillsEnabled: false },
+    );
+
+    assert.equal(merged.documents, false);
+    assert.equal(merged.skillsEnabled, false);
   });
 
   test('maps plans and admin flags to skill clearance', () => {

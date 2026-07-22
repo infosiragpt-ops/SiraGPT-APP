@@ -21,6 +21,7 @@ export interface CustomGPT {
     dataAnalysis?: boolean
     imageGeneration?: boolean
     codeInterpreter?: boolean
+    documents?: boolean
     agentMode?: 'off' | 'auto' | 'always'
     skillsEnabled?: boolean
     skillIds?: string[]
@@ -65,6 +66,7 @@ export interface CreateGPTData {
     dataAnalysis?: boolean
     imageGeneration?: boolean
     codeInterpreter?: boolean
+    documents?: boolean
     agentMode?: 'off' | 'auto' | 'always'
     skillsEnabled?: boolean
     skillIds?: string[]

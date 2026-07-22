@@ -90,7 +90,7 @@
     'session_search', 'session_list', 'session_history',
   ];
 
-  const STAGE_LABELS = {
+const STAGE_LABELS = {
     update_plan: () => 'Actualizando el plan',
     search_tools: (args) => `Buscando herramientas: "${truncate(args?.query, 50)}"`,
     web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
@@ -138,8 +138,54 @@
     monitor_ci: () => 'Esperando verificación CI en verde',
     check_ci_status: () => 'Verificando estado de CI',
     create_pr: () => 'Creando Pull Request',
-    finalize:   () => 'Componiendo respuesta',
-  };
+  finalize:   () => 'Componiendo respuesta',
+};
+
+const CUSTOM_GPT_DOCUMENT_TOOL_NAMES = new Set([
+  'rag_retrieve',
+  'self_rag_answer',
+  'docintel_analyze',
+  'docintel_retrieve',
+  'docintel_extract_tables',
+  'docintel_compare',
+  'deep_analyze',
+  'auto_file',
+  'compare_documents',
+  'search_docs',
+  'create_document',
+  'verify_artifact',
+  'document_edit',
+]);
+
+function applyCustomGptCapabilityGates(tools, capabilities) {
+  const source = Array.isArray(tools) ? tools : [];
+  const capGate = String(process.env.SIRAGPT_GPT_CAPABILITIES_GATING || '').trim().toLowerCase();
+  if (!capabilities || typeof capabilities !== 'object' || capGate === '0' || capGate === 'off') {
+    return source;
+  }
+
+  const blocked = new Set();
+  if (capabilities.webBrowsing === false) {
+    ['web_search', 'web_fetch', 'read_url', 'web_extract', 'deep_search', 'x_search'].forEach((name) => blocked.add(name));
+  }
+  if (capabilities.imageGeneration === false) {
+    ['generate_image', 'generate_video', 'generate_speech', 'generate_music'].forEach((name) => blocked.add(name));
+  }
+  if (capabilities.codeInterpreter === false) {
+    ['run_javascript', 'run_code', 'code_sandbox', 'python_exec', 'bash_exec'].forEach((name) => blocked.add(name));
+  }
+  if (capabilities.skillsEnabled === false) {
+    ['run_skill', 'run_skill_pipeline'].forEach((name) => blocked.add(name));
+  }
+
+  return source.filter((tool) => {
+    const name = tool && typeof tool.name === 'string' ? tool.name : '';
+    if (!name || blocked.has(name)) return false;
+    if (capabilities.documents === false && CUSTOM_GPT_DOCUMENT_TOOL_NAMES.has(name)) return false;
+    if (capabilities.dataAnalysis === false && name.startsWith('create_') && name !== 'create_document') return false;
+    return true;
+  });
+}
 
 function truncate(s, n) {
   if (!s) return '';
@@ -610,6 +656,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       preloopFileIds.length > 0
       && toolContext.prisma
       && toolContext.userId
+      && customGptCapabilities?.documents !== false
       && isDocumentEditRequest(userQuery)
     ) {
       try {
@@ -791,7 +838,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           // Attachment IDs (ownership-verified upstream) — gates document_edit.
           fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
         });
-        if (__harness) tools = __harness.tools;
+        if (__harness) tools = applyCustomGptCapabilityGates(__harness.tools, customGptCapabilities);
       } catch (harnessErr) {
         console.warn('[agent-harness] attach failed — continuing without harness:', harnessErr && harnessErr.message);
       }
@@ -1685,24 +1732,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // no gating. A tool is dropped only when its capability is EXPLICITLY false;
     // missing keys stay ON so partial objects never silently disable tools.
     // Kill switch: SIRAGPT_GPT_CAPABILITIES_GATING=0.
-    let gated = deduped;
-    const caps = opts && opts.capabilities;
-    const capGate = String(process.env.SIRAGPT_GPT_CAPABILITIES_GATING || '').trim().toLowerCase();
-    if (caps && typeof caps === 'object' && capGate !== '0' && capGate !== 'off') {
-      const blocked = new Set();
-      if (caps.webBrowsing === false) ['web_search', 'web_fetch'].forEach((n) => blocked.add(n));
-      if (caps.imageGeneration === false) ['generate_image', 'generate_video', 'generate_speech', 'generate_music'].forEach((n) => blocked.add(n));
-      if (caps.codeInterpreter === false) ['run_javascript', 'run_code', 'code_sandbox'].forEach((n) => blocked.add(n));
-      const blockVisuals = caps.dataAnalysis === false;
-      gated = deduped.filter((tool) => {
-        const name = tool && typeof tool.name === 'string' ? tool.name : '';
-        if (blocked.has(name)) return false;
-        if (blockVisuals && name.startsWith('create_')) return false;
-        return true;
-      });
-      if (gated.length !== deduped.length) {
-        console.log(`[gpt-capabilities] gated ${deduped.length - gated.length} tools (web=${caps.webBrowsing !== false} img=${caps.imageGeneration !== false} canvas=${caps.dataAnalysis !== false} code=${caps.codeInterpreter !== false})`);
-      }
+    const gated = applyCustomGptCapabilityGates(deduped, opts && opts.capabilities);
+    if (gated.length !== deduped.length) {
+      const caps = opts && opts.capabilities;
+      console.log(`[gpt-capabilities] gated ${deduped.length - gated.length} tools (web=${caps?.webBrowsing !== false} img=${caps?.imageGeneration !== false} canvas=${caps?.dataAnalysis !== false} code=${caps?.codeInterpreter !== false} docs=${caps?.documents !== false} skills=${caps?.skillsEnabled !== false})`);
     }
 
     // A1: per-turn tool selection. Hand the model a small, relevant subset
@@ -1772,6 +1805,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       adaptAgentTool,
       baseWebTools,
       buildDefaultTools,
+      applyCustomGptCapabilityGates,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
     },
