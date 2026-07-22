@@ -8,6 +8,7 @@ on:
       - '.github/workflows/gvisor-runner-compat.yml'
       - 'scripts/runner.Dockerfile'
       - 'scripts/code-runner*.js'
+      - 'scripts/gvisor-runner-smoke.mjs'
       - 'backend/src/services/codex/sandbox-provider.js'
       - 'backend/src/services/codex/sandbox-providers/**'
       - 'backend/tests/codex-gvisor-workflow-contract.test.js'
@@ -18,6 +19,7 @@ on:
       - '.github/workflows/gvisor-runner-compat.yml'
       - 'scripts/runner.Dockerfile'
       - 'scripts/code-runner*.js'
+      - 'scripts/gvisor-runner-smoke.mjs'
       - 'backend/src/services/codex/sandbox-provider.js'
       - 'backend/src/services/codex/sandbox-providers/**'
       - 'docker-compose.prod.yml'
@@ -43,7 +45,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install the pinned runsc binary
         shell: bash
@@ -81,7 +83,7 @@ jobs:
           docker info --format '{{json .Runtimes}}' | jq -e --arg runtime "${RUNSC_RUNTIME}" 'has($runtime)'
 
       - name: Build the production runner image
-        run: docker build --pull --file scripts/runner.Dockerfile --tag "${RUNNER_IMAGE}" scripts
+        run: docker build --file scripts/runner.Dockerfile --tag "${RUNNER_IMAGE}" scripts
 
       - name: Exercise tools, runtime identity, and containment
         shell: bash
@@ -93,16 +95,33 @@ jobs:
             --network none \
             --read-only \
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+            --tmpfs /workspace:rw,nosuid,nodev,size=256m,mode=0711 \
+            --tmpfs /export:rw,nosuid,nodev,size=64m,mode=0700 \
+            --tmpfs /runner-cache:rw,nosuid,nodev,size=128m,mode=0711 \
+            --tmpfs /runner-home:rw,nosuid,nodev,size=64m,mode=0711 \
+            --tmpfs /runner-tmp:rw,nosuid,nodev,size=64m,mode=0711 \
             --cap-drop ALL \
+            --cap-add CHOWN \
+            --cap-add DAC_OVERRIDE \
+            --cap-add FOWNER \
+            --cap-add KILL \
+            --cap-add SETGID \
+            --cap-add SETUID \
             --security-opt no-new-privileges:true \
             --pids-limit 128 \
             --cpus 1 \
             --memory 1g \
-            "${RUNNER_IMAGE}" sleep infinity
+            --env NODE_ENV=production \
+            --env CODE_RUNNER_CONTROL_TOKEN=gvisor-smoke-control-token \
+            --env CODE_RUNNER_DEV_PORT_POOL=5173-5174 \
+            --env CODE_RUNNER_INSTALL_TIMEOUT_MS=30000 \
+            --env CODE_RUNNER_DEV_READY_TIMEOUT_MS=30000 \
+            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner.js",dst=/scripts/code-runner.js,readonly \
+            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner-utils.js",dst=/scripts/code-runner-utils.js,readonly \
+            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/gvisor-runner-smoke.mjs",dst=/smoke/gvisor-runner-smoke.mjs,readonly \
+            "${RUNNER_IMAGE}" bun /scripts/code-runner.js
 
-          docker exec siragpt-gvisor-compat node -e 'console.log(process.version)'
-          docker exec siragpt-gvisor-compat bun --version
-          docker exec siragpt-gvisor-compat git --version
+          docker exec siragpt-gvisor-compat bun /smoke/gvisor-runner-smoke.mjs
 
           docker inspect siragpt-gvisor-compat > /tmp/gvisor-inspect.json
           jq -e --arg runtime "${RUNSC_RUNTIME}" '
@@ -113,6 +132,7 @@ jobs:
             and .[0].HostConfig.NanoCpus == 1000000000
             and .[0].HostConfig.Memory == 1073741824
             and (.[0].HostConfig.CapDrop | index("ALL") != null)
+            and ([.[0].HostConfig.CapAdd[]] | sort == ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID"])
             and (.[0].HostConfig.SecurityOpt | index("no-new-privileges:true") != null)
             and ([.[0].Mounts[].Destination] | index("/var/run/docker.sock") == null)
           ' /tmp/gvisor-inspect.json

@@ -8,6 +8,7 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '../..');
 const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/gvisor-runner-compat.yml'), 'utf8');
 const dockerfile = fs.readFileSync(path.join(ROOT, 'scripts/runner.Dockerfile'), 'utf8');
+const smoke = fs.readFileSync(path.join(ROOT, 'scripts/gvisor-runner-smoke.mjs'), 'utf8');
 
 test('gVisor compatibility job is manual and path-gated on an ephemeral Ubuntu runner', () => {
   assert.match(workflow, /workflow_dispatch:/);
@@ -36,7 +37,13 @@ test('runsc is version-and-SHA512 pinned and registered as systrap, never as Doc
 test('the real runner image is exercised under runsc with tools and containment gates', () => {
   assert.match(workflow, /docker build[\s\S]*scripts\/runner\.Dockerfile[\s\S]*scripts/);
   assert.match(workflow, /--runtime\s+"\$\{RUNSC_RUNTIME\}"/);
-  for (const tool of ['node', 'bun', 'git']) assert.match(workflow, new RegExp(`docker exec siragpt-gvisor-compat ${tool}\\b`));
+  assert.match(workflow, /bun \/scripts\/code-runner\.js/);
+  assert.match(workflow, /bun \/smoke\/gvisor-runner-smoke\.mjs/);
+  assert.match(workflow, /CODE_RUNNER_CONTROL_TOKEN=gvisor-smoke-control-token/);
+  assert.match(workflow, /code-runner\.js.*readonly/);
+  assert.match(workflow, /code-runner-utils\.js.*readonly/);
+  assert.match(workflow, /--tmpfs \/workspace:/);
+  assert.match(workflow, /--cap-add SETUID/);
   for (const gate of ['--network none', '--read-only', '--cap-drop ALL', '--pids-limit 128', '--cpus 1', '--memory 1g']) {
     assert.ok(workflow.includes(gate), `missing containment gate: ${gate}`);
   }
@@ -44,6 +51,30 @@ test('the real runner image is exercised under runsc with tools and containment 
   assert.match(workflow, /ReadonlyRootfs/);
   assert.match(workflow, /\/var\/run\/docker\.sock/);
   assert.match(workflow, /read-only root filesystem was writable/);
-  assert.match(dockerfile, /apt-get install[^\n]*nodejs/);
+  assert.match(dockerfile, /FROM node:22\.17\.0-bookworm-slim@sha256:[a-f0-9]{64} AS node-runtime/);
+  assert.match(dockerfile, /FROM oven\/bun:1\.3\.14@sha256:[a-f0-9]{64}/);
+  assert.doesNotMatch(dockerfile, /apt-get install[^\n]*\bnodejs\b/);
   assert.match(dockerfile, /^WORKDIR \/workspace$/m);
+});
+
+test('gVisor smoke exercises the authenticated project lifecycle and a real Node SQLite preview', () => {
+  for (const endpoint of [
+    '/health',
+    '/status',
+    '/workspace/init',
+    '/workspace/write',
+    '/workspace/file',
+    '/workspace/exec',
+    '/workspace/export',
+    '/run',
+    '/stop',
+  ]) {
+    assert.ok(smoke.includes(endpoint), `missing real runner smoke endpoint: ${endpoint}`);
+  }
+  assert.match(smoke, /expectedStatus:\s*401/);
+  assert.match(smoke, /DatabaseSync/);
+  assert.match(smoke, /\^v22\\\./);
+  assert.match(smoke, /uid\)\s*&&\s*nodeResult\.uid\s*>\s*0/);
+  assert.match(smoke, /controlTokenVisible,\s*false/);
+  assert.match(smoke, /node --watch server\.mjs/);
 });
