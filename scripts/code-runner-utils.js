@@ -176,7 +176,7 @@ function sandboxCommand(cmd, identity, limits = {}) {
   }
   // Node/V8 reserves substantially more virtual address space than its RSS;
   // the container memory cgroup remains the real physical-memory boundary.
-  const addressSpaceBytes = positiveLimit(limits.addressSpaceBytes, 16 * 1024 * 1024 * 1024);
+  const addressSpaceBytes = positiveLimit(limits.addressSpaceBytes, 64 * 1024 * 1024 * 1024);
   const maxProcesses = positiveLimit(limits.maxProcesses, 128);
   const maxOpenFiles = positiveLimit(limits.maxOpenFiles, 256);
   const maxFileBytes = positiveLimit(limits.maxFileBytes, 512 * 1024 * 1024);

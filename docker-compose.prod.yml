@@ -108,9 +108,10 @@ services:
       CODE_RUNNER_GID_SPAN: "${CODE_RUNNER_GID_SPAN:-1000000000}"
       CODE_RUNNER_RLIMIT_NPROC: "${CODE_RUNNER_RLIMIT_NPROC:-96}"
       CODE_RUNNER_RLIMIT_NOFILE: "${CODE_RUNNER_RLIMIT_NOFILE:-1024}"
-      # Virtual address space is not RSS: Node/V8 reserves a multi-GiB cage.
+      # Virtual address space is not RSS: Vite/Tailwind/WebAssembly reserve a
+      # large V8 cage even while their physical working set remains small.
       # The 2 GiB container cgroup below is still the hard physical-memory cap.
-      CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-17179869184}"
+      CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-68719476736}"
       CODE_RUNNER_RLIMIT_FSIZE_BYTES: "${CODE_RUNNER_RLIMIT_FSIZE_BYTES:-536870912}"
       CODE_RUNNER_RLIMIT_CPU_SECONDS: "${CODE_RUNNER_RLIMIT_CPU_SECONDS:-1800}"
       # Multi-project dev-server pool (audit B1): one dev server per project.

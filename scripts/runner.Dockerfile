@@ -6,7 +6,7 @@ FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf100
 
 COPY --from=node-runtime /usr/local/ /usr/local/
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git tini util-linux \
+  && apt-get install -y --no-install-recommends ca-certificates git procps tini util-linux \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /workspace/projects /runner-cache /runner-home /runner-tmp \
   && chmod 0711 /workspace/projects /runner-cache /runner-home /runner-tmp
