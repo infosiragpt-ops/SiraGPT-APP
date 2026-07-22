@@ -350,10 +350,12 @@ services:
       # not silently fall back to the native loop.
       CODEX_IMPLEMENTER_ADAPTER: ${CODEX_IMPLEMENTER_ADAPTER:-native}
       CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
-      # Public execution remains closed while the provider is the interim
-      # shared container. Set an isolated mode (opensandbox/gvisor/kata/e2b)
-      # before deliberately enabling CODEX_AGENT_OPEN_TO_ALL.
+      # Public execution remains closed while the boot-selected provider is the
+      # interim shared runner. An env isolation label alone cannot open access.
       CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-false}
+      CODEX_SANDBOX_PROVIDER: ${CODEX_SANDBOX_PROVIDER:-shared-runner}
+      # Kept for operational visibility/backward compatibility only. Access
+      # policy trusts the provider attestation, never this string.
       CODEX_RUNNER_ISOLATION_MODE: ${CODEX_RUNNER_ISOLATION_MODE:-shared-container}
       CODEX_PARALLEL_WRITE_SUBAGENTS: ${CODEX_PARALLEL_WRITE_SUBAGENTS:-false}
       CODE_RUNNER_URL: ${CODE_RUNNER_URL:-http://runner:4097}

@@ -30,7 +30,8 @@ const { authenticateToken } = require('../middleware/auth');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const { canUseCodexAgent, publicAccess } = require('../services/codex/access-control');
 const projectService = require('../services/codex/project-service');
-const { createRunnerClient, runnerDevUrl, codexExportHostPath } = require('../services/codex/runner-client');
+const { createSandboxClient } = require('../services/codex/sandbox-provider');
+const { runnerDevUrl, codexExportHostPath } = require('../services/codex/runner-client');
 const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
@@ -111,7 +112,7 @@ async function resolvePreviewPort(projectId, env = process.env) {
   const hit = previewPortCache.get(projectId);
   if (hit && Date.now() - hit.ts < previewPortTtlMs(env)) return hit.port;
   try {
-    const st = await createRunnerClient().devStatus(projectId);
+    const st = await createSandboxClient().devStatus(projectId);
     const port = st && st.running && Number.isInteger(st.port) ? st.port : null;
     previewPortCache.set(projectId, { port, ts: Date.now() });
     return port;
@@ -290,7 +291,7 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
     }
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const runner = createRunnerClient();
+    const runner = createSandboxClient();
     // REUSE a live dev server before minting anything: the tokenized base is
     // baked into Vite's --base, so restarting re-mints it and instantly 404s
     // ("public base URL" error) every asset URL an already-open iframe holds —
@@ -330,7 +331,7 @@ router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentA
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().devStatus(project.id);
+    const out = await createSandboxClient().devStatus(project.id);
     return res.json({ ...out, devUrl: runnerDevUrl(process.env, Number.isInteger(out?.port) ? out.port : null) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -341,7 +342,7 @@ router.post('/projects/:id/preview/stop', authenticateToken, requireCodexAgentAc
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    await createRunnerClient().stopDev(project.id);
+    await createSandboxClient().stopDev(project.id);
     previewPortCache.delete(project.id);
     return res.json({ ok: true });
   } catch (err) {
@@ -357,7 +358,7 @@ router.post('/projects/:id/export', authenticateToken, requireCodexAgentAccess, 
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().exportWorkspace(project.id);
+    const out = await createSandboxClient().exportWorkspace(project.id);
     return res.json({ ...out, hostPath: codexExportHostPath(project.id) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -433,7 +434,7 @@ router.get('/projects/:id/files', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().exec(project.id, ['git', 'ls-files', '-co', '--exclude-standard']);
+    const out = await createSandboxClient().exec(project.id, ['git', 'ls-files', '-co', '--exclude-standard']);
     const files = String(out?.stdout || '')
       .split('\n')
       .map((s) => s.trim())
@@ -515,7 +516,7 @@ router.post(
 
     try {
       const files = req.body.files.map((f) => ({ path: String(f.path), content: String(f.content) }));
-      await createRunnerClient().writeFiles(project.id, files);
+      await createSandboxClient().writeFiles(project.id, files);
       return res.json({ ok: true, written: files.length });
     } catch (err) {
       return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -529,7 +530,7 @@ router.get('/projects/:id/file', authenticateToken, async (req, res) => {
     if (!project) return undefined;
     const path = String(req.query.path || '').trim();
     if (!path) return res.status(400).json({ error: 'path_required' });
-    const out = await createRunnerClient().readFile(project.id, path);
+    const out = await createSandboxClient().readFile(project.id, path);
     return res.json(out);
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -616,7 +617,7 @@ router.post('/checkpoints/:id/rollback', authenticateToken, async (req, res) => 
     const out = await checkpointService.rollbackCheckpoint({
       checkpointId: req.params.id,
       userId: req.user.id,
-      deps: { runner: createRunnerClient() },
+      deps: { runner: createSandboxClient() },
     });
     if (out.error) return res.status(out.status || 400).json({ error: out.error, detail: out.detail });
     return res.json(out);
@@ -630,7 +631,7 @@ router.get('/checkpoints/:id/diff', authenticateToken, async (req, res) => {
     const out = await checkpointService.getCheckpointDiff({
       checkpointId: req.params.id,
       userId: req.user.id,
-      deps: { runner: createRunnerClient() },
+      deps: { runner: createSandboxClient() },
     });
     if (out.error) return res.status(out.status || 400).json({ error: out.error });
     return res.json(out);

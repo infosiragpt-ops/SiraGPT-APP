@@ -77,7 +77,9 @@ project branch.
 
 The legacy shared Bun runner is a canary bridge, not a multi-tenant security
 boundary. Public execution remains disabled while
-`CODEX_RUNNER_ISOLATION_MODE=shared-container`.
+`CODEX_SANDBOX_PROVIDER=shared-runner`. `CODEX_RUNNER_ISOLATION_MODE` is only an
+operational label: access policy trusts the provider's immutable, validated
+boot attestation and never treats an environment string as proof of isolation.
 
 The production sandbox provider must supply, per workspace:
 

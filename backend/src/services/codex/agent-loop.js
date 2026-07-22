@@ -23,6 +23,7 @@ const actionStoreDefault = require('./action-store');
 const checkpointService = require('./checkpoint-service');
 const runMetrics = require('./run-metrics');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
+const { createSandboxClient } = require('./sandbox-provider');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -522,7 +523,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // close. Created here when the caller didn't inject one.
   const metrics = deps.metrics || runMetrics.createAccumulator({ run, clock });
   const llmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
-  const runner = deps.runner || require('./runner-client').createRunnerClient();
+  const runner = deps.runner || createSandboxClient();
   const actionStore = deps.actionStore || actionStoreDefault;
   const webSearch = deps.webSearch || defaultWebSearch;
   const projectId = project?.id || run.projectId;

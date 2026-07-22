@@ -9,7 +9,7 @@
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
 })();
-const { createRunnerClient } = require('./runner-client');
+const { createSandboxClient } = require('./sandbox-provider');
 const { provisionWorkspace } = require('./workspace');
 const { classifyText } = require('./error-patterns');
 
@@ -80,7 +80,7 @@ function hasFullStackIntent(brief) {
 
 async function createProject({ userId, name, brief = null, runner, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
-  const runnerClient = runner || createRunnerClient();
+  const runnerClient = runner || createSandboxClient();
   const row = await prisma.codexProject.create({
     data: { userId, name, brief, status: 'provisioning' },
   });
