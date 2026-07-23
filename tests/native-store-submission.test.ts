@@ -25,6 +25,17 @@ describe("native store submission material", () => {
     assert.equal(report.localizations[0].storeLocales.googlePlay, "es-419")
     assert.equal(report.localizations[0].storeLocales.appStoreConnect, "es-MX")
     assert.ok(report.checks.every((check) => check.status === "ready"))
+    for (const id of [
+      "ios-usage-descriptions",
+      "ios-privacy-manifest",
+      "ios-privacy-manifest-bundled",
+      "android-backup-policy",
+      "android-network-policy",
+      "windows-store-appx-config",
+      "windows-store-appx-assets",
+    ]) {
+      assert.equal(report.checks.find((check) => check.id === id)?.status, "ready", id)
+    }
     assert.ok(
       report.checks
         .filter((check) => check.id.endsWith("-keywords"))

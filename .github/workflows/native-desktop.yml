@@ -8,11 +8,23 @@ on:
         required: true
         default: true
         type: boolean
+      windows_store_package:
+        description: 'Build Microsoft Store AppX as auto, QA identity, or exact Partner Center identity'
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - qa
+          - store
   pull_request:
     branches: [production-main]
     paths:
       - 'apps/desktop/**'
       - 'scripts/build-desktop.sh'
+      - 'scripts/build-windows-store-appx.js'
+      - 'scripts/generate-windows-appx-assets.js'
+      - 'scripts/validate-windows-store-appx.js'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/native-desktop.yml'
@@ -21,6 +33,9 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'scripts/build-desktop.sh'
+      - 'scripts/build-windows-store-appx.js'
+      - 'scripts/generate-windows-appx-assets.js'
+      - 'scripts/validate-windows-store-appx.js'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/native-desktop.yml'
@@ -93,7 +108,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: Windows x64 NSIS + portable
+    name: Windows x64 NSIS + portable + Store AppX
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -116,18 +131,39 @@ jobs:
           node -c apps/desktop/main.cjs
           node -c apps/desktop/runtime.cjs
           if (-not (Test-Path "apps/desktop/offline.html")) { throw "offline.html is required" }
+          npm run desktop:assets:win:store -- --check
 
       - name: Build Windows artifacts
         run: npm run desktop:dist:win
+
+      - name: Build Microsoft Store AppX
+        env:
+          WINDOWS_STORE_PACKAGE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_store_package || 'auto' }}
+          WINDOWS_STORE_IDENTITY_NAME: ${{ vars.WINDOWS_STORE_IDENTITY_NAME }}
+          WINDOWS_STORE_PUBLISHER: ${{ vars.WINDOWS_STORE_PUBLISHER }}
+          WINDOWS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.WINDOWS_STORE_PUBLISHER_DISPLAY_NAME }}
+          WINDOWS_STORE_APPLICATION_ID: ${{ vars.WINDOWS_STORE_APPLICATION_ID }}
+        run: npm run desktop:dist:win:store
+
+      - name: Validate Microsoft Store AppX
+        run: npm run desktop:validate:win:store
 
       - name: Stage Windows QA artifacts with manifest
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "output/native-qa/windows" | Out-Null
-          $files = Get-ChildItem -Path "output/desktop" -File | Where-Object { $_.Name -like "*.exe" -or $_.Name -like "*.blockmap" }
+          $files = Get-ChildItem -Path "output/desktop" -File | Where-Object {
+            $_.Name -like "*.exe" -or
+            $_.Name -like "*.blockmap" -or
+            $_.Name -like "*.appx" -or
+            $_.Name -eq "windows-store-package.json"
+          }
           if ($files.Count -eq 0) {
             throw "No Windows artifacts found in output/desktop"
+          }
+          if (-not ($files | Where-Object { $_.Name -like "*.appx" })) {
+            throw "No Windows Store AppX package found in output/desktop"
           }
           foreach ($file in $files) {
             Copy-Item -Path $file.FullName -Destination "output/native-qa/windows/$($file.Name)" -Force

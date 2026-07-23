@@ -8,6 +8,12 @@ const metadataPath = path.join(root, "docs/store-submission/native-store-metadat
 const capacitorPath = path.join(root, "capacitor.config.ts")
 const desktopPackagePath = path.join(root, "apps/desktop/package.json")
 const privacyPolicyPath = path.join(root, "docs/legal/privacy-policy.md")
+const iosInfoPlistPath = path.join(root, "ios/App/App/Info.plist")
+const iosPrivacyManifestPath = path.join(root, "ios/App/App/PrivacyInfo.xcprivacy")
+const iosProjectPath = path.join(root, "ios/App/App.xcodeproj/project.pbxproj")
+const androidManifestPath = path.join(root, "android/app/src/main/AndroidManifest.xml")
+const androidDebugManifestPath = path.join(root, "android/app/src/debug/AndroidManifest.xml")
+const windowsAppxAssetsPath = path.join(root, "apps/desktop/assets/appx")
 
 const STORE_LOCALE_KEYS = ["googlePlay", "appStoreConnect", "microsoftStore", "macos"]
 const PLACEHOLDER_PATTERN = /\b(todo|tbd|lorem ipsum|placeholder|replace me)\b/i
@@ -104,6 +110,18 @@ function findForbiddenSecretKeys(value, prefix = "") {
   }
 
   return matches
+}
+
+function readPngDimensions(filePath) {
+  const source = fs.readFileSync(filePath)
+  const pngSignature = "89504e470d0a1a0a"
+  if (source.length < 24 || source.subarray(0, 8).toString("hex") !== pngSignature) {
+    throw new Error(`${path.relative(root, filePath)} is not a valid PNG file`)
+  }
+  return {
+    width: source.readUInt32BE(16),
+    height: source.readUInt32BE(20),
+  }
 }
 
 function createReporter() {
@@ -372,6 +390,154 @@ function validatePrivacyAndOwnerBoundary(reporter, metadata) {
   )
 }
 
+function hasPlistUsageDescription(source, key) {
+  const pattern = new RegExp(
+    `<key>${key}</key>\\s*<string>([^<]{12,})</string>`,
+  )
+  return pattern.test(source)
+}
+
+function validateNativePrivacyAndSecurity(reporter) {
+  const iosInfoPlist = readText(iosInfoPlistPath)
+  const iosPrivacyManifest = readText(iosPrivacyManifestPath)
+  const iosProject = readText(iosProjectPath)
+  const androidManifest = readText(androidManifestPath)
+  const androidDebugManifest = readText(androidDebugManifestPath)
+
+  const iosUsageDescriptions = [
+    "NSCameraUsageDescription",
+    "NSMicrophoneUsageDescription",
+    "NSPhotoLibraryUsageDescription",
+  ]
+  const missingUsageDescriptions = iosUsageDescriptions.filter(
+    (key) => !hasPlistUsageDescription(iosInfoPlist, key),
+  )
+  reporter.add(
+    "ios-usage-descriptions",
+    "native-privacy-security",
+    missingUsageDescriptions.length === 0,
+    missingUsageDescriptions.length === 0
+      ? "iOS camera, microphone, and photo-library usage descriptions are explicit"
+      : `iOS usage descriptions missing or too short: ${missingUsageDescriptions.join(", ")}`,
+  )
+
+  const requiredCollectedDataTypes = [
+    "NSPrivacyCollectedDataTypeEmailAddress",
+    "NSPrivacyCollectedDataTypeUserID",
+    "NSPrivacyCollectedDataTypeOtherUserContent",
+    "NSPrivacyCollectedDataTypePhotosorVideos",
+    "NSPrivacyCollectedDataTypeAudioData",
+    "NSPrivacyCollectedDataTypePurchaseHistory",
+    "NSPrivacyCollectedDataTypeProductInteraction",
+    "NSPrivacyCollectedDataTypeCrashData",
+    "NSPrivacyCollectedDataTypePerformanceData",
+    "NSPrivacyCollectedDataTypeOtherDiagnosticData",
+  ]
+  const missingCollectedDataTypes = requiredCollectedDataTypes.filter(
+    (dataType) => !iosPrivacyManifest.includes(`<string>${dataType}</string>`),
+  )
+  const trackingFlags = iosPrivacyManifest.match(
+    /<key>NSPrivacyCollectedDataTypeTracking<\/key>\s*<(true|false)\/>/g,
+  ) || []
+  const privacyManifestReady = iosPrivacyManifest.includes("<key>NSPrivacyCollectedDataTypes</key>")
+    && missingCollectedDataTypes.length === 0
+    && trackingFlags.length === requiredCollectedDataTypes.length
+    && trackingFlags.every((entry) => entry.endsWith("<false/>"))
+    && !iosPrivacyManifest.includes("<key>NSPrivacyTrackingDomains</key>")
+  reporter.add(
+    "ios-privacy-manifest",
+    "native-privacy-security",
+    privacyManifestReady,
+    privacyManifestReady
+      ? "iOS privacy manifest declares collected app data and disables tracking for every data type"
+      : `iOS PrivacyInfo.xcprivacy is incomplete; missing data types: ${missingCollectedDataTypes.join(", ") || "none"}`,
+  )
+
+  const privacyResourceReferences = iosProject.match(/PrivacyInfo\.xcprivacy in Resources/g) || []
+  reporter.add(
+    "ios-privacy-manifest-bundled",
+    "native-privacy-security",
+    privacyResourceReferences.length >= 2,
+    privacyResourceReferences.length >= 2
+      ? "iOS privacy manifest is included in the app Resources phase"
+      : "iOS PrivacyInfo.xcprivacy is not included in the app Resources phase",
+    { references: privacyResourceReferences.length },
+  )
+
+  const androidBackupDisabled = /android:allowBackup="false"/.test(androidManifest)
+    && /android:fullBackupContent="false"/.test(androidManifest)
+  reporter.add(
+    "android-backup-policy",
+    "native-privacy-security",
+    androidBackupDisabled,
+    androidBackupDisabled
+      ? "Android production manifest disables cloud/full backup of authenticated WebView state"
+      : "Android production manifest must disable allowBackup and fullBackupContent",
+  )
+
+  const androidCleartextDisabled = /android:usesCleartextTraffic="false"/.test(androidManifest)
+  const debugCleartextScoped = /android:usesCleartextTraffic="true"/.test(androidDebugManifest)
+    && /tools:replace="android:usesCleartextTraffic"/.test(androidDebugManifest)
+  reporter.add(
+    "android-network-policy",
+    "native-privacy-security",
+    androidCleartextDisabled && debugCleartextScoped,
+    androidCleartextDisabled && debugCleartextScoped
+      ? "Android blocks cleartext traffic in production and scopes the local override to debug builds"
+      : "Android cleartext policy must be disabled in production with a debug-only override",
+  )
+
+  const desktopPackage = readJson(desktopPackagePath)
+  const appx = desktopPackage.build?.appx || {}
+  const appxConfigurationReady = /^[A-Za-z0-9.-]{3,50}$/.test(appx.identityName || "")
+    && /^CN=.+/i.test(appx.publisher || "")
+    && /^([A-Za-z][A-Za-z0-9]*)(\.[A-Za-z][A-Za-z0-9]*)*$/.test(appx.applicationId || "")
+    && Array.isArray(appx.capabilities)
+    && appx.capabilities.includes("runFullTrust")
+    && Array.isArray(appx.languages)
+    && appx.languages.includes("es-PE")
+    && appx.languages.includes("en-US")
+  reporter.add(
+    "windows-store-appx-config",
+    "native-privacy-security",
+    appxConfigurationReady,
+    appxConfigurationReady
+      ? "Windows Store AppX has a valid QA identity, full-trust capability, and Spanish/English languages"
+      : "Windows Store AppX configuration is incomplete or invalid",
+  )
+
+  const expectedAppxAssets = [
+    ["StoreLogo.png", 50, 50],
+    ["Square44x44Logo.png", 44, 44],
+    ["Square150x150Logo.png", 150, 150],
+    ["Wide310x150Logo.png", 310, 150],
+  ]
+  const invalidAppxAssets = []
+  for (const [fileName, width, height] of expectedAppxAssets) {
+    const filePath = path.join(windowsAppxAssetsPath, fileName)
+    if (!fs.existsSync(filePath)) {
+      invalidAppxAssets.push(`${fileName}: missing`)
+      continue
+    }
+    try {
+      const dimensions = readPngDimensions(filePath)
+      if (dimensions.width !== width || dimensions.height !== height) {
+        invalidAppxAssets.push(`${fileName}: expected ${width}x${height}, got ${dimensions.width}x${dimensions.height}`)
+      }
+    } catch (error) {
+      invalidAppxAssets.push(`${fileName}: ${error.message}`)
+    }
+  }
+  reporter.add(
+    "windows-store-appx-assets",
+    "native-privacy-security",
+    invalidAppxAssets.length === 0,
+    invalidAppxAssets.length === 0
+      ? "Windows Store AppX includes all four branded logo assets at exact required dimensions"
+      : `Windows Store AppX assets are invalid: ${invalidAppxAssets.join("; ")}`,
+  )
+}
+
 async function validateLiveUrls(reporter, metadata, urls) {
   for (const [key, url] of Object.entries(urls)) {
     if (!url) continue
@@ -493,6 +659,7 @@ async function main() {
 
   validateLocalizations(reporter, metadata)
   validatePrivacyAndOwnerBoundary(reporter, metadata)
+  validateNativePrivacyAndSecurity(reporter)
   if (args.checkUrls) await validateLiveUrls(reporter, metadata, urls)
 
   const report = buildReport(metadata, reporter.checks, args.checkUrls)

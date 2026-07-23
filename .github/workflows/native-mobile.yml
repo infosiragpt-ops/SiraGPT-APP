@@ -97,6 +97,19 @@ jobs:
           cd android
           ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon --stacktrace
 
+      - name: Verify Android production privacy and network policy
+        shell: bash
+        run: |
+          set -eu
+          release_manifest="android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
+          debug_manifest="android/app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml"
+          test -f "$release_manifest"
+          test -f "$debug_manifest"
+          grep -q 'android:allowBackup="false"' "$release_manifest"
+          grep -q 'android:fullBackupContent="false"' "$release_manifest"
+          grep -q 'android:usesCleartextTraffic="false"' "$release_manifest"
+          grep -q 'android:usesCleartextTraffic="true"' "$debug_manifest"
+
       - name: Stage Android QA artifacts with manifest
         shell: bash
         run: |
@@ -156,6 +169,7 @@ jobs:
       - name: Build iOS simulator wrapper
         run: |
           test -f ios/App/App/Info.plist
+          test -f ios/App/App/PrivacyInfo.xcprivacy
           test -f ios/App/App/capacitor.config.json
           xcodebuild \
             -project ios/App/App.xcodeproj \
@@ -188,6 +202,7 @@ jobs:
             echo "No iOS simulator .app found in DerivedData" >&2
             exit 1
           fi
+          test -f "$app_path/PrivacyInfo.xcprivacy"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "output/native-qa/ios/SiraGPT-${short_sha}-ios-simulator-app.zip"
 
           device_app_path="$(find "$RUNNER_TEMP/SiraGPT-device-derived" -path '*/Build/Products/Release-iphoneos/*.app' -type d -print -quit)"
@@ -195,6 +210,7 @@ jobs:
             echo "No unsigned iOS device .app found in device DerivedData" >&2
             exit 1
           fi
+          test -f "$device_app_path/PrivacyInfo.xcprivacy"
           device_plist="$device_app_path/Info.plist"
           device_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$device_plist")"
           device_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$device_plist")"

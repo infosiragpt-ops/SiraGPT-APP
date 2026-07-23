@@ -122,10 +122,17 @@ function classifyArtifact(relativePath) {
     }
   }
 
-  if (isUnder("windows") || extension === ".exe") {
+  if (isUnder("windows") || extension === ".exe" || extension === ".appx") {
+    const fileName = path.basename(normalized)
     return {
       platform: "windows",
-      kind: normalized.includes("portable") ? "portable-exe" : "installer-exe",
+      kind: extension === ".appx"
+        ? "microsoft-store-appx"
+        : fileName === "windows-store-package.json"
+          ? "microsoft-store-package-metadata"
+          : normalized.includes("portable")
+            ? "portable-exe"
+            : "installer-exe",
     }
   }
 

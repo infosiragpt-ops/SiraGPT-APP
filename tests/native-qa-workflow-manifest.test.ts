@@ -35,6 +35,11 @@ describe("Native QA GitHub Actions artifact manifests", () => {
     assert.match(workflow, /Stage Windows QA artifacts with manifest/)
     assert.match(workflow, /output\/native-qa\/windows/)
     assert.match(workflow, /\$files = Get-ChildItem -Path "output\/desktop" -File/)
+    assert.match(workflow, /Build Microsoft Store AppX/)
+    assert.match(workflow, /desktop:dist:win:store/)
+    assert.match(workflow, /desktop:validate:win:store/)
+    assert.match(workflow, /\*\.appx/)
+    assert.match(workflow, /windows-store-package\.json/)
 
     const manifestCalls = workflow.match(/scripts\/generate-native-release-manifest\.js/g) || []
     assert.equal(manifestCalls.length, 3)

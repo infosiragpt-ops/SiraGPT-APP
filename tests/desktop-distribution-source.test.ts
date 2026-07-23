@@ -38,6 +38,30 @@ test("desktop package includes deep links, offline assets, and both Mac architec
   assert.match(read("apps/desktop/offline.html"), /Content-Security-Policy/)
 })
 
+test("desktop package includes a deterministic Microsoft Store AppX route", () => {
+  const desktopPackage = JSON.parse(read("apps/desktop/package.json"))
+  const rootPackage = JSON.parse(read("package.json"))
+  const appx = desktopPackage.build.appx
+
+  assert.equal(appx.identityName, "SiraGPT.QA")
+  assert.equal(appx.publisher, "CN=SiraGPT QA")
+  assert.equal(appx.applicationId, "SiraGPT")
+  assert.equal(appx.artifactName, "SiraGPT-Store-${version}-${arch}.${ext}")
+  assert.ok(appx.languages.includes("es-PE"))
+  assert.ok(appx.languages.includes("en-US"))
+  assert.deepEqual(appx.capabilities, ["runFullTrust"])
+  assert.equal(rootPackage.scripts["desktop:dist:win:store"], "node scripts/build-windows-store-appx.js")
+  assert.equal(rootPackage.scripts["desktop:validate:win:store"], "node scripts/validate-windows-store-appx.js")
+
+  const buildScript = read("scripts/build-windows-store-appx.js")
+  assert.match(buildScript, /WINDOWS_STORE_PACKAGE_MODE/)
+  assert.match(buildScript, /Partial Microsoft Store identity is unsafe/)
+  assert.match(buildScript, /unsigned-microsoft-store-handoff/)
+  assert.match(buildScript, /storeSubmissionReady: mode === "store"/)
+  assert.match(read("scripts/validate-windows-store-appx.js"), /AppxManifest\.xml/)
+  assert.match(read("scripts/generate-windows-appx-assets.js"), /Wide310x150Logo\.png/)
+})
+
 test("downloads page resolves real desktop releases without presenting beta as signed", () => {
   const page = read("app/descargas/page.tsx")
   const card = read("components/desktop/desktop-download-card.tsx")
@@ -63,4 +87,7 @@ test("desktop QA workflow can publish durable checksummed prereleases", () => {
   assert.match(workflow, /Publish desktop beta prerelease/)
   assert.match(workflow, /SHA256SUMS\.txt/)
   assert.match(workflow, /gh release create/)
+  assert.match(workflow, /Build Microsoft Store AppX/)
+  assert.match(workflow, /Validate Microsoft Store AppX/)
+  assert.match(workflow, /WINDOWS_STORE_IDENTITY_NAME/)
 })

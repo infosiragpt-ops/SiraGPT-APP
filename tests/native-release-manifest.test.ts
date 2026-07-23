@@ -23,6 +23,8 @@ describe("generate-native-release-manifest", () => {
         "windows/SiraGPT-Setup-x64.exe",
         "windows/SiraGPT-x64-portable.exe",
         "windows/SiraGPT-Setup-x64.exe.blockmap",
+        "windows/SiraGPT-Store-0.4.4-x64.appx",
+        "windows/windows-store-package.json",
       ]
 
       for (const file of files) {
@@ -45,7 +47,7 @@ describe("generate-native-release-manifest", () => {
       assert.equal(manifest.summary.platformCounts.android, 3)
       assert.equal(manifest.summary.platformCounts.ios, 3)
       assert.equal(manifest.summary.platformCounts.macos, 3)
-      assert.equal(manifest.summary.platformCounts.windows, 3)
+      assert.equal(manifest.summary.platformCounts.windows, 5)
       assert.equal(manifest.summary.platformCounts.unknown, undefined)
 
       const simulator = manifest.artifacts.find((artifact) => artifact.path.includes("ios-simulator"))
@@ -60,6 +62,14 @@ describe("generate-native-release-manifest", () => {
       const releaseApk = manifest.artifacts.find((artifact) => artifact.path === "SiraGPT-f99a790.apk")
       assert.ok(releaseApk)
       assert.equal(releaseApk.kind, "release-apk")
+
+      const storeAppx = manifest.artifacts.find((artifact) => artifact.path.endsWith(".appx"))
+      assert.ok(storeAppx)
+      assert.equal(storeAppx.kind, "microsoft-store-appx")
+
+      const storeMetadata = manifest.artifacts.find((artifact) => artifact.path.endsWith("windows-store-package.json"))
+      assert.ok(storeMetadata)
+      assert.equal(storeMetadata.kind, "microsoft-store-package-metadata")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

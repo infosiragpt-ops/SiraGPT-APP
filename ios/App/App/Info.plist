@@ -24,6 +24,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Sira GPT needs camera access only when you choose to capture and attach a photo.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Sira GPT needs microphone access for voice dictation and audio recording.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
