@@ -14,11 +14,7 @@ interface AppShellProps {
 }
 
 export function AppShell({ children }: AppShellProps) {
-  // usePathname is retained even when unused in the JSX — it's the only
-  // hook in this component and Fast Refresh tracks render stability by
-  // hook count. Removing it once caused "Rendered fewer hooks than
-  // expected" during HMR until a full page reload.
-  usePathname()
+  const pathname = usePathname()
   useVisualViewportCssVars({ prefix: "app" })
 
   return (
@@ -31,7 +27,7 @@ export function AppShell({ children }: AppShellProps) {
                 setOpen(false) on the VISIBLE sidebar's provider. Must
                 live here because this level's useSidebar() resolves to
                 the outer provider that actually drives the sidebar DOM. */}
-            <SidebarCollapseBridge />
+            <SidebarCollapseBridge pathname={pathname} />
             <RouteTransitionShell>{children}</RouteTransitionShell>
           </SidebarInset>
         </div>
@@ -40,19 +36,30 @@ export function AppShell({ children }: AppShellProps) {
   )
 }
 
-function SidebarCollapseBridge() {
-  const { setOpen, isMobile } = useSidebar()
+function SidebarCollapseBridge({ pathname }: { pathname: string | null }) {
+  const { setOpen, open, isMobile } = useSidebar()
   // Keep the latest values in refs so the event listener closure
   // stays stable — no need to unmount/remount on every re-render.
   const setOpenRef = React.useRef(setOpen)
   const isMobileRef = React.useRef(isMobile)
+  const pathnameRef = React.useRef(pathname)
   React.useEffect(() => { setOpenRef.current = setOpen }, [setOpen])
   React.useEffect(() => { isMobileRef.current = isMobile }, [isMobile])
+  React.useEffect(() => { pathnameRef.current = pathname }, [pathname])
+
+  // On /code the agent-company panel lives in the APPS rail — keep it open.
+  React.useEffect(() => {
+    if (!pathname?.startsWith("/code") || isMobile) return
+    if (open) return
+    try { setOpen(true) } catch { /* provider unmounted */ }
+  }, [pathname, isMobile, open, setOpen])
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return
     const onCollapse = () => {
       if (isMobileRef.current) return
+      // Company panel docks into APPS on /code — collapsing would hide it.
+      if (pathnameRef.current?.startsWith("/code")) return
       try { setOpenRef.current(false) } catch { /* provider unmounted */ }
     }
     window.addEventListener('siragpt:collapse-sidebar', onCollapse)

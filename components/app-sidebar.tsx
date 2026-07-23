@@ -99,6 +99,7 @@ import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
+import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
   normalizeNavigationHref,
   useNavigationTransition,
@@ -318,6 +319,26 @@ const generationTypes = [
     badge: "Soon",
   },
 ]
+
+/** Host node for AgentCompanyPanel when Code mode is open on desktop. */
+function AgentCompanyAppsSlot() {
+  const slotRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useLayoutEffect(() => {
+    registerAgentCompanySlot(slotRef.current)
+    return () => registerAgentCompanySlot(null)
+  }, [])
+
+  return (
+    <div
+      ref={slotRef}
+      id="siragpt-agent-company-slot"
+      data-sidebar="agent-company-slot"
+      className="relative -mx-2 flex min-h-0 flex-1 flex-col overflow-hidden"
+      aria-label="Empresa de agentes"
+    />
+  )
+}
 
 export function AppSidebar() {
   const t = useTranslations("sidebar")
@@ -1326,46 +1347,56 @@ export function AppSidebar() {
       </div>
 
       <SidebarContent
-        className="px-2 overflow-y-auto custom-scrollbar flex-1"
+        className={cn(
+          "custom-scrollbar flex-1 px-2",
+          sidebarMode === "code" && !isMobile && state === "open"
+            ? "overflow-hidden"
+            : "overflow-y-auto",
+        )}
         ref={scrollAreaRef}
         onScroll={handleScroll}
       >
-        <SidebarSeparator />
+        {!(sidebarMode === "code" && !isMobile && state === "open") ? (
+          <SidebarSeparator />
+        ) : null}
 
-        {/* Codex — the APPS workspace tree. Now lives in the sidebar's
-            CODE mode (header toggle), out of the chat view — nothing was
-            removed, only relocated behind the segmented control.
-            Lote F · #45 — header colapsable persistente. */}
+        {/* Codex / APPS — on desktop Code mode the agent-company panel docks
+            into this rail (same side as Agente 1). Collapsed icon mode and
+            mobile keep the classic APPS workspace tree. */}
         {sidebarMode === "code" && (
-          <SidebarGroup className="py-0">
-            {state !== "closed" && (
-              <button
-                type="button"
-                onClick={toggleCodexCollapsed}
-                aria-expanded={!codexCollapsed}
-                aria-controls="sidebar-codex-content"
-                className="group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-foreground/80 transition-colors select-none"
+          !isMobile && state === "open" ? (
+            <AgentCompanyAppsSlot />
+          ) : (
+            <SidebarGroup className="py-0">
+              {state !== "closed" && (
+                <button
+                  type="button"
+                  onClick={toggleCodexCollapsed}
+                  aria-expanded={!codexCollapsed}
+                  aria-controls="sidebar-codex-content"
+                  className="group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-foreground/80 transition-colors select-none"
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 transition-transform duration-150",
+                      codexCollapsed && "-rotate-90"
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span>Apps</span>
+                </button>
+              )}
+              <div
+                id="sidebar-codex-content"
+                hidden={codexCollapsed && state !== "closed"}
               >
-                <ChevronDown
-                  className={cn(
-                    "h-3 w-3 transition-transform duration-150",
-                    codexCollapsed && "-rotate-90"
-                  )}
-                  aria-hidden="true"
+                <SidebarFoldersDropdown
+                  collapsed={state === "closed"}
+                  onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
                 />
-                <span>Apps</span>
-              </button>
-            )}
-            <div
-              id="sidebar-codex-content"
-              hidden={codexCollapsed && state !== "closed"}
-            >
-              <SidebarFoldersDropdown
-                collapsed={state === "closed"}
-                onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
-              />
-            </div>
-          </SidebarGroup>
+              </div>
+            </SidebarGroup>
+          )
         )}
 
         {/* Recent Chats - Only show for Text Chat, in chat mode */}
