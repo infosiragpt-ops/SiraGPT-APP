@@ -85,8 +85,8 @@ const platforms = {
     releaseGroups: ["windows"],
     uploadGroups: [],
     uploadSetupPlatform: "",
-    firstWorkflow: "Native signed release packages with platform=windows and create_github_release=true",
-    ownerSummary: "Provide a Windows code-signing certificate for public installer trust.",
+    firstWorkflow: "Native desktop builds with windows_store_package=store after configuring the exact Partner Center identity; use Native signed release packages with platform=windows only for direct EXE distribution",
+    ownerSummary: "Reserve the Microsoft Store app and provide its exact non-secret identity values; provide a Windows code-signing certificate only if direct NSIS/portable EXE distribution is also required.",
   },
 }
 

@@ -79,6 +79,23 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false
+    },
+    "appx": {
+      "identityName": "SiraGPT.QA",
+      "publisher": "CN=SiraGPT QA",
+      "publisherDisplayName": "SiraGPT",
+      "applicationId": "SiraGPT",
+      "displayName": "SiraGPT",
+      "artifactName": "SiraGPT-Store-${version}-${arch}.${ext}",
+      "backgroundColor": "#ffffff",
+      "languages": [
+        "es-PE",
+        "es-ES",
+        "en-US"
+      ],
+      "capabilities": [
+        "runFullTrust"
+      ]
     }
   }
 }

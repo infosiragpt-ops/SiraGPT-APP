@@ -52,6 +52,9 @@ npm run desktop:pack:mac
 npm run desktop:pack:win
 npm run desktop:dist:mac
 npm run desktop:dist:win
+npm run desktop:assets:win:store -- --check
+npm run desktop:dist:win:store
+npm run desktop:validate:win:store
 ```
 
 Notes:
@@ -60,7 +63,17 @@ Notes:
 - Windows builds are pinned to x64 so local builds from Apple Silicon create the expected Windows package.
 - Release installers require external signing credentials:
   - Apple Developer ID certificate for macOS distribution outside the App Store.
-  - Windows code-signing certificate for SmartScreen trust.
+  - Windows code-signing certificate for SmartScreen trust on NSIS/portable EXE distribution.
+- Microsoft Store distribution has a separate AppX route. The Store applies the
+  distribution signature, so that route does not need the EXE signing
+  certificate. It does require the exact reserved Partner Center identity:
+  `WINDOWS_STORE_IDENTITY_NAME`, `WINDOWS_STORE_PUBLISHER`,
+  `WINDOWS_STORE_PUBLISHER_DISPLAY_NAME`, and
+  `WINDOWS_STORE_APPLICATION_ID`.
+- `desktop:dist:win:store` uses a clearly marked QA identity when none of those
+  variables are configured. `WINDOWS_STORE_PACKAGE_MODE=store` fails closed
+  unless all four values are present, preventing a package with mixed or
+  incorrect Store identity.
 - macOS notarization requires Hardened Runtime entitlements; these are configured in `apps/desktop/assets/entitlements.mac.plist`.
 - Signing certificates, passwords, and store account credentials must stay outside Git.
 
@@ -100,7 +113,9 @@ Release requirements:
 Use `Native desktop builds` in GitHub Actions to produce desktop artifacts on the correct operating systems:
 
 - `siragpt-desktop-macos`: macOS `.dmg` and `.zip`.
-- `siragpt-desktop-windows-x64`: Windows installer/portable `.exe`.
+- `siragpt-desktop-windows-x64`: Windows installer/portable `.exe`, plus an
+  unsigned `.appx` and `windows-store-package.json`. The JSON states whether
+  the package uses QA identity or the exact Partner Center identity.
 
 Use `Native mobile builds` in GitHub Actions to validate the Capacitor wrappers and produce QA artifacts:
 
@@ -234,11 +249,27 @@ account actions, and safe upload commands, use:
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 ```
 
-The release plan includes a `Release Gate Summary` that lists ready platforms,
-blocked platforms, the signed-release workflow name, and the first safe
-workflow inputs for Android, iPhone, macOS, and Windows. Use that summary to
-avoid relaunching a signed package workflow before the required platform secret
-groups are present.
+The release plan includes a `Release Gate Summary` that separately lists
+signed-package readiness and store-upload readiness. A missing Google Play or
+App Store Connect credential must not block an artifact-only signed release.
+The plan prints artifact-only inputs with upload flags disabled, followed by
+draft/internal upload inputs only for platforms that support automated store
+upload.
+
+The native store readiness check also enforces the platform privacy boundary:
+
+- iOS bundles `PrivacyInfo.xcprivacy` and provides camera, microphone, and
+  photo-library usage descriptions.
+- Android disables authenticated WebView backups and cleartext traffic in the
+  production manifest. A cleartext override exists only in the debug manifest
+  for local development.
+
+For Windows, keep the distribution routes explicit. Microsoft Store can
+re-sign a certified AppX/MSIX package, while direct downloads and Store
+submissions that use the existing NSIS/EXE installer still require an
+Authenticode certificate from a trusted certificate authority. The Partner
+Center reservation must provide the final Store identity and publisher values
+before generating the Store package.
 
 GitHub Actions also exposes `Native readiness report`, which generates and
 uploads the same non-secret Markdown/JSON packet plus
@@ -319,6 +350,17 @@ Desktop signing secrets:
 - `WINDOWS_CERTIFICATE_BASE64`: base64-encoded Windows code-signing certificate.
 - `WINDOWS_CERTIFICATE_PASSWORD`: Windows certificate password.
 
+Microsoft Store AppX identity uses non-secret GitHub repository variables, not
+Actions secrets:
+
+- `WINDOWS_STORE_IDENTITY_NAME`
+- `WINDOWS_STORE_PUBLISHER`
+- `WINDOWS_STORE_PUBLISHER_DISPLAY_NAME`
+- `WINDOWS_STORE_APPLICATION_ID`
+
+These values must be copied exactly from the reserved Partner Center product.
+They are intentionally separate from Windows EXE code-signing credentials.
+
 Never commit these values. Store them only as GitHub Actions secrets or in the vendor store portals.
 Normal account or mailbox passwords are not signing material and must not be
 stored in GitHub Actions. Apple notarization requires an app-specific password,
@@ -366,7 +408,10 @@ Store publication requires account-level work outside Git:
 - Apple Developer/App Store Connect access for iPhone distribution.
 - Google Play Console access, owner verification, and a protected upload key for Android.
 - A Developer ID certificate for macOS distribution outside the App Store.
-- A Windows code-signing certificate for trusted Windows installers.
+- A Partner Center app reservation and exact package identity for Microsoft
+  Store AppX distribution.
+- A Windows code-signing certificate only for trusted NSIS/portable EXE
+  distribution outside the Store.
 
 ## Store Submission Packet
 
@@ -407,6 +452,9 @@ node -c scripts/generate-native-store-owner-packet.js
 node -c scripts/generate-native-github-secrets-template.js
 node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
+node -c scripts/build-windows-store-appx.js
+node -c scripts/generate-windows-appx-assets.js
+node -c scripts/validate-windows-store-appx.js
 sh -n scripts/build-desktop.sh
 sh -n scripts/setup-native-github-secrets.sh
 npm run native:version:check
@@ -418,6 +466,7 @@ npm run native:store:owner-packet -- --repo=infosiragpt-ops/SiraGPT-APP --secret
 npm run native:release:handoff -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-owner-handoff.md --json-out=output/native-owner-handoff.json
 npm run desktop:pack
 npm run desktop:pack:win
+npm run desktop:assets:win:store -- --check
 npm run mobile:sync
 npm run mobile:doctor
 npm run native:readiness

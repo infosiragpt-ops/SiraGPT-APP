@@ -98,6 +98,10 @@ lives in `docs/store-submission/native-store-assets.json`.
    The `Native mobile builds` and `Native desktop builds` workflow artifacts
    must include `native-release-manifest.json`, `native-release-manifest.md`,
    and `SHA256SUMS.txt` alongside every QA binary upload.
+   The Windows upload also contains a validated AppX and
+   `windows-store-package.json`; QA identity is evidence of package health,
+   while `storeSubmissionReady: true` requires the exact reserved Partner
+   Center identity.
 2. Complete owner-only account verification in Google Play Console and Apple
    Developer/App Store Connect.
 3. Add remaining signing and store-upload secrets to GitHub Actions, never to
@@ -123,7 +127,10 @@ Do not use a normal email or account password as a native signing secret.
 Distribution requires dedicated signing material: Android upload keystore,
 Google Play service account JSON for automated Play uploads,
 Apple certificates/profiles and app-specific password, App Store Connect API
-key, and Windows code-signing certificate.
+key, and a Windows code-signing certificate for direct EXE distribution.
+Microsoft Store AppX submission is a distinct route: the Store applies its
+distribution signature, while SiraGPT must supply the exact non-secret
+Partner Center identity values.
 
 ## Platform Notes
 
@@ -170,10 +177,25 @@ Apple notarization credentials in GitHub Actions secrets.
 
 ### Windows
 
-The Windows package can be built as NSIS installer and portable executable.
-For a professional public release, sign both with a Windows code-signing
-certificate. Microsoft Store publication also needs Partner Center metadata,
-logos, screenshots, and the privacy URL.
+The Windows package has two independent distribution routes:
+
+- `npm run desktop:dist:win` builds NSIS installer and portable executable.
+  Sign both with a trusted Windows code-signing certificate before direct
+  public distribution.
+- `npm run desktop:dist:win:store` builds an AppX for Microsoft Store.
+  Partner Center applies the distribution signature, but the package must use
+  the exact reserved values from `WINDOWS_STORE_IDENTITY_NAME`,
+  `WINDOWS_STORE_PUBLISHER`,
+  `WINDOWS_STORE_PUBLISHER_DISPLAY_NAME`, and
+  `WINDOWS_STORE_APPLICATION_ID`.
+
+The build rejects partial Store identity. Without all four values it produces
+only a clearly labelled QA package. Validate either package with
+`npm run desktop:validate:win:store`; the workflow records mode, identity,
+SHA-256, direct-install status, and Store-submission status in
+`windows-store-package.json`. Microsoft Store listing metadata, logos,
+screenshots, privacy URL, account enrollment, and final certification remain
+Partner Center actions.
 
 ## Privacy Declaration Draft
 
@@ -212,6 +234,9 @@ npm run native:github-secrets:template -- --platform=all --out=output/native-sig
 npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
 npm run native:release:plan:ci
+npm run desktop:assets:win:store -- --check
+npm run desktop:dist:win:store
+npm run desktop:validate:win:store
 ```
 
 `native:store:readiness` validates that the metadata packet matches the real
@@ -253,9 +278,10 @@ for the account owner and must not be committed after values are filled.
 for the current repo, including missing GitHub secret names, per-platform
 account actions, safe `gh secret set` commands, and the Actions-vs-signing
 diagnosis that separates public repository workflow availability from missing
-native signing material. It also includes a release gate summary with ready and
-blocked platforms plus the first safe `Native signed release packages` inputs
-for Android, iPhone, macOS, and Windows.
+native signing material. Its release gate distinguishes package signing from
+store upload, so a missing publisher API credential does not incorrectly mark
+an already-signable package as unavailable. Artifact-only workflow inputs keep
+store upload disabled; draft/internal upload inputs are listed separately.
 `native:release:handoff` generates the owner handoff packet for Apple, Google,
 macOS, and Windows account work. It includes the latest QA release link,
 verified workflow run IDs, account-owner actions, secret names, dry-run
@@ -270,6 +296,14 @@ downloads and durable GitHub Releases use the same verification format.
 `native:release:plan:ci` generates the same packet from environment-variable
 presence, which is how GitHub Actions can audit configured native secrets
 without listing or printing secret values.
+
+Windows has two distinct publication paths. The current NSIS/portable EXE
+artifacts require trusted Authenticode signing for direct distribution or an
+EXE-based Microsoft Store submission. An AppX/MSIX submission can be signed by
+Microsoft after Store certification, but it still requires Partner Center
+enrollment plus the reserved identity and publisher values. Do not report the
+Windows certificate as mandatory when the owner chooses the Store-only
+AppX/MSIX route.
 The GitHub Actions workflow `Native readiness report` publishes both the
 non-secret release plan, the GitHub secret-name report, the owner handoff
 packet, and the store asset readiness report as artifacts.

@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-04",
+  "version": "2026-07-23",
   "status": "submission-draft",
   "app": {
     "name": "Sira GPT",
@@ -158,10 +158,23 @@
     },
     "windows": {
       "appId": "com.siragpt.desktop",
-      "distribution": "signed NSIS installer and portable EXE",
+      "distribution": "Microsoft Store AppX/MSIX or signed NSIS installer and portable EXE",
+      "storePackage": {
+        "format": "AppX",
+        "signing": "Microsoft Store signs during certification",
+        "qaIdentity": "SiraGPT.QA",
+        "requiredRepositoryVariables": [
+          "WINDOWS_STORE_IDENTITY_NAME",
+          "WINDOWS_STORE_PUBLISHER",
+          "WINDOWS_STORE_PUBLISHER_DISPLAY_NAME",
+          "WINDOWS_STORE_APPLICATION_ID"
+        ]
+      },
       "requiredAccountActions": [
-        "Windows code-signing certificate",
-        "Microsoft Partner Center app reservation if publishing in Microsoft Store",
+        "Choose Microsoft Store AppX/MSIX, direct EXE distribution, or both",
+        "Microsoft Partner Center developer enrollment and app reservation for Store distribution",
+        "Provide the reserved Store identity and publisher values for AppX/MSIX packaging",
+        "Windows code-signing certificate only for NSIS/portable EXE distribution",
         "Microsoft Store listing metadata and privacy URL if store-distributed"
       ]
     }
@@ -222,7 +235,7 @@
       "Installer screenshots or product page assets if published externally"
     ],
     "windows": [
-      "Signed installer and portable EXE",
+      "Microsoft Store AppX/MSIX or signed installer and portable EXE",
       "Store logos and screenshots if Microsoft Store distributed",
       "Privacy policy URL"
     ]
