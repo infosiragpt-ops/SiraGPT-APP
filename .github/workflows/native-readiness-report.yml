@@ -8,6 +8,10 @@ on:
       - 'docs/native-app-release.md'
       - 'docs/mobile-store-release.md'
       - 'docs/store-submission/**'
+      - 'app/support/**'
+      - 'app/terms-of-service/**'
+      - 'app/sitemap.ts'
+      - 'app/robots.ts'
       - 'scripts/native-release-plan.js'
       - 'scripts/native-github-secrets-report.js'
       - 'scripts/generate-native-github-secrets-template.js'
@@ -28,6 +32,10 @@ on:
       - 'docs/native-app-release.md'
       - 'docs/mobile-store-release.md'
       - 'docs/store-submission/**'
+      - 'app/support/**'
+      - 'app/terms-of-service/**'
+      - 'app/sitemap.ts'
+      - 'app/robots.ts'
       - 'scripts/native-release-plan.js'
       - 'scripts/native-github-secrets-report.js'
       - 'scripts/generate-native-github-secrets-template.js'
@@ -70,9 +78,10 @@ jobs:
       - name: Validate native public metadata
         run: |
           npm run native:version:check
-          npm run native:store:readiness
+          npm run native:store:readiness -- --out=output/native-store-metadata-report.md --json-out=output/native-store-metadata-report.json
           npm run native:store:assets -- --out=output/native-store-assets-report.md --json-out=output/native-store-assets-report.json
           npm run native:store:packet -- --require-ready
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-store-metadata-report.json','utf8')); if (p.status !== 'ready') throw new Error('native store metadata is not ready'); if (p.distributionStatus !== 'owner-action-required') throw new Error('invalid native distribution status'); console.log('native-store-metadata-status=' + p.status); console.log('native-store-localizations=' + p.localizations.length)"
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-store-assets-report.json','utf8')); if (!['ready','blocked'].includes(p.status)) throw new Error('invalid native store asset status'); console.log('native-store-assets-status=' + p.status); console.log('native-store-assets-blocked-platforms=' + p.blockedPlatforms.length)"
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-store-submission-packet.json','utf8')); if (p.status !== 'ready') throw new Error('native store packet is not ready'); console.log('native-store-packet-status=' + p.status); console.log('native-store-packet-platforms=' + p.platforms.length)"
 
@@ -113,6 +122,8 @@ jobs:
           path: |
             output/native-store-assets-report.md
             output/native-store-assets-report.json
+            output/native-store-metadata-report.md
+            output/native-store-metadata-report.json
             output/native-store-submission-packet/**
             output/native-store-submission-packet.json
             output/native-release-plan.md
