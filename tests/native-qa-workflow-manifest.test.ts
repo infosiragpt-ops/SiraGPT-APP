@@ -9,9 +9,14 @@ describe("Native QA GitHub Actions artifact manifests", () => {
     assert.match(workflow, /Stage Android QA artifacts with manifest/)
     assert.match(workflow, /SiraGPT-\$\{short_sha\}-debug\.apk/)
     assert.match(workflow, /SiraGPT-\$\{short_sha\}-\$\{signing_label\}\.aab/)
-    assert.match(workflow, /Stage iOS simulator artifact with manifest/)
+    assert.match(workflow, /Build unsigned iOS device target/)
+    assert.match(workflow, /destination 'generic\/platform=iOS'/)
+    assert.match(workflow, /Stage iOS QA evidence with manifest/)
     assert.match(workflow, /ditto -c -k --sequesterRsrc --keepParent/)
     assert.match(workflow, /SiraGPT-\$\{short_sha\}-ios-simulator-app\.zip/)
+    assert.match(workflow, /SiraGPT-\$\{short_sha\}-ios-device-build\.json/)
+    assert.match(workflow, /status: "unsigned-device-compile-passed"/)
+    assert.match(workflow, /installable: false/)
 
     const manifestCalls = workflow.match(/scripts\/generate-native-release-manifest\.js/g) || []
     assert.equal(manifestCalls.length, 2)

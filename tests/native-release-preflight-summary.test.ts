@@ -25,6 +25,7 @@ const nativeSecretNames = [
   "WINDOWS_CERTIFICATE_BASE64",
   "WINDOWS_CERTIFICATE_PASSWORD",
 ]
+const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string
 
 function cleanNativeEnv(values: Record<string, string> = {}) {
   const env = { ...process.env }
@@ -34,7 +35,7 @@ function cleanNativeEnv(values: Record<string, string> = {}) {
   return {
     ...env,
     PLATFORM: "all",
-    RELEASE_TAG: "native-v0.4.3-test",
+    RELEASE_TAG: `native-v${packageVersion}-test`,
     GITHUB_REPOSITORY: "infosiragpt-ops/SiraGPT-APP",
     GITHUB_SHA: "abc123456789",
     GITHUB_RUN_ID: "12345",
@@ -181,5 +182,33 @@ describe("native-release-preflight-summary", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it("rejects unsafe or version-mismatched release tags", () => {
+    const unsafe = runPreflight(cleanNativeEnv({
+      PLATFORM: "android",
+      RELEASE_TAG: `native v${packageVersion}`,
+    }))
+    const mismatched = runPreflight(cleanNativeEnv({
+      PLATFORM: "android",
+      RELEASE_TAG: "native-v9.9.9",
+    }))
+
+    assert.equal(unsafe.status, 2)
+    assert.match(unsafe.stdout, /native-signed-preflight-status=invalid-workflow-input/)
+    assert.equal(mismatched.status, 2)
+    assert.match(mismatched.stdout, /native-signed-preflight-status=invalid-workflow-input/)
+  })
+
+  it("rejects invalid staged rollout fractions before upload", () => {
+    const result = runPreflight(cleanNativeEnv({
+      PLATFORM: "android",
+      UPLOAD_ANDROID_GOOGLE_PLAY: "true",
+      ANDROID_RELEASE_STATUS: "inProgress",
+      ANDROID_USER_FRACTION: "1.5",
+    }))
+
+    assert.equal(result.status, 2)
+    assert.match(result.stdout, /native-signed-preflight-status=invalid-workflow-input/)
   })
 })

@@ -2,6 +2,7 @@
 
 const fs = require("fs")
 const path = require("path")
+const packageMetadata = require("../package.json")
 
 const secretGroups = {
   android: [
@@ -94,11 +95,23 @@ function evaluatePreflight(env) {
   const uploadAndroid = env.UPLOAD_ANDROID_GOOGLE_PLAY === "true"
   const androidReleaseStatus = env.ANDROID_RELEASE_STATUS || "draft"
   const androidUserFraction = env.ANDROID_USER_FRACTION || ""
+  const releaseTag = (env.RELEASE_TAG || "").trim()
+  const packageVersion = packageMetadata.version
   const groups = selectedGroups(platform)
   const inputErrors = []
 
   if (groups.length === 0) {
     inputErrors.push(`Unknown platform: ${platform}`)
+  }
+  if (!releaseTag) {
+    inputErrors.push("release_tag is required")
+  } else {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(releaseTag)) {
+      inputErrors.push("release_tag must contain only letters, numbers, dots, underscores, and hyphens")
+    }
+    if (!releaseTag.split(/[-_]/).includes(`v${packageVersion}`)) {
+      inputErrors.push(`release_tag must include the package version v${packageVersion}`)
+    }
   }
   if (uploadIos && platform !== "ios" && platform !== "all") {
     inputErrors.push("upload_ios_app_store_connect requires platform ios or all")
@@ -111,6 +124,12 @@ function evaluatePreflight(env) {
   }
   if (uploadAndroid && androidReleaseStatus !== "inProgress" && androidUserFraction) {
     inputErrors.push("android_user_fraction is only valid when android_release_status is inProgress")
+  }
+  if (uploadAndroid && androidUserFraction) {
+    const fraction = Number(androidUserFraction)
+    if (!Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) {
+      inputErrors.push("android_user_fraction must be greater than 0 and less than 1")
+    }
   }
 
   if (uploadIos) groups.push("appstore")
@@ -136,7 +155,8 @@ function evaluatePreflight(env) {
   return {
     status,
     platform,
-    releaseTag: env.RELEASE_TAG || "",
+    releaseTag,
+    packageVersion,
     repository: env.GITHUB_REPOSITORY || "",
     gitSha: env.GITHUB_SHA || "",
     runUrl: env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID
