@@ -91,6 +91,20 @@ function classifyArtifact(relativePath) {
   const isDebugApk = extension === ".apk"
     && (isUnder("debug") || /(?:^|[-_.])debug(?:[-_.]|$)/.test(path.basename(normalized)))
 
+  if (fileName === "android-upload-certificate-blocker.json") {
+    return {
+      platform: "android",
+      kind: "play-upload-blocker-evidence",
+    }
+  }
+
+  if (fileName.endsWith("-ios-device-build.json")) {
+    return {
+      platform: "ios",
+      kind: "ios-device-build-evidence",
+    }
+  }
+
   if (extension === ".blockmap") {
     return {
       platform: isUnder("macos") ? "macos" : isUnder("windows") ? "windows" : "desktop",
