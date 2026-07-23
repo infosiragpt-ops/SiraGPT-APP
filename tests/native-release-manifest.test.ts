@@ -24,7 +24,7 @@ describe("generate-native-release-manifest", () => {
         "windows/SiraGPT-x64-portable.exe",
         "windows/SiraGPT-Setup-x64.exe.blockmap",
         "windows/SiraGPT-Store-0.4.4-x64.appx",
-        "windows/windows-store-package.json",
+        "windows-store-package.json",
       ]
 
       for (const file of files) {

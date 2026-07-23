@@ -84,6 +84,7 @@ function sha256File(filePath) {
 function classifyArtifact(relativePath) {
   const normalized = relativePath.replaceAll(path.sep, "/").toLowerCase()
   const extension = path.extname(normalized)
+  const fileName = path.basename(normalized)
   const isUnder = (directory) => normalized.startsWith(`${directory}/`) || normalized.includes(`/${directory}/`)
   const isIosSimulatorZip = extension === ".zip"
     && /(?:^|[-_.])(?:ios[-_.].*simulator|simulator[-_.].*ios)(?:[-_.]|$)/.test(path.basename(normalized))
@@ -122,8 +123,12 @@ function classifyArtifact(relativePath) {
     }
   }
 
-  if (isUnder("windows") || extension === ".exe" || extension === ".appx") {
-    const fileName = path.basename(normalized)
+  if (
+    isUnder("windows")
+    || extension === ".exe"
+    || extension === ".appx"
+    || fileName === "windows-store-package.json"
+  ) {
     return {
       platform: "windows",
       kind: extension === ".appx"
