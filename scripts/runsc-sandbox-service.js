@@ -196,20 +196,36 @@ class RunscSandboxService {
         throw new RunscSandboxError('duplicate_sandbox', 'multiple sandboxes claim the same workspace reference');
       }
       if (existing.length === 1) {
-        try {
-          let evidence = await this.inspectAndAttest(existing[0].Id);
-          if (!evidence.inspect.State?.Running) {
-            await this.docker.startContainer(existing[0].Id);
-            evidence = await this.inspectAndAttest(existing[0].Id);
+        const existingRef = assertSandboxRef(existing[0].Labels?.[SANDBOX_REF_LABEL]);
+        const resumed = await this.withLock(`sandbox:${existingRef}`, async () => {
+          // GC or a direct delete can win before this lock is acquired. Reload
+          // ownership while holding the same sandbox lock used by exec/stop/
+          // delete, and never return evidence for a removed container.
+          const current = await this.containersForWorkspace(normalizedWorkspace);
+          if (current.length === 0) return null;
+          if (current.length > 1) {
+            throw new RunscSandboxError('duplicate_sandbox', 'multiple sandboxes claim the same workspace reference');
           }
-          await this.verifyWorkspaceAccess(existing[0].Id);
-          await this.activityStore.set(evidence.attestation.sandboxRef, this.clock());
-          return publicSandboxResult(evidence);
-        } catch (error) {
-          if (error?.code !== 'sandbox_expired') throw error;
-          const expiredRef = existing[0].Labels?.[SANDBOX_REF_LABEL];
-          await this.delete(expiredRef);
-        }
+          if (current[0].Id !== existing[0].Id
+            || current[0].Labels?.[SANDBOX_REF_LABEL] !== existingRef) {
+            throw new RunscSandboxError('ownership_mismatch', 'workspace sandbox changed during resume');
+          }
+          try {
+            let evidence = await this.inspectAndAttest(current[0].Id);
+            if (!evidence.inspect.State?.Running) {
+              await this.docker.startContainer(current[0].Id);
+              evidence = await this.inspectAndAttest(current[0].Id);
+            }
+            await this.verifyWorkspaceAccess(current[0].Id);
+            await this.activityStore.set(existingRef, this.clock());
+            return publicSandboxResult(evidence);
+          } catch (error) {
+            if (error?.code !== 'sandbox_expired') throw error;
+            await this.deleteUnlocked(existingRef);
+            return null;
+          }
+        });
+        if (resumed) return resumed;
       }
 
       return this.withLock('capacity', async () => {

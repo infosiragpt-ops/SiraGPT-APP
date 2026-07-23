@@ -424,6 +424,37 @@ test('GC rechecks durable activity after waiting for an in-flight sandbox lock',
   assert.equal(docker.containers.size, 1, 'fresh activity must cancel stale GC deletion');
 });
 
+test('resuming an existing sandbox is atomic with GC and refreshes activity before collection', async () => {
+  let now = Date.now();
+  const cfg = config({ idleTimeoutMs: 10_000, execTimeoutMs: 1000 });
+  const docker = new FakeDocker(cfg);
+  const service = new RunscSandboxService({ docker, config: cfg, clock: () => now });
+  const workspaceRef = `ws_${'m'.repeat(43)}`;
+  const sandbox = await service.ensure({ workspaceRef, ttlMs: 600_000 });
+  now += cfg.idleTimeoutMs + 1;
+
+  let releaseProbe;
+  let probeReady;
+  const ready = new Promise((resolve) => { probeReady = resolve; });
+  const originalProbe = service.verifyWorkspaceAccess.bind(service);
+  service.verifyWorkspaceAccess = async (containerId) => {
+    probeReady();
+    await new Promise((resolve) => { releaseProbe = resolve; });
+    return originalProbe(containerId);
+  };
+
+  const resumedPromise = service.ensure({ workspaceRef });
+  await ready;
+  const collectionPromise = service.gc();
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseProbe();
+
+  const [resumed, collection] = await Promise.all([resumedPromise, collectionPromise]);
+  assert.equal(resumed.sandboxRef, sandbox.sandboxRef);
+  assert.deepEqual(collection.deleted, []);
+  assert.equal(docker.containers.size, 1);
+});
+
 test('startup GC deletes expired containers and orphaned labeled resources after restart', async () => {
   let now = Date.now();
   const cfg = config({ idleTimeoutMs: 10_000_000 });
