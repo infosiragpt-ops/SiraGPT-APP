@@ -130,7 +130,7 @@ jobs:
           if-no-files-found: error
 
   ios:
-    name: iOS simulator build
+    name: iOS simulator + unsigned device build
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -153,7 +153,7 @@ jobs:
       - name: Sync Capacitor iOS
         run: npm run mobile:sync -- ios
 
-      - name: Validate iOS wrapper
+      - name: Build iOS simulator wrapper
         run: |
           test -f ios/App/App/Info.plist
           test -f ios/App/App/capacitor.config.json
@@ -165,7 +165,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Stage iOS simulator artifact with manifest
+      - name: Build unsigned iOS device target
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/SiraGPT-device-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Stage iOS QA evidence with manifest
         shell: bash
         run: |
           set -eu
@@ -177,6 +189,40 @@ jobs:
             exit 1
           fi
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "output/native-qa/ios/SiraGPT-${short_sha}-ios-simulator-app.zip"
+
+          device_app_path="$(find "$RUNNER_TEMP/SiraGPT-device-derived" -path '*/Build/Products/Release-iphoneos/*.app' -type d -print -quit)"
+          if [ -z "$device_app_path" ]; then
+            echo "No unsigned iOS device .app found in device DerivedData" >&2
+            exit 1
+          fi
+          device_plist="$device_app_path/Info.plist"
+          device_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$device_plist")"
+          device_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$device_plist")"
+          device_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$device_plist")"
+          device_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$device_plist")"
+          device_architectures="$(lipo -archs "$device_app_path/$device_executable")"
+          device_report="output/native-qa/ios/SiraGPT-${short_sha}-ios-device-build.json"
+          DEVICE_REPORT="$device_report" \
+          DEVICE_BUNDLE_ID="$device_bundle_id" \
+          DEVICE_VERSION="$device_version" \
+          DEVICE_BUILD="$device_build" \
+          DEVICE_ARCHITECTURES="$device_architectures" \
+          node <<'NODE'
+          const fs = require("fs")
+          const report = {
+            schemaVersion: 1,
+            status: "unsigned-device-compile-passed",
+            purpose: "device-architecture-build-proof",
+            installable: false,
+            bundleIdentifier: process.env.DEVICE_BUNDLE_ID,
+            version: process.env.DEVICE_VERSION,
+            buildNumber: process.env.DEVICE_BUILD,
+            architectures: process.env.DEVICE_ARCHITECTURES.split(/\s+/).filter(Boolean),
+            note: "This proves the generic iOS device target compiles. App Store/TestFlight installation still requires Apple signing and provisioning.",
+          }
+          fs.writeFileSync(process.env.DEVICE_REPORT, `${JSON.stringify(report, null, 2)}\n`)
+          NODE
+
           node scripts/generate-native-release-manifest.js \
             --dir=output/native-qa \
             --out=output/native-qa/native-release-manifest.json \
@@ -185,7 +231,7 @@ jobs:
             --release-tag="native-qa-${GITHUB_RUN_NUMBER}" \
             --git-sha="$GITHUB_SHA"
 
-      - name: Upload iOS debug app
+      - name: Upload iOS QA evidence
         uses: actions/upload-artifact@v6
         with:
           name: siragpt-mobile-ios-simulator

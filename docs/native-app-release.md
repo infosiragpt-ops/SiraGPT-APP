@@ -98,7 +98,10 @@ Use `Native desktop builds` in GitHub Actions to produce desktop artifacts on th
 Use `Native mobile builds` in GitHub Actions to validate the Capacitor wrappers and produce QA artifacts:
 
 - `siragpt-mobile-android`: Android debug `.apk` and release `.aab`.
-- `siragpt-mobile-ios-simulator`: unsigned iOS simulator `.app` for wrapper validation.
+- `siragpt-mobile-ios-simulator`: unsigned iOS simulator `.app` plus a generic
+  device-target build report. The report proves the arm64 iPhone target
+  compiles, but it is intentionally not installable and does not replace Apple
+  signing, provisioning, or TestFlight.
 
 These workflows are unsigned by default. Add signing credentials only through GitHub Actions secrets when distribution signing is ready.
 
@@ -157,6 +160,15 @@ Use `Native signed release packages` manually when real distribution credentials
 - Windows: signed `.exe` installer/portable artifacts.
 
 The workflow can optionally create or update a GitHub Release with the built native artifacts. When `create_github_release` is enabled, it also publishes `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` so every native installer can be audited by version, Git SHA, platform, size, and SHA-256 checksum. It can also upload the signed Android `.aab` to Google Play when `upload_android_google_play` is enabled and upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing. The preflight writes a GitHub Actions step summary and uploads the `siragpt-native-signed-release-preflight` artifact with `preflight.md` and `preflight.json` before stopping, so the run shows whether the blocker is invalid workflow input or missing platform signing/upload secret names.
+
+Before publication, the signed workflow verifies the Android JAR signature, the
+iOS archive and exported IPA signature, the macOS code signature and
+notarization ticket, and the Windows Authenticode status. Temporary Android and
+iOS signing material is removed through `always()` cleanup steps. Existing
+release tags are immutable: a run fails instead of uploading artifacts when the
+requested tag already points to a different Git SHA. Release filenames are
+normalized before manifest generation so public assets and checksum metadata
+use the same canonical names.
 
 The preflight validates package-signing credentials by default:
 

@@ -190,6 +190,15 @@ jobs:
           mkdir -p output/native-release/android
           cp android/app/build/outputs/bundle/release/app-release.aab "output/native-release/android/SiraGPT-${short_sha}.aab"
 
+      - name: Verify Android bundle signature
+        shell: bash
+        run: |
+          set -eu
+          aab_path="$(find output/native-release/android -type f -name '*.aab' -print -quit)"
+          test -n "$aab_path"
+          jarsigner -verify -verbose -certs "$aab_path"
+          keytool -printcert -jarfile "$aab_path" >/dev/null
+
       - name: Upload Android signed artifact
         uses: actions/upload-artifact@v6
         with:
@@ -232,6 +241,11 @@ jobs:
           fi
 
           npm run native:play:upload -- "${args[@]}"
+
+      - name: Remove Android signing assets
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f android/keystore.properties android/keystores/siragpt-upload-key.jks
 
   ios:
     name: iOS signed IPA
@@ -309,9 +323,14 @@ jobs:
           profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$profile_plist")"
           profile_name="$(/usr/libexec/PlistBuddy -c 'Print Name' "$profile_plist")"
           profile_team_id="$(/usr/libexec/PlistBuddy -c 'Print TeamIdentifier:0' "$profile_plist")"
+          profile_app_identifier="$(/usr/libexec/PlistBuddy -c 'Print Entitlements:application-identifier' "$profile_plist")"
 
           if [ "$profile_team_id" != "$APPLE_TEAM_ID" ]; then
             echo "Provisioning profile team id does not match APPLE_TEAM_ID" >&2
+            exit 1
+          fi
+          if [ "$profile_app_identifier" != "$APPLE_TEAM_ID.com.siragpt.app" ]; then
+            echo "Provisioning profile application identifier does not match com.siragpt.app" >&2
             exit 1
           fi
 
@@ -320,6 +339,7 @@ jobs:
 
           {
             echo "profile_name=$profile_name"
+            echo "profile_uuid=$profile_uuid"
             echo "keychain_path=$keychain_path"
           } >> "$GITHUB_OUTPUT"
 
@@ -376,6 +396,21 @@ jobs:
             -exportOptionsPlist "$export_options" \
             -exportPath "$export_path"
 
+          archive_app="$archive_path/Products/Applications/App.app"
+          codesign --verify --deep --strict --verbose=2 "$archive_app"
+
+          ipa_path="$(find "$export_path" -type f -name '*.ipa' -print -quit)"
+          test -n "$ipa_path"
+          verify_path="$RUNNER_TEMP/ios-ipa-verification"
+          rm -rf "$verify_path"
+          mkdir -p "$verify_path"
+          ditto -x -k "$ipa_path" "$verify_path"
+          exported_app="$(find "$verify_path/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$exported_app"
+          codesign --verify --deep --strict --verbose=2 "$exported_app"
+          exported_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$exported_app/Info.plist")"
+          test "$exported_bundle_id" = "com.siragpt.app"
+
       - name: Upload iOS IPA to App Store Connect
         if: ${{ inputs.upload_ios_app_store_connect }}
         shell: bash
@@ -425,6 +460,28 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Remove iOS signing assets
+        if: ${{ always() }}
+        shell: bash
+        env:
+          KEYCHAIN_PATH: ${{ steps.ios_signing.outputs.keychain_path }}
+          PROFILE_UUID: ${{ steps.ios_signing.outputs.profile_uuid }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        run: |
+          if [ -n "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          if [ -n "$PROFILE_UUID" ]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          fi
+          rm -f \
+            "$RUNNER_TEMP/ios-signing.p12" \
+            "$RUNNER_TEMP/profile.mobileprovision" \
+            "$RUNNER_TEMP/profile.plist"
+          if [ -n "$APP_STORE_CONNECT_API_KEY_ID" ]; then
+            rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          fi
+
   macos:
     name: macOS signed DMG + ZIP
     if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
@@ -464,6 +521,39 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: npm run desktop:dist:mac
+
+      - name: Verify macOS signature and notarization
+        shell: bash
+        run: |
+          set -eu
+          mounted_path=""
+          cleanup() {
+            if [ -n "$mounted_path" ]; then
+              hdiutil detach "$mounted_path" >/dev/null 2>&1 || true
+              rm -rf "$mounted_path"
+            fi
+          }
+          trap cleanup EXIT
+
+          shopt -s nullglob
+          dmg_files=(output/desktop/*.dmg)
+          if [ "${#dmg_files[@]}" -eq 0 ]; then
+            echo "No macOS DMG artifacts were produced" >&2
+            exit 1
+          fi
+          for dmg_path in "${dmg_files[@]}"; do
+            hdiutil verify "$dmg_path"
+            xcrun stapler validate "$dmg_path"
+            mounted_path="$(mktemp -d "$RUNNER_TEMP/siragpt-dmg.XXXXXX")"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mounted_path" "$dmg_path" >/dev/null
+            app_path="$(find "$mounted_path" -maxdepth 2 -type d -name '*.app' -print -quit)"
+            test -n "$app_path"
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            spctl --assess --type execute --verbose=4 "$app_path"
+            hdiutil detach "$mounted_path" >/dev/null
+            rm -rf "$mounted_path"
+            mounted_path=""
+          done
 
       - name: Stage macOS artifacts
         shell: bash
@@ -516,6 +606,20 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: npm run desktop:dist:win
 
+      - name: Verify Windows Authenticode signatures
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "output/desktop" -File -Filter "*.exe"
+          if ($files.Count -eq 0) {
+            throw "No Windows executables were produced"
+          }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -FilePath $file.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $($file.Name): $($signature.Status)"
+            }
+          }
+
       - name: Stage Windows artifacts
         shell: pwsh
         run: |
@@ -552,6 +656,42 @@ jobs:
           pattern: siragpt-native-*
           path: output/native-release
           merge-multiple: true
+
+      - name: Normalize release artifact names
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' artifact; do
+            file_name="$(basename "$artifact")"
+            normalized_name="${file_name// /.}"
+            normalized_path="$(dirname "$artifact")/$normalized_name"
+            if [ -e "$normalized_path" ]; then
+              echo "Release artifact name collision: $normalized_name" >&2
+              exit 1
+            fi
+            mv "$artifact" "$normalized_path"
+          done < <(find output/native-release -type f -name '* *' -print0)
+
+      - name: Validate release tag provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" 2>/dev/null)"; then
+            tag_type="$(jq -r '.object.type' <<<"$ref_json")"
+            tag_target="$(jq -r '.object.sha' <<<"$ref_json")"
+            while [ "$tag_type" = "tag" ]; do
+              tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_target}")"
+              tag_type="$(jq -r '.object.type' <<<"$tag_json")"
+              tag_target="$(jq -r '.object.sha' <<<"$tag_json")"
+            done
+            if [ "$tag_target" != "$GITHUB_SHA" ]; then
+              echo "Release tag $RELEASE_TAG points to $tag_target instead of build SHA $GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
 
       - name: Generate release manifest
         shell: bash
