@@ -174,27 +174,36 @@ test('exec reprovisions once only after a controller response proving it did not
   assert.equal(provisionCount, 2);
   assert.equal(posts.length, 2);
 
-  const ambiguous = createRunscSandboxClient({
-    fetchImpl: async (url) => {
-      if (url.endsWith('/v1/sandboxes')) {
-        return response(201, {
-          sandboxRef: staleRef,
-          state: { running: true },
-          previewTarget: { ref: 'preview_opaque' },
-          attestation: instanceAttestation(workspaceRef, staleRef),
-        });
-      }
-      staleResponse = response(409, { error: 'other_conflict' });
-      return staleResponse;
-    },
-    baseUrl: 'http://controller.test', token: 't'.repeat(48), key,
-  });
-  await assert.rejects(
-    () => ambiguous.exec(project, ['node', '--version']),
-    (error) => error instanceof RunscSandboxClientError
-      && error.status === 409
-      && error.code === 'other_conflict',
-  );
+  for (const [status, code] of [
+    [409, 'other_conflict'],
+    [404, 'docker_api_error'],
+    [410, 'docker_api_error'],
+  ]) {
+    let execCalls = 0;
+    const ambiguous = createRunscSandboxClient({
+      fetchImpl: async (url) => {
+        if (url.endsWith('/v1/sandboxes')) {
+          return response(201, {
+            sandboxRef: staleRef,
+            state: { running: true },
+            previewTarget: { ref: 'preview_opaque' },
+            attestation: instanceAttestation(workspaceRef, staleRef),
+          });
+        }
+        execCalls += 1;
+        return response(status, { error: code });
+      },
+      baseUrl: 'http://controller.test', token: 't'.repeat(48), key,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () => ambiguous.exec(project, ['node', '--version']),
+      (error) => error instanceof RunscSandboxClientError
+        && error.status === status
+        && error.code === code,
+    );
+    assert.equal(execCalls, 1, `${status}/${code} must never replay an ambiguous command`);
+  }
 });
 
 test('client rejects malformed or mismatched controller attestation fail-closed', async () => {

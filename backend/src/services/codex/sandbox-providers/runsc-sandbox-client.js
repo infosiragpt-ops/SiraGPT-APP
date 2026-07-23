@@ -170,7 +170,8 @@ function createRunscSandboxClient({
         // responses, which prove the command did not start. Network failures
         // remain ambiguous and are never replayed.
         const safelyDidNotStart = error instanceof RunscSandboxClientError
-          && ([404, 410].includes(error.status)
+          && ((error.status === 404 && error.code === 'sandbox_not_found')
+            || (error.status === 410 && ['sandbox_expired', 'sandbox_idle_expired'].includes(error.code))
             || (error.status === 409 && error.code === 'sandbox_not_running'));
         if (!safelyDidNotStart) throw error;
         refs.delete(String(project));
