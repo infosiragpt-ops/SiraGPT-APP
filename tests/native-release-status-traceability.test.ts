@@ -187,8 +187,8 @@ describe("native release status traceability", () => {
     assert.match(status.latestSignedPreflight.run, /^\d+$/)
     assert.match(status.latestSignedPreflight.url, /\/actions\/runs\/\d+$/)
     assert.match(status.latestSignedPreflight.sourceSha, /^[a-f0-9]{40}$/)
-    assert.equal(status.latestSignedPreflight.status, "blocked-missing-signing-secrets")
-    assert.equal(status.latestSignedPreflight.platform, "all")
+    assert.equal(status.latestSignedPreflight.status, "ready-to-run")
+    assert.equal(status.latestSignedPreflight.platform, "android")
     assert.equal(status.latestSignedPreflight.artifact.name, "siragpt-native-signed-release-preflight")
     assert.match(status.latestSignedPreflight.artifact.id, /^\d+$/)
     assert.equal(status.latestSignedPreflight.artifact.expired, false)
@@ -196,10 +196,10 @@ describe("native release status traceability", () => {
     assert.ok(status.latestSignedPreflight.artifact.verifiedFiles.includes("preflight.json"))
     assert.equal(
       status.latestSignedPreflight.summarySignals.status,
-      "native-signed-preflight-status=blocked-missing-signing-secrets",
+      "native-signed-preflight-status=ready-to-run",
     )
-    assert.equal(status.latestSignedPreflight.summarySignals.platform, "native-signed-preflight-platform=all")
-    assert.equal(status.latestSignedPreflight.summarySignals.missingSecrets, "native-signed-preflight-missing-secrets=14")
+    assert.equal(status.latestSignedPreflight.summarySignals.platform, "native-signed-preflight-platform=android")
+    assert.equal(status.latestSignedPreflight.summarySignals.missingSecrets, "native-signed-preflight-missing-secrets=0")
 
     for (const key of ["android", "ios", "macos", "windows"]) {
       assert.ok(status.latestCurrentProductionValidation.platforms[key], `missing ${key} validation`)

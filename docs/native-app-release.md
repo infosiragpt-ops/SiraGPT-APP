@@ -2,29 +2,35 @@
 
 This document tracks the native wrappers for the hosted SiraGPT product.
 
-## v0.4.4 Candidate Validation (2026-07-22)
+## v0.4.4 Post-Merge Candidate Validation (2026-07-22)
 
-Candidate source SHA: `5b84e2ebc4b667c679b5d26bbfceffd457ee79d9` on
-`codex/native-multiplatform-management`.
+Candidate source SHA: `83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8` on
+`production-main`, merged through PR #59.
 
-- Native readiness report: run `29964742772`, green.
-- Android and iPhone Simulator: run `29964742744`, green.
-- macOS and Windows: run `29964742706`, green.
-- Signed Android AAB: run `29964742757`, green; Google Play upload disabled.
+- Full CI: run `29970296168`, green.
+- Native readiness report: run `29970296280`, green.
+- Android and iPhone Simulator: run `29970344528`, green.
+- macOS and Windows release: run `29970580677`, green.
+- Signed Android AAB: run `29970580670`, green; Google Play upload disabled.
 - Mobile QA prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-5b84e2e`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-83249d0`.
 - Signed Android release:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-5b84e2e`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-83249d0`.
 - Desktop beta prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-5b84e2e`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-83249d0`.
 
 Downloaded checksums were verified locally:
 
 - Android signed AAB: `83c82c4d6d9e99632b001d862c90e138203662f45620e620b4dbd3e162e4c8ec`.
-- iPhone Simulator ZIP: `427665dc1aeca34ab245e478f5892be8fc96c27e1a3d2853fe2fa10144796909`.
-- macOS Apple Silicon DMG: `6deabd0b51dd3b5763d61e943b587090a12e4848d991e70a8c085fac18929075`.
-- Windows installer: `38b81e3a76829e76ff005b5a1a15b89f4b7b2a9084bfb7ee2f9edc6e735f5359`.
-- Windows portable executable: `b82b5702c3448a0b784f62a8638e7e824129ef66507f92f6a430443dd2e31e7a`.
+- iPhone Simulator ZIP: `67d595b7fe45b076cb5b67e1124e8b9e0ec5e237d86c8f73a107af89dae1e457`.
+- macOS Apple Silicon DMG: `5c8dcca64255086bd6c3abfb39b9c830ed27f42236fb49389a62ac333f0fb76b`.
+- Windows installer: `eb4056c860fd3a954b8c514960534218b6d3601722181be86d90625e2a830705`.
+- Windows portable executable: `47f9da53d79c3d0268dd676c739e17ebe825272e9d3a09786f6545f612793e50`.
+- Owner handoff packet: `b236dc056390b4dd9f49191f2fddbe14961aaadc54c8c9232b60935fc0350fdf`.
+
+The public assets were downloaded after publication. SHA-256 verification,
+archive integrity checks, Android JAR signature verification, macOS DMG
+verification, and Windows installer file-type checks all passed.
 
 The iPhone artifact is a simulator build, not an installable App Store IPA.
 Public store distribution still requires Google Play upload credentials, Apple

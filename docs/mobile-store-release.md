@@ -7,37 +7,41 @@
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Public GitHub prereleases `native-mobile-qa-v0.4.4-5b84e2e` and
-  `desktop-beta-v0.4.4-5b84e2e` contain the current QA packages for Android,
+- Public GitHub prereleases `native-mobile-qa-v0.4.4-83249d0` and
+  `desktop-beta-v0.4.4-83249d0` contain the current QA packages for Android,
   iPhone Simulator, macOS, and Windows with checksum manifests.
 - Native store distribution is tracked in milestone `Native Store Distribution v0.4.4`:
   `https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1`.
   Platform owner-action issues are #5 Android/Google Play, #6 iPhone/App Store
   Connect, #7 macOS, and #8 Windows.
-- The v0.4.4 candidate artifact verification SHA is `5b84e2ebc4b667c679b5d26bbfceffd457ee79d9`; native readiness, mobile, desktop, and signed Android workflows are green for that artifact set.
+- The v0.4.4 post-merge verification SHA is `83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8`; CI, native readiness, mobile, desktop, and signed Android workflows are green for that artifact set.
 - Android package signing is configured and verified by the signed AAB release
-  `native-android-signed-v0.4.4-5b84e2e`.
+  `native-android-signed-v0.4.4-83249d0`.
 - Android Google Play upload is blocked until the Google Play service account
   upload secret and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
 ## v0.4.4 Candidate Validation
 
-- Native readiness report: `29964742772`.
-- Native mobile builds: `29964742744`.
-- Native desktop builds: `29964742706`.
-- Native signed Android release: `29964742757`.
+- Full CI: `29970296168`.
+- Native readiness report: `29970296280`.
+- Native mobile builds: `29970344528`.
+- Native desktop release: `29970580677`.
+- Native signed Android release: `29970580670`.
 - Mobile QA prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-5b84e2e`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-83249d0`.
 - Desktop beta prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-5b84e2e`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-83249d0`.
 - Signed Android release:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-5b84e2e`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-83249d0`.
 - Local checksum verification passed for the Android APK/AAB, iPhone Simulator
   ZIP, macOS Apple Silicon DMG, Windows installer/portable files, and owner
   handoff packet.
 - The iPhone Simulator ZIP validates the wrapper but cannot be installed on a
   physical iPhone. A signed IPA remains blocked on Apple credentials.
+- The current non-secret owner handoff packet is
+  `SiraGPT-native-store-owner-packet-83249d0.zip`; its SHA-256 is
+  `b236dc056390b4dd9f49191f2fddbe14961aaadc54c8c9232b60935fc0350fdf`.
 
 ## Previous v0.4.3 Production Baseline
 
