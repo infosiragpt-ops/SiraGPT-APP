@@ -42,3 +42,43 @@ The composer is the only changed region, so the full-view and focused-region com
 The authenticated production chat could not be captured in the in-app browser because that browser session is signed out. Component-level rendering, interaction, source contracts, type checking, and the production build were verified; the live authenticated visual state remains a post-deploy account-session check.
 
 final result: passed
+
+---
+
+# /code Three-Pane Design QA
+
+## Source
+
+- Reference: `/var/folders/0q/r8jm0bhd3pb0pqjd2xj2xmj80000gn/T/TemporaryItems/NSIRD_screencaptureui_dd5eJ6/Captura de pantalla 2026-07-23 a la(s) 12.08.23 p. m..png`
+- Reference dimensions: `2850x1620` pixels (`1425x810` CSS-equivalent at 2x density)
+- Target state: authenticated desktop workspace, company navigation in APPS, CEO Office open, empty preview launchpad
+
+## Implementation
+
+- Screenshot: `test-results/code-agent-company-matrix--efa20-eal-Matrix-style-operations-chromium/matrix-company-three-pane.png`
+- Viewport: `1425x810` CSS pixels at 1x density
+- State: authenticated Matrix fixture, `SiraGPT.COM`, CEO Office selected, PROACTIVO off, empty preview launchpad
+
+## Comparisons
+
+- Full viewport: `output/design-qa/code-reference-vs-implementation.png`
+- Company rail focus: `output/design-qa/code-rail-reference-vs-implementation.png`
+- Comparison order: reference on the left, implementation on the right
+
+## Findings And Fix History
+
+1. P1: The company navigator had been moved into the central workspace, replacing CEO Office. Restored the three persistent desktop surfaces: company/APPS, CEO Office, preview.
+2. P1: The `/code` sidebar override was `22rem`, wider than the reference. Restored the standard `16rem` sidebar width.
+3. P1: An active project fixture forced the preview into a compiling state. Matched the reference state by validating the empty launchpad before exercising runtime operations.
+4. P2: Desktop navigation rows hid too many departments. Added dock-only compact spacing while retaining the mobile dimensions.
+5. Intentional product requirement: the mode tab reads `Empresas</>` instead of the reference label `Code`.
+
+## Functional Evidence
+
+- Desktop company/APPS rail is visible and does not overflow.
+- CEO Office remains the direct command surface.
+- Preview launchpad and template actions remain visible.
+- Control panel exposes real Matrix runs after the runtime fixture is activated.
+- Mobile remains a single usable Empresa/Preview surface.
+
+final result: passed

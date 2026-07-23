@@ -74,13 +74,10 @@ async function mockMatrixCompany(page: Page) {
       id: "ceo-qa",
       workspaceId: "matrix-qa",
       title: "CEO Office",
-      turns: [
-        { id: "u-1", role: "user", content: "Deja SiraGPT listo para producción." },
-        { id: "a-1", role: "assistant", content: "Objetivo recibido. Coordinando departamentos y evidencia." },
-      ],
+      turns: [],
       createdAt: Date.parse(timestamp),
       updatedAt: Date.parse(timestamp),
-      agent: { phase: "preview", intakeStep: 0, context: { goal: "SiraGPT" } },
+      agent: { phase: "idle", intakeStep: 0, context: { goal: "" } },
     }
     const productSession = {
       ...ceoSession,
@@ -100,7 +97,6 @@ async function mockMatrixCompany(page: Page) {
         activeByWorkspace: { "matrix-qa": "ceo-qa" },
       }),
     )
-    localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
     localStorage.setItem(
       "code-workspace:codex-registry",
       JSON.stringify([
@@ -133,8 +129,8 @@ async function mockMatrixCompany(page: Page) {
     if (path === "/codex/projects/codex-matrix-qa/proactive") {
       return fulfillJson(route, {
         state: {
-          enabled: true,
-          enabledAt: "2026-07-23T15:30:00.000Z",
+          enabled: false,
+          enabledAt: null,
           dayKey: "2026-07-23",
           runsToday: 7,
           deptIndex: 4,
@@ -180,24 +176,34 @@ async function mockMatrixCompany(page: Page) {
 }
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.setViewportSize({ width: 1425, height: 810 })
   await mockMatrixCompany(page)
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
+  await expect(page.getByRole("tab", { name: "Empresas</>" })).toBeVisible()
   await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM")
   await expect(page.getByTestId("agent-company-live-preview")).toBeVisible()
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Controlar" })).toContainText("1")
+
+  const companyRail = page.locator("[data-agent-company-dock='apps']")
+  await expect(companyRail).toBeVisible()
+  await expect(page.getByText("¿Qué quieres construir?", { exact: true })).toBeVisible()
+  expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath("matrix-company-three-pane.png"), fullPage: true })
+
+  await page.evaluate(() => {
+    localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
+  })
+  await page.reload({ waitUntil: "domcontentloaded" })
   await expect(page.getByTestId("agent-company-department-trust")).toContainText("Verificar el aislamiento")
   await expect(page.getByRole("button", { name: "Controlar" })).toContainText("2")
-
   await page.getByRole("button", { name: "Controlar" }).click()
   await expect(page.getByTestId("agent-company-operating-loop")).toBeVisible()
   await expect(page.getByTestId("agent-company-worker-list")).toContainText("Confianza, Privacidad y Cumplimiento")
   await expect(page.getByTestId("agent-company-worker-list")).toContainText("Producto e Ingeniería SiraGPT")
 
-  const panel = page.locator("[data-agent-company-dock='workspace']")
-  await expect(panel).toBeVisible()
-  expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
 })
 
