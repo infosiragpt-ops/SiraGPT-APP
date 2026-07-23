@@ -4,6 +4,7 @@ import * as React from "react"
 
 import apiClient from "@/lib/api"
 import type { OfficeTimeOfDay } from "@/lib/agent-office-environment"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 type OfficeSoundId = "coast-day" | "coast-night" | "terrace-steps"
 export type OfficeSoundState = "off" | "loading" | "elevenlabs" | "local"
@@ -34,7 +35,7 @@ async function fetchOfficeSound(soundId: OfficeSoundId): Promise<ArrayBuffer> {
 
   const request = (async () => {
     const sound = await apiClient.getOfficeSoundscape(soundId)
-    const response = await fetch(officeSoundUrl(sound.audio_url), {
+    const response = await authenticatedFetch(officeSoundUrl(sound.audio_url), {
       credentials: "include",
       cache: "force-cache",
     })
