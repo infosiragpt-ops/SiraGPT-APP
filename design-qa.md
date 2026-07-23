@@ -45,6 +45,53 @@ final result: passed
 
 ---
 
+# /code Dynamic Agent Office Design QA
+
+## Source
+
+- Reference: `/var/folders/0q/r8jm0bhd3pb0pqjd2xj2xmj80000gn/T/TemporaryItems/NSIRD_screencaptureui_ZDjlPT/Captura de pantalla 2026-07-23 a la(s) 1.05.01 p. m..png`
+- Source intent: an isometric office with visible departments, desks, monitors, and people actively working.
+- Entry-point reference: `/var/folders/0q/r8jm0bhd3pb0pqjd2xj2xmj80000gn/T/TemporaryItems/NSIRD_screencaptureui_OhdyXt/Captura de pantalla 2026-07-23 a la(s) 1.04.28 p. m..png`
+
+## Implementation
+
+- Desktop screenshot: `test-results/code-agent-company-matrix--efa20-eal-Matrix-style-operations-chromium/agent-office-desktop.png`
+- Mobile screenshot: `test-results/code-agent-company-matrix--528ab-gle-usable-vertical-surface-chromium/agent-office-mobile.png`
+- Side-by-side comparison: `output/design-qa/agent-office-reference-vs-implementation.png`
+- Viewports: `1425x810` desktop and `390x844` mobile.
+- State: two real code sessions mapped to workers, ten real departments, empty desks retained as available capacity.
+
+## Fidelity And Product Decisions
+
+1. The scene preserves the reference's isometric workplace grammar: warm floor, dark department zones, navy desks and monitors, human workers, and large department displays.
+2. Worker density is data-driven. The reference contains many decorative people; the implementation renders only real sessions and Codex runs, so the fixture correctly shows two workers and available desks.
+3. The full scene remains unframed and immersive. Operational controls use the existing SiraGPT visual language and stay outside the 3D world.
+4. Desktop selection opens a restrained activity rail with the worker's actual task, department, status, source, activity type, and timestamp.
+5. Mobile uses a more distant camera to keep the multi-department layout in frame; removing atmospheric fog restored contrast without changing the geometry.
+
+## Functional Evidence
+
+- The left company preview is a live Three.js thumbnail, not a static image.
+- Clicking the thumbnail opens the full office.
+- Canvas pixel sampling confirms nonblank rendered content and meaningful color variance.
+- Two captured frames differ, confirming active animation.
+- A projected click on a rendered worker opens the matching activity inspector.
+- Department and active-only filters work without horizontal overflow.
+- Pause, resume, camera reset, roster, close, and worker handoff controls are keyboard-accessible.
+- Desktop and mobile Playwright coverage passes against the production build.
+
+## Verification
+
+- TypeScript: passed.
+- Repository test suite: `1696/1696` passed.
+- Office E2E: `2/2` passed.
+- Next.js optimized production build: passed.
+- UI lock: verified after intentional re-baseline.
+
+final result: passed
+
+---
+
 # /code Three-Pane Design QA
 
 ## Source
