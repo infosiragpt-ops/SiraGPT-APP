@@ -224,9 +224,16 @@ function renderMarkdown(manifest) {
 }
 
 function renderChecksums(manifest) {
-  return `${manifest.artifacts
-    .map((artifact) => `${artifact.sha256}  ${artifact.path}`)
-    .join("\n")}\n`
+  const fileNames = new Set()
+  const lines = manifest.artifacts.map((artifact) => {
+    if (fileNames.has(artifact.fileName)) {
+      throw new Error(`Duplicate release asset file name: ${artifact.fileName}`)
+    }
+    fileNames.add(artifact.fileName)
+    return `${artifact.sha256}  ${artifact.fileName}`
+  })
+
+  return `${lines.join("\n")}\n`
 }
 
 function writeIfRequested(filePath, contents) {
