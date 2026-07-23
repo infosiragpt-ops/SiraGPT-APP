@@ -66,7 +66,7 @@ Notes:
 
 ## iOS And Android
 
-The mobile shell uses Capacitor with bundle ID `com.siragpt.app`, app name `Sira GPT`, and production URL `https://siragpt.com`.
+The mobile shell uses Capacitor with bundle ID `com.siragpt.app`, app name `Sira GPT`, and production URL `https://siragpt.com/chat`.
 
 Commands:
 

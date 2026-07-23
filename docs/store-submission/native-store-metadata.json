@@ -12,7 +12,7 @@
     "supportEmail": "infosiragpt@gmail.com",
     "privacyPolicyUrl": "https://siragpt.com/privacy-policy",
     "termsUrl": "https://siragpt.com/terms",
-    "webRuntimeUrl": "https://siragpt.com",
+    "webRuntimeUrl": "https://siragpt.com/chat",
     "bundleIds": {
       "android": "com.siragpt.app",
       "ios": "com.siragpt.app",
