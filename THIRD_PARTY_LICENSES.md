@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1555**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1562**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -466,7 +466,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1144)
+## MIT (1151)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -551,6 +551,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@next/env` | 15.5.21 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
+| `@node-saml/node-saml` | 5.1.0 | MIT | [link](https://github.com/node-saml/node-saml) |
 | `@nodelib/fs.scandir` | 2.1.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.stat` | 2.0.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.walk` | 1.2.8 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
@@ -784,7 +785,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@types/pg` | 8.15.6 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/pg-pool` | 2.0.7 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/prop-types` | 15.7.15 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
-| `@types/qs` | 6.15.0 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/qs` | 6.15.0, 6.15.1 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/range-parser` | 1.2.7 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/react` | 18.3.28 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/react-dom` | 18.3.7 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
@@ -794,8 +795,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@types/trusted-types` | 2.0.7 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/unist` | 2.0.11, 3.0.3 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/use-sync-external-store` | 0.0.6 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/xml-encryption` | 1.2.4 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/xml2js` | 0.4.14 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/yauzl` | 2.10.3 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@upsetjs/venn.js` | 2.0.0 | MIT | [link](https://github.com/upsetjs/venn.js) |
+| `@xmldom/is-dom-node` | 1.0.1 | MIT | [link](https://github.com/xmldom/is-dom-node) |
 | `@xmldom/xmldom` | 0.8.13, 0.9.10 | MIT | [link](https://github.com/xmldom/xmldom) |
 | `accepts` | 1.3.8, 2.0.0 | MIT | [link](https://github.com/jshttp/accepts) |
 | `acorn` | 8.16.0 | MIT | [link](https://github.com/acornjs/acorn) |
@@ -1532,8 +1536,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tiny-invariant` | 1.3.3 | MIT | [link](https://github.com/alexreardon/tiny-invariant) |
 | `tinyexec` | 1.1.1, 1.1.2 | MIT | [link](https://github.com/tinylibs/tinyexec) |
 | `tinyglobby` | 0.2.17 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
-| `tldts` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
-| `tldts-core` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
+| `tldts` | 6.1.86, 7.4.8 | MIT | [link](https://github.com/remusao/tldts) |
+| `tldts-core` | 6.1.86, 7.4.8 | MIT | [link](https://github.com/remusao/tldts) |
 | `tmp` | 0.2.7 | MIT | [link](https://github.com/raszi/node-tmp) |
 | `to-regex-range` | 5.0.1 | MIT | [link](https://github.com/micromatch/to-regex-range) |
 | `toad-cache` | 3.7.0 | MIT | [link](https://github.com/kibertoad/toad-cache) |
@@ -1601,11 +1605,14 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `wrap-ansi` | 7.0.0, 8.1.0 | MIT | [link](https://github.com/chalk/wrap-ansi) |
 | `ws` | 8.21.0 | MIT | [link](https://github.com/websockets/ws) |
 | `xml` | 1.0.1 | MIT | [link](https://github.com/dylang/node-xml) |
+| `xml-crypto` | 6.1.2 | MIT | [link](https://github.com/node-saml/xml-crypto) |
+| `xml-encryption` | 3.1.0 | MIT | [link](https://github.com/auth0/node-xml-encryption) |
 | `xml-js` | 1.6.11 | MIT | [link](https://github.com/nashwaan/xml-js) |
 | `xml-naming` | 0.1.0 | MIT | [link](https://github.com/NaturalIntelligence/xml-naming) |
 | `xml2js` | 0.5.0, 0.6.2 | MIT | [link](https://github.com/Leonidas-from-XIV/node-xml2js) |
-| `xmlbuilder` | 10.1.1, 11.0.1 | MIT | [link](https://github.com/oozcitak/xmlbuilder-js) |
+| `xmlbuilder` | 10.1.1, 11.0.1, 15.1.1 | MIT | [link](https://github.com/oozcitak/xmlbuilder-js) |
 | `xmlchars` | 2.2.0 | MIT | [link](https://github.com/lddubeau/xmlchars) |
+| `xpath` | 0.0.32, 0.0.33, 0.0.34 | MIT | [link](https://github.com/goto100/xpath) |
 | `xtend` | 4.0.2 | MIT | [link](https://github.com/Raynos/xtend) |
 | `yargs` | 17.7.2 | MIT | [link](https://github.com/yargs/yargs) |
 | `yauzl` | 2.10.0 | MIT | [link](https://github.com/thejoshwolfe/yauzl) |
