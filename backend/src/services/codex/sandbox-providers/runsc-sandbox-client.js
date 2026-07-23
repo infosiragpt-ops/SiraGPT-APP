@@ -169,7 +169,10 @@ function createRunscSandboxClient({
         // a cached ref between commands. Retry only explicit not-found/gone
         // responses, which prove the command did not start. Network failures
         // remain ambiguous and are never replayed.
-        if (!(error instanceof RunscSandboxClientError) || ![404, 410].includes(error.status)) throw error;
+        const safelyDidNotStart = error instanceof RunscSandboxClientError
+          && ([404, 410].includes(error.status)
+            || (error.status === 409 && error.code === 'sandbox_not_running'));
+        if (!safelyDidNotStart) throw error;
         refs.delete(String(project));
         return run(await sandboxRefFor(project));
       }

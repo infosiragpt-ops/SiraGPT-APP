@@ -9,6 +9,7 @@ const {
   normalizeInstanceAttestation,
 } = require('../src/services/codex/sandbox-providers/contract');
 const {
+  RunscSandboxClientError,
   controllerUrl,
   opaqueWorkspaceRef,
   createRunscSandboxClient,
@@ -139,7 +140,7 @@ test('status from a fresh client is read-only and never provisions or restarts a
   assert.doesNotMatch(calls[0].url, /\/v1\/sandboxes$/);
 });
 
-test('exec reprovisions once only after an explicit stale-reference response', async () => {
+test('exec reprovisions once only after a controller response proving it did not start', async () => {
   const key = 'k'.repeat(48);
   const project = 'cm123456789-project';
   const workspaceRef = opaqueWorkspaceRef(project, key);
@@ -147,6 +148,7 @@ test('exec reprovisions once only after an explicit stale-reference response', a
   const freshRef = `sb_${'b'.repeat(32)}`;
   const posts = [];
   let provisionCount = 0;
+  let staleResponse = response(409, { error: 'sandbox_not_running' });
   const client = createRunscSandboxClient({
     fetchImpl: async (url, options) => {
       if (url.endsWith('/v1/sandboxes')) {
@@ -161,7 +163,7 @@ test('exec reprovisions once only after an explicit stale-reference response', a
       }
       if (url.endsWith('/exec')) {
         posts.push(url);
-        if (url.includes(staleRef)) return response(404, { error: 'sandbox_not_found' });
+        if (url.includes(staleRef)) return staleResponse;
         return response(200, { sandboxRef: freshRef, exitCode: 0, stdout: 'ok', stderr: '' });
       }
       throw new Error(`unexpected call ${options.method} ${url}`);
@@ -171,6 +173,28 @@ test('exec reprovisions once only after an explicit stale-reference response', a
   assert.equal((await client.exec(project, ['node', '--version'])).stdout, 'ok');
   assert.equal(provisionCount, 2);
   assert.equal(posts.length, 2);
+
+  const ambiguous = createRunscSandboxClient({
+    fetchImpl: async (url) => {
+      if (url.endsWith('/v1/sandboxes')) {
+        return response(201, {
+          sandboxRef: staleRef,
+          state: { running: true },
+          previewTarget: { ref: 'preview_opaque' },
+          attestation: instanceAttestation(workspaceRef, staleRef),
+        });
+      }
+      staleResponse = response(409, { error: 'other_conflict' });
+      return staleResponse;
+    },
+    baseUrl: 'http://controller.test', token: 't'.repeat(48), key,
+  });
+  await assert.rejects(
+    () => ambiguous.exec(project, ['node', '--version']),
+    (error) => error instanceof RunscSandboxClientError
+      && error.status === 409
+      && error.code === 'other_conflict',
+  );
 });
 
 test('client rejects malformed or mismatched controller attestation fail-closed', async () => {
