@@ -57,6 +57,7 @@
     "native:release:manifest": "node scripts/generate-native-release-manifest.js",
     "native:release:handoff": "node scripts/generate-native-owner-handoff.js",
     "native:play:upload": "node scripts/upload-google-play-aab.js",
+    "native:android:signing-fingerprint": "node scripts/verify-android-upload-certificate.js",
     "native:store:readiness": "node scripts/native-store-readiness.js",
     "native:store:assets": "node scripts/native-store-assets-readiness.js",
     "native:store:assets:generate": "node scripts/generate-native-store-assets.js",

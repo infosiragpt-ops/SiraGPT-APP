@@ -86,6 +86,11 @@ Release requirements:
 - Android release builds produce a Play-ready `.aab` and a directly installable
   `.apk`. Both use `android/keystore.properties` and the upload keystore in
   `android/keystores/`; the signing files are intentionally ignored.
+- Signed release workflows compare the AAB certificate against the public
+  `ANDROID_PLAY_UPLOAD_SHA1` repository variable before publishing artifacts.
+  Set that variable to the **upload certificate** fingerprint shown in Google
+  Play, not the app-signing certificate. Change it only after the Play Console
+  owner confirms an upload-key reset.
 - Android `versionCode` and iOS `CURRENT_PROJECT_VERSION` are synced from `package.json` by `npm run native:version:sync`.
 - Google Play publishing requires owner verification in Play Console and a Google Play Android Publisher service account secret in GitHub Actions.
 - iOS release builds require full Xcode, Apple Developer signing, a matching provisioning profile, App Store Connect access, and manual review metadata.
