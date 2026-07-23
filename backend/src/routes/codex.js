@@ -294,6 +294,15 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
     const enabled = req.body && req.body.enabled === true;
+    // Enabling starts autonomous code execution immediately. Keep the same
+    // isolation/access gate as manual runs; disabling remains available to
+    // the project owner so a previously enabled loop can always be stopped.
+    if (enabled && !canUseCodexAgent(req.user, process.env)) {
+      return res.status(403).json({
+        error: 'codex_forbidden',
+        message: 'Tu cuenta no puede ejecutar APPS en producción.',
+      });
+    }
     const proactive = require('../services/codex/proactive-engine');
     const prisma = require('../config/database');
     const out = await proactive.setProactive({ prisma, projectId: project.id, userId: req.user.id, enabled });

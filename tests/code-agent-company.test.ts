@@ -4,8 +4,12 @@ import { describe, it } from "node:test"
 import {
   agentCompanyDisplayName,
   buildAgentCompanySnapshot,
+  codeRunIsActive,
+  codeRunStatus,
   codeSessionStatus,
+  departmentIdForRun,
   departmentIdForSession,
+  type AgentCompanyRunLike,
 } from "../lib/code-agent-company"
 import type { CodeChatSession } from "../lib/code-chat-sessions"
 
@@ -79,6 +83,35 @@ describe("code agent company", () => {
     assert.equal(departmentIdForSession(root, "root"), "ceo-office")
     assert.equal(departmentIdForSession(security, "root"), "trust")
     assert.equal(departmentIdForSession(product, "root"), "product-engineering")
+  })
+
+  it("maps persisted Codex workers to departments and reports their real state", () => {
+    const running: AgentCompanyRunLike = {
+      id: "run-1",
+      status: "running",
+      prompt: "[PROACTIVO · Confianza, Privacidad y Cumplimiento] Audita el aislamiento del workspace",
+      createdAt: "2026-07-23T12:00:00.000Z",
+      startedAt: "2026-07-23T12:00:05.000Z",
+    }
+    const completed: AgentCompanyRunLike = {
+      id: "run-2",
+      status: "done",
+      prompt: "[PROACTIVO · Marketing] Prepara evidencia de la campaña",
+      createdAt: "2026-07-23T11:00:00.000Z",
+      finishedAt: "2026-07-23T11:10:00.000Z",
+    }
+
+    assert.equal(departmentIdForRun(running), "trust")
+    assert.equal(departmentIdForRun(completed), "marketing")
+    assert.equal(codeRunIsActive(running), true)
+    assert.equal(codeRunIsActive(completed), false)
+    assert.deepEqual(codeRunStatus(running), { label: "Ejecutando", tone: "active" })
+    assert.deepEqual(codeRunStatus(completed), { label: "Evidencia lista", tone: "ready" })
+
+    const snapshot = buildAgentCompanySnapshot([session()], {}, [running, completed])
+    assert.equal(snapshot.activeAgents, 1)
+    assert.equal(snapshot.taskCount, 2)
+    assert.equal(snapshot.latestActivityAt, Date.parse("2026-07-23T12:00:05.000Z"))
   })
 
   it("prefers an explicit CEO Office session over an older generic session", () => {
