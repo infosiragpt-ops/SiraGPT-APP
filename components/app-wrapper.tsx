@@ -81,7 +81,13 @@ export function AppWrapper({ children }: AppWrapperProps) {
             <ChatProvider>
               <ProviderGuard label="ArtifactPanel">
                 <ArtifactPanelProvider>
-                  <SidebarProvider>
+                  <SidebarProvider
+                    style={
+                      pathname?.startsWith("/code")
+                        ? ({ "--sidebar-width": "22rem" } as React.CSSProperties)
+                        : undefined
+                    }
+                  >
                     <AppShell>
                       {children}
                     </AppShell>
@@ -97,7 +103,13 @@ export function AppWrapper({ children }: AppWrapperProps) {
 
   // For pages that only need sidebar
   return (
-    <SidebarProvider>
+    <SidebarProvider
+      style={
+        pathname?.startsWith("/code")
+          ? ({ "--sidebar-width": "22rem" } as React.CSSProperties)
+          : undefined
+      }
+    >
       <AppShell>
         {children}
       </AppShell>

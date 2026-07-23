@@ -10,8 +10,6 @@
 
 import * as React from "react"
 import { Command as CommandIcon, Plus } from "lucide-react"
-import { type ImperativePanelHandle } from "react-resizable-panels"
-
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -53,8 +51,6 @@ import { TerminalPanel } from "./terminal-panel"
 import { ToolScreen } from "./tool-screen"
 import { WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
 
-const CHAT_DEFAULT_SIZE = 30
-const CHAT_MIN_SIZE = 22
 const TERMINAL_DEFAULT_SIZE = 32
 const TERMINAL_MIN_SIZE = 14
 const PENDING_CODE_TOOL_KEY = "code-workspace:pending-tool"
@@ -99,8 +95,6 @@ export function CodeWorkspace() {
   // time with a bottom toggle (Agente ↔ Preview) — the Replit/bolt mobile pattern.
   const isMobile = useIsMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
-
-  const chatRef = React.useRef<ImperativePanelHandle>(null)
 
   React.useEffect(() => {
     try {
@@ -166,25 +160,20 @@ export function CodeWorkspace() {
   const openComposer = React.useCallback(() => {
     setChatOpen(true)
     setMobileView("chat")
-    chatRef.current?.expand()
     focusChat()
     window.dispatchEvent(new CustomEvent("siragpt:code-composer-mode"))
   }, [focusChat])
 
-  // Replit-style sidebar toggle: collapse/expand the agent chat column on
-  // desktop; on mobile flip between the chat and preview views.
+  // Mobile: flip Empresa ↔ Preview. Desktop: the company panel lives in the
+  // APPS sidebar rail, so "toggle chat" focuses the composer there.
   const toggleChat = React.useCallback(() => {
     if (isMobile) {
       setMobileView((view) => (view === "chat" ? "preview" : "chat"))
       return
     }
-    if (chatOpen) {
-      chatRef.current?.collapse()
-    } else {
-      chatRef.current?.expand()
-      focusChat()
-    }
-  }, [chatOpen, focusChat, isMobile])
+    setChatOpen(true)
+    focusChat()
+  }, [focusChat, isMobile])
 
   const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
     const ids = new Set<WorkspaceToolId>()
@@ -236,7 +225,6 @@ export function CodeWorkspace() {
       if (id === "agent") {
         setChatOpen(true)
         setMobileView("chat")
-        chatRef.current?.expand()
         focusChat()
         return
       }
@@ -356,7 +344,6 @@ export function CodeWorkspace() {
       if (key === "l") {
         event.preventDefault()
         setChatOpen(true)
-        chatRef.current?.expand()
         focusChat()
         return
       }
@@ -406,7 +393,6 @@ export function CodeWorkspace() {
         hint: "Cmd K",
         run: () => {
           setChatOpen(true)
-          chatRef.current?.expand()
           focusChat()
         },
       },
@@ -417,7 +403,6 @@ export function CodeWorkspace() {
         hint: "Cmd L",
         run: () => {
           setChatOpen(true)
-          chatRef.current?.expand()
           focusChat()
         },
       },
@@ -611,28 +596,13 @@ export function CodeWorkspace() {
             )
           }
 
-          // ── Desktop: the original side-by-side resizable split ──
+          // ── Desktop: company panel docks into the APPS sidebar rail;
+          // the workspace itself is the Preview/Shell/Files surface only.
           return (
-            <ResizablePanelGroup direction="horizontal" className="h-full">
-              <ResizablePanel
-                ref={chatRef}
-                collapsible
-                collapsedSize={0}
-                defaultSize={CHAT_DEFAULT_SIZE}
-                minSize={CHAT_MIN_SIZE}
-                maxSize={50}
-                onCollapse={() => setChatOpen(false)}
-                onExpand={() => setChatOpen(true)}
-                className="min-w-0"
-              >
-                <MemoAgentCompanyPanel />
-              </ResizablePanel>
-              <ResizableHandle withHandle />
-
-              <ResizablePanel defaultSize={70} minSize={32} className="relative min-w-0">
-                {mainArea}
-              </ResizablePanel>
-            </ResizablePanelGroup>
+            <>
+              <MemoAgentCompanyPanel />
+              <div className="relative h-full min-h-0 min-w-0">{mainArea}</div>
+            </>
           )
         })()}
       </div>

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { createPortal } from "react-dom"
 import {
   ArrowLeft,
   Bot,
@@ -36,6 +37,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
   AGENT_COMPANY_DEPARTMENTS,
   agentCompanyDisplayName,
@@ -151,6 +154,8 @@ function companyWorkspaceCandidates(option: CompanyOption): string[] {
 
 export function AgentCompanyPanel() {
   const { user } = useAuth()
+  const isMobile = useIsMobile()
+  const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
   const {
     files,
     activeFolder,
@@ -175,6 +180,9 @@ export function AgentCompanyPanel() {
   const [newDepartmentOpen, setNewDepartmentOpen] = React.useState(false)
   const [newDepartmentName, setNewDepartmentName] = React.useState("")
   const [customDepartments, setCustomDepartments] = React.useState<CustomDepartment[]>([])
+
+  React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
+  const dockedInAppsRail = !isMobile && Boolean(dockSlot)
 
   const snapshot = React.useMemo(
     () => buildAgentCompanySnapshot(codeChatSessions, files),
@@ -355,8 +363,14 @@ export function AgentCompanyPanel() {
       ? undefined
       : "allow-scripts allow-forms allow-popups allow-modals"
 
-  return (
-    <div className="relative h-full min-h-0 overflow-hidden border-r border-border/50 bg-background text-foreground">
+  const panel = (
+    <div
+      className={cn(
+        "relative h-full min-h-0 overflow-hidden bg-background text-foreground",
+        !dockedInAppsRail && "border-r border-border/50",
+      )}
+      data-agent-company-dock={dockedInAppsRail ? "apps" : "workspace"}
+    >
       <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
         <AICodeChatPanel embedded title="CEO Office" onBack={() => setView("home")} />
       </div>
@@ -501,6 +515,7 @@ export function AgentCompanyPanel() {
             }}
             onAddDepartment={() => setNewDepartmentOpen(true)}
             user={user}
+            hideFooter={dockedInAppsRail}
           />
         ) : view === "dashboard" ? (
           <DashboardView
@@ -598,6 +613,15 @@ export function AgentCompanyPanel() {
       </Dialog>
     </div>
   )
+
+  // Desktop: dock into the APPS rail (beside Agente 1 / Chats↔Code toggle).
+  // Mobile keeps the in-workspace panel (bottom Empresa ↔ Preview toggle).
+  if (dockedInAppsRail && dockSlot) {
+    return createPortal(panel, dockSlot)
+  }
+  // Waiting for the Apps slot on desktop — avoid a second left column flash.
+  if (!isMobile) return null
+  return panel
 }
 
 function CompanyHome({
@@ -615,6 +639,7 @@ function CompanyHome({
   onOpenDepartment,
   onAddDepartment,
   user,
+  hideFooter = false,
 }: {
   companyName: string
   previewState: CodePreviewState
@@ -635,6 +660,7 @@ function CompanyHome({
   onOpenDepartment: (departmentId: string) => void
   onAddDepartment: () => void
   user: ReturnType<typeof useAuth>["user"]
+  hideFooter?: boolean
 }) {
   return (
     <>
@@ -736,17 +762,19 @@ function CompanyHome({
         </div>
       </div>
 
-      <footer className="flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3">
-        <Avatar className="h-8 w-8 border border-border/60">
-          <AvatarImage src={user?.avatar || undefined} alt="" />
-          <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
-        </Avatar>
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
-        <span className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-muted/35 px-3 text-[11px] font-semibold text-foreground/75">
-          <Radio className={cn("h-3.5 w-3.5", snapshot.activeAgents > 0 ? "text-sky-500" : "text-muted-foreground")} />
-          {snapshot.activeAgents > 0 ? "EN EJECUCIÓN" : "PROACTIVO"}
-        </span>
-      </footer>
+      {hideFooter ? null : (
+        <footer className="flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3">
+          <Avatar className="h-8 w-8 border border-border/60">
+            <AvatarImage src={user?.avatar || undefined} alt="" />
+            <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
+          </Avatar>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
+          <span className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-muted/35 px-3 text-[11px] font-semibold text-foreground/75">
+            <Radio className={cn("h-3.5 w-3.5", snapshot.activeAgents > 0 ? "text-sky-500" : "text-muted-foreground")} />
+            {snapshot.activeAgents > 0 ? "EN EJECUCIÓN" : "PROACTIVO"}
+          </span>
+        </footer>
+      )}
     </>
   )
 }
