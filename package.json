@@ -231,7 +231,7 @@
     "multer": "^2.2.0",
     "negotiator": "^1.0.0",
     "next": "15.5.21",
-    "next-auth": "^4.24.11",
+    "next-auth": "^4.24.15",
     "next-intl": "^4.9.1",
     "next-themes": "latest",
     "node-fetch": "^3.3.2",
