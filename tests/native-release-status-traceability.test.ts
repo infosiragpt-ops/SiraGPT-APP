@@ -91,6 +91,12 @@ type NativeReleaseStatus = {
       size: number
       sha256: string
     }
+    apk: {
+      name: string
+      kind: string
+      size: number
+      sha256: string
+    }
     releaseAssets: string[]
     verification: string
   }
@@ -146,14 +152,19 @@ describe("native release status traceability", () => {
     assert.match(status.latestSignedAndroidRelease.run, /^\d+$/)
     assert.match(status.latestSignedAndroidRelease.runUrl, /\/actions\/runs\/\d+$/)
     assert.match(status.latestSignedAndroidRelease.sourceSha, /^[a-f0-9]{40}$/)
-    assert.equal(status.latestSignedAndroidRelease.status, "verified-signed-android-aab")
+    assert.equal(status.latestSignedAndroidRelease.status, "verified-signed-android-apk-and-aab")
     assert.equal(status.latestSignedAndroidRelease.createGithubRelease, true)
     assert.equal(status.latestSignedAndroidRelease.googlePlayUpload, "skipped-owner-service-account-missing")
     assert.equal(status.latestSignedAndroidRelease.aab.name, `SiraGPT-${signedAndroidShortSha}.aab`)
     assert.equal(status.latestSignedAndroidRelease.aab.kind, "play-aab")
     assert.ok(status.latestSignedAndroidRelease.aab.size > 0)
     assert.match(status.latestSignedAndroidRelease.aab.sha256, /^[a-f0-9]{64}$/)
+    assert.equal(status.latestSignedAndroidRelease.apk.name, `SiraGPT-${signedAndroidShortSha}.apk`)
+    assert.equal(status.latestSignedAndroidRelease.apk.kind, "release-apk")
+    assert.ok(status.latestSignedAndroidRelease.apk.size > 0)
+    assert.match(status.latestSignedAndroidRelease.apk.sha256, /^[a-f0-9]{64}$/)
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes(status.latestSignedAndroidRelease.aab.name))
+    assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes(status.latestSignedAndroidRelease.apk.name))
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("SHA256SUMS.txt"))
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("native-release-manifest.json"))
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("preflight.json"))
@@ -225,6 +236,11 @@ describe("native release status traceability", () => {
     assert.ok(
       status.latestCurrentProductionValidation.platforms.ios.expectedFiles.includes(
         `SiraGPT-${currentWrapperShortSha}-ios-simulator-app.zip`,
+      ),
+    )
+    assert.ok(
+      status.latestCurrentProductionValidation.platforms.ios.expectedFiles.includes(
+        `SiraGPT-${currentWrapperShortSha}-ios-device-build.json`,
       ),
     )
 
