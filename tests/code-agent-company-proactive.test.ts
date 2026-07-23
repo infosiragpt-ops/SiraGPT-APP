@@ -40,4 +40,11 @@ describe("code agent company proactive", () => {
     assert.match(block, /matrix\.build-style/)
     setProactiveCompanyEnabled(false, { workspaceId: "ws-1" })
   })
+
+  it("preserves the start time while backend polling confirms the same run", () => {
+    const first = setProactiveCompanyEnabled(true, { workspaceId: "ws-stable" })
+    const second = setProactiveCompanyEnabled(true, { workspaceId: "ws-stable" })
+    assert.equal(second.startedAt, first.startedAt)
+    setProactiveCompanyEnabled(false, { workspaceId: "ws-stable" })
+  })
 })

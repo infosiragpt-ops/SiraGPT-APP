@@ -242,8 +242,11 @@ function saveStore(store: SessionStore) {
           /* noop */
         }
       }
-      if (typeof queueMicrotask === "function") queueMicrotask(fire)
-      else setTimeout(fire, 0)
+      // A microtask can run before React commits a concurrent render. That is
+      // still re-entrant when saveStore is reached from a state updater and can
+      // keep a fresh workspace in an endless render/restart cycle. A task runs
+      // after the current React work has yielded and committed.
+      window.setTimeout(fire, 0)
     }
   } catch {
     /* quota */
@@ -271,6 +274,10 @@ export function getActiveSessionId(workspaceId: string, store = loadStore()): st
   return first?.id ?? null
 }
 
+export function createCodeChatSessionId(): string {
+  return `code-chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+}
+
 export function ensureDefaultSession(workspaceId: string, store = loadStore()): SessionStore {
   const key = codexWorkspaceSessionKey(workspaceId)
   const existing = listSessionsForWorkspace(key, store)
@@ -283,7 +290,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
     }
   }
   const session: CodeChatSession = {
-    id: `code-chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: createCodeChatSessionId(),
     workspaceId: key,
     title: "Agente 1",
     turns: [],
@@ -301,14 +308,14 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
 
 export function createCodeChatSession(
   workspaceId: string,
-  opts?: { title?: string },
+  opts?: { title?: string; id?: string },
   store = loadStore(),
 ): { store: SessionStore; session: CodeChatSession } {
   const key = codexWorkspaceSessionKey(workspaceId)
   const ensured = ensureDefaultSession(key, store)
   const count = listSessionsForWorkspace(key, ensured).length
   const session: CodeChatSession = {
-    id: `code-chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: opts?.id || createCodeChatSessionId(),
     workspaceId: key,
     title: opts?.title?.trim() || `Agente ${count + 1}`,
     turns: [],

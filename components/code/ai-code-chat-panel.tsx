@@ -93,7 +93,6 @@ import {
   buildProactiveCompanySystemBlock,
   getProactiveCompanyState,
   setProactiveCompanyObjective,
-  subscribeProactiveCompany,
 } from "@/lib/code-agent-company-proactive"
 import { CODE_OPEN_TOOL_LAUNCHER_EVENT, setActiveCodexProject, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
@@ -959,9 +958,10 @@ export type AICodeChatPanelProps = {
   embedded?: boolean
   title?: string
   onBack?: () => void
+  proactive?: boolean
 }
 
-export function AICodeChatPanel({ embedded = false, title, onBack }: AICodeChatPanelProps = {}) {
+export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -1006,16 +1006,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack }: AICodeChatP
   const [codeDraggingFiles, setCodeDraggingFiles] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [buildingApp, setBuildingApp] = React.useState(false)
-  const [proactiveEnabled, setProactiveEnabled] = React.useState(
-    () => getProactiveCompanyState().enabled,
-  )
-  React.useEffect(
-    () =>
-      subscribeProactiveCompany((next) => {
-        setProactiveEnabled(next.enabled)
-      }),
-    [],
-  )
+  const proactiveEnabled = proactive ?? getProactiveCompanyState().enabled
   const agentsActive =
     busy ||
     buildingApp ||

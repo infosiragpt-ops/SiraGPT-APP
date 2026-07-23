@@ -116,10 +116,12 @@ export function setProactiveCompanyEnabled(
   enabled: boolean,
   opts: { workspaceId?: string | null; objective?: string | null } = {},
 ): ProactiveCompanyState {
+  const nextWorkspaceId = opts.workspaceId !== undefined ? opts.workspaceId : state.workspaceId
+  const continuingSameRun = enabled && state.enabled && state.workspaceId === nextWorkspaceId
   state = {
     enabled,
-    workspaceId: opts.workspaceId !== undefined ? opts.workspaceId : state.workspaceId,
-    startedAt: enabled ? Date.now() : null,
+    workspaceId: nextWorkspaceId,
+    startedAt: enabled ? (continuingSameRun ? state.startedAt ?? Date.now() : Date.now()) : null,
     objective: enabled ? (opts.objective ?? state.objective) : null,
   }
   persist()

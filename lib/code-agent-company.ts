@@ -152,6 +152,8 @@ export function countWorkspaceResources(files: Record<string, WorkspaceFileLike>
 
 export function rootCodeSessionId(sessions: readonly CodeChatSession[]): string | null {
   if (sessions.length === 0) return null
+  const ceoOffice = sessions.find((session) => session.title.trim().toLowerCase() === "ceo office")
+  if (ceoOffice) return ceoOffice.id
   return [...sessions].sort((a, b) => a.createdAt - b.createdAt)[0]?.id ?? null
 }
 

@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import { createPortal } from "react-dom"
 import {
   ArrowLeft,
   Bot,
@@ -37,8 +36,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { useIsMobile } from "@/hooks/use-mobile"
-import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
   AGENT_COMPANY_DEPARTMENTS,
   agentCompanyDisplayName,
@@ -50,8 +47,9 @@ import {
 } from "@/lib/code-agent-company"
 import {
   buildProactiveKickoffPrompt,
+  CODE_FOCUS_CEO_CHAT_EVENT,
   departmentBootstrapTitle,
-  focusCeoChatColumn,
+  hydrateProactiveCompany,
   PROACTIVE_CORE_DEPARTMENTS,
   requestProactiveSeedPrompt,
   setProactiveCompanyEnabled,
@@ -164,8 +162,6 @@ function companyWorkspaceCandidates(option: CompanyOption): string[] {
 
 export function AgentCompanyPanel() {
   const { user } = useAuth()
-  const isMobile = useIsMobile()
-  const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
   const {
     files,
     activeFolder,
@@ -196,6 +192,9 @@ export function AgentCompanyPanel() {
 
   React.useEffect(() => {
     let alive = true
+    const hydrated = hydrateProactiveCompany(activeFolder?.id)
+    setProactiveOn(hydrated.enabled)
+
     const load = () => {
       const codexProjectId = getActiveCodexProject()
       if (!codexProjectId) return
@@ -213,11 +212,6 @@ export function AgentCompanyPanel() {
     const timer = setInterval(load, 60_000)
     return () => { alive = false; clearInterval(timer) }
   }, [activeFolder?.id])
-
-  React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
-  const dockedInAppsRail = !isMobile && Boolean(dockSlot)
-  // Desktop: chat lives in the middle /code column; company rail stays on home.
-  const chatLivesInWorkspaceColumn = dockedInAppsRail
 
   const snapshot = React.useMemo(
     () => buildAgentCompanySnapshot(codeChatSessions, files),
@@ -310,38 +304,49 @@ export function AgentCompanyPanel() {
   }, [])
 
   const openCeoOffice = React.useCallback(() => {
-    let rootSessionId = snapshot.rootSessionId
+    let rootSessionId = codeChatSessions.find(
+      (session) => session.title.trim().toLowerCase() === "ceo office",
+    )?.id
     if (!rootSessionId) rootSessionId = createCodeChatSession({ title: "CEO Office" })
     setActiveCodeChatSession(rootSessionId)
-    if (chatLivesInWorkspaceColumn) {
-      setView("home")
-      focusCeoChatColumn()
-      return
-    }
     setView("chat")
   }, [
-    chatLivesInWorkspaceColumn,
     createCodeChatSession,
+    codeChatSessions,
     setActiveCodeChatSession,
-    snapshot.rootSessionId,
   ])
+
+  React.useEffect(() => {
+    const onFocusCeo = () => openCeoOffice()
+    window.addEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+    return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+  }, [openCeoOffice])
 
   const ensureDepartmentSessions = React.useCallback(() => {
     const existingTitles = new Set(codeChatSessions.map((session) => session.title.trim().toLowerCase()))
+    let rootSessionId = codeChatSessions.find(
+      (session) => session.title.trim().toLowerCase() === "ceo office",
+    )?.id
+    if (!rootSessionId) {
+      rootSessionId = createCodeChatSession({ title: "CEO Office" })
+      existingTitles.add("ceo office")
+    }
     for (const department of PROACTIVE_CORE_DEPARTMENTS) {
+      if (department.id === "ceo-office") continue
       const title = departmentBootstrapTitle(department)
       if (existingTitles.has(title.toLowerCase())) continue
-      if (department.id === "ceo-office" && snapshot.rootSessionId) continue
       createCodeChatSession({ title })
       existingTitles.add(title.toLowerCase())
     }
-  }, [codeChatSessions, createCodeChatSession, snapshot.rootSessionId])
+    return rootSessionId
+  }, [codeChatSessions, createCodeChatSession])
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn
     if (next) {
-      ensureDepartmentSessions()
-      openCeoOffice()
+      const rootSessionId = ensureDepartmentSessions()
+      setActiveCodeChatSession(rootSessionId)
+      setView("chat")
       setProactiveCompanyEnabled(true, { workspaceId: activeFolder?.id || null })
       window.setTimeout(
         () => requestProactiveSeedPrompt(buildProactiveKickoffPrompt(companyName)),
@@ -381,8 +386,8 @@ export function AgentCompanyPanel() {
     activeFolder?.id,
     companyName,
     ensureDepartmentSessions,
-    openCeoOffice,
     proactiveOn,
+    setActiveCodeChatSession,
   ])
 
   const selectCompany = React.useCallback(
@@ -469,23 +474,23 @@ export function AgentCompanyPanel() {
 
   const panel = (
     <div
-      className={cn(
-        "relative h-full min-h-0 overflow-hidden bg-background text-foreground",
-        !dockedInAppsRail && "border-r border-border/50",
-      )}
-      data-agent-company-dock={dockedInAppsRail ? "apps" : "workspace"}
+      className="relative h-full min-h-0 overflow-hidden border-r border-border/50 bg-background text-foreground"
+      data-agent-company-dock="workspace"
       data-proactive={proactiveOn ? "on" : "off"}
     >
-      {!chatLivesInWorkspaceColumn ? (
-        <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
-          <AICodeChatPanel embedded title="CEO Office" onBack={() => setView("home")} />
-        </div>
-      ) : null}
+      <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
+        <AICodeChatPanel
+          embedded
+          title="CEO Office"
+          onBack={() => setView("home")}
+          proactive={proactiveOn}
+        />
+      </div>
 
       <div
         className={cn(
           "flex h-full min-h-0 flex-col",
-          !chatLivesInWorkspaceColumn && view === "chat" && "invisible pointer-events-none",
+          view === "chat" && "invisible pointer-events-none",
         )}
       >
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/55 px-3">
@@ -516,7 +521,7 @@ export function AgentCompanyPanel() {
             <PopoverContent
               align="start"
               sideOffset={8}
-              className="w-[min(360px,calc(100vw-24px))] overflow-hidden rounded-lg border-white/70 bg-background/88 p-0 shadow-[0_24px_70px_-34px_rgba(15,23,42,0.45)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/88"
+              className="w-[min(360px,calc(100vw-24px))] overflow-hidden rounded-lg border-white bg-white/95 p-0 shadow-[0_24px_70px_-34px_rgba(15,23,42,0.45)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/95"
             >
               <div className="flex items-center justify-between border-b border-border/45 px-4 py-3">
                 <span className="text-[11px] font-semibold uppercase text-muted-foreground">Empresa de agentes</span>
@@ -622,24 +627,11 @@ export function AgentCompanyPanel() {
                 openCeoOffice()
                 return
               }
-              if (chatLivesInWorkspaceColumn && proactiveOn) {
-                const row = departmentRows.find((entry) => entry.department.id === departmentId)
-                const title = departmentBootstrapTitle(
-                  row?.department ||
-                    AGENT_COMPANY_DEPARTMENTS.find((department) => department.id === departmentId) ||
-                    AGENT_COMPANY_DEPARTMENTS[0],
-                )
-                const sessionId = row?.sessions[0]?.id || createCodeChatSession({ title })
-                setActiveCodeChatSession(sessionId)
-                focusCeoChatColumn()
-                return
-              }
               setSelectedDepartmentId(departmentId)
               setView("department")
             }}
             onAddDepartment={() => setNewDepartmentOpen(true)}
             user={user}
-            hideFooter={dockedInAppsRail}
             proactiveOn={proactiveOn}
             proactiveBusy={proactiveBusy}
             onToggleProactive={() => void toggleProactive()}
@@ -741,13 +733,6 @@ export function AgentCompanyPanel() {
     </div>
   )
 
-  // Desktop: dock into the APPS rail (beside Agente 1 / Chats↔Code toggle).
-  // Mobile keeps the in-workspace panel (bottom Empresa ↔ Preview toggle).
-  if (dockedInAppsRail && dockSlot) {
-    return createPortal(panel, dockSlot)
-  }
-  // Waiting for the Apps slot on desktop — avoid a second left column flash.
-  if (!isMobile) return null
   return panel
 }
 
@@ -766,7 +751,6 @@ function CompanyHome({
   onOpenDepartment,
   onAddDepartment,
   user,
-  hideFooter = false,
   proactiveOn,
   proactiveBusy,
   onToggleProactive,
@@ -790,7 +774,6 @@ function CompanyHome({
   onOpenDepartment: (departmentId: string) => void
   onAddDepartment: () => void
   user: ReturnType<typeof useAuth>["user"]
-  hideFooter?: boolean
   proactiveOn: boolean
   proactiveBusy: boolean
   onToggleProactive: () => void
@@ -896,20 +879,13 @@ function CompanyHome({
       </div>
 
       <footer
-        className={cn(
-          "flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3",
-          hideFooter && "justify-end",
-        )}
+        className="flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3"
       >
-        {hideFooter ? null : (
-          <>
-            <Avatar className="h-8 w-8 border border-border/60">
-              <AvatarImage src={user?.avatar || undefined} alt="" />
-              <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
-            </Avatar>
-            <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
-          </>
-        )}
+        <Avatar className="h-8 w-8 border border-border/60">
+          <AvatarImage src={user?.avatar || undefined} alt="" />
+          <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
+        </Avatar>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
         <button
           type="button"
           onClick={onToggleProactive}

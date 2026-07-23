@@ -81,6 +81,12 @@ describe("code agent company", () => {
     assert.equal(departmentIdForSession(product, "root"), "product-engineering")
   })
 
+  it("prefers an explicit CEO Office session over an older generic session", () => {
+    const generic = session({ id: "generic", title: "Agente 1", createdAt: 1 })
+    const ceo = session({ id: "ceo", title: "CEO Office", createdAt: 2 })
+    assert.equal(buildAgentCompanySnapshot([generic, ceo], {}).rootSessionId, "ceo")
+  })
+
   it("reports streaming and completed phases honestly", () => {
     assert.deepEqual(
       codeSessionStatus(session({ turns: [{ id: "a", role: "assistant", content: "", streaming: true }] })),
