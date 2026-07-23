@@ -107,6 +107,16 @@ runtime identity, a read-only root filesystem and resource caps under systrap.
 It does not install or configure anything on the production VPS; host rollout
 still requires staging, a maintenance window and explicit rollback.
 
+The feature-gated `runsc-workspace` foundation now adds one real systrap
+container, named volume and internal network per workspace behind an
+authenticated controller that alone holds the Docker socket. It revalidates
+container, network and volume state from Docker inspect on every lifecycle
+operation and garbage-collects labeled orphans after restart. It remains
+non-public and secretless, and its file/preview gateways, egress policy,
+disk/inode quota and PostgreSQL lease delivery are intentionally unavailable.
+See `docs/runsc-sandbox-provider.md` for its exact boundary and activation
+blockers.
+
 ## PostgreSQL contract
 
 The Sira control database and user-created application databases are separate

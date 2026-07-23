@@ -15,6 +15,7 @@ const {
 } = require('./sandbox-providers/contract');
 const { createSandboxProviderRegistry } = require('./sandbox-providers/registry');
 const { createSharedRunnerProvider } = require('./sandbox-providers/shared-runner-provider');
+const { createRunscSandboxProvider } = require('./sandbox-providers/runsc-sandbox-provider');
 
 const DEFAULT_PROVIDER_ID = 'shared-runner';
 
@@ -56,12 +57,15 @@ function createSandboxRuntime({ env = process.env, registry } = {}) {
   return Object.freeze(runtime);
 }
 
-function createDefaultRegistry() {
-  return createSandboxProviderRegistry([createSharedRunnerProvider()]);
+function createDefaultRegistry(env = process.env) {
+  return createSandboxProviderRegistry([
+    createSharedRunnerProvider(),
+    createRunscSandboxProvider({ env }),
+  ]);
 }
 
 // Security-sensitive boot singleton. Do not rebuild this from request env.
-const bootRegistry = createDefaultRegistry();
+const bootRegistry = createDefaultRegistry(process.env);
 const bootRuntime = createSandboxRuntime({ env: process.env, registry: bootRegistry });
 
 function getSandboxRuntime() {

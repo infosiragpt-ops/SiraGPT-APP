@@ -357,6 +357,13 @@ services:
       # interim shared runner. An env isolation label alone cannot open access.
       CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-false}
       CODEX_SANDBOX_PROVIDER: ${CODEX_SANDBOX_PROVIDER:-shared-runner}
+      # P1 runsc provider foundation. It is fail-closed and disabled by
+      # default; selecting it without all controller credentials blocks boot.
+      CODEX_RUNSC_SANDBOX_ENABLED: ${CODEX_RUNSC_SANDBOX_ENABLED:-false}
+      CODEX_RUNSC_CONTROLLER_URL: ${CODEX_RUNSC_CONTROLLER_URL:-http://runsc-sandbox-controller:4098}
+      CODEX_RUNSC_CONTROLLER_TOKEN: "${RUNSC_SANDBOX_CONTROLLER_TOKEN:-}"
+      CODEX_RUNSC_WORKSPACE_KEY: "${CODEX_RUNSC_WORKSPACE_KEY:-}"
+      CODEX_RUNSC_EXEC_TIMEOUT_MS: "${RUNSC_SANDBOX_EXEC_TIMEOUT_MS:-600000}"
       # Kept for operational visibility/backward compatibility only. Access
       # policy trusts the provider attestation, never this string.
       CODEX_RUNNER_ISOLATION_MODE: ${CODEX_RUNNER_ISOLATION_MODE:-shared-container}
@@ -423,6 +430,7 @@ services:
     networks:
       - default
       - runner_control
+      - sandbox_controller
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health/live"]
       interval: 15s
@@ -491,6 +499,65 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Optional runsc Sandbox Controller ────────────────────
+  # The only component allowed to hold the Docker socket. It is profile-gated
+  # and the backend never receives this mount. Every generated workload gets a
+  # separate runsc container, named volume, and internal Docker network.
+  runsc-sandbox-controller:
+    profiles: ["runsc-sandbox"]
+    build:
+      context: ./scripts
+      dockerfile: runsc-sandbox-controller.Dockerfile
+    image: siragpt-runsc-controller:0.1.0
+    restart: unless-stopped
+    user: "65532:65532"
+    group_add:
+      - "${DOCKER_SOCKET_GID:-999}"
+    environment:
+      NODE_ENV: production
+      RUNSC_SANDBOX_CONTROLLER_TOKEN: "${RUNSC_SANDBOX_CONTROLLER_TOKEN:-}"
+      RUNSC_SANDBOX_RUNTIME: runsc-systrap
+      # Required immutable sha256 image id; the controller fails closed if absent.
+      RUNSC_SANDBOX_WORKER_IMAGE: "${RUNSC_SANDBOX_WORKER_IMAGE:-}"
+      RUNSC_SANDBOX_STATE_DIR: /var/lib/sira-runsc-controller
+      RUNSC_SANDBOX_CONTROLLER_PORT: "4098"
+      RUNSC_SANDBOX_MEMORY_BYTES: "${RUNSC_SANDBOX_MEMORY_BYTES:-4294967296}"
+      RUNSC_SANDBOX_NANO_CPUS: "${RUNSC_SANDBOX_NANO_CPUS:-2000000000}"
+      RUNSC_SANDBOX_PIDS_LIMIT: "${RUNSC_SANDBOX_PIDS_LIMIT:-256}"
+      RUNSC_SANDBOX_MAX_ACTIVE: "${RUNSC_SANDBOX_MAX_ACTIVE:-2}"
+      RUNSC_SANDBOX_TTL_MS: "${RUNSC_SANDBOX_TTL_MS:-14400000}"
+      RUNSC_SANDBOX_MAX_TTL_MS: "${RUNSC_SANDBOX_MAX_TTL_MS:-28800000}"
+      RUNSC_SANDBOX_IDLE_TIMEOUT_MS: "${RUNSC_SANDBOX_IDLE_TIMEOUT_MS:-1800000}"
+      RUNSC_SANDBOX_EXEC_TIMEOUT_MS: "${RUNSC_SANDBOX_EXEC_TIMEOUT_MS:-600000}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - runsc_controller_state:/var/lib/sira-runsc-controller
+    ports:
+      - "127.0.0.1:4098:4098"
+    networks:
+      - sandbox_controller
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    cpus: 0.5
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4098/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 volumes:
   db_data:
     driver: local
@@ -506,6 +573,8 @@ volumes:
     driver: local
   runner_bun_cache:
     driver: local
+  runsc_controller_state:
+    driver: local
 
 networks:
   # Contains only the backend control plane and the interim runner. PostgreSQL,
@@ -513,3 +582,9 @@ networks:
   # generated code cannot resolve or connect to production data services.
   runner_control:
     driver: bridge
+  # Authenticated control-plane link only. Dynamically created sandbox
+  # networks are separate internal bridges and never include this controller,
+  # backend, PostgreSQL, Redis, runner, frontend, or Caddy.
+  sandbox_controller:
+    driver: bridge
+    internal: true

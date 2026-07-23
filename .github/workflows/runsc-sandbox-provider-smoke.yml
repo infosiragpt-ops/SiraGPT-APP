@@ -1,0 +1,174 @@
+name: runsc sandbox provider smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [production-main]
+    paths:
+      - '.github/workflows/runsc-sandbox-provider-smoke.yml'
+      - 'scripts/runsc-sandbox-*.js'
+      - 'scripts/runsc-sandbox-*.mjs'
+      - 'scripts/runsc-sandbox-*.Dockerfile'
+      - 'backend/src/services/codex/sandbox-provider.js'
+      - 'backend/src/services/codex/sandbox-providers/**'
+      - 'backend/tests/runsc-sandbox-controller.test.js'
+      - 'backend/tests/codex-runsc-sandbox-client.test.js'
+      - 'backend/tests/codex-runsc-production-contract.test.js'
+      - 'docker-compose.prod.yml'
+  push:
+    branches: [production-main]
+    paths:
+      - '.github/workflows/runsc-sandbox-provider-smoke.yml'
+      - 'scripts/runsc-sandbox-*.js'
+      - 'scripts/runsc-sandbox-*.mjs'
+      - 'scripts/runsc-sandbox-*.Dockerfile'
+      - 'backend/src/services/codex/sandbox-provider.js'
+      - 'backend/src/services/codex/sandbox-providers/**'
+      - 'backend/tests/runsc-sandbox-controller.test.js'
+      - 'backend/tests/codex-runsc-sandbox-client.test.js'
+      - 'backend/tests/codex-runsc-production-contract.test.js'
+      - 'docker-compose.prod.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runsc-sandbox-provider-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUNSC_VERSION: release-20260714.0
+  RUNSC_SHA512_X86_64: 75c092fe87d84078f06ac40937cb5207fb5a1a92511b38b4790c915801555daadc59fef33de8db4dd92e1892a6de390c8a2e390a7a3bd0e2d3731d9ed6a3a6e8
+  RUNSC_RUNTIME: runsc-systrap
+  WORKER_IMAGE: siragpt-runsc-worker:0.1.0
+  CONTROLLER_IMAGE: siragpt-runsc-controller:0.1.0
+  CONTROLLER_TOKEN: runsc-ci-controller-token-00000000000000000000000000000000
+
+jobs:
+  smoke:
+    name: controller · per-workspace runsc isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install pinned runsc systrap runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://storage.googleapis.com/gvisor/releases/release/${RUNSC_VERSION#release-}/x86_64/runsc"
+          curl --proto '=https' --tlsv1.2 -fsSLo /tmp/runsc "${url}"
+          echo "${RUNSC_SHA512_X86_64}  /tmp/runsc" | sha512sum -c -
+          sudo install -o root -g root -m 0755 /tmp/runsc /usr/local/bin/runsc
+
+          source_json="$(mktemp)"
+          target_json="$(mktemp)"
+          if sudo test -s /etc/docker/daemon.json; then
+            sudo cat /etc/docker/daemon.json > "${source_json}"
+          else
+            printf '{}\n' > "${source_json}"
+          fi
+          jq --arg runtime "${RUNSC_RUNTIME}" '
+            .runtimes = (.runtimes // {})
+            | .runtimes[$runtime] = {
+                "path": "/usr/local/bin/runsc",
+                "runtimeArgs": ["--platform=systrap", "--network=sandbox"]
+              }
+          ' "${source_json}" > "${target_json}"
+          sudo install -o root -g root -m 0644 "${target_json}" /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | jq -e --arg runtime "${RUNSC_RUNTIME}" '
+            .[$runtime].path == "/usr/local/bin/runsc"
+            and .[$runtime].runtimeArgs == ["--platform=systrap", "--network=sandbox"]
+          '
+
+      - name: Build pinned worker and controller images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --file scripts/runsc-sandbox-worker.Dockerfile --tag "${WORKER_IMAGE}" scripts
+          docker build --file scripts/runsc-sandbox-controller.Dockerfile --tag "${CONTROLLER_IMAGE}" scripts
+          worker_image_id="$(docker image inspect "${WORKER_IMAGE}" --format '{{.Id}}')"
+          [[ "${worker_image_id}" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "WORKER_IMAGE_ID=${worker_image_id}" >> "${GITHUB_ENV}"
+
+      - name: Start the only Docker-socket controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          socket_gid="$(stat -c '%g' /var/run/docker.sock)"
+          docker volume create sira-runsc-controller-state-smoke >/dev/null
+          docker run --detach \
+            --name sira-runsc-controller-smoke \
+            --user 65532:65532 \
+            --group-add "${socket_gid}" \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 64 \
+            --cpus 0.5 \
+            --memory 256m \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+            --publish 127.0.0.1:4098:4098 \
+            --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock,readonly \
+            --mount type=volume,src=sira-runsc-controller-state-smoke,dst=/var/lib/sira-runsc-controller \
+            --env RUNSC_SANDBOX_CONTROLLER_TOKEN="${CONTROLLER_TOKEN}" \
+            --env RUNSC_SANDBOX_RUNTIME="${RUNSC_RUNTIME}" \
+            --env RUNSC_SANDBOX_WORKER_IMAGE="${WORKER_IMAGE_ID}" \
+            --env RUNSC_SANDBOX_MEMORY_BYTES=268435456 \
+            --env RUNSC_SANDBOX_NANO_CPUS=1000000000 \
+            --env RUNSC_SANDBOX_PIDS_LIMIT=64 \
+            --env RUNSC_SANDBOX_MAX_ACTIVE=3 \
+            --env RUNSC_SANDBOX_TTL_MS=600000 \
+            --env RUNSC_SANDBOX_MAX_TTL_MS=600000 \
+            --env RUNSC_SANDBOX_IDLE_TIMEOUT_MS=300000 \
+            --env RUNSC_SANDBOX_EXEC_TIMEOUT_MS=20000 \
+            "${CONTROLLER_IMAGE}"
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4098/health | jq -e '.ok == true' >/dev/null; then
+              exit 0
+            fi
+            if ! docker inspect sira-runsc-controller-smoke --format '{{.State.Running}}' | grep -qx true; then
+              docker logs sira-runsc-controller-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs sira-runsc-controller-smoke
+          exit 1
+
+      - name: Exercise isolation, limits, leases, and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNSC_SMOKE_CONTROLLER_TOKEN="${CONTROLLER_TOKEN}" \
+            node scripts/runsc-sandbox-controller-smoke.mjs
+
+          test -z "$(docker ps -aq --filter label=com.siragpt.runsc-sandbox.managed=true)"
+          test -z "$(docker network ls -q --filter label=com.siragpt.runsc-sandbox.managed=true)"
+          test -z "$(docker volume ls -q --filter label=com.siragpt.runsc-sandbox.managed=true)"
+
+          docker inspect sira-runsc-controller-smoke | jq -e '
+            .[0].Config.User == "65532:65532"
+            and .[0].HostConfig.ReadonlyRootfs == true
+            and (.[0].HostConfig.CapDrop | index("ALL") != null)
+            and (.[0].HostConfig.SecurityOpt | index("no-new-privileges:true") != null)
+            and any(.[0].Mounts[];
+              .Source == "/var/run/docker.sock"
+              and .Destination == "/var/run/docker.sock"
+              and .RW == false
+            )
+          '
+
+      - name: Cleanup ephemeral provider resources
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker ps -aq --filter label=com.siragpt.runsc-sandbox.managed=true | xargs -r docker rm --force
+          docker network ls -q --filter label=com.siragpt.runsc-sandbox.managed=true | xargs -r docker network rm
+          docker volume ls -q --filter label=com.siragpt.runsc-sandbox.managed=true | xargs -r docker volume rm --force
+          docker rm --force sira-runsc-controller-smoke 2>/dev/null || true
+          docker volume rm --force sira-runsc-controller-state-smoke 2>/dev/null || true
