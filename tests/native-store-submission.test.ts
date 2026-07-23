@@ -33,6 +33,8 @@ describe("native store submission material", () => {
       "android-network-policy",
       "windows-store-appx-config",
       "windows-store-appx-assets",
+      "review-access-boundary",
+      "submission-questionnaires",
     ]) {
       assert.equal(report.checks.find((check) => check.id === id)?.status, "ready", id)
     }
@@ -65,6 +67,8 @@ describe("native store submission material", () => {
         join(outDir, "macos", "en-US", "release-notes.txt"),
         join(outDir, "windows", "es-PE", "features.txt"),
         join(outDir, "windows", "en-US", "short-description.txt"),
+        join(outDir, "review-access.json"),
+        join(outDir, "submission-questionnaires.json"),
       ]) {
         assert.ok(existsSync(file), `missing ${file}`)
         assert.ok(readFileSync(file, "utf8").trim().length > 0, `empty ${file}`)

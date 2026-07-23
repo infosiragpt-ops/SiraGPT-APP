@@ -110,18 +110,74 @@ jobs:
           grep -q 'android:usesCleartextTraffic="false"' "$release_manifest"
           grep -q 'android:usesCleartextTraffic="true"' "$debug_manifest"
 
+      - name: Classify Android bundle for Google Play
+        shell: bash
+        env:
+          ANDROID_PLAY_UPLOAD_SHA1: ${{ vars.ANDROID_PLAY_UPLOAD_SHA1 }}
+        run: |
+          set -eu
+          mkdir -p output/native-qa/android
+          aab_path="$(find android/app/build/outputs/bundle/release -maxdepth 1 -type f -name '*.aab' -print -quit)"
+          blocker_report="output/native-qa/android/android-upload-certificate-blocker.json"
+          play_compatible=false
+          blocker_status="blocked-google-play-upload-certificate-unavailable"
+
+          if [ -z "$aab_path" ]; then
+            echo "Android release bundle was not generated" >&2
+            exit 1
+          fi
+
+          if [ -z "${ANDROID_PLAY_UPLOAD_SHA1:-}" ]; then
+            blocker_status="blocked-google-play-expected-upload-certificate-missing"
+          elif [ ! -f android/keystore.properties ]; then
+            blocker_status="blocked-google-play-unsigned-release-bundle"
+          elif node scripts/verify-android-upload-certificate.js \
+            --aab="$aab_path" \
+            --expected-sha1="$ANDROID_PLAY_UPLOAD_SHA1" \
+            --report="$blocker_report"; then
+            play_compatible=true
+          else
+            blocker_status="blocked-google-play-upload-certificate-mismatch"
+          fi
+
+          if [ "$play_compatible" != true ] && [ ! -f "$blocker_report" ]; then
+            BLOCKER_REPORT="$blocker_report" \
+            BLOCKER_STATUS="$blocker_status" \
+            EXPECTED_SHA1="${ANDROID_PLAY_UPLOAD_SHA1:-}" \
+            node <<'NODE'
+          const fs = require("fs")
+          const report = {
+            schemaVersion: 1,
+            status: process.env.BLOCKER_STATUS,
+            playUploadCompatible: false,
+            expectedSha1: process.env.EXPECTED_SHA1 || null,
+            actualSha1: null,
+            remediation:
+              "Configure the Google Play upload certificate fingerprint and matching upload keystore before publishing an AAB.",
+          }
+          fs.writeFileSync(process.env.BLOCKER_REPORT, `${JSON.stringify(report, null, 2)}\n`)
+          NODE
+          fi
+
+          echo "PLAY_AAB_COMPATIBLE=$play_compatible" >> "$GITHUB_ENV"
+          echo "ANDROID_RELEASE_AAB_PATH=$aab_path" >> "$GITHUB_ENV"
+
       - name: Stage Android QA artifacts with manifest
         shell: bash
         run: |
           set -eu
           short_sha="${GITHUB_SHA::7}"
-          signing_label="unsigned-release"
-          if [ -f android/keystore.properties ]; then
-            signing_label="signed-release"
-          fi
           mkdir -p output/native-qa/android
           cp android/app/build/outputs/apk/debug/*.apk "output/native-qa/android/SiraGPT-${short_sha}-debug.apk"
-          cp android/app/build/outputs/bundle/release/*.aab "output/native-qa/android/SiraGPT-${short_sha}-${signing_label}.aab"
+          if [ "$PLAY_AAB_COMPATIBLE" = true ]; then
+            cp "$ANDROID_RELEASE_AAB_PATH" "output/native-qa/android/SiraGPT-${short_sha}-play-upload.aab"
+            mv \
+              output/native-qa/android/android-upload-certificate-blocker.json \
+              output/native-qa/android/android-upload-certificate-status.json
+          else
+            test -f output/native-qa/android/android-upload-certificate-blocker.json
+            echo "Google Play AAB omitted from QA artifacts because the upload certificate gate is blocked."
+          fi
           node scripts/generate-native-release-manifest.js \
             --dir=output/native-qa \
             --out=output/native-qa/native-release-manifest.json \

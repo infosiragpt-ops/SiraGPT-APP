@@ -15,6 +15,7 @@ describe("generate-native-release-manifest", () => {
         "android/SiraGPT-play-upload.aab",
         "SiraGPT-f99a790.apk",
         "android-upload-certificate-blocker.json",
+        "android-upload-certificate-status.json",
         "ios/SiraGPT-ios-simulator-app.zip",
         "ios/SiraGPT.ipa",
         "SiraGPT-flat-ios-simulator-app.zip",
@@ -48,7 +49,7 @@ describe("generate-native-release-manifest", () => {
         artifacts: Array<{ path: string; platform: string; kind: string }>
       }
 
-      assert.equal(manifest.summary.platformCounts.android, 4)
+      assert.equal(manifest.summary.platformCounts.android, 5)
       assert.equal(manifest.summary.platformCounts.ios, 4)
       assert.equal(manifest.summary.platformCounts.macos, 3)
       assert.equal(manifest.summary.platformCounts.windows, 5)
@@ -71,6 +72,13 @@ describe("generate-native-release-manifest", () => {
       assert.ok(androidBlocker)
       assert.equal(androidBlocker.platform, "android")
       assert.equal(androidBlocker.kind, "play-upload-blocker-evidence")
+
+      const androidCertificateStatus = manifest.artifacts.find(
+        (artifact) => artifact.path === "android-upload-certificate-status.json",
+      )
+      assert.ok(androidCertificateStatus)
+      assert.equal(androidCertificateStatus.platform, "android")
+      assert.equal(androidCertificateStatus.kind, "play-upload-certificate-evidence")
 
       const iosDeviceBuild = manifest.artifacts.find((artifact) => artifact.path === "SiraGPT-flat-ios-device-build.json")
       assert.ok(iosDeviceBuild)

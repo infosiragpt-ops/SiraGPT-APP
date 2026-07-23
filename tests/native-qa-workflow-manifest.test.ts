@@ -6,9 +6,16 @@ describe("Native QA GitHub Actions artifact manifests", () => {
   it("publishes Android and iOS QA artifacts with checksum manifests", () => {
     const workflow = readFileSync(".github/workflows/native-mobile.yml", "utf8")
 
+    assert.match(workflow, /Classify Android bundle for Google Play/)
+    assert.match(workflow, /vars\.ANDROID_PLAY_UPLOAD_SHA1/)
+    assert.match(workflow, /scripts\/verify-android-upload-certificate\.js/)
+    assert.match(workflow, /android-upload-certificate-blocker\.json/)
+    assert.match(workflow, /PLAY_AAB_COMPATIBLE/)
+    assert.match(workflow, /Google Play AAB omitted from QA artifacts/)
     assert.match(workflow, /Stage Android QA artifacts with manifest/)
     assert.match(workflow, /SiraGPT-\$\{short_sha\}-debug\.apk/)
-    assert.match(workflow, /SiraGPT-\$\{short_sha\}-\$\{signing_label\}\.aab/)
+    assert.match(workflow, /SiraGPT-\$\{short_sha\}-play-upload\.aab/)
+    assert.doesNotMatch(workflow, /\$\{signing_label\}\.aab/)
     assert.match(workflow, /Build unsigned iOS device target/)
     assert.match(workflow, /destination 'generic\/platform=iOS'/)
     assert.match(workflow, /Stage iOS QA evidence with manifest/)

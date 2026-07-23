@@ -12,7 +12,12 @@ describe("generate-native-owner-handoff", () => {
       latestQaRelease: { tag: string; targetSha: string }
       latestTraceabilityCommit: { sha: string }
       latestSignedPreflight: { run: string; sourceSha: string; status: string }
-      latestSignedAndroidRelease?: { tag: string; sourceSha: string; status: string }
+      latestHistoricalSignedAndroidRelease?: {
+        tag: string
+        sourceSha: string
+        status: string
+        playUploadCompatible: boolean
+      }
       latestSecretAudit: { status: string; diagnosis: string }
       distributionMilestone: {
         title: string
@@ -34,7 +39,8 @@ describe("generate-native-owner-handoff", () => {
         status: string
         mobileRun: string
         desktopRun: string
-        platformArtifacts: Record<string, string[]>
+        workflowPlatformArtifacts: Record<string, string[]>
+        publicReleasePlatformArtifacts: Record<string, string[]>
       }
       latestVerifiedRuns: { docker?: string }
     }
@@ -68,10 +74,16 @@ describe("generate-native-owner-handoff", () => {
           status: string
           mobileRun: string
           desktopRun: string
-          platformArtifacts: Record<string, string[]>
+          workflowPlatformArtifacts: Record<string, string[]>
+          publicReleasePlatformArtifacts: Record<string, string[]>
         }
         latestSignedPreflight: { run: string; sourceSha: string; status: string }
-        latestSignedAndroidRelease?: { tag: string; sourceSha: string; status: string }
+        latestHistoricalSignedAndroidRelease?: {
+          tag: string
+          sourceSha: string
+          status: string
+          playUploadCompatible: boolean
+        }
         latestSecretAudit: { status: string; diagnosis: string }
         distributionMilestone: {
           title: string
@@ -108,21 +120,43 @@ describe("generate-native-owner-handoff", () => {
       assert.equal(handoff.latestActionsDiagnostics.allowedActions, "all")
       assert.equal(handoff.latestActionsDiagnostics.ciRun, status.latestActionsDiagnostics.ciRun)
       assert.equal(handoff.latestActionsDiagnostics.readinessRun, status.latestActionsDiagnostics.readinessRun)
-      assert.match(handoff.latestActionsDiagnostics.diagnosis, /Public repository Actions are enabled/)
+      assert.match(handoff.latestActionsDiagnostics.diagnosis, /GitHub Actions are enabled and green/)
+      assert.match(handoff.latestActionsDiagnostics.diagnosis, /certificate mismatch/)
       assert.equal(handoff.latestQaArtifactManifestRuns.status, status.latestQaArtifactManifestRuns.status)
       assert.equal(handoff.latestQaArtifactManifestRuns.mobileRun, status.latestQaArtifactManifestRuns.mobileRun)
       assert.equal(handoff.latestQaArtifactManifestRuns.desktopRun, status.latestQaArtifactManifestRuns.desktopRun)
-      assert.deepEqual(handoff.latestQaArtifactManifestRuns.platformArtifacts.android, status.latestQaArtifactManifestRuns.platformArtifacts.android)
+      assert.deepEqual(
+        handoff.latestQaArtifactManifestRuns.workflowPlatformArtifacts.android,
+        status.latestQaArtifactManifestRuns.workflowPlatformArtifacts.android,
+      )
+      assert.deepEqual(
+        handoff.latestQaArtifactManifestRuns.publicReleasePlatformArtifacts.android,
+        status.latestQaArtifactManifestRuns.publicReleasePlatformArtifacts.android,
+      )
       assert.equal(handoff.latestSignedPreflight.run, status.latestSignedPreflight.run)
       assert.equal(handoff.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
       assert.equal(handoff.latestSignedPreflight.status, status.latestSignedPreflight.status)
-      if (status.latestSignedAndroidRelease) {
-        assert.equal(handoff.latestSignedAndroidRelease?.tag, status.latestSignedAndroidRelease.tag)
-        assert.equal(handoff.latestSignedAndroidRelease?.sourceSha, status.latestSignedAndroidRelease.sourceSha)
-        assert.equal(handoff.latestSignedAndroidRelease?.status, status.latestSignedAndroidRelease.status)
+      if (status.latestHistoricalSignedAndroidRelease) {
+        assert.equal(
+          handoff.latestHistoricalSignedAndroidRelease?.tag,
+          status.latestHistoricalSignedAndroidRelease.tag,
+        )
+        assert.equal(
+          handoff.latestHistoricalSignedAndroidRelease?.sourceSha,
+          status.latestHistoricalSignedAndroidRelease.sourceSha,
+        )
+        assert.equal(
+          handoff.latestHistoricalSignedAndroidRelease?.status,
+          status.latestHistoricalSignedAndroidRelease.status,
+        )
+        assert.equal(handoff.latestHistoricalSignedAndroidRelease?.playUploadCompatible, false)
       }
       assert.equal(handoff.latestSecretAudit.status, status.latestSecretAudit.status)
-      assert.match(handoff.latestSecretAudit.diagnosis, /Android package signing|Native app signing|native signing|deployment secrets only/)
+      assert.match(
+        handoff.latestSecretAudit.diagnosis,
+        /Android package-signing|Native app signing|native signing|deployment secrets only/,
+      )
+      assert.match(handoff.latestSecretAudit.diagnosis, /not compatible with the current Google Play/)
       assert.equal(handoff.distributionMilestone.title, status.distributionMilestone.title)
       assert.equal(handoff.distributionMilestone.url, status.distributionMilestone.url)
       assert.equal(handoff.distributionMilestone.openIssues, 5)
@@ -161,7 +195,8 @@ describe("generate-native-owner-handoff", () => {
       assert.match(markdown, /Latest QA Artifact Manifest Verification/)
       assert.match(markdown, /Latest GitHub Actions Diagnostics/)
       assert.match(markdown, /Latest Signed Release Preflight/)
-      assert.match(markdown, /Latest Signed Android Release/)
+      assert.match(markdown, /Historical Signed Android Release \(Not Play-Compatible\)/)
+      assert.match(markdown, /Play upload compatible: `false`/)
       assert.match(markdown, /Latest Secret-Name Audit/)
       assert.match(markdown, /Distribution Work Queue/)
       assert.match(markdown, /Native Store Distribution v0\.4\.4/)

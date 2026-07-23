@@ -4,10 +4,19 @@ import { describe, it } from "node:test"
 
 const {
   assertSha1Match,
+  classifySha1Match,
   normalizeSha1,
   parseArgs,
 } = require(join(process.cwd(), "scripts/verify-android-upload-certificate.js")) as {
   assertSha1Match(actual: string, expected: string): string
+  classifySha1Match(actual: string, expected: string): {
+    schemaVersion: number
+    status: string
+    playUploadCompatible: boolean
+    expectedSha1: string
+    actualSha1: string
+    remediation: string | null
+  }
   normalizeSha1(value: string, label?: string): string
   parseArgs(args: string[]): Record<string, string>
 }
@@ -25,6 +34,22 @@ describe("Android Play upload certificate guard", () => {
 
   it("rejects a signing certificate that differs from Google Play", () => {
     assert.equal(assertSha1Match(fingerprint, fingerprint), fingerprint)
+    assert.deepEqual(classifySha1Match(fingerprint, fingerprint), {
+      schemaVersion: 1,
+      status: "verified-google-play-upload-certificate",
+      playUploadCompatible: true,
+      expectedSha1: fingerprint,
+      actualSha1: fingerprint,
+      remediation: null,
+    })
+
+    const mismatch = classifySha1Match(
+      fingerprint,
+      "6D:79:46:5E:D9:E6:15:58:BC:0C:B5:A0:05:52:64:78:6F:EA:C6:31",
+    )
+    assert.equal(mismatch.playUploadCompatible, false)
+    assert.equal(mismatch.status, "blocked-google-play-upload-certificate-mismatch")
+    assert.match(mismatch.remediation || "", /upload-key reset/)
     assert.throws(
       () =>
         assertSha1Match(
@@ -40,11 +65,13 @@ describe("Android Play upload certificate guard", () => {
       parseArgs([
         "--aab=output/SiraGPT.aab",
         `--expected-sha1=${fingerprint}`,
+        "--report=output/android-upload-certificate-blocker.json",
         "--ignored",
       ]),
       {
         aab: "output/SiraGPT.aab",
         "expected-sha1": fingerprint,
+        report: "output/android-upload-certificate-blocker.json",
       },
     )
   })
