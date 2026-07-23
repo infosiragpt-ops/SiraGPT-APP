@@ -152,6 +152,8 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
       "native-store-submission-packet/",
       "native-signing-templates/",
       "native-store-submission-packet.json",
+      "native-store-metadata-report.md",
+      "native-store-metadata-report.json",
       "native-store-assets-report.md",
       "native-store-assets-report.json",
       "native-owner-handoff.md",
@@ -181,11 +183,12 @@ This ZIP contains public store submission material and owner-action checklists f
 
 ## Start Here
 
-1. Open \`native-store-submission-packet/README.md\` for platform listing material.
-2. Open \`native-owner-handoff.md\` for owner actions and GitHub secret names.
-3. Open \`native-release-plan.md\` for missing signing/upload secret groups.
-4. Open \`native-signing-templates/all.env.example\` on the trusted owner machine to prepare local signing input variables.
-5. Use \`PACKET-MANIFEST.json\` to verify the packet source SHA and release references.
+1. Open \`native-store-metadata-report.md\` for localized copy and public metadata validation.
+2. Open \`native-store-submission-packet/README.md\` for platform listing material.
+3. Open \`native-owner-handoff.md\` for owner actions and GitHub secret names.
+4. Open \`native-release-plan.md\` for missing signing/upload secret groups.
+5. Open \`native-signing-templates/all.env.example\` on the trusted owner machine to prepare local signing input variables.
+6. Use \`PACKET-MANIFEST.json\` to verify the packet source SHA and release references.
 
 Status: \`${manifest.status}\`
 `
@@ -283,6 +286,10 @@ function main() {
   rm(outDir)
   mkdir(outDir)
 
+  runNpmScript("native:store:readiness", [
+    `--out=${relative(path.join(outDir, "native-store-metadata-report.md"))}`,
+    `--json-out=${relative(path.join(outDir, "native-store-metadata-report.json"))}`,
+  ])
   runNpmScript("native:store:assets", [
     "--require-ready",
     `--out=${relative(path.join(outDir, "native-store-assets-report.md"))}`,

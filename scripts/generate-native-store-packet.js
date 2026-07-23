@@ -148,11 +148,33 @@ function renderDataSafety(metadata) {
   return lines.join("\n")
 }
 
-function baseListing(metadata, platformKey) {
+function getLocalizationEntries(metadata) {
+  const copy = metadata.storeCopy || {}
+  const expectedKeys = [
+    metadata.app?.primaryLanguage,
+    ...(metadata.app?.additionalLanguages || []),
+  ].filter(Boolean)
+
+  return expectedKeys.map((localeKey) => {
+    const value = copy.localizations?.[localeKey]
+    if (!value) throw new Error(`Missing store copy localization: ${localeKey}`)
+    return { localeKey, value, primary: localeKey === copy.defaultLocale }
+  })
+}
+
+function baseListing(metadata, platformKey, localization, storeLocaleKey = platformKey) {
   const app = metadata.app
-  const copy = metadata.storeCopy
+  const copy = localization.value
+  const storeLocale = copy.storeLocales?.[storeLocaleKey]
+  if (!storeLocale) {
+    throw new Error(`Missing ${storeLocaleKey} store locale for ${localization.localeKey}`)
+  }
+
   return {
-    appName: app.name,
+    localeKey: localization.localeKey,
+    storeLocale,
+    primary: localization.primary,
+    appName: copy.appName,
     desktopProductName: app.desktopProductName,
     platform: platformKey,
     category: app.category,
@@ -167,7 +189,10 @@ function baseListing(metadata, platformKey) {
     subtitle: copy.subtitle,
     shortDescription: copy.shortDescription,
     fullDescription: copy.fullDescription,
+    promotionalText: copy.promotionalText,
+    releaseNotes: copy.releaseNotes,
     keywords: copy.keywords,
+    features: copy.features,
   }
 }
 
@@ -175,7 +200,7 @@ function platformAccountActions(metadata, platformKey) {
   return metadata.platforms?.[platformKey]?.requiredAccountActions || []
 }
 
-function renderPlatformMarkdown(title, listing, assets, actions, extraLines = []) {
+function renderPlatformMarkdown(title, listing, localizations, assets, actions, extraLines = []) {
   const lines = []
   lines.push(`# ${title}`)
   lines.push("")
@@ -185,6 +210,8 @@ function renderPlatformMarkdown(title, listing, assets, actions, extraLines = []
   lines.push("")
   lines.push(`- App name: ${listing.appName}`)
   if (listing.subtitle) lines.push(`- Subtitle: ${listing.subtitle}`)
+  lines.push(`- Primary locale: ${listing.storeLocale}`)
+  lines.push(`- Available locales: ${localizations.map((item) => item.storeLocale).join(", ")}`)
   lines.push(`- Category: ${listing.category}`)
   lines.push(`- Support URL: ${listing.supportUrl}`)
   lines.push(`- Privacy policy: ${listing.privacyPolicyUrl}`)
@@ -225,28 +252,31 @@ function writeTextBundle(baseDir, files) {
 }
 
 function createAndroidPacket(metadata, assetsManifest, outDir) {
-  const listing = {
-    ...baseListing(metadata, "android"),
+  const localizations = getLocalizationEntries(metadata).map((localization) => ({
+    ...baseListing(metadata, "android", localization, "googlePlay"),
     packageName: metadata.platforms.android.packageName,
     trackFirstTarget: metadata.platforms.android.trackFirstTarget,
     binaryType: metadata.platforms.android.binaryType,
-  }
+  }))
+  const listing = localizations.find((item) => item.primary) || localizations[0]
   const { files, missing } = collectAssetsForPlatform("android", assetsManifest)
   const platformDir = path.join(outDir, "google-play")
   const copiedAssets = copyAssets(files, path.join(platformDir, "assets"))
   const actions = platformAccountActions(metadata, "android")
 
-  writeTextBundle(path.join(platformDir, "en-US"), {
-    "title.txt": listing.appName,
-    "short-description.txt": listing.shortDescription,
-    "full-description.txt": listing.fullDescription,
-    "release-notes.txt": "Initial native release for Android with SiraGPT chat, documents, voice, search, and productivity workflows.",
-  })
+  for (const localizedListing of localizations) {
+    writeTextBundle(path.join(platformDir, localizedListing.storeLocale), {
+      "title.txt": localizedListing.appName,
+      "short-description.txt": localizedListing.shortDescription,
+      "full-description.txt": localizedListing.fullDescription,
+      "release-notes.txt": localizedListing.releaseNotes,
+    })
+  }
   writeFile(path.join(platformDir, "data-safety.md"), renderDataSafety(metadata))
-  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, actions, assets: copiedAssets }, null, 2)}\n`)
+  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, localizations, actions, assets: copiedAssets }, null, 2)}\n`)
   writeFile(
     path.join(platformDir, "README.md"),
-    renderPlatformMarkdown("Google Play Submission Packet", listing, copiedAssets, actions, [
+    renderPlatformMarkdown("Google Play Submission Packet", listing, localizations, copiedAssets, actions, [
       "## Binary",
       "",
       `- Expected binary type: \`${listing.binaryType}\``,
@@ -255,34 +285,45 @@ function createAndroidPacket(metadata, assetsManifest, outDir) {
     ]),
   )
 
-  return { platform: "android", packetPath: rel(platformDir), status: missing.length ? "blocked" : "ready", missing, assets: copiedAssets }
+  return {
+    platform: "android",
+    packetPath: rel(platformDir),
+    status: missing.length ? "blocked" : "ready",
+    missing,
+    locales: localizations.map((item) => item.storeLocale),
+    assets: copiedAssets,
+  }
 }
 
 function createIosPacket(metadata, assetsManifest, outDir) {
-  const listing = {
-    ...baseListing(metadata, "ios"),
+  const localizations = getLocalizationEntries(metadata).map((localization) => ({
+    ...baseListing(metadata, "ios", localization, "appStoreConnect"),
     bundleId: metadata.platforms.ios.bundleId,
     binaryType: metadata.platforms.ios.binaryType,
-  }
+  }))
+  const listing = localizations.find((item) => item.primary) || localizations[0]
   const { files, missing } = collectAssetsForPlatform("ios", assetsManifest)
   const platformDir = path.join(outDir, "app-store-connect")
   const copiedAssets = copyAssets(files, path.join(platformDir, "assets"))
   const actions = platformAccountActions(metadata, "ios")
 
-  writeTextBundle(path.join(platformDir, "en-US"), {
-    "name.txt": listing.appName,
-    "subtitle.txt": listing.subtitle,
-    "keywords.txt": listing.keywords.join(", "),
-    "description.txt": listing.fullDescription,
-    "promotional-text.txt": "Use SiraGPT to work with chat, documents, voice, search, and projects from one AI productivity workspace.",
-    "support-url.txt": listing.supportUrl,
-    "privacy-policy-url.txt": listing.privacyPolicyUrl,
-  })
+  for (const localizedListing of localizations) {
+    writeTextBundle(path.join(platformDir, localizedListing.storeLocale), {
+      "name.txt": localizedListing.appName,
+      "subtitle.txt": localizedListing.subtitle,
+      "keywords.txt": localizedListing.keywords.join(","),
+      "description.txt": localizedListing.fullDescription,
+      "promotional-text.txt": localizedListing.promotionalText,
+      "release-notes.txt": localizedListing.releaseNotes,
+      "support-url.txt": localizedListing.supportUrl,
+      "privacy-policy-url.txt": localizedListing.privacyPolicyUrl,
+    })
+  }
   writeFile(path.join(platformDir, "app-privacy.md"), renderDataSafety(metadata))
-  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, actions, assets: copiedAssets }, null, 2)}\n`)
+  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, localizations, actions, assets: copiedAssets }, null, 2)}\n`)
   writeFile(
     path.join(platformDir, "README.md"),
-    renderPlatformMarkdown("App Store Connect Submission Packet", listing, copiedAssets, actions, [
+    renderPlatformMarkdown("App Store Connect Submission Packet", listing, localizations, copiedAssets, actions, [
       "## Binary",
       "",
       `- Expected binary type: \`${listing.binaryType}\``,
@@ -290,24 +331,42 @@ function createIosPacket(metadata, assetsManifest, outDir) {
     ]),
   )
 
-  return { platform: "ios", packetPath: rel(platformDir), status: missing.length ? "blocked" : "ready", missing, assets: copiedAssets }
+  return {
+    platform: "ios",
+    packetPath: rel(platformDir),
+    status: missing.length ? "blocked" : "ready",
+    missing,
+    locales: localizations.map((item) => item.storeLocale),
+    assets: copiedAssets,
+  }
 }
 
 function createMacosPacket(metadata, assetsManifest, outDir) {
-  const listing = {
-    ...baseListing(metadata, "macos"),
+  const localizations = getLocalizationEntries(metadata).map((localization) => ({
+    ...baseListing(metadata, "macos", localization, "macos"),
     bundleId: metadata.platforms.macos.bundleId,
     distribution: metadata.platforms.macos.distribution,
-  }
+  }))
+  const listing = localizations.find((item) => item.primary) || localizations[0]
   const { files, missing } = collectAssetsForPlatform("macos", assetsManifest)
   const platformDir = path.join(outDir, "macos")
   const copiedAssets = copyAssets(files, path.join(platformDir, "assets"))
   const actions = platformAccountActions(metadata, "macos")
 
-  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, actions, assets: copiedAssets }, null, 2)}\n`)
+  for (const localizedListing of localizations) {
+    writeTextBundle(path.join(platformDir, localizedListing.storeLocale), {
+      "name.txt": localizedListing.appName,
+      "subtitle.txt": localizedListing.subtitle,
+      "description.txt": localizedListing.fullDescription,
+      "release-notes.txt": localizedListing.releaseNotes,
+      "support-url.txt": localizedListing.supportUrl,
+      "privacy-policy-url.txt": localizedListing.privacyPolicyUrl,
+    })
+  }
+  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, localizations, actions, assets: copiedAssets }, null, 2)}\n`)
   writeFile(
     path.join(platformDir, "README.md"),
-    renderPlatformMarkdown("macOS Distribution Packet", listing, copiedAssets, actions, [
+    renderPlatformMarkdown("macOS Distribution Packet", listing, localizations, copiedAssets, actions, [
       "## Distribution",
       "",
       `- Bundle ID: \`${listing.bundleId}\``,
@@ -316,24 +375,43 @@ function createMacosPacket(metadata, assetsManifest, outDir) {
     ]),
   )
 
-  return { platform: "macos", packetPath: rel(platformDir), status: missing.length ? "blocked" : "ready", missing, assets: copiedAssets }
+  return {
+    platform: "macos",
+    packetPath: rel(platformDir),
+    status: missing.length ? "blocked" : "ready",
+    missing,
+    locales: localizations.map((item) => item.storeLocale),
+    assets: copiedAssets,
+  }
 }
 
 function createWindowsPacket(metadata, assetsManifest, outDir) {
-  const listing = {
-    ...baseListing(metadata, "windows"),
+  const localizations = getLocalizationEntries(metadata).map((localization) => ({
+    ...baseListing(metadata, "windows", localization, "microsoftStore"),
     appId: metadata.platforms.windows.appId,
     distribution: metadata.platforms.windows.distribution,
-  }
+  }))
+  const listing = localizations.find((item) => item.primary) || localizations[0]
   const { files, missing } = collectAssetsForPlatform("windows", assetsManifest)
   const platformDir = path.join(outDir, "windows")
   const copiedAssets = copyAssets(files, path.join(platformDir, "assets"))
   const actions = platformAccountActions(metadata, "windows")
 
-  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, actions, assets: copiedAssets }, null, 2)}\n`)
+  for (const localizedListing of localizations) {
+    writeTextBundle(path.join(platformDir, localizedListing.storeLocale), {
+      "name.txt": localizedListing.appName,
+      "short-description.txt": localizedListing.shortDescription,
+      "description.txt": localizedListing.fullDescription,
+      "features.txt": localizedListing.features.join("\n"),
+      "release-notes.txt": localizedListing.releaseNotes,
+      "support-url.txt": localizedListing.supportUrl,
+      "privacy-policy-url.txt": localizedListing.privacyPolicyUrl,
+    })
+  }
+  writeFile(path.join(platformDir, "listing.json"), `${JSON.stringify({ listing, localizations, actions, assets: copiedAssets }, null, 2)}\n`)
   writeFile(
     path.join(platformDir, "README.md"),
-    renderPlatformMarkdown("Windows Distribution Packet", listing, copiedAssets, actions, [
+    renderPlatformMarkdown("Windows Distribution Packet", listing, localizations, copiedAssets, actions, [
       "## Distribution",
       "",
       `- App ID: \`${listing.appId}\``,
@@ -342,7 +420,14 @@ function createWindowsPacket(metadata, assetsManifest, outDir) {
     ]),
   )
 
-  return { platform: "windows", packetPath: rel(platformDir), status: missing.length ? "blocked" : "ready", missing, assets: copiedAssets }
+  return {
+    platform: "windows",
+    packetPath: rel(platformDir),
+    status: missing.length ? "blocked" : "ready",
+    missing,
+    locales: localizations.map((item) => item.storeLocale),
+    assets: copiedAssets,
+  }
 }
 
 function renderIndex(metadata, summary) {
@@ -409,6 +494,8 @@ function main() {
       supportEmail: metadata.app.supportEmail,
       webRuntimeUrl: metadata.app.webRuntimeUrl,
       bundleIds: metadata.app.bundleIds,
+      defaultLocale: metadata.storeCopy.defaultLocale,
+      locales: Object.keys(metadata.storeCopy.localizations || {}),
     },
     outputDirectory: rel(outDir),
     platforms,

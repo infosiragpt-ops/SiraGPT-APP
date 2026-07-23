@@ -8,10 +8,10 @@
     "primaryLanguage": "es",
     "additionalLanguages": ["en"],
     "marketingUrl": "https://siragpt.com",
-    "supportUrl": "https://siragpt.com",
+    "supportUrl": "https://siragpt.com/support",
     "supportEmail": "infosiragpt@gmail.com",
     "privacyPolicyUrl": "https://siragpt.com/privacy-policy",
-    "termsUrl": "https://siragpt.com/terms-of-service",
+    "termsUrl": "https://siragpt.com/terms",
     "webRuntimeUrl": "https://siragpt.com",
     "bundleIds": {
       "android": "com.siragpt.app",
@@ -57,17 +57,69 @@
     ]
   },
   "storeCopy": {
-    "shortDescription": "AI assistant for chat, documents, voice, search, and productivity workflows.",
-    "subtitle": "AI chat, documents, voice, and productivity",
-    "fullDescription": "Sira GPT is an AI productivity assistant for chat, document workflows, voice, search, and project work. Use it to ask questions, work with files, generate or revise documents, and coordinate daily AI-powered tasks from the SiraGPT platform.",
-    "keywords": [
-      "ai assistant",
-      "chat",
-      "documents",
-      "productivity",
-      "voice",
-      "search"
-    ]
+    "defaultLocale": "es",
+    "localizations": {
+      "es": {
+        "storeLocales": {
+          "googlePlay": "es-419",
+          "appStoreConnect": "es-MX",
+          "microsoftStore": "es-PE",
+          "macos": "es-MX"
+        },
+        "appName": "Sira GPT",
+        "subtitle": "IA para trabajar mejor",
+        "shortDescription": "Chatea, crea y edita documentos, busca y organiza proyectos con IA.",
+        "fullDescription": "Sira GPT reúne en un solo espacio las herramientas de inteligencia artificial que necesitas para trabajar con mayor claridad y rapidez.\n\nConversa con distintos modelos de IA, analiza archivos, crea y edita documentos, transforma contenido, utiliza voz, realiza búsquedas y organiza proyectos desde una experiencia unificada.\n\nTus conversaciones y archivos permanecen vinculados a tu cuenta para que puedas continuar el trabajo entre dispositivos. Algunas funciones, modelos y límites dependen del plan contratado y de la disponibilidad de los proveedores conectados.\n\nFunciones principales:\n- Chat con modelos de inteligencia artificial.\n- Creación, análisis y edición de documentos.\n- Carga de archivos e imágenes.\n- Voz, búsqueda y herramientas de productividad.\n- Organización de proyectos y conversaciones.\n\nSira GPT requiere conexión a Internet y una cuenta activa.",
+        "promotionalText": "Trabaja con chats, documentos, voz, búsqueda y proyectos desde un solo espacio asistido por IA.",
+        "releaseNotes": "Primera versión nativa de Sira GPT para chat, documentos, voz, búsqueda y proyectos.",
+        "keywords": [
+          "asistente",
+          "chat",
+          "documentos",
+          "productividad",
+          "voz",
+          "búsqueda",
+          "proyectos"
+        ],
+        "features": [
+          "Chat con varios modelos de inteligencia artificial",
+          "Creación, análisis y edición de documentos",
+          "Carga de archivos e imágenes",
+          "Herramientas de voz y búsqueda",
+          "Organización de proyectos y conversaciones"
+        ]
+      },
+      "en": {
+        "storeLocales": {
+          "googlePlay": "en-US",
+          "appStoreConnect": "en-US",
+          "microsoftStore": "en-US",
+          "macos": "en-US"
+        },
+        "appName": "Sira GPT",
+        "subtitle": "AI for better work",
+        "shortDescription": "Chat, create and edit documents, search, and organize projects with AI.",
+        "fullDescription": "Sira GPT brings the artificial intelligence tools you need for focused, productive work into one workspace.\n\nChat with multiple AI models, analyze files, create and edit documents, transform content, use voice, search, and organize projects through a unified experience.\n\nYour conversations and files remain linked to your account so you can continue working across devices. Some features, models, and limits depend on your subscription and the availability of connected providers.\n\nKey features:\n- Chat with artificial intelligence models.\n- Create, analyze, and edit documents.\n- Upload files and images.\n- Voice, search, and productivity tools.\n- Organize projects and conversations.\n\nSira GPT requires an Internet connection and an active account.",
+        "promotionalText": "Work with chats, documents, voice, search, and projects from one AI-assisted workspace.",
+        "releaseNotes": "First native Sira GPT release for chat, documents, voice, search, and projects.",
+        "keywords": [
+          "assistant",
+          "chat",
+          "documents",
+          "productivity",
+          "voice",
+          "search",
+          "projects"
+        ],
+        "features": [
+          "Chat with multiple artificial intelligence models",
+          "Create, analyze, and edit documents",
+          "Upload files and images",
+          "Voice and search tools",
+          "Organize projects and conversations"
+        ]
+      }
+    }
   },
   "platforms": {
     "android": {
