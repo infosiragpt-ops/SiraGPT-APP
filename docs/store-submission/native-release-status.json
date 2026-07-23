@@ -1,10 +1,64 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-06T00:58:23.103Z",
+  "updatedAt": "2026-07-22T23:24:44.401Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
+  "currentCandidate": {
+    "status": "green-qa-candidate",
+    "version": "0.4.4",
+    "buildNumber": 4004,
+    "checkedAt": "2026-07-22T23:24:44.401Z",
+    "sourceSha": "5b84e2ebc4b667c679b5d26bbfceffd457ee79d9",
+    "branch": "codex/native-multiplatform-management",
+    "runs": {
+      "readiness": "29964742772",
+      "mobile": "29964742744",
+      "desktop": "29964742706",
+      "signedAndroid": "29964742757"
+    },
+    "releases": {
+      "mobileQa": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-5b84e2e",
+      "signedAndroid": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-5b84e2e",
+      "desktopBeta": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-5b84e2e"
+    },
+    "verifiedArtifacts": {
+      "androidSignedAab": {
+        "name": "SiraGPT-5b84e2e.aab",
+        "size": 3024915,
+        "sha256": "83c82c4d6d9e99632b001d862c90e138203662f45620e620b4dbd3e162e4c8ec"
+      },
+      "iosSimulatorZip": {
+        "name": "SiraGPT-5b84e2e-ios-simulator-app.zip",
+        "size": 1580575,
+        "sha256": "427665dc1aeca34ab245e478f5892be8fc96c27e1a3d2853fe2fa10144796909"
+      },
+      "macosArm64Dmg": {
+        "name": "SiraGPT-0.4.4-arm64.dmg",
+        "size": 121940767,
+        "sha256": "6deabd0b51dd3b5763d61e943b587090a12e4848d991e70a8c085fac18929075"
+      },
+      "windowsInstaller": {
+        "name": "SiraGPT Setup 0.4.4.exe",
+        "size": 104511211,
+        "sha256": "38b81e3a76829e76ff005b5a1a15b89f4b7b2a9084bfb7ee2f9edc6e735f5359"
+      },
+      "windowsPortable": {
+        "name": "SiraGPT 0.4.4.exe",
+        "size": 104240583,
+        "sha256": "b82b5702c3448a0b784f62a8638e7e824129ef66507f92f6a430443dd2e31e7a"
+      }
+    },
+    "distributionGates": {
+      "androidPackageSigning": "ready",
+      "googlePlayUpload": "blocked-owner-service-account-and-console-verification",
+      "iosAppStore": "blocked-apple-signing-and-app-store-connect",
+      "macosDistribution": "blocked-developer-id-and-notarization",
+      "windowsDistribution": "blocked-code-signing-certificate"
+    },
+    "note": "All four QA wrappers build on native GitHub runners. Android has a verified signed AAB. The iPhone artifact is simulator-only; store-signed iOS, macOS, Windows, and Google Play upload remain owner credential gates."
+  },
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "distributionMilestone": {
-    "title": "Native Store Distribution v0.4.3",
+    "title": "Native Store Distribution v0.4.4",
     "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1",
     "status": "open",
     "openIssues": 5,

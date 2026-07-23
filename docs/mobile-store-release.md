@@ -2,26 +2,47 @@
 
 ## Current State
 
+- Current native source version is `0.4.4` / build `4004`.
 - Android debug APK QA builds successfully in GitHub Actions.
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Public GitHub prerelease `native-qa-v0.4.3-bffcbf7` contains QA packages for Android, iOS simulator, macOS, and Windows, plus a durable all-platform QA ZIP and the current owner handoff packet.
-- Native store distribution is tracked in milestone `Native Store Distribution v0.4.3`:
+- Public GitHub prereleases `native-mobile-qa-v0.4.4-5b84e2e` and
+  `desktop-beta-v0.4.4-5b84e2e` contain the current QA packages for Android,
+  iPhone Simulator, macOS, and Windows with checksum manifests.
+- Native store distribution is tracked in milestone `Native Store Distribution v0.4.4`:
   `https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1`.
   Platform owner-action issues are #5 Android/Google Play, #6 iPhone/App Store
   Connect, #7 macOS, and #8 Windows.
-- The latest native artifact verification SHA is `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`; CI, CodeQL, native readiness, native mobile, native desktop, and Android signed release workflows are green for that native artifact set.
+- The v0.4.4 candidate artifact verification SHA is `5b84e2ebc4b667c679b5d26bbfceffd457ee79d9`; native readiness, mobile, desktop, and signed Android workflows are green for that artifact set.
 - Android package signing is configured and verified by the signed AAB release
-  `native-android-signed-v0.4.3-bffcbf7`.
+  `native-android-signed-v0.4.4-5b84e2e`.
 - Android Google Play upload is blocked until the Google Play service account
   upload secret and Google Play account verification are complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
-## Latest Validation
+## v0.4.4 Candidate Validation
+
+- Native readiness report: `29964742772`.
+- Native mobile builds: `29964742744`.
+- Native desktop builds: `29964742706`.
+- Native signed Android release: `29964742757`.
+- Mobile QA prerelease:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-5b84e2e`.
+- Desktop beta prerelease:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-5b84e2e`.
+- Signed Android release:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-5b84e2e`.
+- Local checksum verification passed for the Android APK/AAB, iPhone Simulator
+  ZIP, macOS Apple Silicon DMG, Windows installer/portable files, and owner
+  handoff packet.
+- The iPhone Simulator ZIP validates the wrapper but cannot be installed on a
+  physical iPhone. A signed IPA remains blocked on Apple credentials.
+
+## Previous v0.4.3 Production Baseline
 
 - `npm run mobile:doctor` passed locally for Android and iOS.
-- `npm run native:version:check` passed locally for native version `0.4.3` / build `4003`.
+- `npm run native:version:check` passed locally for native version `0.4.3` / build `4003` during the previous baseline validation.
 - `npm run native:store:readiness` passed locally against the submission metadata.
 - `npm run native:store:assets:generate` creates the current store screenshots
   and Google Play feature graphic under `docs/store-submission/assets/`.

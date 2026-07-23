@@ -85,6 +85,8 @@ function classifyArtifact(relativePath) {
   const normalized = relativePath.replaceAll(path.sep, "/").toLowerCase()
   const extension = path.extname(normalized)
   const isUnder = (directory) => normalized.startsWith(`${directory}/`) || normalized.includes(`/${directory}/`)
+  const isIosSimulatorZip = extension === ".zip"
+    && /(?:^|[-_.])(?:ios[-_.].*simulator|simulator[-_.].*ios)(?:[-_.]|$)/.test(path.basename(normalized))
 
   if (extension === ".blockmap") {
     return {
@@ -100,7 +102,7 @@ function classifyArtifact(relativePath) {
     }
   }
 
-  if (isUnder("ios") || extension === ".ipa") {
+  if (isUnder("ios") || extension === ".ipa" || isIosSimulatorZip) {
     return {
       platform: "ios",
       kind: extension === ".ipa"

@@ -15,6 +15,7 @@ describe("generate-native-release-manifest", () => {
         "android/SiraGPT-play-upload.aab",
         "ios/SiraGPT-ios-simulator-app.zip",
         "ios/SiraGPT.ipa",
+        "SiraGPT-flat-ios-simulator-app.zip",
         "macos/SiraGPT-arm64.dmg",
         "macos/SiraGPT-arm64-mac.zip",
         "macos/SiraGPT-arm64.dmg.blockmap",
@@ -41,7 +42,7 @@ describe("generate-native-release-manifest", () => {
       }
 
       assert.equal(manifest.summary.platformCounts.android, 2)
-      assert.equal(manifest.summary.platformCounts.ios, 2)
+      assert.equal(manifest.summary.platformCounts.ios, 3)
       assert.equal(manifest.summary.platformCounts.macos, 3)
       assert.equal(manifest.summary.platformCounts.windows, 3)
       assert.equal(manifest.summary.platformCounts.unknown, undefined)

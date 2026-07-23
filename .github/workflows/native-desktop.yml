@@ -245,8 +245,13 @@ jobs:
           set -euo pipefail
           mapfile -d '' files < <(find "$STAGING" -maxdepth 1 -type f ! -name 'RELEASE_NOTES.md' -print0 | sort -z)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            tag_target="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')"
+            if [[ "$tag_target" != "$GITHUB_SHA" ]]; then
+              echo "Release tag $RELEASE_TAG points to $tag_target instead of build SHA $GITHUB_SHA" >&2
+              exit 1
+            fi
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
             gh release edit "$RELEASE_TAG" --prerelease --title "SiraGPT Desktop beta ${RELEASE_TAG#desktop-beta-v}" --notes-file "$STAGING/RELEASE_NOTES.md"
           else
-            gh release create "$RELEASE_TAG" "${files[@]}" --prerelease --title "SiraGPT Desktop beta ${RELEASE_TAG#desktop-beta-v}" --notes-file "$STAGING/RELEASE_NOTES.md"
+            gh release create "$RELEASE_TAG" "${files[@]}" --target "$GITHUB_SHA" --prerelease --title "SiraGPT Desktop beta ${RELEASE_TAG#desktop-beta-v}" --notes-file "$STAGING/RELEASE_NOTES.md"
           fi
