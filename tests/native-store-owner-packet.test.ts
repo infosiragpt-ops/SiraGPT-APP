@@ -10,7 +10,12 @@ describe("generate-native-store-owner-packet", () => {
     const dir = mkdtempSync(join(tmpdir(), "siragpt-native-store-owner-packet-"))
     const status = JSON.parse(readFileSync("docs/store-submission/native-release-status.json", "utf8")) as {
       latestQaRelease: { tag: string; targetSha: string }
-      latestOwnerPacket: { sourceSha: string; zipName: string }
+      currentCandidate: { status: string; sourceSha: string }
+      latestHistoricalSignedAndroidRelease: {
+        tag: string
+        sourceSha: string
+        playUploadCompatible: boolean
+      }
       latestSignedPreflight: { run: string; sourceSha: string; status: string }
       distributionMilestone: {
         title: string
@@ -62,7 +67,12 @@ describe("generate-native-store-owner-packet", () => {
           url: string
           issues: Array<{ number: number; scope: string }>
         }
-        latestOwnerPacket: { sourceSha: string; zipName: string }
+        currentCandidate: { status: string; sourceSha: string }
+        latestHistoricalSignedAndroidRelease: {
+          tag: string
+          sourceSha: string
+          playUploadCompatible: boolean
+        }
         latestSignedPreflight: { run: string; sourceSha: string }
         included: string[]
       }
@@ -75,8 +85,17 @@ describe("generate-native-store-owner-packet", () => {
         [4, 5, 6, 7, 8],
       )
       assert.ok(manifest.distributionMilestone.issues.some((issue) => issue.scope === "android-googleplay"))
-      assert.equal(manifest.latestOwnerPacket.sourceSha, status.latestOwnerPacket.sourceSha)
-      assert.equal(manifest.latestOwnerPacket.zipName, status.latestOwnerPacket.zipName)
+      assert.equal(manifest.currentCandidate.status, status.currentCandidate.status)
+      assert.equal(manifest.currentCandidate.sourceSha, status.currentCandidate.sourceSha)
+      assert.equal(
+        manifest.latestHistoricalSignedAndroidRelease.tag,
+        status.latestHistoricalSignedAndroidRelease.tag,
+      )
+      assert.equal(
+        manifest.latestHistoricalSignedAndroidRelease.sourceSha,
+        status.latestHistoricalSignedAndroidRelease.sourceSha,
+      )
+      assert.equal(manifest.latestHistoricalSignedAndroidRelease.playUploadCompatible, false)
       assert.equal(manifest.latestSignedPreflight.run, status.latestSignedPreflight.run)
       assert.equal(manifest.latestSignedPreflight.sourceSha, status.latestSignedPreflight.sourceSha)
       assert.ok(manifest.included.includes("native-store-submission-packet/"))
@@ -85,6 +104,8 @@ describe("generate-native-store-owner-packet", () => {
       assert.ok(manifest.included.includes("native-store-metadata-report.json"))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "google-play", "README.md")))
       assert.ok(existsSync(join(outDir, "native-store-submission-packet", "app-store-connect", "README.md")))
+      assert.ok(existsSync(join(outDir, "native-store-submission-packet", "review-access.json")))
+      assert.ok(existsSync(join(outDir, "native-store-submission-packet", "submission-questionnaires.json")))
       assert.ok(existsSync(join(outDir, "native-store-metadata-report.md")))
       assert.ok(existsSync(join(outDir, "native-store-metadata-report.json")))
       assert.ok(existsSync(join(outDir, "native-signing-templates", "all.env.example")))
@@ -95,6 +116,7 @@ describe("generate-native-store-owner-packet", () => {
       assert.ok(existsSync(join(outDir, "native-signing-templates", "macos.env.example")))
       assert.ok(existsSync(join(outDir, "native-signing-templates", "windows.env.example")))
       assert.match(readFileSync(join(outDir, "README.md"), "utf8"), /Distribution milestone: https:\/\/github\.com\/infosiragpt-ops\/SiraGPT-APP\/milestone\/1/)
+      assert.match(readFileSync(join(outDir, "README.md"), "utf8"), /Play-compatible: `false`/)
       assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /ANDROID_KEYSTORE_PATH=/)
       assert.match(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /WINDOWS_CERTIFICATE_PATH=/)
       assert.doesNotMatch(readFileSync(join(outDir, "native-signing-templates", "all.env.example"), "utf8"), /NORMAL_MAILBOX_PASSWORD_SHOULD_NOT_APPEAR/)

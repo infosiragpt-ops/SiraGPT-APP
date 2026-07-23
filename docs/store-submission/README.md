@@ -19,40 +19,25 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
-- Latest public QA release: `native-mobile-qa-v0.4.4-dd87ccb`
-  (`dd87ccbfd0d4664d482ee6dbe11d861f5ae67c4f`)
-- Last verified native QA runs:
-  - Mobile: `29980329220`
-  - Desktop: `29980326405`
-  - Readiness report: `29981435625`
-  - CI: `29981435571`
-  - Android signed release packages: `29979825946`
-  - Docker: `28735031878`
-- Current QA binary source: SHA
-  `dd87ccbfd0d4664d482ee6dbe11d861f5ae67c4f`
-  is green in CI, Native readiness report, Native mobile builds, Native desktop
-  builds, and Android signed release packages. These runs generated artifacts
-  for Android, iPhone simulator/device compile proof, macOS, and Windows with
-  `native-release-manifest.json`, `native-release-manifest.md`, and
-  `SHA256SUMS.txt`. The downloaded artifact contents include
-  `SiraGPT-dd87ccb-debug.apk`,
-  `SiraGPT-dd87ccb-signed-release.aab`,
-  `SiraGPT-dd87ccb-ios-simulator-app.zip`,
-  `SiraGPT-dd87ccb-ios-device-build.json`, `SiraGPT-0.4.4-arm64.dmg`,
-  `SiraGPT-0.4.4-arm64-mac.zip`, `SiraGPT.Setup.0.4.4.exe`, and
-  `SiraGPT.0.4.4.exe`.
-- Latest native artifact verification SHA:
-  `dd87ccbfd0d4664d482ee6dbe11d861f5ae67c4f`.
-- Current traceability merge:
-  `dab57ed407f6074200738555532266f79ed70aa5`.
-- Latest QA artifact manifest verification: mobile run `29980329220` and
-  desktop run `29980326405` were downloaded and each Android, iOS simulator,
-  macOS, and Windows artifact upload includes
-  `native-release-manifest.json`, `native-release-manifest.md`, and
-  `SHA256SUMS.txt`.
+- Current QA source: `1d5e24c6c0a4e596e88be25ff1cfb2c728b86697`
+  on `production-main`.
+- Current verified workflow runs:
+  - CI: `30046964522`
+  - Native readiness: `30047839509`
+  - Mobile QA wrappers: `30047818708`
+  - Desktop QA packages: `30047079626`
+  - Android certificate gate: `30048082193`
+- Current mobile QA assets include a debug APK, an iOS Simulator ZIP, unsigned
+  iOS device-build evidence, checksums, and
+  `android-upload-certificate-blocker.json`. They deliberately do not include
+  an AAB or IPA presented as store-ready.
+- Current desktop QA assets include macOS DMG/ZIP packages, Windows NSIS and
+  portable executables, and `SiraGPT-Store-0.4.4-x64.appx`. The AppX uses QA
+  identity, is not directly installable, and is not Partner Center
+  submission-ready.
 - Durable QA releases:
-  - Mobile: https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-dd87ccb
-  - Desktop: https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-dd87ccb
+  - Mobile: https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-1d5e24c
+  - Desktop: https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-1d5e24c
 - Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 - Distribution milestone: https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1
 - Platform owner-action issues:
@@ -60,21 +45,20 @@ secrets. They must never be committed.
   - iPhone / App Store Connect: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/6
   - macOS Developer ID / notarization: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/7
   - Windows signing / Microsoft Store: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/8
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-dd87ccbf.zip`
-  from the signed Android release, with SHA-256
-  `b8bcec94b837d047172cdc3a7197f057bd4d520fecd9d4b5783b24d5f1b97e64`.
-- Latest signed release preflight: `29979825946`, status `ready-to-run` for
-  Android with no missing Android package-signing secrets.
-- Latest signed Android release: `native-android-signed-v0.4.4-dd87ccb`
-  produced both `SiraGPT-dd87ccb.apk` and `SiraGPT-dd87ccb.aab` from SHA
-  `dd87ccbfd0d4664d482ee6dbe11d861f5ae67c4f`.
-- Latest secret-name audit: public repository Actions are running, Android
-  package signing is ready, and remaining signed native distribution blockers
-  are Google Play upload, iOS/App Store, macOS notarization/signing, and Windows
-  code-signing secret names.
-- GitHub Actions diagnostics snapshot: CI run `29981435571`, native readiness
-  run `29981435625`, native mobile run `29980329220`, native desktop run
-  `29980326405`, and Android signed release run `29979825946` are green.
+- The Android signing secret-name preflight passed in run `30048082193`, then
+  the certificate gate correctly failed before publishing any bundle. The
+  configured keystore does not match the Google Play upload certificate.
+- `native-android-signed-v0.4.4-dd87ccb` is retained only as a historical QA
+  prerelease. Its APK/AAB signatures and checksums are internally valid, but
+  its AAB is not compatible with the current Google Play app and must not be
+  uploaded there.
+- Current secret-name audit: Android keystore secret names exist. Google Play
+  service-account credentials, Apple signing/App Store credentials, macOS
+  signing/notarization credentials, Windows direct-signing credentials, and
+  Microsoft Partner Center identity variables are still missing.
+- No vendor-store publication has been proven. Store enrollment, legal
+  agreements, identity verification, reviewer access, final questionnaires,
+  package acceptance, review, and publication remain owner/vendor gates.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Treat that mailbox
@@ -104,9 +88,9 @@ lives in `docs/store-submission/native-store-assets.json`.
    Center identity.
 2. Complete owner-only account verification in Google Play Console and Apple
    Developer/App Store Connect.
-3. Add remaining signing and store-upload secrets to GitHub Actions, never to
-   the repo. Android package signing is already configured; Google Play upload
-   is separate.
+3. Replace or recover the Android upload keystore whose SHA-1 matches the
+   Google Play upload identity, then add remaining signing and store-upload
+   secrets to GitHub Actions. Secret names and values must never be committed.
 4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
    `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
@@ -153,11 +137,13 @@ upload should target `android_play_track=qa` with
 `android_release_status=draft` so the owner can review it in Google Play
 Console before publishing.
 
-Android package signing itself is already configured and verified. The current
-signed `.apk` and `.aab` are attached to the `native-android-signed-v0.4.4-dd87ccb`
-GitHub Release. The remaining Android owner action is Google Play Console
-verification plus `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` for automated
-Play uploads.
+Android package-signing secret names exist, but the configured keystore SHA-1
+does not match the Google Play upload certificate. The workflow must continue
+to stop before upload until the owner supplies the matching upload keystore or
+completes Google Play's upload-key reset process. The service account
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` is a separate missing requirement for
+automated uploads. Historical signed AAB files are QA evidence only and must
+not be uploaded to the current Play app.
 
 ### iPhone
 

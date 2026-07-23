@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { execFileSync } = require("node:child_process")
-const { readFileSync } = require("node:fs")
+const { readFileSync, writeFileSync } = require("node:fs")
 const { X509Certificate } = require("node:crypto")
 
 function normalizeSha1(value, label = "SHA-1 fingerprint") {
@@ -13,14 +13,31 @@ function normalizeSha1(value, label = "SHA-1 fingerprint") {
 }
 
 function assertSha1Match(actual, expected) {
-  const actualNormalized = normalizeSha1(actual, "Actual SHA-1 fingerprint")
-  const expectedNormalized = normalizeSha1(expected, "Expected SHA-1 fingerprint")
-  if (actualNormalized !== expectedNormalized) {
+  const result = classifySha1Match(actual, expected)
+  if (!result.playUploadCompatible) {
     throw new Error(
-      `Android upload certificate mismatch: expected ${expectedNormalized}, got ${actualNormalized}`,
+      `Android upload certificate mismatch: expected ${result.expectedSha1}, got ${result.actualSha1}`,
     )
   }
-  return actualNormalized
+  return result.actualSha1
+}
+
+function classifySha1Match(actual, expected) {
+  const actualSha1 = normalizeSha1(actual, "Actual SHA-1 fingerprint")
+  const expectedSha1 = normalizeSha1(expected, "Expected SHA-1 fingerprint")
+  const playUploadCompatible = actualSha1 === expectedSha1
+  return {
+    schemaVersion: 1,
+    status: playUploadCompatible
+      ? "verified-google-play-upload-certificate"
+      : "blocked-google-play-upload-certificate-mismatch",
+    playUploadCompatible,
+    expectedSha1,
+    actualSha1,
+    remediation: playUploadCompatible
+      ? null
+      : "Provide the existing Google Play upload keystore or complete an upload-key reset before publishing an AAB.",
+  }
 }
 
 function parseArgs(argv) {
@@ -61,9 +78,14 @@ function main() {
     certificatePath: args.certificate,
   })
   const certificate = new X509Certificate(pem)
-  const verified = assertSha1Match(certificate.fingerprint, expected)
-  console.log(`android-play-upload-certificate-sha1=${verified}`)
-  console.log("android-play-upload-certificate-status=verified")
+  const result = classifySha1Match(certificate.fingerprint, expected)
+  if (args.report) {
+    writeFileSync(args.report, `${JSON.stringify(result, null, 2)}\n`)
+  }
+  console.log(`android-play-upload-certificate-sha1=${result.actualSha1}`)
+  console.log(`android-play-upload-certificate-expected-sha1=${result.expectedSha1}`)
+  console.log(`android-play-upload-certificate-status=${result.status}`)
+  assertSha1Match(result.actualSha1, result.expectedSha1)
 }
 
 if (require.main === module) {
@@ -77,6 +99,7 @@ if (require.main === module) {
 
 module.exports = {
   assertSha1Match,
+  classifySha1Match,
   normalizeSha1,
   parseArgs,
 }

@@ -388,6 +388,44 @@ function validatePrivacyAndOwnerBoundary(reporter, metadata) {
     Array.isArray(metadata.ownerAccount?.storePortals) && metadata.ownerAccount.storePortals.length === 4,
     `Owner handoff covers ${metadata.ownerAccount?.storePortals?.length || 0} platform portal(s)`,
   )
+
+  const reviewAccess = metadata.reviewAccess
+  const reviewAccessReady = reviewAccess?.requiresAuthentication === true
+    && reviewAccess?.status === "owner-action-required"
+    && reviewAccess?.credentialStorage === "vendor-console-only"
+    && typeof reviewAccess?.instructions === "string"
+    && reviewAccess.instructions.length >= 80
+    && Array.isArray(reviewAccess?.requiredOwnerOutputs)
+    && reviewAccess.requiredOwnerOutputs.length >= 4
+    && Array.isArray(reviewAccess?.prohibitedLocations)
+    && reviewAccess.prohibitedLocations.length >= 4
+  reporter.add(
+    "review-access-boundary",
+    "owner-security",
+    reviewAccessReady,
+    reviewAccessReady
+      ? "Reviewer access is documented as a vendor-console-only owner action"
+      : "Reviewer access must define non-secret instructions and vendor-console-only credential storage",
+  )
+
+  const questionnaires = metadata.submissionQuestionnaires
+  const questionnairesReady = questionnaires?.status === "owner-review-required"
+    && typeof questionnaires?.answeringRule === "string"
+    && questionnaires.answeringRule.length >= 100
+    && Array.isArray(questionnaires?.googlePlay)
+    && questionnaires.googlePlay.length >= 4
+    && Array.isArray(questionnaires?.appStoreConnect)
+    && questionnaires.appStoreConnect.length >= 4
+    && Array.isArray(questionnaires?.microsoftPartnerCenter)
+    && questionnaires.microsoftPartnerCenter.length >= 3
+  reporter.add(
+    "submission-questionnaires",
+    "store-questionnaires",
+    questionnairesReady,
+    questionnairesReady
+      ? "Vendor questionnaires are enumerated and explicitly require owner review against production"
+      : "Store questionnaire handoff is incomplete",
+  )
 }
 
 function hasPlistUsageDescription(source, key) {

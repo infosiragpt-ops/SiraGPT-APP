@@ -98,6 +98,13 @@ function classifyArtifact(relativePath) {
     }
   }
 
+  if (fileName === "android-upload-certificate-status.json") {
+    return {
+      platform: "android",
+      kind: "play-upload-certificate-evidence",
+    }
+  }
+
   if (fileName.endsWith("-ios-device-build.json")) {
     return {
       platform: "ios",
@@ -115,7 +122,11 @@ function classifyArtifact(relativePath) {
   if (isUnder("android") || extension === ".aab" || extension === ".apk") {
     return {
       platform: "android",
-      kind: extension === ".apk" ? (isDebugApk ? "debug-apk" : "release-apk") : "play-aab",
+      kind: extension === ".aab"
+        ? "play-aab"
+        : extension === ".apk"
+          ? (isDebugApk ? "debug-apk" : "release-apk")
+          : "android-release-metadata",
     }
   }
 

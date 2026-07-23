@@ -226,7 +226,7 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
     latestTraceabilityCommit: status.latestTraceabilityCommit,
     latestActionsDiagnostics: status.latestActionsDiagnostics,
     latestSignedPreflight: status.latestSignedPreflight,
-    latestSignedAndroidRelease: status.latestSignedAndroidRelease,
+    latestHistoricalSignedAndroidRelease: status.latestHistoricalSignedAndroidRelease,
     latestSecretAudit: status.latestSecretAudit,
     platformPlans,
     forbiddenMaterials: [
@@ -331,11 +331,19 @@ function renderMarkdown(handoff) {
     if (handoff.latestQaArtifactManifestRuns.diagnosis) {
       lines.push(`- Diagnosis: ${handoff.latestQaArtifactManifestRuns.diagnosis}`)
     }
-    if (handoff.latestQaArtifactManifestRuns.platformArtifacts) {
+    if (handoff.latestQaArtifactManifestRuns.workflowPlatformArtifacts) {
       lines.push("")
-      lines.push("Verified artifact files:")
+      lines.push("Raw workflow artifact files:")
       lines.push("")
-      for (const [platform, files] of Object.entries(handoff.latestQaArtifactManifestRuns.platformArtifacts)) {
+      for (const [platform, files] of Object.entries(handoff.latestQaArtifactManifestRuns.workflowPlatformArtifacts)) {
+        lines.push(`- ${platform}: ${files.map((file) => `\`${file}\``).join(", ")}`)
+      }
+    }
+    if (handoff.latestQaArtifactManifestRuns.publicReleasePlatformArtifacts) {
+      lines.push("")
+      lines.push("Curated public QA release files:")
+      lines.push("")
+      for (const [platform, files] of Object.entries(handoff.latestQaArtifactManifestRuns.publicReleasePlatformArtifacts)) {
         lines.push(`- ${platform}: ${files.map((file) => `\`${file}\``).join(", ")}`)
       }
     }
@@ -382,23 +390,24 @@ function renderMarkdown(handoff) {
     }
     lines.push("")
   }
-  if (handoff.latestSignedAndroidRelease?.tag) {
-    lines.push("## Latest Signed Android Release")
+  if (handoff.latestHistoricalSignedAndroidRelease?.tag) {
+    lines.push("## Historical Signed Android Release (Not Play-Compatible)")
     lines.push("")
-    lines.push(`- Tag: \`${handoff.latestSignedAndroidRelease.tag}\``)
-    lines.push(`- URL: ${handoff.latestSignedAndroidRelease.url}`)
-    lines.push(`- Source SHA: \`${handoff.latestSignedAndroidRelease.sourceSha}\``)
-    lines.push(`- Workflow run: \`${handoff.latestSignedAndroidRelease.run}\``)
-    lines.push(`- Status: \`${handoff.latestSignedAndroidRelease.status}\``)
-    if (handoff.latestSignedAndroidRelease.aab?.name) {
-      lines.push(`- AAB: \`${handoff.latestSignedAndroidRelease.aab.name}\``)
-      lines.push(`- AAB SHA-256: \`${handoff.latestSignedAndroidRelease.aab.sha256}\``)
+    lines.push(`- Tag: \`${handoff.latestHistoricalSignedAndroidRelease.tag}\``)
+    lines.push(`- URL: ${handoff.latestHistoricalSignedAndroidRelease.url}`)
+    lines.push(`- Source SHA: \`${handoff.latestHistoricalSignedAndroidRelease.sourceSha}\``)
+    lines.push(`- Workflow run: \`${handoff.latestHistoricalSignedAndroidRelease.run}\``)
+    lines.push(`- Status: \`${handoff.latestHistoricalSignedAndroidRelease.status}\``)
+    lines.push(`- Play upload compatible: \`${handoff.latestHistoricalSignedAndroidRelease.playUploadCompatible}\``)
+    if (handoff.latestHistoricalSignedAndroidRelease.aab?.name) {
+      lines.push(`- Historical AAB: \`${handoff.latestHistoricalSignedAndroidRelease.aab.name}\``)
+      lines.push(`- AAB SHA-256: \`${handoff.latestHistoricalSignedAndroidRelease.aab.sha256}\``)
     }
-    if (handoff.latestSignedAndroidRelease.verification) {
-      lines.push(`- Verification: ${handoff.latestSignedAndroidRelease.verification}`)
+    if (handoff.latestHistoricalSignedAndroidRelease.verification) {
+      lines.push(`- Verification: ${handoff.latestHistoricalSignedAndroidRelease.verification}`)
     }
-    if (handoff.latestSignedAndroidRelease.googlePlayUpload) {
-      lines.push(`- Google Play upload: \`${handoff.latestSignedAndroidRelease.googlePlayUpload}\``)
+    if (handoff.latestHistoricalSignedAndroidRelease.googlePlayUpload) {
+      lines.push(`- Google Play upload: \`${handoff.latestHistoricalSignedAndroidRelease.googlePlayUpload}\``)
     }
     lines.push("")
   }

@@ -119,20 +119,8 @@ function runNpmScript(scriptName, extraArgs) {
 }
 
 function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }) {
-  const ownerPacket = releaseStatus.latestOwnerPacket
-    ? {
-        sourceSha: releaseStatus.latestOwnerPacket.sourceSha,
-        sourceCommit: releaseStatus.latestOwnerPacket.sourceCommit,
-        zipName: releaseStatus.latestOwnerPacket.zipName,
-        zipUrl: releaseStatus.latestOwnerPacket.zipUrl,
-        checksumName: releaseStatus.latestOwnerPacket.checksumName,
-        checksumUrl: releaseStatus.latestOwnerPacket.checksumUrl,
-        uploadedAt: releaseStatus.latestOwnerPacket.uploadedAt,
-      }
-    : null
-
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     packetName: "SiraGPT native store + owner packet",
     repository: args.repo,
@@ -145,11 +133,14 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
     latestVerifiedRuns: releaseStatus.latestVerifiedRuns,
     latestTraceabilityCommit: releaseStatus.latestTraceabilityCommit,
     distributionMilestone: releaseStatus.distributionMilestone,
-    latestOwnerPacket: ownerPacket,
+    currentCandidate: releaseStatus.currentCandidate,
     latestSignedPreflight: releaseStatus.latestSignedPreflight,
+    latestHistoricalSignedAndroidRelease: releaseStatus.latestHistoricalSignedAndroidRelease,
     outputDirectory: relative(outDir),
     included: [
       "native-store-submission-packet/",
+      "native-store-submission-packet/review-access.json",
+      "native-store-submission-packet/submission-questionnaires.json",
       "native-signing-templates/",
       "native-store-submission-packet.json",
       "native-store-metadata-report.md",
@@ -175,8 +166,9 @@ Generated: ${manifest.generatedAt}
 - Packet source SHA: \`${manifest.packetSourceSha}\`
 - QA release: ${manifest.releaseUrl}
 - QA binary target SHA: \`${manifest.qaBinaryTargetSha}\`
-- Latest owner packet: ${manifest.latestOwnerPacket?.zipUrl || "not recorded"}
+- Current candidate status: \`${manifest.currentCandidate?.status || "not recorded"}\`
 - Latest signed preflight: ${manifest.latestSignedPreflight?.url || "not recorded"}
+- Historical signed Android artifact: ${manifest.latestHistoricalSignedAndroidRelease?.url || "not recorded"} (Play-compatible: \`${manifest.latestHistoricalSignedAndroidRelease?.playUploadCompatible ?? "unknown"}\`)
 - Distribution milestone: ${manifest.distributionMilestone?.url || "not recorded"}
 
 This ZIP contains public store submission material and owner-action checklists for Android, iPhone, macOS, and Windows. It contains secret names only, not secret values. Do not add passwords, keystores, certificates, provisioning profiles, API private keys, cookies, recovery codes, or app-specific password values to this packet.

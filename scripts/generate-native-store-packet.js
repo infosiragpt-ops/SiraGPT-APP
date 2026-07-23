@@ -501,6 +501,14 @@ function main() {
     platforms,
   }
 
+  writeFile(
+    path.join(outDir, "review-access.json"),
+    `${JSON.stringify(metadata.reviewAccess, null, 2)}\n`,
+  )
+  writeFile(
+    path.join(outDir, "submission-questionnaires.json"),
+    `${JSON.stringify(metadata.submissionQuestionnaires, null, 2)}\n`,
+  )
   writeFile(path.join(outDir, "README.md"), renderIndex(metadata, summary))
   writeFile(path.resolve(root, args.jsonOut), `${JSON.stringify(summary, null, 2)}\n`)
 

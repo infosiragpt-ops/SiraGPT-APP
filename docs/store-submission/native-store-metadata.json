@@ -56,6 +56,53 @@
       }
     ]
   },
+  "reviewAccess": {
+    "requiresAuthentication": true,
+    "status": "owner-action-required",
+    "credentialStorage": "vendor-console-only",
+    "instructions": "Use a dedicated reviewer account with an active review-safe plan. After sign-in, open Chat, send a short message, upload a non-sensitive sample file, and verify that chat history can be reopened.",
+    "requiredOwnerOutputs": [
+      "Dedicated reviewer account created in production",
+      "Reviewer account verified without MFA or one-time-code interruption during review",
+      "Current login identifier and access credential entered only in the vendor review console",
+      "Reviewer notes describe any feature, model, or plan limitations",
+      "Reviewer account tested immediately before submission"
+    ],
+    "prohibitedLocations": [
+      "Git repository",
+      "GitHub Actions secrets",
+      "Release artifacts",
+      "Store submission packet",
+      "Issue comments",
+      "Chat logs and screenshots"
+    ]
+  },
+  "submissionQuestionnaires": {
+    "status": "owner-review-required",
+    "answeringRule": "Answers must be completed in each vendor portal against the exact production build, enabled providers, account model, payment flow, SDK inventory, and privacy policy current at submission time.",
+    "googlePlay": [
+      "App access",
+      "Data safety",
+      "Content rating",
+      "Target audience and content",
+      "Ads declaration",
+      "Government and financial features declarations when applicable"
+    ],
+    "appStoreConnect": [
+      "App privacy",
+      "Age rating",
+      "Export compliance",
+      "Content rights",
+      "Advertising identifier usage",
+      "App Review contact and sign-in instructions"
+    ],
+    "microsoftPartnerCenter": [
+      "Age ratings",
+      "Privacy and support information",
+      "Authentication and certification notes",
+      "Restricted or regulated content declarations when applicable"
+    ]
+  },
   "storeCopy": {
     "defaultLocale": "es",
     "localizations": {
@@ -132,7 +179,8 @@
         "Contact phone number verification",
         "Data safety form",
         "Content rating questionnaire",
-        "Target audience and app access declarations"
+        "Target audience and app access declarations",
+        "Dedicated reviewer account and access instructions entered only in Play Console"
       ]
     },
     "ios": {
@@ -144,7 +192,8 @@
         "Distribution certificate and provisioning profile",
         "App privacy details",
         "Age rating",
-        "TestFlight or App Review submission"
+        "TestFlight or App Review submission",
+        "App Review contact, dedicated reviewer account, and sign-in instructions entered only in App Store Connect"
       ]
     },
     "macos": {
@@ -175,7 +224,8 @@
         "Microsoft Partner Center developer enrollment and app reservation for Store distribution",
         "Provide the reserved Store identity and publisher values for AppX/MSIX packaging",
         "Windows code-signing certificate only for NSIS/portable EXE distribution",
-        "Microsoft Store listing metadata and privacy URL if store-distributed"
+        "Microsoft Store listing metadata and privacy URL if store-distributed",
+        "Certification notes and dedicated reviewer access entered only in Partner Center"
       ]
     }
   },
