@@ -276,6 +276,23 @@ function addWorker({
   selectionRing.visible = false
   group.add(selectionRing)
 
+  // Give each moving worker a forgiving, invisible hit area. Raycasting only
+  // against the visible body made clicks near an arm or between animation
+  // frames fall through to the department carpet, opening the department
+  // instead of the worker activity panel.
+  const interactionTarget = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.52, 1.18, 4, 8),
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      colorWrite: false,
+    }),
+  )
+  interactionTarget.position.y = 1.18
+  interactionTarget.userData.agentOfficeInteractionTarget = true
+  group.add(interactionTarget)
+
   if (showLabel) {
     const label = createWorkerLabel(worker)
     if (label) group.add(label)
@@ -623,6 +640,23 @@ function disposeScene(scene: THREE.Scene) {
   })
 }
 
+function officeSceneModelSignature(model: AgentOfficeModel): string {
+  return JSON.stringify(
+    model.departments.map((department) => ({
+      id: department.id,
+      workers: department.workers.map((worker) => ({
+        id: worker.id,
+        name: worker.name,
+        departmentId: worker.departmentId,
+        statusLabel: worker.statusLabel,
+        statusTone: worker.statusTone,
+        active: worker.active,
+        activity: worker.activity,
+      })),
+    })),
+  )
+}
+
 export function AgentOfficeScene({
   model,
   variant = "full",
@@ -642,7 +676,11 @@ export function AgentOfficeScene({
   const selectDepartmentRef = React.useRef(onSelectDepartment)
   const onReadyRef = React.useRef(onReady)
   const resetCameraRef = React.useRef<(() => void) | null>(null)
+  const modelRef = React.useRef(model)
   const [failed, setFailed] = React.useState(false)
+  const modelSignature = React.useMemo(() => officeSceneModelSignature(model), [model])
+
+  modelRef.current = model
 
   React.useEffect(() => {
     pausedRef.current = paused
@@ -702,11 +740,12 @@ export function AgentOfficeScene({
     let pitch = 0.72
     let distance = 34
 
-    const populatedDepartments = model.departments.filter((department) => department.workers.length > 0)
+    const sceneModel = modelRef.current
+    const populatedDepartments = sceneModel.departments.filter((department) => department.workers.length > 0)
     const officeDepartments =
-      populatedDepartments.length > 0 && model.departments.length > 1
+      populatedDepartments.length > 0 && sceneModel.departments.length > 1
         ? populatedDepartments
-        : model.departments
+        : sceneModel.departments
     const departments = officeDepartments.slice(0, variant === "thumbnail" ? 6 : 10)
     const columns =
       variant === "thumbnail"
@@ -892,6 +931,11 @@ export function AgentOfficeScene({
     scene.traverse((object) => {
       const mesh = object as THREE.Mesh
       if (mesh.isMesh) {
+        if (mesh.userData.agentOfficeInteractionTarget) {
+          mesh.castShadow = false
+          mesh.receiveShadow = false
+          return
+        }
         mesh.castShadow = variant === "full" && mesh.position.y > 0.1
       }
     })
@@ -1084,7 +1128,7 @@ export function AgentOfficeScene({
       renderer.domElement.remove()
       delete host.dataset.officeReady
     }
-  }, [model, timeOfDay, variant])
+  }, [modelSignature, timeOfDay, variant])
 
   return (
     <div
