@@ -50,6 +50,25 @@ async function renderAsset(asset) {
     .toBuffer()
 }
 
+async function decodePixels(image) {
+  return sharp(image)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+}
+
+async function hasSamePixels(actual, expected) {
+  const [actualImage, expectedImage] = await Promise.all([
+    decodePixels(actual),
+    decodePixels(expected),
+  ])
+
+  return actualImage.info.width === expectedImage.info.width
+    && actualImage.info.height === expectedImage.info.height
+    && actualImage.info.channels === expectedImage.info.channels
+    && actualImage.data.equals(expectedImage.data)
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   const sourceMetadata = await sharp(sourcePath).metadata()
@@ -70,7 +89,9 @@ async function main() {
         continue
       }
       const actual = fs.readFileSync(outputPath)
-      if (!actual.equals(expected)) failures.push(`${asset.name}: differs from deterministic source`)
+      if (!(await hasSamePixels(actual, expected))) {
+        failures.push(`${asset.name}: rendered pixels differ from deterministic source`)
+      }
       continue
     }
 
@@ -84,7 +105,13 @@ async function main() {
   if (args.check) process.stdout.write(`validated ${assets.length} deterministic Windows AppX assets\n`)
 }
 
-main().catch((error) => {
-  console.error(`generate-windows-appx-assets: ${error.message}`)
-  process.exit(1)
-})
+module.exports = {
+  hasSamePixels,
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`generate-windows-appx-assets: ${error.message}`)
+    process.exit(1)
+  })
+}

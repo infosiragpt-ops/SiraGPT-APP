@@ -2,8 +2,15 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
 import test from "node:test"
+import sharp from "sharp"
 
 const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8")
+const { hasSamePixels } = require(path.join(process.cwd(), "scripts/generate-windows-appx-assets.js")) as {
+  hasSamePixels: (actual: Buffer, expected: Buffer) => Promise<boolean>
+}
+const { replaceSignedReleaseTag } = require(path.join(process.cwd(), "scripts/sync-native-version.js")) as {
+  replaceSignedReleaseTag: (source: string, version: string) => string
+}
 
 test("desktop shell keeps hardened browser boundaries and recovery", () => {
   const source = read("apps/desktop/main.cjs")
@@ -60,6 +67,36 @@ test("desktop package includes a deterministic Microsoft Store AppX route", () =
   assert.match(buildScript, /storeSubmissionReady: mode === "store"/)
   assert.match(read("scripts/validate-windows-store-appx.js"), /AppxManifest\.xml/)
   assert.match(read("scripts/generate-windows-appx-assets.js"), /Wide310x150Logo\.png/)
+})
+
+test("Windows AppX asset validation compares pixels instead of platform-specific PNG bytes", async () => {
+  const source = {
+    create: {
+      width: 16,
+      height: 16,
+      channels: 4 as const,
+      background: "#ff0000",
+    },
+  }
+  const uncompressed = await sharp(source).png({ compressionLevel: 0 }).toBuffer()
+  const compressed = await sharp(source).png({ compressionLevel: 9, palette: true }).toBuffer()
+
+  assert.equal(uncompressed.equals(compressed), false)
+  assert.equal(await hasSamePixels(uncompressed, compressed), true)
+})
+
+test("native release tag synchronization supports LF and Windows CRLF workflows", () => {
+  const workflow = [
+    "      release_tag:",
+    "        description: Release tag",
+    "        required: true",
+    "        default: native-v0.4.3",
+    "        type: string",
+    "",
+  ].join("\n")
+
+  assert.match(replaceSignedReleaseTag(workflow, "0.4.4"), /default: native-v0\.4\.4/)
+  assert.match(replaceSignedReleaseTag(workflow.replace(/\n/g, "\r\n"), "0.4.4"), /default: native-v0\.4\.4/)
 })
 
 test("downloads page resolves real desktop releases without presenting beta as signed", () => {
