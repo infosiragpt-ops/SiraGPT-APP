@@ -300,7 +300,7 @@
     "@types/react-katex": "^3.0.4",
     "@types/web": "^0.0.352",
     "@xmldom/xmldom": "^0.9.10",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "0.6.0",
     "electron": "^43.0.0",
     "electron-builder": "^26.15.3",
     "eslint": "^8.57.1",
