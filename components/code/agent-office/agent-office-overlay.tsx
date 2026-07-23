@@ -7,19 +7,33 @@ import {
   ArrowUpRight,
   Building2,
   CircleAlert,
+  Clock3,
   Layers3,
+  Loader2,
+  Moon,
   Pause,
   Play,
   RotateCcw,
+  Sun,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
 import type { AgentOfficeModel, AgentOfficeWorker } from "@/lib/agent-office-model"
+import {
+  nextOfficeTimeMode,
+  officeTimeModeLabel,
+  resolveOfficeTimeOfDay,
+  type OfficeTimeMode,
+} from "@/lib/agent-office-environment"
 import { cn } from "@/lib/utils"
 
 import { AgentOfficeScene } from "./agent-office-scene"
+import { useOfficeSoundscape } from "./use-office-soundscape"
 
 type AgentOfficeOverlayProps = {
   open: boolean
@@ -69,8 +83,19 @@ export function AgentOfficeOverlay({
   const [selectedWorkerId, setSelectedWorkerId] = React.useState<string | null>(null)
   const [rosterOpen, setRosterOpen] = React.useState(false)
   const [resetCameraKey, setResetCameraKey] = React.useState(0)
+  const [timeMode, setTimeMode] = React.useState<OfficeTimeMode>("auto")
+  const [localClock, setLocalClock] = React.useState(() => new Date())
+  const timeOfDay = resolveOfficeTimeOfDay(timeMode, localClock)
+  const timeLabel = officeTimeModeLabel(timeMode, timeOfDay)
 
   React.useEffect(() => setMounted(true), [])
+
+  React.useEffect(() => {
+    if (!open) return
+    setLocalClock(new Date())
+    const interval = window.setInterval(() => setLocalClock(new Date()), 60_000)
+    return () => window.clearInterval(interval)
+  }, [open])
 
   React.useEffect(() => {
     if (!open) return
@@ -85,13 +110,6 @@ export function AgentOfficeOverlay({
       window.removeEventListener("keydown", onKeyDown)
     }
   }, [onClose, open])
-
-  React.useEffect(() => {
-    if (!open) {
-      setSelectedWorkerId(null)
-      setRosterOpen(false)
-    }
-  }, [open])
 
   React.useEffect(() => {
     if (departmentId !== "all" && !model.departments.some((department) => department.id === departmentId)) {
@@ -122,6 +140,20 @@ export function AgentOfficeOverlay({
       totalCount: workers.length,
     }
   }, [activeOnly, departmentId, model])
+  const sound = useOfficeSoundscape({
+    timeOfDay,
+    paused,
+    activeCount: visibleModel.activeCount,
+  })
+  const disableSound = sound.disable
+
+  React.useEffect(() => {
+    if (!open) {
+      setSelectedWorkerId(null)
+      setRosterOpen(false)
+      disableSound()
+    }
+  }, [disableSound, open])
 
   const selectedWorker =
     model.workers.find((worker) => worker.id === selectedWorkerId) || null
@@ -135,10 +167,13 @@ export function AgentOfficeOverlay({
       aria-modal="true"
       aria-label={`Oficina de agentes de ${companyName}`}
       data-testid="agent-office-overlay"
+      data-office-time={timeOfDay}
+      data-office-sound={sound.state}
     >
       <AgentOfficeScene
         model={visibleModel}
         paused={paused}
+        timeOfDay={timeOfDay}
         selectedWorkerId={selectedWorkerId}
         resetCameraKey={resetCameraKey}
         className={cn(rosterOpen && "sm:w-[calc(100%_-_360px)]")}
@@ -153,14 +188,14 @@ export function AgentOfficeOverlay({
         }}
       />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex min-h-16 items-center gap-3 border-b border-white/55 bg-white/82 px-3 py-2 shadow-[0_10px_32px_-24px_rgba(15,23,42,0.7)] backdrop-blur-xl sm:px-5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex min-h-16 items-center gap-3 border-b border-white/60 bg-white/90 px-3 py-2 shadow-[0_10px_32px_-24px_rgba(15,23,42,0.7)] backdrop-blur-xl sm:px-5">
         <div className="pointer-events-auto flex min-w-0 items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white">
             <Building2 className="h-5 w-5" />
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold sm:text-base">{companyName}</span>
-            <span className="block truncate text-[11px] text-zinc-500">Oficina de agentes</span>
+            <span className="block truncate text-[11px] text-zinc-500">Terraza costera · {timeLabel}</span>
           </span>
         </div>
 
@@ -180,6 +215,57 @@ export function AgentOfficeOverlay({
         </div>
 
         <div className="pointer-events-auto flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-md bg-white/70"
+            onClick={() => setTimeMode((current) => nextOfficeTimeMode(current))}
+            aria-label={`Ambiente ${timeLabel}. Cambiar ciclo de luz`}
+            title={`Ambiente ${timeLabel}`}
+            data-testid="agent-office-time-toggle"
+          >
+            {timeMode === "auto" ? (
+              <Clock3 className="h-4 w-4" />
+            ) : timeOfDay === "day" ? (
+              <Sun className="h-4 w-4" />
+            ) : (
+              <Moon className="h-4 w-4" />
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-9 w-9 rounded-md bg-white/70",
+              sound.enabled && "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white",
+            )}
+            onClick={sound.toggle}
+            aria-label={
+              sound.enabled
+                ? "Desactivar sonido de la oficina"
+                : "Activar sonido de la oficina"
+            }
+            title={
+              sound.state === "loading"
+                ? "Preparando audio"
+                : sound.state === "elevenlabs"
+                  ? "Audio ElevenLabs activo"
+                  : sound.enabled
+                    ? "Audio local activo"
+                    : "Activar audio"
+            }
+            data-testid="agent-office-sound-toggle"
+          >
+            {sound.state === "loading" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : sound.enabled ? (
+              <Volume2 className="h-4 w-4" />
+            ) : (
+              <VolumeX className="h-4 w-4" />
+            )}
+          </Button>
           <Button
             type="button"
             variant="ghost"
@@ -228,7 +314,7 @@ export function AgentOfficeOverlay({
       </header>
 
       <div className="pointer-events-none absolute left-3 right-3 top-[74px] z-20 flex flex-wrap items-center gap-2 sm:left-5 sm:right-auto">
-        <div className="pointer-events-auto flex h-9 shrink-0 items-center rounded-md border border-white/75 bg-white/82 p-1 shadow-sm backdrop-blur-xl">
+        <div className="pointer-events-auto flex h-9 shrink-0 items-center rounded-md border border-white/75 bg-white/90 p-1 shadow-sm backdrop-blur-xl">
           <button
             type="button"
             className={cn(
@@ -259,7 +345,7 @@ export function AgentOfficeOverlay({
             setDepartmentId(event.target.value)
             setSelectedWorkerId(null)
           }}
-          className="pointer-events-auto h-9 max-w-[min(68vw,320px)] rounded-md border border-white/75 bg-white/82 px-3 text-xs font-medium shadow-sm outline-none backdrop-blur-xl focus:ring-2 focus:ring-zinc-950"
+          className="pointer-events-auto h-9 max-w-[min(68vw,320px)] rounded-md border border-white/75 bg-white/90 px-3 text-xs font-medium shadow-sm outline-none backdrop-blur-xl focus:ring-2 focus:ring-zinc-950"
           aria-label="Filtrar por departamento"
         >
           <option value="all">Todos los departamentos</option>
@@ -269,9 +355,26 @@ export function AgentOfficeOverlay({
             </option>
           ))}
         </select>
+
+        <div className="pointer-events-auto hidden h-9 w-32 items-center gap-2 rounded-md border border-white/75 bg-white/90 px-2.5 shadow-sm backdrop-blur-xl md:flex">
+          {sound.enabled ? (
+            <Volume2 className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+          ) : (
+            <VolumeX className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+          )}
+          <Slider
+            value={[Math.round(sound.volume * 100)]}
+            max={100}
+            step={1}
+            disabled={!sound.enabled}
+            onValueChange={([value]) => sound.setVolume((value || 0) / 100)}
+            className="min-w-0"
+            aria-label="Volumen de la oficina"
+          />
+        </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-center gap-3 rounded-md border border-white/70 bg-white/78 px-3 py-2 text-[11px] font-medium text-zinc-600 shadow-sm backdrop-blur-xl sm:flex">
+      <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-center gap-3 rounded-md border border-white/70 bg-white/80 px-3 py-2 text-[11px] font-medium text-zinc-600 shadow-sm backdrop-blur-xl sm:flex">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-sky-400" />
           Trabajando
@@ -284,11 +387,17 @@ export function AgentOfficeOverlay({
           <span className="h-2 w-2 rounded-full bg-amber-400" />
           Revisión
         </span>
+        {sound.enabled ? (
+          <span className="inline-flex items-center gap-1.5 border-l border-zinc-200 pl-3">
+            <Volume2 className="h-3.5 w-3.5" />
+            {sound.state === "elevenlabs" ? "Ambiente ElevenLabs" : "Ambiente local"}
+          </span>
+        ) : null}
       </div>
 
       {rosterOpen ? (
         <aside
-          className="absolute bottom-0 right-0 top-16 z-30 flex w-full flex-col border-l border-white/70 bg-white/88 shadow-[-18px_0_42px_-32px_rgba(15,23,42,0.6)] backdrop-blur-2xl sm:w-[360px]"
+          className="absolute bottom-0 right-0 top-16 z-30 flex w-full flex-col border-l border-white/70 bg-white/90 shadow-[-18px_0_42px_-32px_rgba(15,23,42,0.6)] backdrop-blur-2xl sm:w-[360px]"
           data-testid="agent-office-roster"
         >
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200/75 px-4">
@@ -390,7 +499,7 @@ export function AgentOfficeOverlay({
         </aside>
       ) : null}
 
-      <div className="pointer-events-none absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-md border border-white/75 bg-white/82 px-3 py-2 text-[11px] font-medium shadow-sm backdrop-blur-xl sm:hidden">
+      <div className="pointer-events-none absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-md border border-white/75 bg-white/90 px-3 py-2 text-[11px] font-medium shadow-sm backdrop-blur-xl sm:hidden">
         <span className="h-2 w-2 rounded-full bg-sky-400" />
         {model.activeCount} activos · {model.totalCount} agentes
       </div>

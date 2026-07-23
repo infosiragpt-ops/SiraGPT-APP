@@ -8,12 +8,14 @@ import type {
   AgentOfficeModel,
   AgentOfficeWorker,
 } from "@/lib/agent-office-model"
+import { officeTimeOfDay, type OfficeTimeOfDay } from "@/lib/agent-office-environment"
 import { cn } from "@/lib/utils"
 
 type AgentOfficeSceneProps = {
   model: AgentOfficeModel
   variant?: "full" | "thumbnail"
   paused?: boolean
+  timeOfDay?: OfficeTimeOfDay
   selectedWorkerId?: string | null
   resetCameraKey?: number
   className?: string
@@ -35,6 +37,13 @@ type WorkerAnimation = {
   walkSpeed: number
   phase: number
   baseY: number
+}
+
+type CoastalArchitecture = {
+  oceanGeometry: THREE.PlaneGeometry
+  oceanPosition: THREE.BufferAttribute
+  oceanBase: Float32Array
+  beacon: THREE.Mesh
 }
 
 const ACTIVITY_COLORS: Record<AgentOfficeActivity, number> = {
@@ -314,6 +323,297 @@ function addWorker({
   }
 }
 
+function addPlant(
+  parent: THREE.Group,
+  x: number,
+  z: number,
+  timeOfDay: OfficeTimeOfDay,
+) {
+  const planter = new THREE.Mesh(
+    new THREE.BoxGeometry(0.72, 0.48, 0.72),
+    material(timeOfDay === "day" ? 0xe3e7e4 : 0x667179, 0.68, 0.08),
+  )
+  planter.position.set(x, 0.24, z)
+  parent.add(planter)
+
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.055, 0.08, 0.72, 8),
+    material(0x6f4e37, 0.86),
+  )
+  trunk.position.set(x, 0.78, z)
+  parent.add(trunk)
+
+  const foliage = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.44, 1),
+    new THREE.MeshStandardMaterial({
+      color: timeOfDay === "day" ? 0x2f7d5c : 0x275a4b,
+      roughness: 0.8,
+      emissive: timeOfDay === "night" ? 0x0f3329 : 0x000000,
+      emissiveIntensity: timeOfDay === "night" ? 0.18 : 0,
+    }),
+  )
+  foliage.position.set(x, 1.28, z)
+  foliage.scale.set(1, 1.3, 1)
+  parent.add(foliage)
+}
+
+function addGlassPanel(
+  parent: THREE.Group,
+  width: number,
+  height: number,
+  timeOfDay: OfficeTimeOfDay,
+) {
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, height),
+    new THREE.MeshPhysicalMaterial({
+      color: timeOfDay === "day" ? 0xa9d5e5 : 0x31506a,
+      roughness: 0.12,
+      metalness: 0.18,
+      transmission: timeOfDay === "day" ? 0.5 : 0.22,
+      transparent: true,
+      opacity: timeOfDay === "day" ? 0.34 : 0.54,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  )
+  parent.add(panel)
+  return panel
+}
+
+function addCoastalArchitecture({
+  scene,
+  totalWidth,
+  totalDepth,
+  timeOfDay,
+  variant,
+}: {
+  scene: THREE.Scene
+  totalWidth: number
+  totalDepth: number
+  timeOfDay: OfficeTimeOfDay
+  variant: "full" | "thumbnail"
+}): CoastalArchitecture {
+  const night = timeOfDay === "night"
+  scene.background = new THREE.Color(night ? 0x0b2136 : 0x9fd2ea)
+  scene.fog = new THREE.Fog(night ? 0x0b2136 : 0xaed9e8, 58, 142)
+
+  const horizon = new THREE.Mesh(
+    new THREE.PlaneGeometry(190, 72),
+    new THREE.MeshBasicMaterial({
+      color: night ? 0x0b2136 : 0xb9e2ef,
+      fog: false,
+    }),
+  )
+  horizon.position.set(0, 20, -78)
+  horizon.renderOrder = -10
+  scene.add(horizon)
+
+  const oceanGeometry = new THREE.PlaneGeometry(
+    190,
+    104,
+    variant === "full" ? 52 : 26,
+    variant === "full" ? 28 : 14,
+  )
+  const oceanPosition = oceanGeometry.attributes.position as THREE.BufferAttribute
+  const oceanBase = new Float32Array(oceanPosition.count)
+  for (let index = 0; index < oceanPosition.count; index += 1) {
+    oceanBase[index] = oceanPosition.getY(index)
+  }
+  const ocean = new THREE.Mesh(
+    oceanGeometry,
+    new THREE.MeshPhysicalMaterial({
+      color: night ? 0x125675 : 0x2388aa,
+      roughness: night ? 0.36 : 0.24,
+      metalness: 0.22,
+      clearcoat: 0.62,
+      clearcoatRoughness: 0.22,
+      emissive: night ? 0x062235 : 0x082b36,
+      emissiveIntensity: night ? 0.42 : 0.08,
+    }),
+  )
+  ocean.rotation.x = -Math.PI / 2
+  ocean.position.set(0, -1.45, -totalDepth / 2 - 49)
+  ocean.receiveShadow = false
+  scene.add(ocean)
+
+  const building = new THREE.Group()
+  const tower = new THREE.Mesh(
+    new THREE.BoxGeometry(totalWidth + 8, 8.5, totalDepth + 8),
+    new THREE.MeshStandardMaterial({
+      color: night ? 0x162838 : 0x5f8599,
+      roughness: 0.24,
+      metalness: 0.52,
+      emissive: night ? 0x081522 : 0x000000,
+      emissiveIntensity: night ? 0.38 : 0,
+    }),
+  )
+  tower.position.y = -4.48
+  building.add(tower)
+
+  const facadeMaterial = new THREE.MeshStandardMaterial({
+    color: night ? 0xffd58a : 0xa9e3f6,
+    emissive: night ? 0xffb84d : 0x2f7f9a,
+    emissiveIntensity: night ? 1.1 : 0.18,
+    roughness: 0.28,
+    metalness: 0.22,
+  })
+  const facadeWidth = totalWidth + 6.8
+  const frontZ = totalDepth / 2 + 4.03
+  const facadeColumns = Math.max(6, Math.floor(facadeWidth / 2.15))
+  for (let row = 0; row < 3; row += 1) {
+    for (let column = 0; column < facadeColumns; column += 1) {
+      const window = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.14, 0.72),
+        facadeMaterial,
+      )
+      window.position.set(
+        -facadeWidth / 2 + 1.05 + column * (facadeWidth - 2.1) / Math.max(1, facadeColumns - 1),
+        -1.28 - row * 1.28,
+        frontZ,
+      )
+      building.add(window)
+    }
+  }
+
+  const terrace = new THREE.Mesh(
+    new THREE.BoxGeometry(totalWidth + 5, 0.22, 4.5),
+    material(night ? 0x77838a : 0xdce2e1, 0.82, 0.08),
+  )
+  terrace.position.set(0, -0.02, totalDepth / 2 + 2.35)
+  terrace.receiveShadow = variant === "full"
+  building.add(terrace)
+
+  const glassHeight = 3.85
+  const panelWidth = 2.8
+  const backWidth = totalWidth + 4
+  const backPanels = Math.ceil(backWidth / panelWidth)
+  const mullionMaterial = material(night ? 0x2e3b45 : 0x607783, 0.38, 0.72)
+  for (let index = 0; index < backPanels; index += 1) {
+    const width = backWidth / backPanels - 0.06
+    const panel = addGlassPanel(building, width, glassHeight, timeOfDay)
+    panel.position.set(
+      -backWidth / 2 + width / 2 + index * (backWidth / backPanels),
+      glassHeight / 2,
+      -totalDepth / 2 - 1.08,
+    )
+  }
+  for (let index = 0; index <= backPanels; index += 1) {
+    const mullion = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, glassHeight + 0.1, 0.08),
+      mullionMaterial,
+    )
+    mullion.position.set(
+      -backWidth / 2 + index * (backWidth / backPanels),
+      glassHeight / 2,
+      -totalDepth / 2 - 1.04,
+    )
+    building.add(mullion)
+  }
+  for (const y of [0.08, 1.34, 2.62, 3.88]) {
+    const crossbar = new THREE.Mesh(
+      new THREE.BoxGeometry(backWidth + 0.08, 0.065, 0.09),
+      mullionMaterial,
+    )
+    crossbar.position.set(0, y, -totalDepth / 2 - 1.02)
+    building.add(crossbar)
+  }
+
+  const sideDepth = totalDepth + 5.2
+  const sidePanels = Math.max(2, Math.ceil(sideDepth / panelWidth))
+  for (const side of [-1, 1]) {
+    for (let index = 0; index < sidePanels; index += 1) {
+      const width = sideDepth / sidePanels - 0.06
+      const panel = addGlassPanel(building, width, glassHeight, timeOfDay)
+      panel.rotation.y = Math.PI / 2
+      panel.position.set(
+        side * (totalWidth / 2 + 1.08),
+        glassHeight / 2,
+        -sideDepth / 2 + width / 2 + index * (sideDepth / sidePanels),
+      )
+    }
+    for (const y of [0.08, 1.34, 2.62, 3.88]) {
+      const crossbar = new THREE.Mesh(
+        new THREE.BoxGeometry(0.09, 0.065, sideDepth + 0.08),
+        mullionMaterial,
+      )
+      crossbar.position.set(side * (totalWidth / 2 + 1.04), y, 0)
+      building.add(crossbar)
+    }
+  }
+
+  const railZ = totalDepth / 2 + 4.5
+  const railPanels = Math.max(3, Math.ceil((totalWidth + 4) / 3.2))
+  for (let index = 0; index < railPanels; index += 1) {
+    const width = (totalWidth + 4) / railPanels - 0.08
+    const rail = addGlassPanel(building, width, 1.05, timeOfDay)
+    rail.position.set(
+      -(totalWidth + 4) / 2 + width / 2 + index * ((totalWidth + 4) / railPanels),
+      0.62,
+      railZ,
+    )
+  }
+
+  for (const x of [-totalWidth / 2 - 0.3, totalWidth / 2 + 0.3]) {
+    addPlant(building, x, totalDepth / 2 + 2.8, timeOfDay)
+  }
+  addPlant(building, -totalWidth / 2 - 0.3, -totalDepth / 2 + 0.2, timeOfDay)
+  addPlant(building, totalWidth / 2 + 0.3, -totalDepth / 2 + 0.2, timeOfDay)
+
+  const canopy = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.min(totalWidth * 0.44, 15), 0.18, 3.2),
+    material(night ? 0x263743 : 0xe8eff1, 0.34, 0.42),
+  )
+  canopy.position.set(0, 4.08, -totalDepth / 2 + 0.55)
+  building.add(canopy)
+
+  const loungeMaterial = material(night ? 0x243b4a : 0xf4f6f5, 0.78)
+  for (const x of [-2.2, 2.2]) {
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.45, 0.82), loungeMaterial)
+    bench.position.set(x, 0.28, totalDepth / 2 + 2.45)
+    building.add(bench)
+  }
+
+  scene.add(building)
+
+  const beacon = new THREE.Mesh(
+    new THREE.SphereGeometry(night ? 1.05 : 1.42, 24, 16),
+    new THREE.MeshBasicMaterial({
+      color: night ? 0xe8f1ff : 0xfff1b8,
+      fog: false,
+    }),
+  )
+  beacon.position.set(night ? 20 : -24, night ? 17 : 22, -56)
+  scene.add(beacon)
+
+  if (night) {
+    const starCount = variant === "full" ? 180 : 80
+    const starPositions = new Float32Array(starCount * 3)
+    for (let index = 0; index < starCount; index += 1) {
+      starPositions[index * 3] = (Math.random() - 0.5) * 120
+      starPositions[index * 3 + 1] = 6 + Math.random() * 36
+      starPositions[index * 3 + 2] = -48 - Math.random() * 45
+    }
+    const starsGeometry = new THREE.BufferGeometry()
+    starsGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3))
+    scene.add(new THREE.Points(
+      starsGeometry,
+      new THREE.PointsMaterial({
+        color: 0xd7e7ff,
+        size: 0.18,
+        transparent: true,
+        opacity: 0.82,
+        fog: false,
+      }),
+    ))
+
+    const terraceLight = new THREE.PointLight(0xffcf8a, 28, Math.max(totalWidth, totalDepth) * 1.45, 1.7)
+    terraceLight.position.set(0, 5.5, totalDepth / 2 + 0.8)
+    scene.add(terraceLight)
+  }
+
+  return { oceanGeometry, oceanPosition, oceanBase, beacon }
+}
+
 function disposeScene(scene: THREE.Scene) {
   scene.traverse((object) => {
     const mesh = object as THREE.Mesh
@@ -327,6 +627,7 @@ export function AgentOfficeScene({
   model,
   variant = "full",
   paused = false,
+  timeOfDay,
   selectedWorkerId = null,
   resetCameraKey = 0,
   className,
@@ -364,6 +665,8 @@ export function AgentOfficeScene({
   React.useEffect(() => {
     const host = hostRef.current
     if (!host) return
+    const resolvedTimeOfDay = timeOfDay || officeTimeOfDay()
+    const night = resolvedTimeOfDay === "night"
 
     let renderer: THREE.WebGLRenderer
     try {
@@ -380,10 +683,12 @@ export function AgentOfficeScene({
 
     setFailed(false)
     renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.setClearColor(variant === "thumbnail" ? 0xdfe8ee : 0xe8edf0, 1)
+    renderer.toneMapping = THREE.ACESFilmicToneMapping
+    renderer.toneMappingExposure = night ? 1.12 : 1.05
+    renderer.setClearColor(night ? 0x0b2136 : variant === "thumbnail" ? 0xb8d9e6 : 0xaed9e8, 1)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, variant === "thumbnail" ? 1 : 1.5))
     renderer.shadowMap.enabled = variant === "full"
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    renderer.shadowMap.type = THREE.PCFShadowMap
     renderer.domElement.className = "block h-full w-full touch-none"
     renderer.domElement.setAttribute("aria-label", "Oficina 3D de agentes y departamentos")
     renderer.domElement.dataset.officeCanvas = variant
@@ -427,22 +732,34 @@ export function AgentOfficeScene({
 
     const resetCamera = () => {
       yaw = -0.72
-      pitch = variant === "thumbnail" ? 0.82 : 0.8
+      pitch = variant === "thumbnail" ? 0.66 : 0.5
       const baseDistance = Math.max(
         variant === "thumbnail" ? 18 : 22,
-        Math.max(totalWidth * 0.78, totalDepth * 1.08),
+        Math.max(totalWidth * 0.82, totalDepth * 1.14),
       )
       const aspect = Math.max(0.35, host.clientWidth / Math.max(1, host.clientHeight))
       distance = Math.min(72, baseDistance * Math.max(1, 0.9 / aspect))
-      target.set(0, 0.5, 0)
+      target.set(0, 0.72, -totalDepth * 0.12)
       updateCamera()
     }
     resetCameraRef.current = resetCamera
     resetCamera()
 
-    const hemisphere = new THREE.HemisphereLight(0xffffff, 0x53606a, 1.7)
+    const coastalArchitecture = addCoastalArchitecture({
+      scene,
+      totalWidth,
+      totalDepth,
+      timeOfDay: resolvedTimeOfDay,
+      variant,
+    })
+
+    const hemisphere = new THREE.HemisphereLight(
+      night ? 0x7ba5c5 : 0xffffff,
+      night ? 0x07111b : 0x53606a,
+      night ? 1.3 : 1.7,
+    )
     scene.add(hemisphere)
-    const sun = new THREE.DirectionalLight(0xfff4dd, 2.45)
+    const sun = new THREE.DirectionalLight(night ? 0xa9c9ff : 0xfff4dd, night ? 1.05 : 2.45)
     sun.position.set(-18, 28, 14)
     sun.castShadow = variant === "full"
     if (variant === "full") {
@@ -453,13 +770,13 @@ export function AgentOfficeScene({
       sun.shadow.camera.bottom = -30
     }
     scene.add(sun)
-    const fill = new THREE.DirectionalLight(0xc9e7ff, 1.2)
+    const fill = new THREE.DirectionalLight(night ? 0x7fa5d6 : 0xc9e7ff, night ? 0.92 : 1.2)
     fill.position.set(18, 12, -16)
     scene.add(fill)
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 10, totalDepth + 10),
-      material(0xcfbd99, 0.92),
+      material(night ? 0x7f898e : 0xcfbd99, 0.92),
     )
     floor.rotation.x = -Math.PI / 2
     floor.position.y = -0.08
@@ -468,7 +785,7 @@ export function AgentOfficeScene({
 
     const aisle = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 6, 1.15),
-      material(0xc7d1d5, 0.9),
+      material(night ? 0x7d898e : 0xc7d1d5, 0.9),
     )
     aisle.rotation.x = -Math.PI / 2
     aisle.position.set(0, -0.035, totalDepth / 2 + 1.6)
@@ -484,6 +801,17 @@ export function AgentOfficeScene({
       const zoneZ = row * (zoneDepth + gapZ) - totalDepth / 2 + zoneDepth / 2
       const departmentGroup = new THREE.Group()
       departmentGroup.position.set(zoneX, 0, zoneZ)
+
+      if (night) {
+        const workLight = new THREE.PointLight(
+          department.activeCount > 0 ? 0xddeaff : 0xffd7a1,
+          department.activeCount > 0 ? 8.5 : 5.5,
+          Math.max(zoneWidth, zoneDepth) * 1.15,
+          1.8,
+        )
+        workLight.position.set(0, 4.1, 0)
+        departmentGroup.add(workLight)
+      }
 
       const carpet = new THREE.Mesh(
         new THREE.BoxGeometry(zoneWidth, 0.12, zoneDepth),
@@ -663,15 +991,15 @@ export function AgentOfficeScene({
     resize()
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    const clock = new THREE.Clock()
+    const animationStartedAt = window.performance.now()
     const projectedWorker = new THREE.Vector3()
     let animationFrame = 0
     let frameCount = 0
     let readyReported = false
 
-    const animate = () => {
+    const animate = (timestamp: number) => {
       animationFrame = window.requestAnimationFrame(animate)
-      const elapsed = clock.getElapsedTime()
+      const elapsed = Math.max(0, timestamp - animationStartedAt) / 1000
       const canAnimate = !pausedRef.current && !reducedMotion && document.visibilityState === "visible"
 
       for (const animation of workers) {
@@ -691,6 +1019,22 @@ export function AgentOfficeScene({
         animation.screen.material.emissiveIntensity = animation.worker.active
           ? 0.9 + (Math.sin(stridePhase * 0.4) + 1) * 0.18
           : 0.2
+      }
+
+      if (canAnimate) {
+        const { oceanGeometry, oceanPosition, oceanBase, beacon } = coastalArchitecture
+        for (let index = 0; index < oceanPosition.count; index += 1) {
+          const x = oceanPosition.getX(index)
+          const depth = oceanBase[index]
+          const wave =
+            Math.sin(elapsed * 0.72 + x * 0.11 + depth * 0.07) * 0.12 +
+            Math.sin(elapsed * 0.43 - x * 0.05 + depth * 0.14) * 0.07
+          oceanPosition.setZ(index, wave)
+        }
+        oceanPosition.needsUpdate = true
+        if (frameCount % 4 === 0) oceanGeometry.computeVertexNormals()
+        const pulse = 1 + Math.sin(elapsed * 0.38) * 0.012
+        beacon.scale.setScalar(pulse)
       }
 
       renderer.render(scene, camera)
@@ -724,7 +1068,7 @@ export function AgentOfficeScene({
         onReadyRef.current?.()
       }
     }
-    animate()
+    animationFrame = window.requestAnimationFrame(animate)
 
     return () => {
       window.cancelAnimationFrame(animationFrame)
@@ -740,14 +1084,19 @@ export function AgentOfficeScene({
       renderer.domElement.remove()
       delete host.dataset.officeReady
     }
-  }, [model, variant])
+  }, [model, timeOfDay, variant])
 
   return (
     <div
       ref={hostRef}
-      className={cn("relative h-full min-h-0 w-full overflow-hidden bg-[#e8edf0]", className)}
+      className={cn(
+        "relative h-full min-h-0 w-full overflow-hidden",
+        timeOfDay === "night" ? "bg-[#0b2136]" : "bg-[#aed9e8]",
+        className,
+      )}
       data-testid={variant === "thumbnail" ? "agent-office-thumbnail" : "agent-office-scene"}
       data-office-ready="false"
+      data-office-time={timeOfDay || "auto"}
     >
       {failed ? (
         <div className="absolute inset-0 flex items-center justify-center bg-zinc-950 px-6 text-center text-xs text-zinc-300">

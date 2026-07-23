@@ -2752,6 +2752,32 @@ class ApiClient {
   async getModels() {
     return this.request('/elevenlabs/models');
   }
+
+  async getOfficeSoundscape(
+    soundId: 'coast-day' | 'coast-night' | 'terrace-steps',
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{
+    ok: boolean;
+    soundId: string;
+    audio_url: string;
+    filename: string;
+    cached: boolean;
+    loop: boolean;
+    durationSeconds: number;
+    provider: 'elevenlabs';
+  }> {
+    return this.request(`/elevenlabs/office-soundscapes/${encodeURIComponent(soundId)}`, {
+      method: 'POST',
+      signal: options.signal,
+      timeoutMs: 100000,
+      // Sound generation is billable. The server-side cache and in-flight
+      // dedupe make the operation idempotent, but the browser still avoids
+      // transport retries so it never creates parallel provider work.
+      maxRetries: 0,
+      suppressFailureLog: true,
+    });
+  }
+
   async textToSpeech(data: {
     text: string;
     voice_id?: string;

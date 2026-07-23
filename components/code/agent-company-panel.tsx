@@ -965,11 +965,11 @@ function CompanyHome({
           <div className="pointer-events-none absolute inset-0">
             <AgentOfficeScene model={officeModel} variant="thumbnail" />
           </div>
-          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/88 px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
+          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/[0.88] px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
             <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-zinc-400")} />
             Oficina · {officeModel.activeCount} activos
           </span>
-          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/68 px-3 py-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/[0.68] px-3 py-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
             <span className="truncate text-[11px] font-medium">Ver oficina de {companyName}</span>
             <ChevronRight className="h-4 w-4" />
           </span>
