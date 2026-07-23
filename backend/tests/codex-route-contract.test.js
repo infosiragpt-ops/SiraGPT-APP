@@ -10,9 +10,10 @@ const { mockResolvedModule } = require('./http-test-utils');
 
 // Stub auth BEFORE the codex router loads it.
 const authPath = require.resolve('../src/middleware/auth');
+let authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
 const restoreAuth = mockResolvedModule(authPath, {
   authenticateToken(req, _res, next) {
-    req.user = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
+    req.user = authUser;
     next();
   },
 });
@@ -73,6 +74,7 @@ after(() => {
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
 });
 beforeEach(() => {
+  authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
   process.env.CODEX_AGENT_V2 = '1';
   delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
@@ -114,6 +116,15 @@ test('GET /access reports flag and user execution access', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.enabled, true);
   assert.equal(res.body.canRun, true);
+});
+
+test('POST /projects/:id/proactive rejects autonomous execution without isolated access', async () => {
+  authUser = { id: 'u-1', isAdmin: false, isSuperAdmin: false };
+  const res = await request(buildApp())
+    .post('/api/codex/projects/p1/proactive')
+    .send({ enabled: true });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error, 'codex_forbidden');
 });
 
 test('flag off ⇒ every other route is 404 not_found', async () => {

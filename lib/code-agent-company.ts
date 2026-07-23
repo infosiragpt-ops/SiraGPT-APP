@@ -24,6 +24,18 @@ export type AgentCompanySnapshot = {
 
 type WorkspaceFileLike = { content?: string } | undefined
 
+export type AgentCompanyRunLike = {
+  id: string
+  status: string
+  prompt?: string | null
+  error?: string | null
+  createdAt?: string | Date | null
+  startedAt?: string | Date | null
+  finishedAt?: string | Date | null
+}
+
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "waiting_approval"])
+
 export const AGENT_COMPANY_DEPARTMENTS: readonly AgentDepartmentDefinition[] = [
   {
     id: "ceo-office",
@@ -130,6 +142,75 @@ export function codeSessionStatus(session: CodeChatSession): AgentCompanySession
   }
 }
 
+export function codeRunIsActive(run: AgentCompanyRunLike): boolean {
+  return ACTIVE_RUN_STATUSES.has(String(run.status || "").toLowerCase())
+}
+
+export function codeRunStatus(run: AgentCompanyRunLike): AgentCompanySessionStatus {
+  switch (String(run.status || "").toLowerCase()) {
+    case "queued":
+      return { label: "En cola", tone: "active" }
+    case "running":
+      return { label: "Ejecutando", tone: "active" }
+    case "waiting_approval":
+      return { label: "Listo para revisar", tone: "attention" }
+    case "done":
+      return { label: "Evidencia lista", tone: "ready" }
+    case "error":
+      return { label: "Requiere atención", tone: "attention" }
+    case "cancelled":
+      return { label: "Cancelado", tone: "idle" }
+    default:
+      return { label: "Disponible", tone: "idle" }
+  }
+}
+
+function normalizedMatchText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+export function departmentIdForRun(
+  run: AgentCompanyRunLike,
+  departments: readonly AgentDepartmentDefinition[] = AGENT_COMPANY_DEPARTMENTS,
+): string {
+  const prompt = String(run.prompt || "")
+  const proactiveDepartment = /^\s*\[PROACTIVO\s*·\s*([^\]]+)\]/i.exec(prompt)?.[1]
+  if (proactiveDepartment) {
+    const normalizedDepartment = normalizedMatchText(proactiveDepartment)
+    const exact = departments.find((department) => normalizedMatchText(department.name) === normalizedDepartment)
+    if (exact) return exact.id
+  }
+
+  const haystack = normalizedMatchText(`${prompt} ${run.error || ""}`)
+  let bestMatch: { id: string; score: number } | null = null
+  for (const department of departments) {
+    if (department.id === "ceo-office" || department.id === "product-engineering") continue
+    const score = department.keywords.reduce(
+      (total, keyword) => total + (haystack.includes(normalizedMatchText(keyword)) ? 1 : 0),
+      0,
+    )
+    if (score > 0 && (!bestMatch || score > bestMatch.score)) {
+      bestMatch = { id: department.id, score }
+    }
+  }
+  return bestMatch?.id ?? "product-engineering"
+}
+
+export function codeRunActivityAt(run: AgentCompanyRunLike): number {
+  const candidates = [run.finishedAt, run.startedAt, run.createdAt]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const value = candidate instanceof Date ? candidate.getTime() : Date.parse(candidate)
+    if (Number.isFinite(value)) return value
+  }
+  return 0
+}
+
 export function countWorkspaceResources(files: Record<string, WorkspaceFileLike>): number {
   const packagePath = Object.keys(files).find((path) => /(^|\/)package\.json$/i.test(path))
   const raw = packagePath ? files[packagePath]?.content : null
@@ -186,14 +267,25 @@ export function departmentIdForSession(
 export function buildAgentCompanySnapshot(
   sessions: readonly CodeChatSession[],
   files: Record<string, WorkspaceFileLike>,
+  runs: readonly AgentCompanyRunLike[] = [],
 ): AgentCompanySnapshot {
+  const sessionActiveAgents = sessions.filter(codeSessionIsActive).length
+  const sessionTaskCount = sessions.filter(codeSessionHasWork).length
+  const runLatestActivityAt = runs.length > 0
+    ? Math.max(...runs.map(codeRunActivityAt))
+    : null
+  const sessionLatestActivityAt = sessions.length > 0
+    ? Math.max(...sessions.map((session) => session.updatedAt))
+    : null
+  const latestActivityAt = [runLatestActivityAt, sessionLatestActivityAt]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0)
+
   return {
     rootSessionId: rootCodeSessionId(sessions),
-    activeAgents: sessions.filter(codeSessionIsActive).length,
-    taskCount: sessions.filter(codeSessionHasWork).length,
+    activeAgents: runs.length > 0 ? runs.filter(codeRunIsActive).length : sessionActiveAgents,
+    taskCount: runs.length > 0 ? runs.length : sessionTaskCount,
     fileCount: Object.keys(files).length,
     resourceCount: countWorkspaceResources(files),
-    latestActivityAt:
-      sessions.length > 0 ? Math.max(...sessions.map((session) => session.updatedAt)) : null,
+    latestActivityAt: latestActivityAt.length > 0 ? Math.max(...latestActivityAt) : null,
   }
 }
