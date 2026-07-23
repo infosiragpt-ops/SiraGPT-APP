@@ -441,7 +441,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `meriyah` | 6.1.4 | ISC | [link](https://github.com/meriyah/meriyah) |
 | `minimalistic-assert` | 1.0.1 | ISC | [link](https://github.com/calvinmetcalf/minimalistic-assert) |
 | `minimatch` | 3.1.5, 5.1.9, 9.0.9 | ISC | [link](https://github.com/isaacs/minimatch) |
-| `next-auth` | 4.24.14 | ISC | [link](https://github.com/nextauthjs/next-auth) |
+| `next-auth` | 4.24.15 | ISC | [link](https://github.com/nextauthjs/next-auth) |
 | `node-cron` | 3.0.3 | ISC | [link](https://github.com/merencia/node-cron) |
 | `npm-normalize-package-bin` | 3.0.0 | ISC | [link](https://github.com/npm/npm-normalize-package-bin) |
 | `once` | 1.4.0 | ISC | [link](https://github.com/isaacs/once) |
