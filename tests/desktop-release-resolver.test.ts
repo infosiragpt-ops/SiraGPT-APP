@@ -50,6 +50,29 @@ test("stable channel excludes prereleases and beta channel can use them", () => 
   assert.equal(findDesktopRelease([releases[1]], "macos-arm64", "beta")?.version, "0.4.5")
 })
 
+test("desktop release resolver selects the newest published asset regardless of API order", () => {
+  const older = {
+    ...releases[1],
+    tag_name: "desktop-beta-v0.4.4-dd87ccb",
+    published_at: "2026-07-23T04:49:20Z",
+    assets: [
+      { name: "SiraGPT-0.4.4-arm64.dmg", browser_download_url: "https://github.com/example/older", size: 120 },
+    ],
+  }
+  const newest = {
+    ...releases[1],
+    tag_name: "desktop-beta-v0.4.4-14a0b5c",
+    published_at: "2026-07-23T14:48:26Z",
+    assets: [
+      { name: "SiraGPT-0.4.4-arm64.dmg", browser_download_url: "https://github.com/example/newest", size: 121 },
+    ],
+  }
+
+  const release = findDesktopRelease([older, newest], "macos-arm64", "beta")
+  assert.equal(release?.releaseTag, "desktop-beta-v0.4.4-14a0b5c")
+  assert.equal(release?.downloadUrl, "https://github.com/example/newest")
+})
+
 test("desktop release resolver accepts electron-builder Windows names and shared checksums", () => {
   const release: GitHubDesktopRelease = {
     tag_name: "desktop-beta-v0.4.4-a11bc1d",
