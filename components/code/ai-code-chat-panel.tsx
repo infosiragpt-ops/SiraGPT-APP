@@ -91,6 +91,7 @@ import {
 } from "@/lib/code-agent-company"
 import {
   buildProactiveCompanySystemBlock,
+  claimPendingSeedPrompt,
   getProactiveCompanyState,
   setProactiveCompanyObjective,
 } from "@/lib/code-agent-company-proactive"
@@ -3562,16 +3563,27 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // and the idle-drain above runs it as soon as the current turn settles.
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const handler = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
-      if (!text) return
+    const runRequest = (text: string) => {
       if (busyRef.current || buildingAppRef.current) {
         pendingInputRef.current.push({ text })
         return
       }
       void dispatchRef.current?.(text)
     }
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string; consumed?: boolean }>).detail
+      const text = detail?.text?.trim()
+      if (!text) return
+      // Handshake with requestProactiveSeedPrompt: mark the shared detail so
+      // the sender knows the kickoff was received and doesn't stash it.
+      if (detail) detail.consumed = true
+      runRequest(text)
+    }
     window.addEventListener("siragpt:code-agent-request", handler)
+    // A PROACTIVO kickoff fired before this panel mounted lands in the stash
+    // (the 120ms race made the button look dead). Claim it exactly once.
+    const pending = claimPendingSeedPrompt()
+    if (pending) runRequest(pending)
     return () => window.removeEventListener("siragpt:code-agent-request", handler)
   }, [])
 

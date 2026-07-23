@@ -141,16 +141,51 @@ export function focusCeoChatColumn(): void {
   window.dispatchEvent(new CustomEvent(CODE_FOCUS_CEO_CHAT_EVENT))
 }
 
+const PENDING_SEED_KEY = "code-workspace:proactive-pending-seed:v1"
+const PENDING_SEED_TTL_MS = 2 * 60_000
+
 export function requestProactiveSeedPrompt(prompt: string): void {
   if (typeof window === "undefined") return
   const text = String(prompt || "").trim()
   if (!text) return
   // Reuse the code chat panel's existing agent-request bus so the kickoff
   // flows through the same dispatch / busy-queue as a typed CEO message.
-  window.dispatchEvent(new CustomEvent("siragpt:code-agent-request", { detail: { text } }))
+  // The detail object is shared by reference: a mounted listener marks it
+  // consumed. If NOBODY consumed it (panel still mounting — the race that
+  // made PROACTIVO look dead), stash it so the panel claims it on mount.
+  const detail: { text: string; consumed?: boolean } = { text }
+  window.dispatchEvent(new CustomEvent("siragpt:code-agent-request", { detail }))
+  if (!detail.consumed) {
+    try {
+      window.sessionStorage.setItem(PENDING_SEED_KEY, JSON.stringify({ text, ts: Date.now() }))
+    } catch {
+      /* storage disabled: the kickoff is lost, but the toast told the user */
+    }
+  }
   window.dispatchEvent(
     new CustomEvent(CODE_COMPANY_SEED_PROMPT_EVENT, { detail: { prompt: text } }),
   )
+}
+
+/**
+ * Claim (read + clear) a kickoff that was requested before the chat panel
+ * mounted. TTL-bound so a stale stash can never fire a surprise build on a
+ * later visit.
+ */
+export function claimPendingSeedPrompt(): string | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_SEED_KEY)
+    if (!raw) return null
+    window.sessionStorage.removeItem(PENDING_SEED_KEY)
+    const parsed = JSON.parse(raw) as { text?: string; ts?: number }
+    const text = String(parsed?.text || "").trim()
+    const ts = Number(parsed?.ts)
+    if (!text || !Number.isFinite(ts) || Date.now() - ts > PENDING_SEED_TTL_MS) return null
+    return text
+  } catch {
+    return null
+  }
 }
 
 export function buildProactiveKickoffPrompt(companyName: string): string {
