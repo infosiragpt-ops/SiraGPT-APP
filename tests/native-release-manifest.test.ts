@@ -13,6 +13,7 @@ describe("generate-native-release-manifest", () => {
       const files = [
         "android/SiraGPT-debug.apk",
         "android/SiraGPT-play-upload.aab",
+        "SiraGPT-f99a790.apk",
         "ios/SiraGPT-ios-simulator-app.zip",
         "ios/SiraGPT.ipa",
         "SiraGPT-flat-ios-simulator-app.zip",
@@ -41,7 +42,7 @@ describe("generate-native-release-manifest", () => {
         artifacts: Array<{ path: string; platform: string; kind: string }>
       }
 
-      assert.equal(manifest.summary.platformCounts.android, 2)
+      assert.equal(manifest.summary.platformCounts.android, 3)
       assert.equal(manifest.summary.platformCounts.ios, 3)
       assert.equal(manifest.summary.platformCounts.macos, 3)
       assert.equal(manifest.summary.platformCounts.windows, 3)
@@ -51,6 +52,14 @@ describe("generate-native-release-manifest", () => {
       assert.ok(simulator)
       assert.equal(simulator.platform, "ios")
       assert.equal(simulator.kind, "simulator-app-zip")
+
+      const debugApk = manifest.artifacts.find((artifact) => artifact.path.endsWith("SiraGPT-debug.apk"))
+      assert.ok(debugApk)
+      assert.equal(debugApk.kind, "debug-apk")
+
+      const releaseApk = manifest.artifacts.find((artifact) => artifact.path === "SiraGPT-f99a790.apk")
+      assert.ok(releaseApk)
+      assert.equal(releaseApk.kind, "release-apk")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
