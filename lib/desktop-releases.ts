@@ -30,7 +30,7 @@ export type GitHubDesktopRelease = {
   assets: GitHubAsset[]
 }
 
-const RELEASES_API = "https://api.github.com/repos/infosiragpt-ops/SiraGPT-APP/releases?per_page=30"
+const RELEASES_API = "https://api.github.com/repos/infosiragpt-ops/SiraGPT-APP/releases?per_page=100"
 const DOWNLOADS_PAGE = "https://siragpt.com/descargas"
 
 const FALLBACK_BETA_ASSETS: Partial<Record<DesktopReleasePlatform, DesktopReleaseAsset>> = {
@@ -102,7 +102,15 @@ export function findDesktopRelease(
   platform: DesktopReleasePlatform,
   channel: DesktopReleaseChannel,
 ): DesktopReleaseAsset | null {
-  for (const release of releases) {
+  const newestFirst = [...releases].sort((left, right) => {
+    const leftPublishedAt = Date.parse(left.published_at || "")
+    const rightPublishedAt = Date.parse(right.published_at || "")
+    const leftTimestamp = Number.isFinite(leftPublishedAt) ? leftPublishedAt : 0
+    const rightTimestamp = Number.isFinite(rightPublishedAt) ? rightPublishedAt : 0
+    return rightTimestamp - leftTimestamp
+  })
+
+  for (const release of newestFirst) {
     if (release.draft || (channel === "stable" && release.prerelease)) continue
     const asset = release.assets.find((candidate) => assetMatchesPlatform(candidate.name, platform))
     if (!asset) continue
