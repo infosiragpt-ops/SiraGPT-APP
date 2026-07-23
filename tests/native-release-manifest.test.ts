@@ -14,9 +14,11 @@ describe("generate-native-release-manifest", () => {
         "android/SiraGPT-debug.apk",
         "android/SiraGPT-play-upload.aab",
         "SiraGPT-f99a790.apk",
+        "android-upload-certificate-blocker.json",
         "ios/SiraGPT-ios-simulator-app.zip",
         "ios/SiraGPT.ipa",
         "SiraGPT-flat-ios-simulator-app.zip",
+        "SiraGPT-flat-ios-device-build.json",
         "macos/SiraGPT-arm64.dmg",
         "macos/SiraGPT-arm64-mac.zip",
         "macos/SiraGPT-arm64.dmg.blockmap",
@@ -24,7 +26,7 @@ describe("generate-native-release-manifest", () => {
         "windows/SiraGPT-x64-portable.exe",
         "windows/SiraGPT-Setup-x64.exe.blockmap",
         "windows/SiraGPT-Store-0.4.4-x64.appx",
-        "windows/windows-store-package.json",
+        "windows-store-package.json",
       ]
 
       for (const file of files) {
@@ -46,8 +48,8 @@ describe("generate-native-release-manifest", () => {
         artifacts: Array<{ path: string; platform: string; kind: string }>
       }
 
-      assert.equal(manifest.summary.platformCounts.android, 3)
-      assert.equal(manifest.summary.platformCounts.ios, 3)
+      assert.equal(manifest.summary.platformCounts.android, 4)
+      assert.equal(manifest.summary.platformCounts.ios, 4)
       assert.equal(manifest.summary.platformCounts.macos, 3)
       assert.equal(manifest.summary.platformCounts.windows, 5)
       assert.equal(manifest.summary.platformCounts.unknown, undefined)
@@ -64,6 +66,16 @@ describe("generate-native-release-manifest", () => {
       const releaseApk = manifest.artifacts.find((artifact) => artifact.path === "SiraGPT-f99a790.apk")
       assert.ok(releaseApk)
       assert.equal(releaseApk.kind, "release-apk")
+
+      const androidBlocker = manifest.artifacts.find((artifact) => artifact.path === "android-upload-certificate-blocker.json")
+      assert.ok(androidBlocker)
+      assert.equal(androidBlocker.platform, "android")
+      assert.equal(androidBlocker.kind, "play-upload-blocker-evidence")
+
+      const iosDeviceBuild = manifest.artifacts.find((artifact) => artifact.path === "SiraGPT-flat-ios-device-build.json")
+      assert.ok(iosDeviceBuild)
+      assert.equal(iosDeviceBuild.platform, "ios")
+      assert.equal(iosDeviceBuild.kind, "ios-device-build-evidence")
 
       const storeAppx = manifest.artifacts.find((artifact) => artifact.path.endsWith(".appx"))
       assert.ok(storeAppx)

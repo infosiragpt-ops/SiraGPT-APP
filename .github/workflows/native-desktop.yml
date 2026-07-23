@@ -229,7 +229,7 @@ jobs:
           mkdir -p "$staging"
 
           find output/desktop-beta-input/macos -type f \( -name '*.dmg' -o -name '*-mac.zip' -o -name '*.blockmap' \) -exec cp {} "$staging"/ \;
-          find output/desktop-beta-input/windows -type f \( -name '*.exe' -o -name '*.blockmap' \) -exec cp {} "$staging"/ \;
+          find output/desktop-beta-input/windows -type f \( -name '*.exe' -o -name '*.blockmap' -o -name '*.appx' -o -name 'windows-store-package.json' \) -exec cp {} "$staging"/ \;
           while IFS= read -r -d '' artifact; do
             file_name="$(basename "$artifact")"
             normalized_name="${file_name// /.}"
@@ -248,6 +248,45 @@ jobs:
             echo "Windows installer missing from desktop beta" >&2
             exit 1
           fi
+          appx_path="$(find "$staging" -maxdepth 1 -type f -name '*.appx' -print -quit)"
+          store_metadata="$staging/windows-store-package.json"
+          if [[ -z "$appx_path" ]]; then
+            echo "Windows Store AppX missing from desktop beta" >&2
+            exit 1
+          fi
+          if [[ ! -f "$store_metadata" ]]; then
+            echo "Windows Store package metadata missing from desktop beta" >&2
+            exit 1
+          fi
+
+          package_mode="$(jq -er '.packageMode' "$store_metadata")"
+          store_submission_ready="$(jq -r '.storeSubmissionReady | tostring' "$store_metadata")"
+          installable_directly="$(jq -r '.installableDirectly | tostring' "$store_metadata")"
+          metadata_appx_name="$(jq -er '.package.fileName' "$store_metadata")"
+          metadata_appx_sha="$(jq -er '.package.sha256' "$store_metadata")"
+          appx_name="$(basename "$appx_path")"
+          appx_sha="$(sha256sum "$appx_path" | awk '{print $1}')"
+          if [[ "$store_submission_ready" != "true" && "$store_submission_ready" != "false" ]]; then
+            echo "Invalid storeSubmissionReady value in Windows Store metadata" >&2
+            exit 1
+          fi
+          if [[ "$installable_directly" != "true" && "$installable_directly" != "false" ]]; then
+            echo "Invalid installableDirectly value in Windows Store metadata" >&2
+            exit 1
+          fi
+          if [[ "$appx_name" != "$metadata_appx_name" ]]; then
+            echo "Windows Store metadata names $metadata_appx_name but staged package is $appx_name" >&2
+            exit 1
+          fi
+          if [[ "$appx_sha" != "$metadata_appx_sha" ]]; then
+            echo "Windows Store AppX checksum does not match its metadata" >&2
+            exit 1
+          fi
+          if [[ "$store_submission_ready" == "true" ]]; then
+            appx_guidance="El AppX usa la identidad reservada de Partner Center; aún requiere certificación de la tienda."
+          else
+            appx_guidance="El AppX QA no debe enviarse a Partner Center hasta configurar la identidad exacta de la tienda."
+          fi
 
           node scripts/generate-native-release-manifest.js \
             --dir="$staging" \
@@ -264,6 +303,8 @@ jobs:
 
           - Canal: beta sin firma pública.
           - Código: ${GITHUB_SHA}.
+          - AppX: \`${appx_name}\` (modo \`${package_mode}\`, Store ready: \`${store_submission_ready}\`, instalación directa: \`${installable_directly}\`).
+          - ${appx_guidance}
           - Verificación: consulta \`SHA256SUMS.txt\` y \`native-release-manifest.json\`.
           - Producción general: espera la versión firmada y notarizada.
           EOF
