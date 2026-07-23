@@ -6,8 +6,12 @@ describe("Signed native release workflow integrity", () => {
   const workflow = readFileSync(".github/workflows/native-release.yml", "utf8")
 
   it("verifies signed artifacts before publishing them", () => {
-    assert.match(workflow, /name: Verify Android bundle signature/)
+    assert.match(workflow, /name: Android signed AAB \+ APK/)
+    assert.match(workflow, /:app:bundleRelease :app:assembleRelease/)
+    assert.match(workflow, /SiraGPT-\$\{short_sha\}\.apk/)
+    assert.match(workflow, /name: Verify Android artifact signatures/)
     assert.match(workflow, /jarsigner -verify -verbose -certs/)
+    assert.match(workflow, /apksigner.*verify --verbose --print-certs/)
     assert.match(workflow, /name: Verify macOS signature and notarization/)
     assert.match(workflow, /xcrun stapler validate/)
     assert.match(workflow, /codesign --verify --deep --strict/)
@@ -15,6 +19,13 @@ describe("Signed native release workflow integrity", () => {
     assert.match(workflow, /Get-AuthenticodeSignature/)
     assert.match(workflow, /signature\.Status -ne "Valid"/)
     assert.match(workflow, /exported_bundle_id.*com\.siragpt\.app/)
+  })
+
+  it("publishes both Android store and directly installable release artifacts", () => {
+    assert.match(workflow, /output\/native-release\/android\/\*\.aab/)
+    assert.match(workflow, /output\/native-release\/android\/\*\.apk/)
+    assert.match(workflow, /aab_path=.*name '\*\.aab'/)
+    assert.doesNotMatch(workflow, /--aab=\$apk_path/)
   })
 
   it("removes temporary mobile signing assets even after failures", () => {

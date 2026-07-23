@@ -83,7 +83,9 @@ npm run native:readiness:mobile
 
 Release requirements:
 
-- Android release builds require `android/keystore.properties` and the upload keystore in `android/keystores/`; both are intentionally ignored.
+- Android release builds produce a Play-ready `.aab` and a directly installable
+  `.apk`. Both use `android/keystore.properties` and the upload keystore in
+  `android/keystores/`; the signing files are intentionally ignored.
 - Android `versionCode` and iOS `CURRENT_PROJECT_VERSION` are synced from `package.json` by `npm run native:version:sync`.
 - Google Play publishing requires owner verification in Play Console and a Google Play Android Publisher service account secret in GitHub Actions.
 - iOS release builds require full Xcode, Apple Developer signing, a matching provisioning profile, App Store Connect access, and manual review metadata.
@@ -152,23 +154,23 @@ credentials.
 
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 
-- Android: signed Play upload `.aab`. Android package signing is already
-  configured; Google Play upload still needs `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64`
-  and owner Play Console verification.
+- Android: signed Play upload `.aab` and signed installable `.apk`. Android
+  package signing is already configured; Google Play upload still needs
+  `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` and owner Play Console verification.
 - iOS: signed App Store Connect `.ipa`.
 - macOS: signed and notarized `.dmg` and `.zip`.
 - Windows: signed `.exe` installer/portable artifacts.
 
 The workflow can optionally create or update a GitHub Release with the built native artifacts. When `create_github_release` is enabled, it also publishes `native-release-manifest.json`, `native-release-manifest.md`, and `SHA256SUMS.txt` so every native installer can be audited by version, Git SHA, platform, size, and SHA-256 checksum. It can also upload the signed Android `.aab` to Google Play when `upload_android_google_play` is enabled and upload the signed iOS `.ipa` to App Store Connect when `upload_ios_app_store_connect` is enabled. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing or upload secrets for the selected operation are missing. The preflight writes a GitHub Actions step summary and uploads the `siragpt-native-signed-release-preflight` artifact with `preflight.md` and `preflight.json` before stopping, so the run shows whether the blocker is invalid workflow input or missing platform signing/upload secret names.
 
-Before publication, the signed workflow verifies the Android JAR signature, the
-iOS archive and exported IPA signature, the macOS code signature and
-notarization ticket, and the Windows Authenticode status. Temporary Android and
-iOS signing material is removed through `always()` cleanup steps. Existing
-release tags are immutable: a run fails instead of uploading artifacts when the
-requested tag already points to a different Git SHA. Release filenames are
-normalized before manifest generation so public assets and checksum metadata
-use the same canonical names.
+Before publication, the signed workflow verifies the Android AAB JAR signature,
+the Android APK signature, the iOS archive and exported IPA signature, the macOS
+code signature and notarization ticket, and the Windows Authenticode status.
+Temporary Android and iOS signing material is removed through `always()` cleanup
+steps. Existing release tags are immutable: a run fails instead of uploading
+artifacts when the requested tag already points to a different Git SHA. Release
+filenames are normalized before manifest generation so public assets and
+checksum metadata use the same canonical names.
 
 The preflight validates package-signing credentials by default:
 
@@ -419,7 +421,7 @@ npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/n
 npm run native:release:plan:ci
 npm run native:github-secrets:report -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-github-secrets-report.md --json-out=output/native-github-secrets-report.json
 npm run native:github-secrets:template -- --platform=all --out=output/native-signing.env.example
-cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
+cd android && ./gradlew :app:assembleDebug :app:bundleRelease :app:assembleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check
 ```
