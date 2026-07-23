@@ -873,7 +873,16 @@ router.get('/me/notifications', authenticateToken, async (req, res) => {
       limit: req.query.limit,
       cursor: req.query.cursor,
     });
-    res.json(result);
+    // Notifications are user-scoped, mutable data. Write the response directly
+    // so Express cannot attach an ETag and turn a conditional request into a
+    // bodyless 304 that the JSON API client cannot consume.
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'private, no-store, no-cache, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    });
+    res.end(JSON.stringify(result));
   } catch (error) {
     console.error('List notifications error:', error);
     res.status(500).json({ error: 'Failed to fetch notifications' });

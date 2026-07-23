@@ -84,7 +84,7 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: p
 delete require.cache[usersRoutePath];
 const usersRouter = require(usersRoutePath);
 
-function call({ method, urlPath, body }) {
+function call({ method, urlPath, body, headers = {} }) {
   return new Promise((resolve, reject) => {
     const app = express();
     app.use(express.json());
@@ -92,14 +92,20 @@ function call({ method, urlPath, body }) {
     const server = app.listen(0, () => {
       const { port } = server.address();
       const req = http.request(
-        { hostname: '127.0.0.1', port, path: urlPath, method, headers: { 'content-type': 'application/json' } },
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: urlPath,
+          method,
+          headers: { 'content-type': 'application/json', ...headers },
+        },
         (res) => {
           let buf = '';
           res.on('data', (c) => { buf += c; });
           res.on('end', () => {
             server.close();
             let json = null; try { json = buf ? JSON.parse(buf) : null; } catch { /* noop */ }
-            resolve({ status: res.statusCode, body: json });
+            resolve({ status: res.statusCode, body: json, headers: res.headers });
           });
         },
       );
@@ -126,6 +132,18 @@ describe('GET /api/users/me/notifications', () => {
     assert.equal(res.body.items.length, 3);
     assert.equal(res.body.total, 3);
     assert.equal(res.body.unreadCount, 2);
+  });
+
+  test('always returns fresh JSON for conditional requests', async () => {
+    const res = await call({
+      method: 'GET',
+      urlPath: '/api/users/me/notifications',
+      headers: { 'if-none-match': '*' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items.length, 3);
+    assert.match(res.headers['cache-control'], /\bno-store\b/);
+    assert.equal(res.headers.etag, undefined);
   });
 
   test('filter=unread returns only unread', async () => {
