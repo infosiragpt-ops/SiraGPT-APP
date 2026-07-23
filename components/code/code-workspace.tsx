@@ -34,7 +34,10 @@ import {
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
+import { CODE_FOCUS_CEO_CHAT_EVENT } from "@/lib/code-agent-company-proactive"
+
 import { AgentCompanyPanel } from "./agent-company-panel"
+import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
@@ -45,7 +48,11 @@ import { PreviewPane } from "./preview-pane"
 // click, which read as input lag. They take no props (context-driven), so a
 // module-level memo makes those interactions skip them entirely.
 const MemoAgentCompanyPanel = React.memo(AgentCompanyPanel)
+const MemoAICodeChatPanel = React.memo(AICodeChatPanel)
 const MemoPreviewPane = React.memo(PreviewPane)
+
+const CHAT_DEFAULT_SIZE = 34
+const CHAT_MIN_SIZE = 24
 import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolScreen } from "./tool-screen"
@@ -95,6 +102,19 @@ export function CodeWorkspace() {
   // time with a bottom toggle (Agente ↔ Preview) — the Replit/bolt mobile pattern.
   const isMobile = useIsMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
+  const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    const onFocusCeo = () => {
+      setChatOpen(true)
+      setMobileView("chat")
+      window.requestAnimationFrame(() => {
+        chatColumnRef.current?.querySelector<HTMLElement>("textarea, [contenteditable='true']")?.focus()
+      })
+    }
+    window.addEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+    return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+  }, [])
 
   React.useEffect(() => {
     try {
@@ -596,12 +616,31 @@ export function CodeWorkspace() {
             )
           }
 
-          // ── Desktop: company panel docks into the APPS sidebar rail;
-          // the workspace itself is the Preview/Shell/Files surface only.
+          // ── Desktop: [APPS company rail] | [CEO / agent chat] | [Preview]
+          // Company panel portals into the sidebar; chat + preview fill /code.
           return (
             <>
               <MemoAgentCompanyPanel />
-              <div className="relative h-full min-h-0 min-w-0">{mainArea}</div>
+              <ResizablePanelGroup direction="horizontal" className="h-full">
+                {chatOpen ? (
+                  <>
+                    <ResizablePanel
+                      defaultSize={CHAT_DEFAULT_SIZE}
+                      minSize={CHAT_MIN_SIZE}
+                      maxSize={50}
+                      className="min-w-0"
+                    >
+                      <div ref={chatColumnRef} className="h-full min-h-0 border-r border-border/50">
+                        <MemoAICodeChatPanel embedded title="CEO Office" />
+                      </div>
+                    </ResizablePanel>
+                    <ResizableHandle withHandle />
+                  </>
+                ) : null}
+                <ResizablePanel defaultSize={chatOpen ? 66 : 100} minSize={32} className="relative min-w-0">
+                  {mainArea}
+                </ResizablePanel>
+              </ResizablePanelGroup>
             </>
           )
         })()}

@@ -86,6 +86,15 @@ import {
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
+import {
+  agentCompanyDisplayName,
+} from "@/lib/code-agent-company"
+import {
+  buildProactiveCompanySystemBlock,
+  getProactiveCompanyState,
+  setProactiveCompanyObjective,
+  subscribeProactiveCompany,
+} from "@/lib/code-agent-company-proactive"
 import { CODE_OPEN_TOOL_LAUNCHER_EVENT, setActiveCodexProject, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
@@ -795,6 +804,7 @@ function buildSystemContext(
   activePath: string | null,
   folder: { name: string; description?: string | null; instructions?: string | null } | null,
   mode?: ComposerMode,
+  proactiveBlock?: string | null,
 ) {
   const fileList = Object.values(files)
     .map((f) => `- ${f.path} (${f.language})`)
@@ -873,11 +883,12 @@ function buildSystemContext(
     previewBlock,
     "",
     AGENT_STYLE_BLOCK,
+    proactiveBlock ? `\n${proactiveBlock}\n` : "",
     "",
     "Archivos disponibles:",
     fileList || "(workspace vacío)",
     activeBlock,
-  ].join("\n")
+  ].filter((part) => part !== "").join("\n")
 }
 
 // ── Persistent chat→Codex-project mapping ───────────────────────────────────
@@ -995,8 +1006,22 @@ export function AICodeChatPanel({ embedded = false, title, onBack }: AICodeChatP
   const [codeDraggingFiles, setCodeDraggingFiles] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [buildingApp, setBuildingApp] = React.useState(false)
+  const [proactiveEnabled, setProactiveEnabled] = React.useState(
+    () => getProactiveCompanyState().enabled,
+  )
+  React.useEffect(
+    () =>
+      subscribeProactiveCompany((next) => {
+        setProactiveEnabled(next.enabled)
+      }),
+    [],
+  )
   const agentsActive =
-    busy || buildingApp || agentPhase === "generating" || agentPhase === "debugging"
+    busy ||
+    buildingApp ||
+    proactiveEnabled ||
+    agentPhase === "generating" ||
+    agentPhase === "debugging"
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
   const [selectingTarget, setSelectingTarget] = React.useState(false)
@@ -1672,11 +1697,23 @@ export function AICodeChatPanel({ embedded = false, title, onBack }: AICodeChatP
         .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
         .join("\n\n")
       const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      const proactiveState = getProactiveCompanyState()
+      if (proactiveState.enabled && text.trim() && !proactiveState.objective) {
+        // First real CEO instruction becomes the company objective.
+        const looksLikeKickoff = /modo PROACTIVO|matrix\.build|0-person company/i.test(text)
+        if (!looksLikeKickoff) setProactiveCompanyObjective(text)
+      }
+      const proactiveBlock = getProactiveCompanyState().enabled
+        ? buildProactiveCompanySystemBlock({
+            companyName: agentCompanyDisplayName(activeFolder?.name),
+            objective: getProactiveCompanyState().objective,
+          })
+        : null
       const finalPrompt = override?.systemPrompt
-        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
+        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}${proactiveBlock ? `\n\n${proactiveBlock}` : ""}\n\n${convoBlock}Usuario: ${text}`
         : includeContext
-          ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
-          : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          ? `${buildSystemContext(files, activePath, activeFolder, composerMode, proactiveBlock)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          : `${proactiveBlock ? `${proactiveBlock}\n\n` : ""}${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
       if (!conversational) {
         patchAssistant({
@@ -3802,7 +3839,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack }: AICodeChatP
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} />
+          <EmptyChat active={agentsActive} proactive={proactiveEnabled} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -4085,17 +4122,19 @@ function CodeAttachmentTray({
   )
 }
 
-function EmptyChat({ active }: { active: boolean }) {
+function EmptyChat({ active, proactive = false }: { active: boolean; proactive?: boolean }) {
   return (
     <div className="flex min-h-full flex-col items-center justify-center px-6 py-10 text-center">
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
         <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
       </span>
       <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        ¿Qué quieres construir?
+        {proactive ? "Objetivo de la empresa" : "¿Qué quieres construir?"}
       </h2>
       <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-muted-foreground">
-        Describe tu idea, pide paquetes npm y el agente crea, ejecuta, verifica y corrige el preview en vivo.
+        {proactive
+          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
+          : "Describe tu idea, pide paquetes npm y el agente crea, ejecuta, verifica y corrige el preview en vivo."}
       </p>
     </div>
   )
