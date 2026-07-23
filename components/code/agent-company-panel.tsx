@@ -48,6 +48,7 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
+import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
   AGENT_COMPANY_DEPARTMENTS,
   agentCompanyDisplayName,
@@ -75,10 +76,9 @@ import type { CodeChatSession } from "@/lib/code-chat-sessions"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
 import {
+  CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_OPEN_TOOL_EVENT,
-  CODE_PREVIEW_STATE_EVENT,
   getActiveCodexProject,
-  type CodePreviewState,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import {
@@ -91,6 +91,8 @@ import { projectsService, type Project } from "@/lib/projects-service"
 import { cn } from "@/lib/utils"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
+import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
+import { AgentOfficeScene } from "./agent-office/agent-office-scene"
 
 type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "task"
 
@@ -104,15 +106,6 @@ type CompanyOption = {
 type CustomDepartment = AgentDepartmentDefinition & { custom: true }
 
 const CUSTOM_DEPARTMENTS_KEY = "code-workspace:agent-company-departments:v1"
-
-const EMPTY_PREVIEW_STATE: CodePreviewState = {
-  phase: "idle",
-  src: "",
-  staticHtml: "",
-  note: "",
-  kind: "empty",
-  entry: null,
-}
 
 const STATUS_STYLES = {
   idle: "bg-zinc-300 dark:bg-zinc-600",
@@ -252,7 +245,7 @@ export function AgentCompanyPanel() {
   const [view, setView] = React.useState<CompanyView>("home")
   const [selectedDepartmentId, setSelectedDepartmentId] = React.useState("ceo-office")
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null)
-  const [previewState, setPreviewState] = React.useState<CodePreviewState>(EMPTY_PREVIEW_STATE)
+  const [officeOpen, setOfficeOpen] = React.useState(false)
   const [companyMenuOpen, setCompanyMenuOpen] = React.useState(false)
   const [projects, setProjects] = React.useState<Project[]>([])
   const [projectsLoading, setProjectsLoading] = React.useState(false)
@@ -272,11 +265,15 @@ export function AgentCompanyPanel() {
   React.useEffect(() => {
     let alive = true
     let refreshing = false
+    let refreshRequested = false
     const hydrated = hydrateProactiveCompany(activeFolder?.id)
     setProactiveOn(hydrated.enabled)
 
     const load = async () => {
-      if (refreshing) return
+      if (refreshing) {
+        refreshRequested = true
+        return
+      }
       refreshing = true
       const codexProjectId = getActiveCodexProject()
       try {
@@ -309,6 +306,10 @@ export function AgentCompanyPanel() {
         }
       } finally {
         refreshing = false
+        if (refreshRequested && alive) {
+          refreshRequested = false
+          void load()
+        }
       }
     }
     void load()
@@ -316,11 +317,14 @@ export function AgentCompanyPanel() {
     const onVisibility = () => {
       if (document.visibilityState === "visible") void load()
     }
+    const onActiveCodexProject = () => void load()
     document.addEventListener("visibilitychange", onVisibility)
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
     return () => {
       alive = false
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibility)
+      window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
     }
   }, [activeFolder?.id])
 
@@ -342,18 +346,8 @@ export function AgentCompanyPanel() {
     setCustomDepartments(readCustomDepartments(activeFolder?.id))
     setView("home")
     setSelectedTaskId(null)
-    setPreviewState(EMPTY_PREVIEW_STATE)
+    setOfficeOpen(false)
   }, [activeFolder?.id])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const onPreviewState = (event: Event) => {
-      const detail = (event as CustomEvent<CodePreviewState>).detail
-      if (detail) setPreviewState(detail)
-    }
-    window.addEventListener(CODE_PREVIEW_STATE_EVENT, onPreviewState)
-    return () => window.removeEventListener(CODE_PREVIEW_STATE_EVENT, onPreviewState)
-  }, [])
 
   const refreshProjects = React.useCallback(async () => {
     setProjectsLoading(true)
@@ -415,13 +409,19 @@ export function AgentCompanyPanel() {
 
   const selectedDepartment = departmentRows.find((row) => row.department.id === selectedDepartmentId) || null
   const selectedTask = codeChatSessions.find((session) => session.id === selectedTaskId) || null
+  const officeModel = React.useMemo(
+    () =>
+      buildAgentOfficeModel({
+        departments: allDepartments,
+        sessions: codeChatSessions,
+        runs: codexRuns,
+        rootSessionId: snapshot.rootSessionId,
+      }),
+    [allDepartments, codeChatSessions, codexRuns, snapshot.rootSessionId],
+  )
 
   const openTool = React.useCallback((toolId: string) => {
     window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId } }))
-  }, [])
-
-  const openPreview = React.useCallback(() => {
-    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
   }, [])
 
   const openCeoOffice = React.useCallback(() => {
@@ -442,6 +442,22 @@ export function AgentCompanyPanel() {
     codeChatSessions,
     setActiveCodeChatSession,
   ])
+
+  const openOfficeWorker = React.useCallback((worker: AgentOfficeWorker) => {
+    setOfficeOpen(false)
+    if (worker.sessionId) {
+      setActiveCodeChatSession(worker.sessionId)
+      if (chatLivesInWorkspaceColumn) {
+        setView("home")
+        focusCeoChatColumn()
+      } else {
+        setView("chat")
+      }
+      return
+    }
+    setSelectedDepartmentId(worker.departmentId)
+    setView("department")
+  }, [chatLivesInWorkspaceColumn, setActiveCodeChatSession])
 
   const ensureDepartmentSessions = React.useCallback(() => {
     const existingTitles = new Set(codeChatSessions.map((session) => session.title.trim().toLowerCase()))
@@ -599,20 +615,6 @@ export function AgentCompanyPanel() {
   }, [activeFolder?.id, allDepartments, customDepartments, newDepartmentName])
 
   const currentProjectId = activeFolder?.id?.replace(/^project:/, "") || null
-  const previewBadge =
-    previewState.phase === "ready"
-      ? { label: "Live", tone: "bg-red-500" }
-      : previewState.phase === "starting"
-        ? { label: "Arrancando", tone: "bg-sky-500" }
-        : previewState.phase === "error" || previewState.phase === "stuck"
-          ? { label: "Revisar", tone: "bg-amber-500" }
-          : { label: "Preview", tone: "bg-zinc-400" }
-
-  const previewSandbox =
-    previewState.src && typeof window !== "undefined" && !previewState.src.startsWith(window.location.origin)
-      ? undefined
-      : "allow-scripts allow-forms allow-popups allow-modals"
-
   const panel = (
     <div
       className={cn(
@@ -760,12 +762,10 @@ export function AgentCompanyPanel() {
         {view === "home" ? (
           <CompanyHome
             companyName={companyName}
-            previewState={previewState}
-            previewBadge={previewBadge}
-            previewSandbox={previewSandbox}
+            officeModel={officeModel}
             snapshot={snapshot}
             departmentRows={departmentRows}
-            onOpenPreview={openPreview}
+            onOpenOffice={() => setOfficeOpen(true)}
             onOpenDashboard={() => setView("dashboard")}
             onOpenControl={() => setView("control")}
             onOpenFiles={() => openTool("files")}
@@ -888,6 +888,14 @@ export function AgentCompanyPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AgentOfficeOverlay
+        open={officeOpen}
+        companyName={companyName}
+        model={officeModel}
+        onClose={() => setOfficeOpen(false)}
+        onOpenWorker={openOfficeWorker}
+      />
     </div>
   )
 
@@ -900,12 +908,10 @@ export function AgentCompanyPanel() {
 
 function CompanyHome({
   companyName,
-  previewState,
-  previewBadge,
-  previewSandbox,
+  officeModel,
   snapshot,
   departmentRows,
-  onOpenPreview,
+  onOpenOffice,
   onOpenDashboard,
   onOpenControl,
   onOpenFiles,
@@ -921,9 +927,7 @@ function CompanyHome({
   onToggleProactive,
 }: {
   companyName: string
-  previewState: CodePreviewState
-  previewBadge: { label: string; tone: string }
-  previewSandbox?: string
+  officeModel: ReturnType<typeof buildAgentOfficeModel>
   snapshot: ReturnType<typeof buildAgentCompanySnapshot>
   departmentRows: Array<{
     department: AgentDepartmentDefinition
@@ -933,7 +937,7 @@ function CompanyHome({
     latest: CodeChatSession | null
     latestRun: CodexRun | null
   }>
-  onOpenPreview: () => void
+  onOpenOffice: () => void
   onOpenDashboard: () => void
   onOpenControl: () => void
   onOpenFiles: () => void
@@ -953,39 +957,20 @@ function CompanyHome({
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
         <button
           type="button"
-          onClick={onOpenPreview}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg border border-border/60 bg-zinc-100 text-left shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:bg-zinc-900"
-          aria-label="Abrir preview en vivo"
+          onClick={onOpenOffice}
+          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg border border-border/60 bg-[#e8edf0] text-left shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Abrir oficina de agentes"
           data-testid="agent-company-live-preview"
         >
-          {previewState.src ? (
-            <iframe
-              src={previewState.src}
-              title="Miniatura del preview en vivo"
-              className="pointer-events-none h-full w-full origin-top-left border-0 bg-white"
-              sandbox={previewSandbox}
-              loading="lazy"
-              tabIndex={-1}
-            />
-          ) : previewState.staticHtml ? (
-            <iframe
-              srcDoc={previewState.staticHtml}
-              title="Miniatura del preview"
-              className="pointer-events-none h-full w-full border-0 bg-white"
-              sandbox="allow-scripts allow-forms"
-              loading="lazy"
-              tabIndex={-1}
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src="/opengraph-image.png" alt="SiraGPT" className="h-full w-full object-cover object-top opacity-90" />
-          )}
+          <div className="pointer-events-none absolute inset-0">
+            <AgentOfficeScene model={officeModel} variant="thumbnail" />
+          </div>
           <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/88 px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
-            <span className={cn("h-2 w-2 rounded-full", previewBadge.tone)} />
-            {previewBadge.label}
+            <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-zinc-400")} />
+            Oficina · {officeModel.activeCount} activos
           </span>
-          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/58 px-3 py-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-            <span className="truncate text-[11px] font-medium">{companyName}</span>
+          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/68 px-3 py-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+            <span className="truncate text-[11px] font-medium">Ver oficina de {companyName}</span>
             <ChevronRight className="h-4 w-4" />
           </span>
         </button>

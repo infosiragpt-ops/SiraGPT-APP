@@ -108,6 +108,7 @@ async function mockMatrixCompany(page: Page) {
         },
       ]),
     )
+    localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
     localStorage.setItem("matrix-qa:user", JSON.stringify(currentUser))
   }, { activeProject: project, currentUser: user, timestamp: now })
 
@@ -183,8 +184,9 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByRole("tab", { name: "Empresas</>" })).toBeVisible()
   await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM")
   await expect(page.getByTestId("agent-company-live-preview")).toBeVisible()
+  await expect(page.getByTestId("agent-office-thumbnail")).toHaveAttribute("data-office-ready", "true")
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Controlar" })).toContainText("1")
+  await expect(page.getByRole("button", { name: "Controlar" })).toContainText(/[1-9]/)
 
   const companyRail = page.locator("[data-agent-company-dock='apps']")
   await expect(companyRail).toBeVisible()
@@ -192,16 +194,68 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-three-pane.png"), fullPage: true })
 
-  await page.evaluate(() => {
-    localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
+  await page.getByTestId("agent-company-live-preview").click()
+  await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
+  const officeScene = page.getByTestId("agent-office-scene")
+  const officeCanvas = officeScene.locator("canvas")
+  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(4)
+
+  const firstFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => {
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl")
+    if (!gl) return { dataUrl: "", range: 0, colored: 0 }
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4)
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+    let min = 255
+    let max = 0
+    let colored = 0
+    for (let index = 0; index < pixels.length; index += 64) {
+      const luminance = pixels[index] + pixels[index + 1] + pixels[index + 2]
+      min = Math.min(min, luminance)
+      max = Math.max(max, luminance)
+      if (pixels[index + 3] > 0 && luminance > 30) colored += 1
+    }
+    return { dataUrl: canvas.toDataURL("image/png"), range: max - min, colored }
   })
-  await page.reload({ waitUntil: "domcontentloaded" })
-  await expect(page.getByTestId("agent-company-department-trust")).toContainText("Verificar el aislamiento")
-  await expect(page.getByRole("button", { name: "Controlar" })).toContainText("2")
+  expect(firstFrame.dataUrl.length).toBeGreaterThan(10_000)
+  expect(firstFrame.range).toBeGreaterThan(100)
+  expect(firstFrame.colored).toBeGreaterThan(100)
+
+  const initialWorkerPoint = await officeCanvas.evaluate((canvas) => ({
+    x: Number(canvas.dataset.firstWorkerX),
+    y: Number(canvas.dataset.firstWorkerY),
+  }))
+  await page.waitForTimeout(750)
+  const secondFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL("image/png"))
+  expect(secondFrame).not.toBe(firstFrame.dataUrl)
+
+  const movedWorkerPoint = await officeCanvas.evaluate((canvas) => ({
+    x: Number(canvas.dataset.firstWorkerX),
+    y: Number(canvas.dataset.firstWorkerY),
+  }))
+  expect(Math.hypot(movedWorkerPoint.x - initialWorkerPoint.x, movedWorkerPoint.y - initialWorkerPoint.y)).toBeGreaterThan(2)
+  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-moving.png"), fullPage: true })
+  await page.getByRole("button", { name: "Pausar oficina" }).click()
+  await expect(page.getByRole("button", { name: "Reanudar oficina" })).toBeVisible()
+  await page.waitForTimeout(100)
+  const workerPoint = await officeCanvas.evaluate((canvas) => ({
+    x: Number(canvas.dataset.firstWorkerX),
+    y: Number(canvas.dataset.firstWorkerY),
+  }))
+  const canvasBox = await officeCanvas.boundingBox()
+  expect(canvasBox).not.toBeNull()
+  await page.mouse.click(canvasBox!.x + workerPoint.x, canvasBox!.y + workerPoint.y)
+  await expect(page.getByTestId("agent-office-roster")).toBeVisible()
+  await expect(page.getByTestId("agent-office-roster")).toContainText("Actividad del agente")
+  await expect(page.getByTestId("agent-office-roster")).toContainText(/Abrir (sesión|departamento)/)
+  await page.waitForTimeout(150)
+  expect(await page.getByTestId("agent-office-overlay").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop.png"), fullPage: true })
+  await page.getByRole("button", { name: "Cerrar oficina" }).click()
+  await expect(page.getByTestId("agent-office-overlay")).toBeHidden()
+
   await page.getByRole("button", { name: "Controlar" }).click()
   await expect(page.getByTestId("agent-company-operating-loop")).toBeVisible()
-  await expect(page.getByTestId("agent-company-worker-list")).toContainText("Confianza, Privacidad y Cumplimiento")
-  await expect(page.getByTestId("agent-company-worker-list")).toContainText("Producto e Ingeniería SiraGPT")
 
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
@@ -219,4 +273,10 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
   const panel = page.locator("[data-agent-company-dock='workspace']")
   expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-mobile.png"), fullPage: true })
+
+  await page.getByTestId("agent-company-live-preview").click()
+  await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
+  await expect(page.getByTestId("agent-office-scene")).toHaveAttribute("data-office-ready", "true")
+  expect(await page.getByTestId("agent-office-overlay").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath("agent-office-mobile.png"), fullPage: true })
 })

@@ -1529,7 +1529,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `thenify` | 3.3.1 | MIT | [link](https://github.com/thenables/thenify) |
 | `thenify-all` | 1.6.0 | MIT | [link](https://github.com/thenables/thenify-all) |
 | `thread-stream` | 4.0.0 | MIT | [link](https://github.com/mcollina/thread-stream) |
-| `three` | 0.161.0, 0.184.0 | MIT | [link](https://github.com/mrdoob/three.js) |
+| `three` | 0.161.0 | MIT | [link](https://github.com/mrdoob/three.js) |
 | `throttleit` | 2.1.0 | MIT | [link](https://github.com/sindresorhus/throttleit) |
 | `tiktoken` | 1.0.22 | MIT | [link](https://github.com/dqbd/tiktoken) |
 | `tiny-inflate` | 1.0.3 | MIT | [link](https://github.com/devongovett/tiny-inflate) |
