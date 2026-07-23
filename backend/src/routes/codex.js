@@ -274,6 +274,42 @@ router.get('/projects/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Modo PROACTIVO (compañía de agentes autónoma, estilo matrix.build) ──────
+// GET  /projects/:id/proactive  → estado + departamentos
+// POST /projects/:id/proactive  { enabled } → toggle; al ENCENDER dispara un
+// primer ciclo inmediato (fire-and-forget) para que el usuario vea acción ya.
+router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const proactive = require('../services/codex/proactive-engine');
+    return res.json({ state: proactive.readProactiveState(project), departments: proactive.DEPARTMENTS });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
+router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const enabled = req.body && req.body.enabled === true;
+    const proactive = require('../services/codex/proactive-engine');
+    const prisma = require('../config/database');
+    const out = await proactive.setProactive({ prisma, projectId: project.id, userId: req.user.id, enabled });
+    if (!out) return res.status(404).json({ error: 'project_not_found' });
+    if (enabled) {
+      // Primer ciclo inmediato — best-effort, nunca bloquea la respuesta.
+      prisma.codexProject.findFirst({ where: { id: project.id, userId: req.user.id } })
+        .then((fresh) => (fresh ? proactive.runCycle({ project: fresh, deps: { prisma } }) : null))
+        .catch((err) => console.warn('[codex proactive] first cycle failed:', err?.message || err));
+    }
+    return res.json({ state: out.state, departments: proactive.DEPARTMENTS });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
 // Ownership gate compartido por las rutas de preview.
 async function loadOwnedProject(req, res) {
   const project = await projectService.getProject({ userId: req.user.id, id: req.params.id });

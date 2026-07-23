@@ -1556,6 +1556,19 @@ async function startServer() {
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
     startDocumentCollectionWorker();
+    // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
+    // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
+    // producción; CODEX_PROACTIVE_ENABLED=0/1 fuerza). unref'd — nunca retiene
+    // el proceso; fallos aislados dentro del propio tick.
+    try {
+      const proactive = require('./src/services/codex/proactive-engine');
+      if (proactive.startProactiveTicker()) {
+        shutdownRegistry.register('codex_proactive_stop', () => proactive.stopProactiveTicker());
+        logger.info('codex_proactive_ticker_started');
+      }
+    } catch (err) {
+      logger.warn({ err: err && err.message }, 'codex_proactive_init_failed');
+    }
 
     // Apply any admin-curated provider keys (panel /admin/connections)
     // by overriding the corresponding process.env vars in this worker.

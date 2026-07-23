@@ -34,6 +34,7 @@ export interface CodexProject { id: string; name: string; status: string; worksp
 export interface CodexRun { id: string; projectId: string; mode: string; status: string; tier: string | null; model: string | null; planRunId: string | null; prompt: string | null; error: string | null; metric?: CodexRunMetric }
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
+export interface CodexProactiveState { enabled: boolean; enabledAt: string | null; dayKey: string | null; runsToday: number; deptIndex: number; lastCycleAt: string | null; lastError: string | null }
 
 async function getPublicHealth(): Promise<CodexHealth> {
   const res = await fetch(`${BASE}/health`, {
@@ -69,6 +70,13 @@ export const codexApi = {
   importFiles: (id: string, files: Array<{ path: string; content: string }>) =>
     req<{ ok: boolean; written: number }>(`/projects/${id}/files`, { method: "POST", body: JSON.stringify({ files }) }),
   readFileContent: (id: string, path: string) => req<{ ok: boolean; path: string; content: string }>(`/projects/${id}/file?path=${encodeURIComponent(path)}`),
+
+  // Modo PROACTIVO (compañía de agentes autónoma). no-store: el estado cambia
+  // desde el ticker del backend, un 304 cacheado dejaría el chip mintiendo.
+  getProactive: (id: string) =>
+    req<{ state: CodexProactiveState; departments: Array<{ id: string; name: string; mission: string }> }>(`/projects/${id}/proactive`, { cache: "no-store" }),
+  setProactive: (id: string, enabled: boolean) =>
+    req<{ state: CodexProactiveState }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),

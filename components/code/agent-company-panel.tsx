@@ -54,9 +54,11 @@ import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/
 import {
   CODE_OPEN_TOOL_EVENT,
   CODE_PREVIEW_STATE_EVENT,
+  getActiveCodexProject,
   type CodePreviewState,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
+import { codexApi } from "@/lib/codex/codex-api"
 import { projectsService, type Project } from "@/lib/projects-service"
 import { cn } from "@/lib/utils"
 
@@ -180,6 +182,47 @@ export function AgentCompanyPanel() {
   const [newDepartmentOpen, setNewDepartmentOpen] = React.useState(false)
   const [newDepartmentName, setNewDepartmentName] = React.useState("")
   const [customDepartments, setCustomDepartments] = React.useState<CustomDepartment[]>([])
+  // Modo PROACTIVO (compañía autónoma): estado real del backend por proyecto.
+  const [proactiveOn, setProactiveOn] = React.useState(false)
+  const [proactiveBusy, setProactiveBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    let alive = true
+    const load = () => {
+      const codexProjectId = getActiveCodexProject()
+      if (!codexProjectId) return
+      codexApi
+        .getProactive(codexProjectId)
+        .then((r) => { if (alive) setProactiveOn(Boolean(r.state?.enabled)) })
+        .catch(() => { /* backend viejo o sin sesión: el chip queda informativo */ })
+    }
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [activeFolder?.id])
+
+  const toggleProactive = React.useCallback(async () => {
+    const codexProjectId = getActiveCodexProject()
+    if (!codexProjectId) {
+      toast.info("Primero pide una construcción en el chat para crear el proyecto; luego activa el modo proactivo.")
+      return
+    }
+    setProactiveBusy(true)
+    try {
+      const next = !proactiveOn
+      const r = await codexApi.setProactive(codexProjectId, next)
+      setProactiveOn(Boolean(r.state?.enabled))
+      toast.success(
+        next
+          ? "Modo proactivo activado — los departamentos proponen y ejecutan trabajo de forma autónoma."
+          : "Modo proactivo desactivado.",
+      )
+    } catch {
+      toast.error("No se pudo cambiar el modo proactivo. Intenta de nuevo.")
+    } finally {
+      setProactiveBusy(false)
+    }
+  }, [proactiveOn])
 
   React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
   const dockedInAppsRail = !isMobile && Boolean(dockSlot)
@@ -516,6 +559,9 @@ export function AgentCompanyPanel() {
             onAddDepartment={() => setNewDepartmentOpen(true)}
             user={user}
             hideFooter={dockedInAppsRail}
+            proactiveOn={proactiveOn}
+            proactiveBusy={proactiveBusy}
+            onToggleProactive={() => void toggleProactive()}
           />
         ) : view === "dashboard" ? (
           <DashboardView
@@ -640,6 +686,9 @@ function CompanyHome({
   onAddDepartment,
   user,
   hideFooter = false,
+  proactiveOn,
+  proactiveBusy,
+  onToggleProactive,
 }: {
   companyName: string
   previewState: CodePreviewState
@@ -661,6 +710,9 @@ function CompanyHome({
   onAddDepartment: () => void
   user: ReturnType<typeof useAuth>["user"]
   hideFooter?: boolean
+  proactiveOn: boolean
+  proactiveBusy: boolean
+  onToggleProactive: () => void
 }) {
   return (
     <>
@@ -769,10 +821,30 @@ function CompanyHome({
             <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
           </Avatar>
           <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
-          <span className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-muted/35 px-3 text-[11px] font-semibold text-foreground/75">
-            <Radio className={cn("h-3.5 w-3.5", snapshot.activeAgents > 0 ? "text-sky-500" : "text-muted-foreground")} />
-            {snapshot.activeAgents > 0 ? "EN EJECUCIÓN" : "PROACTIVO"}
-          </span>
+          <button
+            type="button"
+            onClick={onToggleProactive}
+            disabled={proactiveBusy}
+            title={
+              proactiveOn
+                ? "Modo proactivo ACTIVO: los departamentos proponen y ejecutan trabajo autónomamente. Clic para desactivar."
+                : "Activa el modo proactivo: la compañía de agentes trabaja de forma autónoma en tu proyecto."
+            }
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors disabled:opacity-60",
+              proactiveOn
+                ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-600"
+                : "border-border/60 bg-muted/35 text-foreground/75 hover:bg-muted/60",
+            )}
+          >
+            <Radio
+              className={cn(
+                "h-3.5 w-3.5",
+                snapshot.activeAgents > 0 ? "text-sky-500" : proactiveOn ? "text-emerald-500" : "text-muted-foreground",
+              )}
+            />
+            {snapshot.activeAgents > 0 ? "EN EJECUCIÓN" : proactiveOn ? "PROACTIVO · ON" : "PROACTIVO"}
+          </button>
         </footer>
       )}
     </>
