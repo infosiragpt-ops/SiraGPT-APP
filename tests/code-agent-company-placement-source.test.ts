@@ -10,16 +10,17 @@ const contextSource = readFileSync("lib/code-workspace-context.tsx", "utf8")
 const sessionsSource = readFileSync("lib/code-chat-sessions.ts", "utf8")
 
 describe("agent company placement", () => {
-  it("renders the company in the former desktop agent column", () => {
-    assert.match(workspaceSource, /\[APPS navigator\] \| \[Agent company\] \| \[Preview\]/)
-    assert.match(workspaceSource, /<ResizablePanel[\s\S]*?<MemoAgentCompanyPanel \/>[\s\S]*?<ResizableHandle/)
-    assert.match(companySource, /data-agent-company-dock="workspace"/)
-    assert.doesNotMatch(companySource, /createPortal|subscribeAgentCompanySlot/)
+  it("keeps the three desktop surfaces visible", () => {
+    assert.match(workspaceSource, /\[APPS company rail\] \| \[CEO Office\] \| \[Preview\]/)
+    assert.match(workspaceSource, /<MemoAgentCompanyPanel \/>[\s\S]*?<MemoAICodeChatPanel embedded title="CEO Office" \/>/)
+    assert.match(companySource, /createPortal\(panel, dockSlot\)/)
+    assert.match(companySource, /data-agent-company-dock=\{dockedInAppsRail \? "apps" : "workspace"\}/)
   })
 
-  it("keeps APPS as the project navigator instead of a company portal", () => {
-    assert.match(sidebarSource, /<SidebarFoldersDropdown/)
-    assert.doesNotMatch(sidebarSource, /AgentCompanyAppsSlot|registerAgentCompanySlot/)
+  it("docks the company navigator in the expanded APPS rail", () => {
+    assert.match(sidebarSource, /AgentCompanyAppsSlot/)
+    assert.match(sidebarSource, /registerAgentCompanySlot/)
+    assert.match(sidebarSource, /<AgentCompanyAppsSlot \/>/)
   })
 
   it("passes proactive state explicitly and creates parallel sessions atomically", () => {

@@ -99,6 +99,7 @@ import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
+import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
   normalizeNavigationHref,
   useNavigationTransition,
@@ -318,6 +319,25 @@ const generationTypes = [
     badge: "Soon",
   },
 ]
+
+function AgentCompanyAppsSlot() {
+  const slotRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useLayoutEffect(() => {
+    registerAgentCompanySlot(slotRef.current)
+    return () => registerAgentCompanySlot(null)
+  }, [])
+
+  return (
+    <div
+      ref={slotRef}
+      id="siragpt-agent-company-slot"
+      data-sidebar="agent-company-slot"
+      className="relative -mx-2 flex min-h-0 flex-1 flex-col overflow-hidden"
+      aria-label="Empresa de agentes"
+    />
+  )
+}
 
 export function AppSidebar() {
   const t = useTranslations("sidebar")
@@ -1096,10 +1116,9 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Claude-style mode toggle: Chats ↔ Code. Replaces the
+          {/* Mode toggle: Chats ↔ Empresas. Replaces the
               logo+name lockup in the open header (the collapsed rail
-              keeps the logo button below). The active tab shows its
-              name; the wrapper centers the control in the header. */}
+              keeps the logo button below). */}
           <div className="flex min-w-0 flex-1 items-center justify-center">
             <div
               role="tablist"
@@ -1129,20 +1148,18 @@ export function AppSidebar() {
                 type="button"
                 role="tab"
                 aria-selected={sidebarMode === "code"}
-                aria-label="Code"
-                title="Code"
+                aria-label="Empresas</>"
+                title="Empresas</>"
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
                   "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
                   sidebarMode === "code"
                     ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
-                    : "w-9 text-muted-foreground hover:text-foreground",
+                    : "px-2 text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Code2 className="h-4 w-4 shrink-0" />
-                {sidebarMode === "code" && (
-                  <span className="text-xs font-medium">Code</span>
-                )}
+                <span className="text-xs font-medium">Empresas</span>
+                <Code2 className="h-4 w-4 shrink-0" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -1326,44 +1343,55 @@ export function AppSidebar() {
       </div>
 
       <SidebarContent
-        className="custom-scrollbar flex-1 overflow-y-auto px-2"
+        className={cn(
+          "custom-scrollbar flex-1 px-2",
+          sidebarMode === "code" && !isMobile && state === "open"
+            ? "overflow-hidden"
+            : "overflow-y-auto",
+        )}
         ref={scrollAreaRef}
         onScroll={handleScroll}
       >
-        <SidebarSeparator />
+        {!(sidebarMode === "code" && !isMobile && state === "open") ? (
+          <SidebarSeparator />
+        ) : null}
 
-        {/* APPS remains the project/workspace navigator. The operational
-            agent-company panel lives in /code's former Agente 1 column. */}
+        {/* Desktop docks the company navigator in APPS. Collapsed and mobile
+            layouts retain the compact workspace tree. */}
         {sidebarMode === "code" && (
-          <SidebarGroup className="py-0">
-            {state !== "closed" && (
-              <button
-                type="button"
-                onClick={toggleCodexCollapsed}
-                aria-expanded={!codexCollapsed}
-                aria-controls="sidebar-codex-content"
-                className="group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-foreground/80 transition-colors select-none"
+          !isMobile && state === "open" ? (
+            <AgentCompanyAppsSlot />
+          ) : (
+            <SidebarGroup className="py-0">
+              {state !== "closed" && (
+                <button
+                  type="button"
+                  onClick={toggleCodexCollapsed}
+                  aria-expanded={!codexCollapsed}
+                  aria-controls="sidebar-codex-content"
+                  className="group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-foreground/80 transition-colors select-none"
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 transition-transform duration-150",
+                      codexCollapsed && "-rotate-90"
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span>Apps</span>
+                </button>
+              )}
+              <div
+                id="sidebar-codex-content"
+                hidden={codexCollapsed && state !== "closed"}
               >
-                <ChevronDown
-                  className={cn(
-                    "h-3 w-3 transition-transform duration-150",
-                    codexCollapsed && "-rotate-90"
-                  )}
-                  aria-hidden="true"
+                <SidebarFoldersDropdown
+                  collapsed={state === "closed"}
+                  onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
                 />
-                <span>Apps</span>
-              </button>
-            )}
-            <div
-              id="sidebar-codex-content"
-              hidden={codexCollapsed && state !== "closed"}
-            >
-              <SidebarFoldersDropdown
-                collapsed={state === "closed"}
-                onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
-              />
-            </div>
-          </SidebarGroup>
+              </div>
+            </SidebarGroup>
+          )
         )}
 
         {/* Recent Chats - Only show for Text Chat, in chat mode */}

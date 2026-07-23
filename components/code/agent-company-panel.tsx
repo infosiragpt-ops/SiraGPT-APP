@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { createPortal } from "react-dom"
 import {
   ArrowLeft,
   Bot,
@@ -45,6 +46,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
   AGENT_COMPANY_DEPARTMENTS,
   agentCompanyDisplayName,
@@ -61,8 +64,8 @@ import {
 } from "@/lib/code-agent-company"
 import {
   buildProactiveKickoffPrompt,
-  CODE_FOCUS_CEO_CHAT_EVENT,
   departmentBootstrapTitle,
+  focusCeoChatColumn,
   hydrateProactiveCompany,
   PROACTIVE_CORE_DEPARTMENTS,
   requestProactiveSeedPrompt,
@@ -233,6 +236,8 @@ function companyWorkspaceCandidates(option: CompanyOption): string[] {
 
 export function AgentCompanyPanel() {
   const { user } = useAuth()
+  const isMobile = useIsMobile()
+  const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
   const {
     files,
     activeFolder,
@@ -318,6 +323,10 @@ export function AgentCompanyPanel() {
       document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [activeFolder?.id])
+
+  React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
+  const dockedInAppsRail = !isMobile && Boolean(dockSlot)
+  const chatLivesInWorkspaceColumn = dockedInAppsRail
 
   const snapshot = React.useMemo(
     () => buildAgentCompanySnapshot(codeChatSessions, files, codexRuns),
@@ -421,18 +430,18 @@ export function AgentCompanyPanel() {
     )?.id
     if (!rootSessionId) rootSessionId = createCodeChatSession({ title: "CEO Office" })
     setActiveCodeChatSession(rootSessionId)
+    if (chatLivesInWorkspaceColumn) {
+      setView("home")
+      focusCeoChatColumn()
+      return
+    }
     setView("chat")
   }, [
+    chatLivesInWorkspaceColumn,
     createCodeChatSession,
     codeChatSessions,
     setActiveCodeChatSession,
   ])
-
-  React.useEffect(() => {
-    const onFocusCeo = () => openCeoOffice()
-    window.addEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
-    return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
-  }, [openCeoOffice])
 
   const ensureDepartmentSessions = React.useCallback(() => {
     const existingTitles = new Set(codeChatSessions.map((session) => session.title.trim().toLowerCase()))
@@ -460,7 +469,12 @@ export function AgentCompanyPanel() {
     const openCompanyLoop = () => {
       const rootSessionId = ensureDepartmentSessions()
       setActiveCodeChatSession(rootSessionId)
-      setView("chat")
+      if (chatLivesInWorkspaceColumn) {
+        setView("home")
+        focusCeoChatColumn()
+      } else {
+        setView("chat")
+      }
       window.setTimeout(
         () => requestProactiveSeedPrompt(buildProactiveKickoffPrompt(companyName)),
         120,
@@ -511,6 +525,7 @@ export function AgentCompanyPanel() {
     activeFolder?.id,
     codexAccess?.canRun,
     companyName,
+    chatLivesInWorkspaceColumn,
     ensureDepartmentSessions,
     proactiveOn,
     setActiveCodeChatSession,
@@ -600,23 +615,28 @@ export function AgentCompanyPanel() {
 
   const panel = (
     <div
-      className="relative h-full min-h-0 overflow-hidden border-r border-border/50 bg-background text-foreground"
-      data-agent-company-dock="workspace"
+      className={cn(
+        "relative h-full min-h-0 overflow-hidden bg-background text-foreground",
+        !dockedInAppsRail && "border-r border-border/50",
+      )}
+      data-agent-company-dock={dockedInAppsRail ? "apps" : "workspace"}
       data-proactive={proactiveOn ? "on" : "off"}
     >
-      <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
-        <AICodeChatPanel
-          embedded
-          title="CEO Office"
-          onBack={() => setView("home")}
-          proactive={proactiveOn}
-        />
-      </div>
+      {!chatLivesInWorkspaceColumn ? (
+        <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
+          <AICodeChatPanel
+            embedded
+            title="CEO Office"
+            onBack={() => setView("home")}
+            proactive={proactiveOn}
+          />
+        </div>
+      ) : null}
 
       <div
         className={cn(
           "flex h-full min-h-0 flex-col",
-          view === "chat" && "invisible pointer-events-none",
+          !chatLivesInWorkspaceColumn && view === "chat" && "invisible pointer-events-none",
         )}
       >
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/55 px-3">
@@ -760,6 +780,7 @@ export function AgentCompanyPanel() {
             }}
             onAddDepartment={() => setNewDepartmentOpen(true)}
             user={user}
+            hideFooter={dockedInAppsRail}
             proactiveOn={proactiveOn}
             proactiveBusy={proactiveBusy}
             proactiveState={proactiveState}
@@ -870,6 +891,10 @@ export function AgentCompanyPanel() {
     </div>
   )
 
+  if (dockedInAppsRail && dockSlot) {
+    return createPortal(panel, dockSlot)
+  }
+  if (!isMobile) return null
   return panel
 }
 
@@ -888,6 +913,7 @@ function CompanyHome({
   onOpenDepartment,
   onAddDepartment,
   user,
+  hideFooter = false,
   proactiveOn,
   proactiveBusy,
   proactiveState,
@@ -915,6 +941,7 @@ function CompanyHome({
   onOpenDepartment: (departmentId: string) => void
   onAddDepartment: () => void
   user: ReturnType<typeof useAuth>["user"]
+  hideFooter?: boolean
   proactiveOn: boolean
   proactiveBusy: boolean
   proactiveState: CodexProactiveState
@@ -983,20 +1010,26 @@ function CompanyHome({
           </div>
         ) : null}
 
-        <nav aria-label="Herramientas de la empresa" className="mt-3 space-y-0.5">
-          <CompanyNavRow icon={LayoutDashboard} label="Panel" onClick={onOpenDashboard} />
-          <CompanyNavRow icon={ListTree} label="Controlar" count={snapshot.taskCount} onClick={onOpenControl} />
-          <CompanyNavRow icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
-          <CompanyNavRow icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
+        <nav
+          aria-label="Herramientas de la empresa"
+          className={cn("space-y-0.5", hideFooter ? "mt-2" : "mt-3")}
+        >
+          <CompanyNavRow compact={hideFooter} icon={LayoutDashboard} label="Panel" onClick={onOpenDashboard} />
+          <CompanyNavRow compact={hideFooter} icon={ListTree} label="Controlar" count={snapshot.taskCount} onClick={onOpenControl} />
+          <CompanyNavRow compact={hideFooter} icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
+          <CompanyNavRow compact={hideFooter} icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
         </nav>
 
-        <div className="mt-4 flex items-center justify-between px-2">
+        <div className={cn("flex items-center justify-between px-2", hideFooter ? "mt-3" : "mt-4")}>
           <h2 className="text-xs font-semibold text-muted-foreground">Departamentos</h2>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-md text-muted-foreground hover:text-foreground"
+            className={cn(
+              "rounded-md text-muted-foreground hover:text-foreground",
+              hideFooter ? "h-8 w-8" : "h-9 w-9",
+            )}
             onClick={onAddDepartment}
             aria-label="Añadir departamento"
             title="Añadir departamento"
@@ -1018,25 +1051,45 @@ function CompanyHome({
                 type="button"
                 className={cn(
                   "group flex min-h-[58px] w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  hideFooter && "min-h-[46px] gap-2 rounded-md px-2 py-1.5",
                   department.id === "ceo-office" && "bg-muted/50",
                 )}
                 onClick={() => onOpenDepartment(department.id)}
                 data-testid={`agent-company-department-${department.id}`}
               >
-                <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/55 bg-muted/40 text-muted-foreground">
-                  <DepartmentGlyph departmentId={department.id} className="h-4 w-4" />
-                  <span className={cn("absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background", STATUS_STYLES[status.tone])} />
+                <span
+                  className={cn(
+                    "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/55 bg-muted/40 text-muted-foreground",
+                    hideFooter && "h-8 w-8",
+                  )}
+                >
+                  <DepartmentGlyph departmentId={department.id} className={hideFooter ? "h-3.5 w-3.5" : "h-4 w-4"} />
+                  <span
+                    className={cn(
+                      "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background",
+                      hideFooter && "h-2 w-2",
+                      STATUS_STYLES[status.tone],
+                    )}
+                  />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
-                    <span className="truncate text-[13px] font-semibold">{department.name}</span>
+                    <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
+                      {department.name}
+                    </span>
                     {activeCount > 0 ? (
-                      <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+                      <span className={cn(
+                        "shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+                        hideFooter && "text-[9px]",
+                      )}>
                         {activeCount}
                       </span>
                     ) : null}
                   </span>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                  <span className={cn(
+                    "mt-0.5 block truncate text-[11px] text-muted-foreground",
+                    hideFooter && "text-[9px] leading-3",
+                  )}>
                     {latestRun
                       ? runSummary(latestRun)
                       : latest?.turns.some((turn) => turn.content.trim())
@@ -1052,13 +1105,20 @@ function CompanyHome({
       </div>
 
       <footer
-        className="flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3"
+        className={cn(
+          "flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3",
+          hideFooter && "justify-end",
+        )}
       >
-        <Avatar className="h-8 w-8 border border-border/60">
-          <AvatarImage src={user?.avatar || undefined} alt="" />
-          <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
-        </Avatar>
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
+        {!hideFooter ? (
+          <>
+            <Avatar className="h-8 w-8 border border-border/60">
+              <AvatarImage src={user?.avatar || undefined} alt="" />
+              <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
+            </Avatar>
+            <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
+          </>
+        ) : null}
         <button
           type="button"
           onClick={onToggleProactive}
@@ -1106,19 +1166,27 @@ function CompanyNavRow({
   label,
   count,
   onClick,
+  compact = false,
 }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
   count?: number
   onClick: () => void
+  compact?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        compact && "h-8 gap-2 rounded-md px-2 text-xs",
+      )}
     >
-      <Icon className="h-[18px] w-[18px] text-muted-foreground group-hover:text-foreground" />
+      <Icon className={cn(
+        "h-[18px] w-[18px] text-muted-foreground group-hover:text-foreground",
+        compact && "h-3.5 w-3.5",
+      )} />
       <span className="flex-1">{label}</span>
       {typeof count === "number" && count > 0 ? (
         <span className="text-xs font-semibold tabular-nums text-sky-500">{count}</span>
