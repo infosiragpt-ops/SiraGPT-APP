@@ -114,8 +114,14 @@ export function getActiveHostRunId(): string | null {
 // stores the resolved codex project here; PreviewPane checks it before the
 // host-runner path. Same late-consumer singleton pattern as the host run id.
 let _activeCodexProjectId: string | null = null
+export const CODE_ACTIVE_CODEX_PROJECT_EVENT = "siragpt:active-codex-project"
 export function setActiveCodexProject(projectId: string | null) {
   _activeCodexProjectId = projectId
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_CODEX_PROJECT_EVENT, { detail: { projectId } }),
+    )
+  }
 }
 export function getActiveCodexProject(): string | null {
   return _activeCodexProjectId

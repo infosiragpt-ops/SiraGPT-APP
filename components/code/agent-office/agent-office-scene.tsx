@@ -25,14 +25,16 @@ type AgentOfficeSceneProps = {
 type WorkerAnimation = {
   worker: AgentOfficeWorker
   group: THREE.Group
-  leftArm: THREE.Mesh
-  rightArm: THREE.Mesh
+  leftArm: THREE.Group
+  rightArm: THREE.Group
+  leftLeg: THREE.Group
+  rightLeg: THREE.Group
   screen: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>
   selectionRing: THREE.Mesh
+  walkPath: THREE.CatmullRomCurve3
+  walkSpeed: number
   phase: number
   baseY: number
-  walkStart: THREE.Vector3 | null
-  walkEnd: THREE.Vector3 | null
 }
 
 const ACTIVITY_COLORS: Record<AgentOfficeActivity, number> = {
@@ -123,36 +125,96 @@ function addChair(sceneGroup: THREE.Group, x: number, z: number) {
   sceneGroup.add(chair)
 }
 
+function createWorkerLabel(worker: AgentOfficeWorker) {
+  const canvas = document.createElement("canvas")
+  canvas.width = 640
+  canvas.height = 144
+  const context = canvas.getContext("2d")
+  if (!context) return null
+
+  context.fillStyle = "rgba(255, 255, 255, 0.96)"
+  context.beginPath()
+  context.roundRect(10, 10, 620, 124, 24)
+  context.fill()
+  context.strokeStyle = "rgba(15, 23, 42, 0.14)"
+  context.lineWidth = 3
+  context.stroke()
+
+  context.fillStyle = "#111827"
+  context.font = "600 38px Inter, system-ui, sans-serif"
+  context.fillText(worker.name.slice(0, 27), 38, 62)
+  context.fillStyle = worker.active ? "#0284c7" : "#64748b"
+  context.font = "500 28px Inter, system-ui, sans-serif"
+  context.fillText(worker.statusLabel.slice(0, 34), 38, 105)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.minFilter = THREE.LinearFilter
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  )
+  sprite.scale.set(2.65, 0.6, 1)
+  sprite.position.set(0, 2.26, 0)
+  sprite.renderOrder = 20
+  return sprite
+}
+
 function addWorker({
   sceneGroup,
   worker,
   x,
   z,
   workerIndex,
-  walking,
+  zoneWidth,
+  zoneDepth,
+  showLabel,
 }: {
   sceneGroup: THREE.Group
   worker: AgentOfficeWorker
   x: number
   z: number
   workerIndex: number
-  walking: boolean
+  zoneWidth: number
+  zoneDepth: number
+  showLabel: boolean
 }): WorkerAnimation {
   const group = new THREE.Group()
-  group.position.set(x, 0, walking ? z + 1.35 : z + 0.82)
-  group.rotation.y = walking ? Math.PI / 2 : Math.PI
+  group.position.set(x, 0, z + 1.15)
+  group.rotation.y = Math.PI
 
   const bodyMaterial = material(ACTIVITY_COLORS[worker.activity], 0.68)
-  const skinMaterial = material(0xe5ad66, 0.76)
-  const limbMaterial = material(ACTIVITY_COLORS[worker.activity], 0.72)
+  const skinTones = [0xf0c59b, 0xd9a06f, 0xb97745, 0x7d4d2d]
+  const skinMaterial = material(skinTones[workerIndex % skinTones.length], 0.76)
+  const trousersMaterial = material(workerIndex % 2 === 0 ? 0x26384a : 0x35313f, 0.8)
+  const shoeMaterial = material(0x17191e, 0.88)
+  const hairMaterial = material(workerIndex % 3 === 0 ? 0x171717 : 0x4b342b, 0.9)
 
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.31, 0.62, 12), bodyMaterial)
-  body.position.y = walking ? 0.93 : 0.9
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.5, 6, 12), bodyMaterial)
+  body.position.y = 1.23
   group.add(body)
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 14, 10), skinMaterial)
-  head.position.y = 1.37
+  head.position.y = 1.82
   group.add(head)
+
+  const eyeMaterial = material(0x111827, 0.82)
+  for (const eyeX of [-0.075, 0.075]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 6), eyeMaterial)
+    eye.position.set(eyeX, 1.85, 0.215)
+    group.add(eye)
+  }
+
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.235, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    hairMaterial,
+  )
+  hair.position.y = 1.88
+  group.add(hair)
 
   const statusHalo = new THREE.Mesh(
     new THREE.RingGeometry(0.27, 0.33, 20),
@@ -163,29 +225,75 @@ function addWorker({
       side: THREE.DoubleSide,
     }),
   )
-  statusHalo.position.y = 1.61
+  statusHalo.position.y = 2.12
   statusHalo.rotation.x = Math.PI / 2
   group.add(statusHalo)
 
-  const leftArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.36, 4, 8), limbMaterial)
-  leftArm.position.set(-0.28, 0.99, -0.04)
-  leftArm.rotation.z = 0.42
-  leftArm.rotation.x = walking ? 0 : -0.8
+  const leftArm = new THREE.Group()
+  leftArm.position.set(-0.32, 1.52, 0)
+  leftArm.rotation.z = 0.12
+  const leftArmMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.42, 4, 8), bodyMaterial)
+  leftArmMesh.position.y = -0.25
+  leftArm.add(leftArmMesh)
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), skinMaterial)
+  leftHand.position.y = -0.53
+  leftArm.add(leftHand)
   group.add(leftArm)
 
-  const rightArm = leftArm.clone()
-  rightArm.position.x = 0.28
-  rightArm.rotation.z = -0.42
+  const rightArm = leftArm.clone(true)
+  rightArm.position.x = 0.32
+  rightArm.rotation.z = -0.12
   group.add(rightArm)
 
+  const leftLeg = new THREE.Group()
+  leftLeg.position.set(-0.14, 0.87, 0)
+  const leftLegMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.52, 4, 8), trousersMaterial)
+  leftLegMesh.position.y = -0.31
+  leftLeg.add(leftLegMesh)
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.13, 0.34), shoeMaterial)
+  leftShoe.position.set(0, -0.66, 0.09)
+  leftLeg.add(leftShoe)
+  group.add(leftLeg)
+  const rightLeg = leftLeg.clone(true)
+  rightLeg.position.x = 0.14
+  group.add(rightLeg)
+
   const selectionRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.42, 0.5, 28),
+    new THREE.RingGeometry(0.48, 0.58, 28),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, side: THREE.DoubleSide }),
   )
   selectionRing.position.y = 0.025
   selectionRing.rotation.x = -Math.PI / 2
   selectionRing.visible = false
   group.add(selectionRing)
+
+  if (showLabel) {
+    const label = createWorkerLabel(worker)
+    if (label) group.add(label)
+  }
+
+  const routeOffset = ((workerIndex % 3) - 1) * 0.42
+  const route = new THREE.CatmullRomCurve3(
+    [
+      new THREE.Vector3(x, 0, z + 1.15),
+      new THREE.Vector3(
+        THREE.MathUtils.clamp(x + 1.2 + routeOffset, -zoneWidth / 2 + 1.4, zoneWidth / 2 - 1.4),
+        0,
+        zoneDepth / 2 - 1.35,
+      ),
+      new THREE.Vector3(zoneWidth / 2 - 1.4, 0, routeOffset),
+      new THREE.Vector3(routeOffset, 0, -zoneDepth / 2 + 2.2),
+      new THREE.Vector3(-zoneWidth / 2 + 1.4, 0, -routeOffset),
+      new THREE.Vector3(
+        THREE.MathUtils.clamp(x - 1.15 - routeOffset, -zoneWidth / 2 + 1.4, zoneWidth / 2 - 1.4),
+        0,
+        zoneDepth / 2 - 1.4,
+      ),
+    ],
+    true,
+    "catmullrom",
+    0.18,
+  )
 
   tagObject(group, { workerId: worker.id, departmentId: worker.departmentId })
   sceneGroup.add(group)
@@ -195,12 +303,14 @@ function addWorker({
     group,
     leftArm,
     rightArm,
+    leftLeg,
+    rightLeg,
     screen: null as unknown as WorkerAnimation["screen"],
     selectionRing,
-    phase: workerIndex * 0.77,
+    walkPath: route,
+    walkSpeed: worker.active ? 0.048 : worker.statusTone === "attention" ? 0.038 : 0.03,
+    phase: workerIndex * 1.37,
     baseY: group.position.y,
-    walkStart: walking ? new THREE.Vector3(x - 1.25, 0, z + 1.35) : null,
-    walkEnd: walking ? new THREE.Vector3(x + 1.25, 0, z + 1.35) : null,
   }
 }
 
@@ -287,15 +397,19 @@ export function AgentOfficeScene({
     let pitch = 0.72
     let distance = 34
 
+    const populatedDepartments = model.departments.filter((department) => department.workers.length > 0)
     const officeDepartments =
-      variant === "thumbnail"
-        ? model.departments.filter((department) => department.workers.length > 0).slice(0, 6)
+      populatedDepartments.length > 0 && model.departments.length > 1
+        ? populatedDepartments
         : model.departments
-    const departments = officeDepartments.length > 0 ? officeDepartments : model.departments.slice(0, 4)
-    const columns = variant === "thumbnail" ? Math.min(3, Math.max(1, departments.length)) : Math.min(4, Math.max(1, Math.ceil(Math.sqrt(departments.length * 1.35))))
+    const departments = officeDepartments.slice(0, variant === "thumbnail" ? 6 : 10)
+    const columns =
+      variant === "thumbnail"
+        ? Math.min(3, Math.max(1, departments.length))
+        : Math.min(3, Math.max(1, Math.ceil(Math.sqrt(departments.length * 1.2))))
     const rows = Math.max(1, Math.ceil(departments.length / columns))
-    const zoneWidth = variant === "thumbnail" ? 7.2 : 9.2
-    const zoneDepth = variant === "thumbnail" ? 5.4 : 6.8
+    const zoneWidth = variant === "thumbnail" ? 7.2 : 10.4
+    const zoneDepth = variant === "thumbnail" ? 5.4 : 7.6
     const gapX = variant === "thumbnail" ? 1.2 : 1.7
     const gapZ = variant === "thumbnail" ? 1.1 : 1.7
     const totalWidth = columns * zoneWidth + Math.max(0, columns - 1) * gapX
@@ -315,8 +429,8 @@ export function AgentOfficeScene({
       yaw = -0.72
       pitch = variant === "thumbnail" ? 0.82 : 0.8
       const baseDistance = Math.max(
-        variant === "thumbnail" ? 18 : 27,
-        Math.max(totalWidth * 0.86, totalDepth * 1.25),
+        variant === "thumbnail" ? 18 : 22,
+        Math.max(totalWidth * 0.78, totalDepth * 1.08),
       )
       const aspect = Math.max(0.35, host.clientWidth / Math.max(1, host.clientHeight))
       distance = Math.min(72, baseDistance * Math.max(1, 0.9 / aspect))
@@ -402,7 +516,6 @@ export function AgentOfficeScene({
         const deskX = (deskColumn - (deskColumns - 1) / 2) * spacingX
         const deskZ = (deskRow - (deskRows - 1) / 2) * spacingZ - 0.15
         const worker = visibleWorkers[deskIndex]
-        const walking = Boolean(worker?.active && deskIndex % 4 === 3 && variant === "full")
         const screen = addDesk(departmentGroup, deskX, deskZ, Boolean(worker?.active))
         addChair(departmentGroup, deskX, deskZ + 0.88)
         if (worker) {
@@ -412,7 +525,9 @@ export function AgentOfficeScene({
             x: deskX,
             z: deskZ,
             workerIndex: workers.length,
-            walking,
+            zoneWidth,
+            zoneDepth,
+            showLabel: variant === "full",
           })
           animation.screen = screen
           workers.push(animation)
@@ -562,19 +677,20 @@ export function AgentOfficeScene({
       for (const animation of workers) {
         animation.selectionRing.visible = selectedWorkerRef.current === animation.worker.id
         if (!canAnimate) continue
-        const phase = elapsed * (animation.worker.active ? 3.2 : 1.15) + animation.phase
-        animation.group.position.y = animation.baseY + Math.sin(phase) * (animation.worker.active ? 0.025 : 0.012)
-        if (animation.walkStart && animation.walkEnd) {
-          const progress = (Math.sin(elapsed * 0.72 + animation.phase) + 1) / 2
-          animation.group.position.lerpVectors(animation.walkStart, animation.walkEnd, progress)
-          animation.group.rotation.y = Math.cos(elapsed * 0.72 + animation.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2
-          animation.leftArm.rotation.x = Math.sin(phase) * 0.55
-          animation.rightArm.rotation.x = -Math.sin(phase) * 0.55
-        } else if (animation.worker.active) {
-          animation.leftArm.rotation.x = -0.78 + Math.sin(phase) * 0.16
-          animation.rightArm.rotation.x = -0.78 + Math.sin(phase + Math.PI) * 0.16
-          animation.screen.material.emissiveIntensity = 0.85 + (Math.sin(phase * 0.5) + 1) * 0.2
-        }
+        const walkProgress = (elapsed * animation.walkSpeed + animation.phase * 0.037) % 1
+        const routePoint = animation.walkPath.getPointAt(walkProgress)
+        const routeTangent = animation.walkPath.getTangentAt(walkProgress)
+        const stridePhase = elapsed * (animation.worker.active ? 7.2 : 5.4) + animation.phase
+        animation.group.position.copy(routePoint)
+        animation.group.position.y = animation.baseY + Math.abs(Math.sin(stridePhase)) * 0.045
+        animation.group.rotation.y = Math.atan2(routeTangent.x, routeTangent.z)
+        animation.leftArm.rotation.x = Math.sin(stridePhase) * 0.72
+        animation.rightArm.rotation.x = -Math.sin(stridePhase) * 0.72
+        animation.leftLeg.rotation.x = -Math.sin(stridePhase) * 0.62
+        animation.rightLeg.rotation.x = Math.sin(stridePhase) * 0.62
+        animation.screen.material.emissiveIntensity = animation.worker.active
+          ? 0.9 + (Math.sin(stridePhase * 0.4) + 1) * 0.18
+          : 0.2
       }
 
       renderer.render(scene, camera)

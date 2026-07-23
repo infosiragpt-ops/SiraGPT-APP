@@ -76,6 +76,7 @@ import type { CodeChatSession } from "@/lib/code-chat-sessions"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
 import {
+  CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_OPEN_TOOL_EVENT,
   getActiveCodexProject,
   useCodeWorkspace,
@@ -264,11 +265,15 @@ export function AgentCompanyPanel() {
   React.useEffect(() => {
     let alive = true
     let refreshing = false
+    let refreshRequested = false
     const hydrated = hydrateProactiveCompany(activeFolder?.id)
     setProactiveOn(hydrated.enabled)
 
     const load = async () => {
-      if (refreshing) return
+      if (refreshing) {
+        refreshRequested = true
+        return
+      }
       refreshing = true
       const codexProjectId = getActiveCodexProject()
       try {
@@ -301,6 +306,10 @@ export function AgentCompanyPanel() {
         }
       } finally {
         refreshing = false
+        if (refreshRequested && alive) {
+          refreshRequested = false
+          void load()
+        }
       }
     }
     void load()
@@ -308,11 +317,14 @@ export function AgentCompanyPanel() {
     const onVisibility = () => {
       if (document.visibilityState === "visible") void load()
     }
+    const onActiveCodexProject = () => void load()
     document.addEventListener("visibilitychange", onVisibility)
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
     return () => {
       alive = false
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibility)
+      window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
     }
   }, [activeFolder?.id])
 

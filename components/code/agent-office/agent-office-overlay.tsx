@@ -141,9 +141,11 @@ export function AgentOfficeOverlay({
         paused={paused}
         selectedWorkerId={selectedWorkerId}
         resetCameraKey={resetCameraKey}
+        className={cn(rosterOpen && "sm:w-[calc(100%_-_360px)]")}
         onSelectWorker={(workerId) => {
           setSelectedWorkerId(workerId)
           setRosterOpen(true)
+          window.setTimeout(() => setResetCameraKey((current) => current + 1), 50)
         }}
         onSelectDepartment={(nextDepartmentId) => {
           setDepartmentId(nextDepartmentId)
