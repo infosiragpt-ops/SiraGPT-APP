@@ -123,7 +123,7 @@ jobs:
           if-no-files-found: error
 
   android:
-    name: Android signed AAB
+    name: Android signed AAB + APK
     if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
     needs: preflight
     runs-on: ubuntu-latest
@@ -177,33 +177,44 @@ jobs:
           keyPassword=$ANDROID_KEY_PASSWORD
           EOF
 
-      - name: Build signed Android bundle
+      - name: Build signed Android artifacts
         shell: bash
         run: |
           set -eu
           npm run mobile:sync -- android
           chmod +x android/gradlew
           cd android
-          ./gradlew :app:bundleRelease --no-daemon --stacktrace
+          ./gradlew :app:bundleRelease :app:assembleRelease --no-daemon --stacktrace
           cd ..
           short_sha="${GITHUB_SHA::7}"
           mkdir -p output/native-release/android
           cp android/app/build/outputs/bundle/release/app-release.aab "output/native-release/android/SiraGPT-${short_sha}.aab"
+          cp android/app/build/outputs/apk/release/app-release.apk "output/native-release/android/SiraGPT-${short_sha}.apk"
 
-      - name: Verify Android bundle signature
+      - name: Verify Android artifact signatures
         shell: bash
         run: |
           set -eu
           aab_path="$(find output/native-release/android -type f -name '*.aab' -print -quit)"
+          apk_path="$(find output/native-release/android -type f -name '*.apk' -print -quit)"
           test -n "$aab_path"
+          test -n "$apk_path"
           jarsigner -verify -verbose -certs "$aab_path"
           keytool -printcert -jarfile "$aab_path" >/dev/null
+          apksigner_path="$(find "${ANDROID_HOME:?}/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          if [ ! -x "$apksigner_path" ]; then
+            echo "Android SDK apksigner was not found" >&2
+            exit 1
+          fi
+          "$apksigner_path" verify --verbose --print-certs "$apk_path"
 
-      - name: Upload Android signed artifact
+      - name: Upload Android signed artifacts
         uses: actions/upload-artifact@v6
         with:
           name: siragpt-native-android
-          path: output/native-release/android/*.aab
+          path: |
+            output/native-release/android/*.aab
+            output/native-release/android/*.apk
           retention-days: 30
           if-no-files-found: error
 
