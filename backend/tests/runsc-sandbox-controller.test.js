@@ -23,6 +23,12 @@ const { DockerApi, DockerApiError, decodeDockerStream } = require(path.join(ROOT
 const { FileActivityStore } = require(path.join(ROOT, 'scripts/runsc-sandbox-activity-store'));
 const { createController } = require(path.join(ROOT, 'scripts/runsc-sandbox-controller'));
 
+const PINNED_BUN_IMAGE_ENV = Object.freeze([
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bun-node-fallback-bin',
+  'BUN_RUNTIME_TRANSPILER_CACHE_PATH=0',
+  'BUN_INSTALL_BIN=/usr/local/bin',
+]);
+
 function config(overrides = {}) {
   return {
     ...parseControllerConfig({
@@ -102,6 +108,11 @@ class FakeDocker {
     const id = `container-${++this.sequence}`;
     const networkName = body.HostConfig.NetworkMode;
     const mount = body.HostConfig.Mounts[0];
+    const requestedEnvNames = new Set(body.Env.map((entry) => entry.split('=', 1)[0]));
+    const effectiveEnv = [
+      ...body.Env,
+      ...PINNED_BUN_IMAGE_ENV.filter((entry) => !requestedEnvNames.has(entry.split('=', 1)[0])),
+    ];
     const inspect = {
       Id: id,
       Image: body.Image,
@@ -109,7 +120,8 @@ class FakeDocker {
       Config: {
         Image: body.Image,
         User: body.User,
-        Env: body.Env,
+        // Moby merges image Config.Env entries absent from the create request.
+        Env: effectiveEnv,
         Labels: body.Labels,
       },
       HostConfig: structuredClone(body.HostConfig),
@@ -253,6 +265,7 @@ test('desired sandbox has non-root ownership, hard limits, no binds, no host por
   assert.equal(evidence.networkInspect.Attachable, false);
   assert.equal(evidence.networkInspect.Options['com.docker.network.bridge.gateway_mode_ipv4'], 'isolated');
   assert.ok(evidence.inspect.Config.Env.every((entry) => !/(SECRET|TOKEN|DATABASE|REDIS|DOCKER)/i.test(entry)));
+  assert.ok(PINNED_BUN_IMAGE_ENV.every((entry) => evidence.inspect.Config.Env.includes(entry)));
 });
 
 test('controller readiness rejects a missing or substituted worker image', async () => {

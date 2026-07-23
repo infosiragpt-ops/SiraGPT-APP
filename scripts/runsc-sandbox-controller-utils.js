@@ -21,6 +21,12 @@ const SANDBOX_ENV = Object.freeze([
   'HOME=/home/sandbox',
   'TMPDIR=/tmp',
   'XDG_CACHE_HOME=/cache',
+  // Inherited by the pinned oven/bun image. Declare the exact values in the
+  // create request as well so Moby's image-env merge cannot add unverified
+  // entries behind the controller's allowlist.
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bun-node-fallback-bin',
+  'BUN_RUNTIME_TRANSPILER_CACHE_PATH=0',
+  'BUN_INSTALL_BIN=/usr/local/bin',
 ]);
 
 class RunscSandboxError extends Error {
