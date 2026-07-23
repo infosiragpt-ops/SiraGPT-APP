@@ -87,6 +87,8 @@ function classifyArtifact(relativePath) {
   const isUnder = (directory) => normalized.startsWith(`${directory}/`) || normalized.includes(`/${directory}/`)
   const isIosSimulatorZip = extension === ".zip"
     && /(?:^|[-_.])(?:ios[-_.].*simulator|simulator[-_.].*ios)(?:[-_.]|$)/.test(path.basename(normalized))
+  const isDebugApk = extension === ".apk"
+    && (isUnder("debug") || /(?:^|[-_.])debug(?:[-_.]|$)/.test(path.basename(normalized)))
 
   if (extension === ".blockmap") {
     return {
@@ -98,7 +100,7 @@ function classifyArtifact(relativePath) {
   if (isUnder("android") || extension === ".aab" || extension === ".apk") {
     return {
       platform: "android",
-      kind: extension === ".apk" ? "debug-apk" : "play-aab",
+      kind: extension === ".apk" ? (isDebugApk ? "debug-apk" : "release-apk") : "play-aab",
     }
   }
 
