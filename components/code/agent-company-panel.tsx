@@ -48,6 +48,14 @@ import {
   departmentIdForSession,
   type AgentDepartmentDefinition,
 } from "@/lib/code-agent-company"
+import {
+  buildProactiveKickoffPrompt,
+  departmentBootstrapTitle,
+  focusCeoChatColumn,
+  PROACTIVE_CORE_DEPARTMENTS,
+  requestProactiveSeedPrompt,
+  setProactiveCompanyEnabled,
+} from "@/lib/code-agent-company-proactive"
 import type { CodeChatSession } from "@/lib/code-chat-sessions"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
@@ -193,7 +201,12 @@ export function AgentCompanyPanel() {
       if (!codexProjectId) return
       codexApi
         .getProactive(codexProjectId)
-        .then((r) => { if (alive) setProactiveOn(Boolean(r.state?.enabled)) })
+        .then((r) => {
+          if (!alive) return
+          const enabled = Boolean(r.state?.enabled)
+          setProactiveOn(enabled)
+          setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
+        })
         .catch(() => { /* backend viejo o sin sesión: el chip queda informativo */ })
     }
     load()
@@ -201,31 +214,10 @@ export function AgentCompanyPanel() {
     return () => { alive = false; clearInterval(timer) }
   }, [activeFolder?.id])
 
-  const toggleProactive = React.useCallback(async () => {
-    const codexProjectId = getActiveCodexProject()
-    if (!codexProjectId) {
-      toast.info("Primero pide una construcción en el chat para crear el proyecto; luego activa el modo proactivo.")
-      return
-    }
-    setProactiveBusy(true)
-    try {
-      const next = !proactiveOn
-      const r = await codexApi.setProactive(codexProjectId, next)
-      setProactiveOn(Boolean(r.state?.enabled))
-      toast.success(
-        next
-          ? "Modo proactivo activado — los departamentos proponen y ejecutan trabajo de forma autónoma."
-          : "Modo proactivo desactivado.",
-      )
-    } catch {
-      toast.error("No se pudo cambiar el modo proactivo. Intenta de nuevo.")
-    } finally {
-      setProactiveBusy(false)
-    }
-  }, [proactiveOn])
-
   React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
   const dockedInAppsRail = !isMobile && Boolean(dockSlot)
+  // Desktop: chat lives in the middle /code column; company rail stays on home.
+  const chatLivesInWorkspaceColumn = dockedInAppsRail
 
   const snapshot = React.useMemo(
     () => buildAgentCompanySnapshot(codeChatSessions, files),
@@ -321,8 +313,77 @@ export function AgentCompanyPanel() {
     let rootSessionId = snapshot.rootSessionId
     if (!rootSessionId) rootSessionId = createCodeChatSession({ title: "CEO Office" })
     setActiveCodeChatSession(rootSessionId)
+    if (chatLivesInWorkspaceColumn) {
+      setView("home")
+      focusCeoChatColumn()
+      return
+    }
     setView("chat")
-  }, [createCodeChatSession, setActiveCodeChatSession, snapshot.rootSessionId])
+  }, [
+    chatLivesInWorkspaceColumn,
+    createCodeChatSession,
+    setActiveCodeChatSession,
+    snapshot.rootSessionId,
+  ])
+
+  const ensureDepartmentSessions = React.useCallback(() => {
+    const existingTitles = new Set(codeChatSessions.map((session) => session.title.trim().toLowerCase()))
+    for (const department of PROACTIVE_CORE_DEPARTMENTS) {
+      const title = departmentBootstrapTitle(department)
+      if (existingTitles.has(title.toLowerCase())) continue
+      if (department.id === "ceo-office" && snapshot.rootSessionId) continue
+      createCodeChatSession({ title })
+      existingTitles.add(title.toLowerCase())
+    }
+  }, [codeChatSessions, createCodeChatSession, snapshot.rootSessionId])
+
+  const toggleProactive = React.useCallback(async () => {
+    const next = !proactiveOn
+    if (next) {
+      ensureDepartmentSessions()
+      openCeoOffice()
+      setProactiveCompanyEnabled(true, { workspaceId: activeFolder?.id || null })
+      window.setTimeout(
+        () => requestProactiveSeedPrompt(buildProactiveKickoffPrompt(companyName)),
+        120,
+      )
+    } else {
+      setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
+    }
+
+    const codexProjectId = getActiveCodexProject()
+    if (!codexProjectId) {
+      setProactiveOn(next)
+      toast.info(
+        next
+          ? "PROACTIVO activo en CEO Office. Cuando exista un proyecto Codex, los departamentos también correrán en el servidor."
+          : "Modo PROACTIVO pausado.",
+      )
+      return
+    }
+
+    setProactiveBusy(true)
+    try {
+      const r = await codexApi.setProactive(codexProjectId, next)
+      setProactiveOn(Boolean(r.state?.enabled))
+      toast.success(
+        next
+          ? "Modo PROACTIVO activado — la empresa de agentes opera de forma autónoma."
+          : "Modo PROACTIVO desactivado.",
+      )
+    } catch {
+      setProactiveOn(next)
+      toast.error("No se pudo sincronizar PROACTIVO con el servidor; el modo local sigue activo.")
+    } finally {
+      setProactiveBusy(false)
+    }
+  }, [
+    activeFolder?.id,
+    companyName,
+    ensureDepartmentSessions,
+    openCeoOffice,
+    proactiveOn,
+  ])
 
   const selectCompany = React.useCallback(
     async (option: CompanyOption) => {
@@ -413,12 +474,20 @@ export function AgentCompanyPanel() {
         !dockedInAppsRail && "border-r border-border/50",
       )}
       data-agent-company-dock={dockedInAppsRail ? "apps" : "workspace"}
+      data-proactive={proactiveOn ? "on" : "off"}
     >
-      <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
-        <AICodeChatPanel embedded title="CEO Office" onBack={() => setView("home")} />
-      </div>
+      {!chatLivesInWorkspaceColumn ? (
+        <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
+          <AICodeChatPanel embedded title="CEO Office" onBack={() => setView("home")} />
+        </div>
+      ) : null}
 
-      <div className={cn("flex h-full min-h-0 flex-col", view === "chat" && "invisible pointer-events-none")}>
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          !chatLivesInWorkspaceColumn && view === "chat" && "invisible pointer-events-none",
+        )}
+      >
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/55 px-3">
           {view !== "home" ? (
             <Button
@@ -551,6 +620,18 @@ export function AgentCompanyPanel() {
             onOpenDepartment={(departmentId) => {
               if (departmentId === "ceo-office") {
                 openCeoOffice()
+                return
+              }
+              if (chatLivesInWorkspaceColumn && proactiveOn) {
+                const row = departmentRows.find((entry) => entry.department.id === departmentId)
+                const title = departmentBootstrapTitle(
+                  row?.department ||
+                    AGENT_COMPANY_DEPARTMENTS.find((department) => department.id === departmentId) ||
+                    AGENT_COMPANY_DEPARTMENTS[0],
+                )
+                const sessionId = row?.sessions[0]?.id || createCodeChatSession({ title })
+                setActiveCodeChatSession(sessionId)
+                focusCeoChatColumn()
                 return
               }
               setSelectedDepartmentId(departmentId)
@@ -814,39 +895,47 @@ function CompanyHome({
         </div>
       </div>
 
-      {hideFooter ? null : (
-        <footer className="flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3">
-          <Avatar className="h-8 w-8 border border-border/60">
-            <AvatarImage src={user?.avatar || undefined} alt="" />
-            <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
-          </Avatar>
-          <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
-          <button
-            type="button"
-            onClick={onToggleProactive}
-            disabled={proactiveBusy}
-            title={
-              proactiveOn
-                ? "Modo proactivo ACTIVO: los departamentos proponen y ejecutan trabajo autónomamente. Clic para desactivar."
-                : "Activa el modo proactivo: la compañía de agentes trabaja de forma autónoma en tu proyecto."
-            }
+      <footer
+        className={cn(
+          "flex h-14 shrink-0 items-center gap-3 border-t border-border/50 bg-background px-3",
+          hideFooter && "justify-end",
+        )}
+      >
+        {hideFooter ? null : (
+          <>
+            <Avatar className="h-8 w-8 border border-border/60">
+              <AvatarImage src={user?.avatar || undefined} alt="" />
+              <AvatarFallback>{initials(user?.name, user?.email)}</AvatarFallback>
+            </Avatar>
+            <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={onToggleProactive}
+          disabled={proactiveBusy}
+          aria-pressed={proactiveOn}
+          title={
+            proactiveOn
+              ? "Modo PROACTIVO ACTIVO (matrix.build-style). Clic para pausar."
+              : "Activar PROACTIVO — empresa de agentes autónoma (matrix.build)"
+          }
+          className={cn(
+            "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            proactiveOn || snapshot.activeAgents > 0
+              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              : "border-border/60 bg-muted/35 text-foreground/75 hover:bg-muted/60",
+          )}
+        >
+          <Radio
             className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors disabled:opacity-60",
-              proactiveOn
-                ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-600"
-                : "border-border/60 bg-muted/35 text-foreground/75 hover:bg-muted/60",
+              "h-3.5 w-3.5",
+              snapshot.activeAgents > 0 ? "text-sky-500" : proactiveOn ? "text-emerald-500" : "text-muted-foreground",
             )}
-          >
-            <Radio
-              className={cn(
-                "h-3.5 w-3.5",
-                snapshot.activeAgents > 0 ? "text-sky-500" : proactiveOn ? "text-emerald-500" : "text-muted-foreground",
-              )}
-            />
-            {snapshot.activeAgents > 0 ? "EN EJECUCIÓN" : proactiveOn ? "PROACTIVO · ON" : "PROACTIVO"}
-          </button>
-        </footer>
-      )}
+          />
+          {snapshot.activeAgents > 0 ? "EN EJECUCIÓN" : proactiveOn ? "PROACTIVO · ON" : "PROACTIVO"}
+        </button>
+      </footer>
     </>
   )
 }
