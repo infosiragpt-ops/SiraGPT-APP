@@ -47,7 +47,7 @@ function SidebarCollapseBridge({ pathname }: { pathname: string | null }) {
   React.useEffect(() => { isMobileRef.current = isMobile }, [isMobile])
   React.useEffect(() => { pathnameRef.current = pathname }, [pathname])
 
-  // On /code the agent-company panel lives in the APPS rail — keep it open.
+  // Keep the APPS navigator visible beside the dedicated company workspace.
   React.useEffect(() => {
     if (!pathname?.startsWith("/code") || isMobile) return
     if (open) return
@@ -58,7 +58,7 @@ function SidebarCollapseBridge({ pathname }: { pathname: string | null }) {
     if (typeof window === 'undefined') return
     const onCollapse = () => {
       if (isMobileRef.current) return
-      // Company panel docks into APPS on /code — collapsing would hide it.
+      // The /code workspace relies on the APPS navigator as its first column.
       if (pathnameRef.current?.startsWith("/code")) return
       try { setOpenRef.current(false) } catch { /* provider unmounted */ }
     }

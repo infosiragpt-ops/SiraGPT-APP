@@ -34,10 +34,9 @@ import {
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
-import { CODE_FOCUS_CEO_CHAT_EVENT } from "@/lib/code-agent-company-proactive"
+import { focusCeoChatColumn } from "@/lib/code-agent-company-proactive"
 
 import { AgentCompanyPanel } from "./agent-company-panel"
-import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
@@ -48,7 +47,6 @@ import { PreviewPane } from "./preview-pane"
 // click, which read as input lag. They take no props (context-driven), so a
 // module-level memo makes those interactions skip them entirely.
 const MemoAgentCompanyPanel = React.memo(AgentCompanyPanel)
-const MemoAICodeChatPanel = React.memo(AICodeChatPanel)
 const MemoPreviewPane = React.memo(PreviewPane)
 
 const CHAT_DEFAULT_SIZE = 34
@@ -99,23 +97,9 @@ export function CodeWorkspace() {
   const [codeHubOpen, setCodeHubOpen] = React.useState(false)
   // Mobile: the desktop side-by-side resizable split crams the chat and the
   // preview into two unusable columns on a phone. Instead, show ONE panel at a
-  // time with a bottom toggle (Agente ↔ Preview) — the Replit/bolt mobile pattern.
+  // time with a bottom toggle (Empresa ↔ Preview).
   const isMobile = useIsMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
-  const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
-
-  React.useEffect(() => {
-    const onFocusCeo = () => {
-      setChatOpen(true)
-      setMobileView("chat")
-      window.requestAnimationFrame(() => {
-        chatColumnRef.current?.querySelector<HTMLElement>("textarea, [contenteditable='true']")?.focus()
-      })
-    }
-    window.addEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
-    return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
-  }, [])
-
   React.useEffect(() => {
     try {
       window.localStorage.setItem("code-workspace:preview-open", previewOpen ? "1" : "0")
@@ -180,20 +164,20 @@ export function CodeWorkspace() {
   const openComposer = React.useCallback(() => {
     setChatOpen(true)
     setMobileView("chat")
-    focusChat()
+    focusCeoChatColumn()
     window.dispatchEvent(new CustomEvent("siragpt:code-composer-mode"))
-  }, [focusChat])
+  }, [])
 
-  // Mobile: flip Empresa ↔ Preview. Desktop: the company panel lives in the
-  // APPS sidebar rail, so "toggle chat" focuses the composer there.
+  // Mobile: flip Empresa ↔ Preview. Desktop: open the company column and route
+  // the composer command to CEO Office.
   const toggleChat = React.useCallback(() => {
     if (isMobile) {
       setMobileView((view) => (view === "chat" ? "preview" : "chat"))
       return
     }
     setChatOpen(true)
-    focusChat()
-  }, [focusChat, isMobile])
+    focusCeoChatColumn()
+  }, [isMobile])
 
   const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
     const ids = new Set<WorkspaceToolId>()
@@ -616,32 +600,27 @@ export function CodeWorkspace() {
             )
           }
 
-          // ── Desktop: [APPS company rail] | [CEO / agent chat] | [Preview]
-          // Company panel portals into the sidebar; chat + preview fill /code.
+          // ── Desktop: [APPS navigator] | [Agent company] | [Preview]
+          // The company replaces the former "Agente 1" column.
           return (
-            <>
-              <MemoAgentCompanyPanel />
-              <ResizablePanelGroup direction="horizontal" className="h-full">
-                {chatOpen ? (
-                  <>
-                    <ResizablePanel
-                      defaultSize={CHAT_DEFAULT_SIZE}
-                      minSize={CHAT_MIN_SIZE}
-                      maxSize={50}
-                      className="min-w-0"
-                    >
-                      <div ref={chatColumnRef} className="h-full min-h-0 border-r border-border/50">
-                        <MemoAICodeChatPanel embedded title="CEO Office" />
-                      </div>
-                    </ResizablePanel>
-                    <ResizableHandle withHandle />
-                  </>
-                ) : null}
-                <ResizablePanel defaultSize={chatOpen ? 66 : 100} minSize={32} className="relative min-w-0">
-                  {mainArea}
-                </ResizablePanel>
-              </ResizablePanelGroup>
-            </>
+            <ResizablePanelGroup direction="horizontal" className="h-full">
+              {chatOpen ? (
+                <>
+                  <ResizablePanel
+                    defaultSize={CHAT_DEFAULT_SIZE}
+                    minSize={CHAT_MIN_SIZE}
+                    maxSize={50}
+                    className="min-w-0"
+                  >
+                    <MemoAgentCompanyPanel />
+                  </ResizablePanel>
+                  <ResizableHandle withHandle />
+                </>
+              ) : null}
+              <ResizablePanel defaultSize={chatOpen ? 66 : 100} minSize={32} className="relative min-w-0">
+                {mainArea}
+              </ResizablePanel>
+            </ResizablePanelGroup>
           )
         })()}
       </div>

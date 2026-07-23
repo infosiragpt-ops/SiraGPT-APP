@@ -56,6 +56,7 @@ import {
   codeWorkspaceKey,
   codexWorkspaceSessionKey,
   createCodeChatSession as createCodeChatSessionRecord,
+  createCodeChatSessionId,
   ensureDefaultSession,
   getActiveSessionId,
   listSessionsForWorkspace,
@@ -332,7 +333,9 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   const workspaceSessionKey = codexWorkspaceSessionKey(activeFolder?.id)
 
   React.useEffect(() => {
-    setChatSessionStore((prev) => ensureDefaultSession(workspaceSessionKey, prev))
+    // ensureDefaultSession persists its result. Compute it outside React's
+    // updater so that storage/event side effects cannot re-enter a render.
+    setChatSessionStore(ensureDefaultSession(workspaceSessionKey, readCodeChatStore()))
   }, [workspaceSessionKey])
 
   React.useEffect(() => {
@@ -821,11 +824,13 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   )
 
   const createCodeChatSession = React.useCallback((opts?: { title?: string }) => {
-    const { store, session } = createCodeChatSessionRecord(workspaceSessionKey, opts, chatSessionStore)
-    setChatSessionStore(store)
+    const sessionId = createCodeChatSessionId()
+    setChatSessionStore((prev) =>
+      createCodeChatSessionRecord(workspaceSessionKey, { ...opts, id: sessionId }, prev).store,
+    )
     focusChat()
-    return session.id
-  }, [chatSessionStore, focusChat, workspaceSessionKey])
+    return sessionId
+  }, [focusChat, workspaceSessionKey])
 
   const setActiveCodeChatSession = React.useCallback(
     (sessionId: string) => {
