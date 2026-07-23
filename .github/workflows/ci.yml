@@ -57,7 +57,7 @@ jobs:
       # Prisma engine cache — keyed on schema. Restoring avoids re-downloading
       # the platform-specific query engine binaries on every run.
       - name: Cache Prisma engines
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             backend/node_modules/.prisma
@@ -118,7 +118,7 @@ jobs:
       # Cache .next/cache between runs so `next build` reuses
       # previously compiled modules, speeding up PR rebuilds.
       - name: Cache Next.js build
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .next/cache
           # Source-aware key: invalidate the cache when either deps or
@@ -266,7 +266,7 @@ jobs:
       # Prisma engine cache — keyed on the schema. Avoids re-downloading
       # the query-engine + introspection-engine binaries each run.
       - name: Cache Prisma engines
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             backend/node_modules/.prisma
@@ -701,7 +701,7 @@ jobs:
       # Cache the downloaded browser so the install is fast and reliable
       # (the binary CDN is the usual flake source for Playwright in CI).
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
