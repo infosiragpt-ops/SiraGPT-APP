@@ -9,11 +9,12 @@ const root = path.resolve(__dirname, "..")
 const defaultRepo = process.env.GITHUB_REPOSITORY || "infosiragpt-ops/SiraGPT-APP"
 
 function usage() {
-  return `Usage: node scripts/generate-native-store-owner-packet.js [--repo=owner/name] [--secret-source=env|github] [--out-dir=path] [--zip-out=path] [--checksum-out=path] [--source-sha=sha] [--source-commit=text] [--release-tag=tag] [--json] [--skip-zip]
+  return `Usage: node scripts/generate-native-store-owner-packet.js [--repo=owner/name] [--secret-source=env|github] [--out-dir=path] [--zip-out=path] [--checksum-out=path] [--source-sha=sha] [--source-commit=text] [--release-tag=tag] [--qa-mobile-run=id] [--qa-desktop-run=id] [--qa-ci-run=id] [--json] [--skip-zip]
 
 Creates a non-secret native store + owner packet for Android, iPhone, macOS, and Windows.
 It includes store-listing assets, platform submission folders, owner handoff,
-release plan, a manifest, and optionally a ZIP plus SHA-256 checksum.`
+release plan, a manifest, and optionally a ZIP plus SHA-256 checksum.
+When --release-tag is explicit, its QA binary target is bound to --source-sha.`
 }
 
 function parseArgs(argv) {
@@ -26,6 +27,10 @@ function parseArgs(argv) {
     sourceSha: "",
     sourceCommit: "",
     releaseTag: "",
+    releaseTagExplicit: false,
+    qaMobileRun: "",
+    qaDesktopRun: "",
+    qaCiRun: "",
     format: "markdown",
     skipZip: false,
     help: false,
@@ -54,6 +59,13 @@ function parseArgs(argv) {
       args.sourceCommit = arg.slice("--source-commit=".length)
     } else if (arg.startsWith("--release-tag=")) {
       args.releaseTag = arg.slice("--release-tag=".length)
+      args.releaseTagExplicit = true
+    } else if (arg.startsWith("--qa-mobile-run=")) {
+      args.qaMobileRun = arg.slice("--qa-mobile-run=".length)
+    } else if (arg.startsWith("--qa-desktop-run=")) {
+      args.qaDesktopRun = arg.slice("--qa-desktop-run=".length)
+    } else if (arg.startsWith("--qa-ci-run=")) {
+      args.qaCiRun = arg.slice("--qa-ci-run=".length)
     } else {
       throw new Error(`Unknown argument: ${arg}`)
     }
@@ -61,6 +73,9 @@ function parseArgs(argv) {
 
   if (!["env", "github"].includes(args.secretSource)) {
     throw new Error(`Unknown secret source: ${args.secretSource}`)
+  }
+  if (!args.releaseTagExplicit && (args.qaMobileRun || args.qaDesktopRun || args.qaCiRun)) {
+    throw new Error("QA workflow run IDs require an explicit --release-tag")
   }
 
   return args
@@ -119,7 +134,30 @@ function runNpmScript(scriptName, extraArgs) {
 }
 
 function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }) {
-  const ownerPacket = releaseStatus.latestOwnerPacket
+  const qaRelease = args.releaseTagExplicit
+    ? {
+        tag: args.releaseTag,
+        url: `https://github.com/${args.repo}/releases/tag/${args.releaseTag}`,
+        targetSha: sourceSha,
+        provenance: "explicit-packet-source",
+      }
+    : releaseStatus.latestQaRelease
+  const latestVerifiedRuns = args.releaseTagExplicit
+    ? {
+        ...(args.qaMobileRun ? { mobile: args.qaMobileRun } : {}),
+        ...(args.qaDesktopRun ? { desktop: args.qaDesktopRun } : {}),
+        ...(args.qaCiRun ? { ci: args.qaCiRun } : {}),
+      }
+    : releaseStatus.latestVerifiedRuns
+  const latestTraceabilityCommit = args.releaseTagExplicit
+    ? {
+        sourceSha,
+        sha: sourceSha,
+        message: sourceCommit || "Explicit QA release provenance",
+        note: "The packet release and supplied workflow runs are bound to this exact source SHA.",
+      }
+    : releaseStatus.latestTraceabilityCommit
+  const ownerPacket = !args.releaseTagExplicit && releaseStatus.latestOwnerPacket
     ? {
         sourceSha: releaseStatus.latestOwnerPacket.sourceSha,
         sourceCommit: releaseStatus.latestOwnerPacket.sourceCommit,
@@ -139,14 +177,14 @@ function createManifest({ args, sourceSha, sourceCommit, outDir, releaseStatus }
     packetSourceSha: sourceSha,
     packetSourceCommit: sourceCommit,
     releaseTag: args.releaseTag,
-    releaseUrl: `https://github.com/${args.repo}/releases/tag/${args.releaseTag}`,
-    qaBinaryTargetSha: releaseStatus.latestQaRelease?.targetSha,
-    latestQaRelease: releaseStatus.latestQaRelease,
-    latestVerifiedRuns: releaseStatus.latestVerifiedRuns,
-    latestTraceabilityCommit: releaseStatus.latestTraceabilityCommit,
+    releaseUrl: qaRelease?.url || `https://github.com/${args.repo}/releases/tag/${args.releaseTag}`,
+    qaBinaryTargetSha: qaRelease?.targetSha || sourceSha,
+    latestQaRelease: qaRelease,
+    latestVerifiedRuns,
+    latestTraceabilityCommit,
     distributionMilestone: releaseStatus.distributionMilestone,
     latestOwnerPacket: ownerPacket,
-    latestSignedPreflight: releaseStatus.latestSignedPreflight,
+    latestSignedPreflight: args.releaseTagExplicit ? null : releaseStatus.latestSignedPreflight,
     outputDirectory: relative(outDir),
     included: [
       "native-store-submission-packet/",
@@ -175,8 +213,8 @@ Generated: ${manifest.generatedAt}
 - Packet source SHA: \`${manifest.packetSourceSha}\`
 - QA release: ${manifest.releaseUrl}
 - QA binary target SHA: \`${manifest.qaBinaryTargetSha}\`
-- Latest owner packet: ${manifest.latestOwnerPacket?.zipUrl || "not recorded"}
-- Latest signed preflight: ${manifest.latestSignedPreflight?.url || "not recorded"}
+${manifest.latestOwnerPacket?.zipUrl ? `- Prior recorded owner packet: ${manifest.latestOwnerPacket.zipUrl}` : ""}
+${manifest.latestSignedPreflight?.url ? `- Prior recorded signed preflight: ${manifest.latestSignedPreflight.url}` : ""}
 - Distribution milestone: ${manifest.distributionMilestone?.url || "not recorded"}
 
 This ZIP contains public store submission material and owner-action checklists for Android, iPhone, macOS, and Windows. It contains secret names only, not secret values. Do not add passwords, keystores, certificates, provisioning profiles, API private keys, cookies, recovery codes, or app-specific password values to this packet.
@@ -300,11 +338,21 @@ function main() {
     `--out-dir=${relative(path.join(outDir, "native-store-submission-packet"))}`,
     `--json-out=${relative(path.join(outDir, "native-store-submission-packet.json"))}`,
   ])
-  runNpmScript("native:release:handoff", [
+  const handoffArgs = [
     `--repo=${args.repo}`,
     `--out=${relative(path.join(outDir, "native-owner-handoff.md"))}`,
     `--json-out=${relative(path.join(outDir, "native-owner-handoff.json"))}`,
-  ])
+  ]
+  if (args.releaseTagExplicit) {
+    handoffArgs.push(
+      `--qa-release-tag=${args.releaseTag}`,
+      `--qa-source-sha=${sourceSha}`,
+    )
+    if (args.qaMobileRun) handoffArgs.push(`--qa-mobile-run=${args.qaMobileRun}`)
+    if (args.qaDesktopRun) handoffArgs.push(`--qa-desktop-run=${args.qaDesktopRun}`)
+    if (args.qaCiRun) handoffArgs.push(`--qa-ci-run=${args.qaCiRun}`)
+  }
+  runNpmScript("native:release:handoff", handoffArgs)
   runNpmScript("native:release:plan", [
     `--repo=${args.repo}`,
     `--secret-source=${args.secretSource}`,

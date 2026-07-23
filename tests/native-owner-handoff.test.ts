@@ -53,7 +53,7 @@ describe("generate-native-owner-handoff", () => {
 
       const handoff = JSON.parse(stdout) as {
         status: string
-        latestQaRelease: { tag: string; targetSha: string }
+        latestQaRelease: { tag: string; targetSha: string; url: string }
         latestTraceabilityCommit: { sha: string }
         latestActionsDiagnostics: {
           repoVisibility: string
@@ -66,6 +66,7 @@ describe("generate-native-owner-handoff", () => {
         }
         latestQaArtifactManifestRuns: {
           status: string
+          sourceSha: string
           mobileRun: string
           desktopRun: string
           platformArtifacts: Record<string, string[]>
@@ -169,6 +170,72 @@ describe("generate-native-owner-handoff", () => {
       assert.match(markdown, /#6 iPhone \/ App Store Connect signing and upload owner actions/)
       assert.match(markdown, /#7 macOS Developer ID signing and notarization owner actions/)
       assert.match(markdown, /#8 Windows code signing and Microsoft Store owner actions/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("binds explicit QA provenance without inheriting historical release claims", () => {
+    const dir = mkdtempSync(join(tmpdir(), "siragpt-native-explicit-handoff-"))
+
+    try {
+      const mdOut = join(dir, "handoff.md")
+      const jsonOut = join(dir, "handoff.json")
+      const stdout = execFileSync("node", [
+        "scripts/generate-native-owner-handoff.js",
+        "--platform=all",
+        "--repo=infosiragpt-ops/SiraGPT-APP",
+        "--qa-release-tag=native-mobile-qa-v0.4.4-fedcba9",
+        "--qa-source-sha=fedcba9876543210fedcba9876543210fedcba98",
+        "--qa-mobile-run=30000000001",
+        "--qa-desktop-run=30000000002",
+        "--qa-ci-run=30000000003",
+        `--out=${mdOut}`,
+        `--json-out=${jsonOut}`,
+        "--json",
+      ], { encoding: "utf8" })
+
+      const handoff = JSON.parse(stdout) as {
+        latestQaRelease: { tag: string; targetSha: string; url: string; artifacts?: string[] }
+        latestVerifiedRuns: { mobile: string; desktop: string; ci: string }
+        latestQaArtifactManifestRuns: {
+          sourceSha: string
+          mobileRun: string
+          desktopRun: string
+          platformArtifacts?: Record<string, string[]>
+        }
+        latestTraceabilityCommit: { sha: string }
+        latestActionsDiagnostics: null
+        latestSignedPreflight: null
+        latestSignedAndroidRelease: null
+        latestSecretAudit: null
+      }
+
+      assert.equal(handoff.latestQaRelease.tag, "native-mobile-qa-v0.4.4-fedcba9")
+      assert.equal(handoff.latestQaRelease.targetSha, "fedcba9876543210fedcba9876543210fedcba98")
+      assert.equal(
+        handoff.latestQaRelease.url,
+        "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-fedcba9",
+      )
+      assert.equal(handoff.latestQaRelease.artifacts, undefined)
+      assert.deepEqual(handoff.latestVerifiedRuns, {
+        mobile: "30000000001",
+        desktop: "30000000002",
+        ci: "30000000003",
+      })
+      assert.equal(handoff.latestQaArtifactManifestRuns.sourceSha, "fedcba9876543210fedcba9876543210fedcba98")
+      assert.equal(handoff.latestQaArtifactManifestRuns.mobileRun, "30000000001")
+      assert.equal(handoff.latestQaArtifactManifestRuns.desktopRun, "30000000002")
+      assert.equal(handoff.latestQaArtifactManifestRuns.platformArtifacts, undefined)
+      assert.equal(handoff.latestTraceabilityCommit.sha, "fedcba9876543210fedcba9876543210fedcba98")
+      assert.equal(handoff.latestActionsDiagnostics, null)
+      assert.equal(handoff.latestSignedPreflight, null)
+      assert.equal(handoff.latestSignedAndroidRelease, null)
+      assert.equal(handoff.latestSecretAudit, null)
+
+      const markdown = readFileSync(mdOut, "utf8")
+      assert.doesNotMatch(markdown, /Latest Signed Android Release/)
+      assert.doesNotMatch(markdown, /Assets: undefined/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

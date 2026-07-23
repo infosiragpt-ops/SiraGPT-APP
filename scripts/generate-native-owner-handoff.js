@@ -98,10 +98,12 @@ const aliases = {
 }
 
 function usage() {
-  return `Usage: node scripts/generate-native-owner-handoff.js [--repo=owner/name] [--platform=all|mobile|desktop|android|ios|macos|windows] [--out=path] [--json-out=path] [--json]
+  return `Usage: node scripts/generate-native-owner-handoff.js [--repo=owner/name] [--platform=all|mobile|desktop|android|ios|macos|windows] [--qa-release-tag=tag --qa-source-sha=sha] [--qa-mobile-run=id] [--qa-desktop-run=id] [--qa-ci-run=id] [--out=path] [--json-out=path] [--json]
 
 Generates a non-secret handoff packet for the account owner who must finish
-store verification, signing credentials, and native release approval.`
+store verification, signing credentials, and native release approval.
+When QA release provenance is explicit, both --qa-release-tag and
+--qa-source-sha are required.`
 }
 
 function parseArgs(argv) {
@@ -110,6 +112,11 @@ function parseArgs(argv) {
     platform: "all",
     out: defaultOut,
     jsonOut: defaultJsonOut,
+    qaReleaseTag: "",
+    qaSourceSha: "",
+    qaMobileRun: "",
+    qaDesktopRun: "",
+    qaCiRun: "",
     format: "markdown",
     help: false,
   }
@@ -123,6 +130,16 @@ function parseArgs(argv) {
       args.repo = arg.slice("--repo=".length)
     } else if (arg.startsWith("--platform=")) {
       args.platform = arg.slice("--platform=".length)
+    } else if (arg.startsWith("--qa-release-tag=")) {
+      args.qaReleaseTag = arg.slice("--qa-release-tag=".length)
+    } else if (arg.startsWith("--qa-source-sha=")) {
+      args.qaSourceSha = arg.slice("--qa-source-sha=".length)
+    } else if (arg.startsWith("--qa-mobile-run=")) {
+      args.qaMobileRun = arg.slice("--qa-mobile-run=".length)
+    } else if (arg.startsWith("--qa-desktop-run=")) {
+      args.qaDesktopRun = arg.slice("--qa-desktop-run=".length)
+    } else if (arg.startsWith("--qa-ci-run=")) {
+      args.qaCiRun = arg.slice("--qa-ci-run=".length)
     } else if (arg.startsWith("--out=")) {
       args.out = arg.slice("--out=".length)
     } else if (arg.startsWith("--json-out=")) {
@@ -130,6 +147,13 @@ function parseArgs(argv) {
     } else {
       throw new Error(`Unknown argument: ${arg}`)
     }
+  }
+
+  if (Boolean(args.qaReleaseTag) !== Boolean(args.qaSourceSha)) {
+    throw new Error("--qa-release-tag and --qa-source-sha must be provided together")
+  }
+  if (!args.qaReleaseTag && (args.qaMobileRun || args.qaDesktopRun || args.qaCiRun)) {
+    throw new Error("QA workflow run IDs require --qa-release-tag and --qa-source-sha")
   }
 
   return args
@@ -167,8 +191,58 @@ function codeList(items) {
   return list(items.map((item) => `\`${item}\``))
 }
 
-function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
+function buildHandoff({
+  repo,
+  selectedPlatforms,
+  metadata,
+  status,
+  qaReleaseTag,
+  qaSourceSha,
+  qaMobileRun,
+  qaDesktopRun,
+  qaCiRun,
+}) {
   const actualRepo = repo || status.repo || "infosiragpt-ops/SiraGPT-APP"
+  const latestQaRelease = qaReleaseTag
+    ? {
+        tag: qaReleaseTag,
+        url: `https://github.com/${actualRepo}/releases/tag/${qaReleaseTag}`,
+        targetSha: qaSourceSha,
+        provenance: "explicit-handoff-source",
+      }
+    : status.latestQaRelease
+  const latestVerifiedRuns = qaReleaseTag
+    ? {
+        ...(qaMobileRun ? { mobile: qaMobileRun } : {}),
+        ...(qaDesktopRun ? { desktop: qaDesktopRun } : {}),
+        ...(qaCiRun ? { ci: qaCiRun } : {}),
+      }
+    : status.latestVerifiedRuns
+  const latestQaArtifactManifestRuns = qaReleaseTag
+    ? {
+        checkedAt: new Date().toISOString(),
+        sourceSha: qaSourceSha,
+        ...(qaMobileRun ? { mobileRun: qaMobileRun } : {}),
+        ...(qaDesktopRun ? { desktopRun: qaDesktopRun } : {}),
+        status: qaMobileRun && qaDesktopRun
+          ? "explicit-exact-sha-mobile-and-desktop-runs"
+          : "explicit-release-provenance",
+        diagnosis: "This handoff records only the explicitly supplied QA release target and workflow runs. Artifact names and checksums are authoritative in that release's manifests.",
+      }
+    : status.latestQaArtifactManifestRuns
+  const latestTraceabilityCommit = qaReleaseTag
+    ? {
+        sourceSha: qaSourceSha,
+        sha: qaSourceSha,
+        message: "Explicit QA release provenance",
+        validatedManagementSha: qaSourceSha,
+        validatedManagementCommit: "Explicit QA release provenance",
+        validatedManagementRuns: {
+          ...(qaCiRun ? { ci: qaCiRun } : {}),
+        },
+        note: "The QA release and supplied workflow runs are bound to this exact source SHA.",
+      }
+    : status.latestTraceabilityCommit
   const platformPlans = selectedPlatforms.map((key) => {
     const platform = platforms[key]
     const metadataPlatform = metadata.platforms?.[platform.metadataKey] || {}
@@ -220,14 +294,14 @@ function buildHandoff({ repo, selectedPlatforms, metadata, status }) {
       requiredSecurityActions: [],
       storePortals: [],
     },
-    latestQaRelease: status.latestQaRelease,
-    latestVerifiedRuns: status.latestVerifiedRuns,
-    latestQaArtifactManifestRuns: status.latestQaArtifactManifestRuns,
-    latestTraceabilityCommit: status.latestTraceabilityCommit,
-    latestActionsDiagnostics: status.latestActionsDiagnostics,
-    latestSignedPreflight: status.latestSignedPreflight,
-    latestSignedAndroidRelease: status.latestSignedAndroidRelease,
-    latestSecretAudit: status.latestSecretAudit,
+    latestQaRelease,
+    latestVerifiedRuns,
+    latestQaArtifactManifestRuns,
+    latestTraceabilityCommit,
+    latestActionsDiagnostics: qaReleaseTag ? null : status.latestActionsDiagnostics,
+    latestSignedPreflight: qaReleaseTag ? null : status.latestSignedPreflight,
+    latestSignedAndroidRelease: qaReleaseTag ? null : status.latestSignedAndroidRelease,
+    latestSecretAudit: qaReleaseTag ? null : status.latestSecretAudit,
     platformPlans,
     forbiddenMaterials: [
       "normal email account password",
@@ -308,25 +382,36 @@ function renderMarkdown(handoff) {
   lines.push(`- Release: \`${handoff.latestQaRelease.tag}\``)
   lines.push(`- URL: ${handoff.latestQaRelease.url}`)
   lines.push(`- Target SHA: \`${handoff.latestQaRelease.targetSha}\``)
-  lines.push(`- Assets: ${handoff.latestQaRelease.assetCount}`)
-  lines.push("")
-  lines.push("Verified workflow runs:")
-  lines.push("")
-  lines.push(`- Mobile: \`${handoff.latestVerifiedRuns.mobile}\``)
-  lines.push(`- Desktop: \`${handoff.latestVerifiedRuns.desktop}\``)
-  lines.push(`- Readiness: \`${handoff.latestVerifiedRuns.readiness}\``)
-  lines.push(`- CI: \`${handoff.latestVerifiedRuns.ci}\``)
-  if (handoff.latestVerifiedRuns.docker) {
-    lines.push(`- Docker: \`${handoff.latestVerifiedRuns.docker}\``)
+  if (handoff.latestQaRelease.assetCount !== undefined) {
+    lines.push(`- Assets: ${handoff.latestQaRelease.assetCount}`)
   }
   lines.push("")
+  const verifiedRunLabels = [
+    ["Mobile", handoff.latestVerifiedRuns?.mobile],
+    ["Desktop", handoff.latestVerifiedRuns?.desktop],
+    ["Readiness", handoff.latestVerifiedRuns?.readiness],
+    ["CI", handoff.latestVerifiedRuns?.ci],
+    ["Docker", handoff.latestVerifiedRuns?.docker],
+  ].filter(([, run]) => run)
+  if (verifiedRunLabels.length) {
+    lines.push("Verified workflow runs:")
+    lines.push("")
+    for (const [label, run] of verifiedRunLabels) {
+      lines.push(`- ${label}: \`${run}\``)
+    }
+    lines.push("")
+  }
   if (handoff.latestQaArtifactManifestRuns?.status) {
     lines.push("## Latest QA Artifact Manifest Verification")
     lines.push("")
     lines.push(`- Checked: \`${handoff.latestQaArtifactManifestRuns.checkedAt}\``)
     lines.push(`- Source SHA: \`${handoff.latestQaArtifactManifestRuns.sourceSha}\``)
-    lines.push(`- Mobile run: \`${handoff.latestQaArtifactManifestRuns.mobileRun}\``)
-    lines.push(`- Desktop run: \`${handoff.latestQaArtifactManifestRuns.desktopRun}\``)
+    if (handoff.latestQaArtifactManifestRuns.mobileRun) {
+      lines.push(`- Mobile run: \`${handoff.latestQaArtifactManifestRuns.mobileRun}\``)
+    }
+    if (handoff.latestQaArtifactManifestRuns.desktopRun) {
+      lines.push(`- Desktop run: \`${handoff.latestQaArtifactManifestRuns.desktopRun}\``)
+    }
     lines.push(`- Status: \`${handoff.latestQaArtifactManifestRuns.status}\``)
     if (handoff.latestQaArtifactManifestRuns.diagnosis) {
       lines.push(`- Diagnosis: ${handoff.latestQaArtifactManifestRuns.diagnosis}`)
@@ -348,7 +433,9 @@ function renderMarkdown(handoff) {
     if (handoff.latestTraceabilityCommit.message) {
       lines.push(`- Commit: \`${handoff.latestTraceabilityCommit.message}\``)
     }
-    lines.push("- Status: the listed native, CI, readiness, and Docker workflows are green.")
+    if (handoff.latestTraceabilityCommit.note) {
+      lines.push(`- Status: ${handoff.latestTraceabilityCommit.note}`)
+    }
     lines.push("")
   }
   if (handoff.latestActionsDiagnostics?.actionsEnabled !== undefined) {
@@ -513,6 +600,11 @@ function main() {
     selectedPlatforms,
     metadata,
     status,
+    qaReleaseTag: args.qaReleaseTag,
+    qaSourceSha: args.qaSourceSha,
+    qaMobileRun: args.qaMobileRun,
+    qaDesktopRun: args.qaDesktopRun,
+    qaCiRun: args.qaCiRun,
   })
 
   const json = `${JSON.stringify(handoff, null, 2)}\n`
