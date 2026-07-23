@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, it } from "node:test"
@@ -33,9 +33,11 @@ describe("generate-native-release-manifest", () => {
         writeFileSync(absolute, `artifact:${file}`)
       }
 
+      const checksumsPath = join(dir, "SHA256SUMS.txt")
       const output = execFileSync("node", [
         "scripts/generate-native-release-manifest.js",
         `--dir=${dir}`,
+        `--checksums-out=${checksumsPath}`,
         "--release-tag=test-native",
         "--git-sha=test-sha",
       ], { encoding: "utf8" })
@@ -70,6 +72,34 @@ describe("generate-native-release-manifest", () => {
       const storeMetadata = manifest.artifacts.find((artifact) => artifact.path.endsWith("windows-store-package.json"))
       assert.ok(storeMetadata)
       assert.equal(storeMetadata.kind, "microsoft-store-package-metadata")
+
+      const checksums = readFileSync(checksumsPath, "utf8")
+      assert.match(checksums, /  SiraGPT-debug\.apk$/m)
+      assert.doesNotMatch(checksums, /  android\/SiraGPT-debug\.apk$/m)
+      assert.ok(checksums.trim().split("\n").every((line) => !line.split(/\s{2}/)[1]?.includes("/")))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("rejects duplicate file names that GitHub Releases would flatten", () => {
+    const dir = mkdtempSync(join(tmpdir(), "siragpt-native-manifest-"))
+
+    try {
+      for (const file of ["android/SiraGPT.aab", "archive/SiraGPT.aab"]) {
+        const absolute = join(dir, file)
+        mkdirSync(join(absolute, ".."), { recursive: true })
+        writeFileSync(absolute, `artifact:${file}`)
+      }
+
+      const result = spawnSync("node", [
+        "scripts/generate-native-release-manifest.js",
+        `--dir=${dir}`,
+        `--checksums-out=${join(dir, "SHA256SUMS.txt")}`,
+      ], { encoding: "utf8" })
+
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /Duplicate release asset file name: SiraGPT\.aab/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
