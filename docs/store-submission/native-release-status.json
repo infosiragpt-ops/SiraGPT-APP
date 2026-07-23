@@ -1,61 +1,66 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-23T01:09:13Z",
+  "updatedAt": "2026-07-23T03:07:01Z",
   "repo": "infosiragpt-ops/SiraGPT-APP",
   "currentCandidate": {
     "status": "green-production-main-candidate",
     "version": "0.4.4",
     "buildNumber": 4004,
-    "checkedAt": "2026-07-23T01:09:13Z",
-    "sourceSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
+    "checkedAt": "2026-07-23T03:05:02Z",
+    "sourceSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
     "branch": "production-main",
     "runs": {
-      "ci": "29970296168",
-      "readiness": "29970296280",
-      "mobile": "29970344528",
-      "desktop": "29970580677",
-      "signedAndroid": "29970580670"
+      "ci": "29974467795",
+      "readiness": "29975517523",
+      "mobile": "29975515640",
+      "desktop": "29975516582",
+      "signedAndroid": "29975518333"
     },
     "releases": {
-      "mobileQa": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-83249d0",
-      "signedAndroid": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-83249d0",
-      "desktopBeta": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-83249d0"
+      "mobileQa": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-92849df",
+      "signedAndroid": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-92849df",
+      "desktopBeta": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-92849df"
     },
     "verifiedArtifacts": {
       "androidSignedAab": {
-        "name": "SiraGPT-83249d0.aab",
+        "name": "SiraGPT-92849df.aab",
         "size": 3024915,
         "sha256": "83c82c4d6d9e99632b001d862c90e138203662f45620e620b4dbd3e162e4c8ec"
       },
       "iosSimulatorZip": {
-        "name": "SiraGPT-83249d0-ios-simulator-app.zip",
+        "name": "SiraGPT-92849df-ios-simulator-app.zip",
         "size": 1580575,
-        "sha256": "67d595b7fe45b076cb5b67e1124e8b9e0ec5e237d86c8f73a107af89dae1e457"
+        "sha256": "7417b7af97f3b4e328dcbcc66198312e7abd3980ecfa2e87f6ed5ca870beb623"
       },
       "macosArm64Dmg": {
         "name": "SiraGPT-0.4.4-arm64.dmg",
-        "size": 121940831,
-        "sha256": "5c8dcca64255086bd6c3abfb39b9c830ed27f42236fb49389a62ac333f0fb76b"
+        "size": 121940916,
+        "sha256": "4a69e33610ef53bdc2f95e0977883e30bbe979bd3b507255fa08e1674ceba525"
       },
       "windowsInstaller": {
         "name": "SiraGPT.Setup.0.4.4.exe",
-        "size": 104511272,
-        "sha256": "eb4056c860fd3a954b8c514960534218b6d3601722181be86d90625e2a830705"
+        "size": 104511210,
+        "sha256": "b683d19ece0e9410be94eca7db86e39927c760ae79129c76d4fa4217f338b172"
       },
       "windowsPortable": {
         "name": "SiraGPT.0.4.4.exe",
         "size": 104240582,
-        "sha256": "47f9da53d79c3d0268dd676c739e17ebe825272e9d3a09786f6545f612793e50"
+        "sha256": "c2911721ebf21be8756890188340631b57d37d6ae59b96cda617dff20b0e6031"
       }
     },
     "distributionGates": {
       "androidPackageSigning": "ready",
-      "googlePlayUpload": "blocked-owner-service-account-and-console-verification",
-      "iosAppStore": "blocked-apple-signing-and-app-store-connect",
-      "macosDistribution": "blocked-developer-id-and-notarization",
-      "windowsDistribution": "blocked-code-signing-certificate"
+      "googlePlayUpload": "blocked-owner-developer-enrollment-service-account-and-console-verification",
+      "iosAppStore": "blocked-owner-login-membership-signing-and-app-store-connect",
+      "macosDistribution": "blocked-apple-membership-developer-id-and-notarization",
+      "windowsDistribution": "blocked-microsoft-account-partner-center-and-code-signing"
     },
-    "note": "The merged production-main commit passed CI, native readiness, Android/iPhone Simulator builds, macOS/Windows builds, and signed Android packaging. All public release assets were downloaded and checksum-verified. The iPhone artifact remains simulator-only; store-signed iOS, macOS, Windows, and Google Play upload remain owner credential gates."
+    "accountReadiness": {
+      "googlePlay": "no-developer-account-owner-must-choose-personal-or-organization",
+      "appleDeveloper": "login-identifier-recognized-owner-password-2fa-and-membership-required",
+      "microsoftPartnerCenter": "no-microsoft-account-for-designated-owner-address"
+    },
+    "note": "The current production-main commit passed CI, native readiness, Android/iPhone Simulator builds, macOS/Windows builds, and signed Android packaging. Public release assets were downloaded again and checksum-verified. Google Play has no developer enrollment yet; Apple is waiting for owner authentication, 2FA, and membership confirmation; Microsoft has no account for the designated owner address. The iPhone artifact remains simulator-only, and the desktop packages remain unsigned beta artifacts."
   },
   "distributionTrackerUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4",
   "distributionMilestone": {
@@ -99,72 +104,42 @@
     "note": "The native distribution tracker is split into platform-specific owner-action issues so Android, iPhone, macOS, and Windows signing/store blockers can be completed and verified independently."
   },
   "latestQaRelease": {
-    "tag": "native-qa-v0.4.3-bffcbf7",
-    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-bffcbf7",
-    "targetSha": "bffcbf75ec0ef5be18d1d3dc8672e92708df1f40",
-    "assetCount": 28,
+    "tag": "native-mobile-qa-v0.4.4-92849df",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-92849df",
+    "targetSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "assetCount": 6,
     "artifacts": [
-      "SiraGPT-0.4.3-arm64-mac.zip",
-      "SiraGPT-0.4.3-arm64-mac.zip.blockmap",
-      "SiraGPT-0.4.3-arm64.dmg",
-      "SiraGPT-0.4.3-arm64.dmg.blockmap",
-      "SiraGPT-0.4.3-portable.exe",
-      "SiraGPT-Setup-0.4.3.exe",
-      "SiraGPT-Setup-0.4.3.exe.blockmap",
-      "SiraGPT-bffcbf7-debug.apk",
-      "SiraGPT-bffcbf7-ios-simulator-app.zip",
-      "SiraGPT-bffcbf7-play-signed.aab",
-      "SiraGPT-bffcbf7-signed-release.aab",
-      "SiraGPT-native-qa-v0.4.3-bffcbf7.zip",
-      "SiraGPT-native-qa-v0.4.3-bffcbf7.zip.sha256",
-      "SiraGPT-native-store-owner-packet-bffcbf7.zip",
-      "SiraGPT-native-store-owner-packet-bffcbf7.zip.sha256",
-      "android-SHA256SUMS.txt",
-      "android-native-release-manifest.json",
-      "android-native-release-manifest.md",
-      "android-play-signed-SHA256SUMS.txt",
-      "ios-simulator-SHA256SUMS.txt",
-      "ios-simulator-native-release-manifest.json",
-      "ios-simulator-native-release-manifest.md",
-      "macos-SHA256SUMS.txt",
-      "macos-native-release-manifest.json",
-      "macos-native-release-manifest.md",
-      "windows-SHA256SUMS.txt",
-      "windows-native-release-manifest.json",
-      "windows-native-release-manifest.md"
-    ],
-    "durableZip": {
-      "name": "SiraGPT-native-qa-v0.4.3-bffcbf7.zip",
-      "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-bffcbf7/SiraGPT-native-qa-v0.4.3-bffcbf7.zip",
-      "checksumName": "SiraGPT-native-qa-v0.4.3-bffcbf7.zip.sha256",
-      "checksumUrl": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-qa-v0.4.3-bffcbf7/SiraGPT-native-qa-v0.4.3-bffcbf7.zip.sha256",
-      "checksumSha256": "5cc5c389e844b7f6bb303d7eeeb57dc92463fccf69bf0cd28e23b77de8758994",
-      "size": 468402620
-    }
+      "native-release-manifest.json",
+      "native-release-manifest.md",
+      "SHA256SUMS.txt",
+      "SiraGPT-92849df-debug.apk",
+      "SiraGPT-92849df-ios-simulator-app.zip",
+      "SiraGPT-92849df-signed-release.aab"
+    ]
   },
   "latestVerifiedRuns": {
-    "mobile": "29970344528",
-    "desktop": "29970580677",
-    "readiness": "29970296280",
-    "ci": "29970296168",
+    "mobile": "29975515640",
+    "desktop": "29975516582",
+    "readiness": "29975517523",
+    "ci": "29974467795",
     "docker": "28735031878"
   },
   "latestCurrentProductionValidation": {
-    "checkedAt": "2026-07-23T01:09:13Z",
-    "sourceSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
-    "sourceCommit": "fix(native): harden v0.4.4 release management (#59)",
+    "checkedAt": "2026-07-23T03:05:02Z",
+    "sourceSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "sourceCommit": "Merge pull request #66 from infosiragpt-ops/codex/matrix-agent-company-followup-20260722",
     "status": "green-current-production-main-unsigned-wrapper-builds",
-    "ciRun": "29970296168",
-    "readinessRun": "29970296280",
-    "mobileRun": "29970344528",
-    "desktopRun": "29970580677",
+    "ciRun": "29974467795",
+    "readinessRun": "29975517523",
+    "mobileRun": "29975515640",
+    "desktopRun": "29975516582",
     "platforms": {
       "android": {
         "job": "Android APK + AAB",
         "artifact": "siragpt-mobile-android",
         "expectedFiles": [
-          "SiraGPT-83249d0-debug.apk",
-          "SiraGPT-83249d0-signed-release.aab",
+          "SiraGPT-92849df-debug.apk",
+          "SiraGPT-92849df-signed-release.aab",
           "native-release-manifest.json",
           "native-release-manifest.md",
           "SHA256SUMS.txt"
@@ -174,7 +149,7 @@
         "job": "iOS simulator build",
         "artifact": "siragpt-mobile-ios-simulator",
         "expectedFiles": [
-          "SiraGPT-83249d0-ios-simulator-app.zip",
+          "SiraGPT-92849df-ios-simulator-app.zip",
           "native-release-manifest.json",
           "native-release-manifest.md",
           "SHA256SUMS.txt"
@@ -209,18 +184,16 @@
     "note": "CI, native readiness, mobile wrappers, desktop wrappers, and signed Android packaging completed successfully on the merged production-main SHA. Public release assets were re-downloaded and verified with SHA256SUMS, archive integrity checks, DMG verification, and Android signature verification. Vendor store uploads remain owner-controlled external gates."
   },
   "latestQaArtifactManifestRuns": {
-    "checkedAt": "2026-07-06T00:58:23.103Z",
-    "sourceSha": "bffcbf75ec0ef5be18d1d3dc8672e92708df1f40",
-    "mobileRun": "28760576620",
-    "desktopRun": "28760576641",
-    "status": "verified-manifest-checksums-durable-release-zip-and-current-owner-packet-present",
+    "checkedAt": "2026-07-23T03:05:02Z",
+    "sourceSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "mobileRun": "29975515640",
+    "desktopRun": "29975516582",
+    "status": "verified-current-public-mobile-and-desktop-release-assets",
     "artifactUploads": [
       {
-        "run": "28760576620",
+        "run": "29975515640",
         "name": "siragpt-mobile-android",
-        "platforms": [
-          "android"
-        ],
+        "platforms": ["android"],
         "manifestFiles": [
           "native-release-manifest.json",
           "native-release-manifest.md",
@@ -228,11 +201,9 @@
         ]
       },
       {
-        "run": "28760576620",
+        "run": "29975515640",
         "name": "siragpt-mobile-ios-simulator",
-        "platforms": [
-          "ios"
-        ],
+        "platforms": ["ios"],
         "manifestFiles": [
           "native-release-manifest.json",
           "native-release-manifest.md",
@@ -240,11 +211,9 @@
         ]
       },
       {
-        "run": "28760576641",
+        "run": "29975516582",
         "name": "siragpt-desktop-macos",
-        "platforms": [
-          "macos"
-        ],
+        "platforms": ["macos"],
         "manifestFiles": [
           "native-release-manifest.json",
           "native-release-manifest.md",
@@ -252,11 +221,9 @@
         ]
       },
       {
-        "run": "28760576641",
+        "run": "29975516582",
         "name": "siragpt-desktop-windows-x64",
-        "platforms": [
-          "windows"
-        ],
+        "platforms": ["windows"],
         "manifestFiles": [
           "native-release-manifest.json",
           "native-release-manifest.md",
@@ -266,93 +233,78 @@
     ],
     "platformArtifacts": {
       "android": [
-        "SiraGPT-bffcbf7-debug.apk",
-        "SiraGPT-bffcbf7-signed-release.aab"
+        "SiraGPT-92849df-debug.apk",
+        "SiraGPT-92849df-signed-release.aab"
       ],
-      "ios": [
-        "SiraGPT-bffcbf7-ios-simulator-app.zip"
-      ],
+      "ios": ["SiraGPT-92849df-ios-simulator-app.zip"],
       "macos": [
-        "SiraGPT-0.4.3-arm64-mac.zip",
-        "SiraGPT-0.4.3-arm64-mac.zip.blockmap",
-        "SiraGPT-0.4.3-arm64.dmg",
-        "SiraGPT-0.4.3-arm64.dmg.blockmap"
+        "SiraGPT-0.4.4-arm64-mac.zip",
+        "SiraGPT-0.4.4-arm64-mac.zip.blockmap",
+        "SiraGPT-0.4.4-arm64.dmg",
+        "SiraGPT-0.4.4-arm64.dmg.blockmap",
+        "SiraGPT-0.4.4-mac.zip",
+        "SiraGPT-0.4.4.dmg"
       ],
       "windows": [
-        "SiraGPT 0.4.3.exe",
-        "SiraGPT Setup 0.4.3.exe",
-        "SiraGPT Setup 0.4.3.exe.blockmap"
+        "SiraGPT.0.4.4.exe",
+        "SiraGPT.Setup.0.4.4.exe",
+        "SiraGPT.Setup.0.4.4.exe.blockmap"
       ]
     },
     "releaseAssets": [
-      "SiraGPT-0.4.3-arm64-mac.zip",
-      "SiraGPT-0.4.3-arm64-mac.zip.blockmap",
-      "SiraGPT-0.4.3-arm64.dmg",
-      "SiraGPT-0.4.3-arm64.dmg.blockmap",
-      "SiraGPT-0.4.3-portable.exe",
-      "SiraGPT-Setup-0.4.3.exe",
-      "SiraGPT-Setup-0.4.3.exe.blockmap",
-      "SiraGPT-bffcbf7-debug.apk",
-      "SiraGPT-bffcbf7-ios-simulator-app.zip",
-      "SiraGPT-bffcbf7-play-signed.aab",
-      "SiraGPT-bffcbf7-signed-release.aab",
-      "SiraGPT-native-qa-v0.4.3-bffcbf7.zip",
-      "SiraGPT-native-qa-v0.4.3-bffcbf7.zip.sha256",
-      "SiraGPT-native-store-owner-packet-bffcbf7.zip",
-      "SiraGPT-native-store-owner-packet-bffcbf7.zip.sha256",
-      "android-SHA256SUMS.txt",
-      "android-native-release-manifest.json",
-      "android-native-release-manifest.md",
-      "android-play-signed-SHA256SUMS.txt",
-      "ios-simulator-SHA256SUMS.txt",
-      "ios-simulator-native-release-manifest.json",
-      "ios-simulator-native-release-manifest.md",
-      "macos-SHA256SUMS.txt",
-      "macos-native-release-manifest.json",
-      "macos-native-release-manifest.md",
-      "windows-SHA256SUMS.txt",
-      "windows-native-release-manifest.json",
-      "windows-native-release-manifest.md"
+      "native-mobile-qa-v0.4.4-92849df",
+      "native-android-signed-v0.4.4-92849df",
+      "desktop-beta-v0.4.4-92849df",
+      "SiraGPT-92849df-debug.apk",
+      "SiraGPT-92849df-ios-simulator-app.zip",
+      "SiraGPT-92849df-signed-release.aab",
+      "SiraGPT-92849df.aab",
+      "SiraGPT-0.4.4-arm64.dmg",
+      "SiraGPT-0.4.4.dmg",
+      "SiraGPT.Setup.0.4.4.exe",
+      "SiraGPT.0.4.4.exe",
+      "native-release-manifest.json",
+      "native-release-manifest.md",
+      "SHA256SUMS.txt"
     ],
-    "durableZip": "SiraGPT-native-qa-v0.4.3-bffcbf7.zip",
-    "diagnosis": "The current mobile and desktop QA workflow artifacts were downloaded, checksum-verified, and published in the public QA prerelease for bffcbf75. The release includes a durable all-platform QA ZIP, per-platform manifests/checksums, Android APK/AAB, iPhone simulator app, macOS DMG/ZIP, Windows installer/portable, and the current owner handoff packet."
+    "diagnosis": "The current mobile, signed Android, and desktop public release assets were downloaded from GitHub and checksum-verified for production-main SHA 92849df. The iOS artifact is Simulator-only, and the macOS and Windows packages are unsigned beta artifacts."
   },
   "latestTraceabilityCommit": {
-    "sourceSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
-    "sourceCommit": "fix(native): harden v0.4.4 release management (#59)",
-    "sha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
-    "message": "fix(native): harden v0.4.4 release management (#59)",
-    "validatedManagementSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
-    "validatedManagementCommit": "fix(native): harden v0.4.4 release management (#59)",
+    "sourceSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "sourceCommit": "Merge pull request #66 from infosiragpt-ops/codex/matrix-agent-company-followup-20260722",
+    "sha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "message": "Merge pull request #66 from infosiragpt-ops/codex/matrix-agent-company-followup-20260722",
+    "validatedManagementSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "validatedManagementCommit": "Merge pull request #66 from infosiragpt-ops/codex/matrix-agent-company-followup-20260722",
     "validatedManagementRuns": {
-      "ci": "29970296168",
-      "readiness": "29970296280"
+      "ci": "29974467795",
+      "readiness": "29975517523"
     },
-    "note": "This snapshot records the merged production-main native release management commit with green CI/readiness, verified public mobile/desktop releases, a signed Android AAB, and a non-secret owner packet. Store distribution still requires vendor account credentials and certificates."
+    "note": "This snapshot records the current production-main commit with green CI/readiness, verified public mobile/desktop releases, and a signed Android AAB. Store distribution still requires vendor enrollment, account-owner authentication, agreements, certificates, and store metadata."
   },
   "latestActionsDiagnostics": {
-    "checkedAt": "2026-07-23T01:09:13Z",
+    "checkedAt": "2026-07-23T03:05:02Z",
     "repoVisibility": "PUBLIC",
     "isPrivate": false,
     "actionsEnabled": true,
     "allowedActions": "all",
     "shaPinningRequired": false,
     "sourceCommands": [
-      "gh release view native-mobile-qa-v0.4.4-83249d0 --repo=infosiragpt-ops/SiraGPT-APP",
-      "gh release view native-android-signed-v0.4.4-83249d0 --repo=infosiragpt-ops/SiraGPT-APP",
-      "gh release view desktop-beta-v0.4.4-83249d0 --repo=infosiragpt-ops/SiraGPT-APP",
+      "gh release view native-mobile-qa-v0.4.4-92849df --repo=infosiragpt-ops/SiraGPT-APP",
+      "gh release view native-android-signed-v0.4.4-92849df --repo=infosiragpt-ops/SiraGPT-APP",
+      "gh release view desktop-beta-v0.4.4-92849df --repo=infosiragpt-ops/SiraGPT-APP",
       "npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --require=all --only-required"
     ],
-    "ciRun": "29970296168",
-    "readinessRun": "29970296280",
-    "mobileRun": "29970344528",
-    "desktopRun": "29970580677",
+    "ciRun": "29974467795",
+    "readinessRun": "29975517523",
+    "mobileRun": "29975515640",
+    "desktopRun": "29975516582",
     "dockerRun": "28735031878",
     "codeqlRun": "28759689486",
-    "signedPreflightRun": "29970580670",
-    "signedAndroidRun": "29970580670",
+    "signedPreflightRun": "29975518333",
+    "signedAndroidRun": "29975518333",
     "officialBillingDocs": "https://docs.github.com/en/actions/concepts/billing-and-usage",
-    "diagnosis": "Public repository Actions are enabled and green on the merged production-main SHA. Android package signing and its GitHub Release are verified. The remaining blockers are vendor account verification and missing Google Play, Apple, macOS notarization, and Windows code-signing credentials."
+    "diagnosis": "Public repository Actions are enabled and green on the current production-main SHA. Android package signing and its GitHub Release are verified. Google Play has no developer enrollment yet, Apple is waiting for owner authentication and membership confirmation, and Microsoft has no owner account yet; remaining signing and upload credentials depend on those account steps."
   },
   "latestOwnerPacket": {
     "sourceSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
@@ -380,25 +332,22 @@
     ]
   },
   "latestSignedPreflight": {
-    "run": "29970580670",
-    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/29970580670",
-    "sourceSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
+    "run": "29975518333",
+    "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/29975518333",
+    "sourceSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
     "status": "ready-to-run",
     "platform": "android",
-    "releaseTag": "native-android-signed-v0.4.4-83249d0",
+    "releaseTag": "native-android-signed-v0.4.4-92849df",
     "missingRequiredSecrets": {
       "android": []
     },
     "artifact": {
-      "id": "8549509979",
+      "id": "8551252106",
       "name": "siragpt-native-signed-release-preflight",
-      "archiveDownloadUrl": "https://api.github.com/repos/infosiragpt-ops/SiraGPT-APP/actions/artifacts/8549509979/zip",
+      "archiveDownloadUrl": "https://api.github.com/repos/infosiragpt-ops/SiraGPT-APP/actions/artifacts/8551252106/zip",
       "expired": false,
       "size": 1127,
-      "verifiedFiles": [
-        "preflight.md",
-        "preflight.json"
-      ]
+      "verifiedFiles": ["preflight.md", "preflight.json"]
     },
     "notes": "The signed release preflight passed for platform=android on the merged production-main SHA. Android signing secrets were present; store uploads remained disabled and no non-Android signing job was requested.",
     "summarySignals": {
@@ -437,7 +386,7 @@
     "notes": "Android upload-keystore secrets are configured in GitHub Actions and the signed AAB is published from the merged production-main SHA. Google Play upload remains intentionally disabled because the service-account secret and Play Console owner verification are external prerequisites."
   },
   "latestSecretAudit": {
-    "checkedAt": "2026-07-23T01:09:13Z",
+    "checkedAt": "2026-07-23T03:07:01Z",
     "repo": "infosiragpt-ops/SiraGPT-APP",
     "source": "github",
     "sourceStatus": "available",
@@ -482,25 +431,25 @@
     ],
     "status": "blocked-missing-native-signing-secrets",
     "command": "npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP --require=all --only-required",
-    "diagnosis": "Android package signing is configured and verified. Google Play, iOS/App Store, macOS notarization, and Windows trusted signing remain blocked only on the listed vendor secrets and account-owner verification. Secret names and readiness states were inspected; no values were read or printed."
+    "diagnosis": "Android package signing is configured and verified. Google Play, iOS/App Store, macOS notarization, and Windows trusted signing still lack the listed vendor secrets. Account inspection also confirmed that Google Play developer enrollment has not been created, Apple requires owner authentication and membership confirmation, and Microsoft requires owner account creation. Secret names and readiness states were inspected; no values were read or printed."
   },
   "postMergeValidation": {
-    "checkedAt": "2026-07-23T01:09:13Z",
-    "sourceSha": "83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8",
-    "sourceCommit": "fix(native): harden v0.4.4 release management (#59)",
-    "pullRequest": "https://github.com/infosiragpt-ops/SiraGPT-APP/pull/59",
+    "checkedAt": "2026-07-23T03:05:02Z",
+    "sourceSha": "92849df80644bfd7bfdbd0e6941c10cfc6b1cca9",
+    "sourceCommit": "Merge pull request #66 from infosiragpt-ops/codex/matrix-agent-company-followup-20260722",
+    "pullRequest": "https://github.com/infosiragpt-ops/SiraGPT-APP/pull/66",
     "status": "green-merged-release-assets-verified",
     "runs": {
-      "ci": "29970296168",
-      "readiness": "29970296280",
-      "mobile": "29970344528",
-      "desktop": "29970580677",
-      "signedAndroid": "29970580670"
+      "ci": "29974467795",
+      "readiness": "29975517523",
+      "mobile": "29975515640",
+      "desktop": "29975516582",
+      "signedAndroid": "29975518333"
     },
     "releases": {
-      "mobileQa": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-83249d0",
-      "signedAndroid": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-83249d0",
-      "desktopBeta": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-83249d0"
+      "mobileQa": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-92849df",
+      "signedAndroid": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-92849df",
+      "desktopBeta": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-92849df"
     },
     "verification": {
       "releaseTagsTargetMergedSha": true,
@@ -512,10 +461,12 @@
       "windowsFileType": "verified-nsis-pe32-installers"
     },
     "ownerPacket": {
-      "name": "SiraGPT-native-store-owner-packet-83249d0.zip",
-      "sha256": "b236dc056390b4dd9f49191f2fddbe14961aaadc54c8c9232b60935fc0350fdf",
-      "size": 5139473,
-      "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.4-83249d0/SiraGPT-native-store-owner-packet-83249d0.zip"
+      "name": "SiraGPT-native-store-owner-packet-92849df8.zip",
+      "sha256": "8e0aa119309c9866eaa0384c6adb14b1f25b74174915dcbde8f814c43f32e6d0",
+      "size": 5138894,
+      "artifact": "siragpt-native-readiness-report",
+      "artifactId": "8551252488",
+      "url": "https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/29975517523"
     }
   }
 }

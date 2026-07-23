@@ -7,41 +7,57 @@
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Public GitHub prereleases `native-mobile-qa-v0.4.4-83249d0` and
-  `desktop-beta-v0.4.4-83249d0` contain the current QA packages for Android,
+- Public GitHub prereleases `native-mobile-qa-v0.4.4-92849df` and
+  `desktop-beta-v0.4.4-92849df` contain the current QA packages for Android,
   iPhone Simulator, macOS, and Windows with checksum manifests.
 - Native store distribution is tracked in milestone `Native Store Distribution v0.4.4`:
   `https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1`.
   Platform owner-action issues are #5 Android/Google Play, #6 iPhone/App Store
   Connect, #7 macOS, and #8 Windows.
-- The v0.4.4 post-merge verification SHA is `83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8`; CI, native readiness, mobile, desktop, and signed Android workflows are green for that artifact set.
+- The v0.4.4 verification SHA is `92849df80644bfd7bfdbd0e6941c10cfc6b1cca9`; CI, native readiness, mobile, desktop, and signed Android workflows are green for that artifact set.
 - Android package signing is configured and verified by the signed AAB release
-  `native-android-signed-v0.4.4-83249d0`.
-- Android Google Play upload is blocked until the Google Play service account
-  upload secret and Google Play account verification are complete.
-- iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
+  `native-android-signed-v0.4.4-92849df`.
+- Google Play upload is blocked because the owner account has not completed
+  developer enrollment or selected the legal account type.
+- iOS and macOS publishing are blocked until the owner completes Apple
+  authentication, 2FA, membership, signing, and App Store Connect setup.
+- Windows Store publishing is blocked until the owner creates a Microsoft
+  account, completes Partner Center enrollment, and chooses the signing path.
 
 ## v0.4.4 Candidate Validation
 
-- Full CI: `29970296168`.
-- Native readiness report: `29970296280`.
-- Native mobile builds: `29970344528`.
-- Native desktop release: `29970580677`.
-- Native signed Android release: `29970580670`.
+- Full CI: `29974467795`.
+- Native readiness report: `29975517523`.
+- Native mobile builds: `29975515640`.
+- Native desktop release: `29975516582`.
+- Native signed Android release: `29975518333`.
 - Mobile QA prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-83249d0`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-92849df`.
 - Desktop beta prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-83249d0`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-92849df`.
 - Signed Android release:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-83249d0`.
-- Local checksum verification passed for the Android APK/AAB, iPhone Simulator
-  ZIP, macOS Apple Silicon DMG, Windows installer/portable files, and owner
-  handoff packet.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-92849df`.
+- Fresh GitHub-download checksum verification passed for the Android APK/AAB,
+  iPhone Simulator ZIP, macOS Apple Silicon DMG, Windows installer/portable
+  files, and owner handoff packet.
 - The iPhone Simulator ZIP validates the wrapper but cannot be installed on a
   physical iPhone. A signed IPA remains blocked on Apple credentials.
 - The current non-secret owner handoff packet is
-  `SiraGPT-native-store-owner-packet-83249d0.zip`; its SHA-256 is
-  `b236dc056390b4dd9f49191f2fddbe14961aaadc54c8c9232b60935fc0350fdf`.
+  `SiraGPT-native-store-owner-packet-92849df8.zip`; its SHA-256 is
+  `8e0aa119309c9866eaa0384c6adb14b1f25b74174915dcbde8f814c43f32e6d0`.
+  It is stored in readiness artifact `8551252488`.
+
+## Current Vendor Account Readiness
+
+- Google Play: the designated owner reaches the Play Console enrollment page,
+  but no developer account exists. The owner must choose personal or
+  organization enrollment; this choice must not be automated.
+- Apple: the owner identifier is recognized. Password entry, 2FA, membership
+  status, and organization details remain owner-controlled steps.
+- Microsoft: no Microsoft account currently exists for the designated owner
+  address. Account creation and Partner Center enrollment are required.
+- No password, 2FA code, payment, legal agreement, or identity document is
+  stored in this repository or in the handoff packet.
 
 ## Previous v0.4.3 Production Baseline
 
@@ -170,36 +186,43 @@ QA workflows.
 
 ## Current Google Play Blockers
 
-Google Play Console shows the app in draft state and blocks publishing because the developer account is not fully configured. The account page lists:
+The designated Google account reaches the Play Console enrollment page, but it
+does not have a developer account. The owner must first choose one of these
+account types:
 
-- Verify identity: only the account owner can upload documents.
-- Verify access to a real Android mobile device through the Play Console mobile app.
-- Verify contact phone number: only the account owner can verify it.
+- Organization: requires a verifiable legal entity and D-U-N-S information.
+- Personal: uses the owner's legal identity and has different verification and
+  testing requirements.
 
-These are account-owner actions and cannot be completed by build tooling or local automation without the owner's documents, phone, and real Android device.
+The account-type choice, identity verification, agreements, and developer fee
+are owner actions. They cannot be completed by CI or local automation.
 
 ## Android Play Store Path
 
-1. Complete the Google Play developer account verification as the account owner.
-2. Create or select a Google Play service account with Android Publisher API access for package `com.siragpt.app`.
-3. Store the service account JSON as `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` in GitHub Actions secrets.
-4. Run `Native signed release packages` with `platform=android`, `upload_android_google_play=true`, `android_play_track=qa`, and `android_release_status=draft` for the first safe upload.
-5. Return to the internal testing release in Google Play Console and review the draft.
-6. Publish the prepared internal testing release if the review page enables `Guardar y publicar`.
-7. For production, complete app access, ads, content rating, target audience, data safety, privacy policy, store listing, screenshots, and release notes.
-8. Submit the production release only after a final manual confirmation.
+1. Confirm whether SiraGPT enrolls as a legal organization or personal account.
+2. Complete Play Console enrollment, payment, agreements, and owner verification.
+3. Create the app for package `com.siragpt.app`.
+4. Create a Google Play service account with Android Publisher API access.
+5. Store its JSON as `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` in GitHub Actions secrets.
+6. Run `Native signed release packages` with `platform=android`, `upload_android_google_play=true`, `android_play_track=qa`, and `android_release_status=draft`.
+7. Review the internal-testing draft in Play Console.
+8. Complete app access, ads, content rating, target audience, data safety,
+   privacy policy, store listing, screenshots, and release notes.
+9. Submit a production release only after a final manual confirmation.
 
 ## iOS App Store Path
 
-1. Install full Xcode and select it with `xcode-select`.
-2. Sign in to Xcode with an Apple Developer account.
-3. Open the project with `npm run mobile:open:ios`.
-4. Configure signing for bundle ID `com.siragpt.app`.
-5. Add the Apple Developer signing secrets and App Store Connect API key secrets to GitHub Actions.
-6. Run `Native signed release packages` with `platform=ios` and enable `upload_ios_app_store_connect` when the signed `.ipa` should be uploaded automatically.
-7. Alternatively, archive from Xcode and upload to App Store Connect manually.
-8. Complete privacy nutrition labels, age rating, screenshots, app review information, pricing/availability, and TestFlight review.
-9. Submit to App Review only after a final manual confirmation.
+1. Complete owner sign-in and 2FA.
+2. Confirm or enroll in the Apple Developer Program and record the Team ID.
+3. Install full Xcode and select it with `xcode-select`.
+4. Open the project with `npm run mobile:open:ios`.
+5. Configure signing for bundle ID `com.siragpt.app`.
+6. Add the Apple signing secrets and App Store Connect API key secrets to GitHub Actions.
+7. Run `Native signed release packages` with `platform=ios` and enable `upload_ios_app_store_connect` only when the signed `.ipa` should be uploaded.
+8. Alternatively, archive from Xcode and upload to App Store Connect manually.
+9. Complete privacy nutrition labels, age rating, screenshots, app review
+   information, pricing/availability, and TestFlight review.
+10. Submit to App Review only after a final manual confirmation.
 
 ## Store Listing Draft
 

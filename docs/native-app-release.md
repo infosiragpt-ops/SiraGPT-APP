@@ -4,39 +4,40 @@ This document tracks the native wrappers for the hosted SiraGPT product.
 
 ## v0.4.4 Post-Merge Candidate Validation (2026-07-22)
 
-Candidate source SHA: `83249d0c6a7df2a578bbb6b51f131bd5adfd6dc8` on
-`production-main`, merged through PR #59.
+Candidate source SHA: `92849df80644bfd7bfdbd0e6941c10cfc6b1cca9` on
+`production-main`.
 
-- Full CI: run `29970296168`, green.
-- Native readiness report: run `29970296280`, green.
-- Android and iPhone Simulator: run `29970344528`, green.
-- macOS and Windows release: run `29970580677`, green.
-- Signed Android AAB: run `29970580670`, green; Google Play upload disabled.
+- Full CI: run `29974467795`, green.
+- Native readiness report: run `29975517523`, green.
+- Android and iPhone Simulator: run `29975515640`, green.
+- macOS and Windows release: run `29975516582`, green.
+- Signed Android AAB: run `29975518333`, green; Google Play upload disabled.
 - Mobile QA prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-83249d0`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-92849df`.
 - Signed Android release:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-83249d0`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-92849df`.
 - Desktop beta prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-83249d0`.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-92849df`.
 
 Downloaded checksums were verified locally:
 
 - Android signed AAB: `83c82c4d6d9e99632b001d862c90e138203662f45620e620b4dbd3e162e4c8ec`.
-- iPhone Simulator ZIP: `67d595b7fe45b076cb5b67e1124e8b9e0ec5e237d86c8f73a107af89dae1e457`.
-- macOS Apple Silicon DMG: `5c8dcca64255086bd6c3abfb39b9c830ed27f42236fb49389a62ac333f0fb76b`.
-- Windows installer: `eb4056c860fd3a954b8c514960534218b6d3601722181be86d90625e2a830705`.
-- Windows portable executable: `47f9da53d79c3d0268dd676c739e17ebe825272e9d3a09786f6545f612793e50`.
-- Owner handoff packet: `b236dc056390b4dd9f49191f2fddbe14961aaadc54c8c9232b60935fc0350fdf`.
+- iPhone Simulator ZIP: `7417b7af97f3b4e328dcbcc66198312e7abd3980ecfa2e87f6ed5ca870beb623`.
+- macOS Apple Silicon DMG: `4a69e33610ef53bdc2f95e0977883e30bbe979bd3b507255fa08e1674ceba525`.
+- Windows installer: `b683d19ece0e9410be94eca7db86e39927c760ae79129c76d4fa4217f338b172`.
+- Windows portable executable: `c2911721ebf21be8756890188340631b57d37d6ae59b96cda617dff20b0e6031`.
+- Owner handoff packet: `8e0aa119309c9866eaa0384c6adb14b1f25b74174915dcbde8f814c43f32e6d0`.
 
 The public assets were downloaded after publication. SHA-256 verification,
 archive integrity checks, Android JAR signature verification, macOS DMG
 verification, and Windows installer file-type checks all passed.
 
 The iPhone artifact is a simulator build, not an installable App Store IPA.
-Public store distribution still requires Google Play upload credentials, Apple
-Developer/App Store Connect signing, macOS Developer ID/notarization, and a
-Windows code-signing certificate. A normal mailbox password is not valid for
-any of those signing or upload gates.
+The macOS and Windows artifacts are unsigned betas. Public store distribution
+still requires Google Play developer enrollment and upload credentials, Apple
+owner authentication/membership/signing, macOS Developer ID/notarization, and
+Microsoft Partner Center plus a trusted Windows signing path. A normal mailbox
+password is not valid for any of those signing or upload gates.
 
 ## Desktop
 
@@ -103,87 +104,48 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Latest durable public QA release packet target SHA:
-`bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`
-(`chore(ui-lock): refresh code panel baseline`).
+Latest verified native binary target:
+`92849df80644bfd7bfdbd0e6941c10cfc6b1cca9`.
 
-- Current production-main wrapper validation:
-  - CI: `28759688295`.
-  - CodeQL: `28759689486`.
-  - Native readiness report: `28760576640`.
-  - Native mobile builds: `28760576620`.
-  - Native desktop builds: `28760576641`.
-  - Android signed release packages: `28760576624`.
-  - Result: Android debug APK, Android release AAB, iPhone simulator app,
-    macOS DMG/ZIP, and Windows installer/portable QA artifacts were generated
-    with manifests and SHA-256 checksums.
-  - Downloaded artifact contents verified:
-    `SiraGPT-bffcbf7-debug.apk`, `SiraGPT-bffcbf7-signed-release.aab`,
-    `SiraGPT-bffcbf7-ios-simulator-app.zip`, `SiraGPT-0.4.3-arm64.dmg`,
-    `SiraGPT-0.4.3-arm64-mac.zip`, `SiraGPT Setup 0.4.3.exe`, and
-    `SiraGPT 0.4.3.exe`.
-- Public QA prerelease:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-bffcbf7`.
-  It contains 28 assets, including the all-platform
-  `SiraGPT-native-qa-v0.4.3-bffcbf7.zip` and SHA-256 checksum.
+- CI: `29974467795`.
+- Native readiness report: `29975517523`.
+- Native mobile builds: `29975515640`.
+- Native desktop builds: `29975516582`.
+- Android signed release packages: `29975518333`.
+- Mobile QA prerelease:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-mobile-qa-v0.4.4-92849df`.
 - Signed Android release:
-  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-bffcbf7`.
-  It contains `SiraGPT-bffcbf7.aab`, release manifests, `SHA256SUMS.txt`,
-  preflight files, and the current owner handoff packet.
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.4-92849df`.
+- Desktop beta prerelease:
+  `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/desktop-beta-v0.4.4-92849df`.
 - Native distribution milestone:
   `https://github.com/infosiragpt-ops/SiraGPT-APP/milestone/1`.
-  The milestone contains the parent tracker plus platform owner-action issues
-  for Android/Google Play, iPhone/App Store Connect, macOS, and Windows.
-- GitHub Actions diagnostics on `infosiragpt-ops/SiraGPT-APP`:
-  - Repository visibility: `PUBLIC`.
-  - Actions enabled: `true`.
-  - Allowed actions: `all`.
-  - Diagnosis: standard public-repository Actions are available and running; the signed native release blocker is missing signing/store-upload secrets.
-- Signed release preflight: `Native signed release packages` run `28748232904`.
-  - Input: `platform=all`, `release_tag=native-v0.4.3-preflight-26f5d59`.
-  - Result: stopped in preflight before Android, iOS, macOS, Windows, or GitHub Release package runners because signing secrets are not configured yet.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/28748232904`.
-  - Artifact: `siragpt-native-signed-release-preflight` with `preflight.md` and `preflight.json`.
-  - Diagnosis: public repository Actions are running; signed native release
-    packaging is blocked by missing signing and store-upload secrets, not by
-    repository visibility.
-- Signed Android release: `native-android-signed-v0.4.3-bffcbf7`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-android-signed-v0.4.3-bffcbf7`.
-  - Source SHA: `bffcbf75ec0ef5be18d1d3dc8672e92708df1f40`.
-  - Workflow run: `28760576624`.
-  - Result: `SiraGPT-bffcbf7.aab` was signed, published to GitHub Releases,
-    downloaded locally, and verified against `SHA256SUMS.txt`.
-  - AAB SHA-256:
-    `9aa139e5783df37a3bd8d852e19c32fdc37c861eae7e0bb9574094e32394d348`.
-  - Google Play upload was intentionally skipped because the Play service
-    account secret and owner Play Console verification are still missing.
-- Latest owner handoff packet: `SiraGPT-native-store-owner-packet-bffcbf7.zip`.
-  - URL: `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/download/native-android-signed-v0.4.3-bffcbf7/SiraGPT-native-store-owner-packet-bffcbf7.zip`.
-  - SHA-256: `6b2e62e087483966c1a960d32aa1402cece5c5b3e19899870684ff443c61d8b2`.
+
+The release assets were downloaded from GitHub after publication. Their
+checksums, archive integrity, Android AAB signature, macOS DMG structure, and
+Windows PE32 installer types passed verification.
+
+Current distribution state:
+
+- Android: upload-signed AAB ready; no Play developer enrollment exists yet.
+- iPhone: Simulator build ready; no physical-device/TestFlight IPA until Apple
+  membership and signing are complete.
+- macOS: Intel and Apple Silicon DMG/ZIP betas ready; unsigned and not notarized.
+- Windows: installer and portable betas ready; unsigned and not in Partner Center.
+
+Account-owner gates:
+
+- Google Play: choose personal or organization enrollment and complete identity,
+  agreements, fee, and console setup.
+- Apple: complete password entry, 2FA, membership, Team ID, certificates,
+  provisioning, and App Store Connect setup.
+- Microsoft: create the Microsoft account, complete Partner Center enrollment,
+  and select Microsoft Store packaging or direct code signing.
 
 Security note: a mailbox password literal reached a prior public management
 commit and the branch was force-updated to remove it. Rotate that password
 outside GitHub. Mailbox passwords are not native signing or store-upload
 credentials.
-
-Unsigned QA packages from these runs are attached to the GitHub prerelease
-`native-qa-v0.4.3-bffcbf7`:
-
-https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-bffcbf7
-
-The prerelease above is the latest durable public QA download packet. The
-verified SHA also has fresh 14-day GitHub Actions artifacts attached to the
-desktop and mobile runs listed above. These artifacts prove the wrappers and
-unsigned QA packages build successfully for macOS, Windows, Android, and iOS
-simulator. The prerelease includes `native-release-manifest.json`,
-`native-release-manifest.md`, and `SHA256SUMS.txt` so every QA artifact can
-be verified against its SHA-256 checksum. The release also includes
-`SiraGPT-native-qa-v0.4.3-bffcbf7.zip`, a single durable ZIP preserving platform folders and
-original Windows filenames, plus its `.sha256` checksum. The release also
-contains the previous owner handoff packet for that management SHA. The current
-owner handoff packet is attached to the signed Android release listed above.
-Public distribution for Google Play upload, iPhone, macOS, and Windows still
-requires owner-provided signing and store credentials.
 
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 
