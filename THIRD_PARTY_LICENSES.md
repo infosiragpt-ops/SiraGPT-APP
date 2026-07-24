@@ -1242,7 +1242,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `mz` | 2.7.0 | MIT | [link](https://github.com/normalize/mz) |
 | `n-gram` | 2.0.2 | MIT | [link](https://github.com/words/n-gram) |
 | `nan` | 2.27.0 | MIT | [link](https://github.com/nodejs/nan) |
-| `nanoid` | 3.3.12, 5.1.6, 5.1.9 | MIT | [link](https://github.com/ai/nanoid) |
+| `nanoid` | 3.3.16, 5.1.6, 5.1.9 | MIT | [link](https://github.com/ai/nanoid) |
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
 | `netmask` | 2.0.2 | MIT | [link](https://github.com/rs/node-netmask) |
@@ -1350,7 +1350,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `po-parser` | 2.1.1 | MIT | [link](https://github.com/amannn/po-parser) |
 | `points-on-curve` | 0.2.0 | MIT | [link](https://github.com/pshihn/bezier-points) |
 | `points-on-path` | 0.2.1 | MIT | [link](https://github.com/pshihn/points-on-path) |
-| `postcss` | 8.5.15 | MIT | [link](https://github.com/postcss/postcss) |
+| `postcss` | 8.5.23 | MIT | [link](https://github.com/postcss/postcss) |
 | `postcss-import` | 15.1.0 | MIT | [link](https://github.com/postcss/postcss-import) |
 | `postcss-js` | 4.1.0 | MIT | [link](https://github.com/postcss/postcss-js) |
 | `postcss-load-config` | 6.0.1 | MIT | [link](https://github.com/postcss/postcss-load-config) |
