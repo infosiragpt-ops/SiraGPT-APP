@@ -134,6 +134,13 @@ import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi } from "@/lib/codex/codex-api"
+import {
+  clearSessionCodexProject,
+  clearWorkspaceCodexProject,
+  linkedCodexProject,
+  persistSessionCodexProject,
+  persistWorkspaceCodexProject,
+} from "@/lib/codex/codex-project-link"
 import { openRunStream } from "@/lib/codex/run-stream"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
 import {
@@ -891,42 +898,6 @@ function buildSystemContext(
   ].filter((part) => part !== "").join("\n")
 }
 
-// ── Persistent chat→Codex-project mapping ───────────────────────────────────
-// The in-memory ref used to be the ONLY record of which Codex project a chat
-// session drives, so a reload created a fresh empty project and iterate then
-// edited THAT one and overwrote the local workspace (audit 3.1-ALTA). Backed
-// by localStorage, keyed by chatSessionId; every access is try/catch'd and
-// SSR-safe (storage may be unavailable or full — the in-memory ref still works
-// for the lifetime of the panel).
-const CODEX_PROJECT_STORE_PREFIX = "siragpt:codex-project:"
-
-function readPersistedCodexProject(sid: string): string | null {
-  if (typeof window === "undefined") return null
-  try {
-    return window.localStorage.getItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`)
-  } catch {
-    return null
-  }
-}
-
-function persistCodexProject(sid: string, projectId: string): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`, projectId)
-  } catch {
-    /* storage unavailable/full — the in-memory ref still covers this session */
-  }
-}
-
-function clearPersistedCodexProject(sid: string): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.removeItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`)
-  } catch {
-    /* ignore */
-  }
-}
-
 // Backend import caps (POST /api/codex/projects/:id/files): 200 files, 500KB
 // per file, 5MB total. Filter/trim the local workspace to fit so a huge asset
 // never turns the whole sync into a 400.
@@ -1135,7 +1106,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const codexAvailable = codexHealth.enabled === true
   // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
   // In-memory cache only — the durable mapping lives in localStorage (see
-  // readPersistedCodexProject/persistCodexProject), so a reload reattaches to
+  // session/workspace links), so a reload reattaches to
   // the SAME project instead of iterating on a fresh empty one.
   const codexProjectRef = React.useRef<Record<string, string>>({})
   // Keep the module-level active-codex-project in sync with the visible chat
@@ -1146,8 +1117,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setActiveCodexProject(null)
       return
     }
-    setActiveCodexProject(codexProjectRef.current[sessionId] ?? readPersistedCodexProject(sessionId))
-  }, [sessionId])
+    const projectId =
+      linkedCodexProject({ sessionId, workspaceId: activeFolder?.id }) ??
+      codexProjectRef.current[sessionId]
+    if (projectId) codexProjectRef.current[sessionId] = projectId
+    setActiveCodexProject(projectId)
+  }, [activeFolder?.id, sessionId])
 
   const abortRef = React.useRef<AbortController | null>(null)
   const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -3002,13 +2977,17 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         //    account after a re-login) before being trusted.
         let projectId: string | undefined = codexProjectRef.current[sid]
         if (!projectId) {
-          const persisted = readPersistedCodexProject(sid)
+          const persisted = linkedCodexProject({
+            sessionId: sid,
+            workspaceId: activeFolder?.id,
+          })
           if (persisted) {
             try {
               const existing = await codexApi.getProject(persisted)
               if (existing?.id) projectId = existing.id
             } catch {
-              clearPersistedCodexProject(sid)
+              clearSessionCodexProject(sid)
+              if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
             }
           }
         }
@@ -3018,7 +2997,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           projectId = project.id
         }
         codexProjectRef.current[sid] = projectId
-        persistCodexProject(sid, projectId)
+        persistSessionCodexProject(sid, projectId)
+        if (activeFolder?.id) persistWorkspaceCodexProject(activeFolder.id, projectId)
         // Publish the codex project so PreviewPane runs the app in the CODEX
         // runner (tokenized proxy) instead of pushing a partial local mirror
         // to the owner-gated host runner (which degraded to a black srcdoc).
@@ -3248,7 +3228,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
       }
     },
-    [activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
+    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
   )
 
   // Keep the resilience-fallback ref pointing at the freshest engine closure.

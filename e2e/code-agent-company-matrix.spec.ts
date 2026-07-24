@@ -68,8 +68,12 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
   })
 }
 
-async function mockMatrixCompany(page: Page) {
-  await page.addInitScript(({ activeProject, currentUser, timestamp }) => {
+async function mockMatrixCompany(
+  page: Page,
+  { linkedProject = true }: { linkedProject?: boolean } = {},
+) {
+  const operations = { projectCreates: 0, proactiveToggles: 0 }
+  await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject }) => {
     const ceoSession = {
       id: "ceo-qa",
       workspaceId: "matrix-qa",
@@ -108,9 +112,11 @@ async function mockMatrixCompany(page: Page) {
         },
       ]),
     )
-    localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
+    if (shouldLinkProject) {
+      localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
+    }
     localStorage.setItem("matrix-qa:user", JSON.stringify(currentUser))
-  }, { activeProject: project, currentUser: user, timestamp: now })
+  }, { activeProject: project, currentUser: user, timestamp: now, shouldLinkProject: linkedProject })
 
   await page.route("**/api/**", async (route) => {
     const request = route.request()
@@ -127,11 +133,13 @@ async function mockMatrixCompany(page: Page) {
     if (path === "/codex/access") {
       return fulfillJson(route, { ok: true, enabled: true, canRun: true, allowlistConfigured: true })
     }
-    if (path === "/codex/projects/codex-matrix-qa/proactive") {
+    if (/^\/codex\/projects\/[^/]+\/proactive$/.test(path)) {
+      const enabled = request.method() === "POST"
+      if (enabled) operations.proactiveToggles += 1
       return fulfillJson(route, {
         state: {
-          enabled: false,
-          enabledAt: null,
+          enabled,
+          enabledAt: enabled ? now : null,
           dayKey: "2026-07-23",
           runsToday: 7,
           deptIndex: 4,
@@ -141,8 +149,10 @@ async function mockMatrixCompany(page: Page) {
         departments: [],
       })
     }
-    if (path === "/codex/projects/codex-matrix-qa/runs") return fulfillJson(route, { runs })
-    if (path === "/codex/projects/codex-matrix-qa/checkpoints") {
+    if (/^\/codex\/projects\/[^/]+\/runs$/.test(path) && request.method() === "GET") {
+      return fulfillJson(route, { runs })
+    }
+    if (/^\/codex\/projects\/[^/]+\/checkpoints$/.test(path)) {
       return fulfillJson(route, { checkpoints: [{ id: "checkpoint-1" }, { id: "checkpoint-2" }] })
     }
     if (path === "/ai/models") {
@@ -165,6 +175,31 @@ async function mockMatrixCompany(page: Page) {
         monthlyLimit: 100_000,
       })
     }
+    if (path === "/codex/projects" && request.method() === "POST") {
+      operations.projectCreates += 1
+      return fulfillJson(route, {
+        project: {
+          id: "codex-matrix-runtime",
+          name: "SiraGPT.COM · Empresa",
+          status: "ready",
+          workspacePath: "projects/codex-matrix-runtime",
+          previewUrl: null,
+          error: null,
+        },
+      }, 201)
+    }
+    if (path === "/codex/projects/codex-matrix-runtime") {
+      return fulfillJson(route, {
+        project: {
+          id: "codex-matrix-runtime",
+          name: "SiraGPT.COM · Empresa",
+          status: "ready",
+          workspacePath: "projects/codex-matrix-runtime",
+          previewUrl: null,
+          error: null,
+        },
+      })
+    }
     if (path === "/codex/projects") {
       return fulfillJson(route, { projects: [{ id: "codex-matrix-qa", name: "SiraGPT", status: "ready" }] })
     }
@@ -174,6 +209,8 @@ async function mockMatrixCompany(page: Page) {
 
     return fulfillJson(route, {})
   })
+
+  return operations
 }
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
@@ -279,4 +316,19 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
   await expect(page.getByTestId("agent-office-scene")).toHaveAttribute("data-office-ready", "true")
   expect(await page.getByTestId("agent-office-overlay").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("agent-office-mobile.png"), fullPage: true })
+})
+
+test("PROACTIVO provisions and confirms a real company runtime before turning on", async ({ page }) => {
+  await page.setViewportSize({ width: 1425, height: 810 })
+  const operations = await mockMatrixCompany(page, { linkedProject: false })
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+
+  const companyRail = page.locator("[data-agent-company-dock='apps']")
+  await expect(companyRail).toHaveAttribute("data-proactive", "off")
+  await companyRail.getByRole("button", { name: /^PROACTIVO$/ }).click()
+
+  await expect(companyRail).toHaveAttribute("data-proactive", "on")
+  await expect(companyRail.getByRole("button", { name: /PROACTIVO · ON/ })).toBeVisible()
+  expect(operations.projectCreates).toBe(1)
+  expect(operations.proactiveToggles).toBe(1)
 })

@@ -92,8 +92,10 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
+  CODE_NEW_CODE_CHAT_EVENT,
   CODE_OPEN_TOOL_EVENT,
   getActiveCodexProject,
+  setActiveCodexProject,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import {
@@ -102,6 +104,13 @@ import {
   type CodexProactiveState,
   type CodexRun,
 } from "@/lib/codex/codex-api"
+import {
+  clearSessionCodexProject,
+  clearWorkspaceCodexProject,
+  linkedCodexProject,
+  persistWorkspaceCodexProject,
+  readWorkspaceCodexProject,
+} from "@/lib/codex/codex-project-link"
 import { projectsService, type Project } from "@/lib/projects-service"
 import { cn } from "@/lib/utils"
 
@@ -276,6 +285,7 @@ export function AgentCompanyPanel() {
   const [codexRuns, setCodexRuns] = React.useState<CodexRun[]>([])
   const [checkpointCount, setCheckpointCount] = React.useState(0)
   const [codexAccess, setCodexAccess] = React.useState<CodexAccess | null>(null)
+  const companyRuntimePromisesRef = React.useRef<Map<string, Promise<string>>>(new Map())
 
   React.useEffect(() => {
     let alive = true
@@ -446,6 +456,77 @@ export function AgentCompanyPanel() {
     window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId } }))
   }, [])
 
+  const ensureCompanyRuntime = React.useCallback(
+    ({
+      workspaceId = activeFolder?.id || null,
+      name = companyName,
+    }: {
+      workspaceId?: string | null
+      name?: string
+    } = {}) => {
+      if (!workspaceId) {
+        return Promise.reject(new Error("Selecciona o crea una empresa antes de iniciar el runtime."))
+      }
+
+      const pending = companyRuntimePromisesRef.current.get(workspaceId)
+      if (pending) return pending
+
+      const task = (async () => {
+        const access = codexAccess?.canRun ? codexAccess : await codexApi.access()
+        setCodexAccess(access)
+        if (!access.canRun) {
+          throw Object.assign(
+            new Error("Esta cuenta todavía no está autorizada para ejecutar agentes en producción."),
+            { status: 403 },
+          )
+        }
+
+        const linkedProjectId = linkedCodexProject({
+          workspaceId,
+          sessionId: workspaceId === activeFolder?.id ? activeCodeChatSessionId : null,
+        })
+        if (linkedProjectId) {
+          try {
+            const linkedProject = await codexApi.getProject(linkedProjectId)
+            if (linkedProject.status === "ready") {
+              persistWorkspaceCodexProject(workspaceId, linkedProject.id)
+              setActiveCodexProject(linkedProject.id)
+              return linkedProject.id
+            }
+          } catch {
+            // The linked project was removed or belongs to another session.
+          }
+          if (workspaceId === activeFolder?.id) {
+            clearSessionCodexProject(activeCodeChatSessionId)
+          }
+          clearWorkspaceCodexProject(workspaceId)
+        }
+
+        const project = await codexApi.createProject(
+          `${name.slice(0, 64)} · Empresa`,
+          [
+            `Empresa autónoma: ${name}.`,
+            "CEO Office coordina los departamentos para construir y mantener software real.",
+            "Conserva archivos, ejecuta verificaciones y entrega evidencia antes de publicar.",
+          ].join(" "),
+        )
+        if (project.status !== "ready") {
+          throw new Error(project.error || "El runtime de la empresa no quedó listo.")
+        }
+
+        persistWorkspaceCodexProject(workspaceId, project.id)
+        setActiveCodexProject(project.id)
+        return project.id
+      })().finally(() => {
+        companyRuntimePromisesRef.current.delete(workspaceId)
+      })
+
+      companyRuntimePromisesRef.current.set(workspaceId, task)
+      return task
+    },
+    [activeCodeChatSessionId, activeFolder?.id, codexAccess, companyName],
+  )
+
   const openCeoOffice = React.useCallback(() => {
     let rootSessionId = codeChatSessions.find(
       (session) => session.title.trim().toLowerCase() === "ceo office",
@@ -531,7 +612,9 @@ export function AgentCompanyPanel() {
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn
-    const codexProjectId = getActiveCodexProject()
+    let codexProjectId =
+      readWorkspaceCodexProject(activeFolder?.id) ||
+      getActiveCodexProject()
 
     const openCompanyLoop = () => {
       const rootSessionId = ensureDepartmentSessions()
@@ -548,15 +631,10 @@ export function AgentCompanyPanel() {
       )
     }
 
-    if (!codexProjectId) {
-      setProactiveOn(next)
-      setProactiveCompanyEnabled(next, { workspaceId: activeFolder?.id || null })
-      if (next) openCompanyLoop()
-      toast.info(
-        next
-          ? "PROACTIVO activo en CEO Office. Cuando exista un proyecto Codex, los departamentos también correrán en el servidor."
-          : "Modo PROACTIVO pausado.",
-      )
+    if (!codexProjectId && !next) {
+      setProactiveOn(false)
+      setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
+      toast.info("Modo PROACTIVO pausado.")
       return
     }
 
@@ -567,6 +645,9 @@ export function AgentCompanyPanel() {
 
     setProactiveBusy(true)
     try {
+      if (!codexProjectId) {
+        codexProjectId = await ensureCompanyRuntime()
+      }
       const r = await codexApi.setProactive(codexProjectId, next)
       const enabled = Boolean(r.state?.enabled)
       setProactiveState(r.state || EMPTY_PROACTIVE_STATE)
@@ -582,8 +663,8 @@ export function AgentCompanyPanel() {
       const status = (error as { status?: number })?.status
       toast.error(
         status === 403
-          ? "La ejecución fue rechazada por la política de aislamiento del servidor."
-          : "No se pudo activar PROACTIVO. El panel conserva el último estado confirmado.",
+          ? "Esta cuenta no está autorizada para ejecutar agentes en producción."
+          : "No se pudo preparar el runtime de la empresa. El panel conserva el último estado confirmado.",
       )
     } finally {
       setProactiveBusy(false)
@@ -594,6 +675,7 @@ export function AgentCompanyPanel() {
     companyName,
     chatLivesInWorkspaceColumn,
     ensureDepartmentSessions,
+    ensureCompanyRuntime,
     proactiveOn,
     setActiveCodeChatSession,
   ])
@@ -621,6 +703,14 @@ export function AgentCompanyPanel() {
         description: "Empresa de agentes",
         type: "webapp",
       })
+      let runtimeReady = false
+      try {
+        await ensureCompanyRuntime({ workspaceId: project.id, name: project.name })
+        runtimeReady = true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "El runtime no pudo prepararse."
+        toast.warning(`La empresa se creó, pero su runtime está pendiente: ${message}`)
+      }
       upsertCodexProject({ id: codexIdForProject(project.id), name: project.name, kind: "project" })
       await switchCodexWorkspace({
         id: codexIdForProject(project.id),
@@ -628,16 +718,29 @@ export function AgentCompanyPanel() {
         kind: "project",
         projectId: project.id,
       })
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent(CODE_NEW_CODE_CHAT_EVENT, {
+            detail: {
+              workspaceId: project.id,
+              name: project.name,
+              kind: "project",
+              projectId: project.id,
+              title: "CEO Office",
+            },
+          }),
+        )
+      }, 0)
       setNewCompanyName("")
       setNewCompanyOpen(false)
       setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)])
-      toast.success("Empresa de agentes creada.")
+      if (runtimeReady) toast.success("Empresa creada con CEO Office y runtime operativo.")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear la empresa.")
     } finally {
       setCreatingCompany(false)
     }
-  }, [creatingCompany, newCompanyName, switchCodexWorkspace])
+  }, [creatingCompany, ensureCompanyRuntime, newCompanyName, switchCodexWorkspace])
 
   const createDepartment = React.useCallback(() => {
     const name = newDepartmentName.trim()
