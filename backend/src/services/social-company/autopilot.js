@@ -129,6 +129,8 @@ async function runAutopilot({
             approved: true,
             source: 'ceo_autopilot',
             mediaBrief: content.mediaBrief,
+            generateImage: Boolean(content.mediaBrief),
+            mediaMode: content.mediaBrief ? 'generated' : 'text',
             workspaceId: policy.workspaceId,
             generatedAt: now().toISOString(),
           },
