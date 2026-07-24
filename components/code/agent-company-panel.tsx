@@ -13,19 +13,26 @@ import {
   CircleDot,
   Code2,
   Cpu,
+  ExternalLink,
   FileCode2,
   FolderOpen,
   Gauge,
   Languages,
   LayoutDashboard,
+  Link2,
   ListTree,
   Loader2,
   Megaphone,
+  MessageSquareText,
   Network,
   PackageOpen,
+  PauseCircle,
   PlugZap,
   Plus,
   Radio,
+  RefreshCw,
+  Save,
+  Settings2,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -46,9 +53,17 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
+import {
+  companySocialApi,
+  type CompanySocialOperations,
+  type CompanySocialPlatform,
+  type CompanySocialPolicy,
+} from "@/lib/company-social-api"
 import {
   AGENT_COMPANY_DEPARTMENTS,
   agentCompanyDisplayName,
@@ -94,7 +109,7 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { AgentOfficeScene } from "./agent-office/agent-office-scene"
 
-type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "task"
+type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "resources" | "task"
 
 type CompanyOption = {
   id: string
@@ -349,6 +364,13 @@ export function AgentCompanyPanel() {
     setOfficeOpen(false)
   }, [activeFolder?.id])
 
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get("companyView") === "resources" || params.has("social")) {
+      setView("resources")
+    }
+  }, [])
+
   const refreshProjects = React.useCallback(async () => {
     setProjectsLoading(true)
     try {
@@ -440,6 +462,35 @@ export function AgentCompanyPanel() {
     chatLivesInWorkspaceColumn,
     createCodeChatSession,
     codeChatSessions,
+    setActiveCodeChatSession,
+  ])
+
+  const openDepartmentChat = React.useCallback((departmentId: string) => {
+    if (departmentId === "ceo-office") {
+      openCeoOffice()
+      return
+    }
+    const department = allDepartments.find((entry) => entry.id === departmentId)
+    if (!department) return
+    const title = departmentBootstrapTitle(department)
+    let sessionId = codeChatSessions.find(
+      (session) => session.title.trim().toLowerCase() === title.toLowerCase(),
+    )?.id
+    if (!sessionId) sessionId = createCodeChatSession({ title })
+    setSelectedDepartmentId(departmentId)
+    setActiveCodeChatSession(sessionId)
+    if (chatLivesInWorkspaceColumn) {
+      setView("home")
+      focusCeoChatColumn()
+    } else {
+      setView("chat")
+    }
+  }, [
+    allDepartments,
+    chatLivesInWorkspaceColumn,
+    codeChatSessions,
+    createCodeChatSession,
+    openCeoOffice,
     setActiveCodeChatSession,
   ])
 
@@ -628,7 +679,6 @@ export function AgentCompanyPanel() {
         <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
           <AICodeChatPanel
             embedded
-            title="CEO Office"
             onBack={() => setView("home")}
             proactive={proactiveOn}
           />
@@ -769,15 +819,8 @@ export function AgentCompanyPanel() {
             onOpenDashboard={() => setView("dashboard")}
             onOpenControl={() => setView("control")}
             onOpenFiles={() => openTool("files")}
-            onOpenResources={() => openTool("skills")}
-            onOpenDepartment={(departmentId) => {
-              if (departmentId === "ceo-office") {
-                openCeoOffice()
-                return
-              }
-              setSelectedDepartmentId(departmentId)
-              setView("department")
-            }}
+            onOpenResources={() => setView("resources")}
+            onOpenDepartment={openDepartmentChat}
             onAddDepartment={() => setNewDepartmentOpen(true)}
             user={user}
             hideFooter={dockedInAppsRail}
@@ -816,6 +859,8 @@ export function AgentCompanyPanel() {
               setView("task")
             }}
           />
+        ) : view === "resources" ? (
+          <ResourcesView workspaceId={activeFolder?.id || null} onOpenCeo={openCeoOffice} />
         ) : view === "department" && selectedDepartment ? (
           <DepartmentView row={selectedDepartment} onOpenCeo={openCeoOffice} />
         ) : view === "task" && selectedTask ? (
@@ -1183,6 +1228,381 @@ function CompanyNavRow({
 
 function ViewBody({ children }: { children: React.ReactNode }) {
   return <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">{children}</div>
+}
+
+const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; className: string }> = {
+  facebook: { mark: "f", className: "bg-[#1877f2] text-white" },
+  linkedin: { mark: "in", className: "bg-[#0a66c2] text-white" },
+  x: { mark: "X", className: "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950" },
+}
+
+function ResourcesView({
+  workspaceId,
+  onOpenCeo,
+}: {
+  workspaceId: string | null
+  onOpenCeo: () => void
+}) {
+  const [operations, setOperations] = React.useState<CompanySocialOperations | null>(null)
+  const [draft, setDraft] = React.useState<CompanySocialPolicy | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [providerBusy, setProviderBusy] = React.useState<CompanySocialPlatform | null>(null)
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await companySocialApi.operations()
+      setOperations(result)
+      setDraft({ ...result.policy, workspaceId })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudieron cargar los recursos.")
+    } finally {
+      setLoading(false)
+    }
+  }, [workspaceId])
+
+  React.useEffect(() => {
+    void load()
+  }, [load])
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const status = params.get("social")
+    const platform = params.get("platform")
+    if (status === "connected") toast.success(`${platform || "La cuenta"} quedó conectada.`)
+    else if (status === "page_required") toast.error("Facebook no devolvió una página con permiso para publicar.")
+    else if (status && status !== "connected") toast.error("No se pudo completar la conexión social.")
+    if (status || params.has("companyView")) {
+      params.delete("social")
+      params.delete("platform")
+      params.delete("companyView")
+      const query = params.toString()
+      window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`)
+    }
+  }, [])
+
+  const patchDraft = React.useCallback((patch: Partial<CompanySocialPolicy>) => {
+    setDraft((current) => current ? { ...current, ...patch } : current)
+  }, [])
+
+  const patchPlatform = React.useCallback((platform: CompanySocialPlatform, enabled: boolean) => {
+    setDraft((current) => current
+      ? { ...current, platforms: { ...current.platforms, [platform]: enabled } }
+      : current)
+  }, [])
+
+  const save = React.useCallback(async () => {
+    if (!draft || saving) return
+    setSaving(true)
+    try {
+      const policy = await companySocialApi.updatePolicy({
+        ...draft,
+        workspaceId,
+        confirmAutopublish: draft.enabled && (draft.mode === "auto" || draft.autopilot),
+      })
+      setDraft(policy)
+      setOperations((current) => current ? { ...current, policy } : current)
+      toast.success(policy.enabled ? "Operación social actualizada." : "Publicación autónoma pausada.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar la operación.")
+    } finally {
+      setSaving(false)
+    }
+  }, [draft, saving, workspaceId])
+
+  const pause = React.useCallback(async () => {
+    if (!draft || saving) return
+    setSaving(true)
+    try {
+      const policy = await companySocialApi.updatePolicy({
+        ...draft,
+        enabled: false,
+        autopilot: false,
+        workspaceId,
+      })
+      setDraft(policy)
+      setOperations((current) => current ? { ...current, policy } : current)
+      toast.success("Publicación autónoma detenida.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo detener la publicación.")
+    } finally {
+      setSaving(false)
+    }
+  }, [draft, saving, workspaceId])
+
+  const connect = React.useCallback(async (platform: CompanySocialPlatform) => {
+    setProviderBusy(platform)
+    try {
+      const result = await companySocialApi.connectUrl(platform)
+      window.location.assign(result.url)
+    } catch (error) {
+      setProviderBusy(null)
+      toast.error(error instanceof Error ? error.message : "No se pudo iniciar la conexión.")
+    }
+  }, [])
+
+  const disconnect = React.useCallback(async (platform: CompanySocialPlatform) => {
+    setProviderBusy(platform)
+    try {
+      await companySocialApi.disconnect(platform)
+      toast.success("Cuenta desconectada.")
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo desconectar la cuenta.")
+    } finally {
+      setProviderBusy(null)
+    }
+  }, [load])
+
+  if (loading && !operations) {
+    return (
+      <ViewBody>
+        <div className="flex min-h-40 items-center justify-center text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" aria-label="Cargando recursos" />
+        </div>
+      </ViewBody>
+    )
+  }
+
+  if (!operations || !draft) {
+    return (
+      <ViewBody>
+        <div className="py-12 text-center">
+          <p className="text-sm text-muted-foreground">Recursos no disponibles.</p>
+          <Button type="button" variant="outline" className="mt-4" onClick={() => void load()}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Reintentar
+          </Button>
+        </div>
+      </ViewBody>
+    )
+  }
+
+  const connectedCount = operations.providers.filter((provider) => provider.connection?.connected).length
+  const autonomous = draft.enabled && draft.mode === "auto"
+
+  return (
+    <ViewBody>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Link2 className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Canales de la empresa</h2>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {connectedCount} conectados · {operations.metrics.queued} pendientes · {operations.metrics.publishedToday} publicados hoy
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 rounded-md"
+          onClick={() => void load()}
+          disabled={loading}
+          aria-label="Actualizar canales"
+          title="Actualizar"
+        >
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </Button>
+      </div>
+
+      <div className="mt-4 divide-y divide-border/50 border-y border-border/50">
+        {operations.providers.map((provider) => {
+          const connection = provider.connection
+          const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
+          const busy = providerBusy === provider.platform
+          return (
+            <div key={provider.platform} className="flex min-h-[72px] items-center gap-3 py-3">
+              <span className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-sm font-bold",
+                mark.className,
+              )}>
+                {mark.mark}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-[13px] font-semibold">{provider.label}</span>
+                  <span className={cn(
+                    "h-2 w-2 rounded-full",
+                    connection?.connected ? "bg-emerald-500" : provider.configured ? "bg-amber-400" : "bg-zinc-300",
+                  )} />
+                </span>
+                <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
+                  {connection?.connected
+                    ? connection.accountName || "Cuenta conectada"
+                    : provider.configured
+                      ? "Listo para conectar"
+                      : "Configuración del servidor pendiente"}
+                </span>
+              </span>
+              {connection?.connected ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 rounded-md px-2 text-[11px]"
+                  onClick={() => void disconnect(provider.platform)}
+                  disabled={busy}
+                >
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Desconectar"}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-md px-2 text-[11px]"
+                  onClick={() => void connect(provider.platform)}
+                  disabled={!provider.configured || busy}
+                >
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="mr-1.5 h-3.5 w-3.5" />}
+                  {busy ? null : "Conectar"}
+                </Button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="mt-6 flex items-center gap-2">
+        <Settings2 className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">Operación autónoma</h3>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between border-b border-border/45 py-3">
+        <div>
+          <Label htmlFor="social-operation-enabled" className="text-xs font-semibold">Publicación habilitada</Label>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">Pausa global de todos los canales</p>
+        </div>
+        <Switch
+          id="social-operation-enabled"
+          checked={draft.enabled}
+          onCheckedChange={(enabled) => patchDraft({ enabled })}
+        />
+      </div>
+
+      <div className="border-b border-border/45 py-3">
+        <Label className="text-xs font-semibold">Control de salida</Label>
+        <div className="mt-2 grid grid-cols-2 gap-1 rounded-md bg-muted/55 p-1" role="group" aria-label="Control de publicación">
+          {([
+            ["review", "Revisión"],
+            ["auto", "Automático"],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => patchDraft({ mode })}
+              className={cn(
+                "h-8 rounded-md text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                draft.mode === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+              aria-pressed={draft.mode === mode}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between border-b border-border/45 py-3">
+        <div>
+          <Label htmlFor="social-autopilot-enabled" className="text-xs font-semibold">Contenido diario de CEO Office</Label>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">Una pieza diaria según el objetivo activo</p>
+        </div>
+        <Switch
+          id="social-autopilot-enabled"
+          checked={draft.autopilot}
+          onCheckedChange={(autopilot) => patchDraft({ autopilot })}
+          disabled={draft.mode !== "auto"}
+        />
+      </div>
+
+      <div className="space-y-2 border-b border-border/45 py-3">
+        <Label htmlFor="social-company-objective" className="text-xs font-semibold">Objetivo de CEO Office</Label>
+        <Textarea
+          id="social-company-objective"
+          value={draft.objective}
+          onChange={(event) => patchDraft({ objective: event.target.value })}
+          placeholder="Ej. Posicionar la marca con contenido educativo y captar oportunidades calificadas."
+          className="min-h-[92px] resize-none rounded-md text-xs leading-relaxed"
+          maxLength={2_000}
+        />
+      </div>
+
+      <div className="border-b border-border/45 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="social-daily-limit" className="text-xs font-semibold">Límite diario</Label>
+          <Input
+            id="social-daily-limit"
+            type="number"
+            min={1}
+            max={20}
+            value={draft.dailyLimit}
+            onChange={(event) => patchDraft({
+              dailyLimit: Math.max(1, Math.min(20, Number(event.target.value) || 1)),
+            })}
+            className="h-8 w-20 rounded-md text-right text-xs tabular-nums"
+          />
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-1">
+        {operations.providers.map((provider) => (
+          <label
+            key={`policy-${provider.platform}`}
+            className="flex h-9 items-center justify-between rounded-md px-2 text-xs hover:bg-muted/45"
+          >
+            <span className="flex items-center gap-2">
+              <span className={cn("flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold", SOCIAL_PROVIDER_MARKS[provider.platform].className)}>
+                {SOCIAL_PROVIDER_MARKS[provider.platform].mark}
+              </span>
+              {provider.label}
+            </span>
+            <Switch
+              checked={draft.platforms[provider.platform]}
+              onCheckedChange={(enabled) => patchPlatform(provider.platform, enabled)}
+              aria-label={`Publicar en ${provider.label}`}
+            />
+          </label>
+        ))}
+      </div>
+
+      {autonomous ? (
+        <div className="mt-4 flex items-start gap-2 border-l-2 border-amber-400 bg-amber-50/60 px-3 py-2.5 text-[10px] leading-relaxed text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+          <MessageSquareText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          CEO Office publicará sin revisión previa, dentro del límite y solo en cuentas conectadas.
+        </div>
+      ) : null}
+
+      <div className="mt-5 flex gap-2">
+        <Button type="button" className="flex-1 rounded-md" onClick={() => void save()} disabled={saving}>
+          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+          Guardar operación
+        </Button>
+        {draft.enabled ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-md"
+            onClick={() => void pause()}
+            disabled={saving}
+            aria-label="Detener publicación autónoma"
+            title="Detener publicación"
+          >
+            <PauseCircle className="h-4 w-4" />
+          </Button>
+        ) : null}
+      </div>
+
+      <Button type="button" variant="ghost" className="mt-2 w-full rounded-md text-xs" onClick={onOpenCeo}>
+        <Sparkles className="mr-2 h-4 w-4" />
+        Coordinar desde CEO Office
+      </Button>
+    </ViewBody>
+  )
 }
 
 function OperatingLoop({

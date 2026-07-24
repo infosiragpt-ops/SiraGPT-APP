@@ -474,6 +474,23 @@ function timingSafeTextEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function normalizePrivateContext(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw stateError('OAUTH_STATE_INPUT_INVALID');
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch (_error) {
+    throw stateError('OAUTH_STATE_INPUT_INVALID');
+  }
+  if (!serialized || Buffer.byteLength(serialized, 'utf8') > 4_096) {
+    throw stateError('OAUTH_STATE_INPUT_INVALID');
+  }
+  return JSON.parse(serialized);
+}
+
 function createOAuthStateCodec({
   env = process.env,
   store = createOAuthStateStore({ env }),
@@ -489,13 +506,14 @@ function createOAuthStateCodec({
     return value;
   }
 
-  async function issue({ userId, service, redirectUri }) {
+  async function issue({ userId, service, redirectUri, context }) {
     const signingSecret = secret();
     const binding = {
       userId: requiredText(userId, 'userId'),
       service: requiredText(service, 'service'),
       redirectUri: normalizeRedirectUri(redirectUri, { production }),
     };
+    const privateContext = normalizePrivateContext(context);
     await store.ready();
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -511,7 +529,11 @@ function createOAuthStateCodec({
       );
       const decoded = jwt.decode(token);
       const ttlMs = Math.max(1, Number(decoded.exp) * 1_000 - clock());
-      const stored = await store.issue(jti, JSON.stringify(binding), ttlMs);
+      const stored = await store.issue(
+        jti,
+        JSON.stringify(privateContext ? { ...binding, context: privateContext } : binding),
+        ttlMs,
+      );
       if (stored) return token;
     }
     throw stateError('OAUTH_STATE_JTI_COLLISION');
@@ -562,6 +584,9 @@ function createOAuthStateCodec({
       userId: String(decoded.userId),
       service: String(decoded.service),
       redirectUri: claimRedirect,
+      ...(stored.context && typeof stored.context === 'object'
+        ? { context: stored.context }
+        : {}),
     };
   }
 

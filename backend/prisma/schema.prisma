@@ -1986,18 +1986,19 @@ model ScheduledPost {
 // so the LLM can ground its suggestions ("voy a escribir como
 // @tu_marca, que vende X a un público Y").
 //
-// Tokens are stored raw for now; wire up encryption when the rest of
-// the app (Gmail / Spotify tokens) gets the same treatment.
+// OAuth bundles are encrypted with the platform ENCRYPTION_KEY before
+// persistence. `accessToken` contains the encrypted TokenVault envelope;
+// `refreshToken` remains null for new rows and exists only for legacy data.
 model SocialConnection {
   id     String @id @default(cuid())
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  platform     String // facebook | instagram | youtube | tiktok | linkedin
+  platform     String // facebook | instagram | youtube | tiktok | linkedin | x
   accountId    String? // platform-side user id / page id
   accountName  String? // handle displayed to the user ("@tu_marca")
-  accessToken  String?   @db.Text
-  refreshToken String?   @db.Text
+  accessToken  String? @db.Text // encrypted TokenVault envelope
+  refreshToken String? @db.Text // legacy only; new refresh tokens live in the envelope
   expiresAt    DateTime?
 
   // Profile snapshot the LLM grounds post generation on:

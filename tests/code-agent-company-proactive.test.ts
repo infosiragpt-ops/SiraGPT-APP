@@ -24,7 +24,8 @@ describe("code agent company proactive", () => {
     assert.match(prompt, /NEXORA\.COM/)
     assert.match(prompt, /PROACTIVO/)
     assert.match(prompt, /OKRs|departamento/i)
-    assert.match(prompt, /preview/i)
+    assert.match(prompt, /evidencia|preview/i)
+    assert.match(prompt, /Facebook.*LinkedIn.*X/)
   })
 
   it("builds a system block with departments and objective", () => {
@@ -38,6 +39,8 @@ describe("code agent company proactive", () => {
     assert.match(block, /Lanzar un SaaS de facturación/)
     assert.match(block, /CEO Office/)
     assert.match(block, /matrix\.build-style/)
+    assert.match(block, /modo Revisión/i)
+    assert.match(block, /límite diario/i)
     setProactiveCompanyEnabled(false, { workspaceId: "ws-1" })
   })
 
