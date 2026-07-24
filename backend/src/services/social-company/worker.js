@@ -2,6 +2,7 @@
 
 const { writeAuditLog } = require('../../utils/audit-log');
 const { runAutopilot } = require('./autopilot');
+const { prepareMediaForPost } = require('./media');
 const { cleanPlatform } = require('./platforms');
 const { readPolicy } = require('./policy');
 const { publishPostToPlatform } = require('./publisher');
@@ -86,6 +87,8 @@ async function processPost({
   fetchImpl = globalThis.fetch,
   vault = null,
   chatComplete = null,
+  imageGenerator = null,
+  mediaPreparer = prepareMediaForPost,
   logger = console,
 } = {}) {
   const policy = await readPolicy(prisma, post.userId);
@@ -107,6 +110,28 @@ async function processPost({
   const alreadyPublished = completedPlatforms(config);
   const platforms = normalizedPostPlatforms(post)
     .filter((platform) => policy.platforms[platform] !== false);
+  const pendingPlatforms = platforms.filter((platform) => !alreadyPublished.has(platform));
+  const pendingConnections = new Map(await Promise.all(
+    pendingPlatforms.map(async (platform) => [
+      platform,
+      await prisma.socialConnection.findUnique({
+        where: { userId_platform: { userId: post.userId, platform } },
+      }),
+    ]),
+  ));
+  const connectedPendingPlatforms = pendingPlatforms
+    .filter((platform) => pendingConnections.get(platform));
+  const prepared = connectedPendingPlatforms.length > 0
+    ? await mediaPreparer({ post, imageGenerator })
+    : {
+      media: null,
+      metadata: {
+        status: pendingPlatforms.length > 0 ? 'no_connected_targets' : 'not_needed',
+      },
+    };
+  if (prepared.metadata?.status === 'failed') {
+    logger.warn?.(`[social-worker] media generation failed for ${post.id}: ${prepared.metadata.code}`);
+  }
   let failed = 0;
   let published = 0;
 
@@ -116,9 +141,7 @@ async function processPost({
       continue;
     }
     try {
-      const connection = await prisma.socialConnection.findUnique({
-        where: { userId_platform: { userId: post.userId, platform } },
-      });
+      const connection = pendingConnections.get(platform);
       if (!connection) {
         const error = new Error(`No connected ${platform} account`);
         error.code = 'SOCIAL_CONNECTION_REQUIRED';
@@ -133,6 +156,7 @@ async function processPost({
         fetchImpl,
         vault,
         prisma,
+        media: prepared.media,
       });
       publicationResults[platform] = { status: 'published', ...result };
       published += 1;
@@ -162,6 +186,7 @@ async function processPost({
       config: {
         ...config,
         publicationResults,
+        mediaGeneration: prepared.metadata,
         lastAttemptAt: new Date().toISOString(),
       },
     },
@@ -172,7 +197,13 @@ async function processPost({
     action: status === 'published' ? 'social_post_published' : 'social_post_failed',
     resource: 'scheduled_post',
     resourceId: post.id,
-    metadata: { platforms, published, failed, source: config.source || 'scheduled' },
+    metadata: {
+      platforms,
+      published,
+      failed,
+      source: config.source || 'scheduled',
+      mediaStatus: prepared.metadata?.status || 'not_requested',
+    },
     tags: ['social', 'autonomous-company'],
   });
   return { action: status, postId: post.id, published, failed, post: updated };
@@ -184,6 +215,8 @@ async function runOnce({
   fetchImpl = globalThis.fetch,
   vault = null,
   chatComplete = null,
+  imageGenerator = null,
+  mediaPreparer = prepareMediaForPost,
   logger = console,
   limit = MAX_BATCH,
 } = {}) {
@@ -207,7 +240,16 @@ async function runOnce({
   for (const post of due) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      results.push(await processPost({ prisma, post, env, fetchImpl, vault, logger }));
+      results.push(await processPost({
+        prisma,
+        post,
+        env,
+        fetchImpl,
+        vault,
+        imageGenerator,
+        mediaPreparer,
+        logger,
+      }));
     } catch (error) {
       results.push({
         action: 'error',

@@ -50,6 +50,7 @@ test('worker refuses unapproved posts while policy is in review mode', async () 
 });
 
 test('worker publishes approved connected targets and persists per-platform results', async () => {
+  let mediaPreparationCalls = 0;
   const prisma = makePrisma({
     policy: {
       enabled: true,
@@ -80,11 +81,69 @@ test('worker publishes approved connected targets and persists per-platform resu
     vault: {
       openProviderTokens: () => ({ accessToken: 'page-token', expiresAt: Date.now() + 60_000 }),
     },
+    mediaPreparer: async () => {
+      mediaPreparationCalls += 1;
+      return {
+        media: {
+          buffer: Buffer.from('one-generated-image'),
+          mime: 'image/jpeg',
+          generated: true,
+        },
+        metadata: {
+          status: 'generated',
+          provider: 'openai',
+          model: 'gpt-image-2',
+          bytes: 19,
+        },
+      };
+    },
     fetchImpl: async () => new Response(JSON.stringify({ id: 'external-1' }), { status: 200 }),
   });
   assert.equal(result.action, 'published');
+  assert.equal(mediaPreparationCalls, 1);
   assert.equal(prisma.updates.at(-1).status, 'published');
   assert.equal(prisma.updates.at(-1).config.publicationResults.facebook.status, 'published');
+  assert.equal(prisma.updates.at(-1).config.mediaGeneration.status, 'generated');
+});
+
+test('worker does not spend image generation when no target account is connected', async () => {
+  let mediaPreparationCalls = 0;
+  const prisma = makePrisma({
+    policy: {
+      enabled: true,
+      mode: 'auto',
+      dailyLimit: 3,
+      platforms: { facebook: true, linkedin: false, x: false },
+    },
+    connections: {},
+  });
+  const result = await processPost({
+    prisma,
+    post: {
+      id: 'post-no-connection',
+      userId: 'u1',
+      status: 'scheduled',
+      caption: 'Contenido pendiente',
+      platforms: ['facebook'],
+      scheduledAt: new Date(),
+      config: {
+        approved: true,
+        generateImage: true,
+        mediaBrief: 'Imagen editorial profesional.',
+      },
+    },
+    mediaPreparer: async () => {
+      mediaPreparationCalls += 1;
+      throw new Error('must not generate');
+    },
+  });
+
+  assert.equal(result.action, 'failed');
+  assert.equal(mediaPreparationCalls, 0);
+  assert.equal(
+    prisma.updates.at(-1).config.mediaGeneration.status,
+    'no_connected_targets',
+  );
 });
 
 test('worker marks stale publishing claims for review instead of blindly duplicating external posts', async () => {
@@ -152,5 +211,7 @@ test('worker run invokes CEO autopilot with the injected LLM dependency', async 
   assert.equal(result.recoveredStale, 0);
   assert.equal(result.generated[0].action, 'generated');
   assert.equal(generatedPost.config.source, 'ceo_autopilot');
+  assert.equal(generatedPost.config.generateImage, true);
+  assert.equal(generatedPost.config.mediaMode, 'generated');
   assert.equal(llmCalls, 1);
 });

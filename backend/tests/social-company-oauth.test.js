@@ -3,7 +3,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const oauth = require('../src/services/social-company/oauth');
-const { providerConfig } = require('../src/services/social-company/platforms');
+const {
+  providerConfig,
+  publicProviderStatus,
+} = require('../src/services/social-company/platforms');
 
 const BASE_ENV = {
   NODE_ENV: 'test',
@@ -23,6 +26,14 @@ test('social OAuth platform config is fail-closed and exposes no secret', () => 
   assert.equal(config.apiVersion, '202607');
   assert.match(config.redirectUri, /social-posts\/oauth\/linkedin\/callback$/);
   assert.equal(JSON.stringify(config).includes('li-secret'), true, 'private config retains secret server-side');
+});
+
+test('social provider capabilities expose generated image support and X requests media.write', () => {
+  const xConfig = providerConfig('x', BASE_ENV);
+  assert.equal(xConfig.scopes.includes('media.write'), true);
+  for (const platform of ['facebook', 'linkedin', 'x']) {
+    assert.equal(publicProviderStatus(platform, BASE_ENV).supports.generatedImage, true);
+  }
 });
 
 test('X authorization uses PKCE and keeps verifier in private OAuth context', async () => {

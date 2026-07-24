@@ -93,7 +93,7 @@ function providerConfig(platformValue, env = process.env) {
     authorizeUrl: 'https://x.com/i/oauth2/authorize',
     tokenUrl: 'https://api.x.com/2/oauth2/token',
     apiBase: 'https://api.x.com',
-    scopes: (envValue(env, 'SOCIAL_X_SCOPES') || 'tweet.read tweet.write users.read offline.access')
+    scopes: (envValue(env, 'SOCIAL_X_SCOPES') || 'tweet.read tweet.write users.read media.write offline.access')
       .split(/\s+/)
       .filter(Boolean),
   };
@@ -110,7 +110,7 @@ function publicProviderStatus(platform, env = process.env) {
     supports: {
       text: true,
       remoteImage: config.id === 'facebook',
-      generatedImage: false,
+      generatedImage: true,
     },
   };
 }

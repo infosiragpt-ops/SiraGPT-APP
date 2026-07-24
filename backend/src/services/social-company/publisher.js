@@ -1,10 +1,12 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { parseSafeOutboundUrl } = require('../../utils/url-ssrf-guard');
 const { cleanPlatform, providerConfig } = require('./platforms');
 const { openSocialTokens, sealSocialTokens } = require('./token-vault');
 
 const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_SOCIAL_IMAGE_BYTES = 5 * 1024 * 1024;
 
 function publicationError(code, message, status = 422) {
   const error = new Error(message);
@@ -27,6 +29,35 @@ function validRemoteImage(value) {
   } catch {
     return null;
   }
+}
+
+function preparedMedia(value) {
+  if (!value?.buffer) return null;
+  const buffer = Buffer.isBuffer(value.buffer)
+    ? value.buffer
+    : Buffer.from(value.buffer);
+  if (!buffer.length) return null;
+  if (buffer.length > MAX_SOCIAL_IMAGE_BYTES) {
+    throw publicationError(
+      'SOCIAL_IMAGE_TOO_LARGE',
+      'Social images must be 5 MB or smaller',
+      422,
+    );
+  }
+  const mime = String(value.mime || 'image/jpeg').toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
+    throw publicationError(
+      'SOCIAL_IMAGE_TYPE_UNSUPPORTED',
+      'Social images must be JPEG, PNG, or WebP',
+      422,
+    );
+  }
+  return {
+    buffer,
+    mime,
+    altText: String(value.altText || '').trim().slice(0, 120),
+    generated: value.generated === true,
+  };
 }
 
 async function fetchJson(url, init, fetchImpl = globalThis.fetch) {
@@ -58,6 +89,36 @@ async function fetchJson(url, init, fetchImpl = globalThis.fetch) {
     );
   }
   return { body, response };
+}
+
+async function fetchUpload(url, init, fetchImpl = globalThis.fetch) {
+  if (typeof fetchImpl !== 'function') {
+    throw publicationError('SOCIAL_FETCH_UNAVAILABLE', 'fetch is unavailable', 503);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  timer.unref?.();
+  let response;
+  try {
+    response = await fetchImpl(url, { ...init, signal: init?.signal || controller.signal });
+  } catch (error) {
+    throw publicationError(
+      error?.name === 'AbortError' ? 'SOCIAL_PROVIDER_TIMEOUT' : 'SOCIAL_PROVIDER_UNREACHABLE',
+      error?.name === 'AbortError' ? 'Social provider upload timed out' : 'Social provider upload is unavailable',
+      503,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw publicationError(
+      'SOCIAL_PROVIDER_REJECTED',
+      `Social provider rejected the media upload (HTTP ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ''})`,
+      response.status >= 500 ? 503 : 422,
+    );
+  }
+  return response;
 }
 
 function connectionTokens(connection, vault) {
@@ -152,41 +213,111 @@ async function ensureConnectionTokens({
   });
 }
 
-async function publishFacebook({ config, connection, post, accessToken, fetchImpl }) {
+async function publishFacebook({
+  config,
+  connection,
+  post,
+  accessToken,
+  fetchImpl,
+  media: mediaInput,
+}) {
   if (!connection.accountId) {
     throw publicationError('SOCIAL_ACCOUNT_ID_REQUIRED', 'Facebook Page id is missing', 409);
   }
+  const media = preparedMedia(mediaInput);
   const imageUrl = validRemoteImage(post.imageUrl);
-  const endpoint = imageUrl
+  const endpoint = media || imageUrl
     ? `${config.apiBase}/${encodeURIComponent(connection.accountId)}/photos`
     : `${config.apiBase}/${encodeURIComponent(connection.accountId)}/feed`;
-  const body = new URLSearchParams({
-    access_token: accessToken,
-    ...(imageUrl ? { url: imageUrl, caption: captionFor(post) } : { message: captionFor(post) }),
-  });
+  let body;
+  let headers;
+  if (media) {
+    body = new FormData();
+    body.set('access_token', accessToken);
+    body.set('caption', captionFor(post));
+    body.set(
+      'source',
+      new Blob([media.buffer], { type: media.mime }),
+      media.mime === 'image/png' ? 'siragpt-social.png' : 'siragpt-social.jpg',
+    );
+    headers = { Accept: 'application/json' };
+  } else {
+    body = new URLSearchParams({
+      access_token: accessToken,
+      ...(imageUrl ? { url: imageUrl, caption: captionFor(post) } : { message: captionFor(post) }),
+    });
+    headers = { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' };
+  }
   const result = await fetchJson(endpoint, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers,
     body,
   }, fetchImpl);
   return {
     externalId: String(result.body.post_id || result.body.id || ''),
-    media: imageUrl ? 'remote_image' : 'text',
+    media: media
+      ? (media.generated ? 'generated_image' : 'uploaded_image')
+      : imageUrl ? 'remote_image' : 'text',
   };
 }
 
-async function publishLinkedIn({ config, connection, post, accessToken, fetchImpl, idempotencyKey }) {
+async function publishLinkedIn({
+  config,
+  connection,
+  post,
+  accessToken,
+  fetchImpl,
+  idempotencyKey,
+  media: mediaInput,
+}) {
   if (!connection.accountId) {
     throw publicationError('SOCIAL_ACCOUNT_ID_REQUIRED', 'LinkedIn account id is missing', 409);
+  }
+  const media = preparedMedia(mediaInput);
+  const commonHeaders = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${accessToken}`,
+    'Linkedin-Version': config.apiVersion,
+    'X-Restli-Protocol-Version': '2.0.0',
+  };
+  let imageUrn = null;
+  if (media) {
+    const initialized = await fetchJson(`${config.apiBase}/rest/images?action=initializeUpload`, {
+      method: 'POST',
+      headers: { ...commonHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        initializeUploadRequest: {
+          owner: `urn:li:person:${connection.accountId}`,
+        },
+      }),
+    }, fetchImpl);
+    const uploadUrl = initialized.body.value?.uploadUrl
+      ? parseSafeOutboundUrl(initialized.body.value.uploadUrl, {
+        allowHosts: ['linkedin.com'],
+      }).toString()
+      : null;
+    imageUrn = initialized.body.value?.image;
+    if (!uploadUrl || !imageUrn) {
+      throw publicationError(
+        'SOCIAL_LINKEDIN_IMAGE_INITIALIZATION_FAILED',
+        'LinkedIn returned no image upload target',
+        503,
+      );
+    }
+    await fetchUpload(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': media.mime,
+      },
+      body: media.buffer,
+    }, fetchImpl);
   }
   const result = await fetchJson(`${config.apiBase}/rest/posts`, {
     method: 'POST',
     headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+      ...commonHeaders,
       'Content-Type': 'application/json',
-      'Linkedin-Version': config.apiVersion,
-      'X-Restli-Protocol-Version': '2.0.0',
       'X-RestLi-Idempotency-Key': idempotencyKey,
     },
     body: JSON.stringify({
@@ -200,6 +331,14 @@ async function publishLinkedIn({ config, connection, post, accessToken, fetchImp
       },
       lifecycleState: 'PUBLISHED',
       isReshareDisabledByAuthor: false,
+      ...(imageUrn ? {
+        content: {
+          media: {
+            id: imageUrn,
+            altText: media.altText || 'Imagen generada por SiraGPT',
+          },
+        },
+      } : {}),
     }),
   }, fetchImpl);
   return {
@@ -209,15 +348,50 @@ async function publishLinkedIn({ config, connection, post, accessToken, fetchImp
       || result.body.id
       || '',
     ),
-    media: 'text',
-    mediaOmitted: Boolean(post.imageUrl),
+    media: media
+      ? (media.generated ? 'generated_image' : 'uploaded_image')
+      : 'text',
+    mediaOmitted: Boolean(post.imageUrl) && !media,
   };
 }
 
-async function publishX({ config, post, accessToken, fetchImpl, idempotencyKey }) {
+async function publishX({
+  config,
+  post,
+  accessToken,
+  fetchImpl,
+  idempotencyKey,
+  media: mediaInput,
+}) {
   const text = captionFor(post);
   if (Array.from(text).length > 280) {
     throw publicationError('SOCIAL_X_TEXT_TOO_LONG', 'X posts are limited to 280 characters', 422);
+  }
+  const media = preparedMedia(mediaInput);
+  let mediaId = null;
+  if (media) {
+    const uploaded = await fetchJson(`${config.apiBase}/2/media/upload`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        media: media.buffer.toString('base64'),
+        media_category: 'tweet_image',
+        media_type: media.mime,
+        shared: false,
+      }),
+    }, fetchImpl);
+    mediaId = String(uploaded.body.data?.id || '');
+    if (!mediaId) {
+      throw publicationError(
+        'SOCIAL_X_IMAGE_UPLOAD_FAILED',
+        'X returned no media id',
+        503,
+      );
+    }
   }
   const result = await fetchJson(`${config.apiBase}/2/tweets`, {
     method: 'POST',
@@ -227,12 +401,17 @@ async function publishX({ config, post, accessToken, fetchImpl, idempotencyKey }
       'Content-Type': 'application/json',
       'Idempotency-Key': idempotencyKey,
     },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({
+      text,
+      ...(mediaId ? { media: { media_ids: [mediaId] } } : {}),
+    }),
   }, fetchImpl);
   return {
     externalId: String(result.body.data?.id || ''),
-    media: 'text',
-    mediaOmitted: Boolean(post.imageUrl),
+    media: media
+      ? (media.generated ? 'generated_image' : 'uploaded_image')
+      : 'text',
+    mediaOmitted: Boolean(post.imageUrl) && !media,
   };
 }
 
@@ -244,6 +423,7 @@ async function publishPostToPlatform({
   fetchImpl = globalThis.fetch,
   vault = null,
   prisma = null,
+  media = null,
 } = {}) {
   const platform = cleanPlatform(platformValue);
   const config = providerConfig(platform, env);
@@ -267,6 +447,7 @@ async function publishPostToPlatform({
     accessToken: tokens.accessToken,
     fetchImpl,
     idempotencyKey,
+    media,
   };
   let result;
   if (platform === 'facebook') result = await publishFacebook(input);
@@ -289,6 +470,8 @@ module.exports = {
     connectionTokens,
     ensureConnectionTokens,
     fetchJson,
+    fetchUpload,
+    preparedMedia,
     publishFacebook,
     publishLinkedIn,
     publishX,

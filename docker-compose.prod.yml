@@ -272,7 +272,7 @@ services:
       SOCIAL_LINKEDIN_SCOPES: ${SOCIAL_LINKEDIN_SCOPES:-openid profile w_member_social}
       SOCIAL_X_CLIENT_ID: ${SOCIAL_X_CLIENT_ID:-}
       SOCIAL_X_CLIENT_SECRET: ${SOCIAL_X_CLIENT_SECRET:-}
-      SOCIAL_X_SCOPES: ${SOCIAL_X_SCOPES:-tweet.read tweet.write users.read offline.access}
+      SOCIAL_X_SCOPES: ${SOCIAL_X_SCOPES:-tweet.read tweet.write users.read media.write offline.access}
       IMPERSONATION_TARGET_LIMIT: ${IMPERSONATION_TARGET_LIMIT:-3}
       IMPERSONATION_ADMIN_LIMIT: ${IMPERSONATION_ADMIN_LIMIT:-10}
       IMPERSONATION_WINDOW_MS: ${IMPERSONATION_WINDOW_MS:-3600000}
