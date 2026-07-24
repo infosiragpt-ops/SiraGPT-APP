@@ -35,6 +35,8 @@ const DEPARTMENTS = Object.freeze([
   { id: 'localization', name: 'Localización e IA Transcultural', mission: 'Idiomas, regiones, accesibilidad cultural y adaptación de mercado. Propone internacionalización y accesibilidad.' },
   { id: 'integrations', name: 'Ecosistema de Integraciones y Conectores', mission: 'APIs, canales, conectores, herramientas y automatizaciones. Propone integraciones que multipliquen el valor del producto.' },
   { id: 'trust', name: 'Confianza, Privacidad y Cumplimiento', mission: 'Seguridad, privacidad, cumplimiento y manejo responsable de datos. Propone endurecimiento y transparencia.' },
+  { id: 'product-engineering', name: 'Producto e Ingeniería SiraGPT', mission: 'Arquitectura, experiencia de producto y entrega verificable. Propone y construye mejoras incrementales con pruebas.' },
+  { id: 'marketing', name: 'Marketing', mission: 'Posicionamiento, contenido y campañas medibles. Prepara activos y distribución; las publicaciones externas solo se ejecutan mediante cuentas conectadas y la política explícita de Recursos.' },
 ]);
 
 function dayKey(now = new Date()) {
@@ -104,6 +106,7 @@ async function proposeTask({ project, department, recentRuns, fileTree, notes, c
         'Tu trabajo: proponer LA SIGUIENTE tarea más valiosa (una sola, concreta, completable por un agente de código en una sesión) para este proyecto.',
         'Responde SOLO un JSON: {"title": "<3-8 palabras>", "goal": "<instrucción concreta y autosuficiente para el agente constructor, 1-3 frases, en español>"}.',
         'La tarea debe ser INCREMENTAL sobre lo ya construido (no re-hacer lo existente), y del ámbito del departamento.',
+        'Nunca incluyas secretos. No publiques en redes ni actives gasto desde una tarea de código; prepara el trabajo y usa los controles explícitos de Recursos para efectos externos.',
       ].join(' '),
     },
     {

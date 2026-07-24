@@ -1570,6 +1570,18 @@ async function startServer() {
       logger.warn({ err: err && err.message }, 'codex_proactive_init_failed');
     }
 
+    // Autonomous company social publisher. It only processes user-approved
+    // policies and due posts; default policy is paused/review-only.
+    try {
+      const socialWorker = require('./src/services/social-company/worker');
+      if (socialWorker.start({ logger })) {
+        shutdownRegistry.register('social_publication_worker_stop', () => socialWorker.stop());
+        logger.info('social_publication_worker_started');
+      }
+    } catch (err) {
+      logger.warn({ err: err && err.message }, 'social_publication_worker_init_failed');
+    }
+
     // Apply any admin-curated provider keys (panel /admin/connections)
     // by overriding the corresponding process.env vars in this worker.
     // Fire-and-forget — DB may not be ready instantly; the catch logs.

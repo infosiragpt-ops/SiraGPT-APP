@@ -12,9 +12,16 @@ const sessionsSource = readFileSync("lib/code-chat-sessions.ts", "utf8")
 describe("agent company placement", () => {
   it("keeps the three desktop surfaces visible", () => {
     assert.match(workspaceSource, /\[APPS company rail\] \| \[CEO Office\] \| \[Preview\]/)
-    assert.match(workspaceSource, /<MemoAgentCompanyPanel \/>[\s\S]*?<MemoAICodeChatPanel embedded title="CEO Office" \/>/)
+    assert.match(workspaceSource, /<MemoAgentCompanyPanel \/>[\s\S]*?<MemoAICodeChatPanel embedded \/>/)
     assert.match(companySource, /createPortal\(panel, dockSlot\)/)
     assert.match(companySource, /data-agent-company-dock=\{dockedInAppsRail \? "apps" : "workspace"\}/)
+  })
+
+  it("opens department chats directly and keeps social resources inside the company rail", () => {
+    assert.match(companySource, /const openDepartmentChat = React\.useCallback/)
+    assert.match(companySource, /setActiveCodeChatSession\(sessionId\)/)
+    assert.match(companySource, /<ResourcesView workspaceId=/)
+    assert.match(companySource, /facebook:[\s\S]*linkedin:[\s\S]*x:/i)
   })
 
   it("docks the company navigator in the expanded APPS rail", () => {

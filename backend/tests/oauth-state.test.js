@@ -226,6 +226,28 @@ describe('verifyOAuthState', () => {
   });
 });
 
+it('OAuth private context is one-time server-side state and is returned only after verification', async () => {
+  const env = { NODE_ENV: 'test', JWT_SECRET: 'context-secret', OAUTH_STATE_TTL: '10m' };
+  const state = await signOAuthState({
+    userId: 'u-context',
+    service: 'social_x',
+    redirectUri: REDIRECT_URI,
+    context: { codeVerifier: 'private-pkce-verifier' },
+  }, env);
+  const decoded = jwt.decode(state);
+  assert.equal(decoded.codeVerifier, undefined, 'private context must not be embedded in the URL-visible JWT');
+
+  const verified = await verifyOAuthState(state, {
+    service: 'social_x',
+    redirectUri: REDIRECT_URI,
+  }, env);
+  assert.deepEqual(verified.context, { codeVerifier: 'private-pkce-verifier' });
+  await assert.rejects(
+    () => verifyOAuthState(state, { service: 'social_x', redirectUri: REDIRECT_URI }, env),
+    /OAUTH_STATE_REPLAYED_OR_EXPIRED/,
+  );
+});
+
 describe('frontendOrigin', () => {
   it('reads FRONTEND_URL when set', () => {
     assert.equal(

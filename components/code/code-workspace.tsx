@@ -635,7 +635,7 @@ export function CodeWorkspace() {
                       className="min-w-0"
                     >
                       <div ref={chatColumnRef} className="h-full min-h-0 border-r border-border/50">
-                        <MemoAICodeChatPanel embedded title="CEO Office" />
+                        <MemoAICodeChatPanel embedded />
                       </div>
                     </ResizablePanel>
                     <ResizableHandle withHandle />
