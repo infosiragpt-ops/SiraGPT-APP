@@ -5101,15 +5101,15 @@ footer {
     0 16px 38px -24px hsl(220 30% 18% / 0.32);
 }
 
+/* Single-row composer: placeholder/text sits on the same vertical band as
+   the + button, model picker, mic and send controls (ChatGPT-style). */
 .composer-input-row {
-  display: grid !important;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: 2.2rem auto;
-  align-items: end;
+  display: flex !important;
+  align-items: center;
   column-gap: 0.625rem;
-  row-gap: 0.25rem;
-  min-height: 5.5rem;
-  padding: 0.625rem 0.75rem 0.5rem !important;
+  row-gap: 0;
+  min-height: 3.75rem;
+  padding: 0.5rem 0.75rem !important;
 }
 
 /* Attachments and connector controls remain fully available without changing
@@ -5141,22 +5141,19 @@ footer {
 }
 
 .composer-input-row > :first-child {
-  grid-column: 1;
-  grid-row: 2;
+  flex: 0 0 auto;
   align-self: center;
 }
 
 .composer-input-row .composer-textarea-shell {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
+  align-self: center;
 }
 
 .composer-input-row .composer-toolbar-actions {
-  grid-column: 3;
-  grid-row: 2;
-  justify-self: end;
+  flex: 0 0 auto;
   align-self: center;
   min-height: 2.75rem;
   max-width: 100%;
@@ -5184,12 +5181,10 @@ footer {
 }
 
 .composer-inline-active-tools {
-  grid-column: 2;
-  grid-row: 2;
+  flex: 0 1 auto;
   align-self: center;
-  justify-self: start;
   min-width: 0;
-  max-width: min(56vw, 39rem);
+  max-width: min(36vw, 14rem);
   overflow: visible;
 }
 
@@ -5317,11 +5312,13 @@ footer {
 .composer-textarea-shell .composer-textarea {
   position: relative;
   z-index: 2;
+  display: block;
   height: 2.2rem !important;
   min-height: 2.2rem !important;
   max-height: 2.2rem !important;
   overflow-y: auto !important;
-  padding: 0.18rem 0.2rem 0.1rem !important;
+  /* Optical vertical center with 1rem / 1.5 line-height inside 2.2rem. */
+  padding: 0.35rem 0.2rem !important;
   font-size: 1rem;
   line-height: 1.5;
 }
@@ -5335,7 +5332,7 @@ footer {
   height: 2.2rem;
   max-height: 2.2rem;
   overflow: hidden;
-  padding: 0.375rem 0.25rem;
+  padding: 0.35rem 0.2rem;
   color: hsl(var(--foreground));
   font-size: 1rem;
   font-weight: 400;
@@ -5522,8 +5519,8 @@ button.anti-bribery-context-chip:not(:disabled):active {
   }
   .composer-input-row {
     column-gap: 0.5rem;
-    min-height: 5.5rem;
-    padding: 0.625rem 0.625rem 0.5rem !important;
+    min-height: 3.75rem;
+    padding: 0.5rem 0.625rem !important;
   }
   .composer-input-row .composer-toolbar-actions {
     gap: 0.25rem !important;
@@ -5536,6 +5533,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
     height: 2.35rem !important;
     min-height: 2.35rem !important;
     max-height: 2.35rem !important;
+    padding: 0.425rem 0.2rem !important;
     font-size: 1rem;
     line-height: 1.5;
   }
@@ -5545,6 +5543,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
     max-height: 2.35rem;
   }
   .composer-textarea-highlights {
+    padding: 0.425rem 0.2rem;
     font-size: 1rem;
     line-height: 1.5;
   }

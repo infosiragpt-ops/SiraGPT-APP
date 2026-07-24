@@ -70,13 +70,18 @@ describe("professional chat composer surface source contract", () => {
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
-      /\.composer-input-row\s*\{[\s\S]{0,420}min-height: 5\.5rem;[\s\S]{0,100}padding: 0\.625rem 0\.75rem 0\.5rem !important;/,
-      "the idle composer should not reserve oversized vertical space"
+      /\.composer-input-row\s*\{[\s\S]{0,420}display: flex !important;[\s\S]{0,120}align-items: center;[\s\S]{0,160}min-height: 3\.75rem;[\s\S]{0,100}padding: 0\.5rem 0\.75rem !important;/,
+      "the idle composer should keep text on one row with the controls"
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 5\.5rem;/,
-      "phones should keep the same compact hierarchy without oversized rounding"
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 3\.75rem;/,
+      "phones should keep the same single-row hierarchy without oversized rounding"
+    )
+    assert.doesNotMatch(
+      globals,
+      /\.composer-input-row\s*\{[\s\S]{0,220}grid-template-rows:\s*2\.2rem auto/,
+      "the composer must not park the textarea on a separate row above the controls"
     )
   })
 
