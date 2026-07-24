@@ -26,8 +26,9 @@ import { Slider } from "@/components/ui/slider"
 import type { AgentOfficeModel, AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
   nextOfficeTimeMode,
-  officeTimeModeLabel,
+  officeTimePhaseModeLabel,
   resolveOfficeTimeOfDay,
+  resolveOfficeTimePhase,
   type OfficeTimeMode,
 } from "@/lib/agent-office-environment"
 import { cn } from "@/lib/utils"
@@ -86,7 +87,10 @@ export function AgentOfficeOverlay({
   const [timeMode, setTimeMode] = React.useState<OfficeTimeMode>("auto")
   const [localClock, setLocalClock] = React.useState(() => new Date())
   const timeOfDay = resolveOfficeTimeOfDay(timeMode, localClock)
-  const timeLabel = officeTimeModeLabel(timeMode, timeOfDay)
+  // The clock below re-reads the real local time every minute, so on "auto" the
+  // office moves through dawn → day → dusk → night on its own.
+  const timePhase = resolveOfficeTimePhase(timeMode, localClock)
+  const timeLabel = officeTimePhaseModeLabel(timeMode, timePhase)
 
   React.useEffect(() => setMounted(true), [])
 
@@ -168,12 +172,14 @@ export function AgentOfficeOverlay({
       aria-label={`Oficina de agentes de ${companyName}`}
       data-testid="agent-office-overlay"
       data-office-time={timeOfDay}
+      data-office-phase={timePhase}
       data-office-sound={sound.state}
     >
       <AgentOfficeScene
         model={visibleModel}
         paused={paused}
         timeOfDay={timeOfDay}
+        timePhase={timePhase}
         selectedWorkerId={selectedWorkerId}
         resetCameraKey={resetCameraKey}
         className={cn(rosterOpen && "sm:w-[calc(100%_-_360px)]")}
@@ -201,7 +207,12 @@ export function AgentOfficeOverlay({
 
         <div className="pointer-events-auto ml-auto hidden items-center gap-1.5 sm:flex">
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <span className="h-2 w-2 rounded-full bg-sky-400" />
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full",
+                model.activeCount > 0 ? "animate-pulse bg-sky-500" : "bg-zinc-300",
+              )}
+            />
             {model.activeCount} activos
           </span>
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">

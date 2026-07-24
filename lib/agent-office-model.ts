@@ -37,6 +37,25 @@ export type AgentOfficeWorker = {
   updatedAt: number
 }
 
+/**
+ * What the worker's body is doing in the 3D office.
+ *
+ * The office used to walk every agent around its department in an endless
+ * loop, so a department with 8 running agents looked identical to an empty
+ * one — only the walking speed changed. Stance makes work legible: an agent
+ * that is actually running SITS DOWN at its desk and types, a blocked one
+ * paces, and everyone else waits at their desk.
+ */
+export type AgentOfficeStance = "working" | "blocked" | "standby"
+
+export function officeWorkerStance(
+  worker: Pick<AgentOfficeWorker, "active" | "statusTone">,
+): AgentOfficeStance {
+  if (worker.active) return "working"
+  if (worker.statusTone === "attention") return "blocked"
+  return "standby"
+}
+
 export type AgentOfficeDepartment = {
   id: string
   name: string

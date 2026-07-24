@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { buildAgentOfficeModel } from "../lib/agent-office-model"
+import { buildAgentOfficeModel, officeWorkerStance } from "../lib/agent-office-model"
 import { AGENT_COMPANY_DEPARTMENTS } from "../lib/code-agent-company"
 import type { CodeChatSession } from "../lib/code-chat-sessions"
 import type { CodexRun } from "../lib/codex/codex-api"
@@ -105,4 +105,33 @@ test("buildAgentOfficeModel keeps empty departments without inventing workers", 
   assert.equal(model.activeCount, 0)
   assert.equal(model.departments.length, AGENT_COMPANY_DEPARTMENTS.length)
   assert.ok(model.departments.every((department) => department.workers.length === 0))
+})
+
+test("officeWorkerStance seats running agents and paces blocked ones", () => {
+  // Work has to be visible: a running agent sits at its desk and types, a
+  // blocked one paces, everyone else waits. Before this, every worker walked
+  // an endless loop and a busy office looked exactly like an empty one.
+  assert.equal(officeWorkerStance({ active: true, statusTone: "active" }), "working")
+  assert.equal(officeWorkerStance({ active: true, statusTone: "attention" }), "working")
+  assert.equal(officeWorkerStance({ active: false, statusTone: "attention" }), "blocked")
+  assert.equal(officeWorkerStance({ active: false, statusTone: "ready" }), "standby")
+  assert.equal(officeWorkerStance({ active: false, statusTone: "idle" }), "standby")
+})
+
+test("a department that starts working reports its active desks", () => {
+  const runs = [
+    run({ id: "r-live", prompt: "[PROACTIVO · Ingeniería de Producto] build", status: "running" }),
+    run({ id: "r-done", prompt: "[PROACTIVO · Ingeniería de Producto] ship", status: "done" }),
+  ]
+  const model = buildAgentOfficeModel({
+    departments: AGENT_COMPANY_DEPARTMENTS,
+    sessions: [],
+    runs,
+    rootSessionId: null,
+  })
+  const working = model.workers.filter((worker) => officeWorkerStance(worker) === "working")
+  assert.equal(working.length, 1)
+  assert.equal(model.activeCount, 1)
+  const department = model.departments.find((entry) => entry.activeCount > 0)
+  assert.ok(department, "the running agent must light up exactly one department")
 })

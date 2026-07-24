@@ -3,12 +3,19 @@
 import * as React from "react"
 import * as THREE from "three"
 
-import type {
-  AgentOfficeActivity,
-  AgentOfficeModel,
-  AgentOfficeWorker,
+import {
+  officeWorkerStance,
+  type AgentOfficeActivity,
+  type AgentOfficeModel,
+  type AgentOfficeStance,
+  type AgentOfficeWorker,
 } from "@/lib/agent-office-model"
-import { officeTimeOfDay, type OfficeTimeOfDay } from "@/lib/agent-office-environment"
+import {
+  officeTimeOfDay,
+  officeTimePhase,
+  type OfficeTimeOfDay,
+  type OfficeTimePhase,
+} from "@/lib/agent-office-environment"
 import { cn } from "@/lib/utils"
 
 type AgentOfficeSceneProps = {
@@ -16,6 +23,7 @@ type AgentOfficeSceneProps = {
   variant?: "full" | "thumbnail"
   paused?: boolean
   timeOfDay?: OfficeTimeOfDay
+  timePhase?: OfficeTimePhase
   selectedWorkerId?: string | null
   resetCameraKey?: number
   className?: string
@@ -26,7 +34,9 @@ type AgentOfficeSceneProps = {
 
 type WorkerAnimation = {
   worker: AgentOfficeWorker
+  stance: AgentOfficeStance
   group: THREE.Group
+  head: THREE.Mesh
   leftArm: THREE.Group
   rightArm: THREE.Group
   leftLeg: THREE.Group
@@ -37,6 +47,122 @@ type WorkerAnimation = {
   walkSpeed: number
   phase: number
   baseY: number
+  /** Where the agent stands when it has nothing running. */
+  standPosition: THREE.Vector3
+  /** The chair in front of its own desk — where a running agent types. */
+  seatPosition: THREE.Vector3
+}
+
+type DepartmentAnimation = {
+  working: boolean
+  boardMaterial: THREE.MeshStandardMaterial
+  workLight: THREE.PointLight | null
+  workLightIntensity: number
+  pulse: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>
+  phase: number
+}
+
+/**
+ * Seated pose. The rig's forward axis is local +z (walking sets
+ * rotation.y = atan2(tangent.x, tangent.z)), and rotating a limb group by a
+ * NEGATIVE angle about local x swings it toward +z — i.e. forward, onto the
+ * keyboard. Sitting therefore drops the hips onto the chair and swings both
+ * thighs and both arms forward.
+ */
+const SEAT_HIP_DROP = -0.3
+const SEAT_LEG_PITCH = -0.75
+const SEAT_ARM_PITCH = -1.02
+/**
+ * How far in front of the desk centre the seated body sits. Derived, not
+ * eyeballed: with SEAT_ARM_PITCH the hands land 0.45 behind the body, so 0.7
+ * puts them at deskZ + 0.25 — on the desktop (which spans ±0.39) where a
+ * keyboard would be — while the hips stay inside the chair cushion at
+ * deskZ + 0.88 (radius 0.32).
+ */
+const SEAT_FORWARD_OFFSET = 0.7
+
+type PhaseLighting = {
+  sunColor: number
+  sunIntensity: number
+  sunPosition: [number, number, number]
+  hemisphereSky: number
+  hemisphereGround: number
+  hemisphereIntensity: number
+  fillColor: number
+  fillIntensity: number
+  exposure: number
+  background: number
+  fog: number
+  horizon: number
+  floor: number
+}
+
+/**
+ * Lighting per resolved phase. "dawn" and "dusk" only ever occur inside the
+ * daylight window (see officeTimePhase), so they warm the same day structure
+ * instead of fighting the night sky.
+ */
+const PHASE_LIGHTING: Record<OfficeTimePhase, PhaseLighting> = {
+  dawn: {
+    sunColor: 0xffd7a8,
+    sunIntensity: 1.95,
+    sunPosition: [22, 13, 10],
+    hemisphereSky: 0xffe6cd,
+    hemisphereGround: 0x5b5a63,
+    hemisphereIntensity: 1.45,
+    fillColor: 0xc9bcff,
+    fillIntensity: 1.05,
+    exposure: 1.07,
+    background: 0xbcd6e6,
+    fog: 0xd6cfc6,
+    horizon: 0xf2cfa8,
+    floor: 0xcbbfa4,
+  },
+  day: {
+    sunColor: 0xfff4dd,
+    sunIntensity: 2.45,
+    sunPosition: [-18, 28, 14],
+    hemisphereSky: 0xffffff,
+    hemisphereGround: 0x53606a,
+    hemisphereIntensity: 1.7,
+    fillColor: 0xc9e7ff,
+    fillIntensity: 1.2,
+    exposure: 1.05,
+    background: 0x9fd2ea,
+    fog: 0xaed9e8,
+    horizon: 0xb9e2ef,
+    floor: 0xcfbd99,
+  },
+  dusk: {
+    sunColor: 0xffab6d,
+    sunIntensity: 2.1,
+    sunPosition: [-24, 11, 8],
+    hemisphereSky: 0xffd5ae,
+    hemisphereGround: 0x4a4750,
+    hemisphereIntensity: 1.38,
+    fillColor: 0x9db4f0,
+    fillIntensity: 1.02,
+    exposure: 1.09,
+    background: 0xdfae86,
+    fog: 0xd9b899,
+    horizon: 0xf0b183,
+    floor: 0xc8ab8a,
+  },
+  night: {
+    sunColor: 0xa9c9ff,
+    sunIntensity: 1.05,
+    sunPosition: [-18, 28, 14],
+    hemisphereSky: 0x7ba5c5,
+    hemisphereGround: 0x07111b,
+    hemisphereIntensity: 1.3,
+    fillColor: 0x7fa5d6,
+    fillIntensity: 0.92,
+    exposure: 1.12,
+    background: 0x0b2136,
+    fog: 0x0b2136,
+    horizon: 0x0b2136,
+    floor: 0x7f898e,
+  },
 }
 
 type CoastalArchitecture = {
@@ -326,7 +452,9 @@ function addWorker({
 
   return {
     worker,
+    stance: officeWorkerStance(worker),
     group,
+    head,
     leftArm,
     rightArm,
     leftLeg,
@@ -334,9 +462,14 @@ function addWorker({
     screen: null as unknown as WorkerAnimation["screen"],
     selectionRing,
     walkPath: route,
-    walkSpeed: worker.active ? 0.048 : worker.statusTone === "attention" ? 0.038 : 0.03,
+    walkSpeed: worker.statusTone === "attention" ? 0.038 : 0.03,
     phase: workerIndex * 1.37,
     baseY: group.position.y,
+    standPosition: new THREE.Vector3(x, 0, z + 1.15),
+    // The chair addChair() puts in front of this desk. A running agent walks
+    // the last step to it and sits, so the desk it occupies is the one whose
+    // screen is lit.
+    seatPosition: new THREE.Vector3(x, SEAT_HIP_DROP, z + SEAT_FORWARD_OFFSET),
   }
 }
 
@@ -402,22 +535,24 @@ function addCoastalArchitecture({
   totalWidth,
   totalDepth,
   timeOfDay,
+  light,
   variant,
 }: {
   scene: THREE.Scene
   totalWidth: number
   totalDepth: number
   timeOfDay: OfficeTimeOfDay
+  light: PhaseLighting
   variant: "full" | "thumbnail"
 }): CoastalArchitecture {
   const night = timeOfDay === "night"
-  scene.background = new THREE.Color(night ? 0x0b2136 : 0x9fd2ea)
-  scene.fog = new THREE.Fog(night ? 0x0b2136 : 0xaed9e8, 58, 142)
+  scene.background = new THREE.Color(light.background)
+  scene.fog = new THREE.Fog(light.fog, 58, 142)
 
   const horizon = new THREE.Mesh(
     new THREE.PlaneGeometry(190, 72),
     new THREE.MeshBasicMaterial({
-      color: night ? 0x0b2136 : 0xb9e2ef,
+      color: light.horizon,
       fog: false,
     }),
   )
@@ -662,6 +797,7 @@ export function AgentOfficeScene({
   variant = "full",
   paused = false,
   timeOfDay,
+  timePhase,
   selectedWorkerId = null,
   resetCameraKey = 0,
   className,
@@ -703,8 +839,12 @@ export function AgentOfficeScene({
   React.useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const resolvedTimeOfDay = timeOfDay || officeTimeOfDay()
+    const resolvedPhase = timePhase || (timeOfDay ? (timeOfDay as OfficeTimePhase) : officeTimePhase())
+    // The phase always refines the day/night structure, so deriving one from
+    // the other can never light a starfield with a sunset.
+    const resolvedTimeOfDay: OfficeTimeOfDay = resolvedPhase === "night" ? "night" : "day"
     const night = resolvedTimeOfDay === "night"
+    const light = PHASE_LIGHTING[resolvedPhase]
 
     let renderer: THREE.WebGLRenderer
     try {
@@ -722,8 +862,8 @@ export function AgentOfficeScene({
     setFailed(false)
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = night ? 1.12 : 1.05
-    renderer.setClearColor(night ? 0x0b2136 : variant === "thumbnail" ? 0xb8d9e6 : 0xaed9e8, 1)
+    renderer.toneMappingExposure = light.exposure
+    renderer.setClearColor(light.fog, 1)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, variant === "thumbnail" ? 1 : 1.5))
     renderer.shadowMap.enabled = variant === "full"
     renderer.shadowMap.type = THREE.PCFShadowMap
@@ -789,17 +929,18 @@ export function AgentOfficeScene({
       totalWidth,
       totalDepth,
       timeOfDay: resolvedTimeOfDay,
+      light,
       variant,
     })
 
     const hemisphere = new THREE.HemisphereLight(
-      night ? 0x7ba5c5 : 0xffffff,
-      night ? 0x07111b : 0x53606a,
-      night ? 1.3 : 1.7,
+      light.hemisphereSky,
+      light.hemisphereGround,
+      light.hemisphereIntensity,
     )
     scene.add(hemisphere)
-    const sun = new THREE.DirectionalLight(night ? 0xa9c9ff : 0xfff4dd, night ? 1.05 : 2.45)
-    sun.position.set(-18, 28, 14)
+    const sun = new THREE.DirectionalLight(light.sunColor, light.sunIntensity)
+    sun.position.set(...light.sunPosition)
     sun.castShadow = variant === "full"
     if (variant === "full") {
       sun.shadow.mapSize.set(2048, 2048)
@@ -809,13 +950,13 @@ export function AgentOfficeScene({
       sun.shadow.camera.bottom = -30
     }
     scene.add(sun)
-    const fill = new THREE.DirectionalLight(night ? 0x7fa5d6 : 0xc9e7ff, night ? 0.92 : 1.2)
+    const fill = new THREE.DirectionalLight(light.fillColor, light.fillIntensity)
     fill.position.set(18, 12, -16)
     scene.add(fill)
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 10, totalDepth + 10),
-      material(night ? 0x7f898e : 0xcfbd99, 0.92),
+      material(light.floor, 0.92),
     )
     floor.rotation.x = -Math.PI / 2
     floor.position.y = -0.08
@@ -831,6 +972,7 @@ export function AgentOfficeScene({
     scene.add(aisle)
 
     const workers: WorkerAnimation[] = []
+    const departmentAnimations: DepartmentAnimation[] = []
     const selectables: THREE.Object3D[] = []
 
     departments.forEach((department, departmentIndex) => {
@@ -841,10 +983,13 @@ export function AgentOfficeScene({
       const departmentGroup = new THREE.Group()
       departmentGroup.position.set(zoneX, 0, zoneZ)
 
+      const working = department.activeCount > 0
+      let workLight: THREE.PointLight | null = null
+      const workLightIntensity = working ? 8.5 : 5.5
       if (night) {
-        const workLight = new THREE.PointLight(
-          department.activeCount > 0 ? 0xddeaff : 0xffd7a1,
-          department.activeCount > 0 ? 8.5 : 5.5,
+        workLight = new THREE.PointLight(
+          working ? 0xddeaff : 0xffd7a1,
+          workLightIntensity,
           Math.max(zoneWidth, zoneDepth) * 1.15,
           1.8,
         )
@@ -911,19 +1056,48 @@ export function AgentOfficeScene({
       departmentGroup.add(board)
       selectables.push(board)
 
+      const boardMaterial = new THREE.MeshStandardMaterial({
+        color: working ? stripeColor : 0x8aa0b2,
+        emissive: working ? stripeColor : 0x1f2937,
+        emissiveIntensity: working ? 0.42 : 0.08,
+        roughness: 0.4,
+      })
       const boardLight = new THREE.Mesh(
         new THREE.PlaneGeometry(Math.min(3.25, zoneWidth - 1.45), 1.35),
-        new THREE.MeshStandardMaterial({
-          color: department.activeCount > 0 ? stripeColor : 0x8aa0b2,
-          emissive: department.activeCount > 0 ? stripeColor : 0x1f2937,
-          emissiveIntensity: department.activeCount > 0 ? 0.42 : 0.08,
-          roughness: 0.4,
-        }),
+        boardMaterial,
       )
       boardLight.position.set(0, 1.18, -zoneDepth / 2 + 0.395)
       tagObject(boardLight, { departmentId: department.id })
       departmentGroup.add(boardLight)
       selectables.push(boardLight)
+
+      // Shift-work pulse on the carpet. It only ever runs for a department
+      // with live agents, so "this floor started working" reads from across
+      // the office even before you look at which desks are occupied.
+      const pulse = new THREE.Mesh(
+        new THREE.RingGeometry(0.92, 1.12, 40),
+        new THREE.MeshBasicMaterial({
+          color: stripeColor,
+          transparent: true,
+          opacity: 0,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      )
+      pulse.rotation.x = -Math.PI / 2
+      pulse.position.y = 0.075
+      pulse.visible = working
+      pulse.renderOrder = 3
+      departmentGroup.add(pulse)
+
+      departmentAnimations.push({
+        working,
+        boardMaterial,
+        workLight,
+        workLightIntensity,
+        pulse,
+        phase: departmentIndex * 0.83,
+      })
 
       scene.add(departmentGroup)
     })
@@ -1041,6 +1215,66 @@ export function AgentOfficeScene({
     let frameCount = 0
     let readyReported = false
 
+    /**
+     * Pose a worker for its stance. The office used to walk everyone around
+     * their department forever, so a floor with eight running agents looked
+     * exactly like an empty one. Now a running agent sits at its own desk and
+     * types, an agent waiting for review paces, and the rest wait standing.
+     *
+     * `motion` is false when the tab is hidden, the scene is paused or the user
+     * asked for reduced motion — the pose still resolves, it just stops moving,
+     * so a still frame is as readable as a live one.
+     */
+    const poseWorker = (animation: WorkerAnimation, elapsed: number, motion: boolean) => {
+      const { group, head, leftArm, rightArm, leftLeg, rightLeg, screen } = animation
+
+      if (animation.stance === "blocked") {
+        if (!motion) return
+        const walkProgress = (elapsed * animation.walkSpeed + animation.phase * 0.037) % 1
+        const routePoint = animation.walkPath.getPointAt(walkProgress)
+        const routeTangent = animation.walkPath.getTangentAt(walkProgress)
+        const stridePhase = elapsed * 5.4 + animation.phase
+        group.position.copy(routePoint)
+        group.position.y = animation.baseY + Math.abs(Math.sin(stridePhase)) * 0.045
+        group.rotation.y = Math.atan2(routeTangent.x, routeTangent.z)
+        leftArm.rotation.x = Math.sin(stridePhase) * 0.72
+        rightArm.rotation.x = -Math.sin(stridePhase) * 0.72
+        leftLeg.rotation.x = -Math.sin(stridePhase) * 0.62
+        rightLeg.rotation.x = Math.sin(stridePhase) * 0.62
+        // Slow amber-ish throb: the desk is holding work that needs a human.
+        screen.material.emissiveIntensity = 0.34 + (Math.sin(elapsed * 1.9 + animation.phase) + 1) * 0.11
+        return
+      }
+
+      if (animation.stance === "working") {
+        // Ramp from standing to seated so the start of a run is a visible act:
+        // the agent takes its chair instead of popping into it.
+        const settle = motion ? THREE.MathUtils.smoothstep(elapsed, 0.15, 1.35) : 1
+        group.position.lerpVectors(animation.standPosition, animation.seatPosition, settle)
+        group.rotation.y = Math.PI
+        const typing = motion ? Math.sin(elapsed * 10.5 + animation.phase) : 0
+        leftLeg.rotation.x = SEAT_LEG_PITCH * settle
+        rightLeg.rotation.x = SEAT_LEG_PITCH * settle
+        leftArm.rotation.x = SEAT_ARM_PITCH * settle + typing * 0.07
+        rightArm.rotation.x = SEAT_ARM_PITCH * settle - typing * 0.07
+        head.position.y = 1.82 + typing * 0.007
+        screen.material.emissiveIntensity =
+          0.36 + settle * (0.5 + (Math.sin(elapsed * 8.6 + animation.phase) + 1) * 0.19)
+        return
+      }
+
+      const breath = motion ? Math.sin(elapsed * 1.05 + animation.phase) : 0
+      group.position.copy(animation.standPosition)
+      group.position.y = animation.baseY + breath * 0.012
+      group.rotation.y = Math.PI + (motion ? Math.sin(elapsed * 0.24 + animation.phase) * 0.2 : 0)
+      leftArm.rotation.x = breath * 0.05
+      rightArm.rotation.x = -breath * 0.05
+      leftLeg.rotation.x = 0
+      rightLeg.rotation.x = 0
+      head.position.y = 1.82
+      screen.material.emissiveIntensity = 0.18
+    }
+
     const animate = (timestamp: number) => {
       animationFrame = window.requestAnimationFrame(animate)
       const elapsed = Math.max(0, timestamp - animationStartedAt) / 1000
@@ -1048,21 +1282,26 @@ export function AgentOfficeScene({
 
       for (const animation of workers) {
         animation.selectionRing.visible = selectedWorkerRef.current === animation.worker.id
-        if (!canAnimate) continue
-        const walkProgress = (elapsed * animation.walkSpeed + animation.phase * 0.037) % 1
-        const routePoint = animation.walkPath.getPointAt(walkProgress)
-        const routeTangent = animation.walkPath.getTangentAt(walkProgress)
-        const stridePhase = elapsed * (animation.worker.active ? 7.2 : 5.4) + animation.phase
-        animation.group.position.copy(routePoint)
-        animation.group.position.y = animation.baseY + Math.abs(Math.sin(stridePhase)) * 0.045
-        animation.group.rotation.y = Math.atan2(routeTangent.x, routeTangent.z)
-        animation.leftArm.rotation.x = Math.sin(stridePhase) * 0.72
-        animation.rightArm.rotation.x = -Math.sin(stridePhase) * 0.72
-        animation.leftLeg.rotation.x = -Math.sin(stridePhase) * 0.62
-        animation.rightLeg.rotation.x = Math.sin(stridePhase) * 0.62
-        animation.screen.material.emissiveIntensity = animation.worker.active
-          ? 0.9 + (Math.sin(stridePhase * 0.4) + 1) * 0.18
-          : 0.2
+        poseWorker(animation, elapsed, canAnimate)
+        // Keep the ring on the carpet: sitting drops the whole rig below the
+        // floor, which would bury the selection marker under the department.
+        animation.selectionRing.position.y = 0.025 - animation.group.position.y
+      }
+
+      for (const department of departmentAnimations) {
+        if (!department.working) continue
+        // Same 1.35 s window as the workers sitting down, so the floor lights up
+        // exactly as its agents take their desks.
+        const ignition = canAnimate ? THREE.MathUtils.smoothstep(elapsed, 0.15, 1.35) : 1
+        const beat = canAnimate ? (Math.sin(elapsed * 1.9 + department.phase) + 1) / 2 : 0.5
+        department.boardMaterial.emissiveIntensity = 0.1 + ignition * (0.26 + beat * 0.24)
+        if (department.workLight) {
+          department.workLight.intensity =
+            department.workLightIntensity * (0.62 + ignition * (0.32 + beat * 0.08))
+        }
+        const cycle = canAnimate ? (elapsed * 0.42 + department.phase * 0.31) % 1 : 0.35
+        department.pulse.scale.setScalar(0.55 + cycle * 1.35)
+        department.pulse.material.opacity = ignition * 0.4 * (1 - cycle) ** 1.6
       }
 
       if (canAnimate) {
@@ -1128,7 +1367,7 @@ export function AgentOfficeScene({
       renderer.domElement.remove()
       delete host.dataset.officeReady
     }
-  }, [modelSignature, timeOfDay, variant])
+  }, [modelSignature, timeOfDay, timePhase, variant])
 
   return (
     <div
@@ -1141,6 +1380,7 @@ export function AgentOfficeScene({
       data-testid={variant === "thumbnail" ? "agent-office-thumbnail" : "agent-office-scene"}
       data-office-ready="false"
       data-office-time={timeOfDay || "auto"}
+      data-office-phase={timePhase || "auto"}
     >
       {failed ? (
         <div className="absolute inset-0 flex items-center justify-center bg-zinc-950 px-6 text-center text-xs text-zinc-300">
