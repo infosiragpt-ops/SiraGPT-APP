@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import {
   CheckCircle2,
   FolderGit2,
@@ -16,7 +15,9 @@ import {
   X,
 } from "lucide-react"
 
+import UpgradeModal from "@/components/UpgradeModal"
 import { Button } from "@/components/ui/button"
+import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 import { ProjectChip } from "./project-chip"
 
@@ -34,6 +35,9 @@ const PANELS: PanelDef[] = [
   { id: "git", label: "Git", icon: GitBranch },
   { id: "validation", label: "Validation", icon: CheckCircle2 },
 ]
+
+const isFreePlan = (plan?: string | null) =>
+  String(plan || "FREE").trim().toUpperCase() === "FREE"
 
 export type WorkspaceTopBarProps = {
   openPanels: Set<WorkspacePanelId>
@@ -89,20 +93,28 @@ export function WorkspaceTopBar({
   publishingOpen,
   onToggleChat,
 }: WorkspaceTopBarProps) {
+  const { user } = useAuth()
+  const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const visible = PANELS.filter((p) => openPanels.has(p.id))
   const ToolTabIcon = toolTab?.icon
+  const showUpgrade = Boolean(user && isFreePlan(user.plan))
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2.5">
       <ProjectChip onOpenCode={onOpenCode} />
-      <Link
-        href="/plan"
-        className="flex h-6 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd]"
-        title="Mejorar plan"
-      >
-        <Plus className="h-3 w-3" strokeWidth={2.5} />
-        Upgrade
-      </Link>
+      {showUpgrade ? (
+        <button
+          type="button"
+          className="flex h-6 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+          title="Ver planes y precios"
+          aria-label="Ver planes y precios"
+          aria-haspopup="dialog"
+          onClick={() => setUpgradeOpen(true)}
+        >
+          <Plus className="h-3 w-3" strokeWidth={2.5} />
+          Upgrade
+        </button>
+      ) : null}
 
       {/* Panel tabs — sit in the header itself (Publicar height), roughly
           above where the main pane begins. */}
@@ -263,6 +275,13 @@ export function WorkspaceTopBar({
       >
         <PanelLeft className="h-3.5 w-3.5" />
       </Button>
+      {showUpgrade ? (
+        <UpgradeModal
+          open={upgradeOpen}
+          onOpenChange={setUpgradeOpen}
+          user={user}
+        />
+      ) : null}
     </header>
   )
 }
