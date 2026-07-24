@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 
 const packageJson = require('../package.json');
@@ -43,15 +44,35 @@ const SECURITY_TESTS = Object.freeze([
   'tests/security-test-discovery.test.js',
 ]);
 
+const BACKEND_ROOT = path.resolve(__dirname, '..');
+
+// The sharder selects by discovering tests/**/*.test.js on disk and subtracting
+// tests/.ci-quarantine.txt. Mirror that here by shelling out to the same
+// `find | sort`, so this contract tracks the sharder's real ordering rather
+// than a JS re-implementation that could drift from it (locale-dependent sort
+// order being the obvious trap).
 function canonicalTestFiles() {
-  const command = packageJson.scripts?.test || '';
-  return command.match(/tests\/[A-Za-z0-9._\-/]+\.test\.js/g) || [];
+  const found = spawnSync('bash', ['-c', "find tests -name '*.test.js' -type f | sort"], {
+    cwd: BACKEND_ROOT,
+    encoding: 'utf8',
+  });
+  assert.equal(found.status, 0, found.stderr);
+  const quarantined = new Set(
+    fs
+      .readFileSync(path.join(BACKEND_ROOT, 'tests/.ci-quarantine.txt'), 'utf8')
+      .split('\n')
+      .map((line) => line.replace(/#.*$/, '').trim())
+      .filter(Boolean),
+  );
+  return found.stdout.split('\n').filter((f) => f && !quarantined.has(f));
 }
 
-test('all I15-I19 security contracts live in the canonical test script', () => {
+test('all I15-I19 security contracts are eligible for CI selection', () => {
   const files = canonicalTestFiles();
   for (const file of SECURITY_TESTS) {
-    assert.ok(files.includes(file), `${file} is absent from scripts.test`);
+    // Eligible means: present on disk AND not quarantined. Under discovery-based
+    // selection those are the only two ways a test can fail to run.
+    assert.ok(files.includes(file), `${file} is not eligible for CI`);
   }
 
   const posttest = packageJson.scripts?.posttest || '';
@@ -64,14 +85,14 @@ test('all I15-I19 security contracts live in the canonical test script', () => {
   }
 });
 
-test('test sharder discovers a canonical I15-I19 test from scripts.test', () => {
+test('test sharder selects a canonical I15-I19 test from disk discovery', () => {
   const files = canonicalTestFiles();
   const target = 'tests/production-environment.test.js';
   const targetIndex = files.indexOf(target);
   assert.ok(targetIndex >= 0, 'target security contract is not canonical');
 
   // TOTAL exceeds the file count, so this shard receives exactly the target
-  // at index targetIndex and proves the sharder parsed scripts.test.
+  // at index targetIndex and proves the sharder's discovery order.
   const total = files.length + 17;
   const childEnv = { ...process.env, CI: '' };
   delete childEnv.NODE_TEST_CONTEXT;

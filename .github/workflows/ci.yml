@@ -158,12 +158,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
-      # Sharded test execution — round-robin over the explicit test-file list
+      # Sharded test execution — round-robin over the discovered test-file list
       # so each runner gets ~1/N of the suite. `fail-fast: false` lets us see
       # failures from every shard in a single run instead of cancelling on
       # the first red shard.
       fail-fast: false
-      max-parallel: 2
+      # All four shards run concurrently. At `2` the shards ran in two waves,
+      # which was affordable at 164 files each; discovery-based selection took
+      # each shard to ~437 files, and serialising two waves of that would push
+      # the backend past the frontend build and onto the critical path.
+      max-parallel: 4
       matrix:
         shard: [1, 2, 3, 4]
         total: [4]
