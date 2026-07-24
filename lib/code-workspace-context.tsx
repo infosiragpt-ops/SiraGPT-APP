@@ -66,6 +66,7 @@ import {
   updateCodeChatSessionAgent,
 } from "./code-chat-sessions"
 import type { AgentState } from "./code-agent/types"
+import { readWorkspaceCodexProject } from "./codex/codex-project-link"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
 /** Fired (with detail {id}) when a workspace is deleted elsewhere (e.g. the app
@@ -643,6 +644,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
           setActiveFolder({ id: projectId, name: target.name })
         }
         setWorkspaceSource({ kind: "browser", name: target.name, linked: false })
+        setActiveCodexProject(readWorkspaceCodexProject(projectId))
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
         }
@@ -664,6 +666,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         kind: "local-folder",
         fileCount: Object.keys(persisted.files).length,
       })
+      setActiveCodexProject(readWorkspaceCodexProject(target.id))
       if (!linked && Object.keys(persisted.files).length === 0) {
         toast.info("Vuelve a enlazar la carpeta con + si quieres sincronizar con el disco.")
       }
