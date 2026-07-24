@@ -37,6 +37,12 @@
       "source": 1124066,
       "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
       "reason": "Sharp 0.35 is a breaking native-image upgrade and Next.js plus Transformers currently resolve 0.34.x; keep this time-bounded exception visible until a dedicated compatibility upgrade is validated."
+    },
+    {
+      "package": "brace-expansion",
+      "source": 1124334,
+      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+      "reason": "Upstream published no backport for the 1.x/2.x maintenance lines (1.1.16 and 2.1.2 are the newest releases there and remain in range). The only patched release, 5.0.8, changed the CommonJS export from a callable function to an object, so every minimatch@3/5/9 on the remaining paths would throw; the 5.x nodes are already forced to 5.0.8 via overrides. Residual paths are exceljs>archiver@5 (internal XLSX zip paths, no user-controlled globs) and the license-checker tooling."
     }
   ]
 }
