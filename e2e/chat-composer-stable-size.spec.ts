@@ -102,8 +102,15 @@ async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
 async function composerMetrics(page: Page) {
   return page.getByTestId("chat-composer-surface").evaluate((surface) => {
     const textarea = surface.querySelector("textarea")
+    const plus = surface.querySelector(".composer-plus-liquid-button") as HTMLElement | null
+    const toolbar = surface.querySelector(".composer-toolbar-actions") as HTMLElement | null
     const rect = surface.getBoundingClientRect()
     if (!textarea) throw new Error("Composer textarea is missing")
+
+    const textareaRect = textarea.getBoundingClientRect()
+    const plusRect = plus?.getBoundingClientRect()
+    const toolbarRect = toolbar?.getBoundingClientRect()
+    const mid = (box?: DOMRect) => (box ? box.top + box.height / 2 : null)
 
     return {
       width: rect.width,
@@ -111,6 +118,9 @@ async function composerMetrics(page: Page) {
       textareaClientHeight: textarea.clientHeight,
       textareaScrollHeight: textarea.scrollHeight,
       textareaOverflowY: getComputedStyle(textarea).overflowY,
+      textareaMidY: mid(textareaRect),
+      plusMidY: mid(plusRect),
+      toolbarMidY: mid(toolbarRect),
     }
   })
 }
@@ -134,8 +144,14 @@ test("desktop composer keeps the approved size across text, attachment, tool, an
   const approved = await composerMetrics(page)
   expect(approved.width).toBeGreaterThan(820)
   expect(approved.width).toBeLessThan(835)
-  expect(approved.height).toBeGreaterThan(100)
-  expect(approved.height).toBeLessThan(106)
+  // Single-row composer: text + controls share one vertical band (~60px).
+  expect(approved.height).toBeGreaterThan(56)
+  expect(approved.height).toBeLessThan(72)
+  expect(approved.textareaMidY).not.toBeNull()
+  expect(approved.plusMidY).not.toBeNull()
+  expect(approved.toolbarMidY).not.toBeNull()
+  expect(Math.abs((approved.textareaMidY as number) - (approved.plusMidY as number))).toBeLessThanOrEqual(4)
+  expect(Math.abs((approved.textareaMidY as number) - (approved.toolbarMidY as number))).toBeLessThanOrEqual(4)
 
   const textarea = page.getByTestId("chat-composer-surface").locator("textarea")
   await textarea.fill([
