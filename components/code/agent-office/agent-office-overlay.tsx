@@ -201,7 +201,7 @@ export function AgentOfficeOverlay({
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold sm:text-base">{companyName}</span>
-            <span className="block truncate text-[11px] text-zinc-500">Terraza costera · {timeLabel}</span>
+            <span className="block truncate text-[11px] text-zinc-500">Distrito Edge · Oficina en azotea · {timeLabel}</span>
           </span>
         </div>
 
@@ -213,11 +213,11 @@ export function AgentOfficeOverlay({
                 model.activeCount > 0 ? "animate-pulse bg-sky-500" : "bg-zinc-300",
               )}
             />
-            {model.activeCount} activos
+            {model.activeCount} {model.activeCount === 1 ? "activo" : "activos"}
           </span>
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
             <Users className="h-3.5 w-3.5 text-zinc-500" />
-            {model.totalCount} agentes
+            {model.totalCount} {model.totalCount === 1 ? "agente" : "agentes"}
           </span>
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
             <Layers3 className="h-3.5 w-3.5 text-zinc-500" />
@@ -512,7 +512,8 @@ export function AgentOfficeOverlay({
 
       <div className="pointer-events-none absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-md border border-white/75 bg-white/90 px-3 py-2 text-[11px] font-medium shadow-sm backdrop-blur-xl sm:hidden">
         <span className="h-2 w-2 rounded-full bg-sky-400" />
-        {model.activeCount} activos · {model.totalCount} agentes
+        {model.activeCount} {model.activeCount === 1 ? "activo" : "activos"} · {model.totalCount}{" "}
+        {model.totalCount === 1 ? "agente" : "agentes"}
       </div>
     </div>,
     document.body,
