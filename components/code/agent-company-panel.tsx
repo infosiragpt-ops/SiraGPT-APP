@@ -1109,19 +1109,19 @@ function CompanyHome({
         <button
           type="button"
           onClick={onOpenOffice}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg border border-border/60 bg-[#e8edf0] text-left shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg border border-zinc-300/70 bg-[#dce5e9] text-left shadow-[0_12px_30px_-22px_rgba(15,23,42,0.7)] transition-shadow hover:shadow-[0_16px_34px_-20px_rgba(15,23,42,0.72)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Abrir oficina de agentes"
           data-testid="agent-company-live-preview"
         >
           <div className="pointer-events-none absolute inset-0">
             <AgentOfficeScene model={officeModel} variant="thumbnail" paused={officeOpen} />
           </div>
-          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/[0.88] px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
+          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-md border border-white/70 bg-white/[0.9] px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
             <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-zinc-400")} />
             Oficina · {officeModel.activeCount} {officeModel.activeCount === 1 ? "activo" : "activos"}
           </span>
-          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/[0.68] px-3 py-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-            <span className="truncate text-[11px] font-medium">Ver oficina de {companyName}</span>
+          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/[0.78] px-3 py-2 text-white opacity-100 backdrop-blur-sm transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-visible:opacity-100">
+            <span className="truncate text-[11px] font-medium">Entrar a la sede de {companyName}</span>
             <ChevronRight className="h-4 w-4" />
           </span>
         </button>
