@@ -167,7 +167,7 @@ export function AgentOfficeOverlay({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[140] isolate overflow-hidden bg-[#e8edf0] text-zinc-950"
+      className="fixed inset-0 z-[140] isolate overflow-hidden bg-[#dce5e9] text-zinc-950"
       role="dialog"
       aria-modal="true"
       aria-label={`Oficina de agentes de ${companyName}`}
@@ -195,14 +195,16 @@ export function AgentOfficeOverlay({
         }}
       />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex min-h-16 items-center gap-3 border-b border-white/60 bg-white/90 px-3 py-2 shadow-[0_10px_32px_-24px_rgba(15,23,42,0.7)] backdrop-blur-xl sm:px-5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex min-h-[68px] items-center gap-3 border-b border-white/65 bg-white/[0.9] px-3 py-2 shadow-[0_14px_38px_-26px_rgba(15,23,42,0.68)] backdrop-blur-xl sm:px-5">
         <div className="pointer-events-auto flex min-w-0 items-center gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white shadow-sm">
             <Building2 className="h-5 w-5" />
           </span>
-          <span className="min-w-0">
+          <span className="min-w-0 max-w-[92px] sm:max-w-[280px]">
             <span className="block truncate text-sm font-semibold sm:text-base">{companyName}</span>
-            <span className="block truncate text-[11px] text-zinc-500">Distrito Edge · Oficina en azotea · {timeLabel}</span>
+            <span className="hidden truncate text-[11px] text-zinc-500 sm:block">
+              Distrito Edge · Oficina ejecutiva · {timeLabel}
+            </span>
           </span>
         </div>
 
@@ -226,12 +228,12 @@ export function AgentOfficeOverlay({
           </span>
         </div>
 
-        <div className="pointer-events-auto flex items-center gap-1">
+        <div className="pointer-events-auto flex items-center gap-0.5 rounded-md border border-zinc-200/80 bg-white/70 p-1 shadow-sm">
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-md bg-white/70"
+            className="hidden h-10 w-10 rounded-md bg-transparent sm:inline-flex"
             onClick={() => setTimeMode((current) => nextOfficeTimeMode(current))}
             aria-label={`Ambiente ${timeLabel}. Cambiar ciclo de luz`}
             title={`Ambiente ${timeLabel}`}
@@ -252,7 +254,7 @@ export function AgentOfficeOverlay({
             variant="ghost"
             size="icon"
             className={cn(
-              "h-9 w-9 rounded-md bg-white/70",
+              "h-10 w-10 rounded-md bg-transparent",
               sound.enabled && "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white",
             )}
             onClick={sound.toggle}
@@ -284,7 +286,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-md bg-white/70"
+            className="h-10 w-10 rounded-md bg-transparent"
             onClick={() => setPaused((current) => !current)}
             aria-label={paused ? "Reanudar oficina" : "Pausar oficina"}
             title={paused ? "Reanudar oficina" : "Pausar oficina"}
@@ -295,7 +297,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className="hidden h-9 w-9 rounded-md bg-white/70 sm:inline-flex"
+            className="hidden h-10 w-10 rounded-md bg-transparent sm:inline-flex"
             onClick={() => setResetCameraKey((current) => current + 1)}
             aria-label="Restablecer cámara"
             title="Restablecer cámara"
@@ -306,7 +308,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className={cn("h-9 w-9 rounded-md bg-white/70", rosterOpen && "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white")}
+            className={cn("h-10 w-10 rounded-md bg-transparent", rosterOpen && "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white")}
             onClick={() => setRosterOpen((current) => !current)}
             aria-label="Ver agentes"
             title="Ver agentes"
@@ -317,7 +319,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-md bg-white/70"
+            className="h-10 w-10 rounded-md bg-transparent"
             onClick={onClose}
             aria-label="Cerrar oficina"
             title="Cerrar oficina"
@@ -327,12 +329,12 @@ export function AgentOfficeOverlay({
         </div>
       </header>
 
-      <div className="pointer-events-none absolute left-3 right-3 top-[74px] z-20 flex flex-wrap items-center gap-2 sm:left-5 sm:right-auto">
-        <div className="pointer-events-auto flex h-9 shrink-0 items-center rounded-md border border-white/75 bg-white/90 p-1 shadow-sm backdrop-blur-xl">
+      <div className="pointer-events-none absolute left-3 right-3 top-[78px] z-20 flex items-center gap-2 sm:left-5 sm:right-auto sm:max-w-[720px]">
+        <div className="pointer-events-auto flex h-10 shrink-0 items-center rounded-md border border-white/75 bg-white/90 p-1 shadow-sm backdrop-blur-xl">
           <button
             type="button"
             className={cn(
-              "h-7 rounded px-3 text-xs font-medium transition-colors",
+              "h-8 rounded px-3 text-xs font-medium transition-colors",
               !activeOnly ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-zinc-100",
             )}
             onClick={() => setActiveOnly(false)}
@@ -343,7 +345,7 @@ export function AgentOfficeOverlay({
           <button
             type="button"
             className={cn(
-              "h-7 rounded px-3 text-xs font-medium transition-colors",
+              "h-8 rounded px-3 text-xs font-medium transition-colors",
               activeOnly ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-zinc-100",
             )}
             onClick={() => setActiveOnly(true)}
@@ -359,7 +361,7 @@ export function AgentOfficeOverlay({
             setDepartmentId(event.target.value)
             setSelectedWorkerId(null)
           }}
-          className="pointer-events-auto h-9 max-w-[min(68vw,320px)] rounded-md border border-white/75 bg-white/90 px-3 text-xs font-medium shadow-sm outline-none backdrop-blur-xl focus:ring-2 focus:ring-zinc-950"
+          className="pointer-events-auto h-10 min-w-0 flex-1 rounded-md border border-white/75 bg-white/90 px-3 text-xs font-medium shadow-sm outline-none backdrop-blur-xl focus:ring-2 focus:ring-zinc-950 sm:w-[270px] sm:flex-none"
           aria-label="Filtrar por departamento"
         >
           <option value="all">Todos los departamentos</option>
@@ -370,7 +372,7 @@ export function AgentOfficeOverlay({
           ))}
         </select>
 
-        <div className="pointer-events-auto hidden h-9 w-32 items-center gap-2 rounded-md border border-white/75 bg-white/90 px-2.5 shadow-sm backdrop-blur-xl md:flex">
+        <div className="pointer-events-auto hidden h-10 w-32 items-center gap-2 rounded-md border border-white/75 bg-white/90 px-2.5 shadow-sm backdrop-blur-xl md:flex">
           {sound.enabled ? (
             <Volume2 className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
           ) : (

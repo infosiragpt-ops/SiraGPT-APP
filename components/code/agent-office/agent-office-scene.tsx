@@ -108,63 +108,63 @@ type PhaseLighting = {
 const PHASE_LIGHTING: Record<OfficeTimePhase, PhaseLighting> = {
   dawn: {
     sunColor: 0xffd7a8,
-    sunIntensity: 1.95,
+    sunIntensity: 2.08,
     sunPosition: [22, 13, 10],
     hemisphereSky: 0xffe6cd,
     hemisphereGround: 0x5b5a63,
-    hemisphereIntensity: 1.45,
+    hemisphereIntensity: 1.55,
     fillColor: 0xc9bcff,
-    fillIntensity: 1.05,
-    exposure: 1.07,
-    background: 0xbcd6e6,
-    fog: 0xd6cfc6,
-    horizon: 0xf2cfa8,
-    floor: 0xcbbfa4,
+    fillIntensity: 1.12,
+    exposure: 1.1,
+    background: 0xb7ccd9,
+    fog: 0xc7cfd3,
+    horizon: 0xf0cfaf,
+    floor: 0xd0d1cb,
   },
   day: {
     sunColor: 0xfff4dd,
-    sunIntensity: 2.45,
+    sunIntensity: 2.55,
     sunPosition: [-18, 28, 14],
     hemisphereSky: 0xffffff,
     hemisphereGround: 0x53606a,
-    hemisphereIntensity: 1.7,
+    hemisphereIntensity: 1.78,
     fillColor: 0xc9e7ff,
-    fillIntensity: 1.2,
-    exposure: 1.05,
-    background: 0x9fd2ea,
-    fog: 0xaed9e8,
-    horizon: 0xb9e2ef,
-    floor: 0xcfbd99,
+    fillIntensity: 1.28,
+    exposure: 1.08,
+    background: 0xadd3e2,
+    fog: 0xb9d8e2,
+    horizon: 0xd1e6eb,
+    floor: 0xd7d8d3,
   },
   dusk: {
     sunColor: 0xd8e6ff,
-    sunIntensity: 1.65,
+    sunIntensity: 1.82,
     sunPosition: [-24, 13, 8],
-    hemisphereSky: 0x92abc8,
-    hemisphereGround: 0x2c3540,
-    hemisphereIntensity: 1.45,
-    fillColor: 0x8faee0,
-    fillIntensity: 1.12,
-    exposure: 1.08,
-    background: 0x7897b8,
-    fog: 0x7088a4,
-    horizon: 0x9fb7ce,
-    floor: 0x8f989f,
+    hemisphereSky: 0xadc0d2,
+    hemisphereGround: 0x3d4851,
+    hemisphereIntensity: 1.6,
+    fillColor: 0xa5c4e8,
+    fillIntensity: 1.22,
+    exposure: 1.16,
+    background: 0x899fb7,
+    fog: 0x8195aa,
+    horizon: 0xb6c6d4,
+    floor: 0xb7bab5,
   },
   night: {
     sunColor: 0xa9c9ff,
-    sunIntensity: 1.05,
+    sunIntensity: 1.18,
     sunPosition: [-18, 28, 14],
-    hemisphereSky: 0x7ba5c5,
-    hemisphereGround: 0x07111b,
-    hemisphereIntensity: 1.3,
-    fillColor: 0x7fa5d6,
-    fillIntensity: 0.92,
-    exposure: 1.12,
-    background: 0x0b2136,
-    fog: 0x0b2136,
-    horizon: 0x0b2136,
-    floor: 0x7f898e,
+    hemisphereSky: 0x8aabc4,
+    hemisphereGround: 0x101a22,
+    hemisphereIntensity: 1.42,
+    fillColor: 0x8eb2dc,
+    fillIntensity: 1.02,
+    exposure: 1.18,
+    background: 0x10293f,
+    fog: 0x173047,
+    horizon: 0x294a61,
+    floor: 0x737c80,
   },
 }
 
@@ -198,23 +198,23 @@ function addDesk(sceneGroup: THREE.Group, x: number, z: number, active: boolean)
   desk.position.set(x, 0, z)
 
   const desktop = new THREE.Mesh(
-    new THREE.BoxGeometry(1.75, 0.14, 0.78),
-    material(0x15314b, 0.58, 0.08),
+    new THREE.BoxGeometry(1.82, 0.12, 0.84),
+    material(0x314653, 0.46, 0.14),
   )
   desktop.position.y = 0.82
   desk.add(desktop)
 
-  const legMaterial = material(0x1f2937, 0.8)
+  const legMaterial = material(0x27313a, 0.56, 0.34)
   for (const legX of [-0.68, 0.68]) {
     for (const legZ of [-0.25, 0.25]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.75, 0.08), legMaterial)
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.75, 0.065), legMaterial)
       leg.position.set(legX, 0.4, legZ)
       desk.add(leg)
     }
   }
 
   const monitorBack = new THREE.Mesh(
-    new THREE.BoxGeometry(0.8, 0.52, 0.08),
+    new THREE.BoxGeometry(0.86, 0.54, 0.07),
     material(0x172033, 0.45, 0.15),
   )
   monitorBack.position.set(0, 1.28, -0.22)
@@ -227,13 +227,53 @@ function addDesk(sceneGroup: THREE.Group, x: number, z: number, active: boolean)
     emissiveIntensity: active ? 1.1 : 0.2,
     roughness: 0.38,
   })
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.68, 0.4), screenMaterial)
-  screen.position.set(0, 1.28, -0.175)
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.43), screenMaterial)
+  screen.position.set(0, 1.28, -0.18)
   desk.add(screen)
 
   const stand = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.35, 0.07), legMaterial)
   stand.position.set(0, 1.03, -0.18)
   desk.add(stand)
+
+  const monitorBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.23, 0.035, 16),
+    legMaterial,
+  )
+  monitorBase.position.set(0, 0.91, -0.18)
+  desk.add(monitorBase)
+
+  const deskPad = new THREE.Mesh(
+    new THREE.BoxGeometry(1.02, 0.018, 0.35),
+    material(0x17222c, 0.9),
+  )
+  deskPad.position.set(0, 0.895, 0.16)
+  desk.add(deskPad)
+
+  const keyboard = new THREE.Mesh(
+    new THREE.BoxGeometry(0.56, 0.025, 0.17),
+    material(0xdce4e7, 0.72, 0.08),
+  )
+  keyboard.position.set(0, 0.92, 0.13)
+  desk.add(keyboard)
+
+  const taskLight = new THREE.Mesh(
+    new THREE.BoxGeometry(0.09, 0.32, 0.09),
+    material(0x82939d, 0.52, 0.35),
+  )
+  taskLight.position.set(0.68, 1.04, -0.08)
+  taskLight.rotation.z = -0.22
+  desk.add(taskLight)
+
+  const lampGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 10, 8),
+    new THREE.MeshBasicMaterial({
+      color: active ? 0xc9f3ff : 0xf4dfad,
+      transparent: true,
+      opacity: active ? 0.9 : 0.55,
+    }),
+  )
+  lampGlow.position.set(0.72, 1.2, -0.08)
+  desk.add(lampGlow)
 
   sceneGroup.add(desk)
   return screen
@@ -259,24 +299,33 @@ function addChair(sceneGroup: THREE.Group, x: number, z: number) {
 function createWorkerLabel(worker: AgentOfficeWorker) {
   const canvas = document.createElement("canvas")
   canvas.width = 640
-  canvas.height = 144
+  canvas.height = 132
   const context = canvas.getContext("2d")
   if (!context) return null
 
-  context.fillStyle = "rgba(255, 255, 255, 0.96)"
+  context.fillStyle = "rgba(10, 19, 30, 0.9)"
   context.beginPath()
-  context.roundRect(10, 10, 620, 124, 24)
+  context.roundRect(10, 10, 620, 112, 20)
   context.fill()
-  context.strokeStyle = "rgba(15, 23, 42, 0.14)"
-  context.lineWidth = 3
+  context.strokeStyle = "rgba(180, 221, 232, 0.46)"
+  context.lineWidth = 2
   context.stroke()
 
-  context.fillStyle = "#111827"
-  context.font = "600 38px Inter, system-ui, sans-serif"
-  context.fillText(worker.name.slice(0, 27), 38, 62)
-  context.fillStyle = worker.active ? "#0284c7" : "#64748b"
-  context.font = "500 28px Inter, system-ui, sans-serif"
-  context.fillText(worker.statusLabel.slice(0, 34), 38, 105)
+  context.fillStyle =
+    worker.statusTone === "attention"
+      ? "#fbbf24"
+      : worker.active
+        ? "#38bdf8"
+        : "#34d399"
+  context.beginPath()
+  context.arc(42, 66, 9, 0, Math.PI * 2)
+  context.fill()
+  context.fillStyle = "#f8fafc"
+  context.font = "600 34px Inter, system-ui, sans-serif"
+  context.fillText(worker.name.slice(0, 25), 68, 59)
+  context.fillStyle = "#a9bac8"
+  context.font = "500 24px Inter, system-ui, sans-serif"
+  context.fillText(worker.statusLabel.slice(0, 34), 68, 94)
 
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
@@ -289,8 +338,8 @@ function createWorkerLabel(worker: AgentOfficeWorker) {
       depthWrite: false,
     }),
   )
-  sprite.scale.set(2.65, 0.6, 1)
-  sprite.position.set(0, 2.26, 0)
+  sprite.scale.set(2.38, 0.49, 1)
+  sprite.position.set(0, 2.34, 0)
   sprite.renderOrder = 20
   return sprite
 }
@@ -328,6 +377,27 @@ function addWorker({
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.5, 6, 12), bodyMaterial)
   body.position.y = 1.23
   group.add(body)
+
+  const shirtFront = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.32, 0.025),
+    material(0xe8eef1, 0.82),
+  )
+  shirtFront.position.set(0, 1.39, 0.246)
+  group.add(shirtFront)
+
+  const badge = new THREE.Mesh(
+    new THREE.BoxGeometry(0.095, 0.13, 0.02),
+    new THREE.MeshBasicMaterial({ color: STATUS_COLORS[worker.statusTone] }),
+  )
+  badge.position.set(0.13, 1.43, 0.267)
+  group.add(badge)
+
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.085, 0.095, 0.17, 10),
+    skinMaterial,
+  )
+  neck.position.y = 1.68
+  group.add(neck)
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 14, 10), skinMaterial)
   head.position.y = 1.82
@@ -553,6 +623,7 @@ export function AgentOfficeScene({
     // the other can never light a starfield with a sunset.
     const resolvedTimeOfDay: OfficeTimeOfDay = resolvedPhase === "night" ? "night" : "day"
     const night = resolvedTimeOfDay === "night"
+    const interiorLighting = night || resolvedPhase === "dusk" || resolvedPhase === "dawn"
     const light = PHASE_LIGHTING[resolvedPhase]
 
     let renderer: THREE.WebGLRenderer
@@ -573,9 +644,11 @@ export function AgentOfficeScene({
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = light.exposure
     renderer.setClearColor(light.fog, 1)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, variant === "thumbnail" ? 1 : 1.5))
+    const pixelRatioCap =
+      variant === "thumbnail" ? 1 : window.innerWidth < 640 ? 1.35 : 1.7
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioCap))
     renderer.shadowMap.enabled = variant === "full"
-    renderer.shadowMap.type = THREE.PCFShadowMap
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap
     renderer.domElement.className = "block h-full w-full touch-none"
     renderer.domElement.setAttribute("aria-label", "Oficina 3D de agentes y departamentos")
     renderer.domElement.dataset.officeCanvas = variant
@@ -583,7 +656,7 @@ export function AgentOfficeScene({
 
     const scene = new THREE.Scene()
 
-    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 220)
+    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 280)
     const target = new THREE.Vector3(0, 0, 0)
     let yaw = -0.72
     let pitch = 0.72
@@ -637,6 +710,8 @@ export function AgentOfficeScene({
     const resetCamera = () => {
       const aspect = Math.max(0.35, host.clientWidth / Math.max(1, host.clientHeight))
       const portraitMix = 1 - THREE.MathUtils.smoothstep(aspect, 0.62, 1.12)
+      camera.fov = THREE.MathUtils.lerp(36, variant === "thumbnail" ? 48 : 54, portraitMix)
+      camera.updateProjectionMatrix()
       yaw = edgeDistrict.framing.yaw
       pitch = edgeDistrict.framing.pitch
       distance = THREE.MathUtils.lerp(
@@ -645,6 +720,7 @@ export function AgentOfficeScene({
         portraitMix,
       )
       target.copy(edgeDistrict.framing.target)
+      target.y += portraitMix * 2.8
       updateCamera()
     }
     resetCameraRef.current = resetCamera
@@ -665,15 +741,30 @@ export function AgentOfficeScene({
       sun.shadow.camera.right = 30
       sun.shadow.camera.top = 30
       sun.shadow.camera.bottom = -30
+      sun.shadow.bias = -0.00018
+      sun.shadow.normalBias = 0.025
+      sun.shadow.radius = 2
     }
     scene.add(sun)
     const fill = new THREE.DirectionalLight(light.fillColor, light.fillIntensity)
     fill.position.set(18, 12, -16)
     scene.add(fill)
+    const rim = new THREE.DirectionalLight(
+      resolvedPhase === "dusk" || night ? 0x8dd8ea : 0xdff7ff,
+      resolvedPhase === "dusk" || night ? 0.72 : 0.46,
+    )
+    rim.position.set(-22, 9, -24)
+    scene.add(rim)
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 10, totalDepth + 10),
-      material(light.floor, 0.92),
+      new THREE.MeshPhysicalMaterial({
+        color: light.floor,
+        roughness: 0.72,
+        metalness: 0.08,
+        clearcoat: 0.16,
+        clearcoatRoughness: 0.58,
+      }),
     )
     floor.rotation.x = -Math.PI / 2
     floor.position.y = -0.08
@@ -687,6 +778,19 @@ export function AgentOfficeScene({
     aisle.rotation.x = -Math.PI / 2
     aisle.position.set(0, -0.035, totalDepth / 2 + 1.6)
     scene.add(aisle)
+
+    const aisleAccent = new THREE.Mesh(
+      new THREE.PlaneGeometry(totalWidth + 5.2, 0.075),
+      new THREE.MeshBasicMaterial({
+        color: interiorLighting ? 0x77d6e6 : 0x4f8793,
+        transparent: true,
+        opacity: interiorLighting ? 0.88 : 0.54,
+      }),
+    )
+    aisleAccent.rotation.x = -Math.PI / 2
+    aisleAccent.position.set(0, -0.018, totalDepth / 2 + 1.6)
+    aisleAccent.renderOrder = 4
+    scene.add(aisleAccent)
 
     const workers: WorkerAnimation[] = []
     const departmentAnimations: DepartmentAnimation[] = []
@@ -702,8 +806,8 @@ export function AgentOfficeScene({
 
       const working = department.activeCount > 0
       let workLight: THREE.PointLight | null = null
-      const workLightIntensity = working ? 8.5 : 5.5
-      if (night) {
+      const workLightIntensity = working ? (night ? 8.2 : 5.6) : night ? 4.8 : 3.4
+      if (interiorLighting) {
         workLight = new THREE.PointLight(
           working ? 0xddeaff : 0xffd7a1,
           workLightIntensity,
@@ -716,7 +820,7 @@ export function AgentOfficeScene({
 
       const carpet = new THREE.Mesh(
         new THREE.BoxGeometry(zoneWidth, 0.12, zoneDepth),
-        material(departmentIndex === 0 ? 0x414b54 : 0x4f5961, 0.96),
+        material(departmentIndex === 0 ? 0x34414b : 0x4f5a61, 0.86, 0.02),
       )
       carpet.position.y = -0.01
       carpet.receiveShadow = variant === "full"
@@ -725,6 +829,26 @@ export function AgentOfficeScene({
       selectables.push(carpet)
 
       const stripeColor = ACTIVITY_COLORS[department.workers[0]?.activity || (department.id === "ceo-office" ? "coordination" : "software")]
+      const zoneEdgeMaterial = new THREE.MeshStandardMaterial({
+        color: departmentIndex === 0 ? 0xb9dce4 : 0x8f9ca2,
+        roughness: 0.48,
+        metalness: 0.24,
+      })
+      const zoneEdges = [
+        { x: 0, z: -zoneDepth / 2, width: zoneWidth, depth: 0.07 },
+        { x: 0, z: zoneDepth / 2, width: zoneWidth, depth: 0.07 },
+        { x: -zoneWidth / 2, z: 0, width: 0.07, depth: zoneDepth },
+        { x: zoneWidth / 2, z: 0, width: 0.07, depth: zoneDepth },
+      ]
+      zoneEdges.forEach((edge) => {
+        const trim = new THREE.Mesh(
+          new THREE.BoxGeometry(edge.width, 0.045, edge.depth),
+          zoneEdgeMaterial,
+        )
+        trim.position.set(edge.x, 0.075, edge.z)
+        departmentGroup.add(trim)
+      })
+
       const stripe = new THREE.Mesh(
         new THREE.BoxGeometry(zoneWidth - 0.45, 0.025, 0.12),
         new THREE.MeshBasicMaterial({ color: stripeColor }),
@@ -756,7 +880,9 @@ export function AgentOfficeScene({
             workerIndex: workers.length,
             zoneWidth,
             zoneDepth,
-            showLabel: variant === "full",
+            showLabel:
+              variant === "full" &&
+              (worker.active || worker.statusTone === "attention"),
           })
           animation.screen = screen
           workers.push(animation)
@@ -787,6 +913,40 @@ export function AgentOfficeScene({
       tagObject(boardLight, { departmentId: department.id })
       departmentGroup.add(boardLight)
       selectables.push(boardLight)
+
+      const boardWidth = Math.min(3.25, zoneWidth - 1.45)
+      for (let lineIndex = 0; lineIndex < 3; lineIndex += 1) {
+        const line = new THREE.Mesh(
+          new THREE.PlaneGeometry(boardWidth * (0.7 - lineIndex * 0.09), 0.055),
+          new THREE.MeshBasicMaterial({
+            color: lineIndex === 0 ? 0xf5fbff : 0xc8e0e7,
+            transparent: true,
+            opacity: working ? 0.82 : 0.42,
+            depthWrite: false,
+          }),
+        )
+        line.position.set(
+          -boardWidth * (0.08 + lineIndex * 0.025),
+          1.45 - lineIndex * 0.27,
+          -zoneDepth / 2 + 0.472,
+        )
+        departmentGroup.add(line)
+      }
+      const boardStatus = new THREE.Mesh(
+        new THREE.CircleGeometry(0.1, 18),
+        new THREE.MeshBasicMaterial({
+          color: working ? STATUS_COLORS.active : STATUS_COLORS.ready,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+        }),
+      )
+      boardStatus.position.set(
+        boardWidth * 0.37,
+        1.52,
+        -zoneDepth / 2 + 0.476,
+      )
+      departmentGroup.add(boardStatus)
 
       // Shift-work pulse on the carpet. It only ever runs for a department
       // with live agents, so "this floor started working" reads from across
@@ -1138,7 +1298,7 @@ export function AgentOfficeScene({
       ref={hostRef}
       className={cn(
         "relative h-full min-h-0 w-full overflow-hidden",
-        timeOfDay === "night" ? "bg-[#0b2136]" : "bg-[#aed9e8]",
+        timeOfDay === "night" ? "bg-[#173047]" : "bg-[#b9d8e2]",
         className,
       )}
       data-testid={variant === "thumbnail" ? "agent-office-thumbnail" : "agent-office-scene"}
