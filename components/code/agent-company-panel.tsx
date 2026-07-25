@@ -286,6 +286,7 @@ export function AgentCompanyPanel() {
   const [checkpointCount, setCheckpointCount] = React.useState(0)
   const [codexAccess, setCodexAccess] = React.useState<CodexAccess | null>(null)
   const companyRuntimePromisesRef = React.useRef<Map<string, Promise<string>>>(new Map())
+  const proactiveMutationVersionRef = React.useRef(0)
 
   React.useEffect(() => {
     let alive = true
@@ -300,6 +301,7 @@ export function AgentCompanyPanel() {
         return
       }
       refreshing = true
+      const mutationVersion = proactiveMutationVersionRef.current
       const codexProjectId = getActiveCodexProject()
       try {
         if (!codexProjectId) {
@@ -322,7 +324,10 @@ export function AgentCompanyPanel() {
         if (accessResult.status === "fulfilled") setCodexAccess(accessResult.value)
         if (runsResult.status === "fulfilled") setCodexRuns(runsResult.value)
         if (checkpointsResult.status === "fulfilled") setCheckpointCount(checkpointsResult.value.length)
-        if (proactiveResult.status === "fulfilled") {
+        if (
+          proactiveResult.status === "fulfilled" &&
+          mutationVersion === proactiveMutationVersionRef.current
+        ) {
           const nextState = proactiveResult.value.state || EMPTY_PROACTIVE_STATE
           const enabled = Boolean(nextState.enabled)
           setProactiveState(nextState)
@@ -644,12 +649,14 @@ export function AgentCompanyPanel() {
     }
 
     setProactiveBusy(true)
+    proactiveMutationVersionRef.current += 1
     try {
       if (!codexProjectId) {
         codexProjectId = await ensureCompanyRuntime()
       }
       const r = await codexApi.setProactive(codexProjectId, next)
       const enabled = Boolean(r.state?.enabled)
+      proactiveMutationVersionRef.current += 1
       setProactiveState(r.state || EMPTY_PROACTIVE_STATE)
       setProactiveOn(enabled)
       setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })

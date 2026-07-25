@@ -359,11 +359,20 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   ).toBeGreaterThan(2)
 
   const timeToggle = page.getByTestId("agent-office-time-toggle")
+  await expect(timeToggle).toHaveAttribute(
+    "aria-label",
+    /Ambiente Auto · (Amanecer|Día|Atardecer|Noche)\. Cambiar ciclo de luz/,
+  )
   await timeToggle.click()
+  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "day")
+  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-day.png"), fullPage: true })
   await timeToggle.click()
   await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "dusk")
-  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-dusk.png"), fullPage: true })
+  await timeToggle.click()
+  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "night")
+  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
+  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-night.png"), fullPage: true })
 
   const settledWorkerPoint = await officeCanvas.evaluate((canvas) => ({
     x: Number(canvas.dataset.firstWorkerX),
