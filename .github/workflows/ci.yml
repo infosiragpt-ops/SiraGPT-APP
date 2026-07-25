@@ -314,10 +314,14 @@ jobs:
       # enforce repository-wide minimums.
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }}) with coverage
         if: matrix.shard == 1
+        env:
+          NODE_ENV: test
         run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
         if: matrix.shard != 1
+        env:
+          NODE_ENV: test
         run: bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Upload coverage report
