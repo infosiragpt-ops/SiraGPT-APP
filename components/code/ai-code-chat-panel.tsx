@@ -134,6 +134,7 @@ import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi } from "@/lib/codex/codex-api"
+import { runWhenCodexProjectIdle } from "@/lib/codex/run-slot"
 import {
   clearSessionCodexProject,
   clearWorkspaceCodexProject,
@@ -3021,6 +3022,32 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           }),
         })
 
+      const runWithProjectSlot = <T,>(projectId: string, operation: () => Promise<T>) =>
+        runWhenCodexProjectIdle({
+          projectId,
+          operation,
+          listRuns: codexApi.listRuns,
+          signal: controller.signal,
+          onWait: (activeRun) => {
+            const status =
+              activeRun?.status === "waiting_approval"
+                ? "esperando aprobación"
+                : activeRun?.status === "queued"
+                  ? "en cola"
+                  : "trabajando"
+            setEnginePhase(
+              "En cola con CEO Office",
+              buildCodeAgentPhases("context", {
+                plan: { status: "done", detail: "Solicitud recibida" },
+                context: {
+                  status: "running",
+                  detail: `Otro departamento está ${status}; este turno conserva su lugar`,
+                },
+              }),
+            )
+          },
+        })
+
       try {
         // 1) Ensure ONE Codex project per chat session. The in-memory ref is a
         //    fast cache; localStorage is the durable record so a reload does
@@ -3075,7 +3102,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           const workspaceFiles = collectWorkspaceFilesForImport(files)
           if (workspaceFiles.length > 0) {
             try {
-              await codexApi.importFiles(projectId, workspaceFiles)
+              await runWithProjectSlot(projectId, () =>
+                codexApi.importFiles(projectId, workspaceFiles),
+              )
             } catch (err: any) {
               if (cancelledTurn()) {
                 finishStopped()
@@ -3104,17 +3133,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
         // 2) Start a `plan` run for the user's order. Codex requires a plan run
         //    before a build; the plan auto-approves into build below.
-        const planRun = await codexApi.createRun(projectId, {
-          mode: "plan",
-          // APPS-mode envelope → backend forces the Vite SPA stack + runs the
-          // ensureAppsVitePreviewable auto-repair, so the generated app opens in
-          // the preview instead of an error overlay (root cause of the overlays).
-          prompt: buildAppsModePrompt(text),
-          model: activeModelName || undefined,
-          // The runs API speaks eco|standard|power — a provider name here used
-          // to reach the backend as an unknown tier and always fell to Eco.
-          tier: tierForModelChoice(activeProvider, activeModelName),
-        })
+        const planRun = await runWithProjectSlot(projectId, () =>
+          codexApi.createRun(projectId, {
+            mode: "plan",
+            // APPS-mode envelope → backend forces the Vite SPA stack + runs the
+            // ensureAppsVitePreviewable auto-repair, so the generated app opens in
+            // the preview instead of an error overlay (root cause of the overlays).
+            prompt: buildAppsModePrompt(text),
+            model: activeModelName || undefined,
+            // The runs API speaks eco|standard|power — a provider name here used
+            // to reach the backend as an unknown tier and always fell to Eco.
+            tier: tierForModelChoice(activeProvider, activeModelName),
+          }),
+        )
 
         setEnginePhase(
           "Generando con Agente Codex",

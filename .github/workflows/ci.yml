@@ -259,8 +259,16 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
+      - name: Setup Python document runtime
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install DOCX test dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir 'python-docx>=1.1.0'
 
       - name: Configure Redis for auth-security readiness
         run: |
@@ -314,10 +322,14 @@ jobs:
       # enforce repository-wide minimums.
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }}) with coverage
         if: matrix.shard == 1
+        env:
+          NODE_ENV: test
         run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
         if: matrix.shard != 1
+        env:
+          NODE_ENV: test
         run: bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Upload coverage report

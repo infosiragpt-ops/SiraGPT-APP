@@ -131,3 +131,72 @@ final result: passed
 - Mobile remains a single usable Empresa/Preview surface.
 
 final result: passed
+
+---
+
+# /code Modern Rooftop City Design QA
+
+**Comparison Target**
+
+- Source visual truth: `/var/folders/0q/r8jm0bhd3pb0pqjd2xj2xmj80000gn/T/TemporaryItems/NSIRD_screencaptureui_UHPovE/Captura de pantalla 2026-07-25 a la(s) 10.25.45 a. m..png`
+- Browser-rendered implementation: `docs/audits/agent-office-city-desktop.png`
+- Mobile implementation evidence: `docs/audits/agent-office-city-mobile.png`
+- Full-view comparison input: `/tmp/agent-office-city-comparison-final.png`
+- Viewport: `1425 x 810` CSS px, desktop Chromium, device scale factor `1`
+- Source pixels: `1282 x 740`
+- Implementation pixels: `1425 x 810`
+- Normalization: both sides center-cropped/resized to `1282 x 740`; a 24 px white separator distinguishes the artifacts.
+- State: `/code`, office overlay open, manual `Atardecer`, 10 departments, 4 visible agents, 1 active agent.
+- Scope note: the source is environmental art direction, not a UI mock. The implementation therefore preserves SiraGPT's existing low-poly interactive office identity while matching the source's elevated rooftop, cool dusk skyline, illuminated towers, and glass perimeter.
+
+**Findings**
+
+- No actionable P0, P1, or P2 findings remain.
+- Typography: the reference contains video titles rather than product UI. The implementation correctly retains SiraGPT's existing interface type hierarchy, neutral letter spacing, compact labels, and readable status chips.
+- Spacing and layout: the full-bleed 3D scene stays behind a 64 px command bar; filters remain reachable; the rooftop departments and labels do not overlap persistent controls at desktop or mobile widths.
+- Colors and tokens: the final dusk state uses cool blue-gray sky/fog, dark glass towers, and illuminated windows consistent with the selected skyline. Agent and department status colors remain semantic.
+- Image quality and asset fidelity: the environment is a live Three.js scene, not a stretched raster or placeholder. It includes a deep segmented office tower, 19 district buildings, 10 moving vehicles, 26 trees, a road grid, rooftop glass, animated water, and real worker rigs.
+- Copy and content: the header identifies the company and resolved time phase; counts are computed from current departments/runs; worker labels expose real task status.
+- Interaction and accessibility: time cycling, mute, pause/resume, camera reset, agent selection, department filtering, active-only filtering, keyboard escape, and reduced-motion behavior are implemented.
+- Responsive behavior: the `390 x 844` mobile run has no horizontal overflow and keeps the close, sound, pause, roster, and filtering controls available.
+
+**Comparison History**
+
+1. Initial implementation evidence: warm-orange dusk capture from the first desktop QA run.
+   - [P1] The orange environment did not match the source's cool evening skyline.
+   - [P2] A single city deck visually flattened the river and made the city read as a backdrop.
+   - [P2] Completed/available workers remained static, weakening the requested sense of a staffed office.
+2. Fixes applied:
+   - Rebuilt dusk lighting with cool blue-gray sky, fog, floor, and fill light.
+   - Switched city facades to illuminated evening windows during dusk.
+   - Preserved the instanced Edge district from PR #98 and deepened the main tower from the rooftop to the urban ground plane.
+   - Raised the background skyline and expanded the full scene to 19 buildings without increasing the instanced draw-call budget.
+   - Added a deterministic walking route for available workers while active agents type and review-blocked agents pace.
+   - Pulled both cameras back to show the rooftop office, tower body, roads, and surrounding skyline together.
+3. Post-fix evidence:
+   - `docs/audits/agent-office-city-desktop.png`
+   - `/tmp/agent-office-city-comparison-final.png`
+   - Desktop canvas checks passed: nonblank pixel range, visible colored pixels, animated frame delta, moving worker delta, 19 buildings, 10 city movers, rooftop marker.
+   - Mobile overflow and office rendering checks passed.
+   - Primary interactions tested: open office, switch to dusk, pause/resume, select worker, open roster, close office, open Controlar, open Recursos.
+   - Browser console errors checked: `0`.
+
+**Open Questions**
+
+- None blocking. Photorealism was not used because the product's existing office and worker system is intentionally interactive and low-poly; using a static city photograph would remove camera, worker, time, and activity behavior.
+
+**Implementation Checklist**
+
+- [x] Modern skyline and landmark tower cluster
+- [x] Office visibly located on the main tower roof
+- [x] Real-time dawn/day/dusk/night and manual presentation cycle
+- [x] Animated agents, water, road traffic, and illuminated windows
+- [x] Desktop/mobile canvas and overflow validation
+- [x] CEO Office queue behavior for concurrent department runs
+- [x] Facebook, LinkedIn, and X resource controls retained and exercised
+
+**Follow-up Polish**
+
+- [P3] A later art pass can add stronger water reflections without changing the worker/runtime contract.
+
+final result: passed

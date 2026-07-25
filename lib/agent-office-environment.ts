@@ -1,12 +1,12 @@
-export type OfficeTimeMode = "auto" | "day" | "night"
-export type OfficeTimeOfDay = Exclude<OfficeTimeMode, "auto">
+export type OfficeTimePhase = "dawn" | "day" | "dusk" | "night"
+export type OfficeTimeMode = "auto" | OfficeTimePhase
+export type OfficeTimeOfDay = "day" | "night"
 /**
  * Finer-grained lighting phase. It is always a strict refinement of
  * `OfficeTimeOfDay` — "dawn"/"dusk" only ever occur inside the daylight
  * window — so the scene can warm up the light without ever contradicting the
  * day/night structure (sky, stars, interior lamps).
  */
-export type OfficeTimePhase = "dawn" | "day" | "dusk" | "night"
 
 export const OFFICE_DAY_START_HOUR = 6
 export const OFFICE_NIGHT_START_HOUR = 18
@@ -39,12 +39,14 @@ export function resolveOfficeTimeOfDay(
   mode: OfficeTimeMode,
   date = new Date(),
 ): OfficeTimeOfDay {
-  return mode === "auto" ? officeTimeOfDay(date) : mode
+  if (mode === "auto") return officeTimeOfDay(date)
+  return mode === "night" ? "night" : "day"
 }
 
 export function nextOfficeTimeMode(mode: OfficeTimeMode): OfficeTimeMode {
   if (mode === "auto") return "day"
-  if (mode === "day") return "night"
+  if (mode === "day") return "dusk"
+  if (mode === "dusk") return "night"
   return "auto"
 }
 
@@ -53,6 +55,8 @@ export function officeTimeModeLabel(
   resolved: OfficeTimeOfDay,
 ): string {
   if (mode === "auto") return resolved === "day" ? "Auto · Día" : "Auto · Noche"
+  if (mode === "dawn") return "Amanecer"
+  if (mode === "dusk") return "Atardecer"
   return resolved === "day" ? "Día" : "Noche"
 }
 

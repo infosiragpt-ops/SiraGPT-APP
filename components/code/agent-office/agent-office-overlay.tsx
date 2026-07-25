@@ -7,6 +7,7 @@ import {
   ArrowUpRight,
   Building2,
   CircleAlert,
+  CloudSun,
   Clock3,
   Layers3,
   Loader2,
@@ -238,6 +239,8 @@ export function AgentOfficeOverlay({
           >
             {timeMode === "auto" ? (
               <Clock3 className="h-4 w-4" />
+            ) : timeMode === "dusk" || timeMode === "dawn" ? (
+              <CloudSun className="h-4 w-4" />
             ) : timeOfDay === "day" ? (
               <Sun className="h-4 w-4" />
             ) : (

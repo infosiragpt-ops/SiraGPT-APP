@@ -1,6 +1,9 @@
 import * as THREE from "three"
 
-import type { OfficeTimeOfDay } from "@/lib/agent-office-environment"
+import type {
+  OfficeTimeOfDay,
+  OfficeTimePhase,
+} from "@/lib/agent-office-environment"
 
 export type EdgeDistrictVariant = "full" | "thumbnail"
 
@@ -50,6 +53,7 @@ export type AddEdgeDistrictOptions = {
   totalWidth: number
   totalDepth: number
   timeOfDay: OfficeTimeOfDay
+  timePhase?: OfficeTimePhase
   light: EdgeDistrictLight
   variant: EdgeDistrictVariant
 }
@@ -298,14 +302,15 @@ export function addEdgeDistrict({
   totalWidth,
   totalDepth,
   timeOfDay,
+  timePhase,
   light,
   variant,
 }: AddEdgeDistrictOptions): EdgeDistrictResult {
-  const night = timeOfDay === "night"
+  const night = timeOfDay === "night" || timePhase === "dusk"
   const random = seededRandom(
     0x5eeda11 + Math.round(totalWidth * 17) + Math.round(totalDepth * 29) + (variant === "full" ? 101 : 7),
   )
-  const groundY = -13.4
+  const groundY = -20.4
   const officeY = 0
   const districtHalfWidth = Math.max(58, totalWidth + 28)
   const districtHalfDepth = Math.max(44, totalDepth + 25)
@@ -474,7 +479,7 @@ export function addEdgeDistrict({
     },
   )
 
-  const secondaryCount = variant === "full" ? 16 : 7
+  const secondaryCount = variant === "full" ? 18 : 9
   const normalizedLots: Array<[number, number]> = [
     [-0.54, -0.64],
     [0, -0.76],
@@ -503,8 +508,17 @@ export function addEdgeDistrict({
     const [normalizedX, normalizedZ] = normalizedLots[index]
     const width = 6.2 + random() * 5.4
     const depth = 6 + random() * 5.2
-    const foregroundPenalty = normalizedZ > 0.2 ? 2.8 : 0
-    const height = Math.max(5.2, 7.4 + random() * 5.4 - foregroundPenalty)
+    const foregroundPenalty = normalizedZ > 0.2 ? 4.4 : 0
+    const skylineBoost =
+      normalizedZ < -0.25
+        ? 8 + random() * 13
+        : normalizedZ < 0.2
+          ? 2.5 + random() * 5.5
+          : 0
+    const height = Math.max(
+      7.2,
+      9 + random() * 8 + skylineBoost - foregroundPenalty,
+    )
     const x = normalizedX * districtHalfWidth + (random() - 0.5) * 2.2
     const z = normalizedZ * districtHalfDepth + (random() - 0.5) * 2
     const palette = night ? nightBuildingColors : dayBuildingColors
@@ -927,8 +941,8 @@ export function addEdgeDistrict({
 
   const baseDistance =
     variant === "thumbnail"
-      ? Math.max(42, totalWidth * 1.2, totalDepth * 1.55)
-      : Math.max(48, totalWidth * 1.35, totalDepth * 1.7)
+      ? Math.max(50, totalWidth * 1.35, totalDepth * 1.7)
+      : Math.max(56, totalWidth * 1.5, totalDepth * 1.85)
   const landscapeDistance = variant === "thumbnail" ? baseDistance * 0.93 : baseDistance
   const portraitDistance = landscapeDistance * 1.52
 

@@ -25,6 +25,7 @@ test("officeTimeOfDay follows the local daytime window", () => {
 
 test("manual office time mode overrides the local clock", () => {
   assert.equal(resolveOfficeTimeOfDay("day", localDate(23)), "day")
+  assert.equal(resolveOfficeTimeOfDay("dusk", localDate(23)), "day")
   assert.equal(resolveOfficeTimeOfDay("night", localDate(12)), "night")
   assert.equal(resolveOfficeTimeOfDay("auto", localDate(12)), "day")
 })
@@ -55,6 +56,7 @@ test("officeTimePhase never contradicts the day/night structure", () => {
 test("manual office time mode also pins the lighting phase", () => {
   assert.equal(resolveOfficeTimePhase("auto", localDate(17)), "dusk")
   assert.equal(resolveOfficeTimePhase("day", localDate(23)), "day")
+  assert.equal(resolveOfficeTimePhase("dusk", localDate(12)), "dusk")
   assert.equal(resolveOfficeTimePhase("night", localDate(12)), "night")
 })
 
@@ -67,8 +69,10 @@ test("phase labels name the resolved moment in the header", () => {
 
 test("office time control cycles and exposes a concise visible label", () => {
   assert.equal(nextOfficeTimeMode("auto"), "day")
-  assert.equal(nextOfficeTimeMode("day"), "night")
+  assert.equal(nextOfficeTimeMode("day"), "dusk")
+  assert.equal(nextOfficeTimeMode("dusk"), "night")
   assert.equal(nextOfficeTimeMode("night"), "auto")
   assert.equal(officeTimeModeLabel("auto", "night"), "Auto · Noche")
   assert.equal(officeTimeModeLabel("day", "day"), "Día")
+  assert.equal(officeTimeModeLabel("dusk", "day"), "Atardecer")
 })

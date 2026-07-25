@@ -72,7 +72,7 @@ async function mockMatrixCompany(
   page: Page,
   { linkedProject = true }: { linkedProject?: boolean } = {},
 ) {
-  const operations = { projectCreates: 0, proactiveToggles: 0 }
+  const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0 }
   await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject }) => {
     const ceoSession = {
       id: "ceo-qa",
@@ -175,6 +175,65 @@ async function mockMatrixCompany(
         monthlyLimit: 100_000,
       })
     }
+    if (path === "/social-posts/operations" && request.method() === "GET") {
+      return fulfillJson(route, {
+        policy: {
+          enabled: false,
+          mode: "review",
+          autopilot: false,
+          objective: "Publicar avances del producto con evidencia verificable.",
+          dailyLimit: 3,
+          platforms: { facebook: true, linkedin: true, x: true },
+          workspaceId: "matrix-qa",
+          updatedAt: now,
+        },
+        providers: [
+          {
+            platform: "facebook",
+            label: "Facebook",
+            configured: true,
+            scopes: ["pages_manage_posts"],
+            supports: { text: true, remoteImage: true, generatedImage: true },
+            connection: {
+              id: "social-facebook",
+              platform: "facebook",
+              accountId: "page-qa",
+              accountName: "SiraGPT",
+              profile: { status: "active", kind: "page" },
+              scopes: ["pages_manage_posts"],
+              expiresAt: null,
+              updatedAt: now,
+              connected: true,
+            },
+          },
+          ...(["linkedin", "x"] as const).map((platform) => ({
+            platform,
+            label: platform === "linkedin" ? "LinkedIn" : "X",
+            configured: true,
+            scopes: [],
+            supports: { text: true, remoteImage: true, generatedImage: true },
+            connection: null,
+          })),
+        ],
+        metrics: { queued: 2, publishedToday: 1 },
+      })
+    }
+    if (path === "/social-posts/operations/policy" && request.method() === "PATCH") {
+      operations.socialPolicyUpdates += 1
+      const body = request.postDataJSON()
+      return fulfillJson(route, {
+        policy: {
+          enabled: Boolean(body.enabled),
+          mode: body.mode === "auto" ? "auto" : "review",
+          autopilot: Boolean(body.autopilot),
+          objective: String(body.objective || ""),
+          dailyLimit: Number(body.dailyLimit || 1),
+          platforms: body.platforms || { facebook: true, linkedin: true, x: true },
+          workspaceId: body.workspaceId || "matrix-qa",
+          updatedAt: now,
+        },
+      })
+    }
     if (path === "/codex/projects" && request.method() === "POST") {
       operations.projectCreates += 1
       return fulfillJson(route, {
@@ -215,6 +274,11 @@ async function mockMatrixCompany(
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1425, height: 810 })
+  const consoleErrors: string[] = []
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text())
+  })
+  page.on("pageerror", (error) => consoleErrors.push(error.message))
   await mockMatrixCompany(page)
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
@@ -252,6 +316,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(4)
   await expect(officeScene).toHaveAttribute("data-rooftop-office", "true")
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(14)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-mover-count"))).toBeGreaterThanOrEqual(4)
 
   const firstFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => {
     const gl = canvas.getContext("webgl2") || canvas.getContext("webgl")
@@ -273,9 +338,31 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   expect(firstFrame.range).toBeGreaterThan(100)
   expect(firstFrame.colored).toBeGreaterThan(100)
 
+  const initialWorkerPoint = await officeCanvas.evaluate((canvas) => ({
+    x: Number(canvas.dataset.movingWorkerX),
+    y: Number(canvas.dataset.movingWorkerY),
+  }))
   await page.waitForTimeout(750)
   const secondFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL("image/png"))
   expect(secondFrame).not.toBe(firstFrame.dataUrl)
+
+  const movedWorkerPoint = await officeCanvas.evaluate((canvas) => ({
+    x: Number(canvas.dataset.movingWorkerX),
+    y: Number(canvas.dataset.movingWorkerY),
+  }))
+  expect(
+    Math.hypot(
+      movedWorkerPoint.x - initialWorkerPoint.x,
+      movedWorkerPoint.y - initialWorkerPoint.y,
+    ),
+  ).toBeGreaterThan(2)
+
+  const timeToggle = page.getByTestId("agent-office-time-toggle")
+  await timeToggle.click()
+  await timeToggle.click()
+  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "dusk")
+  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
+  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-dusk.png"), fullPage: true })
 
   const settledWorkerPoint = await officeCanvas.evaluate((canvas) => ({
     x: Number(canvas.dataset.firstWorkerX),
@@ -307,22 +394,22 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   expect(await page.getByTestId("agent-office-overlay").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop.png"), fullPage: true })
 
-  const timeToggle = page.getByTestId("agent-office-time-toggle")
-  await timeToggle.click()
-  await timeToggle.click()
-  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-time", "night")
-  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
-  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(14)
-  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-night.png"), fullPage: true })
-
   await page.getByRole("button", { name: "Cerrar oficina" }).click()
   await expect(page.getByTestId("agent-office-overlay")).toBeHidden()
 
   await page.getByRole("button", { name: "Controlar" }).click()
   await expect(page.getByTestId("agent-company-operating-loop")).toBeVisible()
+  await page.getByRole("button", { name: "Volver a la empresa" }).click()
+  await page.getByRole("button", { name: "Recursos" }).click()
+  await expect(page.getByRole("heading", { name: "Canales de la empresa" })).toBeVisible()
+  await expect(page.getByText("1 conectados · 2 pendientes · 1 publicados hoy")).toBeVisible()
+  await expect(page.getByText("Facebook", { exact: true })).toBeVisible()
+  await expect(page.getByText("LinkedIn", { exact: true })).toBeVisible()
+  await expect(page.getByText("X", { exact: true }).nth(1)).toBeVisible()
 
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
+  expect(consoleErrors).toEqual([])
 })
 
 test("mobile company panel remains a single usable vertical surface", async ({ page }, testInfo) => {
