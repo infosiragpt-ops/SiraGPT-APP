@@ -1100,15 +1100,45 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // Map<chatSessionId, engineSessionId> so each code chat reuses one engine session.
   const engineSessionRef = React.useRef<Record<string, string>>({})
   // Codex Agent V2 — the REAL server-driven agent (plan→build runs, durable
-  // SSE). Health-gated: when the backend flag is off everything below falls
-  // back to the OpenCode/deterministic tiers exactly as before.
+  // SSE). Availability requires BOTH the public feature flag and this user's
+  // effective access. Health alone sent ordinary users into a guaranteed 403
+  // instead of the deterministic builder.
   const codexHealth = useCodexHealth()
-  const codexAvailable = codexHealth.enabled === true
+  const [codexCanRun, setCodexCanRun] = React.useState(false)
+  React.useEffect(() => {
+    if (codexHealth.enabled !== true || !user) {
+      setCodexCanRun(false)
+      return
+    }
+    let cancelled = false
+    setCodexCanRun(false)
+    codexApi
+      .access()
+      .then((access) => {
+        if (!cancelled) setCodexCanRun(access.enabled === true && access.canRun === true)
+      })
+      .catch(() => {
+        if (!cancelled) setCodexCanRun(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [codexHealth.enabled, user?.id])
+  const codexAvailable = codexHealth.enabled === true && codexCanRun
   // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
   // In-memory cache only — the durable mapping lives in localStorage (see
   // session/workspace links), so a reload reattaches to
   // the SAME project instead of iterating on a fresh empty one.
   const codexProjectRef = React.useRef<Record<string, string>>({})
+  const detachCodexProjectForLocalFallback = React.useCallback(
+    (sid: string) => {
+      delete codexProjectRef.current[sid]
+      clearSessionCodexProject(sid)
+      if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
+      setActiveCodexProject(null)
+    },
+    [activeFolder?.id],
+  )
   // Keep the module-level active-codex-project in sync with the visible chat
   // session so PreviewPane's ▶/auto-run targets THIS chat's server workspace
   // (or falls back to the host/srcdoc path when the chat has no codex project).
@@ -1120,9 +1150,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     const projectId =
       linkedCodexProject({ sessionId, workspaceId: activeFolder?.id }) ??
       codexProjectRef.current[sessionId]
-    if (projectId) codexProjectRef.current[sessionId] = projectId
-    setActiveCodexProject(projectId)
-  }, [activeFolder?.id, sessionId])
+    if (projectId && codexAvailable) codexProjectRef.current[sessionId] = projectId
+    setActiveCodexProject(codexAvailable ? projectId : null)
+  }, [activeFolder?.id, codexAvailable, sessionId])
 
   const abortRef = React.useRef<AbortController | null>(null)
   const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -1243,7 +1273,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const uploadCodeFiles = React.useCallback(
     async (fileList: FileList, sourceChannel: string = "picker") => {
       if (fileList.length === 0) return
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para adjuntar archivos.")
         return
       }
@@ -1407,7 +1437,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         toast.success(`${accepted.length} archivos adjuntados al agente de APPS.`)
       }
     },
-    [showCodeUploadRejections, token, user],
+    [showCodeUploadRejections, user],
   )
 
   const removeCodeAttachment = React.useCallback((index: number) => {
@@ -1600,7 +1630,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       }
       const text = normalized.value.trim()
       if (!text || busy) return
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
@@ -2003,7 +2033,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       markVoiced,
       sessionId,
       setTurns,
-      token,
       turns,
       user,
     ],
@@ -2025,7 +2054,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     ) => {
       const text = prompt.trim()
       if (!text || busy || buildingApp) return
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para construir la app.")
         return
       }
@@ -2154,7 +2183,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, codexAvailable, files, markVoiced, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, codexAvailable, files, markVoiced, sessionId, setTurns, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -2222,7 +2251,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const repairFromLog = React.useCallback(
     async (log: string, visibleLabel?: string) => {
       const text = log.trim()
-      if (!text || !user || !token || !sessionId) return
+      if (!text || !user || !sessionId) return
       const sid = sessionId
       patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
       const verdict = classifyBuildError(text)
@@ -2247,7 +2276,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         await runDeterministicSRE(text, "Detecté un error en el build — diagnóstico automático.", sid)
       }
     },
-    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, token, user],
+    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, user],
   )
   const repairFromLogRef = React.useRef(repairFromLog)
   repairFromLogRef.current = repairFromLog
@@ -2321,31 +2350,55 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     [applyBlock],
   )
 
-  // Run the deterministic builder for a context and apply its files. Returns the
-  // file count. Used as the reliable fallback when the engine yields no code.
-  // It emits real project files and a self-contained index.html so APPS lands on
-  // localhost / index.html immediately while the full stack remains editable.
-  const runDeterministicInto = React.useCallback(
-    // Returns the applied files so engine-fallback callers can hand them to
-    // finish({written}) — that attaches the same actions/metrics/voice a
-    // direct build gets (a fallback delivery still IS a completed build).
-    async (ctx: AgentBuildContext): Promise<Array<{ path: string; content: string }>> => {
-      const prompt = promptFromContext(ctx)
+  // Run the deterministic builder from either a raw Codex prompt or an intake
+  // context and apply its files INSIDE the current engine turn. Calling
+  // buildApp() from an engine fallback used to return immediately because that
+  // outer turn already held `busy=true`, leaving the workspace empty while the
+  // UI falsely claimed that the deterministic builder had completed.
+  const runDeterministicPromptInto = React.useCallback(
+    async (
+      prompt: string,
+      ctx?: AgentBuildContext,
+      isCancelled?: () => boolean,
+    ): Promise<Array<{ path: string; content: string }>> => {
+      const throwIfCancelled = () => {
+        if (!isCancelled?.()) return
+        const error = new Error("Generación detenida.")
+        error.name = "AbortError"
+        throw error
+      }
+
+      throwIfCancelled()
       try {
         const result = await intakeService.generate(prompt)
         const files = result.files || []
         if (files.length > 0) {
+          throwIfCancelled()
           applyFilesToWorkspace(files)
           return files
         }
       } catch {
+        throwIfCancelled()
         /* backend unreachable -> offline index.html shell below */
       }
+      throwIfCancelled()
       const fallback = buildLocalIndexFallbackFiles(prompt, ctx)
+      throwIfCancelled()
       applyFilesToWorkspace(fallback)
       return fallback
     },
     [applyFilesToWorkspace],
+  )
+
+  // Context-shaped wrapper used by the OpenCode engine. Returns the applied
+  // files so finish({written}) can attach real actions/metrics/voice.
+  const runDeterministicInto = React.useCallback(
+    async (
+      ctx: AgentBuildContext,
+      isCancelled?: () => boolean,
+    ): Promise<Array<{ path: string; content: string }>> =>
+      runDeterministicPromptInto(promptFromContext(ctx), ctx, isCancelled),
+    [runDeterministicPromptInto],
   )
 
   const runDeterministicPatch = React.useCallback(
@@ -2661,7 +2714,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             return
           }
           // Engine produced nothing usable → reliable deterministic fallback.
-          const fallbackFiles = await runDeterministicInto(ctx)
+          const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn)
           finish(
             reply
               ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
@@ -2721,7 +2774,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         if (ctx) {
           // Engine unreachable/error during a build → still deliver via the builder.
           try {
-            const fallbackFiles = await runDeterministicInto(ctx)
+            const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn)
             finish(`✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El motor no respondió.`, {
               written: fallbackFiles,
             })
@@ -3161,17 +3214,26 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
 
         // 5) FALLBACK: the run failed / produced nothing usable → deterministic
-        //    builder so the user is NEVER left empty (mirrors runEngine). A
-        //    cancelled turn NEVER reaches here (early returns above) — Detener
-        //    must not trigger a build of the very app the user just stopped.
+        //    builder so the user is NEVER left empty (mirrors runEngine). Apply
+        //    it in this turn; buildApp() cannot be called here because this
+        //    engine already owns the shared busy latch.
         if (!iterate) {
-          // omitUserTurn: this codex turn already rendered the user's message.
-          await buildApp(text, undefined, { omitUserTurn: true })
+          // The generated files below live in the browser workspace, not in the
+          // remote Codex project. Force PreviewPane onto the local/static path
+          // so it cannot boot a stale remote tree and hide this fallback.
+          detachCodexProjectForLocalFallback(sid)
+          const fallbackFiles = await runDeterministicPromptInto(
+            text,
+            { goal: "app", productType: text },
+            cancelledTurn,
+          )
           finish(
             narrative
-              ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista.)_`
-              : "✅ App generada (builder determinista).",
+              ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
+              : `✅ App generada (builder determinista, ${fallbackFiles.length} archivos).`,
+            { written: fallbackFiles },
           )
+          toast.success("App generada (builder determinista) →")
           return
         }
         finish(narrative || "_(el agente no devolvió cambios)_")
@@ -3189,13 +3251,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           })
         } else if (!opts?.iterate) {
           // Project provisioning / plan-run error during a BUILD → still deliver
-          // via the deterministic builder in the same turn (omitUserTurn: this
-          // codex turn already rendered the user's message).
+          // via the deterministic builder in the same turn.
           try {
-            await buildApp(text, undefined, { omitUserTurn: true })
-            finish("✅ App generada (builder determinista). El Agente Codex no respondió.")
+            detachCodexProjectForLocalFallback(sid)
+            const fallbackFiles = await runDeterministicPromptInto(
+              text,
+              { goal: "app", productType: text },
+              cancelledTurn,
+            )
+            finish(
+              `✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El Agente Codex no respondió.`,
+              { written: fallbackFiles },
+            )
             toast.success("App generada (builder determinista) →")
-          } catch {
+          } catch (fallbackError: any) {
+            if (cancelledTurn() || fallbackError?.name === "AbortError") {
+              finishStopped()
+              return
+            }
             finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
               label: "Error en el turno",
               phases: buildCodeAgentPhases("generate", {
@@ -3228,7 +3301,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
       }
     },
-    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
+    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, detachCodexProjectForLocalFallback, files, markVoiced, runDeterministicPromptInto, setTurns, token],
   )
 
   // Keep the resilience-fallback ref pointing at the freshest engine closure.
@@ -3257,7 +3330,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
         return
       }
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
@@ -3505,7 +3578,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       sendPrompt,
       sessionId,
       setTurns,
-      token,
       user,
     ],
   )
@@ -3649,7 +3721,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       if (hasFailedCodeAttachments) toast.error("Reintenta o elimina los adjuntos con error.")
       return
     }
-    if (!user || !token) {
+    if (!user) {
       toast.error("Inicia sesión para usar el chat de código.")
       return
     }
@@ -3671,7 +3743,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     input,
     readyCodeAttachments,
     sessionId,
-    token,
     user,
   ])
 

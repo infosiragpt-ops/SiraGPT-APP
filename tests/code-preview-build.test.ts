@@ -212,6 +212,24 @@ describe("buildPreviewDocument", () => {
     assert.match(r.html, /Hola/)
   })
 
+  it("uses the self-contained builder preview when app/page.tsx is the active editor", () => {
+    const builderApp = files({
+      "package.json": '{"scripts":{"dev":"next dev"},"dependencies":{"next":"^14.0.0","react":"^18.0.0"}}',
+      "app/page.tsx": "export default function Page(){ return <div>editable Next source</div> }",
+      "app/api/customers/route.ts": "export async function GET(){ return Response.json([]) }",
+      "index.html":
+        '<!doctype html><html lang="es"><body><main id="app">Preview funcional inmediato</main>' +
+        '<script>document.getElementById("app").dataset.ready = "true"</script>' +
+        "</body></html>",
+    })
+
+    const r = buildPreviewDocument(builderApp, "app/page.tsx")
+
+    assert.equal(r.kind, "html")
+    assert.equal(r.entry, "index.html")
+    assert.match(r.html, /Preview funcional inmediato/)
+  })
+
   it("auto-runs a real generated Next app even when it includes an instant index.html preview", () => {
     const builderApp = files({
       "package.json": '{"scripts":{"dev":"next dev"},"dependencies":{"next":"^14.0.0","react":"^18.0.0"}}',

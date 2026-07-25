@@ -609,6 +609,11 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   const activeExt = activePath ? ext(activePath) : ""
   const activeFile = activePath ? files[activePath] : null
   const projectEntry = findProjectEntry(files)
+  const selfContainedIndex = paths.find(
+    (path) =>
+      stripLead(path).toLowerCase() === "index.html" &&
+      isSelfContainedHtml(files[path]?.content ?? ""),
+  )
 
   // 0) Real Vite/Next projects need the dev server — a srcdoc render would be a
   //    misleading blank page. Markdown/SVG files still preview individually, and
@@ -624,6 +629,19 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
     !(activePath && ["md", "mdx", "svg"].includes(activeExt)) &&
     !activeHtmlRenderable
   ) {
+    // The deterministic Builder deliberately ships two representations:
+    // editable Next/Vite source plus a self-contained index.html that works
+    // immediately without npm. Applying the source tree leaves app/page.tsx
+    // active, so keying this decision only off the active tab hid a perfectly
+    // valid preview behind the generic launchpad. Prefer the static entry until
+    // the real dev server is ready.
+    if (selfContainedIndex) {
+      return {
+        html: buildHtmlDocument(files, selfContainedIndex),
+        kind: "html",
+        entry: selfContainedIndex,
+      }
+    }
     return {
       html: placeholder(
         "Este proyecto usa Vite con dependencias npm. Pulsa ▶ Ejecutar para instalar las dependencias y verlo en vivo en el dev server.",

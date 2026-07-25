@@ -12,16 +12,47 @@ function authHeaders(): Record<string, string> {
   return { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+type CodexRequestInit = RequestInit & { timeoutMs?: number }
+
+function boundedRequestSignal(
+  externalSignal: AbortSignal | null | undefined,
+  timeoutMs: number,
+): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  if (!externalSignal) return timeoutSignal
+
+  const anySignal = (
+    AbortSignal as typeof AbortSignal & {
+      any?: (signals: AbortSignal[]) => AbortSignal
+    }
+  ).any
+  if (anySignal) return anySignal([externalSignal, timeoutSignal])
+
+  // Compatibility fallback for browsers that have AbortSignal.timeout() but
+  // not AbortSignal.any(): either user cancellation or the hard deadline wins.
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (externalSignal.aborted || timeoutSignal.aborted) {
+    abort()
+  } else {
+    externalSignal.addEventListener("abort", abort, { once: true })
+    timeoutSignal.addEventListener("abort", abort, { once: true })
+  }
+  return controller.signal
+}
+
+async function req<T>(path: string, init?: CodexRequestInit): Promise<T> {
   // A hung backend must never freeze the composer's busy latch: every JSON
   // call gets a hard timeout (SSE streaming goes through run-stream.ts, not
-  // req(), so this is safe globally). Placed AFTER the init spread so a
-  // caller-provided signal still wins; absent one, 20s is the ceiling.
+  // req(), so this is safe globally). Preview startup is the exception: the
+  // backend may legitimately wait up to 90s for a cold install, so that caller
+  // opts into a larger bounded timeout.
+  const { timeoutMs = 20_000, ...requestInit } = init || {}
   const res = await authenticatedFetch(`${BASE}${path}`, {
     credentials: "include",
     headers: authHeaders(),
-    ...init,
-    signal: init?.signal ?? AbortSignal.timeout(20_000),
+    ...requestInit,
+    signal: boundedRequestSignal(requestInit.signal, timeoutMs),
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) throw Object.assign(new Error((body as any)?.error || `codex http ${res.status}`), { status: res.status, body })
@@ -74,7 +105,11 @@ export const codexApi = {
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),
   createProject: (name: string, brief?: unknown) => req<{ project: CodexProject }>("/projects", { method: "POST", body: JSON.stringify({ name, brief }) }).then((r) => r.project),
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
-  startPreview: (id: string) => req<{ devUrl: string; previewUrl?: string; basePath?: string }>(`/projects/${id}/preview/start`, { method: "POST" }),
+  startPreview: (id: string, signal?: AbortSignal) =>
+    req<{ devUrl: string; previewUrl?: string; basePath?: string }>(
+      `/projects/${id}/preview/start`,
+      { method: "POST", timeoutMs: 110_000, signal },
+    ),
   previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
   stopPreview: (id: string) => req<{ ok: boolean }>(`/projects/${id}/preview/stop`, { method: "POST" }),
   exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
