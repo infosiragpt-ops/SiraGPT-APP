@@ -12,6 +12,7 @@ const WORKFLOW = fs.readFileSync(
 );
 const PACKAGE = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
 const TEST_SHARD = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'test-shard.sh'), 'utf8');
+const CI_QUARANTINE = fs.readFileSync(path.resolve(__dirname, '.ci-quarantine.txt'), 'utf8');
 
 function stepBlock(name) {
   const marker = `      - name: ${name}`;
@@ -114,7 +115,11 @@ test('credential-transfer regression contracts are part of canonical sharded CI'
   const command = PACKAGE.scripts && PACKAGE.scripts['test:deploy-contract'];
   assert.match(command || '', /tests\/deploy-runner-rollout-contract\.test\.js/);
   assert.match(command || '', /tests\/deploy-source-transfer-contract\.test\.js/);
-  assert.match(TEST_SHARD, /p\.scripts\['test:deploy-contract'\]/);
+  assert.match(TEST_SHARD, /find tests -name '\*\.test\.js' -type f/);
+  assert.doesNotMatch(
+    CI_QUARANTINE,
+    /^tests\/deploy-source-transfer-contract\.test\.js(?:\s|$)/m,
+  );
 });
 
 test('bundle cleanup is scoped while rollback, override, config validation, and provenance remain enforced', () => {
