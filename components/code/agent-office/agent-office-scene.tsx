@@ -47,6 +47,7 @@ type WorkerAnimation = {
   selectionRing: THREE.Mesh
   walkPath: THREE.CatmullRomCurve3
   walkSpeed: number
+  locomotion: boolean
   phase: number
   baseY: number
   /** Where the agent stands when it has nothing running. */
@@ -136,19 +137,19 @@ const PHASE_LIGHTING: Record<OfficeTimePhase, PhaseLighting> = {
     floor: 0xcfbd99,
   },
   dusk: {
-    sunColor: 0xffab6d,
-    sunIntensity: 2.1,
-    sunPosition: [-24, 11, 8],
-    hemisphereSky: 0xffd5ae,
-    hemisphereGround: 0x4a4750,
-    hemisphereIntensity: 1.38,
-    fillColor: 0x9db4f0,
-    fillIntensity: 1.02,
-    exposure: 1.09,
-    background: 0xdfae86,
-    fog: 0xd9b899,
-    horizon: 0xf0b183,
-    floor: 0xc8ab8a,
+    sunColor: 0xd8e6ff,
+    sunIntensity: 1.65,
+    sunPosition: [-24, 13, 8],
+    hemisphereSky: 0x92abc8,
+    hemisphereGround: 0x2c3540,
+    hemisphereIntensity: 1.45,
+    fillColor: 0x8faee0,
+    fillIntensity: 1.12,
+    exposure: 1.08,
+    background: 0x7897b8,
+    fog: 0x7088a4,
+    horizon: 0x9fb7ce,
+    floor: 0x8f989f,
   },
   night: {
     sunColor: 0xa9c9ff,
@@ -458,6 +459,7 @@ function addWorker({
     selectionRing,
     walkPath: route,
     walkSpeed: worker.statusTone === "attention" ? 0.038 : 0.03,
+    locomotion: officeWorkerStance(worker) !== "working" && workerIndex % 3 === 0,
     phase: workerIndex * 1.37,
     baseY: group.position.y,
     standPosition: new THREE.Vector3(x, 0, z + 1.15),
@@ -611,12 +613,14 @@ export function AgentOfficeScene({
       totalWidth,
       totalDepth,
       timeOfDay: resolvedTimeOfDay,
+      timePhase: resolvedPhase,
       light,
       variant,
     })
     renderer.domElement.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
     renderer.domElement.dataset.cityWindowCount = String(edgeDistrict.counts.windows)
     renderer.domElement.dataset.cityTreeCount = String(edgeDistrict.counts.trees)
+    renderer.domElement.dataset.cityMoverCount = String(edgeDistrict.counts.vehicles)
     renderer.domElement.dataset.rooftopOffice = "true"
     host.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
 
@@ -980,6 +984,24 @@ export function AgentOfficeScene({
         return
       }
 
+      if (animation.locomotion) {
+        if (!motion) return
+        const walkProgress = (elapsed * animation.walkSpeed * 0.58 + animation.phase * 0.037) % 1
+        const routePoint = animation.walkPath.getPointAt(walkProgress)
+        const routeTangent = animation.walkPath.getTangentAt(walkProgress)
+        const stridePhase = elapsed * 4.1 + animation.phase
+        group.position.copy(routePoint)
+        group.position.y = animation.baseY + Math.abs(Math.sin(stridePhase)) * 0.035
+        group.rotation.y = Math.atan2(routeTangent.x, routeTangent.z)
+        leftArm.rotation.x = Math.sin(stridePhase) * 0.54
+        rightArm.rotation.x = -Math.sin(stridePhase) * 0.54
+        leftLeg.rotation.x = -Math.sin(stridePhase) * 0.5
+        rightLeg.rotation.x = Math.sin(stridePhase) * 0.5
+        head.position.y = 1.82
+        screen.material.emissiveIntensity = 0.2
+        return
+      }
+
       const breath = motion ? Math.sin(elapsed * 1.05 + animation.phase) : 0
       group.position.copy(animation.standPosition)
       group.position.y = animation.baseY + breath * 0.012
@@ -1051,6 +1073,7 @@ export function AgentOfficeScene({
       renderer.domElement.dataset.frameCount = String(frameCount)
       if (workers[0] && frameCount % 6 === 0) {
         let visibleWorkerPoint: { x: number; y: number; score: number } | null = null
+        let movingWorkerPoint: { x: number; y: number; score: number } | null = null
         for (const animation of workers) {
           animation.group.getWorldPosition(projectedWorker)
           projectedWorker.y += 1.02
@@ -1060,6 +1083,12 @@ export function AgentOfficeScene({
           if (!visibleWorkerPoint || score < visibleWorkerPoint.score) {
             visibleWorkerPoint = { x: projectedWorker.x, y: projectedWorker.y, score }
           }
+          if (
+            animation.locomotion &&
+            (!movingWorkerPoint || score < movingWorkerPoint.score)
+          ) {
+            movingWorkerPoint = { x: projectedWorker.x, y: projectedWorker.y, score }
+          }
         }
         if (visibleWorkerPoint) {
           renderer.domElement.dataset.firstWorkerX = String(
@@ -1067,6 +1096,14 @@ export function AgentOfficeScene({
           )
           renderer.domElement.dataset.firstWorkerY = String(
             Math.round(((-visibleWorkerPoint.y + 1) / 2) * renderer.domElement.clientHeight),
+          )
+        }
+        if (movingWorkerPoint) {
+          renderer.domElement.dataset.movingWorkerX = String(
+            Math.round(((movingWorkerPoint.x + 1) / 2) * renderer.domElement.clientWidth),
+          )
+          renderer.domElement.dataset.movingWorkerY = String(
+            Math.round(((-movingWorkerPoint.y + 1) / 2) * renderer.domElement.clientHeight),
           )
         }
         renderer.domElement.dataset.workerCount = String(workers.length)
