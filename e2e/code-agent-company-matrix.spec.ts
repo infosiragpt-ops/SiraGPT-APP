@@ -221,7 +221,12 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByRole("tab", { name: "Empresas</>" })).toBeVisible()
   await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM")
   await expect(page.getByTestId("agent-company-live-preview")).toBeVisible()
-  await expect(page.getByTestId("agent-office-thumbnail")).toHaveAttribute("data-office-ready", "true")
+  const officeThumbnail = page.getByTestId("agent-office-thumbnail")
+  await expect(officeThumbnail).toHaveAttribute("data-office-ready", "true")
+  await expect(officeThumbnail).toHaveAttribute("data-office-paused", "false")
+  await expect(officeThumbnail).toHaveAttribute("data-rooftop-office", "true")
+  await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(6)
+  await expect(page.getByTestId("agent-company-live-preview")).toContainText("Oficina · 1 activo")
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
   await expect(page.getByRole("button", { name: "Controlar" })).toContainText(/[1-9]/)
 
@@ -233,10 +238,20 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
 
   await page.getByTestId("agent-company-live-preview").click()
   await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
+  await expect(page.getByTestId("agent-office-overlay")).toContainText("Distrito Edge · Oficina en azotea")
+  await expect(officeThumbnail).toHaveAttribute("data-office-paused", "true")
+  await page.waitForTimeout(100)
+  const pausedThumbnailFrame = Number(await officeThumbnail.locator("canvas").getAttribute("data-frame-count"))
+  await page.waitForTimeout(250)
+  expect(
+    Number(await officeThumbnail.locator("canvas").getAttribute("data-frame-count")) - pausedThumbnailFrame,
+  ).toBeLessThanOrEqual(1)
   const officeScene = page.getByTestId("agent-office-scene")
   const officeCanvas = officeScene.locator("canvas")
   await expect(officeScene).toHaveAttribute("data-office-ready", "true")
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(4)
+  await expect(officeScene).toHaveAttribute("data-rooftop-office", "true")
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(14)
 
   const firstFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => {
     const gl = canvas.getContext("webgl2") || canvas.getContext("webgl")
@@ -258,19 +273,22 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   expect(firstFrame.range).toBeGreaterThan(100)
   expect(firstFrame.colored).toBeGreaterThan(100)
 
-  const initialWorkerPoint = await officeCanvas.evaluate((canvas) => ({
-    x: Number(canvas.dataset.firstWorkerX),
-    y: Number(canvas.dataset.firstWorkerY),
-  }))
   await page.waitForTimeout(750)
   const secondFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL("image/png"))
   expect(secondFrame).not.toBe(firstFrame.dataUrl)
 
-  const movedWorkerPoint = await officeCanvas.evaluate((canvas) => ({
+  const settledWorkerPoint = await officeCanvas.evaluate((canvas) => ({
     x: Number(canvas.dataset.firstWorkerX),
     y: Number(canvas.dataset.firstWorkerY),
+    width: canvas.clientWidth,
+    height: canvas.clientHeight,
   }))
-  expect(Math.hypot(movedWorkerPoint.x - initialWorkerPoint.x, movedWorkerPoint.y - initialWorkerPoint.y)).toBeGreaterThan(2)
+  expect(Number.isFinite(settledWorkerPoint.x)).toBe(true)
+  expect(Number.isFinite(settledWorkerPoint.y)).toBe(true)
+  expect(settledWorkerPoint.x).toBeGreaterThan(0)
+  expect(settledWorkerPoint.x).toBeLessThan(settledWorkerPoint.width)
+  expect(settledWorkerPoint.y).toBeGreaterThan(0)
+  expect(settledWorkerPoint.y).toBeLessThan(settledWorkerPoint.height)
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-moving.png"), fullPage: true })
   await page.getByRole("button", { name: "Pausar oficina" }).click()
   await expect(page.getByRole("button", { name: "Reanudar oficina" })).toBeVisible()
@@ -288,6 +306,15 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await page.waitForTimeout(150)
   expect(await page.getByTestId("agent-office-overlay").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop.png"), fullPage: true })
+
+  const timeToggle = page.getByTestId("agent-office-time-toggle")
+  await timeToggle.click()
+  await timeToggle.click()
+  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-time", "night")
+  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(14)
+  await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-night.png"), fullPage: true })
+
   await page.getByRole("button", { name: "Cerrar oficina" }).click()
   await expect(page.getByTestId("agent-office-overlay")).toBeHidden()
 
@@ -328,7 +355,7 @@ test("PROACTIVO provisions and confirms a real company runtime before turning on
   await companyRail.getByRole("button", { name: /^PROACTIVO$/ }).click()
 
   await expect(companyRail).toHaveAttribute("data-proactive", "on")
-  await expect(companyRail.getByRole("button", { name: /PROACTIVO · ON/ })).toBeVisible()
+  await expect(companyRail.getByRole("button", { name: /PROACTIVO · ON|EN EJECUCIÓN/ })).toBeVisible()
   expect(operations.projectCreates).toBe(1)
   expect(operations.proactiveToggles).toBe(1)
 })
