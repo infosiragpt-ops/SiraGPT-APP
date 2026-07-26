@@ -234,6 +234,10 @@ async function resolveAndAssertSafe(host, lookup = dns.lookup) {
       );
     }
   }
+  return records.map((record) => ({
+    address: String(record.address),
+    family: Number(record.family) || net.isIP(String(record.address)),
+  }));
 }
 
 /**

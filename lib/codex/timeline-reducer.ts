@@ -34,6 +34,7 @@ export type TimelineItem =
   | { kind: 'checkpoint'; id: string; checkpointId: string; commitSha: string; title: string; createdAt?: string }
   | { kind: 'summary'; id: string; metrics: any }
   | { kind: 'action_required'; id: string; patternId: string; title: string; rawError: string; blockedCapabilities: string[]; remediationUrl?: string }
+  | { kind: 'tool_permission'; id: string; permissionId: string; toolName: string; humanDescription: string; argsPreview?: Record<string, unknown>; decision?: 'allow' | 'deny' }
 
 // Per-task plan status carried by the plan_updated event (TodoWrite parity).
 export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed'
@@ -196,6 +197,26 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
     case 'action_required':
       items = [...items, { kind: 'action_required', id: synthId('ar', seq), patternId: data.patternId, title: data.title, rawError: data.rawError, blockedCapabilities: data.blockedCapabilities || [], remediationUrl: data.remediationUrl }]
       break
+
+    case 'tool_permission_required':
+      items = [...items, {
+        kind: 'tool_permission',
+        id: data.permissionId || synthId('perm', seq),
+        permissionId: data.permissionId,
+        toolName: data.toolName,
+        humanDescription: data.humanDescription || '',
+        argsPreview: data.argsPreview,
+      }]
+      break
+
+    case 'tool_permission_resolved': {
+      const idx = items.findIndex((item) => item.kind === 'tool_permission' && item.permissionId === data.permissionId)
+      if (idx >= 0) {
+        const item = items[idx] as Extract<TimelineItem, { kind: 'tool_permission' }>
+        items = replaceItem(items, idx, { ...item, decision: data.decision === 'allow' ? 'allow' : 'deny' })
+      }
+      break
+    }
 
     default:
       return state // unknown type: ignore, don't break the timeline

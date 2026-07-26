@@ -66,7 +66,15 @@ test('full flow: create → plan → approve → build → checkpoint → summar
   assert.equal(project.status, 'ready');
   assert.equal(project.workspacePath, `projects/${project.id}`);
 
-  const loopWith = (llm) => (args) => agentLoop.runAgentLoop({ ...args, deps: { ...args.deps, llmTurn: llm, runner: git.runner } });
+  const loopWith = (llm) => (args) => agentLoop.runAgentLoop({
+    ...args,
+    deps: {
+      ...args.deps,
+      llmTurn: llm,
+      runner: git.runner,
+      env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
+    },
+  });
   const llm = scriptedLlm();
 
   // 2) Plan run → waiting_approval + plan_proposed.

@@ -53,6 +53,7 @@ import {
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
+import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
 import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
@@ -3489,8 +3490,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: CodeDispatchOptions) => {
-      const text = rawInput.trim()
-      if (!text) return
+      const displayText = rawInput.trim()
+      if (!displayText) return
+      const text = expandCodexSlashCommand(displayText).prompt
       const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
       if (busy || buildingApp) {
         // The live dev server can fire a BACKGROUND auto-repair turn (it failed
@@ -3644,7 +3646,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
             // run whose file writes are read back into the workspace, with a
             // deterministic buildApp fallback inside so a build always lands.
-            await runCodexEngine(buildText, sid, { displayText: text })
+            await runCodexEngine(buildText, sid, { displayText })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else if (!opts?.forceDeterministic && engineMode && engineAvailable) {
             // OpenCode agent (only truly available in Docker AND opt-in via the

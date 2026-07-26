@@ -13,6 +13,7 @@ import { useTranslations } from "next-intl"
 import { Loader2, Plus, Eye, FileCode2, ListChecks, Plug, Play } from "lucide-react"
 import { codexApi, type CodexAccess, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
 import { DEFAULT_TIER } from "@/lib/codex/model-tiers"
+import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { useOptionalCodeWorkspace } from "@/lib/code-workspace-context"
 import { codexIdForProject, upsertCodexProject } from "@/lib/codex-projects"
@@ -21,6 +22,7 @@ import { PlanCard } from "./plan-card"
 import { CheckpointCard } from "./checkpoint-card"
 import { RunSummaryCard, type RunSessionUsage } from "./run-summary-card"
 import { ActionRequiredCard } from "./action-required-card"
+import { ToolPermissionCard } from "./tool-permission-card"
 import { Composer, type ComposerSendPayload } from "./composer"
 import { BottomTabBar } from "./bottom-tab-bar"
 import { WebTab } from "./web-tab"
@@ -225,6 +227,24 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
         return <RunSummaryCard metrics={item.metrics} session={sessionUsage} />
       case "action_required":
         return <ActionRequiredCard title={item.title} rawError={item.rawError} blockedCapabilities={item.blockedCapabilities} remediationUrl={item.remediationUrl} />
+      case "tool_permission":
+        return (
+          <ToolPermissionCard
+            toolName={item.toolName}
+            humanDescription={item.humanDescription}
+            argsPreview={item.argsPreview}
+            decision={item.decision}
+            onResolve={async (decision) => {
+              if (!activeRunId) return
+              try {
+                await codexApi.resolveToolPermission(activeRunId, item.permissionId, decision)
+              } catch (error: any) {
+                toast.error(error?.message || "No se pudo resolver el permiso")
+                throw error
+              }
+            }}
+          />
+        )
       default:
         return null
     }
@@ -308,7 +328,8 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   // Claude Code never asks you to "create a folder" before the first prompt.
   async function send(payload: ComposerSendPayload) {
     const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
-    const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
+    const expanded = expandCodexSlashCommand(payload.prompt)
+    const fullPrompt = [attachText, expanded.prompt].filter(Boolean).join("\n\n").trim()
     if (!fullPrompt) return
 
     setBusy(true)

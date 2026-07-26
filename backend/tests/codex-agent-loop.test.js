@@ -480,6 +480,57 @@ test('failed proactive gate records the ledger and refuses to checkpoint', async
   assert.ok(events.some((event) => event.type === 'narrative_delta' && /No cerré ni promoví/.test(event.data.text)));
 });
 
+test('project verification unavailable fails closed and never checkpoints', async () => {
+  const commands = [];
+  const events = [];
+  const result = await closeBuild({
+    run: { id: 'run-unavailable-gate', projectId: 'p1', userId: 'u1', prompt: 'corrige la app' },
+    project: { id: 'p1', userId: 'u1', brief: {} },
+    runner: {
+      readFile: async () => {
+        const error = new Error('workspace unavailable');
+        error.code = 'EIO';
+        throw error;
+      },
+      exec: async (_project, command) => {
+        commands.push(command);
+        if (command[0] === 'git' && command[1] === 'status') {
+          return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      writeFiles: async () => ({ ok: true }),
+    },
+    eventStore: {
+      appendEvent: async (_runId, type, data) => {
+        events.push({ type, data });
+      },
+    },
+    prisma: null,
+    llmTurn: async () => ({ text: 'sin cambios', toolCalls: [] }),
+    clock: () => new Date('2026-07-26T12:00:00.000Z'),
+    env: {
+      NODE_ENV: 'test',
+      CODEX_AUTO_VERIFY: '1',
+      CODEX_RUN_BRANCHES: '1',
+    },
+    metrics: null,
+    sourcePrompt: 'corrige la app',
+    backgroundTaskService: {
+      quiesce: async () => ({ ok: true, stopped: 0 }),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checkpoint, null);
+  assert.equal(result.projectGateVerification.clean, null);
+  assert.equal(commands.some((command) => command[0] === 'git' && command.includes('commit')), false);
+  assert.ok(events.some((event) => (
+    event.type === 'narrative_delta'
+    && /fallaron los gates obligatorios/i.test(event.data.text)
+  )));
+});
+
 test('metrics hooks receive usage, actions and lines read', async () => {
   const rec = { usage: [], actions: [], lines: 0 };
   const metrics = {

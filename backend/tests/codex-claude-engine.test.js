@@ -371,6 +371,7 @@ test('build loop: verificación falla → ronda de reparación → done', async 
       eventStore: { appendEvent: async (_r, type, data) => { events.push({ type, data }); }, listEvents: async () => [] },
       actionStore: { recordAction: async () => {} },
       clock: (() => { let t = 0; return () => new Date(1_000_000 + (t += 10)); })(),
+      env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
     },
   });
   assert.equal(res.status, 'done');
@@ -581,6 +582,7 @@ test('build loop: tool calls por encima del budget se reportan al modelo', async
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');
@@ -615,7 +617,7 @@ test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucl
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
-    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', CODEX_AUTO_VERIFY: '0', NODE_ENV: 'test' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');
@@ -647,7 +649,7 @@ test('build loop: reescrituras INTERCALADAS del mismo archivo también disparan 
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
-    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', CODEX_AUTO_VERIFY: '0', NODE_ENV: 'test' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');

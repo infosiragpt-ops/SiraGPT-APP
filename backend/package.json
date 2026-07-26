@@ -29,6 +29,7 @@
     "eval:attribution": "node scripts/run-attribution-eval.js",
     "eval:attribution:json": "node scripts/run-attribution-eval.js --json",
     "inspect:attribution": "node scripts/inspect-attribution.js",
+    "test:codex-parity": "NODE_ENV=test node --test --test-concurrency=1 tests/codex-*.test.js",
     "test:codex-project-database": "node --test tests/codex-project-database-foundation.test.js tests/codex-project-database-provider-contract.test.js tests/codex-project-database-vault.test.js",
     "test:logger-redaction": "node --test tests/log-redaction.test.js tests/logger-redaction.test.js",
     "test:deploy-contract": "node --test tests/deploy-runner-rollout-contract.test.js tests/deploy-source-transfer-contract.test.js",

@@ -128,6 +128,26 @@ export interface CodexPublication {
   publishedAt: string | null
   releases: CodexPublicationRelease[]
 }
+export interface CodexTranscriptEntry {
+  seq: number
+  sourceSeq?: number
+  runId?: string
+  ts?: string
+  type?: string
+  data?: unknown
+  createdAt?: string
+}
+export interface CodexSessionSnapshot {
+  version: number
+  projectId: string
+  sessionId: string
+  cursorSeq: number
+  checkpointSha: string | null
+  checkpointId: string | null
+  loopState: unknown
+  metadata: unknown
+  updatedAt: string
+}
 
 async function getPublicHealth(): Promise<CodexHealth> {
   const res = await fetch(`${BASE}/health`, {
@@ -152,6 +172,12 @@ export const codexApi = {
 
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),
   createProject: (name: string, brief?: unknown) => req<{ project: CodexProject }>("/projects", { method: "POST", body: JSON.stringify({ name, brief }) }).then((r) => r.project),
+  createRepositoryProject: (name: string, repository: { url: string; sourceBranch?: string }, brief?: unknown) =>
+    req<{ project: CodexProject }>("/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, brief, repository }),
+      timeoutMs: 180_000,
+    }).then((r) => r.project),
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
   startPreview: (id: string, signal?: AbortSignal) =>
     req<{ devUrl: string; previewUrl?: string; basePath?: string }>(
@@ -182,6 +208,31 @@ export const codexApi = {
       .then((r) => arrayOrEmpty<CodexRun>(r?.runs)),
   getRun: (projectId: string, runId: string) => req<{ run: CodexRun }>(`/projects/${projectId}/runs/${runId}`).then((r) => r.run),
   cancelRun: (runId: string) => req<{ run: CodexRun }>(`/runs/${runId}/cancel`, { method: "POST" }).then((r) => r.run),
+  resolveToolPermission: (runId: string, permissionId: string, decision: "allow" | "deny") =>
+    req<{ run: CodexRun }>(`/runs/${runId}/tool-permission`, {
+      method: "POST",
+      body: JSON.stringify({ permissionId, decision }),
+    }).then((r) => r.run),
+  getTranscript: (projectId: string, runId: string, afterSeq = 0, limit = 200) =>
+    req<{ transcript: { sessionId: string; entries: CodexTranscriptEntry[]; malformed: number; firstSeq: number | null; lastSeq: number | null } }>(
+      `/projects/${projectId}/runs/${runId}/transcript?afterSeq=${afterSeq}&limit=${limit}`,
+      { cache: "no-store" },
+    ).then((r) => r.transcript),
+  continueSession: (projectId: string, runId: string, afterSeq?: number) =>
+    req<{ session: { ok: boolean; sessionId: string; resumable: boolean; snapshot: CodexSessionSnapshot | null; cursorSeq: number; tail: CodexTranscriptEntry[] } }>(
+      `/projects/${projectId}/runs/${runId}/session/continue`,
+      { method: "POST", body: JSON.stringify(afterSeq == null ? {} : { afterSeq }) },
+    ).then((r) => r.session),
+  forkSession: (projectId: string, runId: string, atSeq?: number) =>
+    req<{ session: { ok: boolean; sourceSessionId: string; sessionId: string; entries: number; lastSeq: number | null } }>(
+      `/projects/${projectId}/runs/${runId}/session/fork`,
+      { method: "POST", body: JSON.stringify(atSeq == null ? {} : { atSeq }) },
+    ).then((r) => r.session),
+  rewindSession: (projectId: string, runId: string, toSeq: number, checkpointId?: string) =>
+    req<{ session: { ok: boolean; sessionId: string; toSeq: number; entries: number; lastSeq: number | null } }>(
+      `/projects/${projectId}/runs/${runId}/session/rewind`,
+      { method: "POST", body: JSON.stringify({ toSeq, ...(checkpointId ? { checkpointId } : {}) }) },
+    ).then((r) => r.session),
 
   approvePlan: (projectId: string, planRunId: string, tier?: string) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify({ mode: "build", planRunId, tier }) }).then((r) => r.run),

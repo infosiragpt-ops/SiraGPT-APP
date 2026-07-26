@@ -18,6 +18,7 @@
  */
 
 const { isCodexV2Enabled } = require('./flags');
+const { createSessionService, snapshotIsResumable } = require('./session-service');
 
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -37,6 +38,7 @@ async function recoverCodexRunsAfterBoot({
   prisma = defaultPrisma,
   queue = runQueueDefault,
   eventStore = eventStoreDefault,
+  sessionService = null,
   env = process.env,
   clock = () => new Date(),
 } = {}) {
@@ -45,6 +47,11 @@ async function recoverCodexRunsAfterBoot({
   if (!prisma || !prisma.codexRun) return result;
 
   try {
+    const sessionsEnabled = !/^(0|false|off|no)$/i.test(String(
+      env.CODEX_SESSION_ARTIFACTS ?? (env.NODE_ENV === 'production' ? '1' : '0'),
+    ));
+    const durableSessionService = sessionService
+      || (sessionsEnabled && prisma.codexSessionState ? createSessionService({ db: prisma, clock }) : null);
     // a) zombie running → RESUME (re-enqueue the SAME run). The workspace and
     //    the event log persist across restarts, and the agent-loop rebuilds
     //    its file tree from the real workspace — so the run continues where
@@ -61,6 +68,21 @@ async function recoverCodexRunsAfterBoot({
     for (const run of running) {
       result.scanned += 1;
       try {
+        let resumeSnapshot = null;
+        let snapshotReady = true;
+        if (durableSessionService) {
+          try {
+            resumeSnapshot = typeof durableSessionService.readSnapshot === 'function'
+              ? await durableSessionService.readSnapshot({ projectId: run.projectId, sessionId: run.id })
+              : null;
+            snapshotReady = typeof durableSessionService.hasResumableSnapshot === 'function'
+              ? await durableSessionService.hasResumableSnapshot({ projectId: run.projectId, sessionId: run.id })
+              : snapshotIsResumable(resumeSnapshot);
+          } catch {
+            resumeSnapshot = null;
+            snapshotReady = false;
+          }
+        }
         let resumes = 0;
         if (eventStore && eventStore.listEvents) {
           const events = await eventStore.listEvents(run.id, { afterSeq: 0, prisma }).catch(() => []);
@@ -68,7 +90,7 @@ async function recoverCodexRunsAfterBoot({
             (e) => e && e.type === 'narrative_delta' && String(e.data?.text || '').includes(RESUME_MARKER),
           ).length;
         }
-        if (resumes >= MAX_BOOT_RESUMES || !queue || !queue.enqueueCodexRun) {
+        if (!snapshotReady || resumes >= MAX_BOOT_RESUMES || !queue || !queue.enqueueCodexRun) {
           await prisma.codexRun.update({
             where: { id: run.id },
             data: { status: 'error', error: INTERRUPTED_MSG, finishedAt: clock() },
@@ -89,7 +111,17 @@ async function recoverCodexRunsAfterBoot({
           // Unique jobId per resume: BullMQ silently ignores q.add when a
           // job with the same id already exists (the dead original lingers
           // in Redis), so re-using runId left resumed runs queued forever.
-          await queue.enqueueCodexRun({ runId: run.id, jobId: `${run.id}:r${resumes + 1}` });
+          await queue.enqueueCodexRun({
+            runId: run.id,
+            jobId: `${run.id}:r${resumes + 1}`,
+            ...(resumeSnapshot ? {
+              resumeSnapshot: {
+                sessionId: resumeSnapshot.sessionId,
+                cursorSeq: resumeSnapshot.cursorSeq,
+                checkpointSha: resumeSnapshot.checkpointSha || null,
+              },
+            } : {}),
+          });
           result.resumedRunning += 1;
         }
       } catch (err) {

@@ -222,6 +222,82 @@ async function cancelRun({ userId, runId, db = defaultPrisma, queue = runQueue, 
   return publicRun(fresh);
 }
 
+/**
+ * Resolve a build-tool approval and requeue the SAME run. The latest durable
+ * permission request is the authority; arbitrary permission ids or plan runs
+ * cannot be resumed through this endpoint.
+ */
+async function resolveToolPermission({
+  userId,
+  runId,
+  permissionId,
+  decision,
+  db = defaultPrisma,
+  queue = runQueue,
+  eventStore = eventStoreDefault,
+  clock = () => new Date(),
+}) {
+  const prisma = requireDb(db);
+  if (!['allow', 'deny'].includes(decision)) {
+    throw new RunServiceError('invalid_permission_decision', 'decision must be allow or deny', 400);
+  }
+  const run = await prisma.codexRun.findFirst({ where: { id: runId, userId } });
+  if (!run) throw new RunServiceError('run_not_found', 'run not found', 404);
+  if (run.mode !== 'build' || run.status !== 'waiting_approval') {
+    throw new RunServiceError('run_not_waiting_tool_permission', 'build run is not waiting for tool approval', 409);
+  }
+
+  const events = await eventStore.listEvents(run.id, { afterSeq: 0, prisma });
+  const request = [...events].reverse().find(
+    (event) => event?.type === 'tool_permission_required' && event.data?.permissionId === permissionId,
+  );
+  if (!request) throw new RunServiceError('tool_permission_not_found', 'tool permission request not found', 404);
+  const alreadyResolved = events.some(
+    (event) =>
+      event?.type === 'tool_permission_resolved'
+      && event.data?.permissionId === permissionId
+      && Number(event.seq) > Number(request.seq),
+  );
+  if (alreadyResolved) {
+    throw new RunServiceError('tool_permission_already_resolved', 'tool permission was already resolved', 409);
+  }
+
+  await eventStore.appendEvent(
+    run.id,
+    'tool_permission_resolved',
+    {
+      permissionId,
+      toolName: request.data.toolName,
+      bindingHash: request.data.bindingHash,
+      decision,
+    },
+    { prisma },
+  );
+  const flip = await prisma.codexRun.updateMany({
+    where: { id: run.id, userId, status: 'waiting_approval' },
+    data: { status: 'queued', error: null, finishedAt: null },
+  });
+  if (!flip?.count) throw new RunServiceError('tool_permission_race', 'run changed while resolving permission', 409);
+  await eventStore.appendEvent(run.id, 'run_status', { status: 'queued' }, { prisma });
+
+  try {
+    const job = await queue.enqueueCodexRun({
+      runId: run.id,
+      jobId: `${run.id}:permission:${clock().getTime()}`,
+    });
+    if (job?.id) {
+      await prisma.codexRun.update({ where: { id: run.id }, data: { jobId: String(job.id) } });
+    }
+  } catch (error) {
+    // Keep queued: boot recovery will re-enqueue it.
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[codex run-service] permission resume enqueue failed:', error?.message || error);
+    }
+  }
+  const fresh = await prisma.codexRun.findUnique({ where: { id: run.id } });
+  return publicRun(fresh || { ...run, status: 'queued' });
+}
+
 /** True when the project has a queued/running/waiting_approval run. Used by
  *  the workspace-import route so a client can't overwrite files under a live
  *  build (the agent would be editing a tree that mutates beneath it). */
@@ -254,6 +330,7 @@ async function listRuns({ userId, projectId, db = defaultPrisma, take = 50 }) {
 module.exports = {
   createRun,
   cancelRun,
+  resolveToolPermission,
   getRun,
   listRuns,
   hasActiveRun,
