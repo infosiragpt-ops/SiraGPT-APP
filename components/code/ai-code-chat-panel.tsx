@@ -140,8 +140,11 @@ import {
   clearWorkspaceCodexProject,
   linkedCodexProject,
   persistSessionCodexProject,
+  persistSessionCodexSyncedRun,
   persistWorkspaceCodexProject,
+  readSessionCodexSyncedRun,
 } from "@/lib/codex/codex-project-link"
+import { selectCodexContinuityRun } from "@/lib/codex/run-continuity"
 import { openRunStream } from "@/lib/codex/run-stream"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
 import {
@@ -198,6 +201,20 @@ type CodeDispatchOptions = {
 type PendingCodeInput = {
   text: string
   files?: string[]
+}
+
+type CodexResumeTarget = {
+  projectId: string
+  runId: string
+  mode: "plan" | "build"
+  status: string
+}
+
+type CodexEngineOptions = {
+  iterate?: boolean
+  displayText?: string
+  omitUserTurn?: boolean
+  resume?: CodexResumeTarget
 }
 
 function codeAttachmentId(file: CodeComposerAttachment): string {
@@ -1107,7 +1124,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const codexHealth = useCodexHealth()
   const [codexCanRun, setCodexCanRun] = React.useState(false)
   React.useEffect(() => {
-    if (codexHealth.enabled !== true || !user) {
+    if (codexHealth.enabled !== true || !user?.id) {
       setCodexCanRun(false)
       return
     }
@@ -1599,7 +1616,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     | ((
         text: string,
         sid: string,
-        opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
+        opts?: CodexEngineOptions,
       ) => Promise<void | "workspace_sync_failed">)
     | null
   >(null)
@@ -2028,6 +2045,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       activeProvider,
       applyBlock,
       busy,
+      codexAvailable,
       composerMode,
       files,
       includeContext,
@@ -2184,7 +2202,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, codexAvailable, files, markVoiced, sessionId, setTurns, user],
+    [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -2822,9 +2840,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     async (
       text: string,
       sid: string,
-      opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
+      opts?: CodexEngineOptions,
     ) => {
-      const iterate = !!opts?.iterate
+      const resuming = !!opts?.resume
+      const iterate = resuming || !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
@@ -2835,11 +2854,22 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         {
           id: assistantId,
           role: "assistant",
-          content: iterate ? "⚙️ Agente Codex trabajando…" : "⚙️ Agente Codex construyendo…",
+          content: resuming
+            ? "⚙️ Retomando el trabajo del Agente Codex…"
+            : iterate
+              ? "⚙️ Agente Codex trabajando…"
+              : "⚙️ Agente Codex construyendo…",
           streaming: true,
-          agentLabel: iterate ? "Agente Codex trabajando" : "Construyendo con Agente Codex",
+          agentLabel: resuming
+            ? "Retomando ejecución"
+            : iterate
+              ? "Agente Codex trabajando"
+              : "Construyendo con Agente Codex",
           agentPhases: buildCodeAgentPhases("plan", {
-            plan: { status: "running", detail: iterate ? "Preparando turno" : "Preparando build" },
+            plan: {
+              status: "running",
+              detail: resuming ? "Reconectando con el backend" : iterate ? "Preparando turno" : "Preparando build",
+            },
           }),
         },
       ])
@@ -3055,7 +3085,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         //    sync back over the local workspace. A persisted id is verified
         //    against the backend (it may have been deleted or belong to another
         //    account after a re-login) before being trusted.
-        let projectId: string | undefined = codexProjectRef.current[sid]
+        let projectId: string | undefined =
+          opts?.resume?.projectId || codexProjectRef.current[sid]
         if (!projectId) {
           const persisted = linkedCodexProject({
             sessionId: sid,
@@ -3085,10 +3116,21 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         setActiveCodexProject(projectId)
 
         setEnginePhase(
-          iterate ? "Preparando turno del agente" : "Planificando la construcción",
+          resuming
+            ? "Reconectando con el trabajo en curso"
+            : iterate
+              ? "Preparando turno del agente"
+              : "Planificando la construcción",
           buildCodeAgentPhases("context", {
             plan: { status: "done", detail: "Proyecto Codex listo" },
-            context: { status: "running", detail: iterate ? "Sincronizando workspace" : "Preparando build" },
+            context: {
+              status: "running",
+              detail: resuming
+                ? "Recuperando eventos y archivos"
+                : iterate
+                  ? "Sincronizando workspace"
+                  : "Preparando build",
+            },
           }),
         )
 
@@ -3098,7 +3140,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         //     if the import fails, abort this tier (editing a stale/foreign
         //     tree and overwriting the local files with it is strictly worse
         //     than falling back) and let dispatch use the next engine.
-        if (iterate) {
+        if (iterate && !resuming) {
           const workspaceFiles = collectWorkspaceFilesForImport(files)
           if (workspaceFiles.length > 0) {
             try {
@@ -3131,44 +3173,65 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           }
         }
 
-        // 2) Start a `plan` run for the user's order. Codex requires a plan run
-        //    before a build; the plan auto-approves into build below.
-        const planRun = await runWithProjectSlot(projectId, () =>
-          codexApi.createRun(projectId, {
-            mode: "plan",
-            // APPS-mode envelope → backend forces the Vite SPA stack + runs the
-            // ensureAppsVitePreviewable auto-repair, so the generated app opens in
-            // the preview instead of an error overlay (root cause of the overlays).
-            prompt: buildAppsModePrompt(text),
-            model: activeModelName || undefined,
-            // The runs API speaks eco|standard|power — a provider name here used
-            // to reach the backend as an unknown tier and always fell to Eco.
-            tier: tierForModelChoice(activeProvider, activeModelName),
-          }),
-        )
-
         setEnginePhase(
-          "Generando con Agente Codex",
+          resuming ? "Retomando con Agente Codex" : "Generando con Agente Codex",
           buildCodeAgentPhases("generate", {
             plan: { status: "done", detail: "Proyecto Codex listo" },
             context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
-            generate: { status: "running", detail: "El agente está trabajando" },
+            generate: {
+              status: "running",
+              detail: resuming ? "Recuperando la ejecución durable" : "El agente está trabajando",
+            },
           }),
         )
 
-        // 3) Stream the plan run to its terminal / waiting_approval status, then
-        //    approve it → build run, and stream that to a terminal status.
-        let fold = await streamRun(planRun.id, initialCodexEngineFold())
-        // Detener during the plan stream: the stream resolves (close(), not a
-        // reject) — bail out before approving a plan the user just cancelled.
-        if (cancelledTurn()) {
-          finishStopped()
-          return
-        }
-        if (fold.status === "waiting_approval") {
-          const buildRun = await codexApi.approvePlan(projectId, planRun.id, tierForModelChoice(activeProvider, activeModelName))
-          // Reset the fold for the build run's own event/seq stream.
-          fold = await streamRun(buildRun.id, initialCodexEngineFold())
+        // 2) A fresh order starts as plan → backend auto-continues to build.
+        // A restored tab reconnects directly to whichever durable run is
+        // already active (or pulls a completed build) instead of creating a
+        // duplicate project/run.
+        let fold: CodexEngineFoldState
+        let completedBuildRunId: string | null = null
+        if (opts?.resume?.mode === "build") {
+          const seed = initialCodexEngineFold()
+          seed.status = opts.resume.status
+          completedBuildRunId = opts.resume.runId
+          fold = await streamRun(opts.resume.runId, seed)
+        } else {
+          const planRun = opts?.resume
+            ? {
+                id: opts.resume.runId,
+                status: opts.resume.status,
+              }
+            : await runWithProjectSlot(projectId, () =>
+                codexApi.createRun(projectId, {
+                  mode: "plan",
+                  // APPS-mode envelope → backend forces the Vite SPA stack +
+                  // preview repair, so generated software opens immediately.
+                  prompt: buildAppsModePrompt(text),
+                  model: activeModelName || undefined,
+                  tier: tierForModelChoice(activeProvider, activeModelName),
+                  // The backend owns continuation even when this tab closes.
+                  autoExecute: true,
+                }),
+              )
+          const seed = initialCodexEngineFold()
+          if (opts?.resume) seed.status = planRun.status
+          fold = await streamRun(planRun.id, seed)
+          if (cancelledTurn()) {
+            finishStopped()
+            return
+          }
+          if (fold.status === "waiting_approval") {
+            // Idempotent: if the backend already continued this plan, the same
+            // build run is returned rather than a second one being created.
+            const buildRun = await codexApi.approvePlan(
+              projectId,
+              planRun.id,
+              tierForModelChoice(activeProvider, activeModelName),
+            )
+            completedBuildRunId = buildRun.id
+            fold = await streamRun(buildRun.id, initialCodexEngineFold())
+          }
         }
         // Detener during the build stream: same shape — no files, no fallback.
         if (cancelledTurn()) {
@@ -3178,6 +3241,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
         const narrative = codexLiveContent(fold)
         const succeeded = fold.status === "done"
+        const markBuildSynchronized = () => {
+          if (completedBuildRunId) {
+            persistSessionCodexSyncedRun(sid, completedBuildRunId)
+          }
+        }
 
         if (succeeded) {
           // 4) Pull the workspace back. Written paths first (freshest), then
@@ -3222,6 +3290,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           }
           if (written.length > 0) {
             applyFilesToWorkspace(written)
+            markBuildSynchronized()
             const tally =
               pullFailed.length > 0
                 ? `${written.length} de ${sourcePaths.length} archivo(s) (${pullFailed.length} no se pudieron leer)`
@@ -3239,16 +3308,21 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // Run finished OK but produced no files (e.g. a pure Q&A/plan turn):
           // render the narrative if any, else fall through to the fallback.
           if (narrative && iterate) {
+            markBuildSynchronized()
             finish(narrative)
             return
           }
+          // A successful run with no pullable files has still been inspected.
+          // Do not replay it after every reload; a fresh user turn can iterate
+          // on the same durable project normally.
+          markBuildSynchronized()
         }
 
         // 5) FALLBACK: the run failed / produced nothing usable → deterministic
         //    builder so the user is NEVER left empty (mirrors runEngine). Apply
         //    it in this turn; buildApp() cannot be called here because this
         //    engine already owns the shared busy latch.
-        if (!iterate) {
+        if (!iterate && !resuming) {
           // The generated files below live in the browser workspace, not in the
           // remote Codex project. Force PreviewPane onto the local/static path
           // so it cannot boot a stale remote tree and hide this fallback.
@@ -3280,7 +3354,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               generate: { status: "done", detail: "Detenida" },
             }),
           })
-        } else if (!opts?.iterate) {
+        } else if (!opts?.iterate && !opts?.resume) {
           // Project provisioning / plan-run error during a BUILD → still deliver
           // via the deterministic builder in the same turn.
           try {
@@ -3339,6 +3413,79 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   React.useEffect(() => {
     codexEngineRef.current = runCodexEngine
   }, [runCodexEngine])
+
+  // Reload/close continuity: the backend keeps auto-executable runs alive.
+  // When this chat mounts again, reconnect to the newest active run or pull
+  // the newest completed build that has not reached this browser workspace.
+  const resumedCodexRunsRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
+    const projectId = linkedCodexProject({
+      sessionId,
+      workspaceId: activeFolder?.id,
+    })
+    if (!projectId) return
+
+    let cancelled = false
+    let resumeKey: string | null = null
+    let targetRunId: string | null = null
+    void (async () => {
+      try {
+        const runs = await codexApi.listRuns(projectId)
+        if (cancelled || busyRef.current || buildingAppRef.current) return
+        const target = selectCodexContinuityRun(
+          runs,
+          readSessionCodexSyncedRun(sessionId),
+        )
+        if (!target || (target.mode !== "plan" && target.mode !== "build")) return
+        resumeKey = `${projectId}:${target.id}`
+        targetRunId = target.id
+        if (resumedCodexRunsRef.current.has(resumeKey)) return
+        resumedCodexRunsRef.current.add(resumeKey)
+        codexProjectRef.current[sessionId] = projectId
+        setActiveCodexProject(projectId)
+        await runCodexEngine(
+          target.prompt?.trim() || "Retoma y completa el trabajo pendiente.",
+          sessionId,
+          {
+            omitUserTurn: true,
+            resume: {
+              projectId,
+              runId: target.id,
+              mode: target.mode,
+              status: target.status,
+            },
+          },
+        )
+      } catch {
+        // A stale/deleted project is handled by the next explicit user turn,
+        // which verifies the durable link before creating a replacement.
+      } finally {
+        // Session switches abort the browser stream but not the backend run.
+        // Permit a later remount to reconnect unless this exact build already
+        // reached the local workspace.
+        if (
+          resumeKey &&
+          targetRunId &&
+          readSessionCodexSyncedRun(sessionId) !== targetRunId
+        ) {
+          resumedCodexRunsRef.current.delete(resumeKey)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeFolder?.id,
+    buildingApp,
+    busy,
+    codexAvailable,
+    runCodexEngine,
+    sessionId,
+    user?.id,
+  ])
 
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: CodeDispatchOptions) => {

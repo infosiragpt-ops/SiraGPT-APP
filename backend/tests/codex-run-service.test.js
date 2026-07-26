@@ -101,6 +101,22 @@ test('createRun (plan) enqueues a job and persists jobId', async () => {
   assert.equal(db._runs.find((r) => r.id === run.id).jobId, `job-${run.id}`);
 });
 
+test('auto-executable plan stores control metadata but exposes a clean prompt', async () => {
+  const db = makeDb({ projects: [PROJECT] });
+  const run = await createRun({
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'plan',
+    prompt: 'construye una app full-stack',
+    autoExecute: true,
+    db,
+    queue: fakeQueue(),
+  });
+  assert.equal(run.prompt, 'construye una app full-stack');
+  assert.equal(run.autoExecute, true);
+  assert.match(db._runs.find((row) => row.id === run.id).prompt, /^\[SIRAGPT_AUTOEXEC_V1\]/);
+});
+
 test('createRun (build) requires a valid approvable planRunId', async () => {
   const db = makeDb({ projects: [PROJECT] });
   await assert.rejects(
@@ -120,6 +136,28 @@ test('createRun (build) succeeds with an approvable plan run', async () => {
   const run = await createRun({ userId: 'u1', projectId: 'p1', mode: 'build', planRunId: 'plan-ok', db, queue: fakeQueue() });
   assert.equal(run.mode, 'build');
   assert.equal(run.planRunId, 'plan-ok');
+});
+
+test('build approval is idempotent for the same plan run', async () => {
+  const calls = [];
+  const db = makeDb({
+    projects: [PROJECT],
+    runs: [
+      { id: 'plan-ok', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' },
+      { id: 'build-existing', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued', planRunId: 'plan-ok' },
+    ],
+  });
+  const run = await createRun({
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'build',
+    planRunId: 'plan-ok',
+    db,
+    queue: fakeQueue(calls),
+  });
+  assert.equal(run.id, 'build-existing');
+  assert.equal(calls.length, 0, 'an existing continuation must not be enqueued twice');
+  assert.equal(db._runs.filter((row) => row.mode === 'build').length, 1);
 });
 
 test('createRun 409s when a run is already active for the project', async () => {

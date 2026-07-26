@@ -167,7 +167,7 @@ function assertAgentOutcome(outcome) {
   return outcome;
 }
 
-function createImplementerRequest({ run, project = null, timeoutMs, maxSteps }) {
+function createImplementerRequest({ run, project = null, timeoutMs, maxSteps, evidence = {} }) {
   const runView = Object.freeze({
     id: run?.id,
     mode: run?.mode,
@@ -190,7 +190,7 @@ function createImplementerRequest({ run, project = null, timeoutMs, maxSteps }) 
       revision: null,
       access: 'rw',
     },
-    evidence: {},
+    evidence: isRecord(evidence) ? evidence : {},
     budget: { timeoutMs, maxSteps },
   };
   return assertAgentRequest(request, { expectedRole: 'implementer' });

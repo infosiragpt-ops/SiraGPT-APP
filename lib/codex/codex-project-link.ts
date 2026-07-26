@@ -2,6 +2,7 @@
 
 const SESSION_PROJECT_PREFIX = "siragpt:codex-project:"
 const WORKSPACE_PROJECT_PREFIX = "siragpt:codex-workspace-project:"
+const SESSION_SYNCED_RUN_PREFIX = "siragpt:codex-synced-run:"
 
 function readLink(prefix: string, key: string | null | undefined): string | null {
   if (typeof window === "undefined" || !key) return null
@@ -44,6 +45,18 @@ export function persistSessionCodexProject(
 
 export function clearSessionCodexProject(sessionId: string | null | undefined): void {
   clearLink(SESSION_PROJECT_PREFIX, sessionId)
+  clearLink(SESSION_SYNCED_RUN_PREFIX, sessionId)
+}
+
+export function readSessionCodexSyncedRun(sessionId: string | null | undefined): string | null {
+  return readLink(SESSION_SYNCED_RUN_PREFIX, sessionId)
+}
+
+export function persistSessionCodexSyncedRun(
+  sessionId: string | null | undefined,
+  runId: string,
+): void {
+  writeLink(SESSION_SYNCED_RUN_PREFIX, sessionId, runId)
 }
 
 export function readWorkspaceCodexProject(workspaceId: string | null | undefined): string | null {

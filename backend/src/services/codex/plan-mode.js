@@ -14,7 +14,7 @@
 
 const { extractJson } = require('../builder/llm');
 
-function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback } = {}) {
+function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback, openclawPromptBlock } = {}) {
   const appsMode = /MODO APPS TIPO CODEX/i.test(String(prompt || ''));
   const system = [
     'Eres un agente de software senior que planifica proyectos web en español.',
@@ -33,6 +33,7 @@ function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback } = 
       ? 'En /apps la arquitectura debe ser "React 18 + Vite 7 + TypeScript (SPA)" con componentes .tsx en src/, para que el preview renderice de inmediato en /index.html.'
       : null,
     'Sé concreto y conciso. 3–8 tareas accionables ordenadas.',
+    openclawPromptBlock || null,
   ].filter(Boolean).join('\n');
 
   const parts = [`Proyecto: ${project?.name || 'Sin nombre'}`];
@@ -92,6 +93,7 @@ async function runPlanMode({ run, project, deps }) {
       fileTree: deps.fileTree,
       priorPlan: deps.priorPlan,
       feedback: deps.feedback,
+      openclawPromptBlock: deps.openclawPromptBlock,
     });
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
   })();

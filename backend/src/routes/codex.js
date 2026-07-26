@@ -604,6 +604,7 @@ router.post(
     body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
     body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
+    body('autoExecute').optional().isBoolean(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -617,6 +618,7 @@ router.post(
         model: req.body.model ?? null,
         tier: req.body.tier ?? null,
         planRunId: req.body.planRunId ?? null,
+        autoExecute: req.body.autoExecute === true,
       });
       return res.status(201).json({ run });
     } catch (err) {
