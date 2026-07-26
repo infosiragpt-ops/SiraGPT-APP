@@ -78,7 +78,10 @@ function stamp({ prompt = '', systemBlocks = [], response = '', modules = null, 
   const blocksHash = hashSystemBlocks(systemBlocks);
   const responseHash = hashText(response);
   const moduleFp = modules ? moduleFingerprint(modules.join('|')) : moduleFingerprint();
-  const ts = Date.now();
+  const requestedTs = Number(opts.ts);
+  const ts = Number.isSafeInteger(requestedTs) && requestedTs >= 0
+    ? requestedTs
+    : Date.now();
   const payload = [STAMP_VERSION, ts, promptHash, blocksHash, responseHash, moduleFp].join('::');
   const secret = opts.secret || SECRET;
   const signature = hmac(secret, payload);
@@ -96,7 +99,12 @@ function stamp({ prompt = '', systemBlocks = [], response = '', modules = null, 
 function verify(receivedStamp, { prompt = '', systemBlocks = [], response = '', secret } = {}) {
   if (!receivedStamp) return { ok: false, reason: 'stamp missing' };
   if (receivedStamp.version !== STAMP_VERSION) return { ok: false, reason: 'unknown version' };
-  const recomputed = stamp({ prompt, systemBlocks, response, opts: { secret } });
+  const recomputed = stamp({
+    prompt,
+    systemBlocks,
+    response,
+    opts: { secret, ts: receivedStamp.ts },
+  });
   if (!recomputed) return { ok: false, reason: 'provenance disabled' };
   // Compare component-wise so we can report exactly which field broke.
   const mismatches = [];

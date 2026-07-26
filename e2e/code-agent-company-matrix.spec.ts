@@ -73,6 +73,7 @@ async function mockMatrixCompany(
   { linkedProject = true }: { linkedProject?: boolean } = {},
 ) {
   const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0 }
+  let proactiveEnabled = false
   await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject }) => {
     const ceoSession = {
       id: "ceo-qa",
@@ -134,12 +135,16 @@ async function mockMatrixCompany(
       return fulfillJson(route, { ok: true, enabled: true, canRun: true, allowlistConfigured: true })
     }
     if (/^\/codex\/projects\/[^/]+\/proactive$/.test(path)) {
-      const enabled = request.method() === "POST"
-      if (enabled) operations.proactiveToggles += 1
+      if (request.method() === "POST") {
+        proactiveEnabled = true
+        operations.proactiveToggles += 1
+      } else if (request.method() === "DELETE") {
+        proactiveEnabled = false
+      }
       return fulfillJson(route, {
         state: {
-          enabled,
-          enabledAt: enabled ? now : null,
+          enabled: proactiveEnabled,
+          enabledAt: proactiveEnabled ? now : null,
           dayKey: "2026-07-23",
           runsToday: 7,
           deptIndex: 4,
@@ -452,8 +457,9 @@ test("PROACTIVO provisions and confirms a real company runtime before turning on
   const operations = await mockMatrixCompany(page, { linkedProject: false })
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
+  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
   const companyRail = page.locator("[data-agent-company-dock='apps']")
-  await expect(companyRail).toHaveAttribute("data-proactive", "off")
+  await expect(companyRail).toHaveAttribute("data-proactive", "off", { timeout: 15_000 })
   await companyRail.getByRole("button", { name: /^PROACTIVO$/ }).click()
 
   await expect(companyRail).toHaveAttribute("data-proactive", "on")
