@@ -59,6 +59,19 @@ test('verify: round-trip succeeds when prompt/blocks/response unchanged', () => 
   assert.strictEqual(r.mismatches.length, 0);
 });
 
+test('verify: round-trip remains valid after the clock advances', async () => {
+  const args = {
+    prompt: 'hello',
+    systemBlocks: [{ kind: 'master-prompt', text: 'sys' }],
+    response: 'hi there',
+  };
+  const s = prov.stamp(args);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const r = prov.verify(s, args);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.expected.ts, s.ts);
+});
+
 test('verify: mutated response is flagged as responseHash mismatch', () => {
   const args = {
     prompt: 'hello',
