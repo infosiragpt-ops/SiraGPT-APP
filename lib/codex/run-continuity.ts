@@ -19,13 +19,19 @@ export function selectCodexContinuityRun(
     .filter((run) => run.autoExecute === true)
     .slice()
     .sort(newestFirst)
+  const plansWithBuilds = new Set(
+    automatic
+      .filter((run) => run.mode === "build" && run.planRunId)
+      .map((run) => run.planRunId as string),
+  )
 
   const active =
     automatic.find((run) => run.mode === "build" && ACTIVE_STATUSES.has(run.status)) ||
     automatic.find(
       (run) =>
         run.mode === "plan" &&
-        (ACTIVE_STATUSES.has(run.status) || run.status === "waiting_approval"),
+        (ACTIVE_STATUSES.has(run.status) ||
+          (run.status === "waiting_approval" && !plansWithBuilds.has(run.id))),
     )
   if (active) return active
 
