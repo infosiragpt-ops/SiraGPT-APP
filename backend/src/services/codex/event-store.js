@@ -25,6 +25,7 @@ const defaultPrisma = (() => {
 // Per-run next-seq cache and append serialization chain (process-local).
 const seqCache = new Map(); // runId -> next seq (Int)
 const appendChains = new Map(); // runId -> Promise (tail of the serialized chain)
+const transcriptSinks = new Map(); // runId -> async (envelope) => void
 
 const MAX_COLLISION_RETRIES = 5;
 
@@ -114,6 +115,15 @@ async function appendEvent(runId, type, data, { prisma = defaultPrisma, publish,
     /* publish is best-effort; replay covers any loss */
   }
 
+  const transcriptSink = transcriptSinks.get(runId);
+  if (transcriptSink) {
+    try {
+      await transcriptSink(envelope);
+    } catch {
+      /* transcript is a secondary artifact; the durable DB event already won */
+    }
+  }
+
   return envelope;
 }
 
@@ -181,6 +191,22 @@ function _resetSeqCache(runId) {
 function forgetRun(runId) {
   if (runId === undefined) return;
   _resetSeqCache(runId);
+  transcriptSinks.delete(runId);
 }
 
-module.exports = { appendEvent, listEvents, createSeqGate, _resetSeqCache, forgetRun };
+function registerTranscriptSink(runId, sink) {
+  if (!runId || typeof sink !== 'function') throw new TypeError('runId and transcript sink are required');
+  transcriptSinks.set(runId, sink);
+  return () => {
+    if (transcriptSinks.get(runId) === sink) transcriptSinks.delete(runId);
+  };
+}
+
+module.exports = {
+  appendEvent,
+  listEvents,
+  createSeqGate,
+  registerTranscriptSink,
+  _resetSeqCache,
+  forgetRun,
+};

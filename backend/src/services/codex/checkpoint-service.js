@@ -13,6 +13,13 @@
  */
 
 const { gitCommitAll } = require('./workspace');
+const {
+  currentBranch,
+  isSafeBranchName,
+  mergeRunBranch,
+  runBranchName,
+  startRunBranch,
+} = require('./git-workflow');
 
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -24,6 +31,34 @@ const DIFF_CAP = 500_000;
 
 function isValidSha(sha) {
   return typeof sha === 'string' && SHA_RE.test(sha);
+}
+
+function projectBaseBranch(project, explicit = null) {
+  const candidate = String(
+    explicit
+    || project?.brief?.repository?.sourceBranch
+    || project?.brief?.sourceBranch
+    || 'main',
+  ).trim();
+  return isSafeBranchName(candidate) ? candidate : null;
+}
+
+async function captureWorkspaceTree({ runner, projectId }) {
+  const add = await runner.exec(projectId, ['git', 'add', '-A']);
+  if (add?.exitCode !== 0) throw new Error(`git_add_failed: ${String(add?.stderr || add?.stdout || '').slice(0, 500)}`);
+  const tree = await runner.exec(projectId, ['git', 'write-tree']);
+  const treeSha = String(tree?.stdout || '').trim();
+  if (tree?.exitCode !== 0 || !isValidSha(treeSha)) {
+    throw new Error(`git_write_tree_failed: ${String(tree?.stderr || tree?.stdout || '').slice(0, 500)}`);
+  }
+  return treeSha;
+}
+
+async function commitTreeSha({ runner, projectId, commitSha = 'HEAD' }) {
+  if (commitSha !== 'HEAD' && !isValidSha(commitSha)) return null;
+  const out = await runner.exec(projectId, ['git', 'rev-parse', `${commitSha}^{tree}`]);
+  const treeSha = String(out?.stdout || '').trim();
+  return out?.exitCode === 0 && isValidSha(treeSha) ? treeSha : null;
 }
 
 function requireDb(db) {
@@ -81,7 +116,15 @@ async function generateCheckpointTitle({ run, changedFiles, llmTurn, env = proce
  * persisted checkpoint, or null when the workspace is clean (no card).
  */
 async function createCheckpoint({ run, project, deps = {} }) {
-  const { runner, eventStore, prisma = defaultPrisma, llmTurn, env, clock = () => new Date() } = deps;
+  const {
+    runner,
+    eventStore,
+    prisma = defaultPrisma,
+    llmTurn,
+    env,
+    expectedTreeSha = null,
+    clock = () => new Date(),
+  } = deps;
   const projectId = project?.id || run.projectId;
 
   // Check for changes BEFORE touching the DB — a clean tree means no checkpoint
@@ -93,6 +136,14 @@ async function createCheckpoint({ run, project, deps = {} }) {
   const db = requireDb(prisma);
   const title = await generateCheckpointTitle({ run, changedFiles: changed.slice(0, 2000), llmTurn, env });
   const commitSha = await gitCommitAll(runner, projectId, title);
+  const committedTreeSha = await commitTreeSha({ runner, projectId, commitSha });
+  if (expectedTreeSha && committedTreeSha !== expectedTreeSha) {
+    const error = new Error('checkpoint tree differs from the tree that passed verification');
+    error.code = 'checkpoint_tree_mismatch';
+    error.expectedTreeSha = expectedTreeSha;
+    error.committedTreeSha = committedTreeSha;
+    throw error;
+  }
 
   const checkpoint = await db.codexCheckpoint.create({
     data: { runId: run.id, projectId, commitSha, title },
@@ -112,14 +163,126 @@ async function createCheckpoint({ run, project, deps = {} }) {
 }
 
 /**
+ * Opt-in entry point for OT-7. The caller invokes this before the agent edits
+ * files; existing checkpoint callers keep their historical single-branch
+ * behavior until the run orchestrator adopts this service.
+ */
+async function prepareRunBranch({ run, project, deps = {} }) {
+  const projectId = project?.id || run?.projectId;
+  const baseBranch = projectBaseBranch(project, deps.baseBranch);
+  if (!baseBranch) return { ok: false, status: 'rejected', code: 'invalid_base_branch' };
+  return startRunBranch({
+    runner: deps.runner,
+    projectId,
+    runId: run?.id,
+    baseBranch,
+  });
+}
+
+/**
+ * Close a run-scoped branch: checkpoint, persist a resumable session snapshot,
+ * then merge only when verification is green. Branch mismatch is fail-closed
+ * so a caller can never commit an unrelated run's workspace by accident.
+ */
+async function finalizeRunCheckpoint({
+  run,
+  project,
+  verification,
+  verify,
+  deps = {},
+}) {
+  const projectId = project?.id || run?.projectId;
+  const baseBranch = projectBaseBranch(project, deps.baseBranch);
+  if (!baseBranch) return { ok: false, status: 'rejected', code: 'invalid_base_branch' };
+  const expectedBranch = runBranchName(run?.id);
+  if (!expectedBranch) {
+    return { ok: false, status: 'rejected', code: 'invalid_run_id' };
+  }
+
+  const activeBranch = await currentBranch({ runner: deps.runner, projectId });
+  if (activeBranch !== expectedBranch) {
+    return {
+      ok: false,
+      status: 'blocked',
+      code: 'run_branch_mismatch',
+      expectedBranch,
+      activeBranch,
+    };
+  }
+
+  const checkpoint = await createCheckpoint({ run, project, deps });
+  let sessionSnapshot = null;
+  if (deps.sessionService && typeof deps.sessionService.saveSnapshot === 'function') {
+    try {
+      let cursorSeq = 0;
+      if (typeof deps.sessionService.readTranscript === 'function') {
+        const transcript = await deps.sessionService.readTranscript({
+          projectId,
+          sessionId: run.id,
+        });
+        cursorSeq = transcript?.lastSeq || 0;
+      }
+      sessionSnapshot = await deps.sessionService.saveSnapshot({
+        projectId,
+        sessionId: run.id,
+        cursorSeq,
+        checkpointSha: checkpoint?.commitSha || null,
+        checkpointId: checkpoint?.id || null,
+        loopState: {
+          phase: 'checkpointed',
+          runId: run.id,
+          runBranch: expectedBranch,
+        },
+      });
+    } catch (error) {
+      sessionSnapshot = {
+        ok: false,
+        error: String(error?.code || error?.message || 'snapshot_failed').slice(0, 200),
+      };
+    }
+  }
+
+  const merge = await mergeRunBranch({
+    runner: deps.runner,
+    projectId,
+    runId: run.id,
+    baseBranch,
+    verification,
+    verify,
+    expectedCommitSha: checkpoint?.commitSha || null,
+    expectedTreeSha: deps.expectedTreeSha || null,
+  });
+  return {
+    ok: merge.ok,
+    status: merge.status,
+    checkpoint,
+    sessionSnapshot,
+    merge,
+  };
+}
+
+/**
  * Rollback the workspace to a checkpoint: stop dev (if running) → git reset
  * --hard <sha> → restart dev (only if it was running). Idempotent (resetting to
  * the current HEAD is a no-op). Ownership enforced via the project relation.
  */
-async function rollbackCheckpoint({ checkpointId, userId, deps = {} }) {
+async function rollbackCheckpoint({
+  checkpointId,
+  userId,
+  projectId: expectedProjectId = null,
+  runId: expectedRunId = null,
+  deps = {},
+}) {
   const { runner, prisma = defaultPrisma } = deps;
   const db = requireDb(prisma);
-  const cp = await db.codexCheckpoint.findFirst({ where: { id: checkpointId, project: { userId } } });
+  const cp = await db.codexCheckpoint.findFirst({
+    where: {
+      id: checkpointId,
+      project: { userId },
+      ...(expectedProjectId ? { projectId: expectedProjectId } : {}),
+      ...(expectedRunId ? { runId: expectedRunId } : {}),
+    },
+  });
   if (!cp) return { error: 'not_found', status: 404 };
   if (!isValidSha(cp.commitSha)) return { error: 'invalid_sha', status: 400 };
   const projectId = cp.projectId;
@@ -136,6 +299,10 @@ async function rollbackCheckpoint({ checkpointId, userId, deps = {} }) {
   } catch { /* runner status best-effort */ }
   if (wasRunning) { try { await runner.stopDev(projectId); } catch { /* ignore */ } }
 
+  const previous = await runner.exec(projectId, ['git', 'rev-parse', 'HEAD']).catch(() => null);
+  const previousSha = isValidSha(String(previous?.stdout || '').trim())
+    ? String(previous.stdout).trim()
+    : null;
   const reset = await runner.exec(projectId, ['git', 'reset', '--hard', cp.commitSha]);
   if (reset?.exitCode !== 0) {
     return { error: 'reset_failed', status: 500, detail: String(reset?.stderr || '').slice(0, 400) };
@@ -147,7 +314,15 @@ async function rollbackCheckpoint({ checkpointId, userId, deps = {} }) {
     // vite re-serves at / and the same-origin proxy iframe 404s.
     try { await runner.startDev(projectId, { basePath: devBasePath }); restarted = true; } catch { /* ignore */ }
   }
-  return { ok: true, commitSha: cp.commitSha, restarted };
+  return { ok: true, commitSha: cp.commitSha, previousSha, restarted };
+}
+
+async function restoreWorkspaceSha({ projectId, commitSha, deps = {} }) {
+  if (!isValidSha(commitSha)) return { ok: false, error: 'invalid_sha' };
+  const reset = await deps.runner.exec(projectId, ['git', 'reset', '--hard', commitSha]);
+  return reset?.exitCode === 0
+    ? { ok: true, commitSha }
+    : { ok: false, error: 'reset_failed' };
 }
 
 /** Unified diff of a checkpoint vs its parent (or the empty tree for the first commit). */
@@ -189,11 +364,17 @@ async function listCheckpoints({ projectId, userId, prisma = defaultPrisma }) {
 module.exports = {
   createCheckpoint,
   rollbackCheckpoint,
+  restoreWorkspaceSha,
   getCheckpointDiff,
   listCheckpoints,
   generateCheckpointTitle,
+  prepareRunBranch,
+  finalizeRunCheckpoint,
   parseShortstat,
   isValidSha,
+  projectBaseBranch,
+  captureWorkspaceTree,
+  commitTreeSha,
   publicCheckpoint,
   EMPTY_TREE,
 };

@@ -18,12 +18,15 @@
  */
 
 const planMode = require('./plan-mode');
+const { randomUUID } = require('node:crypto');
 const buildTools = require('./build-tools');
 const actionStoreDefault = require('./action-store');
 const checkpointService = require('./checkpoint-service');
 const runMetrics = require('./run-metrics');
 const progressLedger = require('./progress-ledger');
 const proactiveMetrics = require('./proactive-metrics');
+const toolScheduler = require('./tool-scheduler');
+const projectHooks = require('./project-hooks');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
 const { createSandboxClient } = require('./sandbox-provider');
 
@@ -48,6 +51,9 @@ const MAX_TRUNCATION_RETRIES = 3;
 // recent working set intact; older tool dumps compress well).
 const COMPACT_KEEP_TAIL = 10;
 const COMPACT_TOOL_RESULT_CAP = 300;
+const CONTEXT_SUMMARY_INPUT_CAP = 48_000;
+const CONTEXT_SUMMARY_CAP = 12_000;
+const CONTEXT_SNAPSHOT_MESSAGE_CAP = 8_000;
 
 function readPosInt(raw, fallback) {
   const n = Number.parseInt(raw, 10);
@@ -57,6 +63,53 @@ function readPosInt(raw, fallback) {
 function flagEnabled(raw) {
   const value = String(raw || '').trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'on';
+}
+
+function productionFeatureEnabled(env, key) {
+  const configured = env?.[key];
+  if (configured !== undefined && configured !== null && String(configured).trim() !== '') {
+    return flagEnabled(configured);
+  }
+  return env?.NODE_ENV === 'production';
+}
+
+function boundedArgsPreview(value, maxChars = 4000) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  try {
+    const text = JSON.stringify(value);
+    if (text.length <= maxChars) return JSON.parse(text);
+    return { summary: `${text.slice(0, maxChars)}…[args recortados]` };
+  } catch {
+    return { summary: '[args no serializables]' };
+  }
+}
+
+function messageContentText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (block?.type === 'text' && typeof block.text === 'string') return block.text;
+      if (block?.type === 'image' || block?.type === 'image_url') return '[captura visual]';
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function toolResultContent(toolName, observation, fallback = '', suffix = '') {
+  const prefix = `[TOOL_RESULT ${toolName}] `;
+  if (!Array.isArray(observation)) return `${prefix}${observation || fallback || ''}${suffix}`;
+  const blocks = observation.map((block) => (
+    block && typeof block === 'object' ? { ...block } : block
+  ));
+  const firstText = blocks.findIndex((block) => block?.type === 'text' && typeof block.text === 'string');
+  if (firstText >= 0) {
+    blocks[firstText] = { ...blocks[firstText], text: `${prefix}${blocks[firstText].text}${suffix}` };
+  } else {
+    blocks.unshift({ type: 'text', text: `${prefix}${fallback || ''}${suffix}` });
+  }
+  return blocks;
 }
 
 /** Plan tasks not yet completed → titles (plan-mode tasks carry no status: pending). */
@@ -218,6 +271,7 @@ function buildSystemPrompt({
   sourcePrompt,
   projectNotes,
   parallelSubagents = false,
+  parallelTools = true,
   openclawPromptBlock = '',
 }) {
   const appsMode = isAppsPrompt(sourcePrompt);
@@ -227,6 +281,9 @@ function buildSystemPrompt({
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
     'Construyes el proyecto usando las herramientas disponibles (no inventes resultados).',
     'Trabajas paso a paso: piensa, usa una herramienta, lee el resultado, continúa.',
+    parallelTools
+      ? 'Cuando varias lecturas, búsquedas o escrituras a archivos DISTINTOS sean independientes, puedes emitirlas en el mismo turno; el runtime preserva automáticamente las dependencias read-after-write.'
+      : 'Emite herramientas de una en una; este runtime tiene desactivada la ejecución paralela.',
     'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css, src/lib/ai.ts (helper askAI: IA real sin API keys) y src/lib/storage.ts (helper `storage`: PERSISTENCIA REAL server-side sin backend propio).',
     'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.',
     'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
@@ -262,10 +319,10 @@ function buildSystemPrompt({
     lines.push(fileTree);
   }
   if (projectNotes) {
-    lines.push('MEMORIA DEL PROYECTO (.sira/notes.md — decisiones y convenciones de runs anteriores; respétalas):');
+    lines.push('MEMORIA DEL PROYECTO (SIRA.md + .sira/notes.md — instrucciones, decisiones y convenciones acumuladas; respétalas):');
     lines.push(projectNotes);
   }
-  lines.push('Mantén la memoria del proyecto: al tomar una decisión estructural (stack, entidades, paleta, convenciones) o dejar trabajo pendiente, actualiza .sira/notes.md con write_file (crea el archivo si no existe; máximo ~60 líneas, lo más nuevo arriba).');
+  lines.push('Mantén la memoria del proyecto: SIRA.md contiene instrucciones y convenciones duraderas; .sira/notes.md conserva notas operativas breves. Cuando tomes una decisión estructural o dejes trabajo pendiente, lee primero el archivo correspondiente y actualiza .sira/notes.md con edit_file; actualiza también SIRA.md cuando cambien instrucciones o convenciones duraderas (crea los archivos si no existen; evita duplicados y conserva lo más importante arriba).');
   // Deterministic skill auto-injection: when the prompt clearly matches a
   // builtin playbook, its full body ships with the system prompt — the E2E
   // validation showed models skip a passively-listed use_skill.
@@ -287,7 +344,7 @@ function buildSystemPrompt({
  * COMPACT_KEEP_TAIL messages stay verbatim. Returns how many were compacted.
  */
 function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}) {
-  const total = messages.reduce((n, m) => n + (typeof m?.content === 'string' ? m.content.length : 0), 0);
+  const total = messages.reduce((n, m) => n + messageContentText(m?.content).length, 0);
   if (total <= maxChars) return 0;
   let compacted = 0;
   const lastKeep = Math.max(2, messages.length - COMPACT_KEEP_TAIL);
@@ -300,6 +357,142 @@ function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}
     }
   }
   return compacted;
+}
+
+function messageChars(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .reduce((total, message) => total + messageContentText(message?.content).length, 0);
+}
+
+function boundedTail(messages, count = COMPACT_KEEP_TAIL) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => message && ['user', 'assistant'].includes(message.role))
+    .slice(-Math.max(2, count))
+    .map((message) => ({
+      role: message.role,
+      content: messageContentText(message.content).slice(0, CONTEXT_SNAPSHOT_MESSAGE_CAP),
+    }));
+}
+
+function summaryInput(messages) {
+  const rows = (Array.isArray(messages) ? messages : []).slice(2, -COMPACT_KEEP_TAIL);
+  const parts = [];
+  let remaining = CONTEXT_SUMMARY_INPUT_CAP;
+  for (const row of rows) {
+    if (remaining <= 0) break;
+    const text = messageContentText(row?.content);
+    if (!text) continue;
+    const piece = `${String(row.role || 'unknown').toUpperCase()}:\n${text}\n`;
+    parts.push(piece.slice(0, remaining));
+    remaining -= piece.length;
+  }
+  return parts.join('\n').slice(0, CONTEXT_SUMMARY_INPUT_CAP);
+}
+
+async function summariseContextWithLlm({
+  messages,
+  llmTurn,
+  signal,
+  env,
+  tier,
+  metrics,
+}) {
+  if (typeof llmTurn !== 'function') return '';
+  const input = summaryInput(messages);
+  if (!input.trim()) return '';
+  try {
+    const turn = await llmTurn({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Resume el estado de una sesión de programación para que otro agente continúe sin repetir trabajo.',
+            'Conserva: objetivo, decisiones, archivos leídos/modificados, resultados de tools, errores pendientes, plan y próximo paso.',
+            'No inventes. Devuelve solo un resumen técnico compacto en español.',
+          ].join('\n'),
+        },
+        { role: 'user', content: input },
+      ],
+      tools: [],
+      signal,
+      env,
+      tier,
+    });
+    if (turn?.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(turn.usage);
+    return String(turn?.text || '').trim().slice(0, CONTEXT_SUMMARY_CAP);
+  } catch {
+    return '';
+  }
+}
+
+async function loadLatestContextSnapshot({ runId, eventStore, prisma }) {
+  if (!runId || typeof eventStore?.listEvents !== 'function') return null;
+  try {
+    const events = await eventStore.listEvents(runId, { afterSeq: 0, prisma });
+    return [...events].reverse().find((event) => event?.type === 'context_snapshot')?.data || null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadResolvedToolPermissions({ runId, eventStore, prisma }) {
+  const allowed = new Set();
+  allowed.permissionIds = new Map();
+  allowed.decisions = [];
+  if (!runId || typeof eventStore?.listEvents !== 'function') return allowed;
+  try {
+    const events = await eventStore.listEvents(runId, { afterSeq: 0, prisma });
+    for (const event of events) {
+      const toolName = String(event.data?.toolName || '');
+      const permissionId = String(event.data?.permissionId || '');
+      const bindingHash = String(event.data?.bindingHash || '');
+      if (!/^[a-f0-9]{64}$/.test(bindingHash)) continue;
+      if (event?.type === 'tool_permission_resolved') {
+        if (event.data?.decision === 'allow') {
+          allowed.add(bindingHash);
+          allowed.permissionIds.set(bindingHash, permissionId);
+        }
+        if (event.data?.decision === 'deny') {
+          allowed.delete(bindingHash);
+          allowed.permissionIds.delete(bindingHash);
+        }
+        allowed.decisions.push({ toolName, bindingHash, decision: event.data?.decision });
+      }
+      if (
+        event?.type === 'tool_permission_consumed'
+        && allowed.permissionIds.get(bindingHash) === permissionId
+      ) {
+        allowed.delete(bindingHash);
+        allowed.permissionIds.delete(bindingHash);
+      }
+    }
+  } catch { /* no persisted permission decisions yet */ }
+  return allowed;
+}
+
+async function persistContextSnapshot({
+  run,
+  eventStore,
+  prisma,
+  summary = '',
+  messages,
+  state = {},
+}) {
+  if (!run?.id || typeof eventStore?.appendEvent !== 'function') return;
+  await eventStore.appendEvent(
+    run.id,
+    'context_snapshot',
+    {
+      summary: String(summary || '').slice(0, CONTEXT_SUMMARY_CAP),
+      tailMessages: boundedTail(messages),
+      state: {
+        verifyRounds: Math.max(0, Number(state.verifyRounds) || 0),
+        planExtensionsUsed: Math.max(0, Number(state.planExtensionsUsed) || 0),
+        planTasks: Array.isArray(state.planTasks) ? state.planTasks.slice(0, 80) : [],
+      },
+    },
+    { prisma },
+  ).catch(() => {});
 }
 
 /**
@@ -712,17 +905,25 @@ async function safeFileTree(runner, projectId) {
 }
 
 /**
- * Project memory (CLAUDE.md pattern): `.sira/notes.md` persists decisions,
- * conventions and pending work across runs. Read best-effort and injected
- * into every run's system prompt; the agent is instructed to keep it fresh.
+ * Project memory (CLAUDE.md pattern): root SIRA.md is the durable instruction
+ * file and `.sira/notes.md` is the compact operational notebook. Both are
+ * loaded on every run so a new session inherits conventions immediately.
  */
 async function safeProjectNotes(runner, projectId) {
-  try {
-    const read = await runner.readFile(projectId, '.sira/notes.md');
-    const text = typeof read?.content === 'string' ? read.content.trim() : '';
-    return text ? text.slice(0, 2500) : '';
-  } catch { /* no notes yet — normal for new projects */ }
-  return '';
+  const read = async (path) => {
+    try {
+      const out = await runner.readFile(projectId, path);
+      return typeof out?.content === 'string' ? out.content.trim() : '';
+    } catch {
+      return '';
+    }
+  };
+  const [instructions, notes] = await Promise.all([read('SIRA.md'), read('.sira/notes.md')]);
+  if (!instructions) return notes.slice(0, 2400);
+  const sections = [];
+  if (instructions) sections.push(`## SIRA.md\n${instructions.slice(0, 5000)}`);
+  if (notes) sections.push(`## .sira/notes.md\n${notes.slice(0, 3000)}`);
+  return sections.join('\n\n').slice(0, 8000);
 }
 
 /** Load the approved plan from the plan run's plan_proposed event. */
@@ -761,6 +962,26 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const actionStore = deps.actionStore || actionStoreDefault;
   const webSearch = deps.webSearch || defaultWebSearch;
   const projectId = project?.id || run.projectId;
+  const runBranchesEnabled = productionFeatureEnabled(env, 'CODEX_RUN_BRANCHES');
+
+  if (runBranchesEnabled) {
+    const branch = await checkpointService.prepareRunBranch({
+      run,
+      project,
+      deps: { runner },
+    }).catch((error) => ({
+      ok: false,
+      code: 'run_branch_setup_failed',
+      detail: String(error?.message || error).slice(0, 1000),
+    }));
+    if (!branch?.ok) {
+      const error = `run branch setup failed (${branch?.code || 'unknown'}): ${String(branch?.detail || '').slice(0, 1000)}`;
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `No inicié cambios porque no pude aislar la rama de esta corrida: ${error}`,
+      }, { prisma }).catch(() => {});
+      return { status: 'error', error };
+    }
+  }
 
   const baseMaxSteps = readPosInt(env.CODEX_MAX_STEPS, DEFAULT_MAX_STEPS);
   let maxSteps = baseMaxSteps;
@@ -773,7 +994,49 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // serialized until the sandbox provider assigns an independent worktree to
   // every writer. The opt-in exists only for controlled development/tests.
   const parallelSubagents = flagEnabled(env.CODEX_PARALLEL_WRITE_SUBAGENTS);
-  const registry = buildTools.toolRegistry();
+  // General tool parallelism is default-on, but the scheduler is conservative:
+  // process-wide tools and any read/write dependency stay serialized.
+  const parallelTools = String(env.CODEX_PARALLEL_TOOL_CALLS ?? '1').trim() !== '0';
+  let registry = buildTools.toolRegistry();
+  const dynamicTools = new Map();
+  if (String(env.CODEX_MCP_DYNAMIC_TOOLS ?? '1').trim() !== '0') {
+    try {
+      const mcp = require('./mcp-tools');
+      const dynamic = await mcp.buildDynamicMcpTools({
+        runner,
+        project: projectId,
+        env,
+        signal,
+      });
+      for (const [name, tool] of dynamic.tools) {
+        dynamicTools.set(name, tool);
+        registry.push({ name, description: tool.description, parameters: tool.parameters });
+      }
+    } catch {
+      // MCP is an optional extension; the built-in registry remains available.
+    }
+  }
+  const activeProvider = (() => {
+    try {
+      const anthropic = require('./anthropic-turn').getAnthropicTurnConfig({ env, tier: run?.tier || null });
+      if (anthropic.enabled && anthropic.tierEligible) {
+        return { provider: 'anthropic', model: anthropic.model };
+      }
+      return require('./llm-provider').describeActiveProvider({ env });
+    } catch {
+      return { provider: null, model: run?.model || null };
+    }
+  })();
+  const modelCapabilities = (() => {
+    try {
+      return require('../agent-harness/model-capabilities').resolveModelCapabilities(
+        activeProvider.model || run?.model || '',
+        { provider: activeProvider.provider || '', env },
+      );
+    } catch {
+      return { supportsImages: false };
+    }
+  })();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
@@ -791,6 +1054,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
+  const hookState = deps.projectHooks || await projectHooks.loadProjectHooks({ runner, projectId });
+  const resolvedToolPermissions = await loadResolvedToolPermissions({
+    runId: run.id,
+    eventStore,
+    prisma,
+  });
+  const resumeSnapshot = deps.resumeSnapshot || await loadLatestContextSnapshot({
+    runId: run.id,
+    eventStore,
+    prisma,
+  });
   const messages = [
     {
       role: 'system',
@@ -801,16 +1075,46 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         sourcePrompt,
         projectNotes,
         parallelSubagents,
+        parallelTools,
         openclawPromptBlock: deps.openclawPromptBlock || '',
       }),
     },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
   ];
+  let contextSummary = String(resumeSnapshot?.summary || '').slice(0, CONTEXT_SUMMARY_CAP);
+  if (contextSummary) {
+    messages.push({
+      role: 'user',
+      content: `[REANUDACIÓN · RESUMEN PERSISTIDO]\n${contextSummary}\nContinúa desde este estado y confirma el estado real con tools antes de editar.`,
+    });
+  }
+  if (Array.isArray(resumeSnapshot?.tailMessages)) {
+    messages.push(...resumeSnapshot.tailMessages
+      .filter((message) => message && ['user', 'assistant'].includes(message.role))
+      .slice(-COMPACT_KEEP_TAIL)
+      .map((message) => ({
+        role: message.role,
+        content: String(message.content || '').slice(0, CONTEXT_SNAPSHOT_MESSAGE_CAP),
+      })));
+  }
+  if (hookState?.error) {
+    messages.push({
+      role: 'user',
+      content: `[POLÍTICA] .sira/hooks.json no pudo cargarse y se ignoró de forma segura: ${String(hookState.error).slice(0, 500)}`,
+    });
+  }
+  if (resolvedToolPermissions.decisions?.length) {
+    const decisions = resolvedToolPermissions.decisions
+      .slice(-8)
+      .map((row) => `- ${row.toolName}: ${row.decision === 'allow' ? 'aprobada una vez' : 'denegada; busca una alternativa'}`)
+      .join('\n');
+    messages.push({ role: 'user', content: `[PERMISOS RESUELTOS]\n${decisions}` });
+  }
 
   let actionCounter = 0;
   let groupCounter = 0;
   let aborted = false;
-  let verifyRounds = 0;
+  let verifyRounds = Math.max(0, Number(resumeSnapshot?.state?.verifyRounds) || 0);
   // Anti-thrash state. A model can loop rewriting one file and burn the budget
   // without progress. Two detectors, because the prod smoke showed BOTH shapes:
   //  - consecutive: src/index.css written 5× in a row (`sameWriteRun`).
@@ -833,14 +1137,50 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // NaN-only parse: an explicit CODEX_PLAN_EXTENSIONS=0 disables the feature.
   const _rawPlanExt = Number.parseInt(env.CODEX_PLAN_EXTENSIONS ?? '', 10);
   const maxPlanExtensions = Number.isFinite(_rawPlanExt) && _rawPlanExt >= 0 ? _rawPlanExt : 2;
-  let planExtensionsUsed = 0;
-  let latestPlanTasks = Array.isArray(plan?.tasks) ? plan.tasks : null;
+  let planExtensionsUsed = Math.max(0, Number(resumeSnapshot?.state?.planExtensionsUsed) || 0);
+  let latestPlanTasks = Array.isArray(resumeSnapshot?.state?.planTasks) && resumeSnapshot.state.planTasks.length
+    ? resumeSnapshot.state.planTasks
+    : (Array.isArray(plan?.tasks) ? plan.tasks : null);
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
     if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 
     compactMessages(messages, { maxChars: contextMaxChars });
+    if (
+      String(env.CODEX_CONTEXT_SUMMARY ?? '1').trim() !== '0'
+      && messageChars(messages) > contextMaxChars
+    ) {
+      const nextSummary = await summariseContextWithLlm({
+        messages,
+        llmTurn,
+        signal,
+        env,
+        tier: run?.tier || null,
+        metrics,
+      });
+      if (nextSummary) {
+        const tail = boundedTail(messages);
+        contextSummary = nextSummary;
+        messages.splice(
+          2,
+          Math.max(0, messages.length - 2),
+          {
+            role: 'user',
+            content: `[COMPACTION · RESUMEN DE CONTEXTO]\n${contextSummary}\nUsa tools para reconfirmar cualquier estado mutable antes de editar.`,
+          },
+          ...tail,
+        );
+        await persistContextSnapshot({
+          run,
+          eventStore,
+          prisma,
+          summary: contextSummary,
+          messages,
+          state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+        });
+      }
+    }
 
     let turn;
     try {
@@ -924,6 +1264,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         metrics,
         sourcePrompt,
         webSearch,
+        sessionService: deps.sessionService,
+        backgroundTaskService: deps.backgroundTaskService,
       });
       return closed.ok === false
         ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
@@ -939,7 +1281,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const groupId = `g${++groupCounter}`;
 
     const executeCall = async (call) => {
-      const tool = buildTools.getTool(call.name);
+      const tool = buildTools.getTool(call.name) || dynamicTools.get(call.name) || null;
       const actionId = `a${++actionCounter}`;
 
       // update_plan is a plan-progress signal, not a workspace action: it emits a
@@ -965,14 +1307,74 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         return { message: `[TOOL_RESULT ${call.name}] Error: herramienta desconocida.`, blocking: null };
       }
 
-      const command = tool.commandFor(call.args);
-      const path = tool.pathFor(call.args);
+      const preHook = projectHooks.applyPreHooks(hookState?.hooks, call.name, call.args);
+      const effectiveArgs = preHook.args;
+      const command = tool.commandFor(effectiveArgs);
+      const path = tool.pathFor(effectiveArgs);
+      if (!preHook.allowed) {
+        await eventStore.appendEvent(run.id, 'action_start', {
+          actionId,
+          kind: tool.kind,
+          command: command || undefined,
+          path: path || undefined,
+          groupId,
+        }, { prisma });
+        await eventStore.appendEvent(run.id, 'action_end', {
+          actionId,
+          status: 'error',
+          outputSummary: `hook preToolUse denegó ${call.name}: ${preHook.message}`,
+          durationMs: 0,
+        }, { prisma });
+        if (metrics?.recordAction) metrics.recordAction(tool.kind, 0);
+        return {
+          message: `[TOOL_RESULT ${call.name}] Acción denegada por .sira/hooks.json: ${preHook.message}`,
+          blocking: null,
+        };
+      }
+
+      if (projectHooks.requiresApproval(project, call.name, effectiveArgs)) {
+        const bindingHash = projectHooks.permissionBindingHash({
+          runId: run.id,
+          projectId,
+          toolName: call.name,
+          args: effectiveArgs,
+        });
+        if (resolvedToolPermissions.has(bindingHash)) {
+          // Approval is one-shot. A later invocation of the same sensitive
+          // tool asks again unless project policy is changed. Consume it
+          // durably before execution so a worker restart cannot reuse it.
+          const permissionId = resolvedToolPermissions.permissionIds.get(bindingHash);
+          await eventStore.appendEvent(run.id, 'tool_permission_consumed', {
+            permissionId,
+            toolName: call.name,
+            bindingHash,
+          }, { prisma });
+          resolvedToolPermissions.delete(bindingHash);
+          resolvedToolPermissions.permissionIds.delete(bindingHash);
+        } else {
+          return {
+            message: `[TOOL_RESULT ${call.name}] Pendiente de aprobación del usuario; la herramienta todavía NO se ejecutó.`,
+            blocking: null,
+            approval: {
+              permissionId: `${run.id}:${actionId}:${randomUUID()}`,
+              toolName: call.name,
+              bindingHash,
+              humanDescription: command || path || `Ejecutar ${call.name}`,
+              argsPreview: boundedArgsPreview(effectiveArgs),
+            },
+          };
+        }
+      }
+
       await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: tool.kind, command: command || undefined, path: path || undefined, groupId }, { prisma });
 
       const t0 = clock().getTime();
-      const result = await tool.execute(call.args, {
+      let result = await tool.execute(effectiveArgs, {
         runner,
         project: projectId,
+        projectRecord: project,
+        run,
+        userId: run?.userId || null,
         webSearch,
         env,
         signal,
@@ -981,6 +1383,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         // delegation runs on the SAME engine as the main loop (Claude for paid
         // tiers) instead of silently dropping to the free Cerebras path.
         tier: run?.tier || null,
+        modelCapabilities,
+        modelProvider: activeProvider.provider,
         onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
         // Live visibility for delegations: the SDK surfaces every specialist
         // tool call as a nested action in the same group. The event store's
@@ -999,6 +1403,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           };
         },
       });
+      result = projectHooks.applyPostHooks(hookState?.hooks, call.name, result);
       const durationMs = Math.max(0, clock().getTime() - t0);
       const status = result.isError ? 'error' : 'done';
 
@@ -1055,29 +1460,52 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
 
       return {
-        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}${thrashNudge}`,
+        message: toolResultContent(call.name, result.observation, outputSummary, thrashNudge),
         blocking: blockingPattern ? { pattern: blockingPattern, detail: result.observation || outputSummary } : null,
       };
     };
 
-    // Claude Code-style parallel delegation: a turn made ONLY of run_subagent
-    // calls runs them concurrently (independent specialists; writes are
-    // per-file via the runner). Mixed turns stay sequential to preserve
-    // read-after-write ordering between tools.
-    const allDelegations = parallelSubagents && calls.length > 1 && calls.every((c) => c.name === 'run_subagent');
     const outcomes = [];
-    if (allDelegations) {
-      outcomes.push(...await Promise.all(calls.map((call) => executeCall(call))));
-    } else {
-      for (const call of calls) outcomes.push(await executeCall(call));
+    const batches = toolScheduler.scheduleToolCalls(calls, {
+      enabled: parallelTools,
+      parallelSubagents,
+    });
+    for (const batch of batches) {
+      const batchOutcomes = batch.length > 1
+        ? await Promise.all(batch.map((call) => executeCall(call)))
+        : [await executeCall(batch[0])];
+      outcomes.push(...batchOutcomes);
+      // A permission request pauses the run before later dependency batches.
+      if (batchOutcomes.some((outcome) => outcome?.approval)) break;
     }
 
     for (const o of outcomes) messages.push({ role: 'user', content: o.message });
+    const approval = outcomes.find((outcome) => outcome?.approval)?.approval;
+    if (approval) {
+      await eventStore.appendEvent(run.id, 'tool_permission_required', approval, { prisma });
+      await persistContextSnapshot({
+        run,
+        eventStore,
+        prisma,
+        summary: contextSummary,
+        messages,
+        state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+      });
+      return { status: 'waiting_approval', permission: approval };
+    }
     const blocked = outcomes.find((o) => o.blocking);
     if (blocked) {
       await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blocked.blocking.pattern, blocked.blocking.detail), { prisma }).catch(() => {});
       return { status: 'error', error: blocked.blocking.pattern.title };
     }
+    await persistContextSnapshot({
+      run,
+      eventStore,
+      prisma,
+      summary: contextSummary,
+      messages,
+      state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+    });
 
     // ── Plan-aware budget extension: this was the last budgeted step and the
     // plan is still unfinished → extend (bounded) so the agent keeps working
@@ -1130,6 +1558,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     metrics,
     sourcePrompt,
     webSearch,
+    sessionService: deps.sessionService,
+    backgroundTaskService: deps.backgroundTaskService,
   });
   return closed.ok === false
     ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
@@ -1339,25 +1769,67 @@ async function closeBuild({
   metrics,
   sourcePrompt,
   webSearch,
+  sessionService,
+  backgroundTaskService,
 }) {
   await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
   const resolvedSourcePrompt = sourcePrompt != null
     ? sourcePrompt
     : await resolveRunSourcePrompt({ run, prisma });
   const proactiveMeta = progressLedger.taskMetaFromPrompt(resolvedSourcePrompt);
-  // Claude Code-style close: verify the workspace actually compiles and run a
-  // bounded self-heal pass BEFORE the checkpoint so the fixes land in it.
-  // Best-effort by contract (verify-loop never throws).
-  try {
-    const verifyLoop = require('./verify-loop');
-    await verifyLoop.autoVerifyAndHeal({ run, projectId: project?.id || run.projectId, runner, eventStore, prisma, llmTurn, env, metrics, clock });
-  } catch (err) {
-    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] auto-verify failed:', err?.message || err);
+  // Stop every trusted background task before verification. A task that cannot
+  // be authenticated/stopped blocks the close rather than racing the gate.
+  const verifyRequired = String(env?.CODEX_AUTO_VERIFY ?? '1') !== '0';
+  const projectId = project?.id || run.projectId;
+  let projectGateVerification = null;
+  if (verifyRequired) {
+    const tasks = backgroundTaskService || require('./background-tasks').backgroundTaskService;
+    let quiescence;
+    try {
+      quiescence = typeof tasks?.quiesce === 'function'
+        ? await tasks.quiesce({ runner, project: projectId })
+        : { ok: false, code: 'background_quiescence_unavailable' };
+    } catch (error) {
+      quiescence = { ok: false, code: 'background_quiescence_failed', error: String(error?.message || error) };
+    }
+    if (!quiescence?.ok) {
+      projectGateVerification = {
+        ran: true,
+        clean: false,
+        rounds: 0,
+        fixes: 0,
+        blockingGates: [quiescence?.code || 'background_tasks'],
+      };
+    } else {
+      try {
+        const verifyLoop = require('./verify-loop');
+        projectGateVerification = await verifyLoop.autoVerifyAndHeal({
+          run,
+          projectId,
+          runner,
+          eventStore,
+          prisma,
+          llmTurn,
+          env,
+          metrics,
+          clock,
+        });
+      } catch (err) {
+        projectGateVerification = {
+          ran: true,
+          clean: false,
+          rounds: 0,
+          fixes: 0,
+          blockingGates: ['verification_exception'],
+          diagnostics: [{ message: String(err?.message || err).slice(0, 1000) }],
+        };
+        if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] auto-verify failed:', err?.message || err);
+      }
+    }
   }
 
   let verification = null;
   if (proactiveMeta) {
-    const projectId = project?.id || run.projectId;
     const maxRepairRounds = readPosInt(env?.CODEX_PROACTIVE_REPAIR_ROUNDS, 2);
     verification = await verifyWorkspace({
       runner,
@@ -1409,13 +1881,84 @@ async function closeBuild({
     recordGateMetrics(verification);
   }
 
-  const projectId = project?.id || run.projectId;
   let diffstat = await workspaceDiffstat({ runner, projectId });
   let checkpoint = null;
-  if (!proactiveMeta || verification?.ok) {
+  let branchFinalization = null;
+  let projectGatesPassed = !verifyRequired || projectGateVerification?.clean === true;
+  let verifiedTreeSha = null;
+  const closeRunBranchesEnabled = productionFeatureEnabled(env, 'CODEX_RUN_BRANCHES');
+  if (closeRunBranchesEnabled && projectGatesPassed && (!proactiveMeta || verification?.ok)) {
     try {
-      checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });
+      verifiedTreeSha = await checkpointService.captureWorkspaceTree({ runner, projectId });
+    } catch (error) {
+      projectGatesPassed = false;
+      projectGateVerification = {
+        ...(projectGateVerification || {}),
+        ran: true,
+        clean: false,
+        blockingGates: ['git_tree_capture'],
+        diagnostics: [{ message: String(error?.message || error).slice(0, 1000) }],
+      };
+    }
+  }
+  if (projectGatesPassed && (!proactiveMeta || verification?.ok)) {
+    try {
+      const checkpointDeps = {
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        clock,
+        env,
+        sessionService,
+        expectedTreeSha: verifiedTreeSha,
+      };
+      if (closeRunBranchesEnabled) {
+        const repository = project?.brief?.kind === 'repo' ? project.brief.repository : null;
+        if (repository?.url) {
+          checkpoint = await checkpointService.createCheckpoint({
+            run,
+            project,
+            deps: checkpointDeps,
+          });
+          const pullRequest = await require('./self-hosting').publishSelfHostedPullRequest({
+            runner,
+            projectId,
+            runId: run.id,
+            repositoryUrl: repository.url,
+            sourceBranch: repository.sourceBranch || 'main',
+            title: `feat(codex): ${String(resolvedSourcePrompt || run.id).slice(0, 120)}`,
+            env,
+          });
+          branchFinalization = { ...pullRequest, checkpoint };
+        } else {
+          branchFinalization = await checkpointService.finalizeRunCheckpoint({
+            run,
+            project,
+            verification: {
+              ok: true,
+              status: 'passed',
+              treeSha: verifiedTreeSha,
+            },
+            deps: checkpointDeps,
+          });
+          checkpoint = branchFinalization?.checkpoint || null;
+        }
+      } else {
+        checkpoint = await checkpointService.createCheckpoint({
+          run,
+          project,
+          deps: checkpointDeps,
+        });
+      }
     } catch (err) {
+      if (closeRunBranchesEnabled) {
+        branchFinalization = {
+          ok: false,
+          status: 'checkpoint_failed',
+          merge: { code: 'checkpoint_failed', detail: String(err?.message || err).slice(0, 1000) },
+        };
+      }
       if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
     }
   }
@@ -1434,7 +1977,7 @@ async function closeBuild({
   }
 
   if (proactiveMeta) {
-    const passed = verification?.ok === true;
+    const passed = verification?.ok === true && projectGatesPassed;
     await progressLedger.appendLedgerEntry({
       prisma,
       project,
@@ -1449,7 +1992,9 @@ async function closeBuild({
         acceptance: acceptanceEvidence(proactiveMeta, verification),
         learnings: passed
           ? [`Verificación superada: ${gateEvidence(verification)}.`]
-          : [`${verification?.kind || 'quality'}: ${String(verification?.errors || 'gate sin evidencia').slice(0, 480)}`],
+          : projectGatesPassed
+            ? [`${verification?.kind || 'quality'}: ${String(verification?.errors || 'gate sin evidencia').slice(0, 480)}`]
+            : [`project gates: ${String(projectGateVerification?.blockingGates || 'tests/lint/typecheck').slice(0, 480)}`],
         createdAt: clock().toISOString(),
       },
     }).catch((err) => {
@@ -1463,11 +2008,50 @@ async function closeBuild({
         ok: false,
         checkpoint: null,
         verification,
-        error: `proactive quality gate failed (${verification?.kind || 'unknown'}): ${String(verification?.errors || 'sin evidencia').slice(0, 1200)}`,
+        projectGateVerification,
+        error: projectGatesPassed
+          ? `proactive quality gate failed (${verification?.kind || 'unknown'}): ${String(verification?.errors || 'sin evidencia').slice(0, 1200)}`
+          : `project quality gates failed: ${String(projectGateVerification?.blockingGates || 'unknown').slice(0, 1200)}`,
       };
     }
   }
-  return { ok: true, checkpoint, verification };
+  if (!projectGatesPassed) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `No cerré ni creé un checkpoint: fallaron los gates obligatorios ${String(projectGateVerification?.blockingGates || 'de calidad')}.`,
+    }, { prisma }).catch(() => {});
+    return {
+      ok: false,
+      checkpoint: null,
+      verification,
+      projectGateVerification,
+      error: `project quality gates failed: ${String(projectGateVerification?.blockingGates || 'unknown').slice(0, 1200)}`,
+    };
+  }
+  if (branchFinalization && branchFinalization.ok !== true) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `El checkpoint quedó en la rama del run, pero no se fusionó: ${branchFinalization?.merge?.code || branchFinalization?.status || 'merge_failed'}.`,
+    }, { prisma }).catch(() => {});
+    return {
+      ok: false,
+      checkpoint,
+      verification,
+      projectGateVerification,
+      branchFinalization,
+      error: `run branch merge failed: ${branchFinalization?.merge?.code || branchFinalization?.status || 'unknown'}`,
+    };
+  }
+  if (branchFinalization?.pullRequest?.url) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `Pull request creado desde el checkpoint verde: ${branchFinalization.pullRequest.url}`,
+    }, { prisma }).catch(() => {});
+  }
+  return {
+    ok: true,
+    checkpoint,
+    verification,
+    projectGateVerification,
+    branchFinalization,
+  };
 }
 
 /** Best-effort lookup of the user's plan for pricing (defaults to FREE). */
@@ -1510,6 +2094,16 @@ module.exports = {
   packageLooksLikeNext,
   isAppsPrompt,
   compactMessages,
+  boundedArgsPreview,
+  messageChars,
+  boundedTail,
+  messageContentText,
+  toolResultContent,
+  summaryInput,
+  summariseContextWithLlm,
+  loadLatestContextSnapshot,
+  loadResolvedToolPermissions,
+  persistContextSnapshot,
   verifyWorkspace,
   verifyDevServer,
   verifySmokeTests,

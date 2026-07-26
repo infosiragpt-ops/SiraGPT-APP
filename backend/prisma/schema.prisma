@@ -2348,11 +2348,32 @@ model CodexProject {
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   runs        CodexRun[]
   checkpoints CodexCheckpoint[]
+  sessionStates CodexSessionState[]
   database    CodexProjectDatabase?
 
   @@index([userId, updatedAt])
   @@index([userId, deleteAfter])
   @@map("codex_projects")
+}
+
+// Control-plane persistence for Codex transcripts and resumable loop
+// snapshots. Keeping this outside the executable workspace prevents generated
+// code and agent tools from reading, replacing or racing their own history.
+model CodexSessionState {
+  id         String   @id @default(cuid())
+  projectId  String
+  sessionId  String
+  transcript Json
+  snapshot   Json?
+  revision   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sessionId])
+  @@index([projectId, updatedAt])
+  @@map("codex_session_states")
 }
 
 // Metadata for a future PostgreSQL resource dedicated to one Codex project.

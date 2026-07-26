@@ -61,11 +61,16 @@ test('enqueueCodexRun forwards an explicit jobId to BullMQ in every call shape',
     add: async (name, data, opts) => { adds.push({ name, data, opts }); return { id: opts.jobId }; },
   });
   try {
-    await runQueue.enqueueCodexRun({ runId: 'r1', jobId: 'r1:r1' }); // boot-recovery resume shape
+    await runQueue.enqueueCodexRun({
+      runId: 'r1',
+      jobId: 'r1:r1',
+      resumeSnapshot: { sessionId: 'r1', cursorSeq: 9, checkpointSha: 'deadbee' },
+    }); // boot-recovery resume shape
     await runQueue.enqueueCodexRun({ runId: 'r1' }, { jobId: 'r1:rq5' }); // opts shape
     await runQueue.enqueueCodexRun({ runId: 'r1' }); // default: idempotent on runId
     assert.deepEqual(adds.map((a) => a.opts.jobId), ['r1:r1', 'r1:rq5', 'r1']);
     assert.ok(adds.every((a) => a.name === 'codex-run' && a.data.runId === 'r1'));
+    assert.deepEqual(adds[0].data.resumeSnapshot, { sessionId: 'r1', cursorSeq: 9, checkpointSha: 'deadbee' });
   } finally {
     runQueue.__setQueueForTests(null);
   }
@@ -85,8 +90,9 @@ test('default handler pins the adapter id validated at boot and captures injecte
   env.CODEX_IMPLEMENTER_ADAPTER = 'not-installed';
   env.CODEX_RUN_TIMEOUT_MS = '9999';
 
-  await handler({ data: { runId: 'run-1' } });
+  await handler({ data: { runId: 'run-1', resumeSnapshot: { sessionId: 'run-1', cursorSeq: 4 } } });
   assert.equal(calls[0].runId, 'run-1');
+  assert.deepEqual(calls[0].resumeSnapshot, { sessionId: 'run-1', cursorSeq: 4, checkpointSha: null });
   assert.equal(calls[0].env.CODEX_IMPLEMENTER_ADAPTER, 'native');
   assert.equal(calls[0].env.CODEX_RUN_TIMEOUT_MS, '1234');
   assert.equal(Object.isFrozen(calls[0].env), true);

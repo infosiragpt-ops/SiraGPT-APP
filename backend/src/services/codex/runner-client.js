@@ -60,9 +60,14 @@ function createRunnerClient({
   timeoutMs = 30_000,
   controlToken = runnerControlToken(),
 } = {}) {
-  async function call(method, path, body, { callTimeoutMs } = {}) {
+  async function call(method, path, body, { callTimeoutMs, signal } = {}) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), callTimeoutMs || timeoutMs);
+    const abortFromCaller = () => ctrl.abort();
+    if (signal) {
+      if (signal.aborted) ctrl.abort();
+      else signal.addEventListener('abort', abortFromCaller, { once: true });
+    }
     let res;
     try {
       const headers = {};
@@ -78,6 +83,7 @@ function createRunnerClient({
       throw new RunnerError(`runner unreachable: ${err.message}`, { status: 0 });
     } finally {
       clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', abortFromCaller);
     }
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -96,6 +102,7 @@ function createRunnerClient({
       // 120s `bun install` gets chopped at the client's 30s default.
       call('POST', '/workspace/exec', { project, cmd, timeoutMs: opts.timeoutMs }, {
         callTimeoutMs: opts.timeoutMs ? Math.max(timeoutMs, opts.timeoutMs + 10_000) : undefined,
+        signal: opts.signal,
       }),
     // Multi-project (audit B1): /run answers { port } of the project's slot;
     // /status and /stop accept an optional project. Without one they keep the

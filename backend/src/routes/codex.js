@@ -37,6 +37,11 @@ const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
 const checkpointService = require('../services/codex/checkpoint-service');
+const {
+  CodexSessionError,
+  createSessionService,
+} = require('../services/codex/session-service');
+const codexDb = require('../config/database');
 const publicationService = require('../services/codex/publication-service');
 const {
   STRIP_REQUEST_HEADERS,
@@ -44,6 +49,21 @@ const {
 } = require('../utils/proxy-headers');
 
 const router = express.Router();
+let sessionRunner = null;
+let sessionService = null;
+
+function codexSessionRuntime() {
+  sessionRunner = sessionRunner || createSandboxClient();
+  sessionService = sessionService || createSessionService({ db: codexDb });
+  return { runner: sessionRunner, service: sessionService };
+}
+
+function mapSessionError(error, res) {
+  if (error instanceof CodexSessionError) {
+    return res.status(400).json({ error: error.code, message: error.message, details: error.details || undefined });
+  }
+  return res.status(502).json({ error: 'codex_session_failed', message: String(error?.message || error) });
+}
 
 function base64urlJson(value) {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -249,6 +269,7 @@ router.post(
         userId: req.user.id,
         name: req.body.name.trim(),
         brief: req.body.brief ?? null,
+        repository: req.body.repository ?? null,
       });
       return res.status(201).json({ project });
     } catch (err) {
@@ -708,6 +729,135 @@ router.get('/projects/:projectId/runs/:runId', authenticateToken, async (req, re
   }
 });
 
+async function requireOwnedScopedRun(req, res) {
+  const run = await runService.getRun({ userId: req.user.id, runId: req.params.runId });
+  if (!run || run.projectId !== req.params.projectId) {
+    res.status(404).json({ error: 'run_not_found' });
+    return null;
+  }
+  return run;
+}
+
+router.get('/projects/:projectId/runs/:runId/transcript', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!await requireOwnedScopedRun(req, res)) return undefined;
+    const { service } = codexSessionRuntime();
+    const transcript = await service.readTranscript({
+      projectId: req.params.projectId,
+      sessionId: req.params.runId,
+      afterSeq: Math.max(0, Number.parseInt(req.query.afterSeq, 10) || 0),
+      limit: Math.max(1, Math.min(500, Number.parseInt(req.query.limit, 10) || 200)),
+    });
+    return res.json({ transcript });
+  } catch (error) {
+    return mapSessionError(error, res);
+  }
+});
+
+router.post(
+  '/projects/:projectId/runs/:runId/session/continue',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      if (!await requireOwnedScopedRun(req, res)) return undefined;
+      const { service } = codexSessionRuntime();
+      const session = await service.continueSession({
+        projectId: req.params.projectId,
+        sessionId: req.params.runId,
+        afterSeq: req.body?.afterSeq == null ? null : Math.max(0, Number(req.body.afterSeq) || 0),
+        limit: Math.max(1, Math.min(500, Number(req.body?.limit) || 200)),
+      });
+      return res.json({ session });
+    } catch (error) {
+      return mapSessionError(error, res);
+    }
+  },
+);
+
+router.post(
+  '/projects/:projectId/runs/:runId/session/fork',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      if (!await requireOwnedScopedRun(req, res)) return undefined;
+      const { service } = codexSessionRuntime();
+      const targetSessionId = `fork-${crypto.randomUUID()}`;
+      const session = await service.forkSession({
+        projectId: req.params.projectId,
+        sourceSessionId: req.params.runId,
+        targetSessionId,
+        atSeq: req.body?.atSeq == null ? Number.MAX_SAFE_INTEGER : Math.max(0, Number(req.body.atSeq) || 0),
+      });
+      return res.status(201).json({ session });
+    } catch (error) {
+      return mapSessionError(error, res);
+    }
+  },
+);
+
+router.post(
+  '/projects/:projectId/runs/:runId/session/rewind',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    const toSeq = Number(req.body?.toSeq);
+    if (!Number.isSafeInteger(toSeq) || toSeq < 0) {
+      return res.status(400).json({ error: 'invalid_rewind_cursor' });
+    }
+    try {
+      const ownedRun = await requireOwnedScopedRun(req, res);
+      if (!ownedRun) return undefined;
+      const activeStatuses = new Set(['queued', 'running', 'waiting_approval']);
+      const projectRuns = await runService.listRuns({
+        userId: req.user.id,
+        projectId: req.params.projectId,
+      });
+      if (activeStatuses.has(ownedRun.status) || projectRuns.some((run) => activeStatuses.has(run.status))) {
+        return res.status(409).json({ error: 'rewind_run_active' });
+      }
+      const { runner, service } = codexSessionRuntime();
+      const checkpointId = req.body?.checkpointId == null ? null : String(req.body.checkpointId).trim();
+      let previousSha = null;
+      const session = await service.rewindSession({
+        projectId: req.params.projectId,
+        sessionId: req.params.runId,
+        toSeq,
+        checkpointId,
+        restoreCheckpoint: checkpointId
+          ? async () => {
+            const restored = await checkpointService.rollbackCheckpoint({
+              checkpointId,
+              userId: req.user.id,
+              projectId: req.params.projectId,
+              runId: req.params.runId,
+              deps: { runner },
+            });
+            previousSha = restored?.previousSha || null;
+            return restored?.error ? { ok: false, ...restored } : { ok: true, ...restored };
+          }
+          : null,
+        undoCheckpointRestore: checkpointId
+          ? async () => (
+            previousSha
+              ? checkpointService.restoreWorkspaceSha({
+                projectId: req.params.projectId,
+                commitSha: previousSha,
+                deps: { runner },
+              })
+              : { ok: false, error: 'previous_sha_unavailable' }
+          )
+          : null,
+      });
+      return res.json({ session });
+    } catch (error) {
+      return mapSessionError(error, res);
+    }
+  },
+);
+
 router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, async (req, res) => {
   try {
     const run = await runService.cancelRun({ userId: req.user.id, runId: req.params.id });
@@ -716,6 +866,31 @@ router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, asyn
     return mapRunError(err, res);
   }
 });
+
+router.post(
+  '/runs/:id/tool-permission',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('permissionId').isString().isLength({ min: 3, max: 240 }),
+    body('decision').isString().isIn(['allow', 'deny']),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const run = await runService.resolveToolPermission({
+        userId: req.user.id,
+        runId: req.params.id,
+        permissionId: req.body.permissionId,
+        decision: req.body.decision,
+      });
+      return res.json({ run });
+    } catch (err) {
+      return mapRunError(err, res);
+    }
+  },
+);
 
 // ── Checkpoints (feature 07) ────────────────────────────────────────────────
 // /checkpoints/* and /projects/:id/checkpoints do not collide with the legacy

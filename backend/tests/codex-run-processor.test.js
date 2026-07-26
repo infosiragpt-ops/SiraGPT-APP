@@ -49,6 +49,40 @@ test('build run: queued → running → done with run_status events in order', a
   assert.deepEqual(statuses, ['running', 'done']);
 });
 
+test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
+  const d = makeDeps();
+  let nativeInput;
+  const loopState = {
+    summary: 'La API ya está implementada.',
+    tailMessages: [{ role: 'user', content: 'continúa con las pruebas' }],
+    state: { verifyRounds: 1 },
+  };
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: async (args) => { nativeInput = args; return { status: 'done' }; },
+    sessionService: {
+      async readSnapshot() {
+        return {
+          version: 1,
+          projectId: 'p1',
+          sessionId: 'run-1',
+          cursorSeq: 7,
+          checkpointSha: 'deadbee',
+          loopState,
+        };
+      },
+    },
+    resumeSnapshot: { sessionId: 'run-1', cursorSeq: 7, checkpointSha: 'deadbee' },
+    clock: d.clock,
+    env: { NODE_ENV: 'test' },
+  });
+
+  assert.equal(res.status, 'done');
+  assert.deepEqual(nativeInput.deps.resumeSnapshot, loopState);
+});
+
 test('plan run ends in waiting_approval with no finishedAt', async () => {
   const d = makeDeps({ run: { mode: 'plan' } });
   const loop = async ({ run }) => { assert.equal(run.mode, 'plan'); return { status: 'waiting_approval' }; };

@@ -18,7 +18,31 @@ test('toolRegistry projects name/description/parameters for every tool', () => {
   const reg = toolRegistry();
   assert.deepEqual(
     reg.map((t) => t.name).sort(),
-    ['browser_check', 'dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'install_dependencies', 'list_files', 'read_file', 'repo_map', 'run_command', 'run_subagent', 'type_check', 'update_plan', 'use_skill', 'web_search', 'write_file'],
+    [
+      'browser_check',
+      'dev_server_check',
+      'edit_file',
+      'glob',
+      'grep_search',
+      'inspect_database',
+      'install_dependencies',
+      'list_files',
+      'mcp_call',
+      'mcp_list_tools',
+    'read_file',
+    'repo_map',
+    'resolve_conflict',
+    'run_command',
+      'run_subagent',
+      'task_logs',
+      'task_stop',
+      'type_check',
+      'update_plan',
+      'use_skill',
+      'web_fetch',
+      'web_search',
+      'write_file',
+    ],
   );
   for (const t of reg) { assert.ok(t.description); assert.ok(t.parameters); }
 });
