@@ -127,6 +127,7 @@
     "agent:extensions:map": "node backend/scripts/platform-extension-map.js",
     "agent:ops:readiness": "node backend/scripts/platform-ops-readiness.js",
     "ops:health": "node backend/scripts/health-snapshot.js",
+    "office:sound:prewarm": "node backend/scripts/prewarm-office-soundscapes.js",
     "dead-code": "node scripts/dead-code.js",
     "dead-code:json": "node scripts/dead-code.js --json",
     "bundle:check": "node scripts/bundle-size-check.js",

@@ -151,6 +151,8 @@ router.post('/office-soundscapes/:soundId', authenticateToken, async (req, res) 
       loop: sound.loop,
       durationSeconds: sound.durationSeconds,
       provider: 'elevenlabs',
+      version: sound.version,
+      fallback: sound.fallback,
     });
   } catch (error) {
     if (error?.code === 'ELEVENLABS_NOT_CONFIGURED') {
