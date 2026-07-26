@@ -100,4 +100,5 @@ test('GET /projects/:id/runs lists project runs', async () => {
   const res = await request(app()).get('/api/codex/projects/p1/runs');
   assert.equal(res.status, 200);
   assert.equal(res.body.runs.length, 1);
+  assert.equal(res.headers['cache-control'], 'no-store');
 });

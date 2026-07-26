@@ -340,8 +340,13 @@ export function AgentCompanyPanel() {
         ])
         if (!alive) return
         if (accessResult.status === "fulfilled") setCodexAccess(accessResult.value)
-        if (runsResult.status === "fulfilled") setCodexRuns(runsResult.value)
-        if (checkpointsResult.status === "fulfilled") setCheckpointCount(checkpointsResult.value.length)
+        if (runsResult.status === "fulfilled") {
+          setCodexRuns(Array.isArray(runsResult.value) ? runsResult.value : [])
+        }
+        if (checkpointsResult.status === "fulfilled") {
+          const checkpoints = Array.isArray(checkpointsResult.value) ? checkpointsResult.value : []
+          setCheckpointCount(checkpoints.length)
+        }
         if (
           proactiveResult.status === "fulfilled" &&
           mutationVersion === proactiveMutationVersionRef.current

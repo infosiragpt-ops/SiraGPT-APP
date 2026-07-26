@@ -70,7 +70,10 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 
 async function mockMatrixCompany(
   page: Page,
-  { linkedProject = true }: { linkedProject?: boolean } = {},
+  {
+    linkedProject = true,
+    malformedCodexLists = false,
+  }: { linkedProject?: boolean; malformedCodexLists?: boolean } = {},
 ) {
   const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0 }
   let proactiveEnabled = false
@@ -155,9 +158,11 @@ async function mockMatrixCompany(
       })
     }
     if (/^\/codex\/projects\/[^/]+\/runs$/.test(path) && request.method() === "GET") {
+      if (malformedCodexLists) return fulfillJson(route, {})
       return fulfillJson(route, { runs })
     }
     if (/^\/codex\/projects\/[^/]+\/checkpoints$/.test(path)) {
+      if (malformedCodexLists) return fulfillJson(route, { checkpoints: null })
       return fulfillJson(route, { checkpoints: [{ id: "checkpoint-1" }, { id: "checkpoint-2" }] })
     }
     if (path === "/ai/models") {
@@ -276,6 +281,22 @@ async function mockMatrixCompany(
 
   return operations
 }
+
+test("empty Codex list payloads cannot crash the company panel", async ({ page }) => {
+  await page.setViewportSize({ width: 1425, height: 810 })
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  await mockMatrixCompany(page, { malformedCodexLists: true })
+
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
+  await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
+
+  await page.reload({ waitUntil: "domcontentloaded" })
+  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
+  await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
+  expect(pageErrors).toEqual([])
+})
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
   test.setTimeout(240_000)
@@ -433,7 +454,7 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
   await mockMatrixCompany(page)
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
-  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM")
+  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
   await expect(page.getByRole("button", { name: "Empresa", pressed: true })).toBeVisible()
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
 

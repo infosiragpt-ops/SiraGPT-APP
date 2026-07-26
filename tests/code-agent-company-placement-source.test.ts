@@ -37,6 +37,17 @@ describe("agent company placement", () => {
     assert.match(contextSource, /setChatSessionStore\(\(prev\) =>[\s\S]*?createCodeChatSessionRecord/)
   })
 
+  it("keeps changing Codex lists array-safe before updating company state", () => {
+    assert.match(
+      companySource,
+      /setCodexRuns\(Array\.isArray\(runsResult\.value\) \? runsResult\.value : \[\]\)/,
+    )
+    assert.match(
+      companySource,
+      /const checkpoints = Array\.isArray\(checkpointsResult\.value\) \? checkpointsResult\.value : \[\]/,
+    )
+  })
+
   it("does not re-enter React while bootstrapping a fresh session store", () => {
     assert.match(
       contextSource,
