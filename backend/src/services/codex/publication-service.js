@@ -262,9 +262,9 @@ async function publishProject({
   if (install?.exitCode !== 0) {
     throw new PublicationError(422, 'publish_install_failed', String(install?.stderr || install?.stdout || 'bun install failed').slice(0, 2_000));
   }
-  const build = await runner.exec(projectId, ['bun', 'run', 'build'], { timeoutMs: 180_000 });
+  const build = await runner.exec(projectId, ['npm', 'run', 'build'], { timeoutMs: 180_000 });
   if (build?.exitCode !== 0) {
-    throw new PublicationError(422, 'publish_build_failed', String(build?.stderr || build?.stdout || 'bun run build failed').slice(0, 2_000));
+    throw new PublicationError(422, 'publish_build_failed', String(build?.stderr || build?.stdout || 'npm run build failed').slice(0, 2_000));
   }
   const outDir = await detectOutputDir(runner, projectId);
   const exported = await runner.exportBuild(projectId, outDir);

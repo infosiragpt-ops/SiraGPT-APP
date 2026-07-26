@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 
 const TASK_ID_RE = /^task_[a-f0-9]{24}$/;
-const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'ls', 'cat', 'wc']);
+const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'npm', 'ls', 'cat', 'wc']);
 const INTERACTIVE_SCAFFOLD_RE = /^(?:create-next-app|create-vite|create-react-app|create-remix)(?:@.*)?$/i;
 const DEFAULT_MAX_TASKS = 4;
 const MAX_TASKS_HARD_CAP = 16;
