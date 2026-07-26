@@ -54,6 +54,7 @@ const { dirname } = require("node:path");
 const {
   sanitizeProjectId,
   resolveProjectRelPath,
+  migrateLegacyViteProxyConfig,
   commandRejectionReason,
   shouldIgnoreExportPath,
   parseDevPortPool,
@@ -427,6 +428,26 @@ async function readProjectJson(projectId, relPath) {
   }
 }
 
+async function migrateLegacyVitePreviewProxy(projectId, entry) {
+  let current;
+  try {
+    current = await callFilesystemHelper(projectId, ["read", "vite.config.ts", "1000000"], { outputCap: 2_000_000 });
+  } catch {
+    return false;
+  }
+  const migrated = migrateLegacyViteProxyConfig(current.content);
+  if (!migrated.changed) return false;
+  await callFilesystemHelper(projectId, ["write"], {
+    input: JSON.stringify({
+      files: [{ path: "vite.config.ts", content: migrated.content }],
+      limits: { maxFiles: 1, maxFileBytes: 1_000_000, maxTotalBytes: 1_000_000 },
+    }),
+    outputCap: 20_000,
+  });
+  pushLog(entry, "[runner] migrated legacy Vite preview proxy to the tokenized app base");
+  return true;
+}
+
 /** Is the configured preview base returning a successful HTTP response? */
 async function probeReady(port, basePath = null) {
   try {
@@ -546,6 +567,7 @@ async function runDev(entry, projectId) {
     entry.error = "No package.json — this project doesn't need a build (use the static preview).";
     return;
   }
+  await migrateLegacyVitePreviewProxy(projectId, entry);
 
   // Detect the framework for the right dev command + port flag.
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };

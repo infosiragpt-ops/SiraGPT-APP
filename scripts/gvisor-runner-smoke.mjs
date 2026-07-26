@@ -6,7 +6,7 @@ const origin = 'http://127.0.0.1:4097';
 const token = process.env.CODE_RUNNER_CONTROL_TOKEN;
 const project = 'gvisor-smoke';
 const fullStackProject = 'fullstack-smoke';
-const fullStackBase = '/fullstack-preview/';
+const fullStackBase = '/api/codex/projects/fullstack-smoke/preview/gvisor-token/app/';
 const fullStackUid = Number(process.env.GVISOR_SMOKE_PROJECT_UID);
 
 assert.ok(token, 'CODE_RUNNER_CONTROL_TOKEN is required by the smoke client');

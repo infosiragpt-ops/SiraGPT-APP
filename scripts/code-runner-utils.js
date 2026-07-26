@@ -60,6 +60,41 @@ function resolveProjectRelPath(relPath) {
   return parts.length ? parts.join('/') : null;
 }
 
+/**
+ * Upgrade the exact Vite proxy emitted by the legacy SiraGPT full-stack
+ * starter. Its broad regex also matched the tokenized preview base itself
+ * (`/api/codex/.../app/`), so Vite proxied index.html to Express and returned
+ * 404 forever. Refuse partial/custom matches to avoid rewriting user configs.
+ */
+function migrateLegacyViteProxyConfig(content) {
+  const source = String(content || '');
+  const portLine = 'const apiPort = Number(process.env.API_PORT) || port + 1000';
+  const baseLine = "  base: process.env.VITE_BASE || '/',";
+  const proxyLine = "      '^.*/api/': {";
+  const rewriteLine = "        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),";
+  if (
+    !source.includes(portLine)
+    || !source.includes(baseLine)
+    || !source.includes(proxyLine)
+    || !source.includes(rewriteLine)
+  ) {
+    return { changed: false, content: source };
+  }
+
+  const upgraded = source
+    .replace(
+      portLine,
+      `${portLine}\nconst base = process.env.VITE_BASE || '/'\nconst apiBase = \`\${base}api\``,
+    )
+    .replace(baseLine, '  base,')
+    .replace(proxyLine, '      [apiBase]: {')
+    .replace(
+      rewriteLine,
+      "        rewrite: (p) => p.startsWith(apiBase) ? `/api${p.slice(apiBase.length)}` : p,",
+    );
+  return { changed: upgraded !== source, content: upgraded };
+}
+
 function isAllowedCommand(cmd) {
   return commandRejectionReason(cmd) === null;
 }
@@ -364,6 +399,7 @@ function createDevPool({ ports, now = () => Date.now() } = {}) {
 module.exports = {
   sanitizeProjectId,
   resolveProjectRelPath,
+  migrateLegacyViteProxyConfig,
   isAllowedCommand,
   commandRejectionReason,
   ALLOWED_BINS,
