@@ -144,6 +144,16 @@ test('exportWorkspace POSTs { project } to /workspace/export', async () => {
   assert.deepEqual(calls[0].body, { project: 'p1' });
 });
 
+test('exportBuild POSTs a bounded output directory to /workspace/export-build', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, project: 'p1', files: 3 }));
+  const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  const out = await client.exportBuild('p1', 'dist');
+  assert.equal(out.files, 3);
+  assert.equal(calls[0].url, 'http://runner:4097/workspace/export-build');
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(calls[0].body, { project: 'p1', outDir: 'dist' });
+});
+
 test('codexExportHostDir/Path default and honour env, picking the right separator', () => {
   assert.equal(codexExportHostDir({}), '.codex-workspaces');
   assert.equal(codexExportHostPath('p1', {}), '.codex-workspaces/p1');

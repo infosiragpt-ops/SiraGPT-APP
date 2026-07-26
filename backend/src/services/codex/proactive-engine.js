@@ -14,10 +14,12 @@
  *             build run — a human's waiting plan is never touched.
  *
  * State lives in CodexProject.brief.proactive (Json column — no migration):
- *   { enabled, enabledAt, dayKey, runsToday, deptIndex, lastCycleAt, lastError }
+ *   { enabled, enabledAt, dayKey, runsToday, deptIndex, lastCycleAt, lastError,
+ *     costTodayUsd, dailyBudgetUsd, budgetBlocked }
  *
  * Safety rails:
- *   - Per-project daily proposal cap (CODEX_PROACTIVE_MAX_PER_DAY, default 6).
+ *   - Per-project daily proposal cap (CODEX_PROACTIVE_MAX_PER_DAY, default 6)
+ *     and USD kill switch (CODEX_PROACTIVE_DAILY_BUDGET_USD, default 2).
  *   - Single-active-run gate: a busy project is skipped, never queued up.
  *   - Departments rotate round-robin so one mandate can't monopolize.
  *   - Ticker default-on ONLY in production; explicit CODEX_PROACTIVE_ENABLED
@@ -26,6 +28,8 @@
  */
 
 const PROACTIVE_PREFIX = '[PROACTIVO';
+const progressLedger = require('./progress-ledger');
+const proactiveMetrics = require('./proactive-metrics');
 
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
 const DEPARTMENTS = Object.freeze([
@@ -54,12 +58,23 @@ function readProactiveState(project) {
     deptIndex: Number.isFinite(Number(p.deptIndex)) ? Number(p.deptIndex) : 0,
     lastCycleAt: p.lastCycleAt || null,
     lastError: p.lastError || null,
+    costTodayUsd: Math.max(0, Number(p.costTodayUsd) || 0),
+    dailyBudgetUsd: Math.max(0, Number(p.dailyBudgetUsd) || 0),
+    budgetBlocked: p.budgetBlocked === true,
+    lastDepartment: typeof p.lastDepartment === 'string' ? p.lastDepartment : null,
   };
 }
 
 async function writeProactiveState({ prisma, project, patch }) {
-  const brief = project && typeof project.brief === 'object' && project.brief !== null ? project.brief : {};
-  const current = readProactiveState(project);
+  // A run can append to brief.ledger while the scheduler is still holding an
+  // older project snapshot. Reload before merging so a state tick never erases
+  // newly-written long-term memory or objectives.
+  const fresh = prisma?.codexProject?.findUnique
+    ? await prisma.codexProject.findUnique({ where: { id: project.id } }).catch(() => null)
+    : null;
+  const source = fresh || project;
+  const brief = source && typeof source.brief === 'object' && source.brief !== null ? source.brief : {};
+  const current = readProactiveState(source);
   const next = { ...current, ...patch };
   await prisma.codexProject.update({
     where: { id: project.id },
@@ -86,6 +101,34 @@ function maxPerDay(env = process.env) {
   return Number.isFinite(n) && n >= 0 ? n : 6;
 }
 
+function dailyBudgetUsd(env = process.env) {
+  const value = Number(env.CODEX_PROACTIVE_DAILY_BUDGET_USD);
+  return Number.isFinite(value) && value >= 0 ? value : 2;
+}
+
+function qaEveryCycles(env = process.env) {
+  const value = Number.parseInt(env.CODEX_PROACTIVE_QA_EVERY_CYCLES ?? '', 10);
+  return Number.isFinite(value) && value >= 0 ? value : 5;
+}
+
+async function costTodayUsd({ prisma, projectId, now = new Date() }) {
+  if (!prisma?.codexRunMetric?.aggregate) return 0;
+  const start = new Date(now);
+  start.setUTCHours(0, 0, 0, 0);
+  try {
+    const result = await prisma.codexRunMetric.aggregate({
+      where: {
+        createdAt: { gte: start },
+        run: { projectId },
+      },
+      _sum: { costAppliedUsd: true },
+    });
+    return Math.max(0, Number(result?._sum?.costAppliedUsd) || 0);
+  } catch {
+    return 0;
+  }
+}
+
 function extractJson(text) {
   const raw = String(text || '');
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -96,18 +139,42 @@ function extractJson(text) {
   try { return JSON.parse(body.slice(start, end + 1)); } catch { return null; }
 }
 
+function autoMarketingTask(result = {}) {
+  if (result.action === 'drafted_review') return 'Contenido preparado como borrador para revisión humana.';
+  if (result.action === 'scheduled_auto') return 'Contenido programado bajo política auto explícitamente habilitada.';
+  if (result.action === 'already_generated') return 'Contenido diario ya generado; idempotencia conservada.';
+  return `Sin efecto externo: ${result.action || 'política no disponible'}.`;
+}
+
 /** LLM proposal: the department's next most valuable task for this project. */
-async function proposeTask({ project, department, recentRuns, fileTree, notes, chatComplete }) {
+async function proposeTask({
+  project,
+  department,
+  recentRuns,
+  fileTree,
+  notes,
+  ledger = [],
+  objectives = [],
+  qaCycle = false,
+  chatComplete,
+}) {
   const messages = [
     {
       role: 'system',
       content: [
         'Eres el director del departamento indicado dentro de una compañía de agentes de software autónomos.',
         'Tu trabajo: proponer LA SIGUIENTE tarea más valiosa (una sola, concreta, completable por un agente de código en una sesión) para este proyecto.',
-        'Responde SOLO un JSON: {"title": "<3-8 palabras>", "goal": "<instrucción concreta y autosuficiente para el agente constructor, 1-3 frases, en español>"}.',
+        'Responde SOLO JSON: {"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}]}.',
         'La tarea debe ser INCREMENTAL sobre lo ya construido (no re-hacer lo existente), y del ámbito del departamento.',
+        'Incluye entre 2 y 5 criterios de aceptación observables. No uses criterios vagos como "que se vea bien".',
+        department.id === 'ceo-office'
+          ? 'Como CEO Office, re-prioriza objectives con un máximo de 5 OKR medibles. Conserva ids estables cuando un objetivo siga vigente.'
+          : 'Para objectives devuelve [] y enlaza la tarea a los objectiveIds vigentes que corresponda.',
+        qaCycle
+          ? 'Esta es una auditoría acumulada: el constructor DEBE delegar primero en qa_reviewer, revisar el diff y añadir o mejorar smoke tests antes de corregir hallazgos.'
+          : null,
         'Nunca incluyas secretos. No publiques en redes ni actives gasto desde una tarea de código; prepara el trabajo y usa los controles explícitos de Recursos para efectos externos.',
-      ].join(' '),
+      ].filter(Boolean).join(' '),
     },
     {
       role: 'user',
@@ -117,6 +184,16 @@ async function proposeTask({ project, department, recentRuns, fileTree, notes, c
         `Departamento: ${department.name} — ${department.mission}`,
         fileTree ? `Archivos del workspace:\n${String(fileTree).slice(0, 1800)}` : 'Workspace aún vacío (proyecto nuevo).',
         notes ? `Notas del proyecto (.sira/notes.md):\n${String(notes).slice(0, 1200)}` : null,
+        objectives.length
+          ? `OKR vigentes:\n${objectives.map((item) => `- ${item.id} [P${item.priority}, ${item.status}] ${item.title}${item.metric ? ` · ${item.metric}: ${item.target || 'sin meta'}` : ''}`).join('\n')}`
+          : 'Aún no hay OKR estructurados.',
+        ledger.length
+          ? `Progress Ledger (resultados acumulados, no repitas fallos ni trabajo):\n${ledger.slice(-12).map((item) => {
+            const diff = `+${item.diffstat.additions}/-${item.diffstat.deletions}`;
+            const learning = item.learnings[0] ? ` · ${item.learnings[0]}` : '';
+            return `- [${item.outcome}] ${item.department} · ${diff} · ${item.task || item.runId}${learning}`;
+          }).join('\n')}`
+          : 'Progress Ledger vacío: esta será una de las primeras decisiones.',
         recentRuns && recentRuns.length
           ? `Últimos trabajos (no los repitas):\n${recentRuns.map((r) => `- [${r.status}] ${String(r.prompt || '').slice(0, 140)}`).join('\n')}`
           : 'Sin trabajos previos.',
@@ -127,7 +204,23 @@ async function proposeTask({ project, department, recentRuns, fileTree, notes, c
   const parsed = extractJson(out && out.content);
   if (!parsed || !parsed.goal || typeof parsed.goal !== 'string') return null;
   const title = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : 'Tarea proactiva';
-  return { title: title.slice(0, 90), goal: parsed.goal.trim().slice(0, 900) };
+  const acceptanceCriteria = progressLedger.normalizeAcceptanceCriteria(parsed.acceptanceCriteria);
+  const defaults = [
+    'La funcionalidad solicitada queda disponible y comprobable en la aplicación.',
+    'El proyecto compila sin errores y los smoke tests aplicables pasan.',
+    'La vista previa renderiza contenido sin excepciones ni requests fallidos.',
+  ];
+  return {
+    title: title.slice(0, 90),
+    goal: parsed.goal.trim().slice(0, 1200),
+    acceptanceCriteria: acceptanceCriteria.length ? acceptanceCriteria : defaults,
+    objectiveIds: Array.isArray(parsed.objectiveIds)
+      ? parsed.objectiveIds.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 12)
+      : objectives.filter((item) => item.status === 'active').slice(0, 3).map((item) => item.id),
+    objectives: department.id === 'ceo-office'
+      ? progressLedger.normalizeObjectives(parsed.objectives)
+      : [],
+  };
 }
 
 /**
@@ -135,14 +228,18 @@ async function proposeTask({ project, department, recentRuns, fileTree, notes, c
  *   'approved_plan' | 'proposed' | 'skipped_active' | 'skipped_budget' |
  *   'skipped_no_proposal' | 'disabled'
  */
-async function runCycle({ project, deps = {}, env = process.env, now = () => new Date() }) {
+async function runCycleInternal({ project, deps = {}, env = process.env, now = () => new Date() }) {
   const prisma = deps.prisma;
-  const runService = deps.runService || require('./run-service');
   const state = readProactiveState(project);
   if (!state.enabled) return { action: 'disabled' };
+  const runService = deps.runService || require('./run-service');
 
   const today = dayKey(now());
   const runsToday = state.dayKey === today ? state.runsToday : 0;
+  const budgetUsd = dailyBudgetUsd(env);
+  const spentUsd = await costTodayUsd({ prisma, projectId: project.id, now: now() });
+  const budgetBlocked = budgetUsd === 0 || spentUsd >= budgetUsd;
+  proactiveMetrics.setBudgetBlocked(budgetBlocked);
 
   // Newest active run decides the phase.
   const active = await prisma.codexRun.findFirst({
@@ -155,6 +252,22 @@ async function runCycle({ project, deps = {}, env = process.env, now = () => new
       && active.status === 'waiting_approval'
       && String(active.prompt || '').startsWith(PROACTIVE_PREFIX);
     if (!isOwnPlan) return { action: 'skipped_active' };
+    if (budgetBlocked) {
+      const message = `Presupuesto proactivo diario alcanzado: $${spentUsd.toFixed(4)} de $${budgetUsd.toFixed(2)}.`;
+      await writeProactiveState({
+        prisma,
+        project,
+        patch: {
+          dayKey: today,
+          costTodayUsd: spentUsd,
+          dailyBudgetUsd: budgetUsd,
+          budgetBlocked: true,
+          lastCycleAt: now().toISOString(),
+          lastError: message,
+        },
+      });
+      return { action: 'skipped_cost_budget', costTodayUsd: spentUsd, dailyBudgetUsd: budgetUsd };
+    }
     // Phase 2 — auto-approve OUR OWN plan by creating its build run.
     const run = await runService.createRun({
       userId: project.userId,
@@ -164,15 +277,107 @@ async function runCycle({ project, deps = {}, env = process.env, now = () => new
       planRunId: active.id,
       db: prisma,
     });
-    await writeProactiveState({ prisma, project, patch: { lastCycleAt: now().toISOString(), lastError: null } });
+    await writeProactiveState({
+      prisma,
+      project,
+      patch: {
+        lastCycleAt: now().toISOString(),
+        lastError: null,
+        costTodayUsd: spentUsd,
+        dailyBudgetUsd: budgetUsd,
+        budgetBlocked: false,
+      },
+    });
     return { action: 'approved_plan', runId: run && run.id, planRunId: active.id };
   }
 
+  if (budgetBlocked) {
+    const message = `Presupuesto proactivo diario alcanzado: $${spentUsd.toFixed(4)} de $${budgetUsd.toFixed(2)}.`;
+    await writeProactiveState({
+      prisma,
+      project,
+      patch: {
+        dayKey: today,
+        costTodayUsd: spentUsd,
+        dailyBudgetUsd: budgetUsd,
+        budgetBlocked: true,
+        lastCycleAt: now().toISOString(),
+        lastError: message,
+      },
+    });
+    return { action: 'skipped_cost_budget', costTodayUsd: spentUsd, dailyBudgetUsd: budgetUsd };
+  }
   if (maxPerDay(env) === 0 || runsToday >= maxPerDay(env)) return { action: 'skipped_budget' };
 
   // Phase 1 — pick the next department (round-robin) and propose a task.
-  const department = DEPARTMENTS[state.deptIndex % DEPARTMENTS.length];
+  const qaEvery = qaEveryCycles(env);
+  const qaCycle = qaEvery > 0 && (runsToday + 1) % qaEvery === 0;
+  const department = qaCycle
+    ? {
+      id: 'qa-reviewer',
+      name: 'QA Reviewer',
+      mission: 'Audita el diff acumulado, ejecuta pruebas y corrige regresiones antes de que el producto siga creciendo.',
+    }
+    : DEPARTMENTS[state.deptIndex % DEPARTMENTS.length];
   const chatComplete = deps.chatComplete || ((a) => require('./llm-provider').chatComplete(a));
+  const memory = progressLedger.readProgressContext(project);
+
+  // Marketing is an external-effect department, not another code generator.
+  // It delegates to the real social-company pipeline and remains constrained
+  // by the user's review/auto policy. Default review/disabled can never publish.
+  if (!qaCycle && department.id === 'marketing') {
+    const social = deps.socialAutopilot || require('../social-company/autopilot');
+    const result = await social.generateDepartmentPost({
+      prisma,
+      project,
+      ledger: memory.ledger,
+      objectives: memory.objectives,
+      chatComplete,
+      now,
+    });
+    const outcome = ['scheduled_auto', 'drafted_review', 'already_generated'].includes(result.action)
+      ? 'passed'
+      : 'blocked';
+    await progressLedger.appendLedgerEntry({
+      prisma,
+      project,
+      entry: {
+        department: department.name,
+        runId: result.postId ? `social:${result.postId}` : `social:${today}:${project.id}`,
+        outcome,
+        task: autoMarketingTask(result),
+        diffstat: { additions: 0, deletions: 0, filesChanged: 0 },
+        acceptance: [{
+          criterion: 'La salida social respeta la política explícita del usuario.',
+          passed: outcome === 'passed',
+          evidence: `social-company: ${result.action}${result.reason ? ` (${result.reason})` : ''}`,
+        }],
+        learnings: [`Marketing → social-company: ${result.action}.`],
+        createdAt: now().toISOString(),
+      },
+    });
+    await writeProactiveState({
+      prisma,
+      project,
+      patch: {
+        dayKey: today,
+        runsToday: runsToday + 1,
+        deptIndex: (state.deptIndex + 1) % DEPARTMENTS.length,
+        lastCycleAt: now().toISOString(),
+        lastError: outcome === 'passed' ? null : `Marketing no ejecutó efecto externo: ${result.action}.`,
+        costTodayUsd: spentUsd,
+        dailyBudgetUsd: budgetUsd,
+        budgetBlocked: false,
+        lastDepartment: department.id,
+      },
+    });
+    return {
+      action: `marketing_${result.action}`,
+      department: department.id,
+      postId: result.postId || null,
+      policyOutcome: result.action,
+    };
+  }
 
   let fileTree = '';
   let notes = '';
@@ -183,13 +388,23 @@ async function runCycle({ project, deps = {}, env = process.env, now = () => new
   const recentRuns = await prisma.codexRun.findMany({
     where: { projectId: project.id, status: { in: ['done', 'error', 'cancelled'] } },
     orderBy: { createdAt: 'desc' },
-    take: 5,
+    take: 8,
     select: { prompt: true, status: true },
   }).catch(() => []);
 
   let proposal = null;
   try {
-    proposal = await proposeTask({ project, department, recentRuns, fileTree, notes, chatComplete });
+    proposal = await proposeTask({
+      project,
+      department,
+      recentRuns,
+      fileTree,
+      notes,
+      ledger: memory.ledger,
+      objectives: memory.objectives,
+      qaCycle,
+      chatComplete,
+    });
   } catch (err) {
     await writeProactiveState({ prisma, project, patch: { lastCycleAt: now().toISOString(), lastError: String(err?.message || err).slice(0, 300) } });
     return { action: 'skipped_no_proposal' };
@@ -199,7 +414,17 @@ async function runCycle({ project, deps = {}, env = process.env, now = () => new
     return { action: 'skipped_no_proposal' };
   }
 
-  const prompt = `${PROACTIVE_PREFIX} · ${department.name}] ${proposal.title}: ${proposal.goal}`;
+  if (proposal.objectives.length) {
+    await progressLedger.writeObjectives({ prisma, project, objectives: proposal.objectives, now: now() });
+  }
+  const prompt = progressLedger.formatProactivePrompt({
+    department,
+    title: proposal.title,
+    goal: proposal.goal,
+    acceptanceCriteria: proposal.acceptanceCriteria,
+    objectiveIds: proposal.objectiveIds,
+    qaCycle,
+  });
   const run = await runService.createRun({
     userId: project.userId,
     projectId: project.id,
@@ -213,12 +438,31 @@ async function runCycle({ project, deps = {}, env = process.env, now = () => new
     patch: {
       dayKey: today,
       runsToday: runsToday + 1,
-      deptIndex: (state.deptIndex + 1) % DEPARTMENTS.length,
+      deptIndex: qaCycle ? state.deptIndex : (state.deptIndex + 1) % DEPARTMENTS.length,
       lastCycleAt: now().toISOString(),
       lastError: null,
+      costTodayUsd: spentUsd,
+      dailyBudgetUsd: budgetUsd,
+      budgetBlocked: false,
+      lastDepartment: department.id,
     },
   });
-  return { action: 'proposed', runId: run && run.id, department: department.id };
+  return { action: 'proposed', runId: run && run.id, department: department.id, qaCycle };
+}
+
+async function runCycle(args) {
+  const startedAt = Date.now();
+  let result;
+  try {
+    result = await runCycleInternal(args);
+    return result;
+  } finally {
+    proactiveMetrics.recordCycle({
+      action: result?.action || 'error',
+      department: result?.department || progressLedger.taskMetaFromPrompt(args?.project?.prompt)?.departmentId || 'none',
+      durationMs: Date.now() - startedAt,
+    });
+  }
 }
 
 /** One tick over every proactive-enabled project (bounded, failure-isolated). */
@@ -254,9 +498,11 @@ function startProactiveTicker({ env = process.env, deps = {} } = {}) {
   const raw = Number.parseInt(env.CODEX_PROACTIVE_INTERVAL_MS ?? '', 10);
   const intervalMs = Number.isFinite(raw) && raw >= 60_000 ? raw : 5 * 60_000;
   _timer = setInterval(() => {
-    tickAll({ deps, env }).catch((err) => {
-      console.warn('[codex proactive] tick failed:', err?.message || err);
-    });
+    tickAll({ deps, env })
+      .then(() => require('./proactive-digest').sendDailyDigest({ prisma: deps.prisma, env }))
+      .catch((err) => {
+        console.warn('[codex proactive] tick failed:', err?.message || err);
+      });
   }, intervalMs);
   if (_timer.unref) _timer.unref();
   return true;
@@ -274,8 +520,12 @@ module.exports = {
   proposeTask,
   runCycle,
   tickAll,
+  tickerEnabled,
   startProactiveTicker,
   stopProactiveTicker,
   extractJson,
   maxPerDay,
+  dailyBudgetUsd,
+  costTodayUsd,
+  qaEveryCycles,
 };

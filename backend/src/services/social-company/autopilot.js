@@ -2,7 +2,11 @@
 
 const { writeAuditLog } = require('../../utils/audit-log');
 const { PLATFORM_IDS } = require('./platforms');
-const { POLICY_PREFIX, parsePolicyRow } = require('./policy');
+const {
+  POLICY_PREFIX,
+  parsePolicyRow,
+  readPolicy,
+} = require('./policy');
 
 function dayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
@@ -22,7 +26,14 @@ function extractJson(text) {
   }
 }
 
-async function generateContent({ policy, platforms, chatComplete }) {
+async function generateContent({
+  policy,
+  platforms,
+  chatComplete,
+  project = null,
+  ledger = [],
+  objectives = [],
+}) {
   const result = await chatComplete({
     messages: [
       {
@@ -41,9 +52,16 @@ async function generateContent({ policy, platforms, chatComplete }) {
         role: 'user',
         content: [
           `Objetivo vigente de CEO Office: ${policy.objective}`,
+          project ? `Producto: ${project.name || project.id}` : null,
+          objectives.length
+            ? `OKR activos:\n${objectives.slice(0, 5).map((item) => `- ${item.title}${item.target ? ` · meta ${item.target}` : ''}`).join('\n')}`
+            : null,
+          ledger.length
+            ? `Resultados reales recientes:\n${ledger.slice(-6).map((item) => `- [${item.outcome}] ${item.task || item.runId} · +${item.diffstat?.additions || 0}/-${item.diffstat?.deletions || 0}`).join('\n')}`
+            : null,
           `Canales conectados: ${platforms.join(', ')}`,
           'Crea la siguiente pieza de contenido más útil para avanzar ese objetivo hoy.',
-        ].join('\n'),
+        ].filter(Boolean).join('\n'),
       },
     ],
     temperature: 0.4,
@@ -57,6 +75,106 @@ async function generateContent({ policy, platforms, chatComplete }) {
     mediaBrief: typeof parsed.mediaBrief === 'string'
       ? parsed.mediaBrief.trim().slice(0, 1_000)
       : '',
+  };
+}
+
+/**
+ * Bridge used by the proactive Marketing department. It never publishes
+ * directly: review mode creates an unapproved draft; auto mode creates an
+ * approved scheduled post that the existing 30s publisher still validates.
+ */
+async function generateDepartmentPost({
+  prisma,
+  project,
+  ledger = [],
+  objectives = [],
+  chatComplete: explicitChatComplete,
+  now = () => new Date(),
+} = {}) {
+  if (!prisma || !project?.userId || !project?.id) {
+    return { action: 'skipped_invalid_project' };
+  }
+  const policy = await readPolicy(prisma, project.userId);
+  if (!policy.enabled || !policy.autopilot || !policy.objective) {
+    return {
+      action: 'skipped_policy',
+      mode: policy.mode,
+      reason: !policy.enabled ? 'disabled' : !policy.autopilot ? 'autopilot_disabled' : 'objective_missing',
+    };
+  }
+  const batchId = `proactive-marketing:${dayKey(now())}:${project.userId}:${project.id}`;
+  const exists = await prisma.scheduledPost.findFirst({
+    where: { userId: project.userId, batchId },
+    select: { id: true, status: true },
+  });
+  if (exists) return { action: 'already_generated', postId: exists.id, status: exists.status, batchId };
+
+  const connections = await prisma.socialConnection.findMany({
+    where: { userId: project.userId, platform: { in: PLATFORM_IDS } },
+    select: { platform: true },
+  });
+  const connected = new Set(connections.map((row) => row.platform));
+  const platforms = PLATFORM_IDS.filter(
+    (platform) => connected.has(platform) && policy.platforms[platform] !== false,
+  );
+  if (platforms.length === 0) return { action: 'skipped_no_connections', batchId };
+
+  const chatComplete = explicitChatComplete
+    || ((args) => require('../codex/llm-provider').chatComplete(args));
+  const content = await generateContent({
+    policy,
+    platforms,
+    chatComplete,
+    project,
+    ledger,
+    objectives,
+  });
+  if (!content) return { action: 'skipped_invalid_content', batchId };
+
+  const auto = policy.mode === 'auto';
+  const createdAt = now();
+  const post = await prisma.scheduledPost.create({
+    data: {
+      userId: project.userId,
+      prompt: policy.objective,
+      caption: content.caption,
+      platforms,
+      scheduledAt: auto ? createdAt : null,
+      status: auto ? 'scheduled' : 'draft',
+      batchId,
+      config: {
+        approved: auto,
+        source: 'proactive_marketing',
+        projectId: project.id,
+        workspaceId: policy.workspaceId,
+        mediaBrief: content.mediaBrief,
+        generateImage: Boolean(content.mediaBrief),
+        mediaMode: content.mediaBrief ? 'generated' : 'text',
+        generatedAt: createdAt.toISOString(),
+        policyMode: policy.mode,
+      },
+    },
+  });
+  void writeAuditLog(prisma, {
+    actorType: 'system',
+    userId: project.userId,
+    action: auto ? 'social_post_scheduled' : 'social_post_drafted',
+    resource: 'scheduled_post',
+    resourceId: post.id,
+    metadata: {
+      source: 'proactive_marketing',
+      projectId: project.id,
+      platforms,
+      policyMode: policy.mode,
+    },
+    tags: ['social', 'autonomous-company', 'marketing'],
+  });
+  return {
+    action: auto ? 'scheduled_auto' : 'drafted_review',
+    postId: post.id,
+    batchId,
+    platforms,
+    status: post.status,
   };
 }
 
@@ -162,5 +280,6 @@ module.exports = {
   dayKey,
   extractJson,
   generateContent,
+  generateDepartmentPost,
   runAutopilot,
 };

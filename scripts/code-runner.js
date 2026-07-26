@@ -289,8 +289,7 @@ function ensurePrivateExportParent(destRoot, rel) {
   }
 }
 
-function writePrivateExport(projectId, files) {
-  const destRoot = `${EXPORT_DIR}/${projectId}`;
+function writePrivateExportAt(destRoot, files) {
   rmSync(destRoot, { recursive: true, force: true });
   mkdirSync(destRoot, { mode: 0o700 });
   chmodSync(destRoot, 0o700);
@@ -315,6 +314,10 @@ function writePrivateExport(projectId, files) {
     }
   }
   return written;
+}
+
+function writePrivateExport(projectId, files) {
+  return writePrivateExportAt(`${EXPORT_DIR}/${projectId}`, files);
 }
 
 // ── Multi-project dev-server registry ───────────────────────────────────────
@@ -811,6 +814,41 @@ Bun.serve({
       } catch (e) {
         const detail = String(e && e.message ? e.message : e).slice(0, 400);
         return Response.json({ ok: false, error: "export_failed", detail }, { status: 500 });
+      }
+    }
+
+    if (url.pathname === "/workspace/export-build" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const outDir = resolveProjectRelPath(body.outDir || "dist");
+      if (!id || !outDir) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      const src = projectDirOf(id);
+      if (!existsSync(src)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      try {
+        ensureProjectDirectory(id);
+        const bundle = await callFilesystemHelper(
+          id,
+          ["export-dir", outDir, String(EXPORT_MAX_FILES), String(EXPORT_MAX_BYTES)],
+          { outputCap: Math.ceil(EXPORT_MAX_BYTES * 1.5) + 2_000_000 },
+        );
+        if (!bundle.files.some((file) => file.path === "index.html")) {
+          return Response.json({ ok: false, error: "build_index_missing" }, { status: 422 });
+        }
+        const destRoot = `${EXPORT_DIR}/.published/${id}`;
+        mkdirSync(`${EXPORT_DIR}/.published`, { recursive: true, mode: 0o700 });
+        chmodSync(`${EXPORT_DIR}/.published`, 0o700);
+        const files = writePrivateExportAt(destRoot, bundle.files);
+        return Response.json({
+          ok: true,
+          project: id,
+          outDir,
+          exportPath: `.published/${id}`,
+          files,
+          bytes: bundle.totalBytes,
+        });
+      } catch (e) {
+        const detail = String(e && e.message ? e.message : e).slice(0, 400);
+        return Response.json({ ok: false, error: "build_export_failed", detail }, { status: 500 });
       }
     }
 

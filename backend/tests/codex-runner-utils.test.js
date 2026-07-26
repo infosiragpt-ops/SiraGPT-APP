@@ -32,6 +32,7 @@ const {
   safeWriteFiles,
   safeReadFile,
   collectExportFiles,
+  collectExportDirectory,
   migrateOwnershipTree,
   sealWorkspaceRoot,
 } = require('../../scripts/code-runner-fs-helper');
@@ -91,6 +92,20 @@ test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () =>
   // Empty/blank → ignored (nothing to copy).
   assert.equal(shouldIgnoreExportPath(''), true);
   assert.equal(shouldIgnoreExportPath(null), true);
+});
+
+test('collectExportDirectory exports a static bundle without exposing sibling source files', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'codex-build-export-'));
+  mkdirSync(join(root, 'dist', 'assets'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(root, 'dist', 'index.html'), '<main>release</main>');
+  writeFileSync(join(root, 'dist', 'assets', 'app.js'), 'console.log("ok")');
+  writeFileSync(join(root, '.env'), 'SECRET=never-export');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const bundle = collectExportDirectory(root, 'dist');
+  assert.deepEqual(bundle.files.map((file) => file.path).sort(), ['assets/app.js', 'index.html']);
+  assert.equal(bundle.files.some((file) => file.path.includes('.env')), false);
+  assert.throws(() => collectExportDirectory(root, '../'), /invalid_request/);
 });
 
 test('buildRunnerEnv starts from an allowlist and never forwards secrets', () => {

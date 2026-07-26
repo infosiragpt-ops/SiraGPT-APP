@@ -3,7 +3,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { runAgentLoop } = require('../src/services/codex/agent-loop');
+const {
+  closeBuild,
+  runAgentLoop,
+  verifyWorkspace,
+} = require('../src/services/codex/agent-loop');
 const { buildPlanMessages } = require('../src/services/codex/plan-mode');
 
 // Scripted llmTurn: shift the next response off a queue.
@@ -369,6 +373,111 @@ test('build close creates a checkpoint when the workspace has changes', async ()
   assert.equal(checkpoints.length, 1);
   assert.equal(checkpoints[0].commitSha, 'abc1234');
   assert.ok(f.events.some((e) => e.type === 'checkpoint_created'));
+});
+
+test('strict proactive gate fails closed when runtime evidence is unavailable', async () => {
+  const events = [];
+  const result = await verifyWorkspace({
+    runner: {
+      readFile: async (_project, path) => ({
+        content: path === 'tsconfig.json'
+          ? '{"compilerOptions":{"jsx":"react-jsx"}}'
+          : '{"scripts":{}}',
+      }),
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    },
+    projectId: 'p1',
+    run: { id: 'run-strict' },
+    eventStore: { appendEvent: async (_runId, type, data) => { events.push({ type, data }); } },
+    prisma: null,
+    clock: () => new Date(),
+    env: { NODE_ENV: 'test' },
+    actionId: 'quality-1',
+    groupId: 'quality',
+    strict: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.kind, 'infra');
+  assert.equal(result.gates.typeCheck.ok, true);
+  assert.equal(result.gates.devServer.ok, false);
+});
+
+test('QA gate requires an executable smoke-test contract', async () => {
+  const result = await verifyWorkspace({
+    runner: {
+      readFile: async (_project, path) => ({
+        content: path === 'tsconfig.json'
+          ? '{"compilerOptions":{"jsx":"react-jsx"}}'
+          : '{"scripts":{}}',
+      }),
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    },
+    projectId: 'p1',
+    run: { id: 'run-qa' },
+    eventStore: { appendEvent: async () => {} },
+    prisma: null,
+    clock: () => new Date(),
+    env: { NODE_ENV: 'test' },
+    actionId: 'quality-1',
+    groupId: 'quality',
+    strict: true,
+    requireSmoke: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.kind, 'smoke');
+  assert.match(result.errors, /exige smoke tests/i);
+});
+
+test('failed proactive gate records the ledger and refuses to checkpoint', async () => {
+  const commands = [];
+  const events = [];
+  const projectState = {
+    id: 'p1',
+    userId: 'u1',
+    brief: { proactive: { enabled: true } },
+  };
+  const prompt = [
+    '[PROACTIVO · Producto] Gate estricto: corrige la app',
+    '[SIRA_PROACTIVE_META]{"department":"Producto","departmentId":"product-engineering","title":"Gate estricto","acceptanceCriteria":["La app abre"],"objectiveIds":[],"qaCycle":false}',
+  ].join('\n');
+  const result = await closeBuild({
+    run: { id: 'run-gate', projectId: 'p1', userId: 'u1', prompt },
+    project: projectState,
+    runner: {
+      readFile: async (_project, path) => {
+        if (path === 'tsconfig.json') return { content: '{"compilerOptions":{"jsx":"react-jsx"}}' };
+        if (path === 'package.json') return { content: '{"scripts":{}}' };
+        throw new Error('not found');
+      },
+      exec: async (_project, cmd) => {
+        commands.push(cmd);
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      writeFiles: async () => {},
+    },
+    eventStore: { appendEvent: async (_runId, type, data) => { events.push({ type, data }); } },
+    prisma: {
+      codexProject: {
+        findUnique: async () => projectState,
+        update: async ({ data }) => {
+          Object.assign(projectState, data);
+          return projectState;
+        },
+      },
+      user: { findUnique: async () => ({ plan: 'FREE' }) },
+    },
+    llmTurn: async () => ({ text: 'No pude reparar.', toolCalls: [] }),
+    clock: () => new Date('2026-07-26T12:00:00.000Z'),
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_PROACTIVE_REPAIR_ROUNDS: '1' },
+    metrics: { recordAction: () => {}, recordLlmUsage: () => {}, finalize: async () => ({ costAppliedUsd: 0.02 }) },
+    sourcePrompt: prompt,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.checkpoint, null);
+  assert.equal(projectState.brief.ledger[0].outcome, 'failed');
+  assert.equal(commands.some((cmd) => cmd[0] === 'git' && cmd.includes('commit')), false);
+  assert.ok(events.some((event) => event.type === 'narrative_delta' && /No cerré ni promoví/.test(event.data.text)));
 });
 
 test('metrics hooks receive usage, actions and lines read', async () => {

@@ -365,11 +365,19 @@ services:
       # AgentAdapter v1 selection is validated at worker boot; unknown ids do
       # not silently fall back to the native loop.
       CODEX_IMPLEMENTER_ADAPTER: ${CODEX_IMPLEMENTER_ADAPTER:-native}
+      CODEX_REMOTE_AGENT_URL: ${CODEX_REMOTE_AGENT_URL:-}
+      CODEX_REMOTE_AGENT_TOKEN: ${CODEX_REMOTE_AGENT_TOKEN:-}
+      CODEX_REMOTE_AGENT_TIMEOUT_MS: ${CODEX_REMOTE_AGENT_TIMEOUT_MS:-900000}
       CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
       # Public execution remains closed while the boot-selected provider is the
       # interim shared runner. An env isolation label alone cannot open access.
       CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-false}
       CODEX_SANDBOX_PROVIDER: ${CODEX_SANDBOX_PROVIDER:-shared-runner}
+      CODEX_ISOLATED_RUNNER_URL: ${CODEX_ISOLATED_RUNNER_URL:-}
+      CODEX_ISOLATED_RUNNER_CONTROL_TOKEN: ${CODEX_ISOLATED_RUNNER_CONTROL_TOKEN:-}
+      CODEX_ISOLATED_RUNNER_ATTESTED: ${CODEX_ISOLATED_RUNNER_ATTESTED:-0}
+      CODEX_ISOLATED_RUNNER_BOUNDARY: ${CODEX_ISOLATED_RUNNER_BOUNDARY:-gvisor-systrap}
+      CODEX_ISOLATED_RUNNER_PUBLIC_MULTI_TENANT: ${CODEX_ISOLATED_RUNNER_PUBLIC_MULTI_TENANT:-0}
       # Kept for operational visibility/backward compatibility only. Access
       # policy trusts the provider attestation, never this string.
       CODEX_RUNNER_ISOLATION_MODE: ${CODEX_RUNNER_ISOLATION_MODE:-shared-container}
@@ -378,8 +386,16 @@ services:
       CODE_RUNNER_CONTROL_TOKEN: "${CODE_RUNNER_CONTROL_TOKEN:-}"
       CODE_RUNNER_DEV_INTERNAL_URL: ${CODE_RUNNER_DEV_INTERNAL_URL:-http://runner:5173}
       CODEX_EXPORT_HOST_DIR: ${CODEX_EXPORT_HOST_DIR:-/opt/siragpt/.codex-workspaces}
+      CODEX_EXPORT_CONTAINER_DIR: ${CODEX_EXPORT_CONTAINER_DIR:-/codex-exports}
+      PUBLISHED_SITES_DIR: ${PUBLISHED_SITES_DIR:-/srv/sites}
+      CODEX_APPS_BASE_DOMAIN: ${CODEX_APPS_BASE_DOMAIN:-apps.siragpt.com}
       CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
       CODEX_MAX_STEPS: ${CODEX_MAX_STEPS:-24}
+      CODEX_PROACTIVE_ENABLED: ${CODEX_PROACTIVE_ENABLED:-1}
+      CODEX_PROACTIVE_INTERVAL_MS: ${CODEX_PROACTIVE_INTERVAL_MS:-300000}
+      CODEX_PROACTIVE_MAX_PER_DAY: ${CODEX_PROACTIVE_MAX_PER_DAY:-6}
+      CODEX_PROACTIVE_DAILY_BUDGET_USD: ${CODEX_PROACTIVE_DAILY_BUDGET_USD:-2}
+      CODEX_PROACTIVE_QA_EVERY_CYCLES: ${CODEX_PROACTIVE_QA_EVERY_CYCLES:-5}
       # Sibling origin (Caddy vhost) that serves codex previews unsandboxed —
       # advertised to the frontend via GET /api/codex/health.
       CODEX_PREVIEW_ORIGIN: ${CODEX_PREVIEW_ORIGIN:-}
@@ -431,6 +447,8 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - projects_data:/root/Desktop/sira-projects
+      - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/codex-exports:ro
+      - published_sites:/srv/sites
     ports:
       - "127.0.0.1:5000:5000"   # Reverse proxy (nginx/caddy) in front
     networks:
@@ -518,6 +536,8 @@ volumes:
   opencode_workspace:
     driver: local
   runner_bun_cache:
+    driver: local
+  published_sites:
     driver: local
 
 networks:

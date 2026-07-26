@@ -37,6 +37,7 @@ const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
 const checkpointService = require('../services/codex/checkpoint-service');
+const publicationService = require('../services/codex/publication-service');
 const {
   STRIP_REQUEST_HEADERS,
   HOP_BY_HOP_HEADERS,
@@ -283,7 +284,13 @@ router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
-    return res.json({ state: proactive.readProactiveState(project), departments: proactive.DEPARTMENTS });
+    const memory = require('../services/codex/progress-ledger').readProgressContext(project);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      state: proactive.readProactiveState(project),
+      departments: proactive.DEPARTMENTS,
+      memory,
+    });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
   }
@@ -316,6 +323,60 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
     return res.json({ state: out.state, departments: proactive.DEPARTMENTS });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
+function sendPublicationError(res, err) {
+  const status = Number(err?.status) || 500;
+  return res.status(status).json({
+    error: err?.code || 'codex_publication_failed',
+    message: String(err?.message || 'Publication failed').slice(0, 2_000),
+  });
+}
+
+router.get('/projects/:id/publication', authenticateToken, async (req, res) => {
+  try {
+    const publication = await publicationService.getPublication({
+      userId: req.user.id,
+      projectId: req.params.id,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ publication });
+  } catch (err) {
+    return sendPublicationError(res, err);
+  }
+});
+
+router.post('/projects/:id/publication', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  const checkpointId = req.body?.checkpointId == null ? null : String(req.body.checkpointId).trim();
+  if (checkpointId != null && (!checkpointId || checkpointId.length > 180)) {
+    return res.status(400).json({ error: 'checkpoint_id_invalid' });
+  }
+  try {
+    const result = await publicationService.publishProject({
+      userId: req.user.id,
+      projectId: req.params.id,
+      checkpointId,
+    });
+    return res.status(201).json(result);
+  } catch (err) {
+    return sendPublicationError(res, err);
+  }
+});
+
+router.post('/projects/:id/publication/rollback', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  const releaseId = String(req.body?.releaseId || '').trim();
+  if (!releaseId || releaseId.length > 180) {
+    return res.status(400).json({ error: 'release_id_required' });
+  }
+  try {
+    return res.json(await publicationService.rollbackPublication({
+      userId: req.user.id,
+      projectId: req.params.id,
+      releaseId,
+    }));
+  } catch (err) {
+    return sendPublicationError(res, err);
   }
 });
 

@@ -260,6 +260,16 @@ function collectExportFiles(root, { maxFiles = 5000, maxTotalBytes = 20_000_000 
   return { files, totalBytes };
 }
 
+function collectExportDirectory(root, rawRel, limits = {}) {
+  const rel = normalizeRelativePath(rawRel);
+  if (!rel) throw publicError('invalid_request');
+  const abs = ensureSafeParents(root, rel);
+  const st = lstatOrNull(abs);
+  if (!st) throw publicError('file_not_found');
+  if (!st.isDirectory() || st.isSymbolicLink()) throw publicError('unsafe_path');
+  return collectExportFiles(abs, limits);
+}
+
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -288,6 +298,14 @@ async function main() {
     process.stdout.write(JSON.stringify({ ok: true, ...result }));
     return;
   }
+  if (action === 'export-dir') {
+    const result = collectExportDirectory(root, process.argv[3], {
+      maxFiles: Number(process.argv[4]) || 5000,
+      maxTotalBytes: Number(process.argv[5]) || 20_000_000,
+    });
+    process.stdout.write(JSON.stringify({ ok: true, ...result }));
+    return;
+  }
   throw publicError('invalid_action');
 }
 
@@ -308,4 +326,5 @@ module.exports = {
   safeWriteFiles,
   safeReadFile,
   collectExportFiles,
+  collectExportDirectory,
 };
