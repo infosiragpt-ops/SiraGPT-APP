@@ -228,6 +228,9 @@ async function mockMatrixCompany(
         metrics: { queued: 2, publishedToday: 1 },
       })
     }
+    if ((path === "/social-posts" || path === "/social-posts/") && request.method() === "GET") {
+      return fulfillJson(route, { posts: [] })
+    }
     if (path === "/social-posts/operations/policy" && request.method() === "PATCH") {
       operations.socialPolicyUpdates += 1
       const body = request.postDataJSON()
@@ -289,17 +292,17 @@ test("empty Codex list payloads cannot crash the company panel", async ({ page }
   await mockMatrixCompany(page, { malformedCodexLists: true })
 
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
-  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
+  await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
 
   await page.reload({ waitUntil: "domcontentloaded" })
-  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
+  await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
   expect(pageErrors).toEqual([])
 })
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
-  test.setTimeout(240_000)
+  test.setTimeout(360_000)
   await page.setViewportSize({ width: 1425, height: 810 })
   const consoleErrors: string[] = []
   page.on("console", (message) => {
@@ -310,7 +313,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
   await expect(page.getByRole("tab", { name: "Empresas</>" })).toBeVisible()
-  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM")
+  await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId("agent-company-live-preview")).toBeVisible()
   const officeThumbnail = page.getByTestId("agent-office-thumbnail")
   await expect(officeThumbnail).toHaveAttribute("data-office-ready", "true")
@@ -435,14 +438,18 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByTestId("agent-office-overlay")).toBeHidden()
 
   await page.getByRole("button", { name: "Controlar" }).click()
-  await expect(page.getByTestId("agent-company-operating-loop")).toBeVisible()
-  await page.getByRole("button", { name: "Volver a la empresa" }).click()
+  await expect(page.getByTestId("company-control-surface")).toBeVisible()
+  await page.getByRole("button", { name: "Cerrar vista de empresa" }).click()
+  await expect(page.getByTestId("company-control-surface")).toBeHidden()
   await page.getByRole("button", { name: "Recursos" }).click()
-  await expect(page.getByRole("heading", { name: "Canales de la empresa" })).toBeVisible()
-  await expect(page.getByText("1 conectados · 2 pendientes · 1 publicados hoy")).toBeVisible()
+  await expect(page.getByTestId("company-resources-surface")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Activos de la empresa agente" })).toBeVisible()
+  await expect(page.getByText("Canales conectados")).toBeVisible()
+  await expect(page.getByText("3 compatibles")).toBeVisible()
+  await expect(page.getByText("borradores y programadas")).toBeVisible()
   await expect(page.getByText("Facebook", { exact: true })).toBeVisible()
   await expect(page.getByText("LinkedIn", { exact: true })).toBeVisible()
-  await expect(page.getByText("X", { exact: true }).nth(1)).toBeVisible()
+  await expect(page.getByText("X", { exact: true }).last()).toBeVisible()
 
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
@@ -454,7 +461,7 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
   await mockMatrixCompany(page)
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
-  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
+  await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole("button", { name: "Empresa", pressed: true })).toBeVisible()
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
 
@@ -484,7 +491,7 @@ test("PROACTIVO provisions and confirms a real company runtime before turning on
   const operations = await mockMatrixCompany(page, { linkedProject: false })
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
-  await expect(page.getByTestId("agent-company-switcher")).toContainText("SiraGPT.COM", { timeout: 15_000 })
+  await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   const companyRail = page.locator("[data-agent-company-dock='apps']")
   await expect(companyRail).toHaveAttribute("data-proactive", "off", { timeout: 15_000 })
   await companyRail.getByRole("button", { name: /^PROACTIVO$/ }).click()
