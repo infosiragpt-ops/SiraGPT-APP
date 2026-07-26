@@ -184,7 +184,7 @@ test('gVisor smoke exercises the authenticated lifecycle and the real full-stack
   assert.match(smoke, /controlTokenVisible,\s*false/);
   assert.match(smoke, /node --watch server\.mjs/);
   assert.match(smoke, /fullstack-smoke/);
-  assert.match(smoke, /\/fullstack-preview\//);
+  assert.match(smoke, /\/api\/codex\/projects\/fullstack-smoke\/preview\/gvisor-token\/app\//);
   assert.match(smoke, /\['express', 'react', 'vite', 'concurrently'\]/);
   for (const sourcePath of ['src/main.tsx', 'src/App.tsx', 'src/index.css']) {
     assert.ok(smoke.includes(sourcePath), `missing transformed frontend gate: ${sourcePath}`);

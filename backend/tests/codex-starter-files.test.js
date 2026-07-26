@@ -99,11 +99,13 @@ test('full-stack starter runs on the pinned Node/npm preview runtime AND behind 
   assert.match(db, /node:sqlite/);
   assert.match(by('server/index.js').content, /from '\.\/db\.js'/);
   // Vite reads port/base from env (the runner launches `npm run dev`, no CLI
-  // flags reach the inner vite) and the /api proxy matches under ANY base.
+  // flags reach the inner vite) and scopes the API proxy after that exact base.
   const vite = by('vite.config.ts').content;
   assert.match(vite, /process\.env\.PORT/);
   assert.match(vite, /process\.env\.VITE_BASE/);
-  assert.match(vite, /\^\.\*\/api\//);
+  assert.match(vite, /const apiBase =/);
+  assert.match(vite, /\[apiBase\]/);
+  assert.doesNotMatch(vite, /\^\.\*\/api\//);
   // Frontend prefixes API calls with BASE_URL — a bare /api escapes the base.
   const app = by('src/App.tsx').content;
   assert.match(app, /import\.meta\.env\.BASE_URL/);

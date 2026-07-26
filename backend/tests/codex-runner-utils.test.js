@@ -19,6 +19,7 @@ const { join } = require('node:path');
 const {
   sanitizeProjectId,
   resolveProjectRelPath,
+  migrateLegacyViteProxyConfig,
   isAllowedCommand,
   commandRejectionReason,
   shouldIgnoreExportPath,
@@ -56,6 +57,34 @@ test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () 
   assert.equal(resolveProjectRelPath('/etc/passwd'), null);
   assert.equal(resolveProjectRelPath('C:/windows'), null);
   assert.equal(resolveProjectRelPath(''), null);
+});
+
+test('migrateLegacyViteProxyConfig scopes only the exact legacy starter proxy', () => {
+  const legacy = `const port = Number(process.env.PORT) || 5173
+const apiPort = Number(process.env.API_PORT) || port + 1000
+
+export default {
+  base: process.env.VITE_BASE || '/',
+  server: {
+    proxy: {
+      '^.*/api/': {
+        target: 'http://localhost:6173',
+        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),
+      },
+    },
+  },
+}
+`;
+  const migrated = migrateLegacyViteProxyConfig(legacy);
+  assert.equal(migrated.changed, true);
+  assert.match(migrated.content, /const apiBase = `\$\{base\}api`/);
+  assert.match(migrated.content, /\[apiBase\]/);
+  assert.doesNotMatch(migrated.content, /\^\.\*\/api\//);
+  assert.match(migrated.content, /p\.startsWith\(apiBase\)/);
+  assert.equal(migrateLegacyViteProxyConfig(migrated.content).changed, false);
+
+  const custom = legacy.replace("  base: process.env.VITE_BASE || '/',", "  base: '/custom/',");
+  assert.deepEqual(migrateLegacyViteProxyConfig(custom), { changed: false, content: custom });
 });
 
 test('isAllowedCommand allows git/bun/bunx/node/npm and blocks the rest', () => {

@@ -536,31 +536,33 @@ function fullStackStarterFiles({ projectName } = {}) {
 
   // Vite config with proxy to the Express API. The runner launches this
   // project with `npm run dev` (concurrently: API + web) instead of the vite
-  // CLI, so port/base come from ENV, not flags. The proxy key is a REGEX so
-  // `/api` also matches under SiraGPT's tokenized preview base (the frontend
-  // calls `${import.meta.env.BASE_URL}api/...`); the rewrite strips the base
-  // back off before hitting Express. API port = web port + 1000 so several
-  // full-stack previews can run side by side without colliding on 3001.
+  // CLI, so port/base come from ENV, not flags. Scope the API proxy to the
+  // tokenized app base (the frontend calls `${import.meta.env.BASE_URL}api/...`);
+  // a broad /api regex would also capture the preview HTML route itself. The
+  // rewrite strips the base back off before hitting Express. API port = web
+  // port + 1000 so several full-stack previews can run side by side.
   const viteConfigProxy = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const port = Number(process.env.PORT) || 5173
 const apiPort = Number(process.env.API_PORT) || port + 1000
+const base = process.env.VITE_BASE || '/'
+const apiBase = \`\${base}api\`
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: process.env.VITE_BASE || '/',
+  base,
   server: {
     host: true,
     allowedHosts: true,
     port,
     strictPort: true,
     proxy: {
-      '^.*/api/': {
+      [apiBase]: {
         target: \`http://localhost:\${apiPort}\`,
         changeOrigin: true,
-        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),
+        rewrite: (p) => p.startsWith(apiBase) ? \`/api\${p.slice(apiBase.length)}\` : p,
       },
     },
   },
