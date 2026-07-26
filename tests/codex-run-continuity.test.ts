@@ -10,6 +10,7 @@ function run(
   status: string,
   createdAt: string,
   autoExecute = true,
+  planRunId: string | null = null,
 ): CodexRun {
   return {
     id,
@@ -18,7 +19,7 @@ function run(
     status,
     tier: null,
     model: null,
-    planRunId: null,
+    planRunId,
     prompt: "Construye la app",
     autoExecute,
     error: null,
@@ -52,5 +53,14 @@ describe("Codex chat continuity", () => {
     ]
     assert.equal(selectCodexContinuityRun(runs, "build-old")?.id, "build-new")
     assert.equal(selectCodexContinuityRun(runs, "build-new"), null)
+  })
+
+  it("does not replay a waiting plan after its completed build was synchronized", () => {
+    const runs = [
+      run("build-1", "build", "done", "2026-07-25T12:01:00Z", true, "plan-1"),
+      run("plan-1", "plan", "waiting_approval", "2026-07-25T12:00:00Z"),
+    ]
+    assert.equal(selectCodexContinuityRun(runs)?.id, "build-1")
+    assert.equal(selectCodexContinuityRun(runs, "build-1"), null)
   })
 })
