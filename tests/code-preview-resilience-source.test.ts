@@ -70,4 +70,30 @@ describe("code preview resilience", () => {
     assert.match(runApp, /if \(!isCurrentRun\(\)\) return/)
     assert.match(previewSource, /previewRunGenerationRef\.current !== generation/)
   })
+
+  it("auto-retries against the Codex runner when its project link rehydrates after mount", () => {
+    assert.match(previewSource, /CODE_ACTIVE_CODEX_PROJECT_EVENT/)
+    assert.match(
+      previewSource,
+      /const \[activeCodexProjectId, setActiveCodexProjectIdState\] = React\.useState/,
+    )
+    assert.match(
+      previewSource,
+      /window\.addEventListener\(CODE_ACTIVE_CODEX_PROJECT_EVENT, refreshCodexProject\)/,
+    )
+    assert.match(
+      previewSource,
+      /gitBinding \|\| activeCodexProjectId \|\| "workspace"/,
+      "the dedupe signature must change when the remote project becomes available",
+    )
+    assert.match(
+      previewSource,
+      /const codexProjectId = activeCodexProjectId \|\| getActiveCodexProject\(\)/,
+    )
+    assert.match(
+      previewSource,
+      /\[activeCodexProjectId, autoRunSignal, canRunProject, projectSignature\]/,
+      "the post-mount auto-run gate must react to Codex project rehydration",
+    )
+  })
 })
