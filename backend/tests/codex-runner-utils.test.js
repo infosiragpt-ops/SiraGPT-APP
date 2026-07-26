@@ -58,9 +58,10 @@ test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () 
   assert.equal(resolveProjectRelPath(''), null);
 });
 
-test('isAllowedCommand allows git/bun/bunx/node and blocks the rest', () => {
+test('isAllowedCommand allows git/bun/bunx/node/npm and blocks the rest', () => {
   assert.equal(isAllowedCommand(['git', 'init']), true);
   assert.equal(isAllowedCommand(['bun', 'install']), true);
+  assert.equal(isAllowedCommand(['npm', 'run', 'test']), true);
   assert.equal(isAllowedCommand(['rm', '-rf', '/']), false);
   assert.equal(isAllowedCommand(['sh', '-c', 'echo hi']), false);
   assert.equal(isAllowedCommand([]), false);

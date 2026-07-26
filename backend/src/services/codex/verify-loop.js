@@ -12,6 +12,7 @@
  */
 
 const buildTools = require('./build-tools');
+const { localCliCommand } = require('./local-cli');
 
 const DEFAULT_ROUNDS = 2;
 const DEFAULT_FIX_STEPS = 4;
@@ -136,11 +137,11 @@ async function detectProjectGates(runner, projectId, env = process.env) {
       applies: testsEnabled && Boolean(testScript || testConfig || pkg.vitest || pkg.jest),
       reason: testsEnabled ? (testScript ? `script:${testScript.name}` : testConfig || (pkg.vitest ? 'package:vitest' : pkg.jest ? 'package:jest' : 'not_configured')) : 'disabled',
       command: usesVitest
-        ? ['bunx', 'vitest', 'run', '--reporter=json']
+        ? localCliCommand('vitest', 'run', '--reporter=json')
         : testScript
-          ? ['bun', 'run', testScript.name]
+          ? ['npm', 'run', testScript.name]
           : pkg.jest || testConfig?.startsWith('jest.')
-            ? ['bunx', 'jest', '--runInBand', '--json']
+            ? localCliCommand('jest', '--runInBand', '--json')
             : null,
       timeoutMs: readTimeoutMs(env.CODEX_VERIFY_TEST_TIMEOUT_MS || env.CODEX_VERIFY_GATE_TIMEOUT_MS),
     },
@@ -149,9 +150,9 @@ async function detectProjectGates(runner, projectId, env = process.env) {
       applies: lintEnabled && Boolean(lintScript || lintConfig || pkg.eslintConfig),
       reason: lintEnabled ? (lintScript ? `script:${lintScript.name}` : lintConfig || (pkg.eslintConfig ? 'package:eslintConfig' : 'not_configured')) : 'disabled',
       command: lintScript
-        ? ['bun', 'run', lintScript.name]
+        ? ['npm', 'run', lintScript.name]
         : lintConfig || pkg.eslintConfig
-          ? ['bunx', 'eslint', '.', '--format', 'json']
+          ? localCliCommand('eslint', '.', '--format', 'json')
           : null,
       timeoutMs: readTimeoutMs(env.CODEX_VERIFY_LINT_TIMEOUT_MS || env.CODEX_VERIFY_GATE_TIMEOUT_MS),
     },
@@ -318,18 +319,21 @@ async function normalizeTsconfig(runner, projectId) {
 }
 
 async function runTypeCheck(runner, projectId, env = process.env) {
-  // Ensure deps exist before every check: bunx fetches tsc from bun's GLOBAL
-  // cache, so tsc "runs" even on an empty node_modules and then floods with
-  // TS7026/type-resolution noise (cycle-18 finding: rounds ran against a tree
-  // that never got installed). With a lockfile this is a <1s no-op.
+  // Ensure deps exist before every check. The local TypeScript entrypoint is
+  // intentional: bunx runs package CLIs with Bun and fails under the runner's
+  // high, project-scoped Linux UIDs. With a lockfile install is a <1s no-op.
   const installTimeoutMs = readTimeoutMs(env.CODEX_VERIFY_INSTALL_TIMEOUT_MS || env.CODEX_VERIFY_GATE_TIMEOUT_MS);
   const typecheckTimeoutMs = readTimeoutMs(env.CODEX_VERIFY_TYPECHECK_TIMEOUT_MS || env.CODEX_VERIFY_GATE_TIMEOUT_MS);
   try {
     await runner.exec(projectId, ['bun', 'install'], { timeoutMs: installTimeoutMs });
   } catch { /* install trouble surfaces through tsc's own output */ }
-  const out = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: typecheckTimeoutMs });
+  const out = await runner.exec(
+    projectId,
+    localCliCommand('tsc', '--noEmit', '--pretty', 'false'),
+    { timeoutMs: typecheckTimeoutMs },
+  );
   const diagnostics = [out.stdout, out.stderr].filter(Boolean).join('\n').trim();
-  if (out.exitCode !== 0 && /\b(?:spawn(?:Sync)?\s+)?bunx?\s+ENOENT\b|command not found:\s*bunx?/i.test(diagnostics)) {
+  if (out.exitCode !== 0 && /\b(?:spawn(?:Sync)?\s+)?(?:bun|node)\s+ENOENT\b|command not found:\s*(?:bun|node)\b/i.test(diagnostics)) {
     return { clean: null, unavailable: true, diagnostics };
   }
   return { clean: out.exitCode === 0, diagnostics };
@@ -414,7 +418,7 @@ async function autoVerifyAndHeal({ run, projectId, runner, eventStore, prisma, l
       const groupId = `vg${++groupCounter}`;
       const checkActionId = `v${++actionCounter}`;
       await normalizeTsconfig(runner, projectId); // every round — the fixer itself can re-add the bogus types
-      await eventStore.appendEvent(run.id, 'action_start', { actionId: checkActionId, kind: 'terminal', command: 'bunx tsc --noEmit', groupId }, { prisma }).catch(() => {});
+      await eventStore.appendEvent(run.id, 'action_start', { actionId: checkActionId, kind: 'terminal', command: 'node node_modules/typescript/bin/tsc --noEmit', groupId }, { prisma }).catch(() => {});
       const t0 = clock().getTime();
       let check;
       try {
@@ -433,7 +437,7 @@ async function autoVerifyAndHeal({ run, projectId, runner, eventStore, prisma, l
           applies: true,
           ran: true,
           clean: typecheck.clean,
-          command: ['bunx', 'tsc', '--noEmit', '--pretty', 'false'],
+          command: localCliCommand('tsc', '--noEmit', '--pretty', 'false'),
           timeoutMs: readTimeoutMs(env.CODEX_VERIFY_TYPECHECK_TIMEOUT_MS || env.CODEX_VERIFY_GATE_TIMEOUT_MS),
           exitCode: typecheck.clean ? 0 : 1,
           diagnostics: typecheck.clean ? [] : genericDiagnostics('typecheck', typecheck.diagnostics, 1),

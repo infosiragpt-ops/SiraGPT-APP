@@ -47,7 +47,7 @@ function fixture(t) {
     exec: async (_project, cmd) => {
       if (cmd[0] === 'git') return { exitCode: 0, stdout: `${head}\n`, stderr: '' };
       if (cmd.join(' ') === 'bun install') return { exitCode: 0, stdout: 'installed', stderr: '' };
-      if (cmd.join(' ') === 'bun run build') return { exitCode: 0, stdout: 'built', stderr: '' };
+      if (cmd.join(' ') === 'npm run build') return { exitCode: 0, stdout: 'built', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
     },
     readFile: async (_project, file) => {

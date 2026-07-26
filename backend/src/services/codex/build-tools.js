@@ -124,7 +124,7 @@ function normalisePackageSpecs(raw) {
 const TOOLS = {
   run_command: {
     kind: 'terminal',
-    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, ls, cat, wc). Con background:true devuelve taskId inmediatamente; consulta task_logs y termina con task_stop. Para instalar paquetes npm usa install_dependencies; no uses scaffolds interactivos.',
+    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, npm, ls, cat, wc). Con background:true devuelve taskId inmediatamente; consulta task_logs y termina con task_stop. Para instalar paquetes npm usa install_dependencies; para scripts usa npm run; no uses scaffolds interactivos.',
     parameters: {
       type: 'object',
       properties: {
@@ -635,7 +635,7 @@ const TOOLS = {
     kind: 'terminal',
     description: 'Instala dependencias declaradas con bun install y compila el proyecto con TypeScript (tsc --noEmit), devolviendo los errores REALES de tipos/imports. Úsalo SIEMPRE después de crear, editar o instalar dependencias, y corrige lo que salga antes de terminar.',
     parameters: { type: 'object', properties: { timeoutMs: { type: 'number' } }, required: [] },
-    commandFor: () => 'bun install && bunx tsc --noEmit',
+    commandFor: () => 'bun install && node node_modules/typescript/bin/tsc --noEmit',
     pathFor: () => null,
     async execute(args, ctx) {
       try {
@@ -648,7 +648,13 @@ const TOOLS = {
             observation: `No pude instalar las dependencias declaradas antes del type check:\n${diagnostics}\nCorrige package.json/bun.lock o usa install_dependencies con paquetes válidos.`,
           };
         }
-        const out = await ctx.runner.exec(ctx.project, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: args?.timeoutMs || 120000 });
+        // eslint-disable-next-line global-require
+        const { localCliCommand } = require('./local-cli');
+        const out = await ctx.runner.exec(
+          ctx.project,
+          localCliCommand('tsc', '--noEmit', '--pretty', 'false'),
+          { timeoutMs: args?.timeoutMs || 120000 },
+        );
         if (out.exitCode === 0) {
           return { isError: false, summary: 'dependencias instaladas + type check limpio', observation: 'OK: dependencias instaladas y el proyecto compila sin errores de TypeScript.' };
         }
@@ -659,7 +665,7 @@ const TOOLS = {
           observation: `El proyecto NO compila. Errores de TypeScript:\n${diagnostics}\nCorrige estos errores editando los archivos afectados.`,
         };
       } catch (err) {
-        // A missing tsconfig / offline bunx is informational, not a build failure.
+        // A missing tsconfig / unavailable local CLI is informational, not a build failure.
         return { isError: false, summary: `type check no disponible: ${err.message}`, observation: `No pude ejecutar el type check (${err.message}). Continúa con cuidado.` };
       }
     },

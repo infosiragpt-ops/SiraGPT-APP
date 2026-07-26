@@ -339,7 +339,7 @@ test('build loop: verificación falla → ronda de reparación → done', async 
     writeFiles: async (_p, writes) => { for (const w of writes) files.set(w.path, w.content); return { ok: true }; },
     exec: async (_p, cmd) => {
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') {
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') {
         tscRuns += 1;
         // Primera verificación falla; tras la reparación pasa.
         return tscRuns === 1
@@ -395,7 +395,7 @@ function devRunner({ devStatusSeq = [], startDevImpl, files = new Map([['tsconfi
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -474,7 +474,7 @@ test('build loop: flag on + dev server error → inyecta [VERIFICACIÓN RUNTIME]
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -527,7 +527,7 @@ test('build loop: flag OFF → NO arranca el dev server (startDev nunca se llama
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };

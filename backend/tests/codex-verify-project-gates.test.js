@@ -41,7 +41,7 @@ function fakeRunner({ packageJson, extraFiles = {}, onExec }) {
       if (command[0] === 'bun' && command[1] === 'install') {
         return { exitCode: 0, stdout: '', stderr: '' };
       }
-      if (command[0] === 'bunx' && command[1] === 'tsc') {
+      if (command[0] === 'node' && command[1] === 'node_modules/typescript/bin/tsc') {
         return { exitCode: 0, stdout: '', stderr: '' };
       }
       return onExec({ projectId, command, options, callNumber: calls.length });
@@ -79,7 +79,7 @@ test('un test roto deja clean=false y devuelve diagnósticos estructurados para 
   const runner = fakeRunner({
     packageJson: { scripts: { test: 'vitest run' } },
     onExec: ({ command }) => {
-      assert.deepEqual(command, ['bunx', 'vitest', 'run', '--reporter=json']);
+      assert.deepEqual(command, ['node', 'node_modules/vitest/vitest.mjs', 'run', '--reporter=json']);
       return { exitCode: 1, stdout: JSON.stringify(vitestJson), stderr: '' };
     },
   });
@@ -97,7 +97,7 @@ test('un test roto deja clean=false y devuelve diagnósticos estructurados para 
   assert.equal(result.diagnostics[0].file, '/workspace/src/order.test.ts');
   assert.equal(result.diagnostics[0].line, 18);
   assert.equal(result.diagnostics[0].code, 'TEST_FAILURE');
-  const testCall = runner.calls.find((call) => call.command.includes('vitest'));
+  const testCall = runner.calls.find((call) => call.command.some((part) => part.includes('vitest')));
   assert.equal(testCall.options.timeoutMs, 4321);
 });
 
@@ -116,7 +116,7 @@ test('un lint roto descubierto por config deja clean=false y conserva regla y ub
     packageJson: { scripts: { dev: 'vite' } },
     extraFiles: { 'eslint.config.js': 'export default [];\n' },
     onExec: ({ command }) => {
-      assert.deepEqual(command, ['bunx', 'eslint', '.', '--format', 'json']);
+      assert.deepEqual(command, ['node', 'node_modules/eslint/bin/eslint.js', '.', '--format', 'json']);
       return { exitCode: 1, stdout: JSON.stringify(eslintJson), stderr: '' };
     },
   });
@@ -132,7 +132,7 @@ test('un lint roto descubierto por config deja clean=false y conserva regla y ub
   assert.equal(result.diagnostics[0].gate, 'lint');
   assert.equal(result.diagnostics[0].code, 'no-unused-vars');
   assert.equal(result.diagnostics[0].line, 7);
-  const lintCall = runner.calls.find((call) => call.command.includes('eslint'));
+  const lintCall = runner.calls.find((call) => call.command.some((part) => part.includes('eslint')));
   assert.equal(lintCall.options.timeoutMs, 6789);
 });
 
@@ -147,11 +147,11 @@ test('sin scripts ni config de tests/lint los gates se saltan y no bloquean', as
   const result = await verify({ runner });
 
   assert.deepEqual(result, { ran: true, clean: true, rounds: 1, fixes: 0 });
-  assert.equal(runner.calls.some((call) => call.command.includes('vitest')), false);
-  assert.equal(runner.calls.some((call) => call.command.includes('eslint')), false);
+  assert.equal(runner.calls.some((call) => call.command.some((part) => part.includes('vitest'))), false);
+  assert.equal(runner.calls.some((call) => call.command.some((part) => part.includes('eslint'))), false);
 });
 
-test('bunx ausente se clasifica como infraestructura no disponible, no como código roto', async () => {
+test('node ausente se clasifica como infraestructura no disponible, no como código roto', async () => {
   const runner = fakeRunner({
     packageJson: { scripts: { dev: 'vite', build: 'vite build' } },
     onExec: () => {
@@ -160,7 +160,7 @@ test('bunx ausente se clasifica como infraestructura no disponible, no como cód
   });
   runner.exec = async (_projectId, command) => {
     if (command[0] === 'bun') return { exitCode: 1, stdout: '', stderr: 'spawnSync bun ENOENT' };
-    return { exitCode: 1, stdout: '', stderr: 'spawnSync bunx ENOENT' };
+    return { exitCode: 1, stdout: '', stderr: 'spawnSync node ENOENT' };
   };
 
   const result = await verify({ runner });
@@ -182,7 +182,7 @@ test('CODEX_VERIFY_TESTS=0 desactiva el gate aunque exista el script', async () 
   });
 
   assert.deepEqual(result, { ran: true, clean: true, rounds: 1, fixes: 0 });
-  assert.equal(runner.calls.some((call) => call.command.includes('vitest')), false);
+  assert.equal(runner.calls.some((call) => call.command.some((part) => part.includes('vitest'))), false);
 });
 
 test('el fixer recibe diagnósticos de tests y respeta CODEX_VERIFY_FIX_STEPS', async () => {
@@ -190,7 +190,7 @@ test('el fixer recibe diagnósticos de tests y respeta CODEX_VERIFY_FIX_STEPS', 
     packageJson: { scripts: { test: 'vitest run' } },
     extraFiles: { 'src/App.tsx': 'export default function App() { return null; }\n' },
     onExec: ({ command }) => {
-      assert.deepEqual(command, ['bunx', 'vitest', 'run', '--reporter=json']);
+      assert.deepEqual(command, ['node', 'node_modules/vitest/vitest.mjs', 'run', '--reporter=json']);
       return { exitCode: 1, stdout: 'FAIL src/App.test.tsx > renders the total', stderr: '' };
     },
   });
@@ -223,5 +223,5 @@ test('el fixer recibe diagnósticos de tests y respeta CODEX_VERIFY_FIX_STEPS', 
   assert.equal(fixerTurns, 2);
   assert.equal(result.rounds, 2);
   assert.equal(result.fixes, 0);
-  assert.equal(runner.calls.filter((call) => call.command.includes('vitest')).length, 2);
+  assert.equal(runner.calls.filter((call) => call.command.some((part) => part.includes('vitest'))).length, 2);
 });

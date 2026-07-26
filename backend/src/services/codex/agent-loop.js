@@ -29,6 +29,7 @@ const toolScheduler = require('./tool-scheduler');
 const projectHooks = require('./project-hooks');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
 const { createSandboxClient } = require('./sandbox-provider');
+const { localCliCommand } = require('./local-cli');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -288,7 +289,7 @@ function buildSystemPrompt({
     'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.',
     'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
-    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git.',
+    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git. En este runner NO uses bunx para tsc, Vitest, Jest o ESLint: usa type_check y los scripts del package.json; los gates ejecutan los binarios locales con Node.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa repo_map (mapa rankeado de símbolos) al retomar un proyecto existente y list_files/grep_search para el detalle, en vez de adivinar rutas.',
     'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
@@ -697,12 +698,12 @@ async function verifySmokeTests({
   const scripts = pkg?.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
   const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) };
   let command = null;
-  if (scripts['test:smoke']) command = ['bun', 'run', 'test:smoke'];
+  if (scripts['test:smoke']) command = ['npm', 'run', 'test:smoke'];
   else if (scripts.test) {
     command = /\bvitest\b/i.test(String(scripts.test))
-      ? ['bun', 'run', 'test', '--', '--run']
-      : ['bun', 'run', 'test'];
-  } else if (deps.vitest) command = ['bunx', 'vitest', 'run'];
+      ? ['npm', 'run', 'test', '--', '--run']
+      : ['npm', 'run', 'test'];
+  } else if (deps.vitest) command = localCliCommand('vitest', 'run');
 
   if (!command) {
     const errors = 'El ciclo QA exige smoke tests, pero package.json no define test/test:smoke ni incluye Vitest.';
@@ -814,7 +815,11 @@ async function verifyWorkspace({
       if (install.exitCode !== 0) {
         errors = `bun install exit ${install.exitCode}\n${String(install.stderr || install.stdout || '').slice(0, 4000)}`;
       } else {
-        const tsc = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120_000 });
+        const tsc = await runner.exec(
+          projectId,
+          localCliCommand('tsc', '--noEmit', '--pretty', 'false'),
+          { timeoutMs: 120_000 },
+        );
         if (tsc.exitCode === 0) ok = true;
         else errors = String([tsc.stdout, tsc.stderr].filter(Boolean).join('\n')).slice(0, 4000) || `tsc exit ${tsc.exitCode}`;
       }
