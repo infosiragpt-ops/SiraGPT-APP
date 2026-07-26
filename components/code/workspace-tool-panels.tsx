@@ -459,7 +459,7 @@ function PublishingTool() {
     <ToolShell
       eyebrow="Deployments"
       title="Publishing"
-      detail="Publica tu proyecto en Hostinger: build + subida (SFTP/FTP), URL en vivo e historial."
+      detail="Compila un checkpoint verificado, publica una URL HTTPS y conserva rollback por release."
       className="bg-[#1f1f1f] text-white"
       headerClassName="border-[#353535] bg-[#1f1f1f] [&_p]:text-[#a8b0bf] [&_h2]:text-white"
       bodyClassName="bg-[#1f1f1f] px-0 py-0"

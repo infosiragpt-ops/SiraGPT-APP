@@ -11,6 +11,7 @@ function fakePrisma({ project, activeRun = null, recentRuns = [] } = {}) {
     state,
     codexProject: {
       findFirst: async () => ({ ...state.project }),
+      findUnique: async () => ({ ...state.project }),
       findMany: async () => [{ ...state.project }],
       update: async ({ data }) => {
         state.project = { ...state.project, ...data };
@@ -51,9 +52,83 @@ test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', asyn
   assert.equal(created[0].mode, 'plan');
   assert.match(created[0].prompt, /^\[PROACTIVO · CEO Office\]/);
   assert.match(created[0].prompt, /Landing inicial/);
+  assert.match(created[0].prompt, /\[SIRA_PROACTIVE_META\]/);
   const p = engine.readProactiveState(prisma.state.project);
   assert.equal(p.runsToday, 1);
   assert.equal(p.deptIndex, 1, 'round-robin advances');
+});
+
+test('USD kill switch blocks proposals using persisted run costs', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexRunMetric = {
+    aggregate: async () => ({ _sum: { costAppliedUsd: 2.75 } }),
+  };
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => ({ content: '{}' }),
+    },
+    env: { CODEX_PROACTIVE_DAILY_BUDGET_USD: '2' },
+  });
+  assert.equal(res.action, 'skipped_cost_budget');
+  assert.equal(res.costTodayUsd, 2.75);
+  assert.equal(engine.readProactiveState(prisma.state.project).budgetBlocked, true);
+});
+
+test('every Kth proposal is a QA cycle and does not advance the department cursor', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const project = {
+    ...PROJECT,
+    brief: { proactive: { enabled: true, dayKey: today, runsToday: 4, deptIndex: 3 } },
+  };
+  const prisma = fakePrisma({ project });
+  const created = [];
+  const res = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async (args) => { created.push(args); return { id: 'qa-plan' }; } },
+      chatComplete: async () => ({
+        content: '{"title":"Audita regresiones","goal":"Revisa el diff acumulado.","acceptanceCriteria":["Vitest pasa","La preview renderiza"]}',
+      }),
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '5' },
+  });
+  assert.equal(res.action, 'proposed');
+  assert.equal(res.department, 'qa-reviewer');
+  assert.equal(res.qaCycle, true);
+  assert.match(created[0].prompt, /"qaCycle":true/);
+  assert.equal(engine.readProactiveState(prisma.state.project).deptIndex, 3);
+});
+
+test('Marketing department delegates to social-company instead of creating a code run', async () => {
+  const project = {
+    ...PROJECT,
+    brief: { proactive: { enabled: true, deptIndex: 7 } },
+  };
+  const prisma = fakePrisma({ project });
+  let calls = 0;
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create a code run'); } },
+      socialAutopilot: {
+        generateDepartmentPost: async () => {
+          calls += 1;
+          return { action: 'drafted_review', postId: 'post-1' };
+        },
+      },
+      chatComplete: async () => { throw new Error('must not propose code'); },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.action, 'marketing_drafted_review');
+  assert.equal(engine.readProactiveState(prisma.state.project).deptIndex, 0);
+  assert.equal(prisma.state.project.brief.ledger[0].runId, 'social:post-1');
 });
 
 test('cycle phase 2: auto-approves ONLY its own waiting plan (creates the build)', async () => {

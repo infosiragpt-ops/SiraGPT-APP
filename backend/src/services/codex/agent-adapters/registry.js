@@ -2,15 +2,16 @@
 
 const { assertAgentAdapter, assertAgentCapabilities } = require('./contract');
 const { nativeCodexAdapter } = require('./native-codex-adapter');
+const { remoteHttpAdapter } = require('./remote-http-adapter');
 
 const IMPLEMENTER_ADAPTER_ENV = 'CODEX_IMPLEMENTER_ADAPTER';
 const DEFAULT_IMPLEMENTER_ADAPTER = 'native';
 
 class AgentAdapterConfigurationError extends Error {
-  constructor(message) {
+  constructor(message, code = 'CODEX_IMPLEMENTER_ADAPTER_UNSUPPORTED') {
     super(message);
     this.name = 'AgentAdapterConfigurationError';
-    this.code = 'CODEX_IMPLEMENTER_ADAPTER_UNSUPPORTED';
+    this.code = code;
   }
 }
 
@@ -71,6 +72,13 @@ class AgentAdapterRegistry {
     if (!capabilities.roles.includes('implementer')) {
       throw new AgentAdapterConfigurationError(`AgentAdapter ${adapter.id} does not support the implementer role`);
     }
+    const health = adapter.health({ env });
+    if (health?.configured === false) {
+      throw new AgentAdapterConfigurationError(
+        health.error || `AgentAdapter ${adapter.id} is not configured`,
+        'CODEX_IMPLEMENTER_ADAPTER_MISCONFIGURED',
+      );
+    }
     return adapter;
   }
 }
@@ -78,7 +86,7 @@ class AgentAdapterRegistry {
 let defaultRegistry;
 
 function getDefaultAgentAdapterRegistry() {
-  if (!defaultRegistry) defaultRegistry = new AgentAdapterRegistry([nativeCodexAdapter]);
+  if (!defaultRegistry) defaultRegistry = new AgentAdapterRegistry([nativeCodexAdapter, remoteHttpAdapter]);
   return defaultRegistry;
 }
 

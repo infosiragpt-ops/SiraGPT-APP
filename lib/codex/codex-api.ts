@@ -59,7 +59,7 @@ async function req<T>(path: string, init?: CodexRequestInit): Promise<T> {
     signal: boundedRequestSignal(requestInit.signal, timeoutMs),
   })
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw Object.assign(new Error((body as any)?.error || `codex http ${res.status}`), { status: res.status, body })
+  if (!res.ok) throw Object.assign(new Error((body as any)?.message || (body as any)?.error || `codex http ${res.status}`), { status: res.status, body })
   return body as T
 }
 
@@ -84,7 +84,50 @@ export interface CodexRun {
 }
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
-export interface CodexProactiveState { enabled: boolean; enabledAt: string | null; dayKey: string | null; runsToday: number; deptIndex: number; lastCycleAt: string | null; lastError: string | null }
+export interface CodexCheckpoint { id: string; commitSha: string; shortSha: string; title: string; createdAt: string; additions: number | null; deletions: number | null }
+export interface CodexObjective { id: string; title: string; metric: string | null; target: string | null; status: "active" | "at_risk" | "done" | "paused"; priority: number; updatedAt: string | null }
+export interface CodexLedgerEntry {
+  department: string
+  runId: string
+  outcome: "passed" | "failed" | "cancelled" | "blocked"
+  task: string | null
+  checkpointSha: string | null
+  diffstat: { additions: number; deletions: number; filesChanged: number }
+  costUsd: number
+  acceptance: Array<{ criterion: string; passed: boolean; evidence: string | null }>
+  learnings: string[]
+  createdAt: string
+}
+export interface CodexProgressMemory { objectives: CodexObjective[]; ledger: CodexLedgerEntry[] }
+export interface CodexProactiveState {
+  enabled: boolean
+  enabledAt: string | null
+  dayKey: string | null
+  runsToday: number
+  deptIndex: number
+  lastCycleAt: string | null
+  lastError: string | null
+  costTodayUsd: number
+  dailyBudgetUsd: number
+  budgetBlocked: boolean
+  lastDepartment: string | null
+}
+export interface CodexPublicationRelease {
+  id: string
+  checkpointId: string
+  commitSha: string
+  outDir: string
+  files: number
+  bytes: number
+  publishedAt: string
+}
+export interface CodexPublication {
+  hostname: string | null
+  url: string | null
+  currentReleaseId: string | null
+  publishedAt: string | null
+  releases: CodexPublicationRelease[]
+}
 
 async function getPublicHealth(): Promise<CodexHealth> {
   const res = await fetch(`${BASE}/health`, {
@@ -128,7 +171,7 @@ export const codexApi = {
   // Modo PROACTIVO (compañía de agentes autónoma). no-store: el estado cambia
   // desde el ticker del backend, un 304 cacheado dejaría el chip mintiendo.
   getProactive: (id: string) =>
-    req<{ state: CodexProactiveState; departments: Array<{ id: string; name: string; mission: string }> }>(`/projects/${id}/proactive`, { cache: "no-store" }),
+    req<{ state: CodexProactiveState; departments: Array<{ id: string; name: string; mission: string }>; memory: CodexProgressMemory }>(`/projects/${id}/proactive`, { cache: "no-store" }),
   setProactive: (id: string, enabled: boolean) =>
     req<{ state: CodexProactiveState }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
 
@@ -146,5 +189,22 @@ export const codexApi = {
   getCheckpointDiff: (checkpointId: string) => req<CodexCheckpointDiff>(`/checkpoints/${checkpointId}/diff`),
   listCheckpoints: (projectId: string) =>
     req<{ checkpoints?: unknown }>(`/projects/${projectId}/checkpoints`, { cache: "no-store" })
-      .then((r) => arrayOrEmpty<any>(r?.checkpoints)),
-}
+      .then((r) => arrayOrEmpty<CodexCheckpoint>(r?.checkpoints)),
+  getPublication: (projectId: string) =>
+    req<{ publication: CodexPublication }>(`/projects/${projectId}/publication`, { cache: "no-store" })
+      .then((r) => r.publication),
+  publishProject: (projectId: string, checkpointId?: string) =>
+    req<{ ok: boolean; publication: CodexPublication; release: CodexPublicationRelease; buildLog: string }>(
+      `/projects/${projectId}/publication`,
+      {
+        method: "POST",
+        body: JSON.stringify(checkpointId ? { checkpointId } : {}),
+        timeoutMs: 240_000,
+      },
+    ),
+  rollbackPublication: (projectId: string, releaseId: string) =>
+    req<{ ok: boolean; publication: CodexPublication; release: CodexPublicationRelease }>(
+      `/projects/${projectId}/publication/rollback`,
+      { method: "POST", body: JSON.stringify({ releaseId }), timeoutMs: 60_000 },
+    ),
+} as const

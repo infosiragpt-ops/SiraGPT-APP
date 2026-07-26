@@ -58,6 +58,40 @@ const restoreRunner = mockResolvedModule(runnerPath, {
   RunnerError: class RunnerError extends Error {},
 });
 
+const publicationCalls = [];
+const restorePublication = mockResolvedModule(
+  require.resolve('../src/services/codex/publication-service'),
+  {
+    getPublication: async (args) => {
+      publicationCalls.push(['get', args]);
+      return {
+        hostname: 'demo.apps.example.com',
+        url: 'https://demo.apps.example.com',
+        currentReleaseId: 'abc1234',
+        publishedAt: '2026-07-26T12:00:00.000Z',
+        releases: [],
+      };
+    },
+    publishProject: async (args) => {
+      publicationCalls.push(['publish', args]);
+      return {
+        ok: true,
+        publication: { currentReleaseId: 'def5678', releases: [] },
+        release: { id: 'def5678' },
+        buildLog: 'built',
+      };
+    },
+    rollbackPublication: async (args) => {
+      publicationCalls.push(['rollback-publication', args]);
+      return {
+        ok: true,
+        publication: { currentReleaseId: args.releaseId, releases: [] },
+        release: { id: args.releaseId },
+      };
+    },
+  },
+);
+
 const codexRoutes = require('../src/routes/codex');
 
 let runnerStatusQueue = null;
@@ -68,6 +102,7 @@ after(() => {
   restoreAuth();
   restoreService();
   restoreRunner();
+  restorePublication();
   delete process.env.CODEX_AGENT_V2;
   delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
@@ -81,6 +116,7 @@ beforeEach(() => {
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
   serviceCalls.length = 0;
   runnerCalls.length = 0;
+  publicationCalls.length = 0;
   runnerStatusQueue = null;
   runnerStatusCalls = 0;
   runnerMockPort = 5173;
@@ -157,6 +193,31 @@ test('GET /projects lists own projects; GET /projects/:id 404s for foreign ids',
   const missing = await request(buildApp()).get('/api/codex/projects/nope');
   assert.equal(missing.status, 404);
   assert.equal(missing.body.error, 'project_not_found');
+});
+
+test('publication routes preserve ownership context and support publish plus rollback', async () => {
+  const app = buildApp();
+  const current = await request(app).get('/api/codex/projects/p1/publication');
+  assert.equal(current.status, 200);
+  assert.equal(current.headers['cache-control'], 'no-store');
+  assert.equal(current.body.publication.url, 'https://demo.apps.example.com');
+
+  const published = await request(app)
+    .post('/api/codex/projects/p1/publication')
+    .send({ checkpointId: 'cp-1' });
+  assert.equal(published.status, 201);
+  const publishCall = publicationCalls.find((call) => call[0] === 'publish');
+  assert.equal(publishCall[1].userId, 'u-1');
+  assert.equal(publishCall[1].projectId, 'p1');
+  assert.equal(publishCall[1].checkpointId, 'cp-1');
+
+  const rolledBack = await request(app)
+    .post('/api/codex/projects/p1/publication/rollback')
+    .send({ releaseId: 'abc1234' });
+  assert.equal(rolledBack.status, 200);
+  const rollbackCall = publicationCalls.find((call) => call[0] === 'rollback-publication');
+  assert.equal(rollbackCall[1].releaseId, 'abc1234');
+  assert.equal(rollbackCall[1].userId, 'u-1');
 });
 
 test('POST /projects/:id/preview/start proxies the runner and adds devUrl', async () => {

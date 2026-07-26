@@ -105,6 +105,8 @@ function createRunnerClient({
       call('GET', project ? `/status?project=${encodeURIComponent(project)}` : '/status'),
     stopDev: (project) => call('POST', '/stop', project ? { project } : {}),
     exportWorkspace: (project) => call('POST', '/workspace/export', { project }),
+    exportBuild: (project, outDir = 'dist') =>
+      call('POST', '/workspace/export-build', { project, outDir }, { callTimeoutMs: 120_000 }),
   };
 }
 

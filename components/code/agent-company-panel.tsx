@@ -175,6 +175,23 @@ const EMPTY_PROACTIVE_STATE: CodexProactiveState = {
   deptIndex: 0,
   lastCycleAt: null,
   lastError: null,
+  costTodayUsd: 0,
+  dailyBudgetUsd: 0,
+  budgetBlocked: false,
+  lastDepartment: null,
+}
+
+function normalizeProactiveState(
+  value: Partial<CodexProactiveState> | null | undefined,
+): CodexProactiveState {
+  const state = { ...EMPTY_PROACTIVE_STATE, ...(value || {}) }
+  return {
+    ...state,
+    runsToday: Number(state.runsToday) || 0,
+    deptIndex: Number(state.deptIndex) || 0,
+    costTodayUsd: Number(state.costTodayUsd) || 0,
+    dailyBudgetUsd: Number(state.dailyBudgetUsd) || 0,
+  }
 }
 
 function customDepartmentStorageKey(workspaceId: string | null | undefined): string {
@@ -351,7 +368,7 @@ export function AgentCompanyPanel() {
           proactiveResult.status === "fulfilled" &&
           mutationVersion === proactiveMutationVersionRef.current
         ) {
-          const nextState = proactiveResult.value.state || EMPTY_PROACTIVE_STATE
+          const nextState = normalizeProactiveState(proactiveResult.value.state)
           const enabled = Boolean(nextState.enabled)
           setProactiveState(nextState)
           setProactiveOn(enabled)
@@ -687,7 +704,7 @@ export function AgentCompanyPanel() {
       const r = await codexApi.setProactive(codexProjectId, next)
       const enabled = Boolean(r.state?.enabled)
       proactiveMutationVersionRef.current += 1
-      setProactiveState(r.state || EMPTY_PROACTIVE_STATE)
+      setProactiveState(normalizeProactiveState(r.state))
       setProactiveOn(enabled)
       setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
       if (enabled) openCompanyLoop()
@@ -1320,7 +1337,9 @@ function CompanyHome({
             <span className="min-w-0 flex-1 truncate text-muted-foreground">
               {proactiveState.lastError
                 ? `Ciclo en revisión: ${proactiveState.lastError}`
-                : `Ciclo autónomo activo · ${proactiveState.runsToday} ejecuciones hoy`}
+                : proactiveState.budgetBlocked
+                  ? `Presupuesto diario alcanzado · $${proactiveState.costTodayUsd.toFixed(2)}`
+                  : `Ciclo autónomo activo · ${proactiveState.runsToday} ejecuciones · $${proactiveState.costTodayUsd.toFixed(2)}`}
             </span>
             {proactiveState.lastCycleAt ? (
               <span className="shrink-0 tabular-nums text-muted-foreground">

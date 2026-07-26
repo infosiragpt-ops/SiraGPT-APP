@@ -22,6 +22,8 @@ const buildTools = require('./build-tools');
 const actionStoreDefault = require('./action-store');
 const checkpointService = require('./checkpoint-service');
 const runMetrics = require('./run-metrics');
+const progressLedger = require('./progress-ledger');
+const proactiveMetrics = require('./proactive-metrics');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
 const { createSandboxClient } = require('./sandbox-provider');
 
@@ -314,9 +316,26 @@ function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}
  * exactly like the tsc path. When it started the server itself it stops it so the
  * verification never leaves a dev server hanging.
  */
-async function verifyDevServer({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
-  if (String(env.CODEX_VERIFY_DEV_SERVER ?? '0') !== '1') return { ran: false, ok: true };
-  if (typeof runner?.devStatus !== 'function' || typeof runner?.startDev !== 'function') return { ran: false, ok: true };
+async function verifyDevServer({
+  runner,
+  projectId,
+  run,
+  eventStore,
+  prisma,
+  metrics,
+  clock,
+  env = process.env,
+  actionId,
+  groupId,
+  strict = false,
+}) {
+  if (!strict && String(env.CODEX_VERIFY_DEV_SERVER ?? '0') !== '1') return { ran: false, ok: true };
+  if (typeof runner?.devStatus !== 'function' || typeof runner?.startDev !== 'function') {
+    const errors = 'El runner no expone devStatus/startDev; no se puede demostrar que la aplicación arranca.';
+    return strict
+      ? { ran: true, ok: false, kind: 'infra', errors, devServer: { ran: false, ok: false }, browser: { ran: false, ok: false } }
+      : { ran: false, ok: true };
+  }
 
   const timeoutMs = readPosInt(env.CODEX_VERIFY_DEV_TIMEOUT_MS, DEFAULT_VERIFY_DEV_TIMEOUT_MS);
   const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
@@ -343,7 +362,10 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
     // honestly, and stop a server we started so nothing hangs.
     if (startedByUs && typeof runner.stopDev === 'function') await runner.stopDev(projectId).catch(() => {});
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación runtime no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
-    return { ran: false, ok: true };
+    const errors = `verificación runtime no disponible: ${err.message}`;
+    return strict
+      ? { ran: true, ok: false, kind: 'infra', errors, devServer: { ran: false, ok: false }, browser: { ran: false, ok: false } }
+      : { ran: false, ok: true };
   }
 
   const durationMs = Math.max(0, clock().getTime() - t0);
@@ -357,23 +379,74 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
     // clean server log. Drive the system Chromium against the dev URL and feed
     // real user-facing errors back to the repair loop. Best-effort by
     // contract: no browser/infra → still verified-ok. CODEX_VERIFY_BROWSER=0 disables.
-    if (String(env.CODEX_VERIFY_BROWSER || '1').trim() !== '0') {
+    if (strict || String(env.CODEX_VERIFY_BROWSER || '1').trim() !== '0') {
       try {
         // eslint-disable-next-line global-require
         const bc = require('./browser-check');
         const url = bc.devUrlFor(env, status?.port || 5173);
         const view = await bc.checkApp({ url, env });
+        if (view.unavailable && strict) {
+          const report = bc.formatReport(view, url);
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `browser_check obligatorio no disponible:\n${String(report).slice(0, 2000)}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return {
+            ran: true,
+            ok: false,
+            kind: 'browser',
+            errors: String(report).slice(0, 4000),
+            devServer: { ran: true, ok: true },
+            browser: { ran: false, ok: false, unavailable: true },
+          };
+        }
         if (!view.unavailable && !view.ok) {
           const report = bc.formatReport(view, url);
           await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `la app no funciona en el navegador:\n${String(report).slice(0, 2000)}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
           if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-          return { ran: true, ok: false, errors: String(report).slice(0, 4000) };
+          return {
+            ran: true,
+            ok: false,
+            kind: 'browser',
+            errors: String(report).slice(0, 4000),
+            devServer: { ran: true, ok: true },
+            browser: { ran: true, ok: false },
+          };
         }
-      } catch { /* browser verification is an aid, never a blocker */ }
+        if (!view.unavailable) {
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y browser_check renderiza #root sin errores', durationMs }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return {
+            ran: true,
+            ok: true,
+            kind: 'browser',
+            devServer: { ran: true, ok: true },
+            browser: { ran: true, ok: true },
+          };
+        }
+      } catch (err) {
+        if (strict) {
+          const errors = `browser_check obligatorio falló: ${err.message}`;
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: errors, durationMs }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return {
+            ran: true,
+            ok: false,
+            kind: 'browser',
+            errors,
+            devServer: { ran: true, ok: true },
+            browser: { ran: false, ok: false, unavailable: true },
+          };
+        }
+      }
     }
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y la app renderiza en navegador', durationMs }, { prisma }).catch(() => {});
     if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-    return { ran: true, ok: true };
+    return {
+      ran: true,
+      ok: true,
+      kind: 'runtime',
+      devServer: { ran: true, ok: true },
+      browser: { ran: false, ok: !strict },
+    };
   }
 
   // A dev server that never became ready and reported NO error/log tail is an
@@ -382,13 +455,105 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
   if (!status?.ready && !status?.error && !errLines) {
     if (startedByUs && typeof runner.stopDev === 'function') await runner.stopDev(projectId).catch(() => {});
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: 'verificación runtime no disponible: el dev server no respondió a tiempo', durationMs }, { prisma }).catch(() => {});
-    return { ran: false, ok: true };
+    const errors = 'El dev server no respondió a tiempo y no produjo evidencia suficiente.';
+    return strict
+      ? { ran: true, ok: false, kind: 'infra', errors, devServer: { ran: false, ok: false }, browser: { ran: false, ok: false } }
+      : { ran: false, ok: true };
   }
 
   const errors = (status?.error ? `${status.error}\n` : '') + (errLines || tail);
   await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `el dev server no arranca:\n${String(errors).slice(0, 2000)}`, durationMs }, { prisma }).catch(() => {});
   if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-  return { ran: true, ok: false, errors: String(errors).slice(0, 4000) };
+  return {
+    ran: true,
+    ok: false,
+    kind: 'runtime',
+    errors: String(errors).slice(0, 4000),
+    devServer: { ran: true, ok: false },
+    browser: { ran: false, ok: false },
+  };
+}
+
+/**
+ * Run an existing Vitest/smoke-test script. A normal build only executes tests
+ * when the workspace defines them; the periodic proactive QA cycle makes their
+ * absence a blocking failure so the agent must add durable regression coverage.
+ */
+async function verifySmokeTests({
+  runner,
+  projectId,
+  run,
+  eventStore,
+  prisma,
+  metrics,
+  clock,
+  actionId,
+  groupId,
+  required = false,
+}) {
+  let pkg;
+  try {
+    const read = await runner.readFile(projectId, 'package.json');
+    pkg = JSON.parse(String(read?.content || '{}'));
+  } catch {
+    const errors = 'package.json no existe o no es JSON válido; no se pueden ejecutar smoke tests.';
+    return required
+      ? { ran: true, ok: false, kind: 'smoke', errors }
+      : { ran: false, ok: true };
+  }
+  const scripts = pkg?.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+  const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) };
+  let command = null;
+  if (scripts['test:smoke']) command = ['bun', 'run', 'test:smoke'];
+  else if (scripts.test) {
+    command = /\bvitest\b/i.test(String(scripts.test))
+      ? ['bun', 'run', 'test', '--', '--run']
+      : ['bun', 'run', 'test'];
+  } else if (deps.vitest) command = ['bunx', 'vitest', 'run'];
+
+  if (!command) {
+    const errors = 'El ciclo QA exige smoke tests, pero package.json no define test/test:smoke ni incluye Vitest.';
+    return required
+      ? { ran: true, ok: false, kind: 'smoke', errors }
+      : { ran: false, ok: true };
+  }
+
+  await eventStore.appendEvent(run.id, 'action_start', {
+    actionId,
+    kind: 'terminal',
+    command: command.join(' '),
+    groupId,
+  }, { prisma }).catch(() => {});
+  const t0 = clock().getTime();
+  try {
+    const out = await runner.exec(projectId, command, { timeoutMs: 120_000 });
+    const durationMs = Math.max(0, clock().getTime() - t0);
+    const output = String([out?.stdout, out?.stderr].filter(Boolean).join('\n')).slice(0, 4000);
+    const ok = out?.exitCode === 0;
+    await eventStore.appendEvent(run.id, 'action_end', {
+      actionId,
+      status: ok ? 'done' : 'error',
+      outputSummary: ok ? 'smoke tests pasan' : (output || `smoke tests exit ${out?.exitCode}`),
+      durationMs,
+    }, { prisma }).catch(() => {});
+    if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+    return ok
+      ? { ran: true, ok: true, kind: 'smoke' }
+      : { ran: true, ok: false, kind: 'smoke', errors: output || `smoke tests exit ${out?.exitCode}` };
+  } catch (err) {
+    const durationMs = Math.max(0, clock().getTime() - t0);
+    const errors = `smoke tests no disponibles: ${err.message}`;
+    await eventStore.appendEvent(run.id, 'action_end', {
+      actionId,
+      status: 'error',
+      outputSummary: errors,
+      durationMs,
+    }, { prisma }).catch(() => {});
+    if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+    return required
+      ? { ran: true, ok: false, kind: 'smoke', errors }
+      : { ran: false, ok: true, kind: 'smoke' };
+  }
 }
 
 /**
@@ -404,9 +569,31 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
  * the caller's existing repair-round loop feeds it back to the model. With the
  * flag unset/0 this is a no-op and behaviour is byte-identical to before.
  */
-async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
-  if (String(env.CODEX_VERIFY_DISABLED || '') === '1') return { ran: false, ok: true };
-  if (typeof runner?.exec !== 'function' || typeof runner?.readFile !== 'function') return { ran: false, ok: true };
+async function verifyWorkspace({
+  runner,
+  projectId,
+  run,
+  eventStore,
+  prisma,
+  metrics,
+  clock,
+  env = process.env,
+  actionId,
+  groupId,
+  strict = false,
+  requireSmoke = false,
+}) {
+  const gates = {
+    typeCheck: { ran: false, ok: !strict },
+    smoke: { ran: false, ok: !requireSmoke },
+    devServer: { ran: false, ok: !strict },
+    browser: { ran: false, ok: !strict },
+  };
+  if (!strict && String(env.CODEX_VERIFY_DISABLED || '') === '1') return { ran: false, ok: true, gates };
+  if (typeof runner?.exec !== 'function' || typeof runner?.readFile !== 'function') {
+    const errors = 'El runner no permite exec/readFile; el gate proactivo no puede verificar el workspace.';
+    return strict ? { ran: true, ok: false, kind: 'infra', errors, gates } : { ran: false, ok: true, gates };
+  }
 
   let tsconfig = '';
   try {
@@ -441,27 +628,63 @@ async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, met
     } catch (err) {
       // Runner/env failure (not a code failure) → skip verification honestly.
       await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
-      return { ran: false, ok: true };
+      const errors = `verificación no disponible: ${err.message}`;
+      return strict
+        ? { ran: true, ok: false, kind: 'infra', errors, gates }
+        : { ran: false, ok: true, gates };
     }
     const durationMs = Math.max(0, clock().getTime() - t0);
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: ok ? 'done' : 'error', outputSummary: ok ? 'compila sin errores de tipos' : errors, durationMs }, { prisma }).catch(() => {});
     if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-    if (!ok) return { ran: true, ok: false, kind: 'tsc', errors };
+    gates.typeCheck = { ran: true, ok };
+    if (!ok) return { ran: true, ok: false, kind: 'tsc', errors, gates };
     tscOk = true;
+  } else if (strict) {
+    const errors = 'El gate proactivo exige un tsconfig.json válido para ejecutar type_check.';
+    return { ran: true, ok: false, kind: 'tsc', errors, gates };
   }
+
+  const smoke = await verifySmokeTests({
+    runner,
+    projectId,
+    run,
+    eventStore,
+    prisma,
+    metrics,
+    clock,
+    actionId: `${actionId}-smoke`,
+    groupId,
+    required: requireSmoke,
+  });
+  gates.smoke = { ran: smoke.ran, ok: smoke.ok };
+  if (smoke.ran && !smoke.ok) return { ran: true, ok: false, kind: 'smoke', errors: smoke.errors, gates };
 
   // Optional runtime check (flag-gated OFF by default). Runs after a clean tsc,
   // or on its own for a project with no tsconfig to typecheck. Reuses the same
   // repair-round mechanism through the caller (kind:'runtime').
   if (tscOk) {
-    const rt = await verifyDevServer({ runner, projectId, run, eventStore, prisma, metrics, clock, env, actionId, groupId });
-    if (rt.ran && !rt.ok) return { ran: true, ok: false, kind: 'runtime', errors: rt.errors };
-    if (rt.ran) return { ran: true, ok: true, kind: 'runtime' };
+    const rt = await verifyDevServer({
+      runner,
+      projectId,
+      run,
+      eventStore,
+      prisma,
+      metrics,
+      clock,
+      env,
+      actionId: `${actionId}-runtime`,
+      groupId,
+      strict,
+    });
+    if (rt.devServer) gates.devServer = rt.devServer;
+    if (rt.browser) gates.browser = rt.browser;
+    if (rt.ran && !rt.ok) return { ran: true, ok: false, kind: rt.kind || 'runtime', errors: rt.errors, gates };
+    if (rt.ran) return { ran: true, ok: true, kind: rt.kind || 'runtime', gates };
   }
 
   // Nothing verified at all (no valid tsconfig + flag off) → deterministic no-op.
-  if (!tsValid) return { ran: false, ok: true };
-  return { ran: true, ok: true, kind: 'tsc' };
+  if (!tsValid) return { ran: false, ok: true, gates };
+  return { ran: true, ok: true, kind: 'tsc', gates };
 }
 
 /** Best-effort tracked-file listing for context. Never throws. */
@@ -554,6 +777,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
+  const proactiveMeta = progressLedger.taskMetaFromPrompt(sourcePrompt);
+  const strictProactiveGate = Boolean(proactiveMeta);
   // Skill-aware step budget: multi-module builds (enterprise apps, stores)
   // physically don't fit the standard budget — the cycle-14 CRM run finished
   // 'done' having only written the base types. When the prompt matches one of
@@ -673,18 +898,36 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         const v = await verifyWorkspace({
           runner, projectId, run, eventStore, prisma, metrics, clock, env,
           actionId: `a${++actionCounter}`, groupId: `g${++groupCounter}`,
+          strict: strictProactiveGate,
+          requireSmoke: Boolean(proactiveMeta?.qaCycle),
         });
         if (v.ran && !v.ok) {
           verifyRounds += 1;
-          const repairPrompt = v.kind === 'runtime'
-            ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO arranca en el dev server. Errores de runtime/boot:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search; si falta un paquete usa install_dependencies; si es código, corrígelo con read_file + edit_file. Cuando termines deja de llamar herramientas.`
-            : `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (si falta un paquete usa install_dependencies; si es código usa read_file + edit_file) y cuando termines deja de llamar herramientas.`;
+          const repairPrompt = strictProactiveGate
+            ? `[GATE PROACTIVO · ${v.kind || 'quality'}] El run NO puede cerrarse hasta superar todos los gates. Delega primero en run_subagent con agent="debugger" y entrégale esta evidencia real:\n${v.errors}\nDespués aplica sus correcciones y vuelve a ejecutar type_check, dev_server_check y browser_check. En ciclo QA también deben pasar los smoke tests.`
+            : (v.kind === 'runtime' || v.kind === 'browser'
+              ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO funciona en el dev server/navegador. Errores:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search; si falta un paquete usa install_dependencies; si es código, corrígelo con read_file + edit_file. Cuando termines deja de llamar herramientas.`
+              : `[VERIFICACIÓN] El proyecto NO compila o sus pruebas fallan. Errores:\n${v.errors}\nCorrige estos errores (si falta un paquete usa install_dependencies; si es código usa read_file + edit_file) y cuando termines deja de llamar herramientas.`);
           messages.push({ role: 'user', content: repairPrompt });
           continue;
         }
       }
-      await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
-      return { status: 'done' };
+      const closed = await closeBuild({
+        run,
+        project,
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        clock,
+        env,
+        metrics,
+        sourcePrompt,
+        webSearch,
+      });
+      return closed.ok === false
+        ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
+        : { status: 'done' };
     }
     if (allCalls.length > calls.length) {
       // Honest budget: tell the model what was dropped instead of letting it
@@ -875,8 +1118,22 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     },
     { prisma },
   ).catch(() => {});
-  await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
-  return { status: 'done' };
+  const closed = await closeBuild({
+    run,
+    project,
+    runner,
+    eventStore,
+    prisma,
+    llmTurn,
+    clock,
+    env,
+    metrics,
+    sourcePrompt,
+    webSearch,
+  });
+  return closed.ok === false
+    ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
+    : { status: 'done' };
 }
 
 async function readRunnerFile(runner, projectId, path) {
@@ -956,14 +1213,138 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
   return { repaired: true };
 }
 
+function gateEvidence(verification) {
+  const labels = {
+    typeCheck: 'type_check',
+    smoke: 'smoke_tests',
+    devServer: 'dev_server_check',
+    browser: 'browser_check',
+  };
+  const parts = [];
+  for (const [key, gate] of Object.entries(verification?.gates || {})) {
+    if (!gate?.ran) {
+      parts.push(`${labels[key] || key}: ${gate?.ok ? 'no aplicable' : 'sin evidencia'}`);
+    } else {
+      parts.push(`${labels[key] || key}: ${gate.ok ? 'ok' : 'falló'}`);
+    }
+  }
+  return parts.join('; ') || 'sin evidencia de verificación';
+}
+
+async function workspaceDiffstat({ runner, projectId }) {
+  const diffstat = { additions: 0, deletions: 0, filesChanged: 0 };
+  if (typeof runner?.exec !== 'function') return diffstat;
+  try {
+    const [status, unstaged, staged] = await Promise.all([
+      runner.exec(projectId, ['git', 'status', '--porcelain']),
+      runner.exec(projectId, ['git', 'diff', '--shortstat', 'HEAD']),
+      runner.exec(projectId, ['git', 'diff', '--cached', '--shortstat', 'HEAD']),
+    ]);
+    const parsedUnstaged = checkpointService.parseShortstat(unstaged?.stdout || '');
+    const parsedStaged = checkpointService.parseShortstat(staged?.stdout || '');
+    diffstat.additions = parsedUnstaged.additions + parsedStaged.additions;
+    diffstat.deletions = parsedUnstaged.deletions + parsedStaged.deletions;
+    diffstat.filesChanged = String(status?.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean).length;
+  } catch { /* best-effort evidence */ }
+  return diffstat;
+}
+
+async function runDebuggerRepair({
+  run,
+  projectId,
+  runner,
+  eventStore,
+  prisma,
+  llmTurn,
+  env,
+  metrics,
+  webSearch,
+  verification,
+  round,
+  clock,
+}) {
+  const tool = buildTools.getTool('run_subagent');
+  if (!tool) return { isError: true, summary: 'debugger no disponible' };
+  const actionId = `quality-debug-${round}`;
+  const groupId = `quality-repair-${round}`;
+  await eventStore.appendEvent(run.id, 'action_start', {
+    actionId,
+    kind: 'agent',
+    command: `subagent debugger: reparar gate ${verification?.kind || 'quality'}`,
+    groupId,
+  }, { prisma }).catch(() => {});
+  const t0 = clock().getTime();
+  const result = await tool.execute({
+    agent: 'debugger',
+    task: [
+      'Repara el workspace hasta que pueda superar sus gates deterministas.',
+      `Gate que falló: ${verification?.kind || 'quality'}.`,
+      `Evidencia real:\n${String(verification?.errors || 'sin detalle').slice(0, 6000)}`,
+      'Inspecciona los archivos y aplica correcciones concretas. Ejecuta type_check y, cuando corresponda, smoke tests, dev_server_check y browser_check antes de terminar.',
+    ].join('\n\n'),
+    context: 'Este es un run PROACTIVO. No ocultes ni ignores errores y no elimines funcionalidad para hacer pasar el gate.',
+  }, {
+    runner,
+    project: projectId,
+    webSearch,
+    env,
+    llmTurn,
+    tier: run?.tier || null,
+    onUsage: (usage) => metrics?.recordLlmUsage?.(usage),
+  });
+  const durationMs = Math.max(0, clock().getTime() - t0);
+  await eventStore.appendEvent(run.id, 'action_end', {
+    actionId,
+    status: result?.isError ? 'error' : 'done',
+    outputSummary: buildTools.summarise(result?.summary || result?.observation || '', 1600),
+    durationMs,
+  }, { prisma }).catch(() => {});
+  if (metrics?.recordAction) metrics.recordAction('agent', durationMs);
+  return result;
+}
+
+function acceptanceEvidence(meta, verification) {
+  const evidence = gateEvidence(verification);
+  return (meta?.acceptanceCriteria || []).map((criterion) => ({
+    criterion,
+    passed: verification?.ok === true,
+    evidence: verification?.ok
+      ? `Gate técnico obligatorio superado: ${evidence}.`
+      : `Bloqueado por ${verification?.kind || 'quality'}: ${String(verification?.errors || evidence).slice(0, 420)}`,
+  }));
+}
+
+function recordGateMetrics(verification) {
+  for (const [gate, result] of Object.entries(verification?.gates || {})) {
+    if (!result?.ran && result?.ok) continue;
+    proactiveMetrics.recordQuality({ outcome: result?.ok ? 'passed' : 'failed', gate });
+  }
+}
+
 /**
  * Build close (feature 07 + 08): create the git checkpoint for the changes this
  * run produced (no checkpoint when the tree is clean), then finalize metrics +
  * run_summary (feature 08 extends this). Best-effort — a checkpoint/metrics
  * failure must not turn a successful build into an error.
  */
-async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics }) {
+async function closeBuild({
+  run,
+  project,
+  runner,
+  eventStore,
+  prisma,
+  llmTurn,
+  clock,
+  env,
+  metrics,
+  sourcePrompt,
+  webSearch,
+}) {
   await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
+  const resolvedSourcePrompt = sourcePrompt != null
+    ? sourcePrompt
+    : await resolveRunSourcePrompt({ run, prisma });
+  const proactiveMeta = progressLedger.taskMetaFromPrompt(resolvedSourcePrompt);
   // Claude Code-style close: verify the workspace actually compiles and run a
   // bounded self-heal pass BEFORE the checkpoint so the fixes land in it.
   // Best-effort by contract (verify-loop never throws).
@@ -973,30 +1354,120 @@ async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, c
   } catch (err) {
     if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] auto-verify failed:', err?.message || err);
   }
+
+  let verification = null;
+  if (proactiveMeta) {
+    const projectId = project?.id || run.projectId;
+    const maxRepairRounds = readPosInt(env?.CODEX_PROACTIVE_REPAIR_ROUNDS, 2);
+    verification = await verifyWorkspace({
+      runner,
+      projectId,
+      run,
+      eventStore,
+      prisma,
+      metrics,
+      clock,
+      env,
+      actionId: 'quality-1',
+      groupId: 'quality-gate',
+      strict: true,
+      requireSmoke: proactiveMeta.qaCycle,
+    });
+    for (let round = 1; !verification.ok && round <= maxRepairRounds; round += 1) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `El gate ${verification.kind || 'de calidad'} falló. El subagente debugger inicia la reparación ${round}/${maxRepairRounds}.`,
+      }, { prisma }).catch(() => {});
+      await runDebuggerRepair({
+        run,
+        projectId,
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        env,
+        metrics,
+        webSearch,
+        verification,
+        round,
+        clock,
+      });
+      verification = await verifyWorkspace({
+        runner,
+        projectId,
+        run,
+        eventStore,
+        prisma,
+        metrics,
+        clock,
+        env,
+        actionId: `quality-${round + 1}`,
+        groupId: 'quality-gate',
+        strict: true,
+        requireSmoke: proactiveMeta.qaCycle,
+      });
+    }
+    recordGateMetrics(verification);
+  }
+
+  const projectId = project?.id || run.projectId;
+  let diffstat = await workspaceDiffstat({ runner, projectId });
   let checkpoint = null;
-  try {
-    checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });
-  } catch (err) {
-    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
+  if (!proactiveMeta || verification?.ok) {
+    try {
+      checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });
+    } catch (err) {
+      if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
+    }
   }
 
   // Metrics + run_summary (feature 08). Order: checkpoint → diffstat → metric →
   // run_summary, then the processor emits the terminal run_status. Best-effort —
   // a metrics failure must not turn a successful build into an error.
+  let metric = null;
   if (metrics && typeof metrics.finalize === 'function') {
     try {
-      let diffstat = { additions: 0, deletions: 0 };
-      if (checkpoint) {
-        const d = await checkpointService.getCheckpointDiff({ checkpointId: checkpoint.id, userId: run.userId, deps: { runner, prisma } });
-        if (d && !d.error) diffstat = { additions: d.additions, deletions: d.deletions };
-      }
       const userPlan = await resolveUserPlan(run.userId, prisma);
-      await metrics.finalize({ diffstat, userPlan, prisma, eventStore, env, clock });
+      metric = await metrics.finalize({ diffstat, userPlan, prisma, eventStore, env, clock });
     } catch (err) {
       if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] metrics finalize failed:', err?.message || err);
     }
   }
-  return { checkpoint };
+
+  if (proactiveMeta) {
+    const passed = verification?.ok === true;
+    await progressLedger.appendLedgerEntry({
+      prisma,
+      project,
+      entry: {
+        department: proactiveMeta.department,
+        runId: run.id,
+        outcome: passed ? 'passed' : 'failed',
+        task: proactiveMeta.title || String(resolvedSourcePrompt || '').slice(0, 600),
+        checkpointSha: checkpoint?.commitSha || null,
+        diffstat,
+        costUsd: Number(metric?.costAppliedUsd ?? metric?.costUsd) || 0,
+        acceptance: acceptanceEvidence(proactiveMeta, verification),
+        learnings: passed
+          ? [`Verificación superada: ${gateEvidence(verification)}.`]
+          : [`${verification?.kind || 'quality'}: ${String(verification?.errors || 'gate sin evidencia').slice(0, 480)}`],
+        createdAt: clock().toISOString(),
+      },
+    }).catch((err) => {
+      if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] progress ledger append failed:', err?.message || err);
+    });
+    if (!passed) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `No cerré ni promoví este run: el gate obligatorio ${verification?.kind || 'de calidad'} sigue fallando después de la reparación.`,
+      }, { prisma }).catch(() => {});
+      return {
+        ok: false,
+        checkpoint: null,
+        verification,
+        error: `proactive quality gate failed (${verification?.kind || 'unknown'}): ${String(verification?.errors || 'sin evidencia').slice(0, 1200)}`,
+      };
+    }
+  }
+  return { ok: true, checkpoint, verification };
 }
 
 /** Best-effort lookup of the user's plan for pricing (defaults to FREE). */
@@ -1041,4 +1512,8 @@ module.exports = {
   compactMessages,
   verifyWorkspace,
   verifyDevServer,
+  verifySmokeTests,
+  closeBuild,
+  gateEvidence,
+  acceptanceEvidence,
 };

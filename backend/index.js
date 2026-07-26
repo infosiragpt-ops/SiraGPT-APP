@@ -516,6 +516,7 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 // CODEX_AGENT_V2 flag (no-op when off) and deliberately fails boot when the
 // configured implementer adapter is unknown.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
+const { startProactiveScheduler, closeProactiveScheduler } = require('./src/services/codex/proactive-queue');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
@@ -1562,10 +1563,24 @@ async function startServer() {
     // el proceso; fallos aislados dentro del propio tick.
     try {
       const proactive = require('./src/services/codex/proactive-engine');
-      if (proactive.startProactiveTicker()) {
-        shutdownRegistry.register('codex_proactive_stop', () => proactive.stopProactiveTicker());
-        logger.info('codex_proactive_ticker_started');
-      }
+      void startProactiveScheduler()
+        .then((scheduler) => {
+          if (scheduler) {
+            logger.info('codex_proactive_bullmq_scheduler_started');
+            return;
+          }
+          if (proactive.startProactiveTicker()) {
+            shutdownRegistry.register('codex_proactive_stop', () => proactive.stopProactiveTicker());
+            logger.info('codex_proactive_local_ticker_started');
+          }
+        })
+        .catch((err) => {
+          logger.warn({ err: err && err.message }, 'codex_proactive_bullmq_init_failed');
+          if (proactive.startProactiveTicker()) {
+            shutdownRegistry.register('codex_proactive_stop', () => proactive.stopProactiveTicker());
+            logger.info('codex_proactive_local_ticker_started');
+          }
+        });
     } catch (err) {
       logger.warn({ err: err && err.message }, 'codex_proactive_init_failed');
     }
@@ -1749,6 +1764,7 @@ async function startServer() {
             closeGoalQueue(),
             closeCodexWorker(),
             closeCodexQueue(),
+            closeProactiveScheduler(),
             closeDocumentCollectionWorker(),
             closeDocumentCollectionQueue(),
         ]);

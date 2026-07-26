@@ -25,6 +25,7 @@ const eventStoreDefault = require('./event-store');
 const { createImplementerRequest, assertAgentOutcome } = require('./agent-adapters/contract');
 const { getDefaultAgentAdapterRegistry } = require('./agent-adapters/registry');
 const { nativeCodexAdapter } = require('./agent-adapters/native-codex-adapter');
+const { remoteAgentEnv } = require('./agent-adapters/remote-http-adapter');
 const buildTools = require('./build-tools');
 const autonomousRunPolicy = require('./autonomous-run-policy');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
@@ -59,6 +60,10 @@ function executionContextForAdapter({ adapter, signal, isCancelled, run, project
     context.nativeRun = run;
     context.nativeProject = project;
     if (runAgentLoop) context.runAgentLoop = runAgentLoop;
+  } else if (adapter.id === 'remote-http') {
+    // The remote adapter receives only its own operator configuration. Never
+    // expose Prisma, host paths, provider API keys, or the full process env.
+    context.deps = { env: remoteAgentEnv(deps.env) };
   }
   return context;
 }
