@@ -209,7 +209,15 @@ async function defaultWebSearch(query) {
   }
 }
 
-function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes, parallelSubagents = false }) {
+function buildSystemPrompt({
+  project,
+  plan,
+  fileTree,
+  sourcePrompt,
+  projectNotes,
+  parallelSubagents = false,
+  openclawPromptBlock = '',
+}) {
   const appsMode = isAppsPrompt(sourcePrompt);
   const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
   const lines = [
@@ -235,6 +243,9 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     'Si el usuario pide software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, punto de venta, gestión de clientes/proveedores/proyectos), delega PRIMERO en enterprise_analyst para convertir el pedido en módulos, entidades, roles y flujos; luego construye una app multi-módulo con navegación lateral, dashboard con KPIs y datos de ejemplo realistas del dominio.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
+  if (openclawPromptBlock) {
+    lines.push(openclawPromptBlock);
+  }
   if (forceViteApps) {
     lines.push('Este run viene de /apps. Stack OBLIGATORIO: React 18 + Vite 7 + TypeScript (el starter ya provisto). Construye componentes .tsx en src/; el entry es src/main.tsx que monta <App/> en #root.');
     lines.push('PROHIBIDO Next.js: NO crees next.config.mjs, app/, pages/ ni cambies package.json a "next dev". Mantén el package.json Vite (script dev="vite"). El resultado debe abrir en el preview de inmediato.');
@@ -556,7 +567,18 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes, parallelSubagents }) },
+    {
+      role: 'system',
+      content: buildSystemPrompt({
+        project,
+        plan,
+        fileTree,
+        sourcePrompt,
+        projectNotes,
+        parallelSubagents,
+        openclawPromptBlock: deps.openclawPromptBlock || '',
+      }),
+    },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
   ];
 
