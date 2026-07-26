@@ -34,6 +34,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import {
   CODE_OPEN_TOOL_EVENT,
   CODE_PREVIEW_STATE_EVENT,
@@ -236,6 +237,11 @@ export function PreviewPane() {
   const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
   )
+  const registerCompanySurface = React.useCallback((element: HTMLDivElement | null) => {
+    registerAgentCompanyPreviewSlot(element)
+  }, [])
+
+  React.useEffect(() => () => registerAgentCompanyPreviewSlot(null), [])
 
   const clearSelectionTimers = React.useCallback(() => {
     for (const timer of selectionTimersRef.current) window.clearTimeout(timer)
@@ -1296,6 +1302,11 @@ export function PreviewPane() {
           framed ? "bg-zinc-100 dark:bg-zinc-900/55" : "bg-white dark:bg-zinc-900",
         )}
       >
+        <div
+          ref={registerCompanySurface}
+          className="pointer-events-none absolute inset-0 z-40 [&>*]:pointer-events-auto"
+          data-testid="agent-company-preview-slot"
+        />
         {selectionMode ? (
           <div className="pointer-events-none absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/45 bg-zinc-950/82 px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_18px_45px_-28px_rgba(15,23,42,0.72)] backdrop-blur-xl">
             <MousePointer2 className="h-3.5 w-3.5 text-violet-200" />

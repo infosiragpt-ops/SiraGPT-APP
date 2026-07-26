@@ -17,10 +17,11 @@ describe("agent company placement", () => {
     assert.match(companySource, /data-agent-company-dock=\{dockedInAppsRail \? "apps" : "workspace"\}/)
   })
 
-  it("opens department chats directly and keeps social resources inside the company rail", () => {
+  it("opens department chats directly and mounts social resources in the preview", () => {
     assert.match(companySource, /const openDepartmentChat = React\.useCallback/)
     assert.match(companySource, /setActiveCodeChatSession\(sessionId\)/)
-    assert.match(companySource, /<ResourcesView workspaceId=/)
+    assert.match(companySource, /<ResourcesView[\s\S]*?surface[\s\S]*?workspaceId=/)
+    assert.match(companySource, /<CompanyPreviewSurface/)
     assert.match(companySource, /facebook:[\s\S]*linkedin:[\s\S]*x:/i)
   })
 

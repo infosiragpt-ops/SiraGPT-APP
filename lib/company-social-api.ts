@@ -52,6 +52,18 @@ export type CompanySocialOperations = {
   }
 }
 
+export type CompanySocialPost = {
+  id: string
+  caption: string | null
+  prompt: string
+  platforms: CompanySocialPlatform[]
+  status: "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled"
+  scheduledAt: string
+  publishedAt: string | null
+  lastError: string | null
+  createdAt: string
+}
+
 const BASE = `${getNormalizedApiBaseUrl()}/social-posts`
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -80,6 +92,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const companySocialApi = {
   operations: () => request<CompanySocialOperations>("/operations", { cache: "no-store" }),
+  listPosts: () => request<{ posts: CompanySocialPost[] }>("/", { cache: "no-store" })
+    .then((result) => result.posts),
   connectUrl: (platform: CompanySocialPlatform) =>
     request<{ platform: CompanySocialPlatform; url: string }>(`/connect/${platform}`),
   disconnect: (platform: CompanySocialPlatform) =>
@@ -90,4 +104,19 @@ export const companySocialApi = {
     method: "PATCH",
     body: JSON.stringify(policy),
   }).then((result) => result.policy),
+  queueTextPost: (input: {
+    caption: string
+    platforms: CompanySocialPlatform[]
+    scheduledAt?: string
+    workspaceId?: string | null
+  }) => request<{ post: CompanySocialPost }>("/queue", {
+    method: "POST",
+    body: JSON.stringify({
+      ...input,
+      prompt: input.caption,
+      approved: true,
+    }),
+  }).then((result) => result.post),
+  publishNow: (postId: string) =>
+    request<{ result: unknown }>(`/${encodeURIComponent(postId)}/publish-now`, { method: "POST" }),
 }

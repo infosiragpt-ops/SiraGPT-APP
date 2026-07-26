@@ -3,18 +3,27 @@
 import * as React from "react"
 import { createPortal } from "react-dom"
 import {
+  Activity,
+  AlertTriangle,
   ArrowLeft,
   Bot,
   Boxes,
   BriefcaseBusiness,
+  CalendarClock,
   Check,
+  CheckCircle2,
   ChevronRight,
   ChevronsUpDown,
   CircleDot,
+  Clock3,
   Code2,
   Cpu,
+  Download,
   ExternalLink,
+  File,
   FileCode2,
+  FileSpreadsheet,
+  FileText,
   FolderOpen,
   Gauge,
   Languages,
@@ -32,11 +41,15 @@ import {
   Radio,
   RefreshCw,
   Save,
+  Search,
+  Send,
   Settings2,
   ShieldCheck,
   Sparkles,
   TrendingUp,
+  UsersRound,
   Workflow,
+  X,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -56,6 +69,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
@@ -63,6 +77,7 @@ import {
   type CompanySocialOperations,
   type CompanySocialPlatform,
   type CompanySocialPolicy,
+  type CompanySocialPost,
 } from "@/lib/company-social-api"
 import {
   AGENT_COMPANY_DEPARTMENTS,
@@ -88,12 +103,12 @@ import {
   setProactiveCompanyEnabled,
 } from "@/lib/code-agent-company-proactive"
 import type { CodeChatSession } from "@/lib/code-chat-sessions"
+import type { CodeFile, CodeFiles } from "@/lib/code-workspace-utils"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_NEW_CODE_CHAT_EVENT,
-  CODE_OPEN_TOOL_EVENT,
   getActiveCodexProject,
   setActiveCodexProject,
   useCodeWorkspace,
@@ -118,7 +133,8 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { AgentOfficeScene } from "./agent-office/agent-office-scene"
 
-type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "resources" | "task"
+type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "files" | "resources" | "task"
+type CompanyPreviewView = Exclude<CompanyView, "home" | "chat" | "department">
 
 type CompanyOption = {
   id: string
@@ -255,6 +271,7 @@ export function AgentCompanyPanel() {
   const { user } = useAuth()
   const isMobile = useIsMobile()
   const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
+  const [previewSlot, setPreviewSlot] = React.useState<HTMLElement | null>(null)
   const {
     files,
     activeFolder,
@@ -267,6 +284,7 @@ export function AgentCompanyPanel() {
   } = useCodeWorkspace()
 
   const [view, setView] = React.useState<CompanyView>("home")
+  const [previewView, setPreviewView] = React.useState<CompanyPreviewView | null>(null)
   const [selectedDepartmentId, setSelectedDepartmentId] = React.useState("ceo-office")
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null)
   const [officeOpen, setOfficeOpen] = React.useState(false)
@@ -354,6 +372,7 @@ export function AgentCompanyPanel() {
   }, [activeFolder?.id])
 
   React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
+  React.useEffect(() => subscribeAgentCompanyPreviewSlot(setPreviewSlot), [])
   const dockedInAppsRail = !isMobile && Boolean(dockSlot)
   const chatLivesInWorkspaceColumn = dockedInAppsRail
 
@@ -370,6 +389,7 @@ export function AgentCompanyPanel() {
   React.useEffect(() => {
     setCustomDepartments(readCustomDepartments(activeFolder?.id))
     setView("home")
+    setPreviewView(null)
     setSelectedTaskId(null)
     setOfficeOpen(false)
   }, [activeFolder?.id])
@@ -377,9 +397,10 @@ export function AgentCompanyPanel() {
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get("companyView") === "resources" || params.has("social")) {
-      setView("resources")
+      if (isMobile) setView("resources")
+      else if (dockedInAppsRail && previewSlot) setPreviewView("resources")
     }
-  }, [])
+  }, [dockedInAppsRail, isMobile, previewSlot])
 
   const refreshProjects = React.useCallback(async () => {
     setProjectsLoading(true)
@@ -452,9 +473,13 @@ export function AgentCompanyPanel() {
     [allDepartments, codeChatSessions, codexRuns, snapshot.rootSessionId],
   )
 
-  const openTool = React.useCallback((toolId: string) => {
-    window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId } }))
-  }, [])
+  const openCompanySurface = React.useCallback((nextView: CompanyPreviewView) => {
+    if (dockedInAppsRail && previewSlot) {
+      setPreviewView(nextView)
+      return
+    }
+    setView(nextView)
+  }, [dockedInAppsRail, previewSlot])
 
   const ensureCompanyRuntime = React.useCallback(
     ({
@@ -920,10 +945,11 @@ export function AgentCompanyPanel() {
             snapshot={snapshot}
             departmentRows={departmentRows}
             onOpenOffice={() => setOfficeOpen(true)}
-            onOpenDashboard={() => setView("dashboard")}
-            onOpenControl={() => setView("control")}
-            onOpenFiles={() => openTool("files")}
-            onOpenResources={() => setView("resources")}
+            activePreviewView={previewView}
+            onOpenDashboard={() => openCompanySurface("dashboard")}
+            onOpenControl={() => openCompanySurface("control")}
+            onOpenFiles={() => openCompanySurface("files")}
+            onOpenResources={() => openCompanySurface("resources")}
             onOpenDepartment={openDepartmentChat}
             onAddDepartment={() => setNewDepartmentOpen(true)}
             user={user}
@@ -936,6 +962,8 @@ export function AgentCompanyPanel() {
           />
         ) : view === "dashboard" ? (
           <DashboardView
+            surface={isMobile}
+            companyName={companyName}
             snapshot={snapshot}
             sessions={codeChatSessions}
             runs={codexRuns}
@@ -950,6 +978,8 @@ export function AgentCompanyPanel() {
           />
         ) : view === "control" ? (
           <ControlView
+            surface={isMobile}
+            companyName={companyName}
             rootSessionId={snapshot.rootSessionId}
             sessions={codeChatSessions}
             runs={codexRuns}
@@ -963,12 +993,25 @@ export function AgentCompanyPanel() {
               setView("task")
             }}
           />
+        ) : view === "files" ? (
+          <FilesView
+            surface={isMobile}
+            companyName={companyName}
+            files={files}
+            sessions={codeChatSessions}
+            departments={allDepartments}
+          />
         ) : view === "resources" ? (
-          <ResourcesView workspaceId={activeFolder?.id || null} onOpenCeo={openCeoOffice} />
+          <ResourcesView
+            surface={isMobile}
+            companyName={companyName}
+            workspaceId={activeFolder?.id || null}
+            onOpenCeo={openCeoOffice}
+          />
         ) : view === "department" && selectedDepartment ? (
           <DepartmentView row={selectedDepartment} onOpenCeo={openCeoOffice} />
         ) : view === "task" && selectedTask ? (
-          <TaskView session={selectedTask} onOpenCeo={openCeoOffice} />
+          <TaskView surface={isMobile} session={selectedTask} onOpenCeo={openCeoOffice} />
         ) : null}
       </div>
 
@@ -1048,11 +1091,138 @@ export function AgentCompanyPanel() {
     </div>
   )
 
+  const previewSurface = previewSlot && previewView ? createPortal(
+    <CompanyPreviewSurface
+      companyName={companyName}
+      view={previewView}
+      onClose={() => setPreviewView(null)}
+    >
+      {previewView === "dashboard" ? (
+        <DashboardView
+          surface
+          companyName={companyName}
+          snapshot={snapshot}
+          sessions={codeChatSessions}
+          runs={codexRuns}
+          checkpointCount={checkpointCount}
+          proactiveState={proactiveState}
+          departmentCount={allDepartments.length}
+          rootSessionId={snapshot.rootSessionId}
+          onOpenTask={(sessionId) => {
+            setSelectedTaskId(sessionId)
+            setPreviewView("task")
+          }}
+        />
+      ) : previewView === "control" ? (
+        <ControlView
+          surface
+          companyName={companyName}
+          rootSessionId={snapshot.rootSessionId}
+          sessions={codeChatSessions}
+          runs={codexRuns}
+          checkpointCount={checkpointCount}
+          proactiveState={proactiveState}
+          departments={allDepartments}
+          activeSessionId={activeCodeChatSessionId}
+          onOpenCeo={() => {
+            setPreviewView(null)
+            openCeoOffice()
+          }}
+          onOpenTask={(sessionId) => {
+            setSelectedTaskId(sessionId)
+            setPreviewView("task")
+          }}
+        />
+      ) : previewView === "files" ? (
+        <FilesView
+          surface
+          companyName={companyName}
+          files={files}
+          sessions={codeChatSessions}
+          departments={allDepartments}
+        />
+      ) : previewView === "resources" ? (
+        <ResourcesView
+          surface
+          companyName={companyName}
+          workspaceId={activeFolder?.id || null}
+          onOpenCeo={() => {
+            setPreviewView(null)
+            openCeoOffice()
+          }}
+        />
+      ) : previewView === "task" && selectedTask ? (
+        <TaskView
+          surface
+          session={selectedTask}
+          onOpenCeo={() => {
+            setPreviewView(null)
+            openCeoOffice()
+          }}
+        />
+      ) : null}
+    </CompanyPreviewSurface>,
+    previewSlot,
+  ) : null
+
   if (dockedInAppsRail && dockSlot) {
-    return createPortal(panel, dockSlot)
+    return (
+      <>
+        {createPortal(panel, dockSlot)}
+        {previewSurface}
+      </>
+    )
   }
   if (!isMobile) return null
   return panel
+}
+
+const COMPANY_VIEW_LABELS: Record<CompanyPreviewView, string> = {
+  dashboard: "Panel",
+  control: "Controlar",
+  files: "Archivos",
+  resources: "Recursos",
+  task: "Detalle",
+}
+
+function CompanyPreviewSurface({
+  companyName,
+  view,
+  onClose,
+  children,
+}: {
+  companyName: string
+  view: CompanyPreviewView
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <section
+      className="absolute inset-0 flex min-h-0 flex-col bg-[#fbfbfa] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50"
+      data-testid="agent-company-preview-surface"
+      data-company-view={view}
+    >
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200/75 bg-white/95 px-4 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/95">
+        <span className="truncate text-[13px] font-semibold">{companyName}</span>
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+        <span className="truncate text-[13px] text-zinc-600 dark:text-zinc-300">
+          {COMPANY_VIEW_LABELS[view]}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="ml-auto h-9 w-9 rounded-md"
+          onClick={onClose}
+          aria-label="Cerrar vista de empresa"
+          title="Volver al preview de la app"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+    </section>
+  )
 }
 
 function CompanyHome({
@@ -1061,6 +1231,7 @@ function CompanyHome({
   officeOpen,
   snapshot,
   departmentRows,
+  activePreviewView,
   onOpenOffice,
   onOpenDashboard,
   onOpenControl,
@@ -1088,6 +1259,7 @@ function CompanyHome({
     latest: CodeChatSession | null
     latestRun: CodexRun | null
   }>
+  activePreviewView: CompanyPreviewView | null
   onOpenOffice: () => void
   onOpenDashboard: () => void
   onOpenControl: () => void
@@ -1150,10 +1322,10 @@ function CompanyHome({
           aria-label="Herramientas de la empresa"
           className={cn("space-y-0.5", hideFooter ? "mt-2" : "mt-3")}
         >
-          <CompanyNavRow compact={hideFooter} icon={LayoutDashboard} label="Panel" onClick={onOpenDashboard} />
-          <CompanyNavRow compact={hideFooter} icon={ListTree} label="Controlar" count={snapshot.taskCount} onClick={onOpenControl} />
-          <CompanyNavRow compact={hideFooter} icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
-          <CompanyNavRow compact={hideFooter} icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
+          <CompanyNavRow compact={hideFooter} active={activePreviewView === "dashboard"} icon={LayoutDashboard} label="Panel" onClick={onOpenDashboard} />
+          <CompanyNavRow compact={hideFooter} active={activePreviewView === "control"} icon={ListTree} label="Controlar" count={snapshot.taskCount} onClick={onOpenControl} />
+          <CompanyNavRow compact={hideFooter} active={activePreviewView === "files"} icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
+          <CompanyNavRow compact={hideFooter} active={activePreviewView === "resources"} icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
         </nav>
 
         <div className={cn("flex items-center justify-between px-2", hideFooter ? "mt-3" : "mt-4")}>
@@ -1303,12 +1475,14 @@ function CompanyNavRow({
   count,
   onClick,
   compact = false,
+  active = false,
 }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
   count?: number
   onClick: () => void
   compact?: boolean
+  active?: boolean
 }) {
   return (
     <button
@@ -1317,7 +1491,9 @@ function CompanyNavRow({
       className={cn(
         "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         compact && "h-8 gap-2 rounded-md px-2 text-xs",
+        active && "bg-muted/65 text-foreground",
       )}
+      aria-current={active ? "page" : undefined}
     >
       <Icon className={cn(
         "h-[18px] w-[18px] text-muted-foreground group-hover:text-foreground",
@@ -1343,24 +1519,45 @@ const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; class
 }
 
 function ResourcesView({
+  companyName,
   workspaceId,
   onOpenCeo,
+  surface = false,
 }: {
+  companyName: string
   workspaceId: string | null
   onOpenCeo: () => void
+  surface?: boolean
 }) {
   const [operations, setOperations] = React.useState<CompanySocialOperations | null>(null)
+  const [posts, setPosts] = React.useState<CompanySocialPost[]>([])
   const [draft, setDraft] = React.useState<CompanySocialPolicy | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
   const [providerBusy, setProviderBusy] = React.useState<CompanySocialPlatform | null>(null)
+  const [caption, setCaption] = React.useState("")
+  const [selectedPlatforms, setSelectedPlatforms] = React.useState<CompanySocialPlatform[]>([])
+  const [delivery, setDelivery] = React.useState<"now" | "scheduled">("now")
+  const [scheduledAt, setScheduledAt] = React.useState("")
+  const [postBusy, setPostBusy] = React.useState(false)
 
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const result = await companySocialApi.operations()
+      const [result, queuedPosts] = await Promise.all([
+        companySocialApi.operations(),
+        companySocialApi.listPosts().catch(() => []),
+      ])
       setOperations(result)
+      setPosts(queuedPosts)
       setDraft({ ...result.policy, workspaceId })
+      setSelectedPlatforms((current) => {
+        const connected = result.providers
+          .filter((provider) => provider.connection?.connected && provider.supports.text)
+          .map((provider) => provider.platform)
+        const retained = current.filter((platform) => connected.includes(platform))
+        return retained.length ? retained : connected
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron cargar los recursos.")
     } finally {
@@ -1461,6 +1658,51 @@ function ResourcesView({
     }
   }, [load])
 
+  const toggleComposerPlatform = React.useCallback((platform: CompanySocialPlatform) => {
+    setSelectedPlatforms((current) => current.includes(platform)
+      ? current.filter((entry) => entry !== platform)
+      : [...current, platform])
+  }, [])
+
+  const submitTextPost = React.useCallback(async () => {
+    const text = caption.trim()
+    if (!text || postBusy) return
+    if (selectedPlatforms.length === 0) {
+      toast.error("Conecta y selecciona al menos una red social.")
+      return
+    }
+    if (delivery === "scheduled" && !scheduledAt) {
+      toast.error("Selecciona la fecha y hora de publicación.")
+      return
+    }
+    if (delivery === "now" && !draft?.enabled) {
+      toast.error("Activa la publicación de la empresa antes de publicar ahora.")
+      return
+    }
+
+    setPostBusy(true)
+    try {
+      const post = await companySocialApi.queueTextPost({
+        caption: text,
+        platforms: selectedPlatforms,
+        scheduledAt: delivery === "scheduled" ? new Date(scheduledAt).toISOString() : undefined,
+        workspaceId,
+      })
+      if (delivery === "now") {
+        await companySocialApi.publishNow(post.id)
+        toast.success("Publicación enviada a los canales seleccionados.")
+      } else {
+        toast.success("Publicación programada.")
+      }
+      setCaption("")
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo preparar la publicación.")
+    } finally {
+      setPostBusy(false)
+    }
+  }, [caption, delivery, draft?.enabled, load, postBusy, scheduledAt, selectedPlatforms, workspaceId])
+
   if (loading && !operations) {
     return (
       <ViewBody>
@@ -1487,6 +1729,293 @@ function ResourcesView({
 
   const connectedCount = operations.providers.filter((provider) => provider.connection?.connected).length
   const autonomous = draft.enabled && draft.mode === "auto"
+
+  if (surface) {
+    const connectedPlatforms = new Set(
+      operations.providers
+        .filter((provider) => provider.connection?.connected && provider.supports.text)
+        .map((provider) => provider.platform),
+    )
+    return (
+      <SurfacePage testId="company-resources-surface">
+        <div className="flex flex-wrap items-end justify-between gap-5">
+          <div>
+            <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
+            <h1 className="mt-2 text-[28px] font-semibold leading-tight">Activos de la empresa agente</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+              Conecta cuentas autorizadas y publica contenido de texto con control explícito del usuario.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 rounded-md bg-white dark:bg-zinc-900"
+            onClick={() => void load()}
+            disabled={loading}
+          >
+            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
+            Actualizar estado
+          </Button>
+        </div>
+
+        <div className="mt-7 grid overflow-hidden rounded-lg border border-zinc-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-white/10 dark:bg-zinc-900">
+          {[
+            { label: "Canales conectados", value: connectedCount, detail: `${operations.providers.length} compatibles`, icon: Link2 },
+            { label: "En cola", value: operations.metrics.queued, detail: "borradores y programadas", icon: Clock3 },
+            { label: "Publicados hoy", value: operations.metrics.publishedToday, detail: "confirmados por proveedor", icon: Send },
+            { label: "Modo de salida", value: draft.mode === "auto" ? "Auto" : "Revisión", detail: draft.enabled ? "publicación habilitada" : "publicación pausada", icon: ShieldCheck },
+          ].map(({ label, value, detail, icon: Icon }, index) => (
+            <div
+              key={label}
+              className={cn(
+                "min-h-[124px] p-5",
+                index > 0 && "border-t border-zinc-200 sm:border-l sm:border-t-0 dark:border-white/10",
+                index === 2 && "sm:border-l-0 xl:border-l",
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-500">{label}</span>
+                <Icon className="h-4 w-4 text-zinc-400" />
+              </div>
+              <div className="mt-4 text-2xl font-semibold tabular-nums">{value}</div>
+              <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
+          <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold">Nueva publicación de texto</h2>
+                <p className="mt-1 text-xs text-zinc-500">El contenido solo sale a cuentas conectadas y seleccionadas.</p>
+              </div>
+              <MessageSquareText className="h-5 w-5 text-zinc-400" />
+            </div>
+            <Label htmlFor="company-social-caption" className="mt-5 block text-xs font-semibold">Contenido</Label>
+            <Textarea
+              id="company-social-caption"
+              value={caption}
+              onChange={(event) => setCaption(event.target.value)}
+              placeholder="Escribe el contenido que deseas publicar..."
+              maxLength={5_000}
+              className="mt-2 min-h-[170px] resize-y rounded-md border-zinc-200 text-sm leading-relaxed dark:border-white/10"
+            />
+            <div className="mt-2 text-right text-[10px] tabular-nums text-zinc-500">{caption.length}/5000</div>
+
+            <div className="mt-5">
+              <Label className="text-xs font-semibold">Canales</Label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {operations.providers.map((provider) => {
+                  const connected = connectedPlatforms.has(provider.platform)
+                  const selected = selectedPlatforms.includes(provider.platform)
+                  const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
+                  return (
+                    <button
+                      key={`composer-${provider.platform}`}
+                      type="button"
+                      disabled={!connected}
+                      onClick={() => toggleComposerPlatform(provider.platform)}
+                      className={cn(
+                        "inline-flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45",
+                        selected
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
+                          : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5",
+                      )}
+                      aria-pressed={selected}
+                      title={connected ? `Publicar en ${provider.label}` : `${provider.label} no está conectado`}
+                    >
+                      <span className={cn("flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold", mark.className)}>
+                        {mark.mark}
+                      </span>
+                      {provider.label}
+                      {connected ? <Check className="h-3.5 w-3.5" /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-[auto_1fr]">
+              <div className="flex h-10 items-center rounded-md border border-zinc-200 p-1 dark:border-white/10" role="group" aria-label="Momento de publicación">
+                {([
+                  ["now", "Ahora"],
+                  ["scheduled", "Programar"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDelivery(value)}
+                    className={cn(
+                      "h-8 rounded px-3 text-xs font-medium",
+                      delivery === value ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white" : "text-zinc-500",
+                    )}
+                    aria-pressed={delivery === value}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {delivery === "scheduled" ? (
+                <Input
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(event) => setScheduledAt(event.target.value)}
+                  aria-label="Fecha y hora de publicación"
+                  className="h-10 rounded-md border-zinc-200 dark:border-white/10"
+                />
+              ) : (
+                <div className="flex h-10 items-center rounded-md bg-zinc-50 px-3 text-xs text-zinc-500 dark:bg-zinc-950">
+                  Se enviará inmediatamente al confirmar.
+                </div>
+              )}
+            </div>
+
+            {!draft.enabled && delivery === "now" ? (
+              <div className="mt-4 flex items-start gap-2 rounded-md bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/25 dark:text-amber-200">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                Activa la publicación en la configuración antes de enviar contenido ahora.
+              </div>
+            ) : null}
+
+            <Button
+              type="button"
+              className="mt-5 h-11 w-full rounded-md"
+              onClick={() => void submitTextPost()}
+              disabled={!caption.trim() || selectedPlatforms.length === 0 || postBusy || (delivery === "scheduled" && !scheduledAt)}
+            >
+              {postBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : delivery === "now" ? <Send className="mr-2 h-4 w-4" /> : <CalendarClock className="mr-2 h-4 w-4" />}
+              {postBusy ? "Procesando..." : delivery === "now" ? "Publicar ahora" : "Programar publicación"}
+            </Button>
+          </section>
+
+          <section>
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold">Apps e integraciones</h2>
+                <p className="mt-1 text-xs text-zinc-500">OAuth real y permisos confirmados por el proveedor.</p>
+              </div>
+              <span className="text-xs tabular-nums text-zinc-500">{connectedCount} conectadas</span>
+            </div>
+            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
+              {operations.providers.map((provider) => {
+                const connection = provider.connection
+                const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
+                const busy = providerBusy === provider.platform
+                return (
+                  <div key={provider.platform} className="flex min-h-[76px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5">
+                    <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-xs font-bold", mark.className)}>
+                      {mark.mark}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <strong className="truncate text-[13px]">{provider.label}</strong>
+                        <span className={cn("h-2 w-2 rounded-full", connection?.connected ? "bg-emerald-500" : provider.configured ? "bg-amber-400" : "bg-zinc-300")} />
+                      </span>
+                      <span className="mt-1 block truncate text-[10px] text-zinc-500">
+                        {connection?.connected
+                          ? connection.accountName || "Cuenta conectada"
+                          : provider.configured
+                            ? "Disponible para conectar"
+                            : "Credenciales del servidor pendientes"}
+                      </span>
+                    </span>
+                    {connection?.connected ? (
+                      <Button type="button" variant="ghost" size="sm" className="h-9 rounded-md text-xs" onClick={() => void disconnect(provider.platform)} disabled={busy}>
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Desconectar"}
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="outline" size="sm" className="h-9 rounded-md text-xs" onClick={() => void connect(provider.platform)} disabled={!provider.configured || busy}>
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-semibold">Control de publicación</h3>
+                  <p className="mt-1 text-[11px] text-zinc-500">Pausa global y aprobación de salida.</p>
+                </div>
+                <Switch
+                  checked={draft.enabled}
+                  onCheckedChange={(enabled) => patchDraft({ enabled })}
+                  aria-label="Habilitar publicación social"
+                />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-1 rounded-md bg-zinc-100 p-1 dark:bg-zinc-800">
+                {([
+                  ["review", "Con revisión"],
+                  ["auto", "Automático"],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => patchDraft({ mode })}
+                    className={cn(
+                      "h-9 rounded text-xs font-medium",
+                      draft.mode === mode ? "bg-white shadow-sm dark:bg-zinc-950" : "text-zinc-500",
+                    )}
+                    aria-pressed={draft.mode === mode}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <Button type="button" variant="outline" className="mt-4 w-full rounded-md" onClick={() => void save()} disabled={saving}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                Guardar configuración
+              </Button>
+            </div>
+          </section>
+        </div>
+
+        <section className="mt-8">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold">Historial de publicaciones</h2>
+              <p className="mt-1 text-xs text-zinc-500">Últimos estados devueltos por la cola y los proveedores.</p>
+            </div>
+            <span className="text-xs tabular-nums text-zinc-500">{posts.length} registros</span>
+          </div>
+          <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
+            {posts.slice(0, 12).map((post) => (
+              <div key={post.id} className="grid min-h-[72px] items-center gap-3 border-b border-zinc-100 px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto_auto] dark:border-white/5">
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium">{post.caption || post.prompt}</p>
+                  <p className="mt-1 truncate text-[10px] text-zinc-500">
+                    {post.platforms.map((platform) => operations.providers.find((provider) => provider.platform === platform)?.label || platform).join(" · ")}
+                  </p>
+                </div>
+                <span className={cn(
+                  "w-fit rounded-full px-2 py-1 text-[10px] font-semibold",
+                  post.status === "published" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300",
+                  ["scheduled", "publishing"].includes(post.status) && "bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
+                  post.status === "failed" && "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300",
+                  !["published", "scheduled", "publishing", "failed"].includes(post.status) && "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+                )}>
+                  {post.status === "published" ? "Publicado" : post.status === "scheduled" ? "Programado" : post.status === "publishing" ? "Publicando" : post.status === "failed" ? "Falló" : post.status}
+                </span>
+                <span className="text-[10px] tabular-nums text-zinc-500">
+                  {relativeActivity(Date.parse(post.publishedAt || post.scheduledAt || post.createdAt))}
+                </span>
+              </div>
+            ))}
+            {posts.length === 0 ? (
+              <div className="px-5 py-12 text-center">
+                <MessageSquareText className="mx-auto h-5 w-5 text-zinc-400" />
+                <p className="mt-2 text-sm font-medium">Sin publicaciones todavía</p>
+                <p className="mt-1 text-xs text-zinc-500">Conecta un canal y prepara el primer contenido.</p>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      </SurfacePage>
+    )
+  }
 
   return (
     <ViewBody>
@@ -1766,7 +2295,35 @@ function OperatingLoop({
   )
 }
 
-function DashboardView({
+function SurfacePage({
+  children,
+  testId,
+}: {
+  children: React.ReactNode
+  testId: string
+}) {
+  return (
+    <div className="h-full overflow-y-auto bg-[#fbfbfa] dark:bg-zinc-950" data-testid={testId}>
+      <div className="mx-auto w-full max-w-[1480px] px-5 py-6 lg:px-8 lg:py-8">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function companyObjective(sessions: readonly CodeChatSession[], rootSessionId: string | null): string {
+  const root = sessions.find((session) => session.id === rootSessionId)
+  const instruction = [...(root?.turns || [])]
+    .reverse()
+    .find((turn) => turn.role === "user" && turn.content.trim())
+    ?.content
+    .replace(/\s+/g, " ")
+    .trim()
+  return instruction || "Define el objetivo principal desde CEO Office para coordinar a todos los departamentos."
+}
+
+function CompanyDashboardSurface({
+  companyName,
   snapshot,
   sessions,
   runs,
@@ -1776,6 +2333,7 @@ function DashboardView({
   rootSessionId,
   onOpenTask,
 }: {
+  companyName: string
   snapshot: ReturnType<typeof buildAgentCompanySnapshot>
   sessions: CodeChatSession[]
   runs: CodexRun[]
@@ -1785,12 +2343,370 @@ function DashboardView({
   rootSessionId: string | null
   onOpenTask: (sessionId: string) => void
 }) {
+  const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
+  const completed = orderedRuns.filter((run) => String(run.status).toLowerCase() === "done").length
+  const attention = orderedRuns.filter((run) => {
+    const status = String(run.status).toLowerCase()
+    return status === "error" || status === "waiting_approval"
+  })
+  const progress = orderedRuns.length ? Math.round((completed / orderedRuns.length) * 100) : 0
+  const objective = companyObjective(sessions, rootSessionId)
+  const metrics = [
+    { label: "Agentes activos", value: snapshot.activeAgents, detail: `${departmentCount} departamentos`, icon: UsersRound },
+    { label: "Ejecuciones", value: orderedRuns.length, detail: `${completed} completadas`, icon: Activity },
+    { label: "Evidencias", value: checkpointCount, detail: "checkpoints verificables", icon: CheckCircle2 },
+    { label: "Atención", value: attention.length, detail: attention.length ? "requieren revisión" : "sin bloqueos activos", icon: AlertTriangle },
+  ]
+
+  return (
+    <SurfacePage testId="company-dashboard-surface">
+      <div className="flex flex-wrap items-end justify-between gap-5">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase text-zinc-500">Panel de empresa</p>
+          <h1 className="mt-2 text-[28px] font-semibold leading-tight">{companyName}</h1>
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+            Estado operativo confirmado por los agentes, sus ejecuciones y la evidencia guardada.
+          </p>
+        </div>
+        <span className={cn(
+          "inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-semibold",
+          proactiveState.enabled
+            ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
+            : "border-zinc-200 bg-white text-zinc-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
+        )}>
+          <span className={cn("h-2 w-2 rounded-full", proactiveState.enabled ? "bg-emerald-500" : "bg-zinc-400")} />
+          {proactiveState.enabled ? "Operación activa" : "Operación en pausa"}
+        </span>
+      </div>
+
+      <div className="mt-7 grid overflow-hidden rounded-lg border border-zinc-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-white/10 dark:bg-zinc-900">
+        {metrics.map(({ label, value, detail, icon: Icon }, index) => (
+          <div
+            key={label}
+            className={cn(
+              "min-h-[132px] p-5",
+              index > 0 && "border-t border-zinc-200 sm:border-t-0 sm:border-l dark:border-white/10",
+              index === 2 && "sm:border-l-0 xl:border-l",
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-500">{label}</span>
+              <Icon className="h-4 w-4 text-zinc-400" />
+            </div>
+            <div className="mt-5 text-3xl font-semibold tabular-nums">{value}</div>
+            <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
+          </div>
+        ))}
+      </div>
+
+      <section className="mt-7 border-y border-zinc-200 py-6 dark:border-white/10">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-4xl">
+            <p className="text-[11px] font-semibold uppercase text-zinc-500">Objetivo compartido</p>
+            <h2 className="mt-2 text-xl font-semibold leading-snug">{objective}</h2>
+          </div>
+          <div className="min-w-[190px]">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-zinc-500">Progreso confirmado</span>
+              <strong className="tabular-nums">{progress}%</strong>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+              <div className="h-full rounded-full bg-zinc-900 dark:bg-zinc-100" style={{ width: `${progress}%` }} />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
+        <section>
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold">Actividad reciente</h2>
+              <p className="mt-1 text-xs text-zinc-500">Conversaciones y encargos guardados en este workspace.</p>
+            </div>
+            <span className="text-xs tabular-nums text-zinc-500">{sessions.length} registros</span>
+          </div>
+          <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
+            {[...sessions]
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, 8)
+              .map((session) => {
+                const status = codeSessionStatus(session)
+                return (
+                  <button
+                    key={session.id}
+                    type="button"
+                    className="flex min-h-[64px] w-full items-center gap-3 border-b border-zinc-100 px-4 text-left last:border-b-0 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring dark:border-white/5 dark:hover:bg-white/5"
+                    onClick={() => onOpenTask(session.id)}
+                  >
+                    <span className={cn("h-2.5 w-2.5 rounded-full", STATUS_STYLES[status.tone])} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {session.id === rootSessionId ? "CEO Office" : session.title}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[11px] text-zinc-500">{latestSessionLine(session)}</span>
+                    </span>
+                    <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">{relativeActivity(session.updatedAt)}</span>
+                  </button>
+                )
+              })}
+            {sessions.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-zinc-500">Aún no hay actividad registrada.</div>
+            ) : null}
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-base font-semibold">Estado operativo</h2>
+          <p className="mt-1 text-xs text-zinc-500">Bloqueos y últimas señales del runtime.</p>
+          <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
+            {(attention.length ? attention : orderedRuns.slice(0, 5)).map((run) => {
+              const status = codeRunStatus(run)
+              return (
+                <div key={run.id} className="border-b border-zinc-100 px-4 py-3.5 last:border-b-0 dark:border-white/5">
+                  <div className="flex items-start gap-3">
+                    <span className={cn("mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full", STATUS_STYLES[status.tone])} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13px] font-semibold">{runTitle(run)}</p>
+                      <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-500">
+                        {run.error || runSummary(run)}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-[10px] text-zinc-500">{status.label}</span>
+                  </div>
+                </div>
+              )
+            })}
+            {orderedRuns.length === 0 ? (
+              <div className="px-5 py-12 text-center">
+                <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500" />
+                <p className="mt-2 text-sm font-medium">Sin ejecuciones pendientes</p>
+                <p className="mt-1 text-xs text-zinc-500">CEO Office iniciará el trabajo cuando reciba un objetivo.</p>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    </SurfacePage>
+  )
+}
+
+function CompanyControlSurface({
+  companyName,
+  rootSessionId,
+  sessions,
+  runs,
+  checkpointCount,
+  proactiveState,
+  departments,
+  activeSessionId,
+  onOpenCeo,
+  onOpenTask,
+}: {
+  companyName: string
+  rootSessionId: string | null
+  sessions: CodeChatSession[]
+  runs: CodexRun[]
+  checkpointCount: number
+  proactiveState: CodexProactiveState
+  departments: readonly AgentDepartmentDefinition[]
+  activeSessionId: string | null
+  onOpenCeo: () => void
+  onOpenTask: (sessionId: string) => void
+}) {
+  const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
+  const objective = companyObjective(sessions, rootSessionId)
+  const activeCount = orderedRuns.filter(codeRunIsActive).length
+  const attentionCount = orderedRuns.filter((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase())).length
+  const completedCount = orderedRuns.filter((run) => String(run.status).toLowerCase() === "done").length
+  const columns = [
+    {
+      id: "active",
+      label: "En ejecución",
+      rows: orderedRuns.filter((run) => codeRunIsActive(run)),
+      tone: "bg-sky-500",
+    },
+    {
+      id: "attention",
+      label: "Requieren atención",
+      rows: orderedRuns.filter((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase())),
+      tone: "bg-amber-500",
+    },
+    {
+      id: "done",
+      label: "Completadas",
+      rows: orderedRuns.filter((run) => String(run.status).toLowerCase() === "done").slice(0, 12),
+      tone: "bg-emerald-500",
+    },
+  ]
+
+  return (
+    <SurfacePage testId="company-control-surface">
+      <div className="flex flex-wrap items-start justify-between gap-5">
+        <div>
+          <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
+          <h1 className="mt-2 text-[28px] font-semibold leading-tight">Control de operaciones</h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+            Objetivos, ejecuciones y responsables con trazabilidad de runtime.
+          </p>
+        </div>
+        <Button type="button" className="h-10 rounded-md px-4" onClick={onOpenCeo}>
+          <Sparkles className="mr-2 h-4 w-4" />
+          Coordinar con CEO Office
+        </Button>
+      </div>
+
+      <section className="mt-7 rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Radio className={cn("h-4 w-4", proactiveState.enabled ? "text-emerald-500" : "text-zinc-400")} />
+              <h2 className="text-sm font-semibold">Modo proactivo</h2>
+              <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                {proactiveState.enabled ? "Encendido" : "En pausa"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-zinc-500">CEO Office divide el objetivo en resultados comprobables.</p>
+          </div>
+          <div className="flex flex-wrap gap-4 text-xs tabular-nums">
+            <span><strong>{activeCount}</strong> en ejecución</span>
+            <span><strong>{attentionCount}</strong> en atención</span>
+            <span><strong>{completedCount}</strong> completadas</span>
+            <span><strong>{checkpointCount}</strong> evidencias</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-5 border-y border-zinc-200 py-5 dark:border-white/10">
+        <p className="text-[11px] font-semibold uppercase text-zinc-500">Objetivo activo</p>
+        <h2 className="mt-2 max-w-5xl text-lg font-semibold leading-snug">{objective}</h2>
+      </section>
+
+      <div className="mt-7 grid gap-5 xl:grid-cols-3">
+        {columns.map((column) => (
+          <section key={column.id} className="min-w-0">
+            <div className="flex items-center gap-2 px-1">
+              <span className={cn("h-2.5 w-2.5 rounded-full", column.tone)} />
+              <h2 className="text-sm font-semibold">{column.label}</h2>
+              <span className="ml-auto text-xs tabular-nums text-zinc-500">{column.rows.length}</span>
+            </div>
+            <div className="mt-3 space-y-2">
+              {column.rows.map((run) => {
+                const departmentId = departmentIdForRun(run, departments)
+                const department = departments.find((entry) => entry.id === departmentId)
+                const status = codeRunStatus(run)
+                return (
+                  <article key={run.id} className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900">
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-800">
+                        <DepartmentGlyph departmentId={departmentId} className="h-3.5 w-3.5 text-zinc-500" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="line-clamp-2 text-[13px] font-semibold leading-snug">{runTitle(run)}</h3>
+                        <p className="mt-1 truncate text-[10px] text-zinc-500">{department?.name || "Producto e Ingeniería"}</p>
+                      </div>
+                    </div>
+                    <p className="mt-3 line-clamp-3 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
+                      {run.error || runSummary(run)}
+                    </p>
+                    <div className="mt-3 flex items-center justify-between border-t border-zinc-100 pt-3 text-[10px] text-zinc-500 dark:border-white/5">
+                      <span>{status.label}</span>
+                      <span>{relativeActivity(runActivityAt(run))}</span>
+                    </div>
+                  </article>
+                )
+              })}
+              {column.rows.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-zinc-300 px-4 py-10 text-center text-xs text-zinc-500 dark:border-zinc-700">
+                  Sin tareas en este estado.
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ))}
+      </div>
+
+      <section className="mt-9">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">Departamentos y memoria</h2>
+            <p className="mt-1 text-xs text-zinc-500">Encargos persistentes vinculados al workspace.</p>
+          </div>
+          <span className="text-xs tabular-nums text-zinc-500">{sessions.length} conversaciones</span>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {[...sessions].sort((a, b) => b.updatedAt - a.updatedAt).map((session) => {
+            const isRoot = session.id === rootSessionId
+            const status = codeSessionStatus(session)
+            return (
+              <button
+                key={session.id}
+                type="button"
+                className={cn(
+                  "flex min-h-[72px] items-center gap-3 rounded-lg border border-zinc-200 bg-white px-4 text-left hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10 dark:bg-zinc-900 dark:hover:bg-white/5",
+                  session.id === activeSessionId && "border-zinc-400 dark:border-zinc-500",
+                )}
+                onClick={isRoot ? onOpenCeo : () => onOpenTask(session.id)}
+              >
+                <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", STATUS_STYLES[status.tone])} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-semibold">{isRoot ? "CEO Office" : session.title}</span>
+                  <span className="mt-1 block truncate text-[10px] text-zinc-500">{latestSessionLine(session)}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+              </button>
+            )
+          })}
+        </div>
+      </section>
+    </SurfacePage>
+  )
+}
+
+function DashboardView({
+  companyName,
+  snapshot,
+  sessions,
+  runs,
+  checkpointCount,
+  proactiveState,
+  departmentCount,
+  rootSessionId,
+  onOpenTask,
+  surface = false,
+}: {
+  companyName: string
+  snapshot: ReturnType<typeof buildAgentCompanySnapshot>
+  sessions: CodeChatSession[]
+  runs: CodexRun[]
+  checkpointCount: number
+  proactiveState: CodexProactiveState
+  departmentCount: number
+  rootSessionId: string | null
+  onOpenTask: (sessionId: string) => void
+  surface?: boolean
+}) {
   const metrics = [
     { label: "Agentes activos", value: snapshot.activeAgents, icon: Bot },
     { label: "Tareas", value: snapshot.taskCount, icon: ListTree },
     { label: "Archivos", value: snapshot.fileCount, icon: FileCode2 },
     { label: "Recursos", value: snapshot.resourceCount, icon: PackageOpen },
   ]
+  if (surface) {
+    return (
+      <CompanyDashboardSurface
+        companyName={companyName}
+        snapshot={snapshot}
+        sessions={sessions}
+        runs={runs}
+        checkpointCount={checkpointCount}
+        proactiveState={proactiveState}
+        departmentCount={departmentCount}
+        rootSessionId={rootSessionId}
+        onOpenTask={onOpenTask}
+      />
+    )
+  }
   return (
     <ViewBody>
       <div className="flex items-center gap-2">
@@ -1845,6 +2761,7 @@ function DashboardView({
 }
 
 function ControlView({
+  companyName,
   rootSessionId,
   sessions,
   runs,
@@ -1854,7 +2771,9 @@ function ControlView({
   activeSessionId,
   onOpenCeo,
   onOpenTask,
+  surface = false,
 }: {
+  companyName: string
   rootSessionId: string | null
   sessions: CodeChatSession[]
   runs: CodexRun[]
@@ -1864,10 +2783,27 @@ function ControlView({
   activeSessionId: string | null
   onOpenCeo: () => void
   onOpenTask: (sessionId: string) => void
+  surface?: boolean
 }) {
   const ordered = [...sessions].sort((a, b) => a.createdAt - b.createdAt)
   const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
   const activeWorkers = orderedRuns.filter(codeRunIsActive).length
+  if (surface) {
+    return (
+      <CompanyControlSurface
+        companyName={companyName}
+        rootSessionId={rootSessionId}
+        sessions={sessions}
+        runs={runs}
+        checkpointCount={checkpointCount}
+        proactiveState={proactiveState}
+        departments={departments}
+        activeSessionId={activeSessionId}
+        onOpenCeo={onOpenCeo}
+        onOpenTask={onOpenTask}
+      />
+    )
+  }
   return (
     <ViewBody>
       <div className="flex items-center gap-2">
@@ -1965,6 +2901,297 @@ function ControlView({
   )
 }
 
+type CompanyArtifact = {
+  id: string
+  name: string
+  path: string
+  content: string
+  updatedAt: number
+  departmentId: string
+  departmentName: string
+  kind: "file" | "report"
+  extension: string
+}
+
+function artifactDepartment(
+  haystack: string,
+  departments: readonly AgentDepartmentDefinition[],
+): AgentDepartmentDefinition | null {
+  const source = haystack.toLocaleLowerCase("es")
+  return departments.find((department) => {
+    const candidates = [
+      department.id,
+      department.name,
+      ...department.keywords,
+    ].map((value) => value.toLocaleLowerCase("es"))
+    return candidates.some((candidate) => candidate.length > 2 && source.includes(candidate))
+  }) || null
+}
+
+function artifactExtension(path: string): string {
+  const match = path.toLowerCase().match(/\.([a-z0-9]+)$/)
+  return match?.[1] || "txt"
+}
+
+function artifactIcon(extension: string, kind: CompanyArtifact["kind"]) {
+  if (kind === "report") return FileText
+  if (["csv", "xls", "xlsx"].includes(extension)) return FileSpreadsheet
+  if (["md", "mdx", "txt", "doc", "docx", "pdf"].includes(extension)) return FileText
+  if (["ts", "tsx", "js", "jsx", "json", "html", "css", "py"].includes(extension)) return FileCode2
+  return File
+}
+
+function downloadArtifact(artifact: CompanyArtifact) {
+  const blob = new Blob([artifact.content], { type: "text/plain;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = artifact.name
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function FilesView({
+  companyName,
+  files,
+  sessions,
+  departments,
+  surface = false,
+}: {
+  companyName: string
+  files: CodeFiles
+  sessions: CodeChatSession[]
+  departments: readonly AgentDepartmentDefinition[]
+  surface?: boolean
+}) {
+  const [query, setQuery] = React.useState("")
+  const [filter, setFilter] = React.useState<"all" | "reports" | "files">("all")
+  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+
+  const artifacts = React.useMemo<CompanyArtifact[]>(() => {
+    const workspaceFiles = Object.values(files).map((file: CodeFile) => {
+      const department = artifactDepartment(file.path, departments)
+      return {
+        id: `file:${file.path}`,
+        name: file.path.split("/").pop() || file.path,
+        path: file.path,
+        content: file.content,
+        updatedAt: file.updatedAt,
+        departmentId: department?.id || "workspace",
+        departmentName: department?.name || "Espacio de trabajo",
+        kind: "file" as const,
+        extension: artifactExtension(file.path),
+      }
+    })
+    const reports = sessions.flatMap((session) => {
+      const result = [...session.turns].reverse().find(
+        (turn) => turn.role === "assistant" && !turn.streaming && turn.content.trim(),
+      )
+      if (!result) return []
+      const department = artifactDepartment(session.title, departments)
+      const safeTitle = session.title
+        .replace(/[^\p{L}\p{N}\s._-]+/gu, "")
+        .trim()
+        .replace(/\s+/g, "-")
+        .slice(0, 70) || "reporte"
+      return [{
+        id: `report:${session.id}`,
+        name: `${safeTitle}.md`,
+        path: `Reportes/${department?.name || "CEO Office"}/${safeTitle}.md`,
+        content: result.content,
+        updatedAt: session.updatedAt,
+        departmentId: department?.id || "ceo-office",
+        departmentName: department?.name || "CEO Office",
+        kind: "report" as const,
+        extension: "md",
+      }]
+    })
+    return [...reports, ...workspaceFiles].sort((a, b) => b.updatedAt - a.updatedAt)
+  }, [departments, files, sessions])
+
+  const filtered = React.useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("es")
+    return artifacts.filter((artifact) => {
+      if (filter === "reports" && artifact.kind !== "report") return false
+      if (filter === "files" && artifact.kind !== "file") return false
+      if (!needle) return true
+      return `${artifact.name} ${artifact.path} ${artifact.departmentName}`
+        .toLocaleLowerCase("es")
+        .includes(needle)
+    })
+  }, [artifacts, filter, query])
+
+  const groups = React.useMemo(() => {
+    const map = new Map<string, { id: string; name: string; artifacts: CompanyArtifact[] }>()
+    for (const artifact of filtered) {
+      const current = map.get(artifact.departmentId) || {
+        id: artifact.departmentId,
+        name: artifact.departmentName,
+        artifacts: [],
+      }
+      current.artifacts.push(artifact)
+      map.set(artifact.departmentId, current)
+    }
+    return [...map.values()].sort((a, b) => {
+      if (a.id === "workspace") return -1
+      if (b.id === "workspace") return 1
+      return a.name.localeCompare(b.name, "es")
+    })
+  }, [filtered])
+  const selected = artifacts.find((artifact) => artifact.id === selectedId) || null
+  const reportCount = artifacts.filter((artifact) => artifact.kind === "report").length
+
+  const body = (
+    <SurfacePage testId="company-files-surface">
+      <div className="flex flex-wrap items-end justify-between gap-5">
+        <div>
+          <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
+          <h1 className="mt-2 text-[28px] font-semibold leading-tight">Archivos y reportes</h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+            Entregables reales del workspace y reportes persistentes de cada departamento.
+          </p>
+        </div>
+        <div className="flex gap-5 text-right text-xs text-zinc-500">
+          <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{artifacts.length}</strong>archivos</span>
+          <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{reportCount}</strong>reportes</span>
+        </div>
+      </div>
+
+      <div className="mt-7 flex flex-wrap items-center gap-3 border-y border-zinc-200 py-3 dark:border-white/10">
+        <div className="relative min-w-[240px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar archivos, reportes o departamentos"
+            aria-label="Buscar archivos y reportes"
+            className="h-10 rounded-md border-zinc-200 bg-white pl-10 dark:border-white/10 dark:bg-zinc-900"
+          />
+        </div>
+        <div className="flex h-10 items-center rounded-md border border-zinc-200 bg-white p-1 dark:border-white/10 dark:bg-zinc-900" role="group" aria-label="Filtrar archivos">
+          {([
+            ["all", "Todos"],
+            ["reports", "Reportes"],
+            ["files", "Archivos"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setFilter(value)}
+              className={cn(
+                "h-8 rounded px-3 text-xs font-medium",
+                filter === value ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white" : "text-zinc-500 hover:text-zinc-950 dark:hover:text-white",
+              )}
+              aria-pressed={filter === value}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={cn("mt-6 grid gap-7", selected && "xl:grid-cols-[minmax(0,1fr)_380px]")}>
+        <div className="min-w-0 space-y-8">
+          {groups.map((group) => (
+            <section key={group.id}>
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-md bg-sky-50 text-sky-600 dark:bg-sky-950/35 dark:text-sky-300">
+                  <FolderOpen className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-semibold">{group.name}</h2>
+                  <p className="text-[11px] text-zinc-500">{group.artifacts.length} elementos</p>
+                </div>
+              </div>
+              <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
+                {group.artifacts.map((artifact) => {
+                  const Icon = artifactIcon(artifact.extension, artifact.kind)
+                  return (
+                    <div
+                      key={artifact.id}
+                      className={cn(
+                        "flex min-h-[68px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5",
+                        selectedId === artifact.id && "bg-zinc-50 dark:bg-white/5",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(artifact.id)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-800">
+                          <Icon className="h-4 w-4 text-zinc-500" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium">{artifact.name}</span>
+                          <span className="mt-1 block truncate text-[10px] text-zinc-500">{artifact.path}</span>
+                        </span>
+                        <span className="hidden shrink-0 text-[10px] tabular-nums text-zinc-500 sm:block">
+                          {relativeActivity(artifact.updatedAt)}
+                        </span>
+                      </button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 shrink-0 rounded-md"
+                        onClick={() => downloadArtifact(artifact)}
+                        aria-label={`Descargar ${artifact.name}`}
+                        title="Descargar"
+                      >
+                        <Download className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
+          {groups.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-zinc-300 px-5 py-16 text-center dark:border-zinc-700">
+              <FolderOpen className="mx-auto h-6 w-6 text-zinc-400" />
+              <p className="mt-3 text-sm font-medium">No hay resultados</p>
+              <p className="mt-1 text-xs text-zinc-500">Cambia el filtro o solicita un entregable desde CEO Office.</p>
+            </div>
+          ) : null}
+        </div>
+
+        {selected ? (
+          <aside className="h-fit rounded-lg border border-zinc-200 bg-white p-5 xl:sticky xl:top-0 dark:border-white/10 dark:bg-zinc-900">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800">
+                {React.createElement(artifactIcon(selected.extension, selected.kind), { className: "h-5 w-5 text-zinc-500" })}
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="break-words text-sm font-semibold">{selected.name}</h2>
+                <p className="mt-1 text-[10px] text-zinc-500">{selected.departmentName}</p>
+              </div>
+              <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedId(null)} aria-label="Cerrar detalle">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-3 border-y border-zinc-100 py-4 text-xs dark:border-white/5">
+              <div><span className="block text-[10px] text-zinc-500">Tipo</span><strong className="mt-1 block uppercase">{selected.extension}</strong></div>
+              <div><span className="block text-[10px] text-zinc-500">Actualizado</span><strong className="mt-1 block">{relativeActivity(selected.updatedAt)}</strong></div>
+            </div>
+            <pre className="mt-4 max-h-[340px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-50 p-3 font-mono text-[10px] leading-relaxed text-zinc-600 dark:bg-zinc-950 dark:text-zinc-300">
+              {selected.content.slice(0, 8_000)}
+              {selected.content.length > 8_000 ? "\n\n… vista previa limitada" : ""}
+            </pre>
+            <Button type="button" className="mt-4 w-full rounded-md" onClick={() => downloadArtifact(selected)}>
+              <Download className="mr-2 h-4 w-4" />
+              Descargar archivo
+            </Button>
+          </aside>
+        ) : null}
+      </div>
+    </SurfacePage>
+  )
+
+  if (surface) return body
+  return body
+}
+
 function DepartmentView({
   row,
   onOpenCeo,
@@ -2040,10 +3267,52 @@ function DepartmentView({
   )
 }
 
-function TaskView({ session, onOpenCeo }: { session: CodeChatSession; onOpenCeo: () => void }) {
+function TaskView({
+  session,
+  onOpenCeo,
+  surface = false,
+}: {
+  session: CodeChatSession
+  onOpenCeo: () => void
+  surface?: boolean
+}) {
   const status = codeSessionStatus(session)
   const lastUser = [...session.turns].reverse().find((turn) => turn.role === "user")
   const lastAssistant = [...session.turns].reverse().find((turn) => turn.role === "assistant")
+  if (surface) {
+    return (
+      <SurfacePage testId="company-task-surface">
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase text-zinc-500">Detalle del encargo</p>
+            <h1 className="mt-2 max-w-4xl text-[28px] font-semibold leading-tight">{session.title}</h1>
+            <span className="mt-3 inline-flex items-center gap-2 text-xs text-zinc-500">
+              <span className={cn("h-2.5 w-2.5 rounded-full", STATUS_STYLES[status.tone])} />
+              {status.label} · actualizado {relativeActivity(session.updatedAt)}
+            </span>
+          </div>
+          <Button type="button" className="rounded-md" onClick={onOpenCeo}>
+            <Sparkles className="mr-2 h-4 w-4" />
+            Abrir en CEO Office
+          </Button>
+        </div>
+        <div className="mt-8 grid gap-7 xl:grid-cols-2">
+          <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
+            <h2 className="text-sm font-semibold">Instrucción más reciente</h2>
+            <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-zinc-700 dark:text-zinc-200">
+              {lastUser?.content || "Sin instrucciones registradas."}
+            </p>
+          </section>
+          <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
+            <h2 className="text-sm font-semibold">Resultado entregado</h2>
+            <p className="mt-4 max-h-[560px] overflow-y-auto whitespace-pre-wrap text-sm leading-7 text-zinc-700 dark:text-zinc-200">
+              {lastAssistant?.content || "Pendiente."}
+            </p>
+          </section>
+        </div>
+      </SurfacePage>
+    )
+  }
   return (
     <ViewBody>
       <div className="flex items-start justify-between gap-4">
