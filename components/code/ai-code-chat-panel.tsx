@@ -1124,7 +1124,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const codexHealth = useCodexHealth()
   const [codexCanRun, setCodexCanRun] = React.useState(false)
   React.useEffect(() => {
-    if (codexHealth.enabled !== true || !user) {
+    if (codexHealth.enabled !== true || !user?.id) {
       setCodexCanRun(false)
       return
     }
@@ -2045,6 +2045,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       activeProvider,
       applyBlock,
       busy,
+      codexAvailable,
       composerMode,
       files,
       includeContext,
@@ -2201,7 +2202,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, codexAvailable, files, markVoiced, sessionId, setTurns, user],
+    [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -3418,7 +3419,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // the newest completed build that has not reached this browser workspace.
   const resumedCodexRunsRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
-    if (!codexAvailable || !user || !sessionId || busy || buildingApp) return
+    if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
     const projectId = linkedCodexProject({
       sessionId,
       workspaceId: activeFolder?.id,
