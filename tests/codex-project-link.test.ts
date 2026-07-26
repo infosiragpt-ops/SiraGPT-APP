@@ -6,8 +6,10 @@ import {
   clearWorkspaceCodexProject,
   linkedCodexProject,
   persistSessionCodexProject,
+  persistSessionCodexSyncedRun,
   persistWorkspaceCodexProject,
   readSessionCodexProject,
+  readSessionCodexSyncedRun,
   readWorkspaceCodexProject,
 } from "../lib/codex/codex-project-link"
 
@@ -34,7 +36,9 @@ describe("codex project links", () => {
       )
 
       persistSessionCodexProject("department-1", "codex-specialist")
+      persistSessionCodexSyncedRun("department-1", "run-finished")
       assert.equal(readSessionCodexProject("department-1"), "codex-specialist")
+      assert.equal(readSessionCodexSyncedRun("department-1"), "run-finished")
       assert.equal(
         linkedCodexProject({ workspaceId: "company-1", sessionId: "department-1" }),
         "codex-company",
@@ -47,6 +51,7 @@ describe("codex project links", () => {
       )
       clearSessionCodexProject("department-1")
       assert.equal(linkedCodexProject({ workspaceId: "company-1" }), null)
+      assert.equal(readSessionCodexSyncedRun("department-1"), null)
     } finally {
       if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow)
       else Reflect.deleteProperty(globalThis, "window")

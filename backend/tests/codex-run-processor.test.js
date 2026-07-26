@@ -60,6 +60,48 @@ test('plan run ends in waiting_approval with no finishedAt', async () => {
   assert.deepEqual(statuses, ['running', 'waiting_approval']);
 });
 
+test('auto-executable plan continues into build inside the backend', async () => {
+  const d = makeDeps({
+    run: {
+      mode: 'plan',
+      prompt: '[SIRAGPT_AUTOEXEC_V1]\nIntegra OpenClaw y construye frontend, backend y pruebas durante horas.',
+    },
+  });
+  let nativeInput;
+  const created = [];
+  const loop = async (args) => {
+    nativeInput = args;
+    return { status: 'waiting_approval' };
+  };
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: loop,
+    runService: {
+      async createRun(args) {
+        created.push(args);
+        return { id: 'build-auto', status: 'queued' };
+      },
+    },
+    clock: d.clock,
+    env: {},
+  });
+
+  assert.equal(res.status, 'waiting_approval');
+  assert.equal(res.autoContinuedRunId, 'build-auto');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].mode, 'build');
+  assert.equal(created[0].planRunId, 'run-1');
+  assert.equal(created[0].autoExecute, true);
+  assert.doesNotMatch(nativeInput.run.prompt, /SIRAGPT_AUTOEXEC/);
+  assert.equal(nativeInput.deps.env.CODEX_RUN_TIMEOUT_MS, String(4 * 60 * 60_000));
+  assert.equal(nativeInput.deps.env.CODEX_MAX_STEPS, '120');
+  assert.equal(nativeInput.deps.env.CODEX_VERIFY_DEV_SERVER, '1');
+  assert.match(nativeInput.deps.openclawPromptBlock, /OpenClaw-Level Runtime Policy/);
+  assert.ok(d.events.some((event) => event.type === 'auto_continue' && event.data.buildRunId === 'build-auto'));
+});
+
 test('a thrown loop becomes a captured error (no throw out, no zombie)', async () => {
   const d = makeDeps();
   const loop = async () => { throw new Error('LLM exploded'); };

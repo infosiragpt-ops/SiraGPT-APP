@@ -71,6 +71,7 @@ export interface CodexRun {
   model: string | null
   planRunId: string | null
   prompt: string | null
+  autoExecute?: boolean
   error: string | null
   createdAt: string
   startedAt: string | null
@@ -127,7 +128,7 @@ export const codexApi = {
   setProactive: (id: string, enabled: boolean) =>
     req<{ state: CodexProactiveState }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
 
-  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string }) =>
+  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string; autoExecute?: boolean }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),
   listRuns: (projectId: string) => req<{ runs: CodexRun[] }>(`/projects/${projectId}/runs`).then((r) => r.runs),
   getRun: (projectId: string, runId: string) => req<{ run: CodexRun }>(`/projects/${projectId}/runs/${runId}`).then((r) => r.run),

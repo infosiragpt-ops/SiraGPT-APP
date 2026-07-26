@@ -25,6 +25,9 @@ const eventStoreDefault = require('./event-store');
 const { createImplementerRequest, assertAgentOutcome } = require('./agent-adapters/contract');
 const { getDefaultAgentAdapterRegistry } = require('./agent-adapters/registry');
 const { nativeCodexAdapter } = require('./agent-adapters/native-codex-adapter');
+const buildTools = require('./build-tools');
+const autonomousRunPolicy = require('./autonomous-run-policy');
+const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_MAX_STEPS = 24;
@@ -33,12 +36,14 @@ function nowIso(clock) {
   return (clock ? clock() : new Date()).toISOString();
 }
 
-function readTimeoutMs(env) {
+function readTimeoutMs(env, policy = null) {
+  if (policy?.timeoutMs) return policy.timeoutMs;
   const v = Number.parseInt((env || process.env).CODEX_RUN_TIMEOUT_MS || '', 10);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_TIMEOUT_MS;
 }
 
-function readMaxSteps(env) {
+function readMaxSteps(env, policy = null) {
+  if (policy?.maxSteps) return policy.maxSteps;
   const v = Number.parseInt((env || process.env).CODEX_MAX_STEPS || '', 10);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_STEPS;
 }
@@ -73,6 +78,7 @@ async function processCodexRunJob({
   eventStore = eventStoreDefault,
   runAgentLoop,
   agentAdapterRegistry,
+  runService,
   clock,
   env = process.env,
 } = {}) {
@@ -91,8 +97,39 @@ async function processCodexRunJob({
   await prisma.codexRun.update({ where: { id: runId }, data: { status: 'running', startedAt: new Date(nowIso(clock)) } });
   await eventStore.appendEvent(runId, 'run_status', { status: 'running' }, { prisma });
 
-  const timeoutMs = readTimeoutMs(env);
+  const agentRun = {
+    ...run,
+    prompt: autonomousRunPolicy.stripAutoExecutePrompt(run.prompt),
+  };
+  const openclawRuntimeProfile = openclawCapabilityKernel.buildCapabilityProfile({
+    prompt: agentRun.prompt || '',
+    userId: run.userId,
+    chatId: null,
+    model: run.model || null,
+    toolNames: buildTools.toolRegistry().map((tool) => tool.name),
+    context: {
+      projectId: run.projectId,
+      runId: run.id,
+      mode: run.mode,
+    },
+  });
+  const openclawRuntimeSummary =
+    openclawCapabilityKernel.buildOpenClawRuntimeSummary(openclawRuntimeProfile);
+  const runtimePolicy = autonomousRunPolicy.deriveAutonomousRunPolicy({
+    run,
+    profile: openclawRuntimeProfile,
+    env,
+  });
+  const runtimeEnv = autonomousRunPolicy.buildAutonomousRunEnv(env, runtimePolicy);
+  const timeoutMs = readTimeoutMs(runtimeEnv, runtimePolicy);
+  const maxSteps = readMaxSteps(runtimeEnv, runtimePolicy);
   const controller = new AbortController();
+
+  for (const runtimeEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    await eventStore
+      .appendEvent(run.id, runtimeEvent.type, runtimeEvent, { prisma })
+      .catch(() => {});
+  }
 
   async function isCancelled() {
     const fresh = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
@@ -103,20 +140,36 @@ async function processCodexRunJob({
   let timer;
   try {
     const registry = agentAdapterRegistry || getDefaultAgentAdapterRegistry();
-    const adapter = registry.resolveImplementer({ env });
+    const adapter = registry.resolveImplementer({ env: runtimeEnv });
     const request = createImplementerRequest({
-      run,
+      run: agentRun,
       project,
       timeoutMs,
-      maxSteps: readMaxSteps(env),
+      maxSteps,
+      evidence: {
+        openclawRuntime: openclawRuntimeSummary,
+        execution: {
+          mode: runtimePolicy.depth,
+          autoExecute: runtimePolicy.autoExecute,
+          verifyDevServer: runtimePolicy.verifyDevServer,
+        },
+      },
     });
     const context = executionContextForAdapter({
       adapter,
       signal: controller.signal,
       isCancelled,
-      run,
+      run: agentRun,
       project,
-      deps: { prisma, eventStore, env, clock },
+      deps: {
+        prisma,
+        eventStore,
+        env: runtimeEnv,
+        clock,
+        openclawRuntimeProfile,
+        openclawPromptBlock:
+          openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile),
+      },
       // Test injection remains at the native boundary; production lazily
       // resolves agent-loop inside native-codex-adapter.
       runAgentLoop,
@@ -167,13 +220,61 @@ async function processCodexRunJob({
   }
   await eventStore.appendEvent(runId, 'run_status', { status }, { prisma });
 
+  let autoContinuedRunId = null;
+  let autoContinueError = null;
+  if (status === 'waiting_approval' && runtimePolicy.autoExecute) {
+    try {
+      const service = runService || require('./run-service');
+      const buildRun = await service.createRun({
+        userId: run.userId,
+        projectId: run.projectId,
+        mode: 'build',
+        prompt: agentRun.prompt,
+        model: run.model,
+        tier: run.tier,
+        planRunId: run.id,
+        autoExecute: true,
+        db: prisma,
+      });
+      autoContinuedRunId = buildRun?.id || null;
+      await eventStore.appendEvent(
+        runId,
+        'auto_continue',
+        {
+          status: 'queued',
+          buildRunId: autoContinuedRunId,
+          message: 'Plan aprobado automáticamente; la construcción continúa en segundo plano.',
+        },
+        { prisma },
+      ).catch(() => {});
+    } catch (err) {
+      autoContinueError = String(err?.message || err).slice(0, 1000);
+      await eventStore.appendEvent(
+        runId,
+        'auto_continue',
+        {
+          status: 'error',
+          message: 'No se pudo iniciar automáticamente la construcción.',
+          error: autoContinueError,
+        },
+        { prisma },
+      ).catch(() => {});
+    }
+  }
+
   // Free the per-run in-memory seq/append-chain caches now that the run is
   // truly terminal (waiting_approval can still resume, so keep its cache).
   if (status !== 'waiting_approval' && typeof eventStore.forgetRun === 'function') {
     try { eventStore.forgetRun(runId); } catch { /* best-effort */ }
   }
 
-  return { status, error: errorMsg };
+  return {
+    status,
+    error: errorMsg,
+    autoContinuedRunId,
+    autoContinueError,
+    executionMode: runtimePolicy.depth,
+  };
 }
 
 module.exports = {
