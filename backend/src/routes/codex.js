@@ -628,6 +628,7 @@ router.post(
 );
 
 router.get('/projects/:projectId/runs', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const runs = await runService.listRuns({ userId: req.user.id, projectId: req.params.projectId });
     return res.json({ runs });
@@ -688,6 +689,7 @@ router.get('/checkpoints/:id/diff', authenticateToken, async (req, res) => {
 });
 
 router.get('/projects/:projectId/checkpoints', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const checkpoints = await checkpointService.listCheckpoints({ userId: req.user.id, projectId: req.params.projectId });
     if (checkpoints === null) return res.status(404).json({ error: 'project_not_found' });

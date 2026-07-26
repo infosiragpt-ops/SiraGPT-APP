@@ -63,6 +63,8 @@ test('GET /projects/:id/checkpoints lists; 404 for a non-owned project', async (
   const ok = await request(app()).get('/api/codex/projects/p1/checkpoints');
   assert.equal(ok.status, 200);
   assert.equal(ok.body.checkpoints.length, 1);
+  assert.equal(ok.headers['cache-control'], 'no-store');
   const miss = await request(app()).get('/api/codex/projects/other/checkpoints');
   assert.equal(miss.status, 404);
+  assert.equal(miss.headers['cache-control'], 'no-store');
 });

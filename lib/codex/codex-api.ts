@@ -14,6 +14,10 @@ function authHeaders(): Record<string, string> {
 
 type CodexRequestInit = RequestInit & { timeoutMs?: number }
 
+function arrayOrEmpty<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
 function boundedRequestSignal(
   externalSignal: AbortSignal | null | undefined,
   timeoutMs: number,
@@ -130,7 +134,9 @@ export const codexApi = {
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string; autoExecute?: boolean }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),
-  listRuns: (projectId: string) => req<{ runs: CodexRun[] }>(`/projects/${projectId}/runs`).then((r) => r.runs),
+  listRuns: (projectId: string) =>
+    req<{ runs?: unknown }>(`/projects/${projectId}/runs`, { cache: "no-store" })
+      .then((r) => arrayOrEmpty<CodexRun>(r?.runs)),
   getRun: (projectId: string, runId: string) => req<{ run: CodexRun }>(`/projects/${projectId}/runs/${runId}`).then((r) => r.run),
   cancelRun: (runId: string) => req<{ run: CodexRun }>(`/runs/${runId}/cancel`, { method: "POST" }).then((r) => r.run),
 
@@ -138,5 +144,7 @@ export const codexApi = {
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify({ mode: "build", planRunId, tier }) }).then((r) => r.run),
   rollbackCheckpoint: (checkpointId: string) => req<{ ok: boolean; commitSha: string; restarted: boolean }>(`/checkpoints/${checkpointId}/rollback`, { method: "POST" }),
   getCheckpointDiff: (checkpointId: string) => req<CodexCheckpointDiff>(`/checkpoints/${checkpointId}/diff`),
-  listCheckpoints: (projectId: string) => req<{ checkpoints: any[] }>(`/projects/${projectId}/checkpoints`).then((r) => r.checkpoints),
+  listCheckpoints: (projectId: string) =>
+    req<{ checkpoints?: unknown }>(`/projects/${projectId}/checkpoints`, { cache: "no-store" })
+      .then((r) => arrayOrEmpty<any>(r?.checkpoints)),
 }
