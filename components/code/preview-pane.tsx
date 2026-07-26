@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import {
+  CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_OPEN_TOOL_EVENT,
   CODE_PREVIEW_STATE_EVENT,
   getActiveCodexProject,
@@ -237,6 +238,9 @@ export function PreviewPane() {
   const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
   )
+  const [activeCodexProjectId, setActiveCodexProjectIdState] = React.useState<string | null>(() =>
+    typeof window === "undefined" ? null : getActiveCodexProject(),
+  )
   const registerCompanySurface = React.useCallback((element: HTMLDivElement | null) => {
     registerAgentCompanyPreviewSlot(element)
   }, [])
@@ -254,7 +258,7 @@ export function PreviewPane() {
   )
   // A codex-backed chat is runnable even when the local mirror is partial —
   // the real workspace (with its package.json) lives in the codex runner.
-  const canRunProject = hasNodeProject || Boolean(gitBinding) || Boolean(getActiveCodexProject())
+  const canRunProject = hasNodeProject || Boolean(gitBinding) || Boolean(activeCodexProjectId)
   const projectSignature = React.useMemo(() => {
     if (!canRunProject) return ""
     // Fingerprint EVERY file by path + content length (not a fixed list of key
@@ -265,8 +269,8 @@ export function PreviewPane() {
     const fingerprint = names
       .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
       .join("|")
-    return `${activeFolder?.id || "local"}:${gitBinding || "workspace"}:${fingerprint}`
-  }, [activeFolder?.id, canRunProject, files, gitBinding])
+    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${fingerprint}`
+  }, [activeCodexProjectId, activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -279,6 +283,21 @@ export function PreviewPane() {
       window.removeEventListener("storage", refreshBinding)
     }
   }, [activeFolder?.id])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const refreshCodexProject = (event?: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string | null }> | undefined)?.detail
+      setActiveCodexProjectIdState(
+        detail && Object.prototype.hasOwnProperty.call(detail, "projectId")
+          ? detail.projectId || null
+          : getActiveCodexProject(),
+      )
+    }
+    refreshCodexProject()
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, refreshCodexProject)
+    return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, refreshCodexProject)
+  }, [])
 
   const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
@@ -296,13 +315,13 @@ export function PreviewPane() {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
     if (modeRef.current === "codex") {
-      const codexProjectId = getActiveCodexProject()
+      const codexProjectId = activeCodexProjectId || getActiveCodexProject()
       if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
     } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
     // The Shell tool loses its exec target when the run stops.
     setActiveHostRunId(null)
-  }, [clearPoll])
+  }, [activeCodexProjectId, clearPoll])
 
   // While the app is live, keep polling status at a slow cadence (a) so the
   // runner's lastTouch keeps getting bumped and the idle reaper never kills an
@@ -429,7 +448,7 @@ export function PreviewPane() {
     // unsandboxed with its own origin/storage. Pushing the local virtual FS
     // to the host runner would boot a stale/partial copy (and the host runner
     // is owner-gated anyway — this path works for every user).
-    const codexProjectId = getActiveCodexProject()
+    const codexProjectId = activeCodexProjectId || getActiveCodexProject()
     if (codexProjectId) {
       modeRef.current = "codex"
       const previewOrigin = await codexPreviewOrigin()
@@ -521,7 +540,7 @@ export function PreviewPane() {
     // Host run is live → the Shell tool can now exec real commands against it.
     setActiveHostRunId(runIdRef.current)
     pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "", generation)
-  }, [activeFolder?.id, clearPoll, files, pollUntilReady])
+  }, [activeCodexProjectId, activeFolder?.id, clearPoll, files, pollUntilReady])
 
   // Mirror the latest values into refs so the auto-run listener (registered
   // once) and the post-commit auto-run effect always read FRESH state without
@@ -598,7 +617,7 @@ export function PreviewPane() {
     // Run on initial mount too (autoRunSignal === 0): a freshly cloned/opened
     // runnable project must auto-start its dev server WITHOUT a manual click.
     // The signature dedupe and the "starting" queue below prevent duplicate runs.
-    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current)) || Boolean(getActiveCodexProject())
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current)) || Boolean(activeCodexProjectId)
     if (!canRunProject || !projectSignature || !needsDevServer) {
       // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
       // force flag so it can't surprise a later run once it becomes runnable.
@@ -618,14 +637,14 @@ export function PreviewPane() {
     lastAutoRunSignatureRef.current = projectSignature
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRunSignal, canRunProject, projectSignature])
+  }, [activeCodexProjectId, autoRunSignal, canRunProject, projectSignature])
 
   // Drain a queued auto-run once the in-flight boot settles (ready/error/idle).
   React.useEffect(() => {
     if (liveRun.phase === "starting") return
     if (!pendingAutoRunRef.current) return
     pendingAutoRunRef.current = false
-    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current)) || Boolean(getActiveCodexProject())
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current)) || Boolean(activeCodexProjectId)
     if (!canRunProject || !projectSignature || !needsDevServer) {
       // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
       // force flag so it can't surprise a later run once it becomes runnable.
@@ -638,7 +657,7 @@ export function PreviewPane() {
     lastAutoRunSignatureRef.current = projectSignature
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveRun.phase, canRunProject, projectSignature])
+  }, [activeCodexProjectId, liveRun.phase, canRunProject, projectSignature])
 
   // Post-ready type verification: the readiness probe proves the dev server
   // answers; tsc --noEmit proves the TypeScript actually compiles. One verify
