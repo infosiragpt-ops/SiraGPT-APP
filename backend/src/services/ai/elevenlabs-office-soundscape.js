@@ -7,25 +7,31 @@ const { signalWithTimeout } = require('../../utils/abort-signal');
 
 const OFFICE_SOUNDS = Object.freeze({
   'coast-day': Object.freeze({
-    filename: 'office-coast-day-v1.mp3',
-    text: 'Seamless daytime ambience from a modern glass office terrace beside the Pacific Ocean: gentle distant waves, light sea breeze, subtle quiet city atmosphere, no voices, no music, no sudden loud sounds',
-    durationSeconds: 18,
+    filename: 'office-coast-day-v2.mp3',
+    legacyFilename: 'office-coast-day-v1.mp3',
+    version: 2,
+    text: 'Seamless premium daytime ambience inside a modern software engineering office on a glass rooftop: subtle real mechanical keyboards at varied distance, quiet HVAC, occasional soft chair movement, and a faint coastal city breeze beyond closed windows. Professional low-distraction stereo mix, stable volume, no speech, no music, no alerts, no prominent footsteps, no sudden sounds',
+    durationSeconds: 28,
     loop: true,
-    promptInfluence: 0.62,
+    promptInfluence: 0.72,
   }),
   'coast-night': Object.freeze({
-    filename: 'office-coast-night-v1.mp3',
-    text: 'Seamless calm night ambience from a modern glass office terrace beside the Pacific Ocean: soft distant waves, mild evening sea breeze, very subtle city lights atmosphere, no voices, no music, no sudden loud sounds',
-    durationSeconds: 18,
+    filename: 'office-coast-night-v2.mp3',
+    legacyFilename: 'office-coast-night-v1.mp3',
+    version: 2,
+    text: 'Seamless premium night ambience inside a modern software engineering office on a glass rooftop: sparse quiet mechanical keyboard work at varied distance, soft HVAC, occasional restrained chair movement, and a faint evening coastal city breeze beyond closed windows. Calm low-distraction stereo mix, stable volume, no speech, no music, no alerts, no prominent footsteps, no sudden sounds',
+    durationSeconds: 28,
     loop: true,
-    promptInfluence: 0.62,
+    promptInfluence: 0.72,
   }),
   'terrace-steps': Object.freeze({
-    filename: 'office-terrace-steps-v1.mp3',
-    text: 'Two soft professional office footsteps on a clean stone terrace floor, close and natural, no voices, no ambience, no music',
-    durationSeconds: 1.5,
+    filename: 'office-terrace-steps-v2.mp3',
+    legacyFilename: 'office-terrace-steps-v1.mp3',
+    version: 2,
+    text: 'Three restrained professional office footsteps on a polished stone floor, natural soft leather shoes, close but quiet, clean one-shot recording, no voices, no room ambience, no music, no impact boom',
+    durationSeconds: 2.4,
     loop: false,
-    promptInfluence: 0.78,
+    promptInfluence: 0.82,
   }),
 });
 
@@ -54,6 +60,34 @@ function providerError(status, detail) {
   return error;
 }
 
+async function existingSound(audioDir, soundId, definition) {
+  const candidates = [
+    { filename: definition.filename, version: definition.version, fallback: false },
+    ...(definition.legacyFilename
+      ? [{ filename: definition.legacyFilename, version: 1, fallback: true }]
+      : []),
+  ];
+
+  for (const candidate of candidates) {
+    const audioPath = path.join(audioDir, candidate.filename);
+    const existing = await fs.promises.stat(audioPath).catch(() => null);
+    if (!existing?.isFile() || existing.size <= 0) continue;
+    return {
+      soundId,
+      filename: candidate.filename,
+      audioPath,
+      audioUrl: `/elevenlabs/audio/${candidate.filename}`,
+      cached: true,
+      generated: false,
+      loop: definition.loop,
+      durationSeconds: definition.durationSeconds,
+      version: candidate.version,
+      fallback: candidate.fallback,
+    };
+  }
+  return null;
+}
+
 async function generateOfficeSoundscape({
   soundId,
   outputDir,
@@ -67,27 +101,17 @@ async function generateOfficeSoundscape({
     throw error;
   }
 
+  const audioDir = resolveAudioDir(outputDir);
+  const audioPath = path.join(audioDir, definition.filename);
+  const cached = await existingSound(audioDir, soundId, definition);
+  if (cached && !cached.fallback) return cached;
+
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
+    if (cached) return cached;
     const error = new Error('ElevenLabs API key not configured');
     error.code = 'ELEVENLABS_NOT_CONFIGURED';
     throw error;
-  }
-
-  const audioDir = resolveAudioDir(outputDir);
-  const audioPath = path.join(audioDir, definition.filename);
-  const existing = await fs.promises.stat(audioPath).catch(() => null);
-  if (existing?.isFile() && existing.size > 0) {
-    return {
-      soundId,
-      filename: definition.filename,
-      audioPath,
-      audioUrl: `/elevenlabs/audio/${definition.filename}`,
-      cached: true,
-      generated: false,
-      loop: definition.loop,
-      durationSeconds: definition.durationSeconds,
-    };
   }
 
   const flightKey = `${audioDir}:${soundId}`;
@@ -142,7 +166,13 @@ async function generateOfficeSoundscape({
         generated: true,
         loop: definition.loop,
         durationSeconds: definition.durationSeconds,
+        version: definition.version,
+        fallback: false,
       };
+    } catch (error) {
+      const legacy = await existingSound(audioDir, soundId, definition);
+      if (legacy) return legacy;
+      throw error;
     } finally {
       await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
     }
@@ -154,9 +184,18 @@ async function generateOfficeSoundscape({
   return generation;
 }
 
+async function prewarmOfficeSoundscapes(options = {}) {
+  const results = [];
+  for (const soundId of Object.keys(OFFICE_SOUNDS)) {
+    results.push(await generateOfficeSoundscape({ ...options, soundId }));
+  }
+  return results;
+}
+
 module.exports = {
   OFFICE_SOUNDS,
   generateOfficeSoundscape,
   officeSoundDefinition,
+  prewarmOfficeSoundscapes,
   resolveAudioDir,
 };

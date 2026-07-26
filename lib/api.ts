@@ -2765,6 +2765,8 @@ class ApiClient {
     loop: boolean;
     durationSeconds: number;
     provider: 'elevenlabs';
+    version: number;
+    fallback: boolean;
   }> {
     return this.request(`/elevenlabs/office-soundscapes/${encodeURIComponent(soundId)}`, {
       method: 'POST',

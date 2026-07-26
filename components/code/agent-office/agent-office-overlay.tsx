@@ -146,19 +146,18 @@ export function AgentOfficeOverlay({
     }
   }, [activeOnly, departmentId, model])
   const sound = useOfficeSoundscape({
+    active: open,
     timeOfDay,
     paused,
     activeCount: visibleModel.activeCount,
   })
-  const disableSound = sound.disable
 
   React.useEffect(() => {
     if (!open) {
       setSelectedWorkerId(null)
       setRosterOpen(false)
-      disableSound()
     }
-  }, [disableSound, open])
+  }, [open])
 
   const selectedWorker =
     model.workers.find((worker) => worker.id === selectedWorkerId) || null
@@ -255,28 +254,36 @@ export function AgentOfficeOverlay({
             size="icon"
             className={cn(
               "h-10 w-10 rounded-md bg-transparent",
-              sound.enabled && "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white",
+              sound.enabled &&
+                sound.state !== "unavailable" &&
+                "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white",
             )}
             onClick={sound.toggle}
             aria-label={
-              sound.enabled
-                ? "Desactivar sonido de la oficina"
-                : "Activar sonido de la oficina"
+              sound.state === "unavailable"
+                ? "Reintentar sonido de la oficina"
+                : sound.enabled
+                  ? "Desactivar sonido de la oficina"
+                  : "Activar sonido de la oficina"
             }
             title={
               sound.state === "loading"
                 ? "Preparando audio"
                 : sound.state === "elevenlabs"
                   ? "Audio ElevenLabs activo"
-                  : sound.enabled
-                    ? "Audio local activo"
-                    : "Activar audio"
+                  : sound.state === "blocked"
+                    ? "Toca para activar el audio"
+                    : sound.state === "unavailable"
+                      ? "Reintentar audio"
+                      : sound.enabled
+                        ? "Audio activo"
+                        : "Activar audio"
             }
             data-testid="agent-office-sound-toggle"
           >
             {sound.state === "loading" ? (
               <Loader2 className="h-4 w-4 animate-spin" />
-            ) : sound.enabled ? (
+            ) : sound.enabled && sound.state !== "unavailable" ? (
               <Volume2 className="h-4 w-4" />
             ) : (
               <VolumeX className="h-4 w-4" />
@@ -403,10 +410,20 @@ export function AgentOfficeOverlay({
           <span className="h-2 w-2 rounded-full bg-amber-400" />
           Revisión
         </span>
-        {sound.enabled ? (
+        {sound.enabled || sound.state === "unavailable" ? (
           <span className="inline-flex items-center gap-1.5 border-l border-zinc-200 pl-3">
-            <Volume2 className="h-3.5 w-3.5" />
-            {sound.state === "elevenlabs" ? "Ambiente ElevenLabs" : "Ambiente local"}
+            {sound.state === "unavailable" ? (
+              <VolumeX className="h-3.5 w-3.5" />
+            ) : (
+              <Volume2 className="h-3.5 w-3.5" />
+            )}
+            {sound.state === "elevenlabs"
+              ? "Ambiente ElevenLabs"
+              : sound.state === "blocked"
+                ? "Toca para activar audio"
+                : sound.state === "unavailable"
+                  ? "Audio no disponible"
+                  : "Preparando ambiente"}
           </span>
         ) : null}
       </div>

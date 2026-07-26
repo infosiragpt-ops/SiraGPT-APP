@@ -41,11 +41,14 @@ test('office soundscape uses a fixed prompt contract and atomically caches the r
     assert.equal(captured.headers['xi-api-key'], 'test-key');
     assert.equal(captured.body.text, OFFICE_SOUNDS['coast-day'].text);
     assert.equal(captured.body.loop, true);
-    assert.equal(captured.body.duration_seconds, 18);
+    assert.equal(captured.body.duration_seconds, 28);
+    assert.equal(captured.body.model_id, 'eleven_text_to_sound_v2');
     assert.equal(first.generated, true);
-    assert.equal(first.audioUrl, '/elevenlabs/audio/office-coast-day-v1.mp3');
+    assert.equal(first.audioUrl, '/elevenlabs/audio/office-coast-day-v2.mp3');
+    assert.equal(first.version, 2);
+    assert.equal(first.fallback, false);
     assert.equal(fs.readFileSync(first.audioPath, 'utf8'), 'ID3-office-sound');
-    assert.deepEqual(fs.readdirSync(outputDir), ['office-coast-day-v1.mp3']);
+    assert.deepEqual(fs.readdirSync(outputDir), ['office-coast-day-v2.mp3']);
 
     const second = await generateOfficeSoundscape({
       soundId: 'coast-day',
@@ -56,6 +59,7 @@ test('office soundscape uses a fixed prompt contract and atomically caches the r
     });
     assert.equal(second.cached, true);
     assert.equal(second.generated, false);
+    assert.equal(second.version, 2);
   } finally {
     fs.rmSync(outputDir, { recursive: true, force: true });
   }
@@ -80,6 +84,58 @@ test('office soundscape requires a server-side API key', async () => {
     () => generateOfficeSoundscape({ soundId: 'coast-night' }),
     (error) => error.code === 'ELEVENLABS_NOT_CONFIGURED',
   );
+});
+
+test('office soundscape serves a previously generated recording without an API key', async () => {
+  delete process.env.ELEVENLABS_API_KEY;
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-office-sound-'));
+  const filename = OFFICE_SOUNDS['coast-night'].filename;
+
+  try {
+    fs.writeFileSync(path.join(outputDir, filename), 'ID3-prerecorded-office');
+    const result = await generateOfficeSoundscape({
+      soundId: 'coast-night',
+      outputDir,
+      fetchImpl: async () => {
+        throw new Error('must not contact provider');
+      },
+    });
+
+    assert.equal(result.cached, true);
+    assert.equal(result.generated, false);
+    assert.equal(result.version, 2);
+    assert.equal(result.fallback, false);
+    assert.equal(result.filename, filename);
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('office soundscape keeps the prior ElevenLabs recording as a safe fallback', async () => {
+  process.env.ELEVENLABS_API_KEY = 'test-key';
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-office-sound-'));
+  const definition = OFFICE_SOUNDS['terrace-steps'];
+
+  try {
+    fs.writeFileSync(path.join(outputDir, definition.legacyFilename), 'ID3-legacy-office');
+    const result = await generateOfficeSoundscape({
+      soundId: 'terrace-steps',
+      outputDir,
+      fetchImpl: async () => ({
+        ok: false,
+        status: 402,
+        text: async () => 'quota exceeded',
+      }),
+    });
+
+    assert.equal(result.cached, true);
+    assert.equal(result.generated, false);
+    assert.equal(result.version, 1);
+    assert.equal(result.fallback, true);
+    assert.equal(result.filename, definition.legacyFilename);
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
 });
 
 test.after(() => {
