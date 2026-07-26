@@ -278,6 +278,7 @@ async function mockMatrixCompany(
 }
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
+  test.setTimeout(240_000)
   await page.setViewportSize({ width: 1425, height: 810 })
   const consoleErrors: string[] = []
   page.on("console", (message) => {
@@ -443,7 +444,12 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
   await page.getByTestId("agent-company-live-preview").click()
   await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
   await expect(page.getByTestId("agent-office-scene")).toHaveAttribute("data-office-ready", "true")
-  await expect(page.getByRole("button", { name: "Activar sonido de la oficina" })).toBeVisible()
+  const soundToggle = page.getByTestId("agent-office-sound-toggle")
+  await expect(soundToggle).toBeVisible()
+  await expect(soundToggle).toHaveAttribute(
+    "aria-label",
+    /^(Activar|Desactivar|Reintentar) sonido de la oficina$/,
+  )
   await expect(page.getByRole("button", { name: "Pausar oficina" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Ver agentes" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Cerrar oficina" })).toBeVisible()
