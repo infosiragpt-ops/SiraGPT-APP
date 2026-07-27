@@ -104,7 +104,21 @@ function resolveTurnEngine({ tier = null, env = process.env } = {}) {
  */
 let _warnedEcoLadderFallback = false;
 
-async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient, createAnthropicClient, temperature = 0.3, maxTokens } = {}) {
+async function defaultLlmTurn({
+  messages,
+  tools = [],
+  signal,
+  env = process.env,
+  tier = null,
+  createClient,
+  createAnthropicClient,
+  temperature = 0.3,
+  maxTokens,
+  onTextDelta = null,
+  onReasoningDelta = null,
+  model = null,
+  effort = null,
+} = {}) {
   // Native Claude engine for eligible tiers (composer Power selector): best
   // tool-calling fidelity. On failure it degrades to the prompted ladder
   // below (which itself may reach Anthropic in prompted mode, or OpenRouter/
@@ -122,7 +136,17 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   let claudeDegraded = false;
   if (resolveTurnEngine({ tier, env }) === 'anthropic') {
     try {
-      const opts = { messages, tools, signal, env, tier };
+      const opts = {
+        messages,
+        tools,
+        signal,
+        env,
+        tier,
+        onTextDelta,
+        onReasoningDelta,
+        model,
+        effort,
+      };
       if (createAnthropicClient) opts.createClient = createAnthropicClient;
       return await anthropicTurn(opts);
     } catch (err) {
@@ -150,16 +174,21 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
     if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
     const client = createClient ? createClient({ env }) : cerebrasClientModule.createCerebrasClient({ env });
     if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
-    const resp = await client.chat.completions.create(
-      { model: cfg.model, messages: effective, temperature, max_tokens: maxTokens || 2048 },
-      signal ? { signal } : undefined,
-    );
-    const choice = resp?.choices?.[0]?.message || {};
-    content = typeof choice.content === 'string' ? choice.content : '';
-    reasoningText = typeof choice.reasoning === 'string'
-      ? choice.reasoning
-      : (typeof choice.reasoning_content === 'string' ? choice.reasoning_content : '');
-    usage = extractUsage(resp, cfg.model);
+    const out = await llmProvider.callOpenAICompatible({
+      messages: effective,
+      temperature,
+      maxTokens: maxTokens || 2048,
+      signal,
+      model: llmProvider.modelFor('cerebras', env, model) || cfg.model,
+      client,
+      providerLabel: 'Cerebras',
+      onTextDelta,
+      onReasoningDelta,
+      effort,
+    });
+    content = out.content;
+    reasoningText = out.reasoning || '';
+    usage = out.usage;
   } else {
     // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
     // quarantine-based failover. Reached when (a) a paid tier degraded from
@@ -170,7 +199,17 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
       _warnedEcoLadderFallback = true;
       console.warn('[codex llm-turn] tier eco sin Cerebras configurado — usando el ladder (puede cobrar un proveedor de pago)');
     }
-    const out = await llmProvider.chatComplete({ messages: effective, temperature, maxTokens, signal, env });
+    const out = await llmProvider.chatComplete({
+      messages: effective,
+      temperature,
+      maxTokens,
+      signal,
+      env,
+      onTextDelta,
+      onReasoningDelta,
+      model,
+      effort,
+    });
     content = out.content;
     reasoningText = out.reasoning || '';
     usage = out.usage;

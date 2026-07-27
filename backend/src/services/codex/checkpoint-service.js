@@ -111,6 +111,25 @@ async function generateCheckpointTitle({ run, changedFiles, llmTurn, env = proce
   return fallback;
 }
 
+function checkpointCommitBody({ run, project, changedFiles, expectedTreeSha = null }) {
+  const files = String(changedFiles || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 80);
+  const task = String(run?.prompt || '').trim().replace(/\s+/g, ' ').slice(0, 800);
+  return [
+    `Run: ${run?.id || 'unknown'}`,
+    `Project: ${project?.name || project?.id || run?.projectId || 'unknown'}`,
+    `Mode: ${run?.mode || 'build'}`,
+    expectedTreeSha ? `Verified-Tree: ${expectedTreeSha}` : null,
+    task ? `Task: ${task}` : null,
+    '',
+    'Changed files:',
+    ...(files.length ? files : ['(not reported)']),
+  ].filter((line) => line !== null).join('\n');
+}
+
 /**
  * Create a checkpoint at the close of a build IF there are changes. Returns the
  * persisted checkpoint, or null when the workspace is clean (no card).
@@ -135,7 +154,13 @@ async function createCheckpoint({ run, project, deps = {} }) {
 
   const db = requireDb(prisma);
   const title = await generateCheckpointTitle({ run, changedFiles: changed.slice(0, 2000), llmTurn, env });
-  const commitSha = await gitCommitAll(runner, projectId, title);
+  const body = checkpointCommitBody({
+    run,
+    project,
+    changedFiles: changed.slice(0, 4000),
+    expectedTreeSha,
+  });
+  const commitSha = await gitCommitAll(runner, projectId, title, { body });
   const committedTreeSha = await commitTreeSha({ runner, projectId, commitSha });
   if (expectedTreeSha && committedTreeSha !== expectedTreeSha) {
     const error = new Error('checkpoint tree differs from the tree that passed verification');
@@ -363,6 +388,7 @@ async function listCheckpoints({ projectId, userId, prisma = defaultPrisma }) {
 
 module.exports = {
   createCheckpoint,
+  checkpointCommitBody,
   rollbackCheckpoint,
   restoreWorkspaceSha,
   getCheckpointDiff,

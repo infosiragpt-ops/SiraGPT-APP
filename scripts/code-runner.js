@@ -30,7 +30,8 @@
  * Workspace API (Codex Agent V2, flag-gated at the backend):
  *   POST /workspace/init  { project }          → mkdir + git init -b main
  *   POST /workspace/write { project, files[] } → write files (paths sanitized)
- *   GET  /workspace/file?project&path          → read a file (cap 200k)
+ *   GET  /workspace/file?project&path          → read a text file (cap 200k)
+ *   GET  /workspace/file-binary?project&path   → read binary as base64 (cap 6MB)
  *   POST /workspace/exec  { project, cmd[], timeoutMs } → allowlisted exec
  *   POST /workspace/export { project }                  → mirror source to
  *                   EXPORT_DIR/<project> (host bind-mount) — hybrid "to disk".
@@ -846,6 +847,31 @@ Bun.serve({
           return Response.json({ ok: false, error: "file_not_found" }, { status: 404 });
         }
         if (error.code === "unsafe_path" || error.code === "invalid_request") {
+          return Response.json({ ok: false, error: error.code }, { status: 400 });
+        }
+        return Response.json({ ok: false, error: "filesystem_operation_failed" }, { status: 500 });
+      }
+    }
+
+    if (url.pathname === "/workspace/file-binary" && req.method === "GET") {
+      const id = sanitizeProjectId(url.searchParams.get("project"));
+      const rel = resolveProjectRelPath(url.searchParams.get("path"));
+      if (!id || !rel) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      if (!existsSync(projectDirOf(id))) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      ensureProjectDirectory(id);
+      try {
+        const result = await callFilesystemHelper(id, ["read-base64", rel, "6000000"], { outputCap: 8_500_000 });
+        return Response.json({
+          ok: true,
+          path: result.path,
+          bytes: result.bytes,
+          contentBase64: result.contentBase64,
+        });
+      } catch (error) {
+        if (error.code === "file_not_found") {
+          return Response.json({ ok: false, error: "file_not_found" }, { status: 404 });
+        }
+        if (["unsafe_path", "invalid_request", "file_too_large"].includes(error.code)) {
           return Response.json({ ok: false, error: error.code }, { status: 400 });
         }
         return Response.json({ ok: false, error: "filesystem_operation_failed" }, { status: 500 });

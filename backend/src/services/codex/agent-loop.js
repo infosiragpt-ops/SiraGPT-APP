@@ -55,6 +55,8 @@ const COMPACT_TOOL_RESULT_CAP = 300;
 const CONTEXT_SUMMARY_INPUT_CAP = 48_000;
 const CONTEXT_SUMMARY_CAP = 12_000;
 const CONTEXT_SNAPSHOT_MESSAGE_CAP = 8_000;
+const STREAM_PROTOCOL_GUARD_CHARS = 20;
+const REASONING_CONTEXT_CAP = 8_000;
 
 function readPosInt(raw, fallback) {
   const n = Number.parseInt(raw, 10);
@@ -92,10 +94,82 @@ function messageContentText(content) {
     .map((block) => {
       if (block?.type === 'text' && typeof block.text === 'string') return block.text;
       if (block?.type === 'image' || block?.type === 'image_url') return '[captura visual]';
+      if (block?.type === 'document') return '[documento PDF]';
       return '';
     })
     .filter(Boolean)
     .join('\n');
+}
+
+function contextBudgetChars(modelCapabilities = {}, env = process.env) {
+  const explicit = Number.parseInt(env?.CODEX_CONTEXT_MAX_CHARS, 10);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+
+  const contextWindow = Math.max(8192, Number(modelCapabilities?.contextWindow) || 20_000);
+  const outputTokens = Math.min(
+    Math.max(2048, Number(modelCapabilities?.maxOutputTokens) || 4096),
+    Math.floor(contextWindow / 4),
+  );
+  // Reserve output plus provider/tool framing. Three chars/token is deliberately
+  // conservative for mixed Spanish, source code and JSON tool arguments.
+  const reservedTokens = outputTokens + Math.max(2048, Math.floor(contextWindow * 0.04));
+  const inputTokens = Math.max(4096, contextWindow - reservedTokens);
+  return Math.min(750_000, Math.max(12_000, Math.floor(inputTokens * 3)));
+}
+
+function effortForStage({ tier = null, verifyRounds = 0, env = process.env } = {}) {
+  const configured = String(env?.CODEX_REASONING_EFFORT || '').trim().toLowerCase();
+  if (['low', 'medium', 'high'].includes(configured)) return configured;
+  if (verifyRounds > 0) return 'high';
+  return String(tier || '').toLowerCase() === 'eco' ? 'low' : 'medium';
+}
+
+function createProtocolSafeTextStream(emit) {
+  let raw = '';
+  let emittedText = '';
+  let stopped = false;
+
+  const emitSlice = async (end) => {
+    if (end <= emittedText.length) return;
+    const delta = raw.slice(emittedText.length, end);
+    emittedText += delta;
+    if (delta) await emit(delta);
+  };
+
+  return {
+    async push(delta) {
+      if (stopped || !delta) return;
+      raw += String(delta);
+      const protocol = raw.search(/```(?:tool_call|json)\b/i);
+      if (protocol >= 0) {
+        stopped = true;
+        await emitSlice(protocol);
+        return;
+      }
+      await emitSlice(Math.max(emittedText.length, raw.length - STREAM_PROTOCOL_GUARD_CHARS));
+    },
+    async finish(finalText) {
+      const final = String(finalText || '');
+      if (!final) return;
+      let suffix = '';
+      if (!emittedText) suffix = final;
+      else if (final.startsWith(emittedText)) suffix = final.slice(emittedText.length);
+      else {
+        const normalized = emittedText.trimStart();
+        if (normalized && final.startsWith(normalized)) suffix = final.slice(normalized.length);
+      }
+      if (suffix) {
+        emittedText += suffix;
+        await emit(suffix);
+      }
+    },
+    get emitted() {
+      return emittedText.length > 0;
+    },
+    get text() {
+      return emittedText;
+    },
+  };
 }
 
 function toolResultContent(toolName, observation, fallback = '', suffix = '') {
@@ -271,6 +345,8 @@ function buildSystemPrompt({
   fileTree,
   sourcePrompt,
   projectNotes,
+  progressContext = '',
+  projectSettings = null,
   parallelSubagents = false,
   parallelTools = true,
   openclawPromptBlock = '',
@@ -303,6 +379,9 @@ function buildSystemPrompt({
     'Si el usuario pide software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, punto de venta, gestión de clientes/proveedores/proyectos), delega PRIMERO en enterprise_analyst para convertir el pedido en módulos, entidades, roles y flujos; luego construye una app multi-módulo con navegación lateral, dashboard con KPIs y datos de ejemplo realistas del dominio.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
+  if (projectSettings) {
+    lines.push(`Política del proyecto (.sira/settings.json): modo=${projectSettings.mode}; tools allow=${projectSettings.tools.allow.join(', ') || 'todas'}; deny=${projectSettings.tools.deny.join(', ') || 'ninguna'}; aprobación=${projectSettings.tools.requireApproval.join(', ') || (projectSettings.mode === 'confirm' ? 'acciones sensibles' : 'solo MCP externo')}. Respeta esta política; no intentes eludirla.`);
+  }
   if (openclawPromptBlock) {
     lines.push(openclawPromptBlock);
   }
@@ -322,6 +401,11 @@ function buildSystemPrompt({
   if (projectNotes) {
     lines.push('MEMORIA DEL PROYECTO (SIRA.md + .sira/notes.md — instrucciones, decisiones y convenciones acumuladas; respétalas):');
     lines.push(projectNotes);
+  }
+  if (progressContext) {
+    lines.push('MEMORIA ESTRUCTURADA DEL PROYECTO (objetivos y resultados reales de corridas anteriores):');
+    lines.push(progressContext);
+    lines.push('Usa este ledger para no repetir errores, conservar decisiones y avanzar los objetivos vigentes.');
   }
   lines.push('Mantén la memoria del proyecto: SIRA.md contiene instrucciones y convenciones duraderas; .sira/notes.md conserva notas operativas breves. Cuando tomes una decisión estructural o dejes trabajo pendiente, lee primero el archivo correspondiente y actualiza .sira/notes.md con edit_file; actualiza también SIRA.md cuando cambien instrucciones o convenciones duraderas (crea los archivos si no existen; evita duplicados y conserva lo más importante arriba).');
   // Deterministic skill auto-injection: when the prompt clearly matches a
@@ -418,6 +502,7 @@ async function summariseContextWithLlm({
       signal,
       env,
       tier,
+      effort: 'low',
     });
     if (turn?.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(turn.usage);
     return String(turn?.text || '').trim().slice(0, CONTEXT_SUMMARY_CAP);
@@ -968,6 +1053,55 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const webSearch = deps.webSearch || defaultWebSearch;
   const projectId = project?.id || run.projectId;
   const runBranchesEnabled = productionFeatureEnabled(env, 'CODEX_RUN_BRANCHES');
+  // eslint-disable-next-line global-require
+  const projectSettingsModule = require('./project-settings');
+  const settingsState = deps.projectSettings?.settings
+    ? deps.projectSettings
+    : (deps.projectSettings
+      ? { settings: deps.projectSettings, error: null, source: 'injected' }
+      : await projectSettingsModule.loadProjectSettings({ runner, projectId, project }));
+  const projectSettings = settingsState.settings;
+  if (settingsState.error) {
+    const error = `invalid .sira/settings.json: ${settingsState.error}`;
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `No inicié cambios porque la política del proyecto es inválida: ${settingsState.error}`,
+    }, { prisma }).catch(() => {});
+    return { status: 'error', error };
+  }
+  if (projectSettings.mode === 'plan-only') {
+    const error = 'project mode plan-only: inicia un run en modo plan o cambia .sira/settings.json';
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: 'Este proyecto está en modo solo-plan. No ejecuté herramientas ni modifiqué archivos.',
+    }, { prisma }).catch(() => {});
+    return { status: 'error', error };
+  }
+
+  const projectBudget = deps.projectBudget || require('./project-budget');
+  const budget = await projectBudget.checkProjectBudget({
+    prisma,
+    projectId,
+    settings: projectSettings,
+    env,
+    now: clock(),
+  });
+  await eventStore.appendEvent(run.id, 'budget_status', {
+    allowed: budget.allowed,
+    reason: budget.reason,
+    costTodayUsd: budget.costTodayUsd,
+    dailyBudgetUsd: budget.dailyBudgetUsd,
+    remainingUsd: budget.remainingUsd,
+  }, { prisma }).catch(() => {});
+  if (!budget.allowed) {
+    const error = budget.reason === 'daily_budget_exceeded'
+      ? `project daily budget exceeded: $${Number(budget.costTodayUsd || 0).toFixed(4)} of $${Number(budget.dailyBudgetUsd || 0).toFixed(2)}`
+      : `project budget preflight failed: ${budget.error || budget.reason}`;
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: budget.reason === 'daily_budget_exceeded'
+        ? `No inicié esta corrida: el proyecto alcanzó su presupuesto diario de $${Number(budget.dailyBudgetUsd || 0).toFixed(2)}.`
+        : 'No inicié esta corrida porque no pude verificar de forma segura el presupuesto diario.',
+    }, { prisma }).catch(() => {});
+    return { status: 'error', error };
+  }
 
   if (runBranchesEnabled) {
     const branch = await checkpointService.prepareRunBranch({
@@ -991,7 +1125,6 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const baseMaxSteps = readPosInt(env.CODEX_MAX_STEPS, DEFAULT_MAX_STEPS);
   let maxSteps = baseMaxSteps;
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
-  const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
   const maxSameFileWrites = readPosInt(env.CODEX_MAX_SAME_FILE_WRITES, DEFAULT_MAX_SAME_FILE_WRITES);
   // Parallel specialists are unsafe while they share one checkout: several
@@ -1002,7 +1135,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // General tool parallelism is default-on, but the scheduler is conservative:
   // process-wide tools and any read/write dependency stay serialized.
   const parallelTools = String(env.CODEX_PARALLEL_TOOL_CALLS ?? '1').trim() !== '0';
-  let registry = buildTools.toolRegistry();
+  let registry = buildTools.toolRegistry()
+    .filter((tool) => projectSettingsModule.toolDecision(projectSettings, tool.name).allowed);
   const dynamicTools = new Map();
   if (String(env.CODEX_MCP_DYNAMIC_TOOLS ?? '1').trim() !== '0') {
     try {
@@ -1014,6 +1148,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         signal,
       });
       for (const [name, tool] of dynamic.tools) {
+        if (!projectSettingsModule.toolDecision(projectSettings, name).allowed) continue;
         dynamicTools.set(name, tool);
         registry.push({ name, description: tool.description, parameters: tool.parameters });
       }
@@ -1042,6 +1177,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       return { supportsImages: false };
     }
   })();
+  const contextMaxChars = contextBudgetChars(modelCapabilities, env);
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
@@ -1059,6 +1195,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
+  const progressContext = deps.progressContext != null
+    ? deps.progressContext
+    : progressLedger.formatProgressContext(project);
   const hookState = deps.projectHooks || await projectHooks.loadProjectHooks({ runner, projectId });
   const resolvedToolPermissions = await loadResolvedToolPermissions({
     runId: run.id,
@@ -1079,6 +1218,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         fileTree,
         sourcePrompt,
         projectNotes,
+        progressContext,
+        projectSettings,
         parallelSubagents,
         parallelTools,
         openclawPromptBlock: deps.openclawPromptBlock || '',
@@ -1146,10 +1287,19 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let latestPlanTasks = Array.isArray(resumeSnapshot?.state?.planTasks) && resumeSnapshot.state.planTasks.length
     ? resumeSnapshot.state.planTasks
     : (Array.isArray(plan?.tasks) ? plan.tasks : null);
+  const completedBackgroundTasks = [];
+  const backgroundWatchers = new Set();
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
     if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
+    while (completedBackgroundTasks.length) {
+      const completed = completedBackgroundTasks.shift();
+      messages.push({
+        role: 'user',
+        content: `[BACKGROUND_TASK ${completed.taskId}] status=${completed.status}\n${completed.log || '(sin salida)'}`,
+      });
+    }
 
     compactMessages(messages, { maxChars: contextMaxChars });
     if (
@@ -1188,8 +1338,43 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     }
 
     let turn;
+    const streamingEnabled = String(env.CODEX_STREAMING ?? '1').trim() !== '0';
+    const reasoningBlockId = `r${step}`;
+    let streamedReasoning = '';
+    let reasoningStreamStarted = false;
+    const narrativeStream = createProtocolSafeTextStream(async (text) => {
+      await eventStore.appendEvent(run.id, 'narrative_delta', { text }, { prisma }).catch(() => {});
+    });
+    const onReasoningDelta = async (text) => {
+      const delta = String(text || '');
+      if (!delta) return;
+      if (!reasoningStreamStarted) {
+        reasoningStreamStarted = true;
+        await eventStore.appendEvent(run.id, 'reasoning_start', {
+          blockId: reasoningBlockId,
+          label: 'Razonando',
+        }, { prisma }).catch(() => {});
+      }
+      streamedReasoning += delta;
+      await eventStore.appendEvent(run.id, 'reasoning_delta', {
+        blockId: reasoningBlockId,
+        text: delta,
+      }, { prisma }).catch(() => {});
+    };
     try {
-      turn = await llmTurn({ messages, tools: registry, signal, env, tier: run?.tier || null });
+      turn = await llmTurn({
+        messages,
+        tools: registry,
+        signal,
+        env,
+        tier: run?.tier || null,
+        model: run?.model || null,
+        effort: effortForStage({ tier: run?.tier || null, verifyRounds, env }),
+        ...(streamingEnabled ? {
+          onTextDelta: (text) => narrativeStream.push(text),
+          onReasoningDelta,
+        } : {}),
+      });
     } catch (err) {
       // Transport error → run error. Feature 09: a blocking pattern (402, missing
       // key, quota) surfaces an action_required card before the run ends.
@@ -1204,11 +1389,23 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
     // Reasoning block (native or prompted).
     if (turn?.reasoning && (turn.reasoning.text || turn.reasoning.label)) {
-      const blockId = `r${step}`;
       const r = turn.reasoning;
-      await eventStore.appendEvent(run.id, 'reasoning_start', { blockId, label: r.label || 'Razonando' }, { prisma });
-      if (r.text) await eventStore.appendEvent(run.id, 'reasoning_delta', { blockId, text: String(r.text) }, { prisma });
-      await eventStore.appendEvent(run.id, 'reasoning_end', { blockId, durationMs: Number(r.durationMs) || 0 }, { prisma });
+      if (!reasoningStreamStarted) {
+        await eventStore.appendEvent(run.id, 'reasoning_start', { blockId: reasoningBlockId, label: r.label || 'Razonando' }, { prisma });
+        if (r.text) await eventStore.appendEvent(run.id, 'reasoning_delta', { blockId: reasoningBlockId, text: String(r.text) }, { prisma });
+      } else if (r.text && String(r.text).startsWith(streamedReasoning)) {
+        const remaining = String(r.text).slice(streamedReasoning.length);
+        if (remaining) await eventStore.appendEvent(run.id, 'reasoning_delta', { blockId: reasoningBlockId, text: remaining }, { prisma });
+      }
+      await eventStore.appendEvent(run.id, 'reasoning_end', { blockId: reasoningBlockId, durationMs: Number(r.durationMs) || 0 }, { prisma });
+      if (r.text) {
+        messages.push({
+          role: 'assistant',
+          content: `[REASONING_CONTEXT · NO MOSTRAR AL USUARIO]\n${String(r.text).slice(-REASONING_CONTEXT_CAP)}`,
+        });
+      }
+    } else if (reasoningStreamStarted) {
+      await eventStore.appendEvent(run.id, 'reasoning_end', { blockId: reasoningBlockId, durationMs: 0 }, { prisma });
     }
 
     // Narrative. Models sometimes regurgitate the transcript encoding into
@@ -1217,7 +1414,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     // file bodies into the user-facing chat and bloated the context. Cut it.
     const narrativeText = String(turn?.text || '').split('[TOOL_RESULT')[0].trim();
     if (narrativeText) {
-      await eventStore.appendEvent(run.id, 'narrative_delta', { text: narrativeText }, { prisma });
+      if (streamingEnabled) await narrativeStream.finish(narrativeText);
+      else await eventStore.appendEvent(run.id, 'narrative_delta', { text: narrativeText }, { prisma });
       messages.push({ role: 'assistant', content: narrativeText });
     }
 
@@ -1257,6 +1455,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           continue;
         }
       }
+      const stopHook = projectHooks.applyStopHooks(hookState?.hooks, {
+        status: 'done',
+        reason: 'model_completed',
+        runId: run.id,
+      });
+      if (!stopHook.allowed) {
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: `No cerré la corrida porque el hook Stop la bloqueó: ${stopHook.message}`,
+        }, { prisma }).catch(() => {});
+        return { status: 'error', error: `stop hook denied: ${stopHook.message}` };
+      }
       const closed = await closeBuild({
         run,
         project,
@@ -1271,10 +1480,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         webSearch,
         sessionService: deps.sessionService,
         backgroundTaskService: deps.backgroundTaskService,
+        backgroundWatchers,
       });
-      return closed.ok === false
-        ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
-        : { status: 'done' };
+      return terminalOutcomeAfterClose(closed, stopHook, 'proactive quality gate failed');
     }
     if (allCalls.length > calls.length) {
       // Honest budget: tell the model what was dropped instead of letting it
@@ -1288,6 +1496,27 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const executeCall = async (call) => {
       const tool = buildTools.getTool(call.name) || dynamicTools.get(call.name) || null;
       const actionId = `a${++actionCounter}`;
+      const policyDecision = projectSettingsModule.toolDecision(projectSettings, call.name);
+      if (!policyDecision.allowed) {
+        const deniedKind = tool?.kind || 'terminal';
+        await eventStore.appendEvent(run.id, 'action_start', {
+          actionId,
+          kind: deniedKind,
+          command: String(call.name),
+          groupId,
+        }, { prisma });
+        await eventStore.appendEvent(run.id, 'action_end', {
+          actionId,
+          status: 'error',
+          outputSummary: policyDecision.reason,
+          durationMs: 0,
+        }, { prisma });
+        if (metrics?.recordAction) metrics.recordAction(deniedKind, 0);
+        return {
+          message: `[TOOL_RESULT ${call.name}] Acción denegada por .sira/settings.json: ${policyDecision.reason}`,
+          blocking: null,
+        };
+      }
 
       // update_plan is a plan-progress signal, not a workspace action: it emits a
       // `plan_updated` event (TodoWrite parity) instead of action_start/end, so it
@@ -1337,7 +1566,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         };
       }
 
-      if (projectHooks.requiresApproval(project, call.name, effectiveArgs)) {
+      if (projectHooks.requiresApproval(project, call.name, effectiveArgs, projectSettings)) {
         const bindingHash = projectHooks.permissionBindingHash({
           runId: run.id,
           projectId,
@@ -1390,6 +1619,37 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         tier: run?.tier || null,
         modelCapabilities,
         modelProvider: activeProvider.provider,
+        projectSettings,
+        backgroundTaskService: deps.backgroundTaskService,
+        watchBackgroundTask: (task, service) => {
+          if (!task?.taskId || typeof service?.watch !== 'function') return;
+          const watcher = Promise.resolve(service.watch({
+            runner,
+            project: projectId,
+            taskId: task.taskId,
+            signal,
+            pollMs: env.CODEX_BACKGROUND_POLL_MS,
+            onComplete: async (result) => {
+              const status = String(result?.task?.status || 'lost');
+              completedBackgroundTasks.push({
+                taskId: task.taskId,
+                status,
+                log: String(result?.log || result?.error || '').slice(-8_000),
+              });
+              const text = `Tarea background ${task.taskId} terminó con estado ${status}. Usa task_logs para revisar la salida completa.`;
+              await eventStore.appendEvent(run.id, 'narrative_delta', { text }, { prisma }).catch(() => {});
+            },
+          })).catch(() => {});
+          backgroundWatchers.add(watcher);
+          watcher.finally(() => backgroundWatchers.delete(watcher)).catch(() => {});
+        },
+        backgroundSubagentManager: deps.backgroundSubagentManager,
+        notifyBackgroundSubagent: async (task) => {
+          const text = task.status === 'done'
+            ? `Subagente background ${task.agent} terminó (${task.taskId}). Usa subagent_status para incorporar su informe.`
+            : `Subagente background ${task.agent} terminó con estado ${task.status} (${task.taskId})${task.error ? `: ${task.error}` : '.'}`;
+          await eventStore.appendEvent(run.id, 'narrative_delta', { text }, { prisma }).catch(() => {});
+        },
         onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
         // Live visibility for delegations: the SDK surfaces every specialist
         // tool call as a nested action in the same group. The event store's
@@ -1551,6 +1811,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     },
     { prisma },
   ).catch(() => {});
+  const stopHook = projectHooks.applyStopHooks(hookState?.hooks, {
+    status: aborted ? 'timeout' : 'budget_exhausted',
+    reason: aborted ? 'timeout' : 'step_budget',
+    runId: run.id,
+  });
+  if (!stopHook.allowed) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `No cerré la corrida porque el hook Stop la bloqueó: ${stopHook.message}`,
+    }, { prisma }).catch(() => {});
+    return { status: 'error', error: `stop hook denied: ${stopHook.message}` };
+  }
   const closed = await closeBuild({
     run,
     project,
@@ -1565,10 +1836,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     webSearch,
     sessionService: deps.sessionService,
     backgroundTaskService: deps.backgroundTaskService,
+    backgroundWatchers,
   });
-  return closed.ok === false
-    ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
-    : { status: 'done' };
+  return terminalOutcomeAfterClose(closed, stopHook, 'proactive quality gate failed');
 }
 
 async function readRunnerFile(runner, projectId, path) {
@@ -1749,6 +2019,19 @@ function acceptanceEvidence(meta, verification) {
   }));
 }
 
+function terminalOutcomeAfterClose(closed, stopHook, fallbackError) {
+  if (closed?.ok === false) {
+    return { status: 'error', error: closed.error || fallbackError || 'quality gate failed' };
+  }
+  const transformed = stopHook?.outcome || {};
+  const status = ['done', 'error', 'cancelled'].includes(transformed.status)
+    ? transformed.status
+    : 'done';
+  return status === 'error'
+    ? { status, error: String(transformed.error || transformed.reason || 'stop hook transformed outcome').slice(0, 2000) }
+    : { status };
+}
+
 function recordGateMetrics(verification) {
   for (const [gate, result] of Object.entries(verification?.gates || {})) {
     if (!result?.ran && result?.ok) continue;
@@ -1776,6 +2059,7 @@ async function closeBuild({
   webSearch,
   sessionService,
   backgroundTaskService,
+  backgroundWatchers = null,
 }) {
   await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
   const resolvedSourcePrompt = sourcePrompt != null
@@ -1806,6 +2090,9 @@ async function closeBuild({
         blockingGates: [quiescence?.code || 'background_tasks'],
       };
     } else {
+      if (backgroundWatchers?.size) {
+        await Promise.allSettled([...backgroundWatchers]);
+      }
       try {
         const verifyLoop = require('./verify-loop');
         projectGateVerification = await verifyLoop.autoVerifyAndHeal({
@@ -1888,6 +2175,7 @@ async function closeBuild({
 
   let diffstat = await workspaceDiffstat({ runner, projectId });
   let checkpoint = null;
+  let checkpointError = null;
   let branchFinalization = null;
   let projectGatesPassed = !verifyRequired || projectGateVerification?.clean === true;
   let verifiedTreeSha = null;
@@ -1957,6 +2245,7 @@ async function closeBuild({
         });
       }
     } catch (err) {
+      checkpointError = String(err?.message || err).slice(0, 1000);
       if (closeRunBranchesEnabled) {
         branchFinalization = {
           ok: false,
@@ -1968,9 +2257,50 @@ async function closeBuild({
     }
   }
 
-  // Metrics + run_summary (feature 08). Order: checkpoint → diffstat → metric →
-  // run_summary, then the processor emits the terminal run_status. Best-effort —
-  // a metrics failure must not turn a successful build into an error.
+  const proactivePassed = !proactiveMeta || verification?.ok === true;
+  const branchPassed = !branchFinalization || branchFinalization.ok === true;
+  const checkpointPassed = !checkpointError;
+  const finalOutcome = projectGatesPassed && proactivePassed && branchPassed && checkpointPassed ? 'passed' : 'failed';
+  const learningEvidence = {
+    project: projectGateVerification,
+    proactive: verification,
+    branch: branchFinalization
+      ? {
+        ok: branchFinalization.ok,
+        status: branchFinalization.status || null,
+        merge: branchFinalization.merge || null,
+      }
+      : null,
+    checkpointError,
+  };
+  let learned = {
+    learnings: progressLedger.deterministicLearnings({
+      outcome: finalOutcome,
+      checkpointSha: checkpoint?.commitSha || null,
+      diffstat,
+      verification: learningEvidence,
+    }),
+    usage: null,
+  };
+  const autoMemoryConfigured = env?.CODEX_AUTO_MEMORY;
+  const autoMemoryEnabled = autoMemoryConfigured == null
+    ? env?.NODE_ENV === 'production'
+    : String(autoMemoryConfigured).trim() !== '0';
+  if (autoMemoryEnabled) {
+    learned = await progressLedger.generateAutoLearnings({
+      llmTurn,
+      task: proactiveMeta?.title || resolvedSourcePrompt,
+      outcome: finalOutcome,
+      checkpointSha: checkpoint?.commitSha || null,
+      diffstat,
+      verification: learningEvidence,
+      env,
+    });
+    if (learned.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(learned.usage);
+  }
+
+  // Metrics + run_summary (feature 08). Order: checkpoint → auto-memory →
+  // metric → ledger → run_summary, then the processor emits run_status.
   let metric = null;
   if (metrics && typeof metrics.finalize === 'function') {
     try {
@@ -1981,31 +2311,27 @@ async function closeBuild({
     }
   }
 
+  await progressLedger.appendLedgerEntry({
+    prisma,
+    project,
+    entry: {
+      department: proactiveMeta?.department || 'interactive',
+      runId: run.id,
+      outcome: finalOutcome,
+      task: proactiveMeta?.title || String(resolvedSourcePrompt || '').slice(0, 600),
+      checkpointSha: checkpoint?.commitSha || null,
+      diffstat,
+      costUsd: Number(metric?.costAppliedUsd ?? metric?.costUsd) || 0,
+      acceptance: proactiveMeta ? acceptanceEvidence(proactiveMeta, verification) : [],
+      learnings: learned.learnings,
+      createdAt: clock().toISOString(),
+    },
+  }).catch((err) => {
+    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] progress ledger append failed:', err?.message || err);
+  });
+
   if (proactiveMeta) {
-    const passed = verification?.ok === true && projectGatesPassed;
-    await progressLedger.appendLedgerEntry({
-      prisma,
-      project,
-      entry: {
-        department: proactiveMeta.department,
-        runId: run.id,
-        outcome: passed ? 'passed' : 'failed',
-        task: proactiveMeta.title || String(resolvedSourcePrompt || '').slice(0, 600),
-        checkpointSha: checkpoint?.commitSha || null,
-        diffstat,
-        costUsd: Number(metric?.costAppliedUsd ?? metric?.costUsd) || 0,
-        acceptance: acceptanceEvidence(proactiveMeta, verification),
-        learnings: passed
-          ? [`Verificación superada: ${gateEvidence(verification)}.`]
-          : projectGatesPassed
-            ? [`${verification?.kind || 'quality'}: ${String(verification?.errors || 'gate sin evidencia').slice(0, 480)}`]
-            : [`project gates: ${String(projectGateVerification?.blockingGates || 'tests/lint/typecheck').slice(0, 480)}`],
-        createdAt: clock().toISOString(),
-      },
-    }).catch((err) => {
-      if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] progress ledger append failed:', err?.message || err);
-    });
-    if (!passed) {
+    if (!proactivePassed || !projectGatesPassed) {
       await eventStore.appendEvent(run.id, 'narrative_delta', {
         text: `No cerré ni promoví este run: el gate obligatorio ${verification?.kind || 'de calidad'} sigue fallando después de la reparación.`,
       }, { prisma }).catch(() => {});
@@ -2030,6 +2356,18 @@ async function closeBuild({
       verification,
       projectGateVerification,
       error: `project quality gates failed: ${String(projectGateVerification?.blockingGates || 'unknown').slice(0, 1200)}`,
+    };
+  }
+  if (checkpointError) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `No cerré la corrida porque el checkpoint Git falló: ${checkpointError}`,
+    }, { prisma }).catch(() => {});
+    return {
+      ok: false,
+      checkpoint: null,
+      verification,
+      projectGateVerification,
+      error: `checkpoint failed: ${checkpointError}`,
     };
   }
   if (branchFinalization && branchFinalization.ok !== true) {
@@ -2100,6 +2438,9 @@ module.exports = {
   isAppsPrompt,
   compactMessages,
   boundedArgsPreview,
+  contextBudgetChars,
+  effortForStage,
+  createProtocolSafeTextStream,
   messageChars,
   boundedTail,
   messageContentText,

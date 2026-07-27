@@ -55,6 +55,49 @@ function readMaxSteps(env, policy = null) {
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_STEPS;
 }
 
+async function publishTerminalSignals({
+  run,
+  project,
+  status,
+  error = null,
+  prisma,
+  triggers,
+  env,
+  clock,
+}) {
+  await require('./run-completion').publishRunCompletion({
+    run,
+    status,
+    error,
+    triggers,
+    env,
+  });
+  if (!['done', 'error', 'cancelled'].includes(status)) return;
+  const outcome = status === 'done' ? 'passed' : status === 'cancelled' ? 'cancelled' : 'failed';
+  await require('./progress-ledger').appendLedgerEntryIfMissing({
+    prisma,
+    project,
+    entry: {
+      department: 'interactive',
+      runId: run?.id,
+      outcome,
+      task: String(run?.prompt || '').slice(0, 600),
+      checkpointSha: null,
+      diffstat: {},
+      costUsd: 0,
+      acceptance: [],
+      learnings: [
+        status === 'done'
+          ? 'Corrida finalizada; no hubo evidencia adicional de checkpoint en el cierre.'
+          : status === 'cancelled'
+            ? 'Corrida cancelada antes de completar el objetivo.'
+            : `Corrida fallida: ${String(error || run?.error || 'error no especificado').slice(0, 450)}`,
+      ],
+      createdAt: nowIso(clock),
+    },
+  }).catch(() => {});
+}
+
 function defaultOnFeature(env, key) {
   const source = env || process.env;
   const fallback = source.NODE_ENV === 'production' ? '1' : '0';
@@ -102,6 +145,7 @@ async function processCodexRunJob({
   clock,
   env = process.env,
   resumeSnapshot = null,
+  triggers = null,
 } = {}) {
   if (!prisma || !prisma.codexRun) throw new Error('database unavailable');
 
@@ -130,6 +174,16 @@ async function processCodexRunJob({
       data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
     });
     await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma });
+    await publishTerminalSignals({
+      run,
+      project,
+      status: 'error',
+      error,
+      prisma,
+      triggers,
+      env,
+      clock,
+    });
     return { status: 'error', error };
   }
   let nativeRunner = runner;
@@ -182,6 +236,16 @@ async function processCodexRunJob({
           data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
         });
         await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma });
+        await publishTerminalSignals({
+          run,
+          project,
+          status: 'error',
+          error,
+          prisma,
+          triggers,
+          env,
+          clock,
+        });
         return { status: 'error', error };
       }
     }
@@ -311,6 +375,8 @@ async function processCodexRunJob({
     await prisma.codexRun
       .update({ where: { id: runId }, data: { finishedAt: new Date(nowIso(clock)) } })
       .catch(() => {});
+    // cancelRun owns the terminal event, webhook, metric and fallback ledger.
+    // Re-publishing here would double-count the same cancellation.
     if (unregisterTranscript) unregisterTranscript();
     return { status: 'cancelled' };
   }
@@ -333,10 +399,24 @@ async function processCodexRunJob({
   });
   if (!flip || flip.count === 0) {
     const fresh = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
+    // The concurrent owner that won the conditional transition is responsible
+    // for its terminal side effects. This processor must only observe the race.
     if (unregisterTranscript) unregisterTranscript();
     return { status: fresh?.status || status, raced: true };
   }
   await eventStore.appendEvent(runId, 'run_status', { status }, { prisma });
+  if (['done', 'error', 'cancelled'].includes(status)) {
+    await publishTerminalSignals({
+      run,
+      project,
+      status,
+      error: errorMsg,
+      prisma,
+      triggers,
+      env,
+      clock,
+    });
+  }
 
   let autoContinuedRunId = null;
   let autoContinueError = null;
@@ -401,6 +481,7 @@ module.exports = {
   TimeoutError,
   readTimeoutMs,
   readMaxSteps,
+  publishTerminalSignals,
   defaultOnFeature,
   executionContextForAdapter,
 };

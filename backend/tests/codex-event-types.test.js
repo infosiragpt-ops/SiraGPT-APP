@@ -23,6 +23,7 @@ const VALID = {
   action_start: { actionId: 'a1', kind: 'terminal', command: 'git status', groupId: 'g1' },
   action_end: { actionId: 'a1', status: 'done', outputSummary: 'clean', durationMs: 120, linesRead: 0 },
   narrative_delta: { text: 'Estoy creando el layout.' },
+  budget_status: { allowed: true, reason: 'within_budget', costTodayUsd: 1.2, dailyBudgetUsd: 10, remainingUsd: 8.8 },
   checkpoint_created: { checkpointId: 'c1', commitSha: 'abc1234', title: 'feat: layout', createdAt: '2026-06-13' },
   run_summary: { metrics: { timeWorkedMs: 1000, actionsCount: 3, costSource: 'estimated' } },
   action_required: { patternId: 'openrouter_402', title: 'Sin créditos', rawError: '402', blockedCapabilities: ['gen'], remediationUrl: 'https://x' },

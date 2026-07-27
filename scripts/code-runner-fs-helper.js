@@ -211,6 +211,44 @@ function safeReadFile(root, rawRel, maxBytes = 200_000) {
   }
 }
 
+function safeReadBinaryFile(root, rawRel, maxBytes = 6_000_000) {
+  const rel = normalizeRelativePath(rawRel);
+  if (!rel) throw publicError('invalid_request');
+  const abs = ensureSafeParents(root, rel);
+  const before = lstatOrNull(abs);
+  if (!before) throw publicError('file_not_found');
+  if (before.isSymbolicLink() || !before.isFile()) throw publicError('unsafe_path');
+
+  const limit = Math.min(Math.max(Number(maxBytes) || 0, 1), 12_000_000);
+  if (before.size > limit) throw publicError('file_too_large');
+
+  let fd = null;
+  try {
+    fd = openSync(abs, constants.O_RDONLY | NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw publicError('unsafe_path');
+    if (st.size > limit) throw publicError('file_too_large');
+    const buffer = Buffer.alloc(st.size);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const chunk = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (chunk === 0) break;
+      bytesRead += chunk;
+    }
+    const content = buffer.subarray(0, bytesRead);
+    return {
+      path: rel,
+      bytes: content.length,
+      contentBase64: content.toString('base64'),
+    };
+  } catch (error) {
+    if (error && (error.code === 'ELOOP' || error.code === 'EMLINK')) throw publicError('unsafe_path');
+    throw error;
+  } finally {
+    if (fd != null) closeSync(fd);
+  }
+}
+
 function shouldIgnoreExport(rel) {
   return rel.split('/').some((segment) => IGNORED_EXPORT_DIRS.has(segment));
 }
@@ -290,6 +328,11 @@ async function main() {
     process.stdout.write(JSON.stringify({ ok: true, ...result }));
     return;
   }
+  if (action === 'read-base64') {
+    const result = safeReadBinaryFile(root, process.argv[3], Number(process.argv[4]) || 6_000_000);
+    process.stdout.write(JSON.stringify({ ok: true, ...result }));
+    return;
+  }
   if (action === 'export') {
     const result = collectExportFiles(root, {
       maxFiles: Number(process.argv[3]) || 5000,
@@ -325,6 +368,7 @@ module.exports = {
   ensureSafeParents,
   safeWriteFiles,
   safeReadFile,
+  safeReadBinaryFile,
   collectExportFiles,
   collectExportDirectory,
 };

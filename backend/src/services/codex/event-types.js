@@ -77,6 +77,14 @@ const VALIDATORS = {
 
   narrative_delta: (d) => isObj(d) && isStr(d.text),
 
+  budget_status: (d) =>
+    isObj(d) &&
+    typeof d.allowed === 'boolean' &&
+    nonEmptyStr(d.reason) &&
+    optNum(d.costTodayUsd) &&
+    optNum(d.dailyBudgetUsd) &&
+    optNum(d.remainingUsd),
+
   checkpoint_created: (d) =>
     isObj(d) &&
     nonEmptyStr(d.checkpointId) &&

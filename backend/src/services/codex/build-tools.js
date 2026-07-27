@@ -139,6 +139,15 @@ const TOOLS = {
     async execute(args, ctx) {
       const cmd = Array.isArray(args?.cmd) ? args.cmd : null;
       if (!cmd) return { isError: true, summary: 'cmd debe ser un array de strings', observation: 'Error: cmd debe ser un array de strings.' };
+      // eslint-disable-next-line global-require
+      const commandPolicy = require('./project-settings').commandDecision(ctx.projectSettings, cmd);
+      if (!commandPolicy.allowed) {
+        return {
+          isError: true,
+          summary: commandPolicy.reason,
+          observation: `Error de política: ${commandPolicy.reason}. Ajusta .sira/settings.json o usa un comando permitido.`,
+        };
+      }
       if (args?.background) {
         try {
           // eslint-disable-next-line global-require
@@ -150,6 +159,9 @@ const TOOLS = {
             timeoutMs: args.timeoutMs,
             env: ctx.env || process.env,
           });
+          if (typeof ctx.watchBackgroundTask === 'function') {
+            ctx.watchBackgroundTask(task, service);
+          }
           return {
             isError: false,
             summary: `tarea background iniciada: ${task.taskId}`,
@@ -334,6 +346,45 @@ const TOOLS = {
     },
   },
 
+  read_media: {
+    kind: 'file_read',
+    description: 'Lee y VE una imagen (PNG/JPEG/GIF/WebP) o PDF del workspace. Las imágenes se entregan como contenido multimodal al modelo activo; los PDF se convierten a texto y, con Claude, también se adjunta el documento para comprender PDFs escaneados. Usa read_file para SVG o texto.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Ruta relativa de la imagen o PDF.' },
+      },
+      required: ['path'],
+    },
+    commandFor: () => null,
+    pathFor: (args) => args?.path || null,
+    async execute(args, ctx) {
+      if (!args?.path) return { isError: true, summary: 'path requerido', observation: 'Error: path requerido.' };
+      try {
+        // eslint-disable-next-line global-require
+        const result = await require('./workspace-media').readWorkspaceMedia({
+          runner: ctx.runner,
+          project: ctx.project,
+          path: args.path,
+          modelCapabilities: ctx.modelCapabilities,
+          provider: ctx.modelProvider,
+          env: ctx.env || process.env,
+        });
+        return {
+          isError: false,
+          summary: `${result.mediaType} leído (${result.bytes} bytes)`,
+          observation: result.observation,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          summary: `no se pudo leer el medio: ${err.message}`,
+          observation: `Error leyendo ${args.path} como imagen/PDF: ${err.message}`,
+        };
+      }
+    },
+  },
+
   list_files: {
     kind: 'file_read',
     description: 'Lista los archivos del workspace (tracked + nuevos, sin node_modules). Úsalo para orientarte antes de leer o editar.',
@@ -437,7 +488,7 @@ const TOOLS = {
 
   write_file: {
     kind: 'file_write',
-    description: 'Crea o sobrescribe un archivo del workspace con el contenido dado.',
+    description: 'Crea un archivo nuevo o sobrescribe uno existente. Para sobrescribir exige haber leído primero su versión vigente con read_file y falla si cambió desde esa lectura.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
     commandFor: () => null,
     pathFor: (args) => args?.path || null,
@@ -446,11 +497,50 @@ const TOOLS = {
         return { isError: true, summary: 'path y content requeridos', observation: 'Error: path y content (string) requeridos.' };
       }
       try {
+        // eslint-disable-next-line global-require
+        const fileStateModule = require('./file-state');
+        const fileState = fileStateModule.trackerForContext(ctx);
+        let currentContent = null;
+        const enforceState = fileStateModule.shouldEnforceFileState(ctx);
+        if (enforceState) {
+          try {
+            const current = await ctx.runner.readFile(ctx.project, args.path);
+            currentContent = current?.content ?? '';
+          } catch (readError) {
+            const missing = readError?.status === 404 || readError?.body?.error === 'file_not_found' || readError?.message === 'file_not_found';
+            if (!missing) throw readError;
+          }
+        }
+        if (currentContent != null && enforceState) {
+          const state = fileState.checkEdit(args.path, currentContent);
+          if (!state.ok) {
+            if (state.reason === 'not_read') {
+              return {
+                isError: true,
+                summary: `${args.path} debe leerse antes de sobrescribir`,
+                observation: `Error: read-before-write. ${args.path} ya existe; léelo con read_file antes de sobrescribirlo. Para crear archivos nuevos no hace falta una lectura previa.`,
+              };
+            }
+            if (state.reason === 'changed_since_read') {
+              fileState.forget(args.path);
+              return {
+                isError: true,
+                summary: `${args.path} cambió desde la última lectura`,
+                observation: `Error: ${args.path} cambió desde la última lectura. Vuelve a leerlo y reintenta la sobrescritura sobre su estado vigente.`,
+              };
+            }
+            return {
+              isError: true,
+              summary: `ruta insegura: ${args.path}`,
+              observation: `Error: la ruta ${args.path} no es una ruta relativa segura del workspace.`,
+            };
+          }
+        }
         await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: args.content }]);
         // A successful write becomes the new known state for follow-up edits in
         // the same run. This does not waive read-before-edit for other runs.
         // eslint-disable-next-line global-require
-        require('./file-state').trackerForContext(ctx).markWritten(args.path, args.content);
+        fileState.markWritten(args.path, args.content);
         const bytes = Buffer.byteLength(args.content, 'utf8');
         return { isError: false, summary: `escrito ${args.path} (${bytes} bytes)`, observation: `OK: escrito ${args.path} (${bytes} bytes).` };
       } catch (err) {
@@ -730,13 +820,16 @@ const TOOLS = {
 
   run_subagent: {
     kind: 'agent',
-    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH), más los agentes custom que el proyecto defina en .sira/agents.json. La política del workspace decide si varias delegaciones se serializan o ejecutan en paralelo. Recibes solo su informe final.',
+    description: 'Delega una tarea en un subagente con contexto fresco: explorer (solo lectura y barato), planner, frontend_builder, backend_engineer, db_architect, qa_reviewer, debugger, enterprise_analyst o agentes custom de .sira/agents.json. model y effort permiten elegir capacidad por especialista. background:true inicia agentes read-only en paralelo y devuelve taskId; consulta subagent_status o detén con subagent_stop.',
     parameters: {
       type: 'object',
       properties: {
         agent: { type: 'string', description: 'Nombre del subagente.' },
         task: { type: 'string', description: 'Tarea concreta y autocontenida para el subagente.' },
         context: { type: 'string', description: 'Contexto extra del proyecto que el subagente necesita.' },
+        model: { type: 'string', description: 'Modelo opcional compatible con el proveedor activo.' },
+        effort: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Esfuerzo de razonamiento del especialista.' },
+        background: { type: 'boolean', description: 'Ejecutar en background. Por seguridad, solo agentes read-only salvo aislamiento explícito.' },
       },
       required: ['agent', 'task'],
     },
@@ -748,16 +841,109 @@ const TOOLS = {
       const sdk = require('./agent-sdk');
       try {
         const customAgents = await sdk.loadWorkspaceAgents({ runner: ctx.runner, project: ctx.project });
-        const outcome = await sdk.runSubagent({
+        const definition = sdk.getSubagent(String(args?.agent || '')) || customAgents[String(args?.agent || '')] || null;
+        if (!definition) {
+          return { isError: true, summary: 'subagente desconocido', observation: `Subagente desconocido: ${String(args?.agent || '')}.` };
+        }
+        const configuredModel = definition.readOnly && String(args?.agent || '') === 'explorer'
+          ? ctx.projectSettings?.subagents?.explorerModel
+          : ctx.projectSettings?.subagents?.defaultModel;
+        const model = String(args?.model || configuredModel || definition.model || '').trim().slice(0, 160) || null;
+        const effort = ['low', 'medium', 'high'].includes(String(args?.effort || '').toLowerCase())
+          ? String(args.effort).toLowerCase()
+          : (ctx.projectSettings?.subagents?.defaultEffort || definition.effort || 'medium');
+        const execute = ({ signal = ctx.signal } = {}) => sdk.runSubagent({
           name: String(args?.agent || ''),
           task: String(args?.task || ''),
           context: String(args?.context || ''),
-          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, tier: ctx.tier || null, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
+          model,
+          effort,
+          deps: {
+            runner: ctx.runner,
+            project: ctx.project,
+            webSearch: ctx.webSearch,
+            env: ctx.env,
+            llmTurn: ctx.llmTurn,
+            tier: ctx.tier || null,
+            signal,
+            onUsage: ctx.onUsage,
+            emitAction: ctx.emitAction,
+            customAgents,
+            projectSettings: ctx.projectSettings,
+            modelCapabilities: ctx.modelCapabilities,
+            modelProvider: ctx.modelProvider,
+          },
         });
+        if (args?.background) {
+          if (!definition.readOnly && String(ctx.env?.CODEX_PARALLEL_WRITE_SUBAGENTS || '') !== '1') {
+            return {
+              isError: true,
+              summary: 'background rechazado para subagente escritor',
+              observation: 'Error: background solo está habilitado para subagentes read-only. Usa explorer/planner/qa_reviewer o un sandbox con worktree aislado.',
+            };
+          }
+          // eslint-disable-next-line global-require
+          const manager = ctx.backgroundSubagentManager || require('./background-subagents').backgroundSubagentManager;
+          const task = manager.start({
+            runId: ctx.run?.id,
+            project: ctx.project,
+            agent: String(args.agent),
+            execute,
+            parentSignal: ctx.signal,
+            onComplete: async (finished) => {
+              if (typeof ctx.notifyBackgroundSubagent === 'function') await ctx.notifyBackgroundSubagent(finished);
+            },
+          });
+          return {
+            isError: false,
+            summary: `subagente background iniciado: ${task.taskId}`,
+            observation: `OK: ${args.agent} trabaja en background con taskId=${task.taskId}. Recibirás una notificación al terminar; usa subagent_status para consultar o recoger su informe.`,
+          };
+        }
+        const outcome = await execute();
         const report = sdk.formatSubagentReport(outcome);
         return { isError: !outcome.ok, summary: `${outcome.agent}: ${outcome.ok ? 'completado' : 'falló'} (${outcome.toolCallsCount} herramientas)`, observation: report };
       } catch (err) {
         return { isError: true, summary: `subagente falló: ${err.message}`, observation: `Error ejecutando el subagente: ${err.message}` };
+      }
+    },
+  },
+
+  subagent_status: {
+    kind: 'agent',
+    description: 'Consulta el estado y recoge el informe de un subagente iniciado con run_subagent background:true.',
+    parameters: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] },
+    commandFor: (args) => `subagent status: ${args?.taskId || '?'}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        // eslint-disable-next-line global-require
+        const manager = ctx.backgroundSubagentManager || require('./background-subagents').backgroundSubagentManager;
+        const task = manager.status({ taskId: args?.taskId, runId: ctx.run?.id, project: ctx.project });
+        const report = task.outcome
+          ? `[SUBAGENTE ${task.agent}] ${task.status}\n${task.outcome.result}`
+          : `[SUBAGENTE ${task.agent}] ${task.status}${task.error ? `\nError: ${task.error}` : ''}`;
+        return { isError: task.status === 'error', summary: `${task.agent}: ${task.status}`, observation: report };
+      } catch (err) {
+        return { isError: true, summary: `subagent_status falló: ${err.message}`, observation: `Error consultando subagente: ${err.message}` };
+      }
+    },
+  },
+
+  subagent_stop: {
+    kind: 'agent',
+    description: 'Cancela cooperativamente un subagente background del mismo run y proyecto.',
+    parameters: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] },
+    commandFor: (args) => `subagent stop: ${args?.taskId || '?'}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        // eslint-disable-next-line global-require
+        const manager = ctx.backgroundSubagentManager || require('./background-subagents').backgroundSubagentManager;
+        const task = manager.stop({ taskId: args?.taskId, runId: ctx.run?.id, project: ctx.project });
+        return { isError: false, summary: `${task.agent}: ${task.status}`, observation: `Cancelación solicitada para ${task.taskId}; estado=${task.status}.` };
+      } catch (err) {
+        return { isError: true, summary: `subagent_stop falló: ${err.message}`, observation: `Error cancelando subagente: ${err.message}` };
       }
     },
   },

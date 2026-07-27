@@ -148,13 +148,22 @@ test('a thrown loop becomes a captured error (no throw out, no zombie)', async (
 
 test('out-of-band cancellation finalizes cancelled WITHOUT a duplicate run_status', async () => {
   const d = makeDeps();
+  let terminalPublishes = 0;
   // Loop returns done, but the row was flipped to cancelled mid-flight.
   const loop = async () => { d.runRow.status = 'cancelled'; return { status: 'done' }; };
-  const res = await processCodexRunJob({ runId: 'run-1', prisma: d.prisma, eventStore: d.eventStore, runAgentLoop: loop, clock: d.clock });
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: loop,
+    clock: d.clock,
+    triggers: { async publish() { terminalPublishes += 1; return {}; } },
+  });
   assert.equal(res.status, 'cancelled');
   // Only the 'running' run_status is emitted here; cancelRun owns 'cancelled'.
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running']);
+  assert.equal(terminalPublishes, 0);
 });
 
 test('cancel landing after the isCancelled() check is not clobbered and emits no terminal run_status', async () => {
@@ -191,13 +200,22 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   };
   const eventStore = { async appendEvent(runId, type, data) { events.push({ runId, type, data }); } };
   const loop = async () => ({ status: 'done' });
-  const res = await processCodexRunJob({ runId: 'run-1', prisma, eventStore, runAgentLoop: loop, clock: () => new Date('2026-06-13T12:00:00Z') });
+  let terminalPublishes = 0;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma,
+    eventStore,
+    runAgentLoop: loop,
+    clock: () => new Date('2026-06-13T12:00:00Z'),
+    triggers: { async publish() { terminalPublishes += 1; return {}; } },
+  });
   // The row was cancelled out-of-band; the guarded write must not revert it to done.
   assert.equal(runRow.status, 'cancelled');
   assert.equal(res.raced, true);
   // Only `running` was emitted by the processor; no terminal done/error event.
   const statuses = events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running']);
+  assert.equal(terminalPublishes, 0);
 });
 
 test('hard timeout aborts a hung loop into error', async () => {

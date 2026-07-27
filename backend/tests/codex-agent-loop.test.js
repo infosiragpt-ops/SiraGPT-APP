@@ -27,7 +27,12 @@ function fakeDeps(overrides = {}) {
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: `ran ${cmd.join(' ')}`, stderr: '' };
     },
-    readFile: async () => ({ content: 'a\nb\nc' }),
+    readFile: async (_p, path) => {
+      if (path === '.sira/settings.json' || path === '.sira/hooks.json' || path === '.sira/notes.md' || path === 'SIRA.md') {
+        throw new Error('file_not_found');
+      }
+      return { content: 'a\nb\nc' };
+    },
     writeFiles: async (_p, files) => { writes.push(...files); return { ok: true }; },
   };
   let t = 0;
@@ -51,6 +56,7 @@ test('build loop runs grouped tool calls with one groupId, narrative, then done'
   const f = fakeDeps({
     llmTurn: scriptedLlm([
       { text: 'Voy a crear el index y revisar git.', toolCalls: [
+        { name: 'read_file', args: { path: 'index.html' } },
         { name: 'write_file', args: { path: 'index.html', content: '<h1>hi</h1>' } },
         { name: 'run_command', args: { cmd: ['git', 'status'] } },
       ] },
@@ -62,13 +68,14 @@ test('build loop runs grouped tool calls with one groupId, narrative, then done'
   assert.deepEqual(f.writes, [{ path: 'index.html', content: '<h1>hi</h1>' }]);
 
   const starts = f.events.filter((e) => e.type === 'action_start');
-  assert.equal(starts.length, 2);
+  assert.equal(starts.length, 3);
   assert.equal(starts[0].data.groupId, starts[1].data.groupId); // same burst → one group
-  assert.equal(starts[0].data.kind, 'file_write');
-  assert.equal(starts[1].data.kind, 'terminal');
-  assert.equal(f.events.filter((e) => e.type === 'action_end').length, 2);
+  assert.equal(starts[0].data.kind, 'file_read');
+  assert.equal(starts[1].data.kind, 'file_write');
+  assert.equal(starts[2].data.kind, 'terminal');
+  assert.equal(f.events.filter((e) => e.type === 'action_end').length, 3);
   assert.ok(f.events.some((e) => e.type === 'narrative_delta'));
-  assert.equal(f.actions.length, 2); // both persisted as CodexAction
+  assert.equal(f.actions.length, 3); // all persisted as CodexAction
 });
 
 test('build prompt tells the model to edit the starter instead of scaffolding', async () => {
@@ -266,7 +273,10 @@ test('a truncated turn (cut-off write) nudges a retry instead of closing the bui
   const f = fakeDeps({
     llmTurn: scriptedLlm([
       { text: 'Escribo el componente.', toolCalls: [], truncated: true },
-      { text: 'Lo divido en partes.', toolCalls: [{ name: 'write_file', args: { path: 'src/App.tsx', content: '<App/>' } }] },
+      { text: 'Lo divido en partes.', toolCalls: [
+        { name: 'read_file', args: { path: 'src/App.tsx' } },
+        { name: 'write_file', args: { path: 'src/App.tsx', content: '<App/>' } },
+      ] },
       { text: 'Listo.', toolCalls: [] },
     ]),
   });

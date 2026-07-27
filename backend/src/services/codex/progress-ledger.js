@@ -118,6 +118,118 @@ function readProgressContext(project) {
   };
 }
 
+function formatProgressContext(project, { maxEntries = 12, maxChars = 9000 } = {}) {
+  const { objectives, ledger } = readProgressContext(project);
+  if (!objectives.length && !ledger.length) return '';
+  const lines = [];
+  if (objectives.length) {
+    lines.push('OBJETIVOS VIGENTES:');
+    for (const objective of objectives) {
+      lines.push(
+        `- [${objective.status}] P${objective.priority} ${objective.title}`
+        + `${objective.metric ? ` | métrica: ${objective.metric}` : ''}`
+        + `${objective.target ? ` | meta: ${objective.target}` : ''}`,
+      );
+    }
+  }
+  const recent = ledger.slice(-Math.max(1, maxEntries));
+  if (recent.length) {
+    if (lines.length) lines.push('');
+    lines.push('LEDGER DE CORRIDAS RECIENTES:');
+    for (const entry of recent) {
+      lines.push(
+        `- ${entry.createdAt} | ${entry.department} | ${entry.outcome} | run=${entry.runId}`
+        + `${entry.task ? ` | ${entry.task}` : ''}`
+        + `${entry.checkpointSha ? ` | sha=${entry.checkpointSha}` : ''}`,
+      );
+      for (const learning of entry.learnings.slice(0, 4)) {
+        lines.push(`  aprendizaje: ${learning}`);
+      }
+    }
+  }
+  return lines.join('\n').slice(0, maxChars);
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || '');
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : raw;
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  try {
+    return JSON.parse(body.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function deterministicLearnings({ outcome, checkpointSha, diffstat, verification }) {
+  const files = Math.max(0, Number(diffstat?.filesChanged) || 0);
+  const lines = [
+    outcome === 'passed'
+      ? `Corrida cerrada con gates verdes${checkpointSha ? ` en ${String(checkpointSha).slice(0, 12)}` : ''}.`
+      : `Corrida cerrada como ${outcome}; revisar la evidencia de calidad antes de continuar.`,
+    `Impacto: ${files} archivo(s), +${Math.max(0, Number(diffstat?.additions) || 0)} -${Math.max(0, Number(diffstat?.deletions) || 0)}.`,
+  ];
+  const blocked = verification?.blockingGates || verification?.gatesFailed;
+  if (blocked) lines.push(`Gates observados: ${String(blocked).slice(0, 420)}.`);
+  return lines;
+}
+
+async function generateAutoLearnings({
+  llmTurn,
+  task,
+  outcome,
+  checkpointSha,
+  diffstat,
+  verification,
+  env = process.env,
+}) {
+  const fallback = deterministicLearnings({
+    outcome,
+    checkpointSha,
+    diffstat,
+    verification,
+  });
+  if (typeof llmTurn !== 'function') return { learnings: fallback, usage: null };
+  const evidence = boundedText(JSON.stringify(verification || {}), 4000);
+  try {
+    const turn = await llmTurn({
+      messages: [
+        {
+          role: 'system',
+          content: 'Extrae memoria técnica durable de una corrida de software. Devuelve SOLO JSON válido: {"learnings":["..."]}. Incluye de 1 a 6 hechos reutilizables, decisiones, errores o convenciones. No inventes y no incluyas secretos.',
+        },
+        {
+          role: 'user',
+          content: [
+            `Tarea: ${boundedText(task, 1800) || '(sin descripción)'}`,
+            `Resultado: ${outcome}`,
+            `Checkpoint: ${checkpointSha || '(sin cambios)'}`,
+            `Diffstat: ${JSON.stringify(diffstat || {})}`,
+            `Verificación: ${evidence || '(sin evidencia adicional)'}`,
+          ].join('\n'),
+        },
+      ],
+      tools: [],
+      maxTokens: 700,
+      effort: 'low',
+      env,
+    });
+    const parsed = extractJsonObject(turn?.text);
+    const learnings = Array.isArray(parsed?.learnings)
+      ? parsed.learnings.map((value) => boundedText(value, 500)).filter(Boolean).slice(0, 8)
+      : [];
+    return {
+      learnings: learnings.length ? learnings : fallback,
+      usage: turn?.usage || null,
+    };
+  } catch {
+    return { learnings: fallback, usage: null };
+  }
+}
+
 function mergeObjectives(current, proposed, now = new Date()) {
   const existing = new Map(normalizeObjectives(current).map((item) => [item.id, item]));
   const next = normalizeObjectives(proposed).map((item) => ({
@@ -193,6 +305,15 @@ async function appendLedgerEntry({ prisma, project, entry }) {
   return ledger.at(-1) || null;
 }
 
+async function appendLedgerEntryIfMissing({ prisma, project, entry }) {
+  if (!prisma?.codexProject?.update || !project?.id) return null;
+  const fresh = await loadFreshProject(prisma, project.id, project);
+  const existing = normalizeLedger(asRecord(fresh?.brief).ledger)
+    .find((item) => item.runId === entry?.runId);
+  if (existing) return existing;
+  return appendLedgerEntry({ prisma, project: fresh || project, entry });
+}
+
 async function writeObjectives({ prisma, project, objectives, now = new Date() }) {
   if (!prisma?.codexProject?.update || !project?.id) return [];
   const fresh = await loadFreshProject(prisma, project.id, project);
@@ -211,6 +332,7 @@ module.exports = {
   MAX_ACCEPTANCE_CRITERIA,
   PROACTIVE_META_MARKER,
   appendLedgerEntry,
+  appendLedgerEntryIfMissing,
   asRecord,
   formatProactivePrompt,
   mergeObjectives,
@@ -218,6 +340,9 @@ module.exports = {
   normalizeLedger,
   normalizeObjectives,
   readProgressContext,
+  formatProgressContext,
+  generateAutoLearnings,
+  deterministicLearnings,
   taskMetaFromPrompt,
   writeObjectives,
 };
