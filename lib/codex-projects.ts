@@ -13,6 +13,8 @@ export type CodexProjectEntry = {
   /** Shown in the Codex picker (e.g. ~/Desktop/siraGPT). */
   displayPath?: string
   fileCount?: number
+  /** Keeps a local workspace at the top of company/workspace pickers. */
+  isPinned?: boolean
   updatedAt: number
 }
 
@@ -60,7 +62,9 @@ export function listCodexProjects(): CodexProjectEntry[] {
 export function upsertCodexProject(entry: Omit<CodexProjectEntry, "updatedAt"> & { updatedAt?: number }): CodexProjectEntry[] {
   const store = storage()
   if (!store) return []
+  const existing = listCodexProjects().find((row) => row.id === entry.id)
   const next: CodexProjectEntry = {
+    ...existing,
     ...entry,
     updatedAt: entry.updatedAt ?? Date.now(),
   }

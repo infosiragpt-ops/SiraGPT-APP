@@ -91,7 +91,9 @@ function ActiveFolderHydrator() {
   const firedAgentRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
+    const liveParams = new URLSearchParams(window.location.search)
     if (localId) {
+      if (liveParams.get("local") !== localId) return
       if (activeFolder?.id === localId) return
       const entry = listCodexProjects().find((row) => row.id === localId)
       void switchCodexWorkspace({
@@ -102,12 +104,16 @@ function ActiveFolderHydrator() {
       return
     }
     if (!folderId) return
+    if (liveParams.get("folder") !== folderId) return
     if (activeFolder?.id === folderId) return
     let cancelled = false
     ;(async () => {
       try {
         const project = await projectsService.get(folderId)
-        if (cancelled) return
+        if (
+          cancelled
+          || new URLSearchParams(window.location.search).get("folder") !== folderId
+        ) return
         setActiveFolder({
           id: project.id,
           name: project.name,
@@ -115,7 +121,10 @@ function ActiveFolderHydrator() {
           instructions: project.instructions,
         })
       } catch {
-        if (cancelled) return
+        if (
+          cancelled
+          || new URLSearchParams(window.location.search).get("folder") !== folderId
+        ) return
         setActiveFolder({ id: folderId, name: folderId })
       }
     })()

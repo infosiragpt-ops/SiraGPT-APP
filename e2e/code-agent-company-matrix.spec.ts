@@ -75,7 +75,16 @@ async function mockMatrixCompany(
     malformedCodexLists = false,
   }: { linkedProject?: boolean; malformedCodexLists?: boolean } = {},
 ) {
-  const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0, activityReports: 0 }
+  const operations = {
+    projectCreates: 0,
+    projectUpdates: [] as Array<Record<string, unknown>>,
+    projectDeletes: 0,
+    proactiveToggles: 0,
+    socialPolicyUpdates: 0,
+    activityReports: 0,
+  }
+  let currentProject = { ...project }
+  let projectDeleted = false
   let proactiveEnabled = false
   let companyAssociated = linkedProject
   let associatedCodexProjectId = linkedProject ? "codex-matrix-qa" : null
@@ -181,8 +190,23 @@ async function mockMatrixCompany(
     if (path === "/auth/me") return fulfillJson(route, { user })
     if (path === "/health" && request.method() === "HEAD") return route.fulfill({ status: 204 })
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
-    if (path === "/projects" && request.method() === "GET") return fulfillJson(route, { projects: [project] })
-    if (path === "/projects/matrix-qa") return fulfillJson(route, { project })
+    if (path === "/projects" && request.method() === "GET") {
+      return fulfillJson(route, { projects: projectDeleted ? [] : [currentProject] })
+    }
+    if (path === "/projects/matrix-qa" && request.method() === "GET") {
+      return fulfillJson(route, { project: currentProject })
+    }
+    if (path === "/projects/matrix-qa" && request.method() === "PUT") {
+      const body = request.postDataJSON() as Record<string, unknown>
+      operations.projectUpdates.push(body)
+      currentProject = { ...currentProject, ...body, updatedAt: now }
+      return fulfillJson(route, { project: currentProject })
+    }
+    if (path === "/projects/matrix-qa" && request.method() === "DELETE") {
+      operations.projectDeletes += 1
+      projectDeleted = true
+      return fulfillJson(route, { deleted: true })
+    }
     if (path === "/codex/health") {
       return fulfillJson(route, { ok: true, enabled: true, previewOrigin: "https://preview.example.test" })
     }
@@ -464,6 +488,59 @@ test("empty Codex list payloads cannot crash the company panel", async ({ page }
   await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
   expect(pageErrors).toEqual([])
+})
+
+test("company switcher can pin, rename and soft-delete an enterprise", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1425, height: 810 })
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  const operations = await mockMatrixCompany(page)
+
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+  const switcher = page.getByTestId("agent-company-switcher")
+  await expect(switcher).toBeVisible({ timeout: 30_000 })
+
+  await switcher.click()
+  const companyRow = page.getByTestId("agent-company-row-matrix-qa")
+  await expect(companyRow).toBeVisible()
+  await page.getByTestId("agent-company-actions-matrix-qa").click()
+  await page.getByRole("menuitem", { name: "Fijar empresa" }).click()
+  await expect.poll(() => operations.projectUpdates.length).toBe(1)
+  expect(operations.projectUpdates[0]).toEqual({ isStarred: true })
+
+  await switcher.click()
+  await expect(page.getByTestId("agent-company-pinned-matrix-qa")).toBeVisible()
+  await page.getByTestId("agent-company-actions-matrix-qa").click()
+  await page.getByRole("menuitem", { name: "Editar nombre" }).click()
+  const editDialog = page.getByTestId("agent-company-edit-dialog")
+  await expect(editDialog).toBeVisible()
+  await editDialog.getByLabel("Nombre de la empresa").fill("Acme Operaciones")
+  await editDialog.getByRole("button", { name: "Guardar cambios" }).click()
+  await expect(editDialog).toBeHidden()
+  await expect.poll(() => operations.projectUpdates.length).toBe(2)
+  expect(operations.projectUpdates[1]).toEqual({ name: "Acme Operaciones" })
+  await expect(switcher).toContainText("Acme Operaciones")
+
+  await switcher.click()
+  await page.getByTestId("agent-company-actions-matrix-qa").click()
+  await page.getByRole("menuitem", { name: "Eliminar empresa" }).click()
+  const deleteDialog = page.getByTestId("agent-company-delete-dialog")
+  await expect(deleteDialog).toContainText("Podrás restaurarla durante 30 días")
+  await deleteDialog.getByRole("button", { name: "Eliminar empresa" }).click()
+  await expect.poll(() => operations.projectDeletes).toBe(1)
+  await expect(deleteDialog).toBeHidden()
+  await expect.poll(() => page.evaluate(() => document.body.style.pointerEvents)).not.toBe("none")
+  await expect(page).not.toHaveURL(/[?&]folder=/)
+
+  await switcher.click()
+  await expect(page.getByTestId("agent-company-menu")).toContainText("Sin empresas.")
+  await page.screenshot({ path: testInfo.outputPath("company-actions-complete.png"), fullPage: true })
+  const unexpectedPageErrors = pageErrors.filter(
+    (message) => !message.includes(
+      "The document is sandboxed and lacks the 'allow-same-origin' flag",
+    ),
+  )
+  expect(unexpectedPageErrors).toEqual([])
 })
 
 test("mission evidence, CEO review and report survive a reload", async ({ page }, testInfo) => {

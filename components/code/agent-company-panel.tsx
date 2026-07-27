@@ -33,6 +33,7 @@ import {
   Loader2,
   Megaphone,
   MessageSquareText,
+  MoreHorizontal,
   Network,
   PackageOpen,
   PauseCircle,
@@ -77,6 +78,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -125,7 +133,13 @@ import {
 import type { CodeChatSession } from "@/lib/code-chat-sessions"
 import type { CodeFile, CodeFiles } from "@/lib/code-workspace-utils"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
+import {
+  CODEX_UPDATED_EVENT,
+  codexIdForProject,
+  listCodexProjects,
+  removeCodexProject,
+  upsertCodexProject,
+} from "@/lib/codex-projects"
 import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
@@ -180,6 +194,7 @@ type CompanyOption = {
   projectId?: string
   name: string
   kind: "project" | "local-folder"
+  isPinned: boolean
 }
 
 type CustomDepartment = AgentDepartmentDefinition & { custom: true }
@@ -579,6 +594,15 @@ function companyWorkspaceCandidates(option: CompanyOption): string[] {
   return Array.from(new Set(values))
 }
 
+function replaceCompanyWorkspaceUrl(option: CompanyOption | null) {
+  const url = new URL(window.location.href)
+  url.searchParams.delete("folder")
+  url.searchParams.delete("local")
+  if (option?.projectId) url.searchParams.set("folder", option.projectId)
+  else if (option?.kind === "local-folder") url.searchParams.set("local", option.id)
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
+}
+
 export function AgentCompanyPanel() {
   const { user } = useAuth()
   const isMobile = useIsMobile()
@@ -593,6 +617,7 @@ export function AgentCompanyPanel() {
     setActiveCodeChatSession,
     listCodeChatSessionsForWorkspace,
     switchCodexWorkspace,
+    forgetWorkspace,
   } = useCodeWorkspace()
 
   const [view, setView] = React.useState<CompanyView>("home")
@@ -603,9 +628,14 @@ export function AgentCompanyPanel() {
   const [companyMenuOpen, setCompanyMenuOpen] = React.useState(false)
   const [projects, setProjects] = React.useState<Project[]>([])
   const [projectsLoading, setProjectsLoading] = React.useState(false)
+  const [companyRegistry, setCompanyRegistry] = React.useState<ReturnType<typeof listCodexProjects>>([])
   const [newCompanyOpen, setNewCompanyOpen] = React.useState(false)
   const [newCompanyName, setNewCompanyName] = React.useState("")
   const [creatingCompany, setCreatingCompany] = React.useState(false)
+  const [editingCompany, setEditingCompany] = React.useState<CompanyOption | null>(null)
+  const [editingCompanyName, setEditingCompanyName] = React.useState("")
+  const [deletingCompany, setDeletingCompany] = React.useState<CompanyOption | null>(null)
+  const [companyMutation, setCompanyMutation] = React.useState<string | null>(null)
   const [newDepartmentOpen, setNewDepartmentOpen] = React.useState(false)
   const [newDepartmentName, setNewDepartmentName] = React.useState("")
   const [newDepartmentAgents, setNewDepartmentAgents] = React.useState(32)
@@ -883,27 +913,55 @@ export function AgentCompanyPanel() {
     if (companyMenuOpen) void refreshProjects()
   }, [companyMenuOpen, refreshProjects])
 
+  React.useEffect(() => {
+    const refreshRegistry = () => setCompanyRegistry(listCodexProjects())
+    refreshRegistry()
+    window.addEventListener(CODEX_UPDATED_EVENT, refreshRegistry)
+    return () => window.removeEventListener(CODEX_UPDATED_EVENT, refreshRegistry)
+  }, [])
+
   const companyOptions = React.useMemo<CompanyOption[]>(() => {
+    const registry = companyRegistry
     const cloud: CompanyOption[] = projects.map((project) => ({
       id: project.id,
       projectId: project.id,
       name: project.name,
       kind: "project",
+      isPinned: project.isStarred,
     }))
-    const local: CompanyOption[] = listCodexProjects()
+    const local: CompanyOption[] = registry
       .filter((entry) => entry.kind === "local-folder")
-      .map((entry) => ({ id: entry.id, name: entry.name, kind: "local-folder" }))
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        kind: "local-folder",
+        isPinned: entry.isPinned === true,
+      }))
     const current: CompanyOption | null = activeFolder
-      ? {
-          id: activeFolder.id,
-          projectId: activeFolder.id.startsWith("local:") ? undefined : activeFolder.id,
-          name: activeFolder.name,
-          kind: activeFolder.id.startsWith("local:") ? "local-folder" : "project",
-        }
+      ? (() => {
+          const kind = activeFolder.id.startsWith("local:") ? "local-folder" : "project"
+          const projectId = kind === "project" ? activeFolder.id.replace(/^project:/, "") : undefined
+          const registryId = projectId ? codexIdForProject(projectId) : activeFolder.id
+          return {
+            id: projectId || activeFolder.id,
+            projectId,
+            name: activeFolder.name,
+            kind,
+            isPinned: projectId
+              ? projects.find((project) => project.id === projectId)?.isStarred
+                ?? registry.find((entry) => entry.id === registryId)?.isPinned
+                ?? false
+              : registry.find((entry) => entry.id === registryId)?.isPinned === true,
+          }
+        })()
       : null
     const merged = current ? [current, ...cloud, ...local] : [...cloud, ...local]
-    return merged.filter((entry, index) => merged.findIndex((candidate) => candidate.id === entry.id) === index)
-  }, [activeFolder, projects])
+    return merged
+      .filter((entry, index) => merged.findIndex((candidate) => candidate.id === entry.id) === index)
+      .map((entry, index) => ({ entry, index }))
+      .sort((left, right) => Number(right.entry.isPinned) - Number(left.entry.isPinned) || left.index - right.index)
+      .map(({ entry }) => entry)
+  }, [activeFolder, companyRegistry, projects])
 
   const departmentRows = React.useMemo(() => {
     return allDepartments.map((department) => {
@@ -1331,6 +1389,7 @@ export function AgentCompanyPanel() {
   const selectCompany = React.useCallback(
     async (option: CompanyOption) => {
       setCompanyMenuOpen(false)
+      replaceCompanyWorkspaceUrl(option)
       await switchCodexWorkspace({
         id: option.kind === "project" && option.projectId ? codexIdForProject(option.projectId) : option.id,
         name: option.name,
@@ -1389,6 +1448,189 @@ export function AgentCompanyPanel() {
       setCreatingCompany(false)
     }
   }, [creatingCompany, ensureCompanyRuntime, newCompanyName, switchCodexWorkspace])
+
+  const toggleCompanyPin = React.useCallback(async (option: CompanyOption) => {
+    if (companyMutation) return
+    const nextPinned = !option.isPinned
+    setCompanyMutation(`pin:${option.id}`)
+    setCompanyMenuOpen(false)
+
+    if (option.projectId) {
+      setProjects((current) =>
+        current.map((project) =>
+          project.id === option.projectId ? { ...project, isStarred: nextPinned } : project,
+        ),
+      )
+    }
+
+    try {
+      if (option.projectId) {
+        const updated = await projectsService.update(option.projectId, { isStarred: nextPinned })
+        setProjects((current) =>
+          current.map((project) => project.id === updated.id ? { ...project, ...updated } : project),
+        )
+        const registryId = codexIdForProject(option.projectId)
+        const registryEntry = listCodexProjects().find((entry) => entry.id === registryId)
+        upsertCodexProject({
+          ...registryEntry,
+          id: registryId,
+          name: updated.name,
+          kind: "project",
+          isPinned: updated.isStarred,
+        })
+      } else {
+        const registryEntry = listCodexProjects().find((entry) => entry.id === option.id)
+        upsertCodexProject({
+          ...registryEntry,
+          id: option.id,
+          name: option.name,
+          kind: "local-folder",
+          isPinned: nextPinned,
+        })
+      }
+      window.dispatchEvent(new Event(CODEX_UPDATED_EVENT))
+      toast.success(nextPinned ? "Empresa fijada." : "Empresa desfijada.")
+    } catch (error) {
+      if (option.projectId) {
+        setProjects((current) =>
+          current.map((project) =>
+            project.id === option.projectId ? { ...project, isStarred: !nextPinned } : project,
+          ),
+        )
+      }
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar la empresa.")
+    } finally {
+      setCompanyMutation(null)
+    }
+  }, [companyMutation])
+
+  const openCompanyEditor = React.useCallback((option: CompanyOption) => {
+    setCompanyMenuOpen(false)
+    window.setTimeout(() => {
+      setEditingCompany(option)
+      setEditingCompanyName(option.name)
+    }, 0)
+  }, [])
+
+  const openCompanyDeletion = React.useCallback((option: CompanyOption) => {
+    setCompanyMenuOpen(false)
+    window.setTimeout(() => setDeletingCompany(option), 0)
+  }, [])
+
+  const saveCompanyName = React.useCallback(async () => {
+    const option = editingCompany
+    const name = editingCompanyName.trim()
+    if (!option || !name || companyMutation) return
+    if (name === option.name) {
+      setEditingCompany(null)
+      return
+    }
+
+    setCompanyMutation(`rename:${option.id}`)
+    try {
+      let nextName = name
+      if (option.projectId) {
+        const updated = await projectsService.update(option.projectId, { name })
+        nextName = updated.name
+        setProjects((current) =>
+          current.map((project) => project.id === updated.id ? { ...project, ...updated } : project),
+        )
+        const registryId = codexIdForProject(option.projectId)
+        const registryEntry = listCodexProjects().find((entry) => entry.id === registryId)
+        upsertCodexProject({
+          ...registryEntry,
+          id: registryId,
+          name: nextName,
+          kind: "project",
+          isPinned: updated.isStarred,
+        })
+      } else {
+        const registryEntry = listCodexProjects().find((entry) => entry.id === option.id)
+        upsertCodexProject({
+          ...registryEntry,
+          id: option.id,
+          name: nextName,
+          kind: "local-folder",
+          isPinned: option.isPinned,
+        })
+      }
+
+      const isCurrent = option.projectId
+        ? activeFolder?.id?.replace(/^project:/, "") === option.projectId
+        : activeFolder?.id === option.id
+      if (isCurrent) {
+        await switchCodexWorkspace({
+          id: option.projectId ? codexIdForProject(option.projectId) : option.id,
+          name: nextName,
+          kind: option.kind,
+          projectId: option.projectId,
+        })
+      }
+      window.dispatchEvent(new Event(CODEX_UPDATED_EVENT))
+      setEditingCompany(null)
+      toast.success("Nombre de la empresa actualizado.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo editar la empresa.")
+    } finally {
+      setCompanyMutation(null)
+    }
+  }, [
+    activeFolder?.id,
+    companyMutation,
+    editingCompany,
+    editingCompanyName,
+    switchCodexWorkspace,
+  ])
+
+  const deleteSelectedCompany = React.useCallback(async () => {
+    const option = deletingCompany
+    if (!option || companyMutation) return
+    setCompanyMutation(`delete:${option.id}`)
+
+    try {
+      if (option.projectId) {
+        await projectsService.remove(option.projectId)
+        setProjects((current) => current.filter((project) => project.id !== option.projectId))
+      }
+
+      const registryId = option.projectId ? codexIdForProject(option.projectId) : option.id
+      removeCodexProject(registryId)
+
+      const workspaceId = option.projectId || option.id
+      const isCurrent = activeFolder?.id?.replace(/^project:/, "") === workspaceId.replace(/^project:/, "")
+      const fallback = companyOptions.find((candidate) => candidate.id !== option.id)
+      if (isCurrent) replaceCompanyWorkspaceUrl(fallback || null)
+      forgetWorkspace(workspaceId)
+      if (isCurrent && fallback) {
+        await switchCodexWorkspace({
+          id: fallback.projectId ? codexIdForProject(fallback.projectId) : fallback.id,
+          name: fallback.name,
+          kind: fallback.kind,
+          projectId: fallback.projectId,
+        })
+      }
+
+      window.dispatchEvent(new Event(CODEX_UPDATED_EVENT))
+      setDeletingCompany(null)
+      setCompanyMenuOpen(false)
+      toast.success(
+        option.projectId
+          ? "Empresa movida a Papelera. Puedes restaurarla durante 30 días."
+          : "Empresa local quitada. No se eliminó ningún archivo del disco.",
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar la empresa.")
+    } finally {
+      setCompanyMutation(null)
+    }
+  }, [
+    activeFolder?.id,
+    companyMutation,
+    companyOptions,
+    deletingCompany,
+    forgetWorkspace,
+    switchCodexWorkspace,
+  ])
 
   const createDepartment = React.useCallback(async () => {
     const name = newDepartmentName.trim()
@@ -1735,30 +1977,85 @@ export function AgentCompanyPanel() {
                       currentProjectId && companyWorkspaceCandidates(option).some((candidate) => candidate.replace(/^project:/, "") === currentProjectId),
                     )
                     return (
-                      <button
+                      <div
                         key={`${option.kind}:${option.id}`}
-                        type="button"
-                        onClick={() => void selectCompany(option)}
+                        data-testid={`agent-company-row-${option.id}`}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-lg border px-3 py-3 text-left transition-colors",
+                          "flex w-full items-center rounded-lg border transition-colors",
                           isCurrent
                             ? "border-sky-200 bg-sky-50/80 dark:border-sky-900/70 dark:bg-sky-950/25"
                             : "border-border/55 bg-background/65 hover:bg-muted/45",
                         )}
                       >
-                        <span className="flex h-9 w-1 shrink-0 rounded-full bg-sky-300" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold">{agentCompanyDisplayName(option.name)}</span>
-                          <span className="mt-1 block truncate text-[11px] text-muted-foreground">
-                            {optionSnapshot.taskCount} tareas · {active} agentes activos
+                        <button
+                          type="button"
+                          onClick={() => void selectCompany(option)}
+                          className="flex min-w-0 flex-1 items-center gap-3 rounded-l-lg px-3 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                          aria-label={`Abrir empresa ${agentCompanyDisplayName(option.name)}`}
+                        >
+                          <span className="flex h-9 w-1 shrink-0 rounded-full bg-sky-300" />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <span className="truncate text-sm font-semibold">{agentCompanyDisplayName(option.name)}</span>
+                              {option.isPinned ? (
+                                <Pin
+                                  className="h-3.5 w-3.5 shrink-0 fill-sky-100 text-sky-600"
+                                  aria-label="Empresa fijada"
+                                  data-testid={`agent-company-pinned-${option.id}`}
+                                />
+                              ) : null}
+                            </span>
+                            <span className="mt-1 block truncate text-[11px] text-muted-foreground">
+                              {optionSnapshot.taskCount} tareas · {active} agentes activos
+                            </span>
                           </span>
-                        </span>
-                        <span className="min-w-[52px] text-right">
-                          <span className="block text-xl font-semibold tabular-nums">{active}</span>
-                          <span className="block text-[9px] uppercase text-muted-foreground">Activos</span>
-                        </span>
-                        {isCurrent ? <Check className="h-4 w-4 shrink-0 text-sky-600" /> : null}
-                      </button>
+                          <span className="min-w-[52px] text-right">
+                            <span className="block text-xl font-semibold tabular-nums">{active}</span>
+                            <span className="block text-[9px] uppercase text-muted-foreground">Activos</span>
+                          </span>
+                          {isCurrent ? <Check className="h-4 w-4 shrink-0 text-sky-600" /> : null}
+                        </button>
+
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="mr-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              aria-label={`Configurar ${agentCompanyDisplayName(option.name)}`}
+                              data-testid={`agent-company-actions-${option.id}`}
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" sideOffset={6} className="w-52 rounded-lg p-1.5">
+                            <DropdownMenuItem
+                              className="gap-2 rounded-md"
+                              disabled={Boolean(companyMutation)}
+                              onSelect={() => void toggleCompanyPin(option)}
+                            >
+                              {option.isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                              {option.isPinned ? "Desfijar empresa" : "Fijar empresa"}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="gap-2 rounded-md"
+                              disabled={Boolean(companyMutation)}
+                              onSelect={() => openCompanyEditor(option)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                              Editar nombre
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="gap-2 rounded-md text-destructive focus:bg-destructive/10 focus:text-destructive"
+                              disabled={Boolean(companyMutation)}
+                              onSelect={() => openCompanyDeletion(option)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Eliminar empresa
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     )
                   })
                 )}
@@ -1953,6 +2250,86 @@ export function AgentCompanyPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={Boolean(editingCompany)}
+        onOpenChange={(open) => {
+          if (!open && !companyMutation) setEditingCompany(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]" data-testid="agent-company-edit-dialog">
+          <DialogHeader>
+            <DialogTitle>Editar empresa</DialogTitle>
+            <DialogDescription>
+              Cambia el nombre visible de esta empresa y de su workspace asociado.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="agent-company-edit-name">Nombre de la empresa</Label>
+            <Input
+              id="agent-company-edit-name"
+              value={editingCompanyName}
+              onChange={(event) => setEditingCompanyName(event.target.value)}
+              maxLength={120}
+              autoComplete="organization"
+              autoFocus
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void saveCompanyName()
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEditingCompany(null)}
+              disabled={Boolean(companyMutation)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void saveCompanyName()}
+              disabled={!editingCompanyName.trim() || Boolean(companyMutation)}
+            >
+              {companyMutation?.startsWith("rename:") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Guardar cambios
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(deletingCompany)}
+        onOpenChange={(open) => {
+          if (!open && !companyMutation) setDeletingCompany(null)
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-[460px]" data-testid="agent-company-delete-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Eliminar empresa</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingCompany?.projectId
+                ? `"${agentCompanyDisplayName(deletingCompany.name)}" se moverá a Papelera. Podrás restaurarla durante 30 días y sus datos no se borrarán de inmediato.`
+                : `"${agentCompanyDisplayName(deletingCompany?.name)}" se quitará de este navegador. Los archivos de tu disco no se eliminarán.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(companyMutation)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={Boolean(companyMutation)}
+              onClick={() => void deleteSelectedCompany()}
+            >
+              {companyMutation?.startsWith("delete:") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Eliminar empresa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={associationWizardOpen} onOpenChange={setAssociationWizardOpen}>
         <DialogContent className="sm:max-w-[560px]" data-testid="company-association-wizard">
