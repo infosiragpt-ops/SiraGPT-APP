@@ -1,0 +1,20 @@
+{
+  "id": "task_flow_create",
+  "name": "Create durable task flow",
+  "version": "1.0.0",
+  "description": "Create an owner-scoped durable flow for multi-step background work that must survive restarts, waits, and later resumptions.",
+  "capabilities": ["agent:spawn"],
+  "timeoutMs": 5000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "goal": { "type": "string", "minLength": 1, "maxLength": 8000, "description": "The outcome this durable flow owns." },
+      "controllerId": { "type": "string", "maxLength": 200, "description": "Stable SiraGPT controller identifier." },
+      "currentStep": { "type": "string", "maxLength": 200, "description": "Initial workflow step." },
+      "stateJson": { "type": "object", "description": "Minimal JSON state needed to resume the flow." },
+      "chatId": { "type": "string", "maxLength": 160, "description": "Owning chat; defaults to the current chat." }
+    },
+    "required": ["goal"],
+    "additionalProperties": false
+  }
+}

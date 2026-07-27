@@ -41,6 +41,35 @@ test('paraphrase pipeline accepts rewritten output', async () => {
   assert.ok(result.output.length > 0);
 });
 
+test('paraphrase pipeline forwards mode, language, and custom instruction to both rewrite passes', async () => {
+  const calls = [];
+  await runParaphrasePipeline({
+    source: 'Texto original para transformar.',
+    mode: 'custom',
+    language: 'pt',
+    customInstruction: 'Use frases curtas.',
+    rewriteFn: async (input) => {
+      calls.push(input);
+      return input.pass === 1
+        ? 'Primeira versão com palavras diferentes.'
+        : 'Resultado final breve e inteiramente reformulado.';
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(
+    calls.map(({ pass, mode, language, customInstruction }) => ({
+      pass,
+      mode,
+      language,
+      customInstruction,
+    })),
+    [
+      { pass: 1, mode: 'custom', language: 'pt', customInstruction: 'Use frases curtas.' },
+      { pass: 2, mode: 'custom', language: 'pt', customInstruction: 'Use frases curtas.' },
+    ],
+  );
+});
+
 test('MODE_SIMILARITY_CEILINGS: humanize/creative are stricter than standard', () => {
   assert.ok(MODE_SIMILARITY_CEILINGS.humanize < MODE_SIMILARITY_CEILINGS.standard);
   assert.ok(MODE_SIMILARITY_CEILINGS.creative < MODE_SIMILARITY_CEILINGS.standard);

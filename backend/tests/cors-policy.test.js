@@ -7,13 +7,16 @@
 
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
+const cors = require("cors");
+const express = require("express");
+const request = require("supertest");
 
 const {
+  createCredentialedCorsOptions,
   resolveAllowedOrigins,
   makeOriginCallback,
   validateAllowedOrigins,
   DEV_FALLBACK,
-  PROD_FALLBACK,
 } = require("../src/middleware/cors-policy");
 
 describe("resolveAllowedOrigins", () => {
@@ -32,23 +35,15 @@ describe("resolveAllowedOrigins", () => {
     assert.notEqual(result, DEV_FALLBACK, "must be a copy, not a reference");
   });
 
-  test("returns the prod fallback origins when CORS_ORIGINS is empty in production (with WARN)", () => {
-    const originalWarn = console.warn;
-    const warnings = [];
-    console.warn = (...args) => warnings.push(args.join(" "));
-    try {
-      const result = resolveAllowedOrigins({ NODE_ENV: "production" });
-      // PROD_FALLBACK was introduced cycle 9; the previous fail-closed
-      // behaviour is replaced by safe-default origins + a loud WARN.
-      assert.deepEqual(result, PROD_FALLBACK);
-      assert.ok(result.some((o) => o.startsWith("https://siragpt")));
-      assert.equal(result.some((o) => o.startsWith("http://localhost")), false);
-      assert.equal(result.some((o) => o.startsWith("http://127.0.0.1")), false);
-      assert.equal(result.every((o) => o.startsWith("https://")), true);
-      assert.ok(warnings.some((line) => line.includes("CORS_ORIGINS env var is unset")));
-    } finally {
-      console.warn = originalWarn;
-    }
+  test("fails closed when CORS_ORIGINS is empty in production", () => {
+    assert.throws(
+      () => resolveAllowedOrigins({ NODE_ENV: "production" }),
+      (error) => {
+        assert.equal(error.code, "CORS_ORIGINS_REQUIRED");
+        assert.doesNotMatch(error.message, /\.io|https?:\/\//i);
+        return true;
+      },
+    );
   });
 
   test("respects CORS_ORIGINS in production", () => {
@@ -57,6 +52,27 @@ describe("resolveAllowedOrigins", () => {
       CORS_ORIGINS: "https://app.example.com",
     });
     assert.deepEqual(result, ["https://app.example.com"]);
+  });
+
+  test("rejects credentialed wildcard origins in production", () => {
+    assert.throws(
+      () => resolveAllowedOrigins({ NODE_ENV: "production", CORS_ORIGINS: "*" }),
+      (error) => {
+        assert.equal(error.code, "CORS_WILDCARD_CREDENTIALS_FORBIDDEN");
+        assert.doesNotMatch(error.message, /https?:\/\//);
+        return true;
+      },
+    );
+  });
+
+  test("rejects the prod alias rather than applying a partial environment policy", () => {
+    assert.throws(
+      () => resolveAllowedOrigins({
+        NODE_ENV: "prod",
+        CORS_ORIGINS: "https://siragpt.com",
+      }),
+      (error) => error.code === "NODE_ENV_INVALID_ALIAS",
+    );
   });
 
   test("ignores empty / whitespace-only entries", () => {
@@ -69,19 +85,19 @@ describe("resolveAllowedOrigins", () => {
   test("merges CODEX_PREVIEW_ORIGIN so generated apps' module fetches pass CORS", () => {
     // A codex preview app fetches @vite/client / main.tsx with Origin equal to
     // the preview origin; without this the strict callback 500s and the app
-    // stays blank. Present with an explicit list AND with the prod fallback,
-    // trailing slash trimmed.
+    // stays blank. The explicit allowlist remains mandatory in production.
     const withList = resolveAllowedOrigins({
       CORS_ORIGINS: "https://app.example.com",
       CODEX_PREVIEW_ORIGIN: "https://preview.example.com/",
     });
     assert.ok(withList.includes("https://preview.example.com"));
 
-    const withFallback = resolveAllowedOrigins({
+    const inProduction = resolveAllowedOrigins({
       NODE_ENV: "production",
+      CORS_ORIGINS: "https://siragpt.com",
       CODEX_PREVIEW_ORIGIN: "https://preview.example.com",
     });
-    assert.ok(withFallback.includes("https://preview.example.com"));
+    assert.ok(inProduction.includes("https://preview.example.com"));
 
     // A non-https value is ignored (never widens the allowlist).
     const ignored = resolveAllowedOrigins({
@@ -146,6 +162,30 @@ describe("validateAllowedOrigins", () => {
       () => resolveAllowedOrigins({ CORS_ORIGINS: "https://ok.com, garbage" }),
       /Invalid CORS_ORIGINS entry "garbage"/
     );
+  });
+});
+
+describe("credentialed browser contract", () => {
+  test("reflects only an exact trusted origin and emits credential headers", async () => {
+    const app = express();
+    app.use(cors(createCredentialedCorsOptions(["https://siragpt.com"])));
+    app.options("/mutation", (_req, res) => res.sendStatus(204));
+    app.use((_error, _req, res, _next) => res.sendStatus(403));
+
+    const trusted = await request(app)
+      .options("/mutation")
+      .set("Origin", "https://siragpt.com")
+      .set("Access-Control-Request-Method", "POST");
+    assert.equal(trusted.headers["access-control-allow-origin"], "https://siragpt.com");
+    assert.equal(trusted.headers["access-control-allow-credentials"], "true");
+    assert.notEqual(trusted.headers["access-control-allow-origin"], "*");
+
+    const untrusted = await request(app)
+      .options("/mutation")
+      .set("Origin", "https://evil.example")
+      .set("Access-Control-Request-Method", "POST");
+    assert.equal(untrusted.headers["access-control-allow-origin"], undefined);
+    assert.equal(untrusted.headers["access-control-allow-credentials"], undefined);
   });
 });
 

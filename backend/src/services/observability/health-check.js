@@ -32,31 +32,130 @@
  */
 
 const PROCESS_BOOT_AT = Date.now();
+const {
+  MIGRATIONS_OPERATION,
+  coalescePrismaHealthOperation,
+  runCoalescedDatabasePing,
+} = require('../../health/db-operation-coalescer');
+const {
+  sanitizeDatabaseErrorMessage,
+} = require('../../config/database-url');
+const DEFAULT_HEALTH_DB_TIMEOUT_MS = 1500;
+const MIN_HEALTH_DB_TIMEOUT_MS = 100;
+const MAX_HEALTH_DB_TIMEOUT_MS = 10_000;
+const DEFAULT_HEALTH_REDIS_TIMEOUT_MS = 1000;
+const MIN_HEALTH_REDIS_TIMEOUT_MS = 100;
+const MAX_HEALTH_REDIS_TIMEOUT_MS = 10_000;
+const DATABASE_HEALTH_ERROR_CODES = Object.freeze({
+  databaseFailed: 'DATABASE_PROBE_FAILED',
+  databaseTimeout: 'DATABASE_PROBE_TIMEOUT',
+  migrationsFailed: 'MIGRATIONS_FAILED',
+  migrationsProbeFailed: 'MIGRATIONS_PROBE_FAILED',
+  migrationsProbeTimeout: 'MIGRATIONS_PROBE_TIMEOUT',
+});
+const REDIS_HEALTH_ERROR_CODES = Object.freeze({
+  redisFailed: 'REDIS_PROBE_FAILED',
+  redisTimeout: 'REDIS_PROBE_TIMEOUT',
+  unexpectedReply: 'REDIS_PROBE_UNEXPECTED_REPLY',
+});
+
+function resolveHealthDbTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(env?.HEALTH_DB_TIMEOUT_MS, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_HEALTH_DB_TIMEOUT_MS;
+  return Math.min(MAX_HEALTH_DB_TIMEOUT_MS, Math.max(MIN_HEALTH_DB_TIMEOUT_MS, parsed));
+}
+
+function resolveHealthRedisTimeoutMs(env = process.env) {
+  const parsed = Number.parseInt(env?.HEALTH_REDIS_TIMEOUT_MS, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_HEALTH_REDIS_TIMEOUT_MS;
+  return Math.min(
+    MAX_HEALTH_REDIS_TIMEOUT_MS,
+    Math.max(MIN_HEALTH_REDIS_TIMEOUT_MS, parsed),
+  );
+}
+
+function runDbOperationWithTimeout(operation, { timeoutMs, label }) {
+  let timer;
+  const operationPromise = Promise.resolve().then(operation);
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label} probe timed out after ${timeoutMs}ms`);
+      error.code = "HEALTH_DB_TIMEOUT";
+      reject(error);
+    }, timeoutMs);
+  });
+
+  // Promise.race installs a rejection handler on operationPromise immediately,
+  // so a Prisma call that rejects after the timeout cannot become unhandled.
+  return Promise.race([operationPromise, timeoutPromise])
+    .finally(() => clearTimeout(timer));
+}
+
+function runRedisOperationWithTimeout(operation, timeoutMs) {
+  let timer;
+  const operationPromise = Promise.resolve().then(operation);
+  // Retain an explicit rejection sink in addition to Promise.race's handler:
+  // a ping that rejects after the deadline must never emit unhandledRejection.
+  operationPromise.catch(() => undefined);
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`Redis probe timed out after ${timeoutMs}ms`);
+      error.code = 'HEALTH_REDIS_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+
+  return Promise.race([operationPromise, timeoutPromise])
+    .finally(() => clearTimeout(timer));
+}
+
+function publicDatabaseProbeErrorCode(error, probe, env) {
+  // Classify only after the central sanitizer has removed configured and
+  // inline datasource URLs. The sanitized message is intentionally kept
+  // internal; public health responses expose a stable value-free code.
+  const safeMessage = sanitizeDatabaseErrorMessage(
+    error?.message || error || 'unknown database error',
+    env,
+  );
+  const timedOut = error?.code === 'HEALTH_DB_TIMEOUT'
+    || /\bprobe timed out\b/i.test(safeMessage);
+  if (probe === 'migrations') {
+    return timedOut
+      ? DATABASE_HEALTH_ERROR_CODES.migrationsProbeTimeout
+      : DATABASE_HEALTH_ERROR_CODES.migrationsProbeFailed;
+  }
+  return timedOut
+    ? DATABASE_HEALTH_ERROR_CODES.databaseTimeout
+    : DATABASE_HEALTH_ERROR_CODES.databaseFailed;
+}
 
 // ── Individual probes ──────────────────────────────────────────────
 
-async function checkDatabase(prisma) {
+async function checkDatabase(prisma, env = process.env) {
   if (!prisma || typeof prisma.$queryRawUnsafe !== "function") {
     return { name: "database", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_prisma_client_provided" } };
   }
   const start = Date.now();
   try {
     // `SELECT 1` is the cheapest possible round-trip; covers TCP +
-    // auth + a real query path. Timeout is enforced by the deps' own
-    // pool config — health-check itself doesn't race a timer because
-    // a slow DB IS the signal we want surfaced.
-    await prisma.$queryRawUnsafe("SELECT 1");
+    // auth + a real query path. Bound the operation independently of
+    // Prisma's pool timeout so readiness itself always responds.
+    const timeoutMs = resolveHealthDbTimeoutMs(env);
+    await runDbOperationWithTimeout(
+      () => runCoalescedDatabasePing(prisma),
+      { timeoutMs, label: "database" },
+    );
     return { name: "database", status: "healthy", critical: true, latency_ms: Date.now() - start };
   } catch (err) {
     return {
       name: "database", status: "unhealthy", critical: true,
       latency_ms: Date.now() - start,
-      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+      error: publicDatabaseProbeErrorCode(err, "database", env),
     };
   }
 }
 
-async function checkMigrations(prisma) {
+async function checkMigrations(prisma, env = process.env) {
   if (!prisma || typeof prisma.$queryRawUnsafe !== "function") {
     return { name: "migrations", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_prisma_client_provided" } };
   }
@@ -69,16 +168,24 @@ async function checkMigrations(prisma) {
     // stuck, not an in-flight migration. Surfacing it as a critical readiness
     // failure lets the load balancer drain a broken instance instead of routing
     // traffic into 500s.
-    const rows = await prisma.$queryRawUnsafe(
-      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+    const timeoutMs = resolveHealthDbTimeoutMs(env);
+    const rows = await runDbOperationWithTimeout(
+      () => coalescePrismaHealthOperation(
+        prisma,
+        MIGRATIONS_OPERATION,
+        () => prisma.$queryRawUnsafe(
+          'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+        ),
+      ),
+      { timeoutMs, label: "migrations" },
     );
     const failed = Array.isArray(rows) ? rows.map((r) => r && r.migration_name).filter(Boolean) : [];
     if (failed.length > 0) {
       return {
         name: "migrations", status: "unhealthy", critical: true,
         latency_ms: Date.now() - start,
-        details: { failed_count: failed.length, failed: failed.slice(0, 20) },
-        error: "failed migration(s) present (P3009)",
+        details: { failed_count: failed.length },
+        error: DATABASE_HEALTH_ERROR_CODES.migrationsFailed,
       };
     }
     return { name: "migrations", status: "healthy", critical: true, latency_ms: Date.now() - start, details: { failed_count: 0 } };
@@ -90,18 +197,19 @@ async function checkMigrations(prisma) {
       name: "migrations", status: "skipped", critical: false,
       latency_ms: Date.now() - start,
       details: { reason: "migrations_table_unreadable" },
-      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+      error: publicDatabaseProbeErrorCode(err, "migrations", env),
     };
   }
 }
 
-async function checkRedis(redis) {
+async function checkRedis(redis, env = process.env) {
   if (!redis || typeof redis.ping !== "function") {
     return { name: "redis", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_redis_client_provided" } };
   }
   const start = Date.now();
   try {
-    const reply = await redis.ping();
+    const timeoutMs = resolveHealthRedisTimeoutMs(env);
+    const reply = await runRedisOperationWithTimeout(() => redis.ping(), timeoutMs);
     const ok = reply === "PONG" || reply === true;
     return {
       name: "redis",
@@ -111,22 +219,86 @@ async function checkRedis(redis) {
       critical: true,
       latency_ms: Date.now() - start,
       details: { reply: String(reply).slice(0, 32) },
+      ...(ok ? {} : { error: REDIS_HEALTH_ERROR_CODES.unexpectedReply }),
     };
   } catch (err) {
     return {
       name: "redis", status: "unhealthy", critical: true,
       latency_ms: Date.now() - start,
-      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+      error: err?.code === 'HEALTH_REDIS_TIMEOUT'
+        ? REDIS_HEALTH_ERROR_CODES.redisTimeout
+        : REDIS_HEALTH_ERROR_CODES.redisFailed,
     };
   }
 }
 
 async function checkQueue(queue) {
-  if (!queue || typeof queue.getJobCounts !== "function") {
+  if (!queue) {
     // A degraded queue is still serviceable for synchronous chat;
     // mark non-critical so a stalled queue doesn't 503 the whole API.
     return { name: "queue", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_queue_provided" } };
   }
+
+  const registryProbe = typeof queue === "function"
+    ? queue
+    : (typeof queue.probe === "function" ? () => queue.probe() : null);
+  if (registryProbe) {
+    const start = Date.now();
+    try {
+      const snapshot = await registryProbe();
+      const queues = Array.isArray(snapshot?.queues) ? snapshot.queues : [];
+      const statusBySnapshot = {
+        ready: "healthy",
+        disabled: "skipped",
+        skipped: "skipped",
+        degraded: "degraded",
+        unhealthy: "unhealthy",
+      };
+      const criticalFailures = queues.filter(
+        (item) => item?.critical && item?.status === "unhealthy"
+      ).length;
+      let status = statusBySnapshot[snapshot?.status] || "degraded";
+      if (status === "unhealthy" && criticalFailures === 0) status = "degraded";
+      const details = {
+        status: snapshot?.status || "degraded",
+        total: queues.length,
+        ready: queues.filter((item) => item?.status === "ready").length,
+        degraded: queues.filter((item) => item?.status === "degraded").length,
+        unhealthy: queues.filter((item) => item?.status === "unhealthy").length,
+        skipped: queues.filter((item) => item?.status === "skipped").length,
+        criticalFailures,
+      };
+      return {
+        name: "queue",
+        status,
+        critical: criticalFailures > 0,
+        latency_ms: Date.now() - start,
+        details,
+      };
+    } catch {
+      // The shared registry catches individual queue errors. Reaching this
+      // branch means the aggregate probe itself failed, so criticality is
+      // unknown and must not drain an otherwise-serving instance.
+      return {
+        name: "queue", status: "degraded", critical: false,
+        latency_ms: Date.now() - start,
+        details: {
+          status: "degraded",
+          total: 0,
+          ready: 0,
+          degraded: 0,
+          unhealthy: 0,
+          skipped: 0,
+          criticalFailures: 0,
+        },
+      };
+    }
+  }
+
+  if (typeof queue.getJobCounts !== "function") {
+    return { name: "queue", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_queue_provided" } };
+  }
+
   const start = Date.now();
   try {
     const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
@@ -162,6 +334,104 @@ function checkProcess() {
   };
 }
 
+function finiteNonNegative(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function readPoolAutoscalerState(source) {
+  try {
+    if (typeof source === "function") return source() || null;
+    if (source && typeof source.getState === "function") return source.getState() || null;
+    return source && typeof source === "object" ? source : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Non-critical operational view of the shared Prisma pool. The instrumentation
+ * snapshot remains the source of truth for the live limit; autoscaler state is
+ * selected down to safe advisory fields so history and arbitrary errors do not
+ * leak through the public health response.
+ */
+function checkDatabasePool(poolMetrics, getPoolAutoscalerState) {
+  if (!poolMetrics || typeof poolMetrics.snapshot !== "function") {
+    return {
+      name: "database_pool",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_pool_instrumentation" },
+    };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const snapshot = poolMetrics.snapshot();
+    if (snapshot?.capacity?.observable === false) {
+      return {
+        name: "database_pool",
+        status: "skipped",
+        critical: false,
+        latency_ms: Date.now() - startedAt,
+        details: {
+          capacity: {
+            observable: false,
+            reason: snapshot.capacity.reason || "pool_capacity_unobservable",
+          },
+          reason: "pool_capacity_unobservable",
+        },
+      };
+    }
+    const state = readPoolAutoscalerState(getPoolAutoscalerState);
+    const actualLimit = finiteNonNegative(snapshot?.pool?.max, 0);
+    const stats = state?.stats || {};
+    const recommendation = {
+      enabled: Boolean(state),
+      running: Boolean(state?.running),
+      mode: "advisory",
+      currentLimit: actualLimit,
+      recommendedLimit: finiteNonNegative(state?.recommendedLimit, actualLimit),
+      lastRecommendation: typeof state?.lastRecommendation === "string"
+        ? state.lastRecommendation
+        : "hold",
+      lastRecommendationAt: state?.lastRecommendationAt ?? null,
+      stats: {
+        ticks: finiteNonNegative(stats.ticks, 0),
+        recommendations: finiteNonNegative(stats.recommendations, 0),
+        applyErrors: finiteNonNegative(stats.applyErrors, 0),
+      },
+    };
+
+    let status = "healthy";
+    // These are configured-limit estimates, not native Prisma pool counters.
+    // Both warning and critical estimates degrade the composite monotonically;
+    // estimated pressure alone must never trigger a readiness 503.
+    if (
+      snapshot?.estimated_saturation === "critical"
+      || snapshot?.estimated_saturation === "warn"
+    ) {
+      status = "degraded";
+    }
+    return {
+      name: "database_pool",
+      status,
+      critical: false,
+      latency_ms: Date.now() - startedAt,
+      details: { snapshot, recommendation },
+    };
+  } catch {
+    return {
+      name: "database_pool",
+      status: "degraded",
+      critical: false,
+      latency_ms: Date.now() - startedAt,
+      details: { reason: "pool_snapshot_unavailable" },
+    };
+  }
+}
+
 function checkModelProvidersConfigured(env = process.env) {
   // Informational only — environment configuration is an ops concern,
   // not a runtime invariant. Surfaces *which* providers are reachable
@@ -181,6 +451,63 @@ function checkModelProvidersConfigured(env = process.env) {
     latency_ms: 0,
     details: { providers, configured_count: configured },
   };
+}
+
+/**
+ * Report whether user-registered external MCP endpoints can be authorized.
+ *
+ * Host patterns are deliberately reduced to a count and stable error codes:
+ * health responses must never disclose private integration hostnames.
+ */
+function checkMcpPolicyConfiguration(env = process.env) {
+  const start = Date.now();
+  try {
+    const {
+      resolveMcpPolicyConfig,
+    } = require('../agent-harness/mcp-policy');
+    const config = resolveMcpPolicyConfig(env);
+    const errorCodes = config.errors
+      .map((entry) => entry?.code)
+      .filter((code) => typeof code === 'string');
+    const denyAll = Boolean(
+      config.production
+      && config.denyAll
+      && errorCodes.length === 1
+      && errorCodes[0] === 'MCP_ALLOWED_HOSTS_REQUIRED',
+    );
+    return {
+      name: 'mcp_policy',
+      status: config.valid ? 'healthy' : (denyAll ? 'degraded' : (config.production ? 'unhealthy' : 'degraded')),
+      critical: config.production && !denyAll,
+      latency_ms: Date.now() - start,
+      details: {
+        configured: config.configured,
+        deny_all: denyAll,
+        allowed_host_count: config.allowedHostCount,
+        https_required: config.production,
+        http_loopback_enabled: config.allowHttpLoopback,
+        error_codes: errorCodes,
+      },
+      ...(errorCodes.length ? { error: 'MCP_POLICY_CONFIGURATION_INVALID' } : {}),
+    };
+  } catch {
+    const production = env?.NODE_ENV === 'production';
+    return {
+      name: 'mcp_policy',
+      status: production ? 'unhealthy' : 'degraded',
+      critical: production,
+      latency_ms: Date.now() - start,
+      details: {
+        configured: false,
+          deny_all: production,
+        allowed_host_count: 0,
+        https_required: production,
+        http_loopback_enabled: false,
+        error_codes: ['MCP_POLICY_VALIDATION_UNAVAILABLE'],
+      },
+      error: 'MCP_POLICY_VALIDATION_UNAVAILABLE',
+    };
+  }
 }
 
 function resolveOptionalIntegrationHealth(details) {
@@ -400,12 +727,19 @@ function checkGoogleOAuth(oauthResult) {
     };
   }
 
-  const checked = Boolean(oauthResult.checked);
+  const google = oauthResult.providers?.google;
+  const checked = google
+    ? Boolean(google.configured)
+    : Boolean(oauthResult.checked);
   const mismatch = Boolean(oauthResult.mismatch);
-  const issues = Array.isArray(oauthResult.issues) ? oauthResult.issues : [];
+  const issues = google && Array.isArray(google.reasons)
+    ? google.reasons
+    : (Array.isArray(oauthResult.issues) ? oauthResult.issues : []);
 
   let status;
-  if (!checked) status = "skipped";
+  if (google?.status === "healthy") status = "healthy";
+  else if (google?.status === "degraded") status = "degraded";
+  else if (!checked || google?.status === "disabled") status = "skipped";
   else if (issues.length > 0) status = "degraded";
   else status = "healthy";
 
@@ -415,6 +749,34 @@ function checkGoogleOAuth(oauthResult) {
     critical: false,
     latency_ms: 0,
     details: { checked, mismatch, issues },
+  };
+}
+
+function checkOAuthProviders(oauthResult) {
+  const providers = oauthResult?.providers;
+  if (!providers || typeof providers !== "object" || Object.keys(providers).length === 0) {
+    return {
+      name: "oauth_providers",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_provider_classification", providers: {} },
+    };
+  }
+
+  const statuses = Object.values(providers)
+    .map((provider) => provider?.status)
+    .filter(Boolean);
+  let status = "skipped";
+  if (statuses.includes("degraded")) status = "degraded";
+  else if (statuses.includes("healthy")) status = "healthy";
+
+  return {
+    name: "oauth_providers",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { providers },
   };
 }
 
@@ -464,6 +826,40 @@ function checkStartupEnvironment(startupEnvResult) {
   };
 }
 
+function checkRbacBootstrap(rbacStatus) {
+  if (!rbacStatus || typeof rbacStatus !== "object") {
+    return {
+      name: "rbac_bootstrap",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: {
+        state: "not_started",
+        ready: false,
+        mode: null,
+        errorCode: null,
+      },
+    };
+  }
+
+  const mode = rbacStatus.mode === "enforce" ? "enforce" : "shadow";
+  const ready = rbacStatus.ready === true;
+  const details = {
+    state: typeof rbacStatus.state === "string" ? rbacStatus.state : "unknown",
+    ready,
+    mode,
+    errorCode: typeof rbacStatus.errorCode === "string" ? rbacStatus.errorCode : null,
+  };
+  return {
+    name: "rbac_bootstrap",
+    status: ready ? "healthy" : (mode === "enforce" ? "unhealthy" : "degraded"),
+    critical: mode === "enforce",
+    latency_ms: 0,
+    details,
+    ...(details.errorCode ? { error: details.errorCode } : {}),
+  };
+}
+
 function checkCoworkSubsystem(coworkHealth) {
   if (!coworkHealth || typeof coworkHealth.runLivenessCheck !== "function") {
     return { name: "cowork", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_cowork_health_module" } };
@@ -497,26 +893,50 @@ function runLivenessCheck() {
   };
 }
 
-async function runReadinessCheck({ prisma, redis, queue } = {}) {
+async function runReadinessCheck({ prisma, redis, queue, rbac, env = process.env } = {}) {
   const checks = await Promise.all([
-    checkDatabase(prisma),
-    checkMigrations(prisma),
-    checkRedis(redis),
+    checkDatabase(prisma, env),
+    checkMigrations(prisma, env),
+    checkRedis(redis, env),
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
-  return composeStatus(checks);
+  let rbacCheck = null;
+  if (rbac !== undefined) {
+    rbacCheck = checkRbacBootstrap(rbac);
+    checks.push(rbacCheck);
+  }
+  const report = composeStatus(checks);
+  if (rbacCheck) report.rbac = rbacCheck.details;
+  return report;
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv, env = process.env } = {}) {
+async function runFullHealthCheck({
+  prisma,
+  redis,
+  queue,
+  telemetry,
+  sentry,
+  langfuse,
+  posthog,
+  circuitBreakers,
+  coworkHealth,
+  googleOAuth,
+  startupEnv,
+  rbac,
+  poolMetrics,
+  getPoolAutoscalerState,
+  env = process.env,
+} = {}) {
   const checks = await Promise.all([
-    checkDatabase(prisma),
-    checkMigrations(prisma),
-    checkRedis(redis),
+    checkDatabase(prisma, env),
+    checkMigrations(prisma, env),
+    checkRedis(redis, env),
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
   checks.push(checkModelProvidersConfigured(env));
+  checks.push(checkMcpPolicyConfiguration(env));
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));
   checks.push(checkLangfuse(langfuse));
@@ -528,12 +948,20 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   checks.push(checkR2Storage(env));
   checks.push(checkPlaywright());
 
+  let databasePoolCheck = null;
+  if (poolMetrics) {
+    databasePoolCheck = checkDatabasePool(poolMetrics, getPoolAutoscalerState);
+    checks.push(databasePoolCheck);
+  }
+
   // OAuth boot-config health: pushed into the checks array so a stale
   // misconfiguration drives the composite status to `degraded`, and also
   // mirrored under a top-level `googleOAuth` key so monitoring probes can
   // read `{ checked, mismatch, issues }` directly without scanning checks.
   const googleOAuthCheck = checkGoogleOAuth(googleOAuth);
   checks.push(googleOAuthCheck);
+  const oauthProvidersCheck = checkOAuthProviders(googleOAuth);
+  checks.push(oauthProvidersCheck);
 
   // Startup environment health: pushed into the checks array so lingering
   // config issues drive the composite status to `degraded`, and also mirrored
@@ -542,9 +970,18 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   const startupEnvCheck = checkStartupEnvironment(startupEnv);
   checks.push(startupEnvCheck);
 
+  let rbacCheck = null;
+  if (rbac !== undefined) {
+    rbacCheck = checkRbacBootstrap(rbac);
+    checks.push(rbacCheck);
+  }
+
   const report = composeStatus(checks);
   report.googleOAuth = googleOAuthCheck.details;
+  report.oauthProviders = oauthProvidersCheck.details.providers;
   report.startupEnv = startupEnvCheck.details;
+  if (rbacCheck) report.rbac = rbacCheck.details;
+  if (databasePoolCheck) report.databasePool = databasePoolCheck.details;
   return report;
 }
 
@@ -577,19 +1014,33 @@ function reportToHttpStatus(report) {
 
 module.exports = {
   PROCESS_BOOT_AT,
+  DEFAULT_HEALTH_DB_TIMEOUT_MS,
+  MIN_HEALTH_DB_TIMEOUT_MS,
+  MAX_HEALTH_DB_TIMEOUT_MS,
+  DEFAULT_HEALTH_REDIS_TIMEOUT_MS,
+  MIN_HEALTH_REDIS_TIMEOUT_MS,
+  MAX_HEALTH_REDIS_TIMEOUT_MS,
+  DATABASE_HEALTH_ERROR_CODES,
+  REDIS_HEALTH_ERROR_CODES,
+  resolveHealthDbTimeoutMs,
+  resolveHealthRedisTimeoutMs,
   checkDatabase,
   checkMigrations,
   checkRedis,
   checkQueue,
   checkProcess,
+  checkDatabasePool,
   checkModelProvidersConfigured,
+  checkMcpPolicyConfiguration,
   checkOpenTelemetry,
   checkSentry,
   checkLangfuse,
   checkPostHog,
   checkCircuitBreakers,
   checkGoogleOAuth,
+  checkOAuthProviders,
   checkStartupEnvironment,
+  checkRbacBootstrap,
   checkCoworkSubsystem,
   checkR2Storage,
   checkPlaywright,

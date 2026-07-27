@@ -7,15 +7,18 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const FormData = require('form-data');
-const { PrismaClient } = require('@prisma/client');
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
 const {
   contentDispositionHeader,
   resolveConfinedFile,
 } = require('../middleware/file-response-safety');
+const {
+  generateOfficeSoundscape,
+  officeSoundDefinition,
+} = require('../services/ai/elevenlabs-office-soundscape');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 const uploadRoot = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
   : path.resolve(__dirname, '../../uploads');
@@ -121,6 +124,52 @@ router.get('/models', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching models:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Curated office ambience. The browser can only request these fixed sound IDs;
+// prompts and provider credentials remain server-side. Each result is generated
+// once, written atomically, and reused by every later office session.
+router.post('/office-soundscapes/:soundId', authenticateToken, async (req, res) => {
+  const soundId = String(req.params.soundId || '').trim();
+  if (!officeSoundDefinition(soundId)) {
+    return res.status(404).json({ error: 'Office sound not found' });
+  }
+
+  try {
+    const sound = await generateOfficeSoundscape({
+      soundId,
+      outputDir: audioDir,
+    });
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.status(sound.generated ? 201 : 200).json({
+      ok: true,
+      soundId: sound.soundId,
+      audio_url: sound.audioUrl,
+      filename: sound.filename,
+      cached: sound.cached,
+      loop: sound.loop,
+      durationSeconds: sound.durationSeconds,
+      provider: 'elevenlabs',
+      version: sound.version,
+      fallback: sound.fallback,
+    });
+  } catch (error) {
+    if (error?.code === 'ELEVENLABS_NOT_CONFIGURED') {
+      return res.status(503).json({ error: 'Office sound provider is not configured' });
+    }
+    if (error?.code === 'INSUFFICIENT_CREDITS') {
+      return res.status(402).json({ error: 'Office sound provider has insufficient credits' });
+    }
+    if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+      return res.status(504).json({ error: 'Office sound generation timed out' });
+    }
+    console.error('Office sound generation error:', {
+      soundId,
+      code: error?.code || 'UNKNOWN',
+      status: Number(error?.status) || null,
+    });
+    return res.status(502).json({ error: 'Office sound generation failed' });
   }
 });
 

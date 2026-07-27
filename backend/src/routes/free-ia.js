@@ -15,11 +15,12 @@
  *                                       503 when not configured OR when
  *                                       >=10 upstream samples show
  *                                       <50% success.
- *   GET  /api/free-ia/metrics         — full JSON snapshot for dashboards
+ *   GET  /api/free-ia/metrics         — redacted JSON summary for dashboards
  *                                       (fallbacks, upstream, timestamps).
  *   GET  /api/free-ia/metrics/summary — one-line digest + degraded flag,
  *                                       for status badges.
- *   GET  /api/free-ia/metrics.prom    — Prometheus text exposition.
+ *   GET  /api/free-ia/metrics.prom    — protected alias of the unified
+ *                                       Prometheus text exposition.
  *   POST /api/free-ia/metrics/reset   — admin-only counter reset, returns
  *                                       the pre-reset snapshot as audit
  *                                       trail.
@@ -32,7 +33,8 @@
  *   3. Surface the brand name when the LLM gateway falls back.
  *   4. Show a degraded-mode badge when /health flips to 503.
  *
- * Security: API key and base URL never appear in any response.
+ * Security: API key and base URL never appear in any response. Prometheus
+ * exposition uses the shared operational metrics access policy.
  */
 
 const express = require('express');
@@ -49,6 +51,9 @@ const {
   PROVIDER_NAME,
 } = require('../services/ai/cerebras-client');
 const freeIaMetrics = require('../services/free-ia-metrics');
+const {
+  metricsHandler,
+} = require('../services/observability/metrics-exposition');
 const fce = require('../services/feature-cost-estimator');
 const { userQuotaDigest } = require('../services/model-quota-router');
 const prisma = require('../config/database');
@@ -97,10 +102,10 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/brand',            auth: 'public', returns: 'brand constants' },
   { method: 'GET',  path: '/api/free-ia/health',           auth: 'public', returns: '200 OK / 503 degraded' },
   { method: 'GET',  path: '/api/free-ia/info',             auth: 'public', returns: 'consolidated view' },
-  { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
+  { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'redacted JSON summary' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },
   { method: 'GET',  path: '/api/free-ia/metrics/badge',    auth: 'public', returns: '{ fallbacks, healthy } or 204' },
-  { method: 'GET',  path: '/api/free-ia/metrics.prom',     auth: 'public', returns: 'Prometheus text exposition' },
+  { method: 'GET',  path: '/api/free-ia/metrics.prom',     auth: 'ops',    returns: 'unified protected Prometheus exposition' },
   { method: 'POST', path: '/api/free-ia/metrics/reset',    auth: 'admin',  returns: 'pre-reset snapshot' },
 ]);
 
@@ -167,7 +172,7 @@ router.get('/health', (_req, res) => {
 // Ops visibility — how often the silent fallback fires per feature.
 // JSON shape for dashboards, Prometheus text for scraping.
 router.get('/metrics', (_req, res) => {
-  res.json(freeIaMetrics.snapshot());
+  res.json(freeIaMetrics.publicSnapshot());
 });
 
 // One-line digest for status badges / health dashboards.
@@ -190,10 +195,7 @@ router.get('/metrics/badge', (_req, res) => {
   res.json(c);
 });
 
-router.get('/metrics.prom', (_req, res) => {
-  res.type('text/plain; version=0.0.4');
-  res.send(freeIaMetrics.toPrometheusText());
-});
+router.get('/metrics.prom', metricsHandler);
 
 // Admin-only — reset the counter. Useful for ops drills and after an
 // incident postmortem so the dashboard starts fresh. Returns the

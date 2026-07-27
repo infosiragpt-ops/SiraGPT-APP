@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { buildApa, buildSynthesis, categoryActionLabel, formatYear } from "@/lib/search-brain-ui"
 import { normalizeChatInput } from "@/lib/chat-input-normalize"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -117,8 +118,8 @@ export function UniversalSearchPanel() {
     async function load() {
       try {
         const [settingsRes, providersRes] = await Promise.all([
-          fetch(`${API_ROOT}/search-brain/settings`, { credentials: "include", headers: authHeaders(false) }),
-          fetch(`${API_ROOT}/search-brain/universal/providers`, { credentials: "include", headers: authHeaders(false) }),
+          authenticatedFetch(`${API_ROOT}/search-brain/settings`, { headers: authHeaders(false) }),
+          fetch(`${API_ROOT}/search-brain/universal/providers`),
         ])
         const settingsJson = await settingsRes.json().catch(() => null)
         const providersJson = await providersRes.json().catch(() => null)
@@ -145,14 +146,14 @@ export function UniversalSearchPanel() {
     if (kind === "region") setRegion(value)
     if (kind === "mode") setMode(value === "cloud" ? "cloud" : "local")
     try {
-      const res = await fetch(`${API_ROOT}/search-brain/settings/${kind}`, {
+      const res = await authenticatedFetch(`${API_ROOT}/search-brain/settings/${kind}`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
         body: JSON.stringify({ [kind]: value }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const settingsRes = await fetch(`${API_ROOT}/search-brain/settings`, { credentials: "include", headers: authHeaders(false) })
+      const settingsRes = await authenticatedFetch(`${API_ROOT}/search-brain/settings`, { headers: authHeaders(false) })
       if (settingsRes.ok) setSettings(await settingsRes.json())
     } catch {
       toast.error("No se pudo guardar la configuración")
@@ -168,8 +169,7 @@ export function UniversalSearchPanel() {
     try {
       const res = await fetch(`${API_ROOT}/search-brain/universal`, {
         method: "POST",
-        credentials: "include",
-        headers: authHeaders(),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query: cleanQuery,
           region,

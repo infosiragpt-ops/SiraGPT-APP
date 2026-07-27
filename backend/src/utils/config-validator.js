@@ -25,6 +25,24 @@
 
 'use strict';
 
+const {
+  DATABASE_RUNTIME_URL_CONFLICT_CODE,
+  DATABASE_DIRECT_URL_CONFLICT_CODE,
+  DIRECT_DATABASE_URL_INVALID_CODE,
+  isDirectPostgresUrl,
+  isRemotePrismaUrl,
+  resolveDirectMigrationDatabaseUrl,
+  resolveRuntimeDatabaseUrl,
+} = require('../config/database-url');
+const {
+  hasWildcardOrigin,
+  validateAllowedOrigins,
+} = require('../middleware/cors-policy');
+const {
+  isInvalidEnvironmentAlias,
+  normalizeEnvironmentName,
+} = require('./environment');
+
 // Per-environment required vars. Kept small & realistic — anything
 // the app cannot serve real traffic without. Optional integrations
 // live in RECOMMENDED.
@@ -69,20 +87,12 @@ const LOCALHOST_PATTERNS = [
 ];
 
 function resolveEnvName(env) {
-  const raw = String(env.NODE_ENV || '').toLowerCase().trim();
-  if (raw === 'production' || raw === 'prod') return 'production';
-  if (raw === 'staging' || raw === 'stage') return 'staging';
-  if (raw === 'test') return 'test';
-  return 'development';
+  return normalizeEnvironmentName(env);
 }
 
 function looksLikeLocalhost(value) {
   if (!value || typeof value !== 'string') return false;
   return LOCALHOST_PATTERNS.some((re) => re.test(value));
-}
-
-function resolveDatabaseUrl(env) {
-  return env.PRISMA_DATABASE_URL || env.DATABASE_URL || '';
 }
 
 function isCiEnvironment(env) {
@@ -94,10 +104,11 @@ function shouldBlockLocalDatabaseUrl(env) {
   return policy === 'block' || String(env.REJECT_LOCAL_DATABASE_URL || '').toLowerCase() === 'true';
 }
 
-function checkRequired(env, envName, errors) {
+function checkRequired(env, envName, errors, databaseUrl, databaseUrlConflict) {
   const required = REQUIRED_BY_ENV[envName] || [];
   for (const key of required) {
-    const v = env[key];
+    if (key === 'PRISMA_DATABASE_URL' && databaseUrlConflict) continue;
+    const v = key === 'PRISMA_DATABASE_URL' ? databaseUrl : env[key];
     if (!v || String(v).trim() === '') {
       errors.push({
         key,
@@ -122,10 +133,11 @@ function checkRecommended(env, envName, warnings) {
   }
 }
 
-function checkCrossFieldMisconfig(env, envName, warnings, errors) {
+function checkCrossFieldMisconfig(env, envName, warnings, errors, databaseUrl) {
   // Prod DB pointing at localhost is almost certainly a mistake.
-  const databaseUrl = resolveDatabaseUrl(env);
-  const databaseKey = env.PRISMA_DATABASE_URL ? 'PRISMA_DATABASE_URL' : 'DATABASE_URL';
+  const databaseKey = String(env.PRISMA_DATABASE_URL || '').trim()
+    ? 'PRISMA_DATABASE_URL'
+    : 'DATABASE_URL';
 
   if (envName === 'production' && looksLikeLocalhost(databaseUrl) && shouldBlockLocalDatabaseUrl(env)) {
     errors.push({
@@ -174,12 +186,49 @@ function checkCrossFieldMisconfig(env, envName, warnings, errors) {
       });
     }
   }
-  // CORS wide-open in prod
-  if (envName === 'production' && String(env.CORS_ORIGINS || env.CORS_ORIGIN || '').trim() === '*') {
-    warnings.push({
-      key: env.CORS_ORIGINS ? 'CORS_ORIGINS' : 'CORS_ORIGIN',
+  // Credentialed CORS reflects the requesting origin. A wildcard in
+  // production would therefore let an arbitrary site submit authenticated
+  // browser requests and defeats the Origin half of the CSRF policy.
+  if (envName === 'production') {
+    const corsOrigins = String(env.CORS_ORIGINS || '').trim();
+    if (!corsOrigins) {
+      errors.push({
+        key: 'CORS_ORIGINS',
+        code: 'CORS_ORIGINS_REQUIRED',
+        envName,
+        message: 'Production requires an explicit CORS_ORIGINS allowlist.',
+      });
+    } else if (hasWildcardOrigin(corsOrigins)) {
+      errors.push({
+        key: 'CORS_ORIGINS',
+        code: 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN',
+        envName,
+        message: 'Credentialed CORS cannot use a wildcard origin in production.',
+      });
+    } else {
+      try {
+        validateAllowedOrigins(
+          corsOrigins.split(',').map((origin) => origin.trim()).filter(Boolean),
+        );
+      } catch (_error) {
+        errors.push({
+          key: 'CORS_ORIGINS',
+          code: 'CORS_ORIGINS_INVALID',
+          envName,
+          message: 'Production CORS_ORIGINS contains an invalid origin.',
+        });
+      }
+    }
+  }
+  if (
+    envName === 'production'
+    && ['1', 'true'].includes(String(env.CSRF_DISABLED || '').trim().toLowerCase())
+  ) {
+    errors.push({
+      key: 'CSRF_DISABLED',
+      code: 'CSRF_DISABLED_IN_PRODUCTION',
       envName,
-      message: 'CORS_ORIGINS="*" in production is dangerous — pin to your domains.',
+      message: 'CSRF protection cannot be disabled in production.',
     });
   }
 }
@@ -188,10 +237,66 @@ function validateConfig(env = process.env, opts = {}) {
   const envName = opts.envName || resolveEnvName(env);
   const errors = [];
   const warnings = [];
+  let databaseUrl = null;
+  let runtimeDatabaseUrlConflict = false;
 
-  checkRequired(env, envName, errors);
+  if (isInvalidEnvironmentAlias(env)) {
+    errors.push({
+      key: 'NODE_ENV',
+      code: 'NODE_ENV_INVALID_ALIAS',
+      envName,
+      message: 'NODE_ENV uses an unsupported alias; use the literal production environment name.',
+    });
+  }
+
+  try {
+    databaseUrl = resolveRuntimeDatabaseUrl(env);
+  } catch (error) {
+    runtimeDatabaseUrlConflict = error?.code === DATABASE_RUNTIME_URL_CONFLICT_CODE;
+    errors.push({
+      key: 'PRISMA_DATABASE_URL',
+      code: DATABASE_RUNTIME_URL_CONFLICT_CODE,
+      envName,
+      message: 'Conflicting runtime database URL aliases are configured. Refusing to choose between them.',
+    });
+  }
+
+  try {
+    resolveDirectMigrationDatabaseUrl(env);
+  } catch (error) {
+    const code = error?.code === DATABASE_DIRECT_URL_CONFLICT_CODE
+      ? DATABASE_DIRECT_URL_CONFLICT_CODE
+      : DIRECT_DATABASE_URL_INVALID_CODE;
+    errors.push({
+      key: 'DIRECT_DATABASE_URL',
+      code,
+      envName,
+      message: code === DATABASE_DIRECT_URL_CONFLICT_CODE
+        ? 'Conflicting direct migration database URL aliases are configured.'
+        : 'DIRECT_DATABASE_URL must use the postgres: or postgresql: protocol.',
+    });
+  }
+
+  if (
+    databaseUrl
+    && !isDirectPostgresUrl(databaseUrl)
+    && !isRemotePrismaUrl(databaseUrl)
+  ) {
+    errors.push({
+      key: String(env.PRISMA_DATABASE_URL || '').trim()
+        ? 'PRISMA_DATABASE_URL'
+        : 'DATABASE_URL',
+      code: 'RUNTIME_DATABASE_URL_INVALID',
+      envName,
+      message: 'Runtime database URL must use postgres:, postgresql:, or prisma+postgres:.',
+    });
+  }
+
+  checkRequired(env, envName, errors, databaseUrl, runtimeDatabaseUrlConflict);
   checkRecommended(env, envName, warnings);
-  checkCrossFieldMisconfig(env, envName, warnings, errors);
+  if (!runtimeDatabaseUrlConflict) {
+    checkCrossFieldMisconfig(env, envName, warnings, errors, databaseUrl);
+  }
 
   return {
     ok: errors.length === 0,
@@ -228,9 +333,10 @@ function validateConfigOrExit(env = process.env, opts = {}) {
     const failOnError =
       opts.failOnError !== undefined
         ? opts.failOnError
-        : envName === 'production' || envName === 'staging';
+        : envName === 'production'
+          || envName === 'staging'
+          || result.errors.some((issue) => issue.code === 'NODE_ENV_INVALID_ALIAS');
     if (failOnError) {
-      // eslint-disable-next-line n/no-process-exit
       process.exit(1);
     }
   } else {
@@ -250,5 +356,5 @@ module.exports = {
   REQUIRED_BY_ENV,
   RECOMMENDED_BY_ENV,
   // exported for tests
-  _internal: { looksLikeLocalhost, resolveDatabaseUrl },
+  _internal: { looksLikeLocalhost, resolveDatabaseUrl: resolveRuntimeDatabaseUrl },
 };

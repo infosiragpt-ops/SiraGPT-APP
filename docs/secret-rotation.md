@@ -5,7 +5,8 @@ Rotación de API keys y secretos sin downtime para SiraGPT (frontend + backend).
 > Ámbito: secretos en `.env` (backend y frontend), claves de proveedores
 > (OpenAI, Anthropic, Stripe, Langfuse, LangSmith, Sentry, PostHog),
 > secretos de aplicación (`JWT_SECRET`, `SESSION_SECRET`, `ENCRYPTION_KEY`),
-> y URLs con credenciales (`PRISMA_DATABASE_URL`, `REDIS_URL`).
+> y URLs con credenciales (`PRISMA_DATABASE_URL`, `DIRECT_DATABASE_URL`,
+> `DATABASE_URL`, `REDIS_URL`).
 
 ---
 
@@ -35,7 +36,7 @@ Categorías:
 - **Observabilidad**: `LANGFUSE_SECRET_KEY`, `LANGSMITH_API_KEY`,
   `SENTRY_DSN`, `POSTHOG_API_KEY`
 - **Aplicación**: `JWT_SECRET`, `SESSION_SECRET`, `ENCRYPTION_KEY`
-- **Infra**: `PRISMA_DATABASE_URL`, `REDIS_URL`
+- **Infra**: `PRISMA_DATABASE_URL`, `DIRECT_DATABASE_URL`, `DATABASE_URL`, `REDIS_URL`
 
 Reglas de validación están en `backend/scripts/verify-secret-rotation.js`
 (`KEY_RULES`).

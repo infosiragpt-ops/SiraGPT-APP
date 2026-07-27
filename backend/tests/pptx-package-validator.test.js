@@ -69,6 +69,19 @@ test('validatePptxPackage passes when refs + files match and >= 1 slide', async 
   assert.equal(result.slideFiles, 3);
 });
 
+test('validatePptxPackage blocks a deck that ignores the requested total', async () => {
+  const buf = await makePptxBuffer({ slideRefs: 10, slideFiles: 10 });
+  const result = await validatePptxPackage({
+    buffer: buf,
+    prompt: 'crea una presentación en 8 diapositivas',
+    expectedSlides: 8,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'requested_slide_count_mismatch');
+  assert.equal(result.expectedSlides, 8);
+  assert.equal(result.slideFiles, 10);
+});
+
 test('validatePptxPackage BLOCKS a 0-slide deck', async () => {
   const zip = new JSZip();
   zip.file('ppt/presentation.xml', '<p:presentation xmlns:p="x"><p:sldIdLst/></p:presentation>');

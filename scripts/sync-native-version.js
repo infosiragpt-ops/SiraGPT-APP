@@ -62,11 +62,22 @@ function stageJsonUpdate(filePath, nextValue, changedFiles) {
   if (!checkOnly) writeJson(filePath, nextValue)
 }
 
+function replaceSignedReleaseTag(source, versionName, filePath = path.join(root, ".github/workflows/native-release.yml")) {
+  return replaceRequired(
+    source,
+    /(^ {6}release_tag:[^\S\r\n]*\r?\n(?:^ {8}[^\r\n]*\r?\n)*?^ {8}default:[^\S\r\n]*)['"]?[^'"\s#]+['"]?/m,
+    `$1native-v${versionName}`,
+    filePath,
+    "signed release workflow default tag",
+  )
+}
+
 function main() {
   const packagePath = path.join(root, "package.json")
   const desktopPackagePath = path.join(root, "apps/desktop/package.json")
   const androidBuildPath = path.join(root, "android/app/build.gradle")
   const iosProjectPath = path.join(root, "ios/App/App.xcodeproj/project.pbxproj")
+  const nativeReleaseWorkflowPath = path.join(root, ".github/workflows/native-release.yml")
   const packageJson = readJson(packagePath)
   const versionName = String(process.env.SIRAGPT_NATIVE_VERSION_NAME || packageJson.version || "").trim()
 
@@ -125,6 +136,14 @@ function main() {
     stageJsonUpdate(desktopPackagePath, desktopPackage, changedFiles)
   }
 
+  const nativeReleaseWorkflow = readText(nativeReleaseWorkflowPath)
+  const nextNativeReleaseWorkflow = replaceSignedReleaseTag(
+    nativeReleaseWorkflow,
+    versionName,
+    nativeReleaseWorkflowPath,
+  )
+  stageTextUpdate(nativeReleaseWorkflowPath, nextNativeReleaseWorkflow, changedFiles)
+
   if (changedFiles.length > 0) {
     const fileList = changedFiles.join(", ")
     if (checkOnly) {
@@ -138,9 +157,16 @@ function main() {
   console.log(`native-version: already synced ${versionName} (${versionCode})`)
 }
 
-try {
-  main()
-} catch (error) {
-  console.error(`native-version: ${error.message}`)
-  process.exit(1)
+module.exports = {
+  computeVersionCode,
+  replaceSignedReleaseTag,
+}
+
+if (require.main === module) {
+  try {
+    main()
+  } catch (error) {
+    console.error(`native-version: ${error.message}`)
+    process.exit(1)
+  }
 }

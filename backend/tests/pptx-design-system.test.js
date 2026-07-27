@@ -56,6 +56,7 @@ test('listPptxThemes exposes id/label/description only', () => {
 test('pickPptxTheme: prompt styling keywords override the template default', () => {
   assert.equal(pickPptxTheme({ template: 'business', prompt: 'una ppt oscura y elegante' }).id, 'boardroom');
   assert.equal(pickPptxTheme({ template: 'legal', prompt: 'algo minimalista y limpio' }).id, 'minimal');
+  assert.equal(pickPptxTheme({ template: 'business', prompt: 'presentación ejecutiva y minimalista' }).id, 'minimal');
   assert.equal(pickPptxTheme({ template: 'business', prompt: 'presentación educativa cálida' }).id, 'editorial');
   assert.equal(pickPptxTheme({ template: 'academic', prompt: 'deck de estrategia corporativa' }).id, 'consulting');
 });

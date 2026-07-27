@@ -17,6 +17,12 @@ const jwt = require('jsonwebtoken');
 
 const prisma = require('../src/config/database');
 const { buildRouteTestApp, reloadModule } = require('./http-test-utils');
+const {
+  onUserSessionsRevoked,
+} = require('../src/services/auth/user-session-revocation-events');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const JWT_SECRET = 'test-revoke-all-jwt-secret-at-least-32-chars!!';
 process.env.JWT_SECRET = JWT_SECRET;
@@ -35,7 +41,9 @@ function mockPrisma() {
   };
 
   prisma.session.findUnique = async ({ where, include }) => {
-    const s = store.sessions.find((x) => x.token === where.token) || null;
+    const s = store.sessions.find((x) => (
+      where.token ? x.token === where.token : x.id === where.id
+    )) || null;
     if (!s) return null;
     if (include && include.user) {
       return { ...s, user: store.users.find((u) => u.id === s.userId) || null };
@@ -43,13 +51,31 @@ function mockPrisma() {
     return s;
   };
 
+  prisma.session.findMany = async ({ where }) => store.sessions.filter((session) => {
+    if (where.userId && session.userId !== where.userId) return false;
+    const excluded = Array.isArray(where.NOT?.token?.in)
+      ? where.NOT.token.in
+      : [where.NOT?.token].filter(Boolean);
+    if (excluded.includes(session.token)) return false;
+    return true;
+  });
+
+  prisma.session.delete = async ({ where }) => {
+    const index = store.sessions.findIndex((session) => session.id === where.id);
+    if (index < 0) throw new Error('session not found');
+    const [deleted] = store.sessions.splice(index, 1);
+    return deleted;
+  };
+
   prisma.session.deleteMany = async ({ where }) => {
     const before = store.sessions.length;
     for (let i = store.sessions.length - 1; i >= 0; i--) {
       const s = store.sessions[i];
       if (where.userId && s.userId !== where.userId) continue;
-      // Spec from route: NOT: { token: req.token }
-      if (where.NOT && where.NOT.token && s.token === where.NOT.token) continue;
+      const excluded = Array.isArray(where.NOT?.token?.in)
+        ? where.NOT.token.in
+        : [where.NOT?.token].filter(Boolean);
+      if (excluded.includes(s.token)) continue;
       store.sessions.splice(i, 1);
     }
     return { count: before - store.sessions.length };
@@ -80,7 +106,7 @@ function seedUserAndSessions(store, { userId = 'u1', count = 3 } = {}) {
     store.sessions.push({
       id: `sess-${i}`,
       userId,
-      token: t,
+      token: hashSessionToken(t),
       expiresAt: new Date(Date.now() + 3600_000),
       createdAt: new Date(),
     });
@@ -110,7 +136,7 @@ describe('POST /api/auth/sessions/revoke-all', () => {
     assert.equal(res.body.ok, true);
     assert.equal(res.body.count, 3);
     assert.equal(store.sessions.length, 1);
-    assert.equal(store.sessions[0].token, currentToken);
+    assert.equal(store.sessions[0].token, hashSessionToken(currentToken));
   });
 
   it('returns count=0 when the caller has only one session', async () => {
@@ -140,6 +166,71 @@ describe('POST /api/auth/sessions/revoke-all', () => {
     assert.equal(row.actorId, 'u1');
     assert.equal(row.resourceType, 'session');
     assert.ok(row.metadata && row.metadata.count === 2);
+  });
+
+  it('publishes a user session-revoked event after deleting other sessions', async (t) => {
+    const tokens = seedUserAndSessions(store, { count: 3 });
+    const events = [];
+    const unsubscribe = onUserSessionsRevoked((event) => events.push(event));
+    t.after(unsubscribe);
+
+    await request(app)
+      .post('/api/auth/sessions/revoke-all')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .expect(200);
+
+    assert.deepEqual(events, [{
+      userId: 'u1',
+      reason: 'sessions_revoked',
+    }]);
+  });
+
+  it('publishes a user session-revoked event after deleting one session', async (t) => {
+    const tokens = seedUserAndSessions(store, { count: 3 });
+    const events = [];
+    const unsubscribe = onUserSessionsRevoked((event) => events.push(event));
+    t.after(unsubscribe);
+
+    await request(app)
+      .delete('/api/auth/sessions/sess-1')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .expect(200);
+
+    assert.deepEqual(events, [{
+      userId: 'u1',
+      reason: 'session_revoked',
+    }]);
+  });
+
+  it('refuses to revoke the current session when its database token is hashed', async () => {
+    const tokens = seedUserAndSessions(store, { count: 3 });
+
+    const response = await request(app)
+      .delete('/api/auth/sessions/sess-0')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .expect(400);
+
+    assert.equal(response.body.reason, 'is_current');
+    assert.equal(store.sessions.some((session) => session.id === 'sess-0'), true);
+  });
+
+  it('legacy users revoke-others endpoint publishes the same revocation event', async (t) => {
+    const tokens = seedUserAndSessions(store, { count: 3 });
+    const events = [];
+    const unsubscribe = onUserSessionsRevoked((event) => events.push(event));
+    t.after(unsubscribe);
+    const usersApp = buildRouteTestApp('/api/users', reloadModule('../src/routes/users'));
+
+    const response = await request(usersApp)
+      .post('/api/users/sessions/revoke-others')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .expect(200);
+
+    assert.equal(response.body.revoked, 2);
+    assert.deepEqual(events, [{
+      userId: 'u1',
+      reason: 'sessions_revoked',
+    }]);
   });
 
   it('rejects unauthenticated callers with 401', async () => {

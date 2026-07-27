@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiClient as api } from '@/lib/api'
+import { authenticatedFetch, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
 
 describe('refresh token', () => {
   const mockFetch = vi.fn()
@@ -7,11 +8,13 @@ describe('refresh token', () => {
   const refreshedToken = 'refreshed-token-456'
 
   beforeEach(() => {
+    vi.restoreAllMocks()
     globalThis.fetch = mockFetch
-    vi.clearAllMocks()
+    mockFetch.mockReset()
     api.setToken(null)
     ;(api as any)._refreshing = null
-    ;(api as any)._ensureCsrfToken = vi.fn().mockResolvedValue(null)
+    clearAuthenticatedFetchCsrfCache()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
   it('calls /auth/refresh on 401 then retries with new token', async () => {
@@ -151,7 +154,7 @@ describe('refresh token', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1)
     const [url, options] = mockFetch.mock.calls[0]
     expect(String(url)).toContain('/doc/generate')
-    expect(options.headers.Authorization).toBe(`Bearer ${testToken}`)
+    expect(new Headers(options.headers).get('Authorization')).toBe(`Bearer ${testToken}`)
     expect(events).toEqual([{ type: 'final', content: 'ok' }])
   })
 
@@ -197,10 +200,10 @@ describe('refresh token', () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(3)
     expect(String(mockFetch.mock.calls[0][0])).toContain('/doc/generate')
-    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBeUndefined()
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).has('Authorization')).toBe(false)
     expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
     expect(String(mockFetch.mock.calls[2][0])).toContain('/doc/generate')
-    expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe(`Bearer ${refreshedToken}`)
+    expect(new Headers(mockFetch.mock.calls[2][1].headers).get('Authorization')).toBe(`Bearer ${refreshedToken}`)
     expect(events).toEqual([{ type: 'final', content: 'doc listo' }])
   })
 })

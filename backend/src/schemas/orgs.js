@@ -16,6 +16,10 @@
  */
 
 const { z } = require('zod');
+const {
+  MAX_POLICY_PATTERNS,
+  normalizeMcpAllowedHosts,
+} = require('../services/agent-harness/mcp-policy');
 
 // Hex color — `#rgb`, `#rrggbb`, optional alpha (`#rgba`, `#rrggbbaa`).
 // Keep tolerant — branding tools paste freely. Validation here is shape
@@ -52,6 +56,23 @@ const FeaturesSchema = z
   .strict();
 
 const ResponseStyleSchema = z.enum(['concise', 'detailed', 'balanced']);
+
+const McpAllowedHostsSchema = z
+  .array(z.string())
+  .max(MAX_POLICY_PATTERNS, {
+    message: 'org.settings.mcpAllowedHosts.too_many',
+  })
+  .transform((values, ctx) => {
+    try {
+      return normalizeMcpAllowedHosts(values, { allowLoopback: true });
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error?.code || 'org.settings.mcpAllowedHosts.invalid',
+      });
+      return z.NEVER;
+    }
+  });
 
 // Allowlist of AI provider names accepted as org-level preference.
 // Mirrors the `actualProvider` branch in routes/ai.js. Case-insensitive
@@ -128,6 +149,7 @@ const OrgSettingsSchema = z
     audit: AuditSettingsSchema.optional(),
     export: ExportSettingsSchema.optional(),
     transfer: TransferSettingsSchema.optional(),
+    mcpAllowedHosts: McpAllowedHostsSchema.optional(),
   })
   .passthrough();
 
@@ -141,6 +163,7 @@ const ORG_SETTINGS_KNOWN_KEYS = Object.freeze([
   'audit',
   'export',
   'transfer',
+  'mcpAllowedHosts',
 ]);
 
 // PATCH-friendly variant: each known key may be explicitly `null` to
@@ -156,6 +179,7 @@ const OrgSettingsPatchSchema = z
     audit: z.union([AuditSettingsSchema, z.null()]).optional(),
     export: z.union([ExportSettingsSchema, z.null()]).optional(),
     transfer: z.union([TransferSettingsSchema, z.null()]).optional(),
+    mcpAllowedHosts: z.union([McpAllowedHostsSchema, z.null()]).optional(),
   })
   .passthrough();
 

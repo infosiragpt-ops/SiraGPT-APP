@@ -18,7 +18,7 @@ const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
 
-const MAX_PAGES = Number(process.env.SIRAGPT_DOC_CRITIQUE_MAX_PAGES || 6);
+const MAX_PAGES = Number(process.env.SIRAGPT_DOC_CRITIQUE_MAX_PAGES || 10);
 const BUDGET_MS = Number(process.env.SIRAGPT_DOC_CRITIQUE_BUDGET_MS || 45_000);
 const RENDERABLE = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
 
@@ -71,6 +71,8 @@ const CRITIQUE_SYSTEM = [
   'Eres un director de arte y QA de documentos corporativos. Recibes páginas/láminas renderizadas de un documento generado.',
   'ASUME QUE HAY PROBLEMAS — tu trabajo es encontrarlos. Si no encontraste ninguno, mira otra vez.',
   'Busca específicamente: (1) páginas o mitades de página en blanco, (2) texto desbordado o cortado, (3) tablas rotas o vacías, (4) texto de sistema/meta que un humano no escribiría ("generado por", "pipeline", placeholders, lorem), (5) títulos que son ecos de la instrucción del usuario, (6) elementos solapados, (7) márgenes violados, (8) inconsistencia tipográfica o de color.',
+  'En presentaciones, el total incluye portada y agenda; la agenda enumera solo las láminas de contenido. No la declares incompleta por no listar la portada o la propia agenda.',
+  'Evalúa solo las imágenes recibidas: no afirmes que faltan páginas basándote únicamente en el número de imágenes del lote.',
   'Responde SOLO JSON: {"defects":[{"page":n,"defect":"...","severity":"high|medium|low","suggestion":"..."}],"overall":"pass|needs_work","summary":"una frase"}.',
   'Sé preciso: reporta solo defectos visibles reales, con la página exacta. Un documento corto y limpio SÍ puede ser un pass.',
 ].join('\n');

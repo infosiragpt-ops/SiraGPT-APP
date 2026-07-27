@@ -112,8 +112,9 @@ async function embedTexts(texts, opts = {}) {
 
 function createPgUserMemoryStore({ prisma, embedder = embedTexts } = {}) {
   if (!prisma) {
-    const { PrismaClient } = require('@prisma/client');
-    prisma = new PrismaClient();
+    // Lazy to preserve the feature-off import path while still sharing the
+    // process-wide configured and instrumented Prisma client.
+    prisma = require('../config/database');
   }
 
   return {

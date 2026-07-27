@@ -25,6 +25,9 @@ const { UserRepository } = require('../repositories/UserRepository');
 const { TokenVault } = require('../services/TokenVault');
 const { GoogleAuthService } = require('../services/GoogleAuthService');
 const {
+  createRbacAssignmentSyncService,
+} = require('../services/rbac-assignment-sync');
+const {
   stripTrailingSlash,
   getGoogleCallbackURL,
 } = require('./oauth-url-policy');
@@ -33,7 +36,12 @@ const {
 // Wire concrete deps once at module load. Test code can rebuild
 // these from their constructors with mocks; the production wiring is
 // kept simple and explicit so missing dependencies fail loudly here.
-const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
+const rbacAssignments = createRbacAssignmentSyncService({ prisma });
+const users = new UserRepository({
+  prisma,
+  withRetry: withAccelerateRetry,
+  rbacAssignments,
+});
 const tokenVault = new TokenVault({ encrypt, decrypt });
 const googleAuth = new GoogleAuthService({ users, tokens: tokenVault, bcrypt });
 
@@ -71,6 +79,9 @@ if (googleOAuthConfigured) {
       const result = await googleAuth.handleVerify({ accessToken, refreshToken, profile });
       return done(null, result.user);
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        return done(null, false, { message: 'account_inactive' });
+      }
       console.error('Google OAuth error:', error);
       // Transient DB outage (Accelerate P6008 etc.) becomes a soft
       // failure so the route handler can redirect with a friendly
@@ -93,7 +104,7 @@ passport.use(new JwtStrategy({
 }, async (payload, done) => {
   try {
     const user = await users.findById(payload.userId);
-    if (user) return done(null, user);
+    if (user && user.deletedAt == null) return done(null, user);
     return done(null, false);
   } catch (error) {
     if (isAccelerateTransientError(error)) {
@@ -112,7 +123,7 @@ passport.serializeUser((user, done) => {
 passport.deserializeUser(async (id, done) => {
   try {
     const user = await users.findById(id);
-    done(null, user);
+    done(null, user && user.deletedAt == null ? user : false);
   } catch (error) {
     if (isAccelerateTransientError(error)) {
       // Treat as "no user" so the request continues unauthenticated

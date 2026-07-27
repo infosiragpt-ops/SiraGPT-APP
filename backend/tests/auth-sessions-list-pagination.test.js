@@ -17,6 +17,9 @@ const jwt = require('jsonwebtoken');
 
 const prisma = require('../src/config/database');
 const { buildRouteTestApp, reloadModule } = require('./http-test-utils');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const JWT_SECRET = 'test-sessions-list-pagination-jwt-secret-32!!';
 process.env.JWT_SECRET = JWT_SECRET;
@@ -37,6 +40,17 @@ function mockPrisma() {
       return { ...s, user: store.users.find((u) => u.id === s.userId) || null };
     }
     return s;
+  };
+
+  prisma.session.updateMany = async ({ where, data }) => {
+    let count = 0;
+    for (const session of store.sessions) {
+      if (where.id && session.id !== where.id) continue;
+      if (where.token && session.token !== where.token) continue;
+      Object.assign(session, data);
+      count += 1;
+    }
+    return { count };
   };
 
   prisma.session.findMany = async ({ where, orderBy, skip = 0, take } = {}) => {
@@ -79,7 +93,7 @@ function seedUserAndSessions(store, { userId = 'u1', count = 25 } = {}) {
     store.sessions.push({
       id: `sess-${i}`,
       userId,
-      token: t,
+      token: hashSessionToken(t),
       expiresAt: new Date(base + 3600_000),
       // descending by createdAt → most-recently created first when sorted
       createdAt: new Date(base + i),
@@ -112,6 +126,17 @@ describe('GET /api/auth/sessions — pagination', () => {
     assert.equal(res.body.pages, 2);
     assert.equal(Array.isArray(res.body.sessions), true);
     assert.equal(res.body.sessions.length, 20);
+  });
+
+  it('marks the current session when its stored token is hashed', async () => {
+    const res = await request(app)
+      .get('/api/auth/sessions?limit=100')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .expect(200);
+
+    const current = res.body.sessions.filter((session) => session.current);
+    assert.equal(current.length, 1);
+    assert.equal(current[0].id, 'sess-0');
   });
 
   it('honours ?page and ?limit', async () => {

@@ -4,10 +4,8 @@
  * /api/admin/connections — CRUD for admin-curated upstream AI API
  * connections (OpenAI, Anthropic, Gemini, OpenRouter, custom, ...).
  *
- * Mounted under `/api/admin/connections` so the existing
- * `authenticateToken + requireAdmin` chain in `admin.js` does NOT
- * apply automatically. We re-apply it here at the router level so
- * the route file stays self-contained.
+ * Mounted separately from the root admin router, so this router applies the
+ * same mount-aware declarative permission boundary itself.
  *
  * The bridge applies enabled provider credentials into process.env so
  * runtime paths can pick up admin-managed keys without a server restart.
@@ -15,7 +13,8 @@
 
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const prisma = require('../config/database');
 const { encrypt, decrypt } = require('../utils/encryption');
 const { applyAdminConnections, reconcileCatalog } = require('../services/admin-connections-bridge');
@@ -23,7 +22,7 @@ const modelSyncService = require('../services/model-sync-service');
 const { invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 
 const router = express.Router();
-router.use(authenticateToken, requireAdmin);
+router.use(authenticateToken, requireAdminRoutePermission);
 
 // Refresh the bridge after a write. Fire-and-forget — the response
 // has already gone out; logging the failure is enough.

@@ -117,6 +117,10 @@ const AUDIT_ARCHIVE_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SWEEP
 // rows whose `expiresAt < now` AND `acceptedAt IS NULL` (accepted rows
 // are immutable history and stay around).
 const PENDING_TRANSFER_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PENDING_TRANSFER_SWEEP_SCHEDULE || '30 7 * * *';
+// Scientific saved-search alerts. The lightweight dispatcher wakes hourly,
+// but each search carries its own daily/weekly nextRunAt so provider traffic
+// remains bounded and manual searches are never executed in the background.
+const RESEARCH_ALERT_SCHEDULE = process.env.SYSTEM_CRON_RESEARCH_ALERT_SCHEDULE || '30 * * * *';
 
 let _state = null;
 
@@ -934,6 +938,40 @@ function start(opts = {}) {
     schedule: PENDING_TRANSFER_SWEEP_SCHEDULE,
     task: pendingTransferSweepTask,
     meta: pendingTransferSweepMeta,
+  });
+
+  let researchAlertsRunning = false;
+  const researchAlertsMeta = {};
+  const researchAlertsTask = cron.schedule(
+    RESEARCH_ALERT_SCHEDULE,
+    async () => {
+      if (researchAlertsRunning) {
+        logger.warn?.('[system-cron] skip research-saved-search-alerts — previous run still active');
+        return;
+      }
+      researchAlertsRunning = true;
+      const finish = recordRun(researchAlertsMeta, 'research-saved-search-alerts');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./run-research-alerts');
+        const result = await job.run({ limit: 10 });
+        logger.info?.(`[system-cron] research-saved-search-alerts done: ${JSON.stringify(result)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] research-saved-search-alerts failed: ${err && err.message}`);
+      } finally {
+        researchAlertsRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'research-saved-search-alerts',
+    schedule: RESEARCH_ALERT_SCHEDULE,
+    task: researchAlertsTask,
+    meta: researchAlertsMeta,
   });
 
   for (const t of tasks) {

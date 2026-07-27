@@ -112,7 +112,12 @@ function makePrisma({
         return row;
       },
     },
+    async $queryRawUnsafe(sql, ...params) {
+      if (/set_config/i.test(sql)) return [{ lock_timeout: params[0] }];
+      return [{ locked: true }];
+    },
   };
+  db.$transaction = async (fn) => fn(db);
   return db;
 }
 
@@ -129,6 +134,11 @@ function makeDeps(overrides = {}) {
         nameId: 'saml-nameid-alice',
         profile: {},
       }),
+    },
+    rbacAssignments: overrides.rbacAssignments || {
+      syncLegacyAdminAssignment: async () => ({ denied: false }),
+      syncOrgRoleAssignment: async () => ({ denied: false }),
+      invalidateUser: async () => {},
     },
   };
 }
@@ -297,6 +307,11 @@ test('OIDC provider — identity row uses provider="oidc" + sub as externalId', 
     },
     samlHandler: {
       verifySamlResponse: async () => { throw new Error('should not be called'); },
+    },
+    rbacAssignments: {
+      syncLegacyAdminAssignment: async () => ({ denied: false }),
+      syncOrgRoleAssignment: async () => ({ denied: false }),
+      invalidateUser: async () => {},
     },
   };
   const res = makeRes();

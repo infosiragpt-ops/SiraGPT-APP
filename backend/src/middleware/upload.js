@@ -117,6 +117,7 @@ const upload = multer({
 });
 
 module.exports = upload;
+module.exports.uploadDir = uploadDir;
 // The effective per-request file-count ceiling multer actually enforces. Routes
 // derive their `.array(field, maxCount)` from this so the advertised batch size
 // never exceeds what the instance accepts (otherwise large batches were silently

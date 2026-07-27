@@ -3,12 +3,41 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  existsSync,
+  lstatSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
+const {
   sanitizeProjectId,
   resolveProjectRelPath,
+  migrateLegacyViteProxyConfig,
+  previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
   shouldIgnoreExportPath,
+  buildRunnerEnv,
+  isControlRequestAuthorized,
+  controlTokenForEnv,
+  projectIdentity,
+  sandboxCommand,
 } = require('../../scripts/code-runner-utils');
+const {
+  safeWriteFiles,
+  safeReadFile,
+  collectExportFiles,
+  collectExportDirectory,
+  migrateOwnershipTree,
+  sealWorkspaceRoot,
+} = require('../../scripts/code-runner-fs-helper');
 
 test('sanitizeProjectId accepts cuid-like ids and rejects everything else', () => {
   assert.equal(sanitizeProjectId('cmbx1y2z30000abcd1234efgh'), 'cmbx1y2z30000abcd1234efgh');
@@ -31,9 +60,71 @@ test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () 
   assert.equal(resolveProjectRelPath(''), null);
 });
 
-test('isAllowedCommand allows git/bun/bunx/node and blocks the rest', () => {
+test('migrateLegacyViteProxyConfig scopes only the exact legacy starter proxy', () => {
+  const legacy = `const port = Number(process.env.PORT) || 5173
+const apiPort = Number(process.env.API_PORT) || port + 1000
+
+export default {
+  base: process.env.VITE_BASE || '/',
+  server: {
+    proxy: {
+      '^.*/api/': {
+        target: 'http://localhost:6173',
+        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),
+      },
+    },
+  },
+}
+`;
+  const migrated = migrateLegacyViteProxyConfig(legacy);
+  assert.equal(migrated.changed, true);
+  assert.match(migrated.content, /const apiBase = `\$\{base\}api`/);
+  assert.match(migrated.content, /\[apiBase\]/);
+  assert.doesNotMatch(migrated.content, /\^\.\*\/api\//);
+  assert.match(migrated.content, /p\.startsWith\(apiBase\)/);
+  assert.doesNotMatch(migrated.content, /VITE_HMR/);
+  assert.equal(migrateLegacyViteProxyConfig(migrated.content).changed, false);
+
+  const managedWithDisabledHmr = migrated.content.replace(
+    '  server: {\n',
+    "  server: {\n    hmr: process.env.VITE_HMR === 'false' ? false : undefined,\n",
+  );
+  const hmrMigrated = migrateLegacyViteProxyConfig(managedWithDisabledHmr);
+  assert.equal(hmrMigrated.changed, true);
+  assert.doesNotMatch(hmrMigrated.content, /VITE_HMR/);
+  assert.equal(migrateLegacyViteProxyConfig(hmrMigrated.content).changed, false);
+
+  const custom = legacy.replace("  base: process.env.VITE_BASE || '/',", "  base: '/custom/',");
+  assert.deepEqual(migrateLegacyViteProxyConfig(custom), { changed: false, content: custom });
+});
+
+test('preview config migration commits clean repos, restores system drift, and skips user edits', () => {
+  assert.equal(previewConfigMigrationMode({
+    status: '',
+    headContent: 'old',
+    migratedContent: 'new',
+  }), 'commit');
+  assert.equal(previewConfigMigrationMode({
+    status: ' M vite.config.ts\n',
+    headContent: 'managed',
+    migratedContent: 'managed',
+  }), 'restore');
+  assert.equal(previewConfigMigrationMode({
+    status: ' M vite.config.ts\n',
+    headContent: 'old',
+    migratedContent: 'user-edited',
+  }), 'skip');
+  assert.equal(previewConfigMigrationMode({
+    status: null,
+    headContent: 'old',
+    migratedContent: 'new',
+  }), 'skip');
+});
+
+test('isAllowedCommand allows git/bun/bunx/node/npm and blocks the rest', () => {
   assert.equal(isAllowedCommand(['git', 'init']), true);
   assert.equal(isAllowedCommand(['bun', 'install']), true);
+  assert.equal(isAllowedCommand(['npm', 'run', 'test']), true);
   assert.equal(isAllowedCommand(['rm', '-rf', '/']), false);
   assert.equal(isAllowedCommand(['sh', '-c', 'echo hi']), false);
   assert.equal(isAllowedCommand([]), false);
@@ -65,4 +156,180 @@ test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () =>
   // Empty/blank → ignored (nothing to copy).
   assert.equal(shouldIgnoreExportPath(''), true);
   assert.equal(shouldIgnoreExportPath(null), true);
+});
+
+test('collectExportDirectory exports a static bundle without exposing sibling source files', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'codex-build-export-'));
+  mkdirSync(join(root, 'dist', 'assets'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(root, 'dist', 'index.html'), '<main>release</main>');
+  writeFileSync(join(root, 'dist', 'assets', 'app.js'), 'console.log("ok")');
+  writeFileSync(join(root, '.env'), 'SECRET=never-export');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const bundle = collectExportDirectory(root, 'dist');
+  assert.deepEqual(bundle.files.map((file) => file.path).sort(), ['assets/app.js', 'index.html']);
+  assert.equal(bundle.files.some((file) => file.path.includes('.env')), false);
+  assert.throws(() => collectExportDirectory(root, '../'), /invalid_request/);
+});
+
+test('buildRunnerEnv starts from an allowlist and never forwards secrets', () => {
+  const out = buildRunnerEnv({
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    LANG: 'C.UTF-8',
+    NODE_ENV: 'production',
+    CODE_RUNNER_CONTROL_TOKEN: 'control-secret',
+    OPENAI_API_KEY: 'provider-secret',
+    DATABASE_URL: 'postgres://control-plane',
+    REDIS_URL: 'redis://control-plane',
+  }, {
+    HOME: '/runner-home/p1',
+    PORT: 5173,
+    CODE_RUNNER_CONTROL_TOKEN: 'still-no',
+    SOME_PASSWORD: 'still-no',
+    AWS_ACCESS_KEY_ID: 'still-no',
+  });
+
+  assert.deepEqual(out, {
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    LANG: 'C.UTF-8',
+    HOME: '/runner-home/p1',
+    PORT: '5173',
+  });
+});
+
+test('control auth keeps /health public, supports tokenless dev, and validates bearer tokens', () => {
+  assert.equal(isControlRequestAuthorized({ pathname: '/health', token: 'secret' }), true);
+  assert.equal(isControlRequestAuthorized({ pathname: '/status', token: '' }), true);
+  assert.equal(isControlRequestAuthorized({ pathname: '/status', token: 'secret' }), false);
+  assert.equal(isControlRequestAuthorized({ pathname: '/status', token: 'secret', authorization: 'Basic secret' }), false);
+  assert.equal(isControlRequestAuthorized({ pathname: '/status', token: 'secret', authorization: 'Bearer wrong' }), false);
+  assert.equal(isControlRequestAuthorized({ pathname: '/status', token: 'secret', authorization: 'Bearer secret' }), true);
+});
+
+test('control token configuration fails closed only in production', () => {
+  assert.equal(controlTokenForEnv({ NODE_ENV: 'development' }), '');
+  assert.equal(controlTokenForEnv({ NODE_ENV: 'production', CODE_RUNNER_CONTROL_TOKEN: ' token ' }), 'token');
+  assert.throws(
+    () => controlTokenForEnv({ NODE_ENV: 'production' }),
+    /CODE_RUNNER_CONTROL_TOKEN is required/,
+  );
+});
+
+test('projectIdentity is stable, project-specific, and never root', () => {
+  const a1 = projectIdentity('project-a');
+  const a2 = projectIdentity('project-a');
+  const b = projectIdentity('project-b');
+  assert.deepEqual(a1, a2);
+  assert.notDeepEqual(a1, b);
+  assert.ok(a1.uid > 0);
+  assert.ok(a1.gid > 0);
+  assert.deepEqual(projectIdentity('project-a', { uidBase: 20_000, uidSpan: 1, gidBase: 30_000, gidSpan: 1 }), {
+    uid: 20_000,
+    gid: 30_000,
+  });
+});
+
+test('sandboxCommand applies setsid, prlimit, and a no-root setpriv identity without a shell', () => {
+  const argv = sandboxCommand(['bun', 'install'], { uid: 20_001, gid: 30_001 }, {
+    addressSpaceBytes: 123_456,
+    maxProcesses: 12,
+    maxOpenFiles: 34,
+    maxFileBytes: 56_789,
+    cpuSeconds: 90,
+  });
+  assert.deepEqual(argv, [
+    'setsid',
+    'prlimit',
+    '--as=123456:123456',
+    '--nproc=12:12',
+    '--nofile=34:34',
+    '--fsize=56789:56789',
+    '--cpu=90:90',
+    '--core=0:0',
+    'setpriv',
+    '--reuid=20001',
+    '--regid=30001',
+    '--clear-groups',
+    '--no-new-privs',
+    '--',
+    'bun',
+    'install',
+  ]);
+  assert.ok(
+    sandboxCommand(['node', '-v'], { uid: 20_001, gid: 30_001 }).includes('--as=68719476736:68719476736'),
+    'default virtual-address limit must leave room for the V8 reservation; cgroups cap RSS',
+  );
+  assert.throws(() => sandboxCommand(['node', '-v'], { uid: 0, gid: 0 }), /non-root/);
+  assert.throws(() => sandboxCommand('node -v', { uid: 20_001, gid: 20_001 }), /non-empty string array/);
+});
+
+test('filesystem helper rejects direct, dangling, and parent symlinks and never exports them', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'codex-runner-fs-'));
+  const project = join(root, 'project');
+  const outside = join(root, 'outside');
+  mkdirSync(project, { mode: 0o700 });
+  mkdirSync(outside, { mode: 0o700 });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  writeFileSync(join(project, 'safe.txt'), 'safe');
+  writeFileSync(join(outside, 'secret.txt'), 'secret');
+  symlinkSync(join(outside, 'secret.txt'), join(project, 'leak.txt'));
+  symlinkSync(join(root, 'would-be-created.txt'), join(project, 'dangling.txt'));
+  symlinkSync(outside, join(project, 'outside-dir'));
+
+  assert.throws(() => safeReadFile(project, 'leak.txt'), /unsafe_path/);
+  assert.deepEqual(safeReadFile(project, 'safe.txt'), { path: 'safe.txt', content: 'safe' });
+
+  const result = safeWriteFiles(project, [
+    { path: 'safe.txt', content: 'updated' },
+    { path: 'dangling.txt', content: 'must not escape' },
+    { path: 'outside-dir/new.txt', content: 'must not escape' },
+  ]);
+  assert.equal(result.written, 1);
+  assert.equal(readFileSync(join(project, 'safe.txt'), 'utf8'), 'updated');
+  assert.equal(lstatSync(join(project, 'dangling.txt')).isSymbolicLink(), true);
+  assert.equal(existsSync(join(root, 'would-be-created.txt')), false);
+  assert.equal(existsSync(join(outside, 'new.txt')), false);
+
+  const bundle = collectExportFiles(project);
+  assert.deepEqual(bundle.files.map((file) => file.path), ['safe.txt']);
+  assert.equal(Buffer.from(bundle.files[0].content, 'base64').toString('utf8'), 'updated');
+});
+
+test('legacy ownership migration fails before chowning a multiply-linked inode', (t) => {
+  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') {
+    t.skip('POSIX ownership test');
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), 'codex-runner-hardlink-'));
+  const project = join(root, 'legacy-project');
+  const peer = join(root, 'other-project-secret');
+  mkdirSync(project, { mode: 0o700 });
+  writeFileSync(peer, 'secret');
+  linkSync(peer, join(project, 'hidden-peer'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  assert.throws(
+    () => migrateOwnershipTree(project, { uid: process.getuid(), gid: process.getgid() }),
+    /unsafe_hardlink/,
+  );
+});
+
+test('legacy workspace root is sealed while project traversal remains possible', (t) => {
+  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') {
+    t.skip('POSIX ownership test');
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), 'codex-runner-seal-'));
+  mkdirSync(join(root, 'projects'), { mode: 0o777 });
+  mkdirSync(join(root, 'legacy-app'), { mode: 0o755 });
+  writeFileSync(join(root, 'package.json'), '{}', { mode: 0o644 });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  sealWorkspaceRoot(root, 'projects', { uid: process.getuid(), gid: process.getgid() });
+  const mode = (path) => statSync(path).mode & 0o777;
+  assert.equal(mode(root), 0o711);
+  assert.equal(mode(join(root, 'projects')), 0o711);
+  assert.equal(mode(join(root, 'legacy-app')), 0o700);
+  assert.equal(mode(join(root, 'package.json')), 0o600);
 });

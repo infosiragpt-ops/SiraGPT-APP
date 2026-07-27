@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * credits-service — client for /api/credits/* (F2 PR7).
  *
@@ -59,7 +61,7 @@ function authHeader(): Record<string, string> {
 }
 
 export async function getMyCredits(): Promise<Credits | null> {
-  const res = await fetch(`${API_ROOT}/credits/me`, {
+  const res = await authenticatedFetch(`${API_ROOT}/credits/me`, {
     headers: authHeader(),
   })
   if (res.status === 401) return null
@@ -78,7 +80,7 @@ export async function listMyTransactions(opts?: {
   if (opts?.limit) qs.set("limit", String(opts.limit))
   if (opts?.type) qs.set("type", opts.type)
   const url = `${API_ROOT}/credits/me/transactions${qs.toString() ? `?${qs}` : ""}`
-  const res = await fetch(url, { headers: authHeader() })
+  const res = await authenticatedFetch(url, { headers: authHeader() })
   if (!res.ok) throw new Error(`listMyTransactions: ${res.status}`)
   return (await res.json()) as TransactionsResponse
 }

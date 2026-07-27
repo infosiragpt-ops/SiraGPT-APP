@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "@/lib/api"
 import { useBackendReady } from "@/lib/use-backend-ready"
 import { toast } from "sonner"
@@ -40,11 +41,11 @@ function ForgotPasswordPageContent() {
 
     setIsLoading(true)
     try {
-      const res = await fetch(`${getNormalizedApiBaseUrl()}/auth/forgot-password`, {
+      const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim() }),
-      })
+      }, { bearerToken: null })
       if (res.ok) {
         setSent(true)
         toast.success(t("resetLinkSent"))

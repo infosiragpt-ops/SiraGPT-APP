@@ -29,6 +29,9 @@ const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const { parseZip } = require('../src/services/zip-parser');
 const { isValidOoxml } = require('../src/services/doc-agent');
+const {
+  createSessionRecord,
+} = require('../src/services/auth/session-token-persistence');
 
 const prisma = new PrismaClient();
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5151';
@@ -200,7 +203,7 @@ async function runScenario({ name, fileName, mime, buffer, prompt, verify }, H, 
   const art = artifacts.find((a) => a.valid !== false && String(a.name).toLowerCase().endsWith(`.${wantExt}`))
     || artifacts.find((a) => a.valid !== false)
     || artifacts[0];
-  const dl = await fetch(`${BASE}${art.url}?token=${encodeURIComponent(token)}`, { headers: H });
+  const dl = await fetch(`${BASE}${art.url}`, { headers: H });
   if (dl.status !== 200) throw new Error(`download HTTP ${dl.status} for ${art.url}`);
   const outBuf = Buffer.from(await dl.arrayBuffer());
   log(`artefacto: ${art.name} (${outBuf.length}b) valid=${art.valid}`);
@@ -220,7 +223,12 @@ async function main() {
     data: { email, name: 'Cowork Live E2E', password: 'x', plan: 'ENTERPRISE', monthlyLimit: 99999999, monthlyCallLimit: 99999999 },
   });
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '2h', audience: 'siragpt-clients', issuer: 'siragpt-api' });
-  await prisma.session.create({ data: { userId: user.id, token, fingerprint: null, expiresAt: new Date(Date.now() + 7200_000) } });
+  await createSessionRecord(prisma, {
+    userId: user.id,
+    token,
+    fingerprint: null,
+    expiresAt: new Date(Date.now() + 7200_000),
+  });
   const H = { Authorization: `Bearer ${token}` };
   const createdFileIds = [];
 

@@ -12,8 +12,8 @@
  *   3. Hard fallback (`SIRAGPT_API_KEY_DEFAULT_RPM`, default 60)
  *
  * The middleware is a no-op for JWT/session traffic (req.authMethod
- * !== 'api_key'). When the rate-limit store throws, the request is
- * allowed through (fail-open) — same posture as enforce-org-rate-limit.
+ * !== 'api_key'). Production store failures return a no-store 503;
+ * explicit nonproduction policies can retain memory or fail-open behavior.
  *
  * Also emits a sampled audit-log row every Nth use of the same key
  * (env `SIRAGPT_API_KEY_AUDIT_SAMPLE_RATE`, default 100) with
@@ -24,6 +24,11 @@
 
 const rateLimitStore = require('./rate-limit-store');
 const { getRequestId } = require('./request-id');
+const {
+  resolveSensitiveRateLimitPolicy,
+  resolveStoreRetryAfterSeconds,
+} = require('./rate-limit-policy');
+const { isProductionLike } = require('../utils/environment');
 
 const WINDOW_MS = 60_000;
 
@@ -31,6 +36,7 @@ const HEADER_LIMIT = 'X-API-Key-RateLimit-Limit';
 const HEADER_REMAINING = 'X-API-Key-RateLimit-Remaining';
 const HEADER_RESET = 'X-API-Key-RateLimit-Reset';
 const HEADER_SOURCE = 'X-API-Key-RateLimit-Source';
+const DEFAULT_AUDIT_COUNTER_MAX = 10_000;
 
 function envInt(name, fallback) {
   const v = process.env[name];
@@ -78,12 +84,11 @@ function resolveLimit(req) {
 }
 
 let _failureLogged = false;
-function logOnce(msg, err) {
+function logOnce(msg) {
   if (_failureLogged) return;
   _failureLogged = true;
-  const detail = err && err.message ? ` (${err.message})` : '';
   // eslint-disable-next-line no-console
-  console.warn(`[api-key-rate-limit] ${msg}${detail}`);
+  console.warn(`[api-key-rate-limit] ${msg}`);
 }
 
 function setNoStoreHeaders(res) {
@@ -98,6 +103,15 @@ const AUDIT_SAMPLE_RATE = (() => {
 })();
 const _useCounters = new Map(); // keyId → count (per-process)
 function _resetAuditCountersForTests() { _useCounters.clear(); }
+function _auditCounterSize() { return _useCounters.size; }
+
+function resolveAuditCounterMax(value) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 100_000) {
+    return Math.floor(parsed);
+  }
+  return DEFAULT_AUDIT_COUNTER_MAX;
+}
 
 let _prismaRef = null;
 function _getPrisma() {
@@ -123,11 +137,20 @@ function _getAuditWriter() {
   return _writeAuditLog;
 }
 
-function _maybeAuditUse(req, endpoint) {
+function _maybeAuditUse(req, endpoint, counterMax = DEFAULT_AUDIT_COUNTER_MAX) {
   const apiKey = req && req.apiKey;
   if (!apiKey || !apiKey.id) return;
   const prev = _useCounters.get(apiKey.id) || 0;
   const next = prev + 1;
+  if (_useCounters.has(apiKey.id)) {
+    _useCounters.delete(apiKey.id);
+  } else {
+    while (_useCounters.size >= counterMax) {
+      const oldest = _useCounters.keys().next().value;
+      if (oldest === undefined) break;
+      _useCounters.delete(oldest);
+    }
+  }
   _useCounters.set(apiKey.id, next);
   if (next % AUDIT_SAMPLE_RATE !== 0) return;
 
@@ -161,9 +184,17 @@ function _maybeAuditUse(req, endpoint) {
  */
 function enforceApiKeyRateLimit(opts = {}) {
   const store = opts.store || rateLimitStore;
+  const env = opts.env || process.env;
+  const policy = resolveSensitiveRateLimitPolicy(env);
+  const consumeEnv = policy.mode === 'memory'
+    ? { ...env, RATE_LIMIT_STORE: 'memory' }
+    : env;
   const windowMs = Number.isFinite(opts.windowMs) && opts.windowMs > 0
     ? Number(opts.windowMs)
     : WINDOW_MS;
+  const auditCounterMax = resolveAuditCounterMax(
+    opts.auditCounterMax ?? env.SIRAGPT_API_KEY_AUDIT_COUNTER_MAX,
+  );
 
   return async function enforceApiKeyRateLimitMiddleware(req, res, next) {
     if (!req || req.authMethod !== 'api_key' || !req.apiKey || !req.apiKey.id) {
@@ -176,11 +207,33 @@ function enforceApiKeyRateLimit(opts = {}) {
 
     let result;
     try {
-      result = await store.consume(`api-key-rpm:${req.apiKey.id}`, limit, windowMs);
-    } catch (err) {
-      logOnce('rate-limit store failed (fail-open)', err);
+      result = await store.consume(`api-key-rpm:${req.apiKey.id}`, limit, windowMs, {
+        env: consumeEnv,
+        requireDistributed: policy.requireDistributed,
+      });
+    } catch (_err) {
       // Audit even when the store hiccups, so forensics still see the use.
-      try { _maybeAuditUse(req, req.originalUrl || req.url); } catch (_) { /* swallow */ }
+      try {
+        _maybeAuditUse(req, req.originalUrl || req.url, auditCounterMax);
+      } catch (_) { /* swallow */ }
+      if (policy.failClosed) {
+        const retryAfterSeconds = resolveStoreRetryAfterSeconds(
+          _err,
+          policy.retryAfterSeconds,
+        );
+        logOnce('rate-limit store unavailable (fail-closed)');
+        setNoStoreHeaders(res);
+        try { res.setHeader('Retry-After', String(retryAfterSeconds)); } catch (_e) { /* swallow */ }
+        const requestId = getRequestId(req);
+        return res.status(503).json({
+          ok: false,
+          code: rateLimitStore.RATE_LIMIT_STORE_UNAVAILABLE,
+          error: 'Rate limit service temporarily unavailable.',
+          retryAfterSec: retryAfterSeconds,
+          ...(requestId ? { requestId } : {}),
+        });
+      }
+      logOnce('rate-limit store unavailable (explicit nonproduction fail-open)');
       return next();
     }
 
@@ -212,14 +265,61 @@ function enforceApiKeyRateLimit(opts = {}) {
     }
 
     // Sampled audit-log of api_key_used. Fire-and-forget.
-    try { _maybeAuditUse(req, req.originalUrl || req.url); } catch (_) { /* swallow */ }
+    try {
+      _maybeAuditUse(req, req.originalUrl || req.url, auditCounterMax);
+    } catch (_) { /* swallow */ }
 
     return next();
   };
 }
 
+/**
+ * Lazy, retryable gate used by auth middleware. A failed module/factory load
+ * is never cached, and an unexpected runtime throw invalidates the cached
+ * middleware so the next request gets a fresh initialization attempt.
+ */
+function createResilientApiKeyRateLimitGate(opts = {}) {
+  const env = opts.env || process.env;
+  const policy = resolveSensitiveRateLimitPolicy(env);
+  const loadMiddleware = opts.loadMiddleware
+    || (() => enforceApiKeyRateLimit({ env }));
+  let middleware = null;
+
+  return async function resilientApiKeyRateLimitGate(req, res, next) {
+    try {
+      if (!middleware) {
+        const loaded = await Promise.resolve(loadMiddleware());
+        if (typeof loaded !== 'function') {
+          throw new TypeError('API key rate limiter did not initialize');
+        }
+        middleware = loaded;
+      }
+      return await middleware(req, res, next);
+    } catch (error) {
+      middleware = null;
+      if (!policy.failClosed && !isProductionLike(env)) return next();
+
+      const retryAfterSeconds = resolveStoreRetryAfterSeconds(
+        error,
+        policy.retryAfterSeconds,
+      );
+      setNoStoreHeaders(res);
+      try { res.setHeader('Retry-After', String(retryAfterSeconds)); } catch (_e) { /* swallow */ }
+      const requestId = getRequestId(req);
+      return res.status(503).json({
+        ok: false,
+        code: rateLimitStore.RATE_LIMIT_STORE_UNAVAILABLE,
+        error: 'Rate limit service temporarily unavailable.',
+        retryAfterSec: retryAfterSeconds,
+        ...(requestId ? { requestId } : {}),
+      });
+    }
+  };
+}
+
 module.exports = {
   enforceApiKeyRateLimit,
+  createResilientApiKeyRateLimitGate,
   defaultRpmForPlan,
   resolveLimit,
   resolvePlan,
@@ -228,5 +328,7 @@ module.exports = {
   HEADER_RESET,
   HEADER_SOURCE,
   AUDIT_SAMPLE_RATE,
+  DEFAULT_AUDIT_COUNTER_MAX,
   _resetAuditCountersForTests,
+  _auditCounterSize,
 };

@@ -64,6 +64,87 @@ describe('pre-registered metrics', () => {
   });
 });
 
+describe('registration schema', () => {
+  it('is idempotent for an identical counter schema without clearing samples', () => {
+    const name = 'test_agent_identical_counter_registration';
+    const schema = { help: 'identical schema', labels: ['agent'], maxSeries: 3 };
+    registerCounter(name, schema);
+    counter(name, { agent: 'planner' }, 2);
+
+    registerCounter(name, { ...schema, labels: [...schema.labels] });
+
+    const metric = registry.get(name);
+    assert.equal(metric.series.get('agent=planner'), 2);
+    assert.equal(metric.series.size, 1);
+  });
+
+  it('is idempotent for an identical histogram schema without clearing samples', () => {
+    const name = 'test_agent_identical_histogram_registration';
+    const schema = {
+      help: 'identical histogram',
+      labels: ['agent'],
+      buckets: [10, 20],
+      maxSeries: 4,
+    };
+    registerHistogram(name, schema);
+    observe(name, { agent: 'planner' }, 5);
+
+    registerHistogram(name, {
+      ...schema,
+      labels: [...schema.labels],
+      buckets: [...schema.buckets],
+    });
+
+    assert.equal(registry.get(name).series.get('agent=planner').count, 1);
+  });
+
+  it('rejects duplicate registration with a conflicting type or schema', () => {
+    const name = 'test_agent_conflicting_registration';
+    registerHistogram(name, {
+      help: 'duration',
+      labels: ['agent'],
+      buckets: [10, 20],
+      maxSeries: 4,
+    });
+
+    for (const registerConflict of [
+      () => registerCounter(name, { help: 'duration', labels: ['agent'], maxSeries: 4 }),
+      () => registerHistogram(name, {
+        help: 'different help',
+        labels: ['agent'],
+        buckets: [10, 20],
+        maxSeries: 4,
+      }),
+      () => registerHistogram(name, {
+        help: 'duration',
+        labels: ['tool'],
+        buckets: [10, 20],
+        maxSeries: 4,
+      }),
+      () => registerHistogram(name, {
+        help: 'duration',
+        labels: ['agent'],
+        buckets: [10, 30],
+        maxSeries: 4,
+      }),
+      () => registerHistogram(name, {
+        help: 'duration',
+        labels: ['agent'],
+        buckets: [10, 20],
+        maxSeries: 5,
+      }),
+    ]) {
+      assert.throws(registerConflict, /conflicting metric registration/i);
+    }
+
+    const metric = registry.get(name);
+    assert.equal(metric.type, 'histogram');
+    assert.deepEqual(metric.labels, ['agent']);
+    assert.deepEqual(metric.buckets, [10, 20]);
+    assert.equal(metric.maxSeries, 4);
+  });
+});
+
 // ── counter ───────────────────────────────────────────────────
 
 describe('counter', () => {
@@ -109,6 +190,18 @@ describe('counter', () => {
     const keys = [...m.series.keys()];
     assert.equal(keys[0], 'agent=a,terminatedBy=');
   });
+
+  it('rejects negative, non-finite, and non-numeric deltas', () => {
+    const name = 'test_agent_counter_invalid_values';
+    registerCounter(name, { help: 'invalid values', labels: ['agent'] });
+    for (const value of [-1, NaN, Infinity, -Infinity, '2']) {
+      counter(name, { agent: String(value) }, value);
+    }
+    assert.equal(registry.get(name).series.size, 0);
+
+    counter(name, { agent: 'valid' }, 2);
+    assert.equal(registry.get(name).series.get('agent=valid'), 2);
+  });
 });
 
 // ── gauge ─────────────────────────────────────────────────────
@@ -133,6 +226,18 @@ describe('gauge', () => {
     gauge('se_agent_errors_total', { agent: 'a' }, 42);
     const m = registry.get('se_agent_errors_total');
     assert.equal(m.series.size, 0);
+  });
+
+  it('rejects non-finite values while retaining finite negative gauges', () => {
+    const name = 'test_agent_gauge_invalid_values';
+    registerGauge(name, { help: 'invalid values', labels: ['collection'] });
+    for (const value of [NaN, Infinity, -Infinity, '2']) {
+      gauge(name, { collection: String(value) }, value);
+    }
+    assert.equal(registry.get(name).series.size, 0);
+
+    gauge(name, { collection: 'delta' }, -2);
+    assert.equal(registry.get(name).series.get('collection=delta'), -2);
   });
 });
 
@@ -178,6 +283,91 @@ describe('observe', () => {
     observe('nonexistent_histogram', { foo: 'bar' }, 50);
     // Should not throw.
   });
+
+  it('rejects negative, non-finite, and non-numeric observations', () => {
+    const name = 'test_agent_histogram_invalid_values';
+    registerHistogram(name, {
+      help: 'invalid values',
+      labels: ['agent'],
+      buckets: [10],
+    });
+    for (const value of [-1, NaN, Infinity, -Infinity, '2']) {
+      observe(name, { agent: String(value) }, value);
+    }
+    assert.equal(registry.get(name).series.size, 0);
+
+    observe(name, { agent: 'valid' }, 2);
+    const record = registry.get(name).series.get('agent=valid');
+    assert.equal(record.count, 1);
+    assert.equal(record.sum, 2);
+  });
+});
+
+describe('per-family series cap', () => {
+  it('uses a finite bounded default', () => {
+    registerCounter('test_agent_default_series_cap', {
+      help: 'h',
+      labels: ['value'],
+    });
+    const family = registry.get('test_agent_default_series_cap');
+    assert.ok(Number.isInteger(family.maxSeries));
+    assert.ok(family.maxSeries >= 1 && family.maxSeries <= 10_000);
+  });
+
+  it('folds counter overflow into a deterministic __other__ series', () => {
+    registerCounter('test_agent_counter_cap', {
+      help: 'h',
+      labels: ['agent'],
+      maxSeries: 3,
+    });
+    for (const agent of ['a', 'b', 'c', 'd']) {
+      counter('test_agent_counter_cap', { agent });
+    }
+    counter('test_agent_counter_cap', { agent: 'a' }, 2);
+
+    const family = registry.get('test_agent_counter_cap');
+    assert.equal(family.series.size, 3);
+    assert.equal(family.series.get('agent=a'), 3);
+    assert.equal(family.series.get('agent=b'), 1);
+    assert.equal(family.series.get('agent=__other__'), 2);
+  });
+
+  it('folds histogram overflow into a deterministic __other__ series', () => {
+    registerHistogram('test_agent_histogram_cap', {
+      help: 'h',
+      labels: ['agent'],
+      buckets: [10],
+      maxSeries: 2,
+    });
+    observe('test_agent_histogram_cap', { agent: 'a' }, 1);
+    observe('test_agent_histogram_cap', { agent: 'b' }, 2);
+    observe('test_agent_histogram_cap', { agent: 'c' }, 3);
+
+    const family = registry.get('test_agent_histogram_cap');
+    assert.equal(family.series.size, 2);
+    assert.equal(family.series.get('agent=a').count, 1);
+    assert.equal(family.series.get('agent=__other__').count, 2);
+    assert.equal(family.series.get('agent=__other__').sum, 5);
+  });
+
+  it('bounds gauges by dropping later new label sets while allowing updates', () => {
+    registerGauge('test_agent_gauge_cap', {
+      help: 'h',
+      labels: ['collection'],
+      maxSeries: 2,
+    });
+    gauge('test_agent_gauge_cap', { collection: 'a' }, 1);
+    gauge('test_agent_gauge_cap', { collection: 'b' }, 2);
+    gauge('test_agent_gauge_cap', { collection: 'c' }, 3);
+    gauge('test_agent_gauge_cap', { collection: 'a' }, 4);
+
+    const family = registry.get('test_agent_gauge_cap');
+    assert.equal(family.series.size, 2);
+    assert.equal(family.series.get('collection=a'), 4);
+    assert.equal(family.series.get('collection=b'), 2);
+    assert.equal(family.series.has('collection=c'), false);
+    assert.equal(family.series.has('collection=__other__'), false);
+  });
 });
 
 // ── renderText ────────────────────────────────────────────────
@@ -215,14 +405,12 @@ describe('renderText', () => {
     assert.match(out, /se_agent_duration_ms_count\{.*\} 1/);
   });
 
-  it('sanitises problematic chars (\\, ", newline) at ingestion time', () => {
-    // labelKey() replaces backslash, double-quote, and newline with
-    // "_" BEFORE storing in the series map. So by the time renderText
-    // runs, there are no special chars left to escape — the render
-    // function sees the already-cleaned value.
-    counter('se_agent_errors_total', { agent: 'a"b\\c' });
+  it('escapes CR/LF, backslashes, and quotes without creating sample lines', () => {
+    counter('se_agent_errors_total', { agent: 'a\r\ninjected 1"\\c' });
     const out = renderText();
-    assert.match(out, /se_agent_errors_total\{agent="a_b_c"\} 1/);
+    assert.equal(out.includes('\r'), false);
+    assert.equal(out.split('\n').some((line) => line.startsWith('injected 1')), false);
+    assert.ok(out.includes('se_agent_errors_total{agent="a\\ninjected 1\\"\\\\c"} 1'));
   });
 
   it('ends with a newline', () => {

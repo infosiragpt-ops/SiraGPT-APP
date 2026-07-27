@@ -3,16 +3,20 @@
 const { test, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const crypto = require('node:crypto');
+const { once } = require('node:events');
 const express = require('express');
 const request = require('supertest');
+const WebSocket = require('ws');
 
 const { mockResolvedModule } = require('./http-test-utils');
 
 // Stub auth BEFORE the codex router loads it.
 const authPath = require.resolve('../src/middleware/auth');
+let authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
 const restoreAuth = mockResolvedModule(authPath, {
   authenticateToken(req, _res, next) {
-    req.user = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
+    req.user = authUser;
     next();
   },
 });
@@ -57,6 +61,40 @@ const restoreRunner = mockResolvedModule(runnerPath, {
   RunnerError: class RunnerError extends Error {},
 });
 
+const publicationCalls = [];
+const restorePublication = mockResolvedModule(
+  require.resolve('../src/services/codex/publication-service'),
+  {
+    getPublication: async (args) => {
+      publicationCalls.push(['get', args]);
+      return {
+        hostname: 'demo.apps.example.com',
+        url: 'https://demo.apps.example.com',
+        currentReleaseId: 'abc1234',
+        publishedAt: '2026-07-26T12:00:00.000Z',
+        releases: [],
+      };
+    },
+    publishProject: async (args) => {
+      publicationCalls.push(['publish', args]);
+      return {
+        ok: true,
+        publication: { currentReleaseId: 'def5678', releases: [] },
+        release: { id: 'def5678' },
+        buildLog: 'built',
+      };
+    },
+    rollbackPublication: async (args) => {
+      publicationCalls.push(['rollback-publication', args]);
+      return {
+        ok: true,
+        publication: { currentReleaseId: args.releaseId, releases: [] },
+        release: { id: args.releaseId },
+      };
+    },
+  },
+);
+
 const codexRoutes = require('../src/routes/codex');
 
 let runnerStatusQueue = null;
@@ -67,18 +105,22 @@ after(() => {
   restoreAuth();
   restoreService();
   restoreRunner();
+  restorePublication();
   delete process.env.CODEX_AGENT_V2;
   delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
+  delete process.env.CODEX_PREVIEW_TOKEN_SECRET;
 });
 beforeEach(() => {
+  authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
   process.env.CODEX_AGENT_V2 = '1';
   delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
   serviceCalls.length = 0;
   runnerCalls.length = 0;
+  publicationCalls.length = 0;
   runnerStatusQueue = null;
   runnerStatusCalls = 0;
   runnerMockPort = 5173;
@@ -90,6 +132,58 @@ function buildApp() {
   app.use('/api/codex', codexRoutes);
   return app;
 }
+
+test('Codex router exposes the tokenized preview WebSocket attachment', () => {
+  assert.equal(typeof codexRoutes.attachPreviewWebSocketProxy, 'function');
+});
+
+test('tokenized preview WebSocket reaches only its runner project', async (t) => {
+  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-preview-websocket-test-secret';
+  const upstream = http.createServer();
+  const upstreamWss = new WebSocket.Server({ server: upstream });
+  upstreamWss.on('connection', (socket) => {
+    socket.send('vite-connected');
+    socket.on('message', (data) => socket.send(`vite:${String(data)}`));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  runnerMockPort = upstream.address().port;
+
+  const proxy = http.createServer(buildApp());
+  const binding = codexRoutes.attachPreviewWebSocketProxy(proxy);
+  await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+
+  const payload = Buffer.from(JSON.stringify({
+    projectId: 'p1',
+    userId: 'u-1',
+    exp: Date.now() + 60_000,
+  })).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', process.env.CODEX_PREVIEW_TOKEN_SECRET)
+    .update(payload)
+    .digest('base64url');
+  const token = `${payload}.${signature}`;
+  const client = new WebSocket(
+    `ws://127.0.0.1:${proxy.address().port}/api/codex/projects/p1/preview/${token}/app/`,
+    'vite-hmr',
+  );
+
+  t.after(async () => {
+    client.terminate();
+    binding.close();
+    for (const socket of upstreamWss.clients) socket.terminate();
+    await new Promise((resolve) => proxy.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  });
+
+  const connected = new Promise((resolve) => client.once('message', (data) => resolve(String(data))));
+  await once(client, 'open');
+  assert.equal(client.protocol, 'vite-hmr');
+  assert.equal(await connected, 'vite-connected');
+
+  const echoed = new Promise((resolve) => client.once('message', (data) => resolve(String(data))));
+  client.send('ping');
+  assert.equal(await echoed, 'vite:ping');
+});
 
 test('GET /health responds 200 with enabled=false when the flag is off', async () => {
   delete process.env.CODEX_AGENT_V2;
@@ -114,6 +208,15 @@ test('GET /access reports flag and user execution access', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.enabled, true);
   assert.equal(res.body.canRun, true);
+});
+
+test('POST /projects/:id/proactive rejects autonomous execution without isolated access', async () => {
+  authUser = { id: 'u-1', isAdmin: false, isSuperAdmin: false };
+  const res = await request(buildApp())
+    .post('/api/codex/projects/p1/proactive')
+    .send({ enabled: true });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error, 'codex_forbidden');
 });
 
 test('flag off ⇒ every other route is 404 not_found', async () => {
@@ -146,6 +249,31 @@ test('GET /projects lists own projects; GET /projects/:id 404s for foreign ids',
   const missing = await request(buildApp()).get('/api/codex/projects/nope');
   assert.equal(missing.status, 404);
   assert.equal(missing.body.error, 'project_not_found');
+});
+
+test('publication routes preserve ownership context and support publish plus rollback', async () => {
+  const app = buildApp();
+  const current = await request(app).get('/api/codex/projects/p1/publication');
+  assert.equal(current.status, 200);
+  assert.equal(current.headers['cache-control'], 'no-store');
+  assert.equal(current.body.publication.url, 'https://demo.apps.example.com');
+
+  const published = await request(app)
+    .post('/api/codex/projects/p1/publication')
+    .send({ checkpointId: 'cp-1' });
+  assert.equal(published.status, 201);
+  const publishCall = publicationCalls.find((call) => call[0] === 'publish');
+  assert.equal(publishCall[1].userId, 'u-1');
+  assert.equal(publishCall[1].projectId, 'p1');
+  assert.equal(publishCall[1].checkpointId, 'cp-1');
+
+  const rolledBack = await request(app)
+    .post('/api/codex/projects/p1/publication/rollback')
+    .send({ releaseId: 'abc1234' });
+  assert.equal(rolledBack.status, 200);
+  const rollbackCall = publicationCalls.find((call) => call[0] === 'rollback-publication');
+  assert.equal(rollbackCall[1].releaseId, 'abc1234');
+  assert.equal(rollbackCall[1].userId, 'u-1');
 });
 
 test('POST /projects/:id/preview/start proxies the runner and adds devUrl', async () => {

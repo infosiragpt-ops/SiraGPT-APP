@@ -68,6 +68,7 @@ test('snapshot() shape: stable top-level keys + upstream block', () => {
     'totalCostBlocked',
     'perFeature',
     'lastEventAt',
+    'business',
     'upstream',
     'startedAt',
     'lastResetAt',
@@ -84,6 +85,7 @@ test('snapshot() shape: stable top-level keys + upstream block', () => {
     'topErrorCodes',
   ].sort();
   assert.deepEqual(Object.keys(s.upstream).sort(), expectedUpstream);
+  assert.deepEqual(Object.keys(s.business).sort(), ['attempts', 'errors', 'successes']);
 });
 
 test('summary() returns a one-line digest with all the numbers backing it', () => {
@@ -244,6 +246,83 @@ test('recordFallback increments total + per-feature counters', () => {
   assert.equal(s.perFeature.generate.costBlocked, '3');
 });
 
+test('fallback business attempt/success/error metrics dedupe by request key', () => {
+  metrics.reset();
+  assert.equal(typeof metrics.recordFallbackAttempt, 'function');
+  assert.equal(typeof metrics.recordFallbackSuccess, 'function');
+  assert.equal(typeof metrics.recordFallbackError, 'function');
+
+  for (let index = 0; index < 2; index += 1) {
+    metrics.recordFallbackAttempt({
+      feature: 'paraphrase',
+      amount: 5,
+      requestKey: 'user-1:idempotency-1',
+    });
+    metrics.recordFallbackSuccess({
+      feature: 'paraphrase',
+      requestKey: 'user-1:idempotency-1',
+    });
+    metrics.recordFallbackError({
+      feature: 'paraphrase',
+      requestKey: 'user-1:idempotency-1',
+    });
+  }
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.totalFallbacks, 1);
+  assert.deepEqual(snapshot.business, {
+    attempts: 1,
+    successes: 1,
+    errors: 1,
+  });
+  const prometheus = metrics.toPrometheusText();
+  assert.match(prometheus, /^sira_free_ia_fallback_success_total 1$/m);
+  assert.match(prometheus, /^sira_free_ia_fallback_errors_total 1$/m);
+});
+
+test('fallback business metrics treat distinct request keys independently', () => {
+  metrics.reset();
+  assert.equal(typeof metrics.recordFallbackAttempt, 'function');
+  assert.equal(typeof metrics.recordFallbackSuccess, 'function');
+  assert.equal(typeof metrics.recordFallbackError, 'function');
+  metrics.recordFallbackAttempt({ feature: 'paraphrase', amount: 2, requestKey: 'request-a' });
+  metrics.recordFallbackAttempt({ feature: 'paraphrase', amount: 2, requestKey: 'request-b' });
+  metrics.recordFallbackSuccess({ requestKey: 'request-a' });
+  metrics.recordFallbackError({ requestKey: 'request-b' });
+  const snapshot = metrics.snapshot();
+  assert.deepEqual(snapshot.business, {
+    attempts: 2,
+    successes: 1,
+    errors: 1,
+  });
+  assert.equal(snapshot.totalCostBlocked, '4');
+});
+
+test('recordFallback normalizes feature labels before storing or exporting them', () => {
+  metrics.reset();
+  metrics.recordFallback({ feature: '  paraphrase / custom\r\nmetric  ', amount: 2 });
+  const s = metrics.snapshot();
+  assert.deepEqual(Object.keys(s.perFeature), ['paraphrase_custom_metric']);
+  assert.equal(s.perFeature.paraphrase_custom_metric.costBlocked, '2');
+  const text = metrics.toPrometheusText();
+  assert.match(text, /feature="paraphrase_custom_metric"/);
+  assert.equal(text.includes('\r'), false);
+  assert.equal(text.split('\n').some((line) => line.startsWith('metric ')), false);
+});
+
+test('recordFallback bounds perFeature cardinality and folds overflow into __other__', () => {
+  metrics.reset();
+  assert.ok(Number.isInteger(metrics.MAX_FEATURE_LABELS));
+  assert.equal(metrics.OTHER_FEATURE_LABEL, '__other__');
+  for (let i = 0; i < metrics.MAX_FEATURE_LABELS + 5; i += 1) {
+    metrics.recordFallback({ feature: `feature-${i}`, amount: 1 });
+  }
+  const s = metrics.snapshot();
+  assert.ok(Object.keys(s.perFeature).length <= metrics.MAX_FEATURE_LABELS);
+  assert.equal(s.totalFallbacks, metrics.MAX_FEATURE_LABELS + 5);
+  assert.equal(s.perFeature.__other__.count, 6);
+  assert.equal(s.perFeature.__other__.costBlocked, '6');
+});
+
 test('recordFallback handles missing/invalid amount as 0 cost (no crash)', () => {
   metrics.reset();
   metrics.recordFallback({ feature: 'x' });
@@ -296,11 +375,11 @@ test('toPrometheusText emits the expected counter names + per-feature labels', (
   assert.match(txt, /^sira_free_ia_fallback_cost_blocked_total 12$/m);
   assert.match(txt, /sira_free_ia_fallback_total\{feature="paraphrase"\} 1/);
   assert.match(txt, /sira_free_ia_fallback_total\{feature="image_generation"\} 1/);
-  // No injection from label names that contain quotes:
+  // Untrusted labels are normalized before they reach the exposition:
   metrics.reset();
   metrics.recordFallback({ feature: 'weird"feature', amount: 1 });
   const sanitized = metrics.toPrometheusText();
-  assert.match(sanitized, /feature="weird\\"feature"/);
+  assert.match(sanitized, /feature="weird_feature"/);
 });
 
 test('recordUpstreamSuccess / recordUpstreamError track the Free IA upstream', () => {
@@ -480,7 +559,7 @@ test('reset() clears upstream counters too', () => {
   assert.equal(s.upstream.lastErrorCode, null);
 });
 
-test('chargeCredits triggers recordFallback on the Free IA path', async () => {
+test('chargeCredits leaves fallback business metrics and headers to the validated route handler', async () => {
   // Re-stub Prisma like the existing charge-credits-middleware tests do.
   const Module = require('node:module');
   const origRequire = Module.prototype.require;
@@ -489,7 +568,12 @@ test('chargeCredits triggers recordFallback on the Free IA path', async () => {
   stubs.set('../config/database', {
     creditTransaction: { async findUnique() { return null; }, async create({ data }) { return { id: 'tx_x', ...data }; } },
     credit: { async findUnique() { return { userId: 'u1', balance, lifetimeSpent: 0n }; }, async update() { return { userId: 'u1', balance, lifetimeSpent: 0n }; } },
-    async $executeRawUnsafe() { return 0; }, // always insufficient
+    async $transaction(callback) {
+      return callback({
+        creditTransaction: this.creditTransaction,
+        async $queryRawUnsafe() { return []; }, // always insufficient
+      });
+    },
   });
   Module.prototype.require = function (spec) {
     if (stubs.has(spec)) return stubs.get(spec);
@@ -506,24 +590,28 @@ test('chargeCredits triggers recordFallback on the Free IA path', async () => {
   try {
     const headers = {};
     const req = { user: { id: 'u1' }, body: {}, get() {} };
-    const res = {
-      status() { return res; },
-      json() { return res; },
-      setHeader(name, value) { headers[name.toLowerCase()] = String(value); },
-      headersSent: false,
-    };
     let nextCalled = false;
     await new Promise((resolve) => {
-      chargeCredits({ feature: 'paraphrase', cost: 5 })(req, res, () => {
+      const res = {
+        status() { return res; },
+        json() { resolve(); return res; },
+        setHeader(name, value) { headers[name.toLowerCase()] = String(value); },
+        headersSent: false,
+      };
+      chargeCredits({
+        feature: 'paraphrase',
+        cost: 5,
+        allowFreeIaFallback: true,
+      })(req, res, () => {
         nextCalled = true;
         resolve();
       });
     });
     assert.equal(nextCalled, true);
     const s = metrics.snapshot();
-    assert.equal(s.totalFallbacks, 1);
-    assert.equal(s.perFeature.paraphrase.count, 1);
-    assert.equal(s.perFeature.paraphrase.costBlocked, '5');
+    assert.equal(s.totalFallbacks, 0);
+    assert.deepEqual(s.perFeature, {});
+    assert.deepEqual(headers, {});
   } finally {
     if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
     else process.env.CEREBRAS_API_KEY = prevKey;

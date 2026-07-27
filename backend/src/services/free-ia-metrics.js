@@ -1,5 +1,7 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
+
 /**
  * free-ia-metrics — tiny in-memory counter for Free IA (Cerebras)
  * fallback events.
@@ -17,11 +19,29 @@
  *   reset()                             — testing helper
  */
 
+const {
+  escapePrometheusLabelValue,
+  normalizePrometheusLabelToken,
+} = require('../utils/prometheus-labels');
+
+const MAX_ERROR_CODE_LABELS = 20;
+const OTHER_ERROR_CODE_LABEL = '__other__';
+const MAX_FEATURE_LABELS = 20;
+const OTHER_FEATURE_LABEL = '__other__';
+const MAX_BUSINESS_DEDUPE_KEYS = 5000;
+
 const state = {
   totalFallbacks: 0,
   totalCostBlocked: 0n,
   perFeature: Object.create(null),
   lastEventAt: null,
+  fallbackSuccesses: 0,
+  fallbackErrors: 0,
+  businessDedupe: {
+    attempt: new Map(),
+    success: new Map(),
+    error: new Map(),
+  },
   // Health: track Free IA upstream outcomes so ops can see whether
   // Cerebras itself is healthy when we route to it.
   upstreamSuccess: 0,
@@ -50,21 +70,77 @@ function toAmount(value) {
   }
 }
 
+function normalizeFeatureLabel(feature) {
+  return normalizePrometheusLabelToken(feature, {
+    fallback: 'unknown',
+    maxLength: 64,
+  });
+}
+
+function boundedFeatureBucket(feature) {
+  const normalized = normalizeFeatureLabel(feature);
+  if (Object.prototype.hasOwnProperty.call(state.perFeature, normalized)) {
+    return normalized;
+  }
+  const concreteCount = Object.keys(state.perFeature)
+    .filter((label) => label !== OTHER_FEATURE_LABEL)
+    .length;
+  const concreteLimit = Math.max(0, MAX_FEATURE_LABELS - 1);
+  return concreteCount >= concreteLimit
+    ? OTHER_FEATURE_LABEL
+    : normalized;
+}
+
 /**
  * Record a single Free IA fallback event. Called from the chargeCredits
  * middleware when an INSUFFICIENT balance is silently re-routed.
  */
-function recordFallback({ feature, amount } = {}) {
+function requestKeyDigest(requestKey) {
+  if (requestKey == null || String(requestKey).trim() === '') return null;
+  return createHash('sha256').update(String(requestKey)).digest('hex');
+}
+
+function claimBusinessMetric(phase, requestKey) {
+  const digest = requestKeyDigest(requestKey);
+  if (!digest) return true;
+  const bucket = state.businessDedupe[phase];
+  if (bucket.has(digest)) return false;
+  bucket.set(digest, true);
+  if (bucket.size > MAX_BUSINESS_DEDUPE_KEYS) {
+    const oldest = bucket.keys().next().value;
+    bucket.delete(oldest);
+  }
+  return true;
+}
+
+function recordFallbackAttempt({ feature, amount, requestKey } = {}) {
+  if (!claimBusinessMetric('attempt', requestKey)) return state.totalFallbacks;
   state.totalFallbacks += 1;
   const cost = toAmount(amount);
   state.totalCostBlocked += cost;
   state.lastEventAt = new Date().toISOString();
-  const key = typeof feature === 'string' && feature ? feature : 'unknown';
+  const key = boundedFeatureBucket(feature);
   const slot = state.perFeature[key] || { count: 0, costBlocked: 0n };
   slot.count += 1;
   slot.costBlocked += cost;
   state.perFeature[key] = slot;
   return state.totalFallbacks;
+}
+
+function recordFallback(input = {}) {
+  return recordFallbackAttempt(input);
+}
+
+function recordFallbackSuccess({ requestKey } = {}) {
+  if (!claimBusinessMetric('success', requestKey)) return state.fallbackSuccesses;
+  state.fallbackSuccesses += 1;
+  return state.fallbackSuccesses;
+}
+
+function recordFallbackError({ requestKey } = {}) {
+  if (!claimBusinessMetric('error', requestKey)) return state.fallbackErrors;
+  state.fallbackErrors += 1;
+  return state.fallbackErrors;
 }
 
 /**
@@ -80,10 +156,31 @@ function recordUpstreamSuccess() {
   return state.upstreamSuccess;
 }
 
+function normalizeErrorCodeLabel(code) {
+  return normalizePrometheusLabelToken(code, {
+    fallback: 'unknown',
+    maxLength: 64,
+  });
+}
+
+function boundedErrorCodeBucket(code) {
+  const normalized = normalizeErrorCodeLabel(code);
+  if (Object.prototype.hasOwnProperty.call(state.upstreamErrorsByCode, normalized)) {
+    return normalized;
+  }
+  const concreteCount = Object.keys(state.upstreamErrorsByCode)
+    .filter((label) => label !== OTHER_ERROR_CODE_LABEL)
+    .length;
+  const concreteLimit = Math.max(0, MAX_ERROR_CODE_LABELS - 1);
+  return concreteCount >= concreteLimit
+    ? OTHER_ERROR_CODE_LABEL
+    : normalized;
+}
+
 function recordUpstreamError({ code, message } = {}) {
   state.upstreamErrors += 1;
   state.lastUpstreamErrorAt = new Date().toISOString();
-  const codeStr = typeof code === 'string' ? code : (code != null ? String(code) : null);
+  const codeStr = code == null ? null : normalizeErrorCodeLabel(code);
   state.lastUpstreamErrorCode = codeStr;
   // Capture the last error message too — useful for a postmortem
   // banner without having to grep logs. Capped at 240 chars to keep
@@ -93,7 +190,7 @@ function recordUpstreamError({ code, message } = {}) {
   }
   // Bump per-code frequency map. `unknown` bucket catches errors that
   // didn't carry an identifiable code/status/name.
-  const bucket = codeStr || 'unknown';
+  const bucket = boundedErrorCodeBucket(codeStr);
   state.upstreamErrorsByCode[bucket] = (state.upstreamErrorsByCode[bucket] || 0) + 1;
   return state.upstreamErrors;
 }
@@ -150,6 +247,11 @@ function snapshot() {
     totalCostBlocked: state.totalCostBlocked.toString(),
     perFeature,
     lastEventAt: state.lastEventAt,
+    business: {
+      attempts: state.totalFallbacks,
+      successes: state.fallbackSuccesses,
+      errors: state.fallbackErrors,
+    },
     upstream: {
       success: state.upstreamSuccess,
       errors: state.upstreamErrors,
@@ -162,6 +264,18 @@ function snapshot() {
     },
     startedAt: state.startedAt,
     lastResetAt: state.lastResetAt,
+  };
+}
+
+function publicSnapshot() {
+  const full = snapshot();
+  const {
+    lastErrorMessage: _lastErrorMessage,
+    ...safeUpstream
+  } = full.upstream;
+  return {
+    ...full,
+    upstream: safeUpstream,
   };
 }
 
@@ -181,10 +295,16 @@ function toPrometheusText() {
   lines.push('# TYPE sira_free_ia_fallback_cost_blocked_total counter');
   lines.push(`sira_free_ia_fallback_cost_blocked_total ${state.totalCostBlocked.toString()}`);
   for (const [k, v] of Object.entries(state.perFeature)) {
-    const escaped = String(k).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escaped = escapePrometheusLabelValue(k);
     lines.push(`sira_free_ia_fallback_total{feature="${escaped}"} ${v.count}`);
     lines.push(`sira_free_ia_fallback_cost_blocked_total{feature="${escaped}"} ${v.costBlocked.toString()}`);
   }
+  lines.push('# HELP sira_free_ia_fallback_success_total Successfully completed fallback business requests.');
+  lines.push('# TYPE sira_free_ia_fallback_success_total counter');
+  lines.push(`sira_free_ia_fallback_success_total ${state.fallbackSuccesses}`);
+  lines.push('# HELP sira_free_ia_fallback_errors_total Failed fallback business requests.');
+  lines.push('# TYPE sira_free_ia_fallback_errors_total counter');
+  lines.push(`sira_free_ia_fallback_errors_total ${state.fallbackErrors}`);
   lines.push('# HELP sira_free_ia_upstream_success_total Successful Cerebras Llama 3.1 8B calls.');
   lines.push('# TYPE sira_free_ia_upstream_success_total counter');
   lines.push(`sira_free_ia_upstream_success_total ${state.upstreamSuccess}`);
@@ -192,7 +312,7 @@ function toPrometheusText() {
   lines.push('# TYPE sira_free_ia_upstream_errors_total counter');
   lines.push(`sira_free_ia_upstream_errors_total ${state.upstreamErrors}`);
   for (const [code, count] of Object.entries(state.upstreamErrorsByCode)) {
-    const escaped = String(code).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escaped = escapePrometheusLabelValue(code);
     lines.push(`sira_free_ia_upstream_errors_total{code="${escaped}"} ${count}`);
   }
   return lines.join('\n') + '\n';
@@ -258,6 +378,13 @@ function reset() {
   state.totalCostBlocked = 0n;
   state.perFeature = Object.create(null);
   state.lastEventAt = null;
+  state.fallbackSuccesses = 0;
+  state.fallbackErrors = 0;
+  state.businessDedupe = {
+    attempt: new Map(),
+    success: new Map(),
+    error: new Map(),
+  };
   state.upstreamSuccess = 0;
   state.upstreamErrors = 0;
   state.lastUpstreamErrorAt = null;
@@ -268,12 +395,22 @@ function reset() {
 }
 
 module.exports = {
+  MAX_ERROR_CODE_LABELS,
+  OTHER_ERROR_CODE_LABEL,
+  MAX_FEATURE_LABELS,
+  OTHER_FEATURE_LABEL,
+  normalizeFeatureLabel,
+  normalizeErrorCodeLabel,
   recordFallback,
+  recordFallbackAttempt,
+  recordFallbackSuccess,
+  recordFallbackError,
   recordUpstreamSuccess,
   recordUpstreamError,
   topUpstreamErrorCodes,
   pruneErrorCodes,
   snapshot,
+  publicSnapshot,
   summary,
   compactSummary,
   toPrometheusText,

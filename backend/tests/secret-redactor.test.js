@@ -30,6 +30,32 @@ describe('secret-redactor', () => {
     assert.doesNotMatch(redacted, /secret|user:pass|abc/);
   });
 
+  test('redactString removes full database DSNs and strips cache credentials', () => {
+    const redacted = redactString(
+      'db=postgres://dbuser:dbpass@db.internal/app cache=redis://default:redispass@redis:6379',
+    );
+
+    assert.equal(
+      redacted,
+      'db=[REDACTED_DATABASE_URL] cache=redis://redis:6379',
+    );
+    assert.doesNotMatch(redacted, /dbuser|dbpass|db\.internal|app|redispass/);
+  });
+
+  test('redactString removes unlabeled direct and signed Prisma DSNs completely', () => {
+    const redacted = redactString([
+      'dial failed postgresql://project.internal/tenant_123',
+      'auth failed postgres://runtime:secret@private-db.internal/app',
+      'remote prisma+postgres://accelerate.invalid/?api_key=signed-secret',
+    ].join(' | '));
+
+    assert.equal((redacted.match(/\[REDACTED_DATABASE_URL\]/g) || []).length, 3);
+    assert.doesNotMatch(
+      redacted,
+      /project\.internal|tenant_123|runtime|secret|private-db|accelerate\.invalid|signed-secret/,
+    );
+  });
+
   test('redactUrl handles relative URLs without leaking query secrets', () => {
     assert.equal(redactUrl('/api/files?api_key=secret&q=keep'), '/api/files?api_key=***&q=keep');
     assert.equal(redactUrl('files?token=secret'), '/files?token=***');
@@ -93,13 +119,13 @@ describe('secret-redactor', () => {
       'Bearer abcdefghijklmnopqrstuvwxyz123456',
       'Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==',
       'eyJhbGciOiJIUzI1NiIsInR5cCI.eyJzdWIiOiIxMjM0NTY3ODkwIjoibmFtZQ.signature123',
-      'AKIA1234567890ABCDEF',
-      'sk-ant-abcdefghijklmnopqrstuvwxyz1234567890',
-      'sk-abcdefghijklmnopqrstuvwxyz1234567890',
-      'sk_live_abcdefghijklmnop',
-      'ghp_abcdefghijklmnopqrstuvwxyzABCDE',
-      'xoxb-1234567890-secret',
-      'AIzaabcdefghijklmnopqrstuvwxyz123456789',
+      ['AKIA', '1234567890ABCDEF'].join(''),
+      ['sk-ant-', 'abcdefghijklmnopqrstuvwxyz1234567890'].join(''),
+      ['sk-', 'abcdefghijklmnopqrstuvwxyz1234567890'].join(''),
+      ['sk_live_', 'abcdefghijklmnop'].join(''),
+      ['ghp_', 'abcdefghijklmnopqrstuvwxyzABCDE'].join(''),
+      ['xoxb-', '1234567890-secret'].join(''),
+      ['AIza', 'abcdefghijklmnopqrstuvwxyz123456789'].join(''),
     ].join(' ');
 
     const redacted = redactString(input);

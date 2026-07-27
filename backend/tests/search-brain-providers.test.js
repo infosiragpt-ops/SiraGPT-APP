@@ -13,8 +13,41 @@ const {
   normaliseAuthors,
   buildWosUsrQuery,
   searchWebOfScience,
+  adaptScientificPaper,
+  REGISTRY,
   INTERNAL,
 } = require("../src/services/searchBrain/providers");
+
+test("registry exposes all 16 worldwide scientific indexes", () => {
+  assert.equal(Object.keys(REGISTRY).length, 16);
+  for (const source of ["arxiv", "europepmc", "core", "dblp", "datacite", "redalyc", "biorxiv", "medrxiv"]) {
+    assert.equal(typeof REGISTRY[source], "function", `missing ${source}`);
+  }
+});
+
+test("adaptScientificPaper maps the canonical research shape without losing provenance", () => {
+  const row = adaptScientificPaper({
+    source: "europepmc",
+    title: "Precision medicine review",
+    authors: [{ name: "Ana Ruiz" }, { name: "John Smith" }],
+    year: 2025,
+    venue: "Journal of Precision Medicine",
+    doi: "https://doi.org/10.1000/precision",
+    htmlUrl: "https://europepmc.org/article/MED/1",
+    pdfUrl: "https://example.org/paper.pdf",
+    abstract: "A systematic review.",
+    citations: 17,
+    openAccess: true,
+  }, "europepmc", 20);
+
+  assert.equal(row.source, "europepmc");
+  assert.deepEqual(row.authors, ["Ana Ruiz", "John Smith"]);
+  assert.equal(row.journal, "Journal of Precision Medicine");
+  assert.equal(row.doi, "10.1000/precision");
+  assert.equal(row.citationCount, 17);
+  assert.equal(row.providerRank, 20);
+  assert.equal(row.openAccess, true);
+});
 
 test("reconstructAbstract: inverts OpenAlex's word→positions map", () => {
   const inv = {

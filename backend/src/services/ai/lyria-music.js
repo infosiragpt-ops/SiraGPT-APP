@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { signalWithTimeout, throwIfAborted } = require('../../utils/abort-signal');
 
 const OPENROUTER_BASE = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
 const LYRIA_MODEL = process.env.LYRIA_MODEL_ID || 'google/lyria-3-pro-preview';
@@ -63,9 +64,10 @@ function classifyOpenRouterError(status, detail) {
  * @param {string} opts.prompt            required music description
  * @param {number} [opts.durationSeconds] target length hint in seconds
  * @param {Function} [opts.fetchImpl]     injectable fetch (tests)
+ * @param {AbortSignal} [opts.signal]     user/request cancellation signal
  * @returns {Promise<{filename,audioPath,audioUrl,sizeBytes,mime,durationSeconds,model}>}
  */
-async function generateLyriaMusicFile({ prompt, durationSeconds, fetchImpl } = {}) {
+async function generateLyriaMusicFile({ prompt, durationSeconds, fetchImpl, signal } = {}) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) {
     const err = new Error('Prompt is required for music generation');
@@ -86,10 +88,11 @@ async function generateLyriaMusicFile({ prompt, durationSeconds, fetchImpl } = {
 
   const seconds = clampSeconds(durationSeconds, 30);
   const fullPrompt = `${cleanPrompt}\n\nDuración aproximada de la pista: ${seconds} segundos.`;
+  throwIfAborted(signal);
 
   const resp = await doFetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: 'POST',
-    signal: AbortSignal.timeout(LYRIA_TIMEOUT_MS),
+    signal: signalWithTimeout(signal, LYRIA_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
       'Content-Type': 'application/json',
@@ -125,6 +128,7 @@ async function generateLyriaMusicFile({ prompt, durationSeconds, fetchImpl } = {
   let buffer = '';
   const decoder = new TextDecoder();
   for await (const chunk of resp.body) {
+    throwIfAborted(signal);
     buffer += decoder.decode(chunk, { stream: true });
     let nl;
     while ((nl = buffer.indexOf('\n')) >= 0) {
@@ -143,6 +147,7 @@ async function generateLyriaMusicFile({ prompt, durationSeconds, fetchImpl } = {
     }
   }
 
+  throwIfAborted(signal);
   if (streamError && audioParts.length === 0) {
     const detail = typeof streamError === 'object' ? JSON.stringify(streamError) : String(streamError);
     const err = new Error(`Lyria stream error: ${detail.slice(0, 300)}`);
@@ -160,6 +165,7 @@ async function generateLyriaMusicFile({ prompt, durationSeconds, fetchImpl } = {
   ensureDir(audioDir);
   const filename = generatedMusicFilename('lyria');
   const audioPath = path.join(audioDir, filename);
+  throwIfAborted(signal);
   fs.writeFileSync(audioPath, audioBuffer);
 
   return {

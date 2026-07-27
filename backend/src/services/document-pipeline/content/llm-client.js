@@ -122,30 +122,41 @@ function hasAnyContentKey(env = process.env) {
 }
 
 /**
+ * Resolve every configured content provider in failover order.
+ *
+ * Most document generators need only the first provider, but long-form edits
+ * should be able to retry a batch when an upstream returns malformed JSON or
+ * times out. Keeping the ordering here prevents each editor from inventing a
+ * different provider policy.
+ */
+function resolveContentClients({ preferred, env = process.env } = {}) {
+  const forced = (preferred || env.DOC_CONTENT_PROVIDER || '').trim();
+  const ordered = forced
+    ? [...LADDER.filter((s) => s.provider === forced), ...LADDER.filter((s) => s.provider !== forced)]
+    : LADDER;
+  return ordered
+    .filter((step) => Boolean(env[step.key]))
+    .map((step) => ({
+      client: wrapClientForProvider(createContentClient(step.provider, env), step.provider),
+      provider: step.provider,
+      model: step.model(env),
+    }));
+}
+
+/**
  * Resolve the first configured provider on the ladder.
  * Returns { client, provider, model } or null when nothing is configured.
  * A caller-supplied preferred provider wins when its key exists.
  */
 function resolveContentClient({ preferred, env = process.env } = {}) {
-  const forced = (preferred || env.DOC_CONTENT_PROVIDER || '').trim();
-  const ordered = forced
-    ? [...LADDER.filter((s) => s.provider === forced), ...LADDER.filter((s) => s.provider !== forced)]
-    : LADDER;
-  for (const step of ordered) {
-    if (!env[step.key]) continue;
-    return {
-      client: wrapClientForProvider(createContentClient(step.provider, env), step.provider),
-      provider: step.provider,
-      model: step.model(env),
-    };
-  }
-  return null;
+  return resolveContentClients({ preferred, env })[0] || null;
 }
 
 module.exports = {
   createContentClient,
   DEFAULT_MODEL,
   resolveContentClient,
+  resolveContentClients,
   hasAnyContentKey,
   sanitizeResponseFormat,
   stripSchemaConstraints,

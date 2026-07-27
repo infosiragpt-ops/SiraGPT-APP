@@ -116,10 +116,26 @@ function buildDocumentEditTool(deps = {}) {
           if (ordered.every(isDocx)) {
             try {
               const loaded = [];
+              const objectStorage = deps.objectStorage || require('../../object-storage');
+              const readSourceBuffer = deps.readSourceBuffer
+                || (deps.sourcePreservingEdit && deps.sourcePreservingEdit.readSourceBuffer)
+                || require('../../source-preserving-document-edit').readSourceBuffer;
               for (const row of ordered) {
-                const blob = await fsImpl.readFile(row.path);
-                if (blob.length > MAX_FILE_BYTES) throw new Error('file_too_large');
-                loaded.push({ name: row.originalName || row.filename, buffer: blob });
+                let buffer;
+                let cleanup = async () => {};
+                try {
+                  if (objectStorage.isRemote(row.path)) {
+                    const read = await readSourceBuffer(row);
+                    buffer = read.buffer;
+                    cleanup = read.cleanup;
+                  } else {
+                    buffer = await fsImpl.readFile(row.path);
+                  }
+                  if (buffer.length > MAX_FILE_BYTES) throw new Error('file_too_large');
+                  loaded.push({ name: row.originalName || row.filename, buffer });
+                } finally {
+                  await cleanup().catch(() => {});
+                }
               }
               buffer = merge.mergeDocxBuffers(loaded);
             } catch (mergeErr) {
@@ -245,17 +261,33 @@ function buildDocumentEditTool(deps = {}) {
       }
 
       const files = [];
+      const objectStorage = deps.objectStorage || require('../../object-storage');
+      const readSourceBuffer = deps.readSourceBuffer
+        || (deps.sourcePreservingEdit && deps.sourcePreservingEdit.readSourceBuffer)
+        || require('../../source-preserving-document-edit').readSourceBuffer;
       for (const row of rows) {
         let buffer;
+        let cleanup = async () => {};
         try {
-          buffer = await fsImpl.readFile(row.path);
+          if (objectStorage.isRemote(row.path)) {
+            const read = await readSourceBuffer(row);
+            buffer = read.buffer;
+            cleanup = read.cleanup;
+          } else {
+            buffer = await fsImpl.readFile(row.path);
+          }
         } catch (_) {
+          await cleanup().catch(() => {});
           return { ok: false, error: 'file_blob_missing', fileId: row.id };
         }
-        if (buffer.length > MAX_FILE_BYTES) {
-          return { ok: false, error: 'file_too_large', fileId: row.id, maxBytes: MAX_FILE_BYTES };
+        try {
+          if (buffer.length > MAX_FILE_BYTES) {
+            return { ok: false, error: 'file_too_large', fileId: row.id, maxBytes: MAX_FILE_BYTES };
+          }
+          files.push({ name: row.originalName || row.filename, buffer });
+        } finally {
+          await cleanup().catch(() => {});
         }
-        files.push({ name: row.originalName || row.filename, buffer });
       }
 
       // Run the verified pipeline (remote sandbox in prod, auto-fallback).

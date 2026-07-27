@@ -167,6 +167,14 @@ function extractFileIdsFromMessageFiles(input) {
 }
 
 function resolveStoredFilePath(row = {}, userId = '') {
+  // Production uploads are stored as `r2:…` refs. Accept them as-is so
+  // downstream readers (objectStorage.toLocalTemp / readStream) can fetch
+  // the bytes; fs.existsSync would always reject them.
+  try {
+    const objectStorage = require('./object-storage');
+    if (row.path && objectStorage.isRemote(row.path)) return row.path;
+  } catch { /* object-storage is always present in prod; ignore in unit stubs */ }
+
   const candidates = [];
   if (row.path) {
     candidates.push(row.path);

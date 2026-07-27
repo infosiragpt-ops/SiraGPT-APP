@@ -78,6 +78,7 @@ const {
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
 const { buildForbiddenToolNames } = require('../services/agents/agent-tool-policy');
+const { resolveUserSkillClearance } = require('../services/agents/custom-gpt-agent-policy');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
 const documentAnalysisQuality = require('../services/document-analysis-quality');
@@ -104,10 +105,30 @@ const {
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+const {
+  hasRecentGeneratedArtifactSource,
+  isSourcePreservingEditRequest,
+} = require('../services/source-preserving-document-edit');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
 })();
+
+const GENERATED_DOCUMENT_CONTEXT = [{
+  originalName: 'documento-generado.docx',
+  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}];
+
+function shouldResumeGeneratedArtifactForDocumentFollowup({
+  goal,
+  providedFileIds = [],
+  hasGeneratedArtifact = false,
+} = {}) {
+  if (!hasGeneratedArtifact) return false;
+  if (Array.isArray(providedFileIds) && providedFileIds.length > 0) return false;
+  if (!looksLikeDocumentFollowupQuestion(goal)) return false;
+  return isSourcePreservingEditRequest(goal, GENERATED_DOCUMENT_CONTEXT);
+}
 
 // ── Utility: safe JSON serialization ──────────────────────────────
 // Never throws on circular refs, BigInt, Symbol, or undefined values.
@@ -839,7 +860,14 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
     const job = await enqueueAgentTask({
       taskId: snapshot.taskId,
       traceId: snapshot.traceId || crypto.randomUUID(),
-      user: { id: req.user?.id, email: req.user?.email },
+      user: {
+        id: req.user?.id,
+        email: req.user?.email,
+        // A manual retry runs under the caller's current plan. Persisted
+        // clearance is only for boot recovery, where no live user session is
+        // available and the task must resume with its original boundary.
+        clearance: resolveUserSkillClearance(req.user),
+      },
       goal: snapshot.agentGoal || snapshot.displayGoal,
       displayGoal: snapshot.displayGoal,
       systemContract: snapshot.systemContract || '',
@@ -1010,6 +1038,7 @@ router.post(
     taskStore.writeTaskSnapshot({
       taskId,
       userId: req.user?.id,
+      userClearance: payload.user?.clearance || resolveUserSkillClearance(req.user),
       chatId: payload.chatId,
       displayGoal,
       agentGoal: payload.goal,
@@ -1086,14 +1115,33 @@ router.post(
     try {
       const providedNow = Array.isArray(req.body.files) ? req.body.files.map(String).filter(Boolean) : [];
       if (providedNow.length === 0 && req.body.chatId && looksLikeDocumentFollowupQuestion(req.body.goal)) {
-        const reattached = await resolveChatDocumentFileIds(prisma, {
+        const hasGeneratedArtifact = await hasRecentGeneratedArtifactSource(prisma, {
           userId: req.user?.id,
           chatId: String(req.body.chatId),
-          providedFileIds: providedNow,
         });
-        if (Array.isArray(reattached) && reattached.length > 0) {
-          req.body.files = reattached;
-          console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+        const resumeGeneratedArtifact = shouldResumeGeneratedArtifactForDocumentFollowup({
+          goal: req.body.goal,
+          providedFileIds: providedNow,
+          hasGeneratedArtifact,
+        });
+
+        if (resumeGeneratedArtifact) {
+          // Keep files empty deliberately. The document runtime will resolve the
+          // latest owner-scoped generated artifact from this chat and edit that
+          // version, preserving every previous turn instead of rebasing onto the
+          // original upload.
+          req.body.preferRecentArtifact = true;
+          console.log('[agent-task] continuing edit from latest generated chat artifact');
+        } else {
+          const reattached = await resolveChatDocumentFileIds(prisma, {
+            userId: req.user?.id,
+            chatId: String(req.body.chatId),
+            providedFileIds: providedNow,
+          });
+          if (Array.isArray(reattached) && reattached.length > 0) {
+            req.body.files = reattached;
+            console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+          }
         }
       }
     } catch (reattachErr) {
@@ -1103,13 +1151,21 @@ router.post(
     const requestedFileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
-    const canUseLocalDocumentRuntime = requestedFileIds.length > 0 || isTranscriptionRequest(String(req.body.goal || ''));
+    const canUseLocalDocumentRuntime = requestedFileIds.length > 0
+      || Boolean(req.body.preferRecentArtifact)
+      || isTranscriptionRequest(String(req.body.goal || ''));
     if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
       return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
     }
 
     if (process.env.AGENT_TASK_INLINE !== '1') {
       return handleQueuedTaskRequest(req, res);
+    }
+    if (req.body.preferRecentArtifact) {
+      return handleLocalTaskRequest(req, res, {
+        fallbackReason: 'generated_artifact_continuation',
+        fallbackDetail: 'continue editing the latest generated document in this chat',
+      });
     }
     if (!process.env.OPENAI_API_KEY && canUseLocalDocumentRuntime) {
       return handleLocalTaskRequest(req, res, { fallbackReason: 'openai_not_configured' });
@@ -1294,6 +1350,7 @@ router.post(
     const task = createTaskRecord({
       taskId,
       userId: req.user?.id,
+      userClearance: resolveUserSkillClearance(req.user),
       chatId,
       displayGoal,
       model,
@@ -1419,7 +1476,14 @@ router.post(
       executionProfile,
       universalTaskContract,
     });
-    const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
+    const userClearance = resolveUserSkillClearance(req.user);
+    const tools = buildTaskTools({
+      skillContext: {
+        clearance: userClearance,
+        userId: req.user?.id,
+        chatId,
+      },
+    }).filter((tool) => !forbiddenToolNames.has(tool.name));
     const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
     const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
     const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
@@ -1548,6 +1612,7 @@ router.post(
     const toolCtx = {
       userId: req.user?.id,
       userEmail: req.user?.email,
+      clearance: userClearance,
       openai,
       signal: controller.signal,
       chatId,
@@ -2057,12 +2122,17 @@ async function handleQueuedTaskRequest(req, res) {
   const payload = {
     taskId,
     traceId,
-    user: { id: req.user?.id, email: req.user?.email },
+    user: {
+      id: req.user?.id,
+      email: req.user?.email,
+      clearance: resolveUserSkillClearance(req.user),
+    },
     goal: agentGoal,
     displayGoal,
     systemContract,
     files: fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     chatId,
     model,
     maxSteps,
@@ -2102,12 +2172,14 @@ async function handleQueuedTaskRequest(req, res) {
   const snapshot = {
     taskId,
     userId: req.user?.id,
+    userClearance: payload.user?.clearance || resolveUserSkillClearance(req.user),
     chatId,
     displayGoal,
     agentGoal,
     systemContract,
     fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     model,
     maxSteps,
     maxRuntimeMs,
@@ -2267,12 +2339,14 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const snapshot = {
     taskId,
     userId: req.user?.id,
+    userClearance: resolveUserSkillClearance(req.user),
     chatId,
     displayGoal,
     agentGoal,
     systemContract,
     fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     model,
     maxSteps,
     maxRuntimeMs,
@@ -2336,12 +2410,17 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const payload = {
     taskId,
     traceId,
-    user: { id: req.user?.id, email: req.user?.email },
+    user: {
+      id: req.user?.id,
+      email: req.user?.email,
+      clearance: snapshot.userClearance || resolveUserSkillClearance(req.user),
+    },
     goal: agentGoal,
     displayGoal,
     systemContract,
     files: fileIds,
     fileMetadata: clientFileMetadata,
+    preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     chatId,
     model,
     maxSteps,
@@ -2798,6 +2877,7 @@ function buildAgentSystemPrompt(
 function createTaskRecord({
   taskId,
   userId,
+  userClearance = 'authenticated',
   chatId,
   displayGoal,
   model,
@@ -2828,6 +2908,7 @@ function createTaskRecord({
   const record = {
     taskId,
     userId: String(userId || ''),
+    userClearance: existingSnapshot?.userClearance || userClearance,
     chatId,
     displayGoal,
     model,
@@ -3176,8 +3257,20 @@ function reduceAgentState(state, evt) {
           step.id === evt.id ? { ...step, status: evt.ok ? 'done' : 'error' } : step
         ),
       };
-    case 'file_artifact':
-      return { ...state, artifacts: [...state.artifacts, evt.artifact] };
+    case 'file_artifact': {
+      const artifacts = Array.isArray(state.artifacts) ? [...state.artifacts] : [];
+      const filename = String(evt.artifact?.filename || '').trim().toLowerCase();
+      const format = String(evt.artifact?.format || evt.artifact?.mime || '').trim().toLowerCase();
+      const existingIndex = filename
+        ? artifacts.findIndex((item) => (
+          String(item?.filename || '').trim().toLowerCase() === filename
+          && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+        ))
+        : -1;
+      if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact);
+      else artifacts.push(evt.artifact);
+      return { ...state, artifacts };
+    }
     case 'final_text':
       return { ...state, finalText: evt.markdown };
     case 'done':
@@ -3273,6 +3366,7 @@ router.INTERNAL = {
   reduceAgentState,
   safeJsonStringify,
   resolveQueuedStreamTimeoutMs,
+  shouldResumeGeneratedArtifactForDocumentFollowup,
   shouldRunAttachmentTaskLocally,
   shortLabel,
   streamTaskEvents,

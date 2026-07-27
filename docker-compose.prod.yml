@@ -51,7 +51,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     # Bound to 127.0.0.1 only — the backend runs on the host under PM2
@@ -79,21 +79,41 @@ services:
         max-file: "3"
 
   # ── Codex/APPS Runner ─────────────────────────────────────
-  # Isolated workspace runner for APPS/Codex V2. The backend talks to the
+  # Canary workspace runner for APPS/Codex V2. This shared container is
+  # contained but is not the final hostile multi-tenant isolation boundary.
+  # The backend talks to the
   # control API on 4097 and proxies the dev server on 5173 through same-origin
   # tokenized URLs; no dynamic public ports are exposed.
   runner:
     build:
       context: ./scripts
       dockerfile: runner.Dockerfile
+    image: siragpt-runner:latest
     restart: unless-stopped
     working_dir: /workspace
     command: ["bun", "/scripts/code-runner.js"]
     environment:
+      NODE_ENV: production
       DEV_PORT: "5173"
       CTRL_PORT: "4097"
       RUNNER_WORKDIR: "/workspace"
       EXPORT_DIR: "/export"
+      # Service-to-service credential for the control plane. Generated code
+      # never receives this value; the runner strips its own environment before
+      # spawning install/dev/exec children.
+      CODE_RUNNER_CONTROL_TOKEN: "${CODE_RUNNER_CONTROL_TOKEN:-}"
+      CODE_RUNNER_UID_BASE: "${CODE_RUNNER_UID_BASE:-100000}"
+      CODE_RUNNER_UID_SPAN: "${CODE_RUNNER_UID_SPAN:-1000000000}"
+      CODE_RUNNER_GID_BASE: "${CODE_RUNNER_GID_BASE:-100000}"
+      CODE_RUNNER_GID_SPAN: "${CODE_RUNNER_GID_SPAN:-1000000000}"
+      CODE_RUNNER_RLIMIT_NPROC: "${CODE_RUNNER_RLIMIT_NPROC:-96}"
+      CODE_RUNNER_RLIMIT_NOFILE: "${CODE_RUNNER_RLIMIT_NOFILE:-1024}"
+      # Virtual address space is not RSS: Vite/Tailwind/WebAssembly reserve a
+      # large V8 cage even while their physical working set remains small.
+      # The 2 GiB container cgroup below is still the hard physical-memory cap.
+      CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-68719476736}"
+      CODE_RUNNER_RLIMIT_FSIZE_BYTES: "${CODE_RUNNER_RLIMIT_FSIZE_BYTES:-536870912}"
+      CODE_RUNNER_RLIMIT_CPU_SECONDS: "${CODE_RUNNER_RLIMIT_CPU_SECONDS:-1800}"
       # Multi-project dev-server pool (audit B1): one dev server per project.
       # Traffic reaches these ports through the backend's same-origin preview
       # proxy over the internal docker network — nothing is published to the
@@ -103,15 +123,39 @@ services:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/scripts/code-runner.js:ro
       - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
-      - runner_bun_cache:/root/.bun/install/cache
+      - runner_bun_cache:/runner-cache
       - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/export
     expose:
       - "4097"
       # Dev-server port pool (expose is documentational on the internal
       # network; kept in sync with CODE_RUNNER_DEV_PORT_POOL above).
       - "5173-5182"
+    # Interim shared-runner containment while per-workspace OpenSandbox/gVisor
+    # replaces it. These controls reduce blast radius but are NOT advertised as
+    # a complete hostile multi-tenant sandbox.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    cpus: 4.0
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+      - /runner-home:rw,nosuid,nodev,size=128m,mode=0711
+      - /runner-tmp:rw,nosuid,nodev,size=512m,mode=0711
+    networks:
+      - runner_control
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4097/status'); if(!r.ok) process.exit(1)"]
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4097/health'); if(!r.ok) process.exit(1)"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -119,7 +163,9 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "4.0"
           memory: 2G
+          pids: 512
         reservations:
           memory: 256M
     logging:
@@ -137,10 +183,16 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        SIRAGPT_VERSION: ${SIRAGPT_VERSION:-unknown}
       cache_from:
         - siragpt-backend:latest
     image: siragpt-backend:latest
     restart: unless-stopped
+    # Backend owns a 30s shutdown deadline; Compose leaves 5s for process exit
+    # while remaining below the single-container parent's 40s minimum budget.
+    stop_grace_period: 35s
     depends_on:
       db:
         condition: service_healthy
@@ -151,11 +203,119 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
-      PRISMA_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-siragpt}
+      RBAC_ENFORCEMENT_MODE: "${RBAC_ENFORCEMENT_MODE:-enforce}"
+      RBAC_CACHE_TTL_MS: "${RBAC_CACHE_TTL_MS:-60000}"
+      RBAC_MUTATION_LOCK_TIMEOUT_MS: "${RBAC_MUTATION_LOCK_TIMEOUT_MS:-500}"
+      RBAC_REDIS_CONNECT_TIMEOUT_MS: "${RBAC_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      RBAC_REDIS_STARTUP_TIMEOUT_MS: "${RBAC_REDIS_STARTUP_TIMEOUT_MS:-500}"
+      RBAC_REDIS_COMMAND_TIMEOUT_MS: "${RBAC_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      AUTH_USER_LOCK_TIMEOUT_MS: "${AUTH_USER_LOCK_TIMEOUT_MS:-500}"
+      AUTH_REVOCATION_REDIS_CONNECT_TIMEOUT_MS: "${AUTH_REVOCATION_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      AUTH_REVOCATION_REDIS_COMMAND_TIMEOUT_MS: "${AUTH_REVOCATION_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS: "${AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS:-5000}"
+      AUTH_SOCKET_REVALIDATION_TIMEOUT_MS: "${AUTH_SOCKET_REVALIDATION_TIMEOUT_MS:-2000}"
+      AUTH_SOCKET_REVALIDATION_CACHE_MAX: "${AUTH_SOCKET_REVALIDATION_CACHE_MAX:-2000}"
+      # Global ceiling for user-registered external MCP endpoints. Missing
+      # configuration starts the backend with MCP deny-all/degraded.
+      SIRAGPT_MCP_ALLOWED_HOSTS: "${SIRAGPT_MCP_ALLOWED_HOSTS:-}"
+      SIRAGPT_MCP_ALLOW_HTTP: "0"
+      # Keep explicit runtime/direct roles untouched. POSTGRES-only deployments
+      # are synthesized by the shared pure resolver after all URL roles are
+      # confirmed absent, so a remote runtime can never silently target `db`.
+      PRISMA_DATABASE_URL: "${PRISMA_DATABASE_URL:-}"
+      DIRECT_DATABASE_URL: "${DIRECT_DATABASE_URL:-}"
+      DATABASE_URL: "${DATABASE_URL:-}"
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}"
+      DATABASE_SSL_CA: "${DATABASE_SSL_CA:-}"
+      DATABASE_SSL_CERT: "${DATABASE_SSL_CERT:-}"
+      DATABASE_SSL_KEY: "${DATABASE_SSL_KEY:-}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-db}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: "${POSTGRES_DB:-siragpt}"
+      MIGRATION_COMMAND_TIMEOUT_MS: "${MIGRATION_COMMAND_TIMEOUT_MS:-300000}"
+      BOOT_COMMAND_TIMEOUT_MS: "${BOOT_COMMAND_TIMEOUT_MS:-5000}"
+      MIGRATION_DB_CONNECT_TIMEOUT_MS: "${MIGRATION_DB_CONNECT_TIMEOUT_MS:-10000}"
+      MIGRATION_DB_QUERY_TIMEOUT_MS: "${MIGRATION_DB_QUERY_TIMEOUT_MS:-15000}"
+      MIGRATION_DB_STATEMENT_TIMEOUT_MS: "${MIGRATION_DB_STATEMENT_TIMEOUT_MS:-15000}"
+      MIGRATION_LOCK_TIMEOUT_MS: "${MIGRATION_LOCK_TIMEOUT_MS:-120000}"
+      # Production never skips migrations; migration-only also rejects skip.
+      SKIP_MIGRATIONS: "0"
+      # Normal boot only; --migrate-only remains strict regardless.
+      MIGRATION_NONFATAL: "${MIGRATION_NONFATAL:-0}"
       REDIS_URL: redis://redis:6379
+      # Security-critical shared state. Both runtimes fail closed in production.
+      # Keep compat until every pre-hash/compat replica is drained.
+      SESSION_TOKEN_HASH_MODE: ${SESSION_TOKEN_HASH_MODE:-hash}
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: ${SESSION_TOKEN_HASH_COMPAT_DRAINED:-1}
+      SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE: ${SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE:-100}
+      SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES: ${SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES:-10}
+      AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO: ${AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO:-0.8}
+      AUTH_SECURITY_READY_RETRY_BASE_MS: ${AUTH_SECURITY_READY_RETRY_BASE_MS:-250}
+      AUTH_SECURITY_READY_RETRY_MAX_MS: ${AUTH_SECURITY_READY_RETRY_MAX_MS:-5000}
+      OAUTH_STATE_TTL: ${OAUTH_STATE_TTL:-10m}
+      OAUTH_STATE_RETRY_AFTER_SECONDS: ${OAUTH_STATE_RETRY_AFTER_SECONDS:-5}
+      OAUTH_STATE_CACHE_MAX_ENTRIES: ${OAUTH_STATE_CACHE_MAX_ENTRIES:-10000}
+      OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS: ${OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS:-500}
+      OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS: ${OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS:-500}
+      OAUTH_STATE_REDIS_PREFIX: ${OAUTH_STATE_REDIS_PREFIX:-sira:oauth-state:}
+      SOCIAL_PUBLICATION_WORKER_ENABLED: ${SOCIAL_PUBLICATION_WORKER_ENABLED:-true}
+      SOCIAL_PUBLICATION_WORKER_INTERVAL_MS: ${SOCIAL_PUBLICATION_WORKER_INTERVAL_MS:-30000}
+      SOCIAL_FACEBOOK_CLIENT_ID: ${SOCIAL_FACEBOOK_CLIENT_ID:-}
+      SOCIAL_FACEBOOK_CLIENT_SECRET: ${SOCIAL_FACEBOOK_CLIENT_SECRET:-}
+      SOCIAL_FACEBOOK_API_VERSION: ${SOCIAL_FACEBOOK_API_VERSION:-v23.0}
+      SOCIAL_FACEBOOK_SCOPES: ${SOCIAL_FACEBOOK_SCOPES:-pages_show_list,pages_read_engagement,pages_manage_posts}
+      SOCIAL_LINKEDIN_CLIENT_ID: ${SOCIAL_LINKEDIN_CLIENT_ID:-}
+      SOCIAL_LINKEDIN_CLIENT_SECRET: ${SOCIAL_LINKEDIN_CLIENT_SECRET:-}
+      SOCIAL_LINKEDIN_API_VERSION: ${SOCIAL_LINKEDIN_API_VERSION:-202607}
+      SOCIAL_LINKEDIN_SCOPES: ${SOCIAL_LINKEDIN_SCOPES:-openid profile w_member_social}
+      SOCIAL_X_CLIENT_ID: ${SOCIAL_X_CLIENT_ID:-}
+      SOCIAL_X_CLIENT_SECRET: ${SOCIAL_X_CLIENT_SECRET:-}
+      SOCIAL_X_SCOPES: ${SOCIAL_X_SCOPES:-tweet.read tweet.write users.read media.write offline.access}
+      IMPERSONATION_TARGET_LIMIT: ${IMPERSONATION_TARGET_LIMIT:-3}
+      IMPERSONATION_ADMIN_LIMIT: ${IMPERSONATION_ADMIN_LIMIT:-10}
+      IMPERSONATION_WINDOW_MS: ${IMPERSONATION_WINDOW_MS:-3600000}
+      IMPERSONATION_MEMORY_MAX_KEYS: ${IMPERSONATION_MEMORY_MAX_KEYS:-10000}
+      IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS: ${IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS:-500}
+      IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS: ${IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS:-500}
+      IMPERSONATION_REDIS_PREFIX: ${IMPERSONATION_REDIS_PREFIX:-sira:impersonation:}
+      IMPERSONATION_STORE_RETRY_AFTER_SECONDS: ${IMPERSONATION_STORE_RETRY_AFTER_SECONDS:-5}
+      # Production-sensitive limiters never fall back to process memory.
+      RATE_LIMIT_STORE: redis
+      RATE_LIMIT_SENSITIVE_POLICY: distributed
+      RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: ${RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS:-1000}
+      RATE_LIMIT_STORE_RETRY_AFTER_SECONDS: ${RATE_LIMIT_STORE_RETRY_AFTER_SECONDS:-5}
+      # SAML never falls back to process memory in production.
+      SAML_REQUEST_TTL_MS: ${SAML_REQUEST_TTL_MS:-300000}
+      SAML_REQUEST_CACHE_MAX_ENTRIES: ${SAML_REQUEST_CACHE_MAX_ENTRIES:-5000}
+      SAML_REDIS_CONNECT_TIMEOUT_MS: ${SAML_REDIS_CONNECT_TIMEOUT_MS:-500}
+      SAML_REDIS_COMMAND_TIMEOUT_MS: ${SAML_REDIS_COMMAND_TIMEOUT_MS:-500}
+      SAML_REDIS_RETRY_BASE_MS: ${SAML_REDIS_RETRY_BASE_MS:-100}
+      SAML_REDIS_RETRY_MAX_MS: ${SAML_REDIS_RETRY_MAX_MS:-5000}
+      SAML_REDIS_PREFIX: ${SAML_REDIS_PREFIX:-sira:saml:}
+      SAML_RELAY_STATE_SECRET: ${SAML_RELAY_STATE_SECRET:-}
+      SAML_ACS_BODY_LIMIT_BYTES: ${SAML_ACS_BODY_LIMIT_BYTES:-262144}
+      SAML_ACS_RATE_LIMIT_MAX: ${SAML_ACS_RATE_LIMIT_MAX:-30}
+      SAML_ACS_RATE_LIMIT_WINDOW_MS: ${SAML_ACS_RATE_LIMIT_WINDOW_MS:-60000}
+      RATE_LIMIT_BILLING_CHECKOUT_MAX: ${RATE_LIMIT_BILLING_CHECKOUT_MAX:-10}
+      RATE_LIMIT_BILLING_CHECKOUT_IP_MAX: ${RATE_LIMIT_BILLING_CHECKOUT_IP_MAX:-100}
+      RATE_LIMIT_BILLING_VERIFY_MAX: ${RATE_LIMIT_BILLING_VERIFY_MAX:-20}
+      RATE_LIMIT_BILLING_VERIFY_IP_MAX: ${RATE_LIMIT_BILLING_VERIFY_IP_MAX:-200}
+      RATE_LIMIT_BILLING_PLAN_CHANGE_MAX: ${RATE_LIMIT_BILLING_PLAN_CHANGE_MAX:-5}
+      RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX: ${RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX:-50}
+      RATE_LIMIT_BILLING_WINDOW_MS: ${RATE_LIMIT_BILLING_WINDOW_MS:-900000}
+      RATE_LIMIT_BILLING_PLAN_WINDOW_MS: ${RATE_LIMIT_BILLING_PLAN_WINDOW_MS:-3600000}
+      RATE_LIMIT_BILLING_REFUND_MAX: ${RATE_LIMIT_BILLING_REFUND_MAX:-5}
+      RATE_LIMIT_BILLING_REFUND_IP_MAX: ${RATE_LIMIT_BILLING_REFUND_IP_MAX:-50}
+      RATE_LIMIT_BILLING_REFUND_WINDOW_MS: ${RATE_LIMIT_BILLING_REFUND_WINDOW_MS:-3600000}
+      SIRAGPT_API_KEY_AUDIT_COUNTER_MAX: ${SIRAGPT_API_KEY_AUDIT_COUNTER_MAX:-10000}
+      # Production traffic reaches this backend through exactly one Caddy hop.
+      TRUST_PROXY_HOPS: "1"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      CSRF_PEPPER: ${CSRF_PEPPER:-}
+      CORS_ORIGINS: "${CORS_ORIGINS:-https://siragpt.com,https://www.siragpt.com,https://office.siragpt.com}"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
@@ -165,10 +325,27 @@ services:
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       FRONTEND_URL: ${FRONTEND_URL:-https://siragpt.com}
+      GOOGLE_AUTH_BASE_URL: ${GOOGLE_AUTH_BASE_URL:-https://api.siragpt.com}
+      GOOGLE_AUTH_URI: ${GOOGLE_AUTH_URI:-https://api.siragpt.com/api/auth/google/callback}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://api.siragpt.com/api/auth/gmail/callback}
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: ${GOOGLE_REDIRECT_CALENDAR_DRIVE_URI:-https://api.siragpt.com/api/auth/google-services/callback}
+      OAUTH_POST_CALLBACK_ALLOWED_ORIGINS: ${OAUTH_POST_CALLBACK_ALLOWED_ORIGINS:-}
+      GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:-https://api.siragpt.com/api/github/callback}
+      GITHUB_OAUTH_SUCCESS_REDIRECT: ${GITHUB_OAUTH_SUCCESS_REDIRECT:-https://siragpt.com/settings}
+      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-https://api.siragpt.com/api/spotify/callback}
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: ${SPOTIFY_OAUTH_SUCCESS_REDIRECT:-https://siragpt.com/chat}
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: ${SPOTIFY_OAUTH_FAILURE_REDIRECT:-https://siragpt.com/connections}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_WEBHOOK_RECOVERY_DISABLED: ${STRIPE_WEBHOOK_RECOVERY_DISABLED:-false}
+      STRIPE_WEBHOOK_RECOVERY_INTERVAL_MS: ${STRIPE_WEBHOOK_RECOVERY_INTERVAL_MS:-60000}
+      STRIPE_WEBHOOK_RECOVERY_BATCH_SIZE: ${STRIPE_WEBHOOK_RECOVERY_BATCH_SIZE:-25}
+      STRIPE_WEBHOOK_RECOVERY_LEASE_MS: ${STRIPE_WEBHOOK_RECOVERY_LEASE_MS:-120000}
+      STRIPE_WEBHOOK_RECOVERY_BACKOFF_BASE_MS: ${STRIPE_WEBHOOK_RECOVERY_BACKOFF_BASE_MS:-30000}
+      STRIPE_WEBHOOK_RECOVERY_BACKOFF_MAX_MS: ${STRIPE_WEBHOOK_RECOVERY_BACKOFF_MAX_MS:-3600000}
+      STRIPE_WEBHOOK_RECOVERY_MAX_ATTEMPTS: ${STRIPE_WEBHOOK_RECOVERY_MAX_ATTEMPTS:-8}
       STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
       STRIPE_PRICE_PRO_MAX: ${STRIPE_PRICE_PRO_MAX:-}
       STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
@@ -179,18 +356,59 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0}
       CODE_HOST_RUNNER: ${CODE_HOST_RUNNER:-false}
+      CODE_HOST_RUNNER_UNSAFE_PRODUCTION_ACK: ""
       CODE_RUNNER_PROXY_URLS: ${CODE_RUNNER_PROXY_URLS:-true}
       CODE_RUNNER_MAX_CONCURRENT: ${CODE_RUNNER_MAX_CONCURRENT:-2}
       CODE_RUNNER_INSTALL_TIMEOUT_MS: ${CODE_RUNNER_INSTALL_TIMEOUT_MS:-180000}
       CODE_RUNNER_READY_TIMEOUT_MS: ${CODE_RUNNER_READY_TIMEOUT_MS:-120000}
       CODEX_AGENT_V2: ${CODEX_AGENT_V2:-true}
+      # AgentAdapter v1 selection is validated at worker boot; unknown ids do
+      # not silently fall back to the native loop.
+      CODEX_IMPLEMENTER_ADAPTER: ${CODEX_IMPLEMENTER_ADAPTER:-native}
+      CODEX_REMOTE_AGENT_URL: ${CODEX_REMOTE_AGENT_URL:-}
+      CODEX_REMOTE_AGENT_TOKEN: ${CODEX_REMOTE_AGENT_TOKEN:-}
+      CODEX_REMOTE_AGENT_TIMEOUT_MS: ${CODEX_REMOTE_AGENT_TIMEOUT_MS:-900000}
       CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
-      CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-true}
+      # Public execution remains closed while the boot-selected provider is the
+      # interim shared runner. An env isolation label alone cannot open access.
+      CODEX_AGENT_OPEN_TO_ALL: ${CODEX_AGENT_OPEN_TO_ALL:-false}
+      CODEX_SANDBOX_PROVIDER: ${CODEX_SANDBOX_PROVIDER:-shared-runner}
+      CODEX_ISOLATED_RUNNER_URL: ${CODEX_ISOLATED_RUNNER_URL:-}
+      CODEX_ISOLATED_RUNNER_CONTROL_TOKEN: ${CODEX_ISOLATED_RUNNER_CONTROL_TOKEN:-}
+      CODEX_ISOLATED_RUNNER_ATTESTED: ${CODEX_ISOLATED_RUNNER_ATTESTED:-0}
+      CODEX_ISOLATED_RUNNER_BOUNDARY: ${CODEX_ISOLATED_RUNNER_BOUNDARY:-gvisor-systrap}
+      CODEX_ISOLATED_RUNNER_PUBLIC_MULTI_TENANT: ${CODEX_ISOLATED_RUNNER_PUBLIC_MULTI_TENANT:-0}
+      # Kept for operational visibility/backward compatibility only. Access
+      # policy trusts the provider attestation, never this string.
+      CODEX_RUNNER_ISOLATION_MODE: ${CODEX_RUNNER_ISOLATION_MODE:-shared-container}
+      CODEX_PARALLEL_WRITE_SUBAGENTS: ${CODEX_PARALLEL_WRITE_SUBAGENTS:-false}
       CODE_RUNNER_URL: ${CODE_RUNNER_URL:-http://runner:4097}
+      CODE_RUNNER_CONTROL_TOKEN: "${CODE_RUNNER_CONTROL_TOKEN:-}"
       CODE_RUNNER_DEV_INTERNAL_URL: ${CODE_RUNNER_DEV_INTERNAL_URL:-http://runner:5173}
       CODEX_EXPORT_HOST_DIR: ${CODEX_EXPORT_HOST_DIR:-/opt/siragpt/.codex-workspaces}
+      CODEX_EXPORT_CONTAINER_DIR: ${CODEX_EXPORT_CONTAINER_DIR:-/codex-exports}
+      PUBLISHED_SITES_DIR: ${PUBLISHED_SITES_DIR:-/srv/sites}
+      CODEX_APPS_BASE_DOMAIN: ${CODEX_APPS_BASE_DOMAIN:-apps.siragpt.com}
       CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
       CODEX_MAX_STEPS: ${CODEX_MAX_STEPS:-24}
+      CODEX_ANTHROPIC_CACHE: ${CODEX_ANTHROPIC_CACHE:-1}
+      CODEX_CONTEXT_SUMMARY: ${CODEX_CONTEXT_SUMMARY:-1}
+      CODEX_PARALLEL_TOOL_CALLS: ${CODEX_PARALLEL_TOOL_CALLS:-1}
+      CODEX_RUN_BRANCHES: ${CODEX_RUN_BRANCHES:-1}
+      CODEX_SESSION_ARTIFACTS: ${CODEX_SESSION_ARTIFACTS:-1}
+      CODEX_MCP_DYNAMIC_TOOLS: ${CODEX_MCP_DYNAMIC_TOOLS:-1}
+      CODEX_MCP_SECRET_BINDINGS: ${CODEX_MCP_SECRET_BINDINGS:-}
+      CODEX_SELF_HOST_GITHUB_TOKEN: ${CODEX_SELF_HOST_GITHUB_TOKEN:-}
+      CODEX_AUTO_VERIFY: ${CODEX_AUTO_VERIFY:-1}
+      CODEX_VERIFY_PROJECT_GATES: ${CODEX_VERIFY_PROJECT_GATES:-1}
+      CODEX_VERIFY_TESTS: ${CODEX_VERIFY_TESTS:-1}
+      CODEX_VERIFY_LINT: ${CODEX_VERIFY_LINT:-1}
+      CODEX_SELF_HOST_REPOSITORIES: ${CODEX_SELF_HOST_REPOSITORIES:-https://github.com/infosiragpt-ops/SiraGPT-APP.git}
+      CODEX_PROACTIVE_ENABLED: ${CODEX_PROACTIVE_ENABLED:-1}
+      CODEX_PROACTIVE_INTERVAL_MS: ${CODEX_PROACTIVE_INTERVAL_MS:-300000}
+      CODEX_PROACTIVE_MAX_PER_DAY: ${CODEX_PROACTIVE_MAX_PER_DAY:-6}
+      CODEX_PROACTIVE_DAILY_BUDGET_USD: ${CODEX_PROACTIVE_DAILY_BUDGET_USD:-2}
+      CODEX_PROACTIVE_QA_EVERY_CYCLES: ${CODEX_PROACTIVE_QA_EVERY_CYCLES:-5}
       # Sibling origin (Caddy vhost) that serves codex previews unsandboxed —
       # advertised to the frontend via GET /api/codex/health.
       CODEX_PREVIEW_ORIGIN: ${CODEX_PREVIEW_ORIGIN:-}
@@ -212,16 +430,43 @@ services:
       CORE_API_KEY: ${CORE_API_KEY:-}
       MAX_FILE_SIZE: ${MAX_FILE_SIZE:-50}
       UPLOAD_DIR: /app/uploads
-      RATE_LIMIT_STORE: redis
-      HEALTH_CACHE_TTL_MS: "5000"
+      # Operational health endpoints, bounded DB/queue probes, and scheduler.
+      INTERNAL_HEALTH_TOKEN: ${INTERNAL_HEALTH_TOKEN:-}
+      INTERNAL_HEALTH_ALLOW_LOOPBACK: ${INTERNAL_HEALTH_ALLOW_LOOPBACK:-false}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      METRICS_ALLOW_LOOPBACK: ${METRICS_ALLOW_LOOPBACK:-false}
+      HEALTH_CACHE_TTL_MS: ${HEALTH_CACHE_TTL_MS:-5000}
+      HEALTH_DB_TIMEOUT_MS: ${HEALTH_DB_TIMEOUT_MS:-1500}
+      HEALTH_REDIS_TIMEOUT_MS: ${HEALTH_REDIS_TIMEOUT_MS:-1000}
+      HEALTH_PROBE_INTERVAL_MS: ${HEALTH_PROBE_INTERVAL_MS:-30000}
+      HEALTH_PROVIDER_PROBES_ENABLED: ${HEALTH_PROVIDER_PROBES_ENABLED:-false}
+      HEALTH_SCHEDULE_PROVIDER_PROBES: ${HEALTH_SCHEDULE_PROVIDER_PROBES:-false}
+      HEALTH_QUEUE_PROBE_TIMEOUT_MS: ${HEALTH_QUEUE_PROBE_TIMEOUT_MS:-1500}
+      HEALTH_QUEUE_PROBE_CACHE_TTL_MS: ${HEALTH_QUEUE_PROBE_CACHE_TTL_MS:-1000}
+      HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: ${HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS:-30000}
+      HEALTH_CRITICAL_QUEUES: ${HEALTH_CRITICAL_QUEUES:-agent-task,chat-run,codex-runs,document-collections,goal-runs}
+      # Prisma v6 pool URL controls + advisory-only recommendation loop.
+      DATABASE_POOL_MIN: ${DATABASE_POOL_MIN:-2}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      DATABASE_POOL_TIMEOUT_MS: ${DATABASE_POOL_TIMEOUT_MS:-10000}
+      DATABASE_POOL_AUTOSCALE_ENABLED: ${DATABASE_POOL_AUTOSCALE_ENABLED:-false}
+      DATABASE_POOL_AUTOSCALE_INTERVAL_MS: ${DATABASE_POOL_AUTOSCALE_INTERVAL_MS:-30000}
+      DATABASE_POOL_AUTOSCALE_MIN: ${DATABASE_POOL_AUTOSCALE_MIN:-2}
+      DATABASE_POOL_AUTOSCALE_MAX: ${DATABASE_POOL_AUTOSCALE_MAX:-50}
+      DATABASE_POOL_AUTOSCALE_COLD_SAMPLES: ${DATABASE_POOL_AUTOSCALE_COLD_SAMPLES:-3}
       IDEMPOTENCY_ENABLED: "true"
       DB_CONNECT_RETRIES: "5"
       DB_RETRY_BASE_DELAY_MS: "1000"
     volumes:
       - uploads_data:/app/uploads
       - projects_data:/root/Desktop/sira-projects
+      - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/codex-exports:ro
+      - published_sites:/srv/sites
     ports:
       - "127.0.0.1:5000:5000"   # Reverse proxy (nginx/caddy) in front
+    networks:
+      - default
+      - runner_control
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health/live"]
       interval: 15s
@@ -305,3 +550,12 @@ volumes:
     driver: local
   runner_bun_cache:
     driver: local
+  published_sites:
+    driver: local
+
+networks:
+  # Contains only the backend control plane and the interim runner. PostgreSQL,
+  # Redis, Caddy, frontend and user deployments stay on the default network, so
+  # generated code cannot resolve or connect to production data services.
+  runner_control:
+    driver: bridge

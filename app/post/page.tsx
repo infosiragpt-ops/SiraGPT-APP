@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
@@ -72,8 +73,8 @@ export default function PostPage() {
     setLoading(true)
     try {
       const [postsRes, connectionsRes] = await Promise.all([
-        fetch(`${API_ROOT}/social-posts`, { credentials: "include", headers: authHeaders(false) }),
-        fetch(`${API_ROOT}/social-posts/connections`, { credentials: "include", headers: authHeaders(false) }),
+        authenticatedFetch(`${API_ROOT}/social-posts`, { credentials: "include", headers: authHeaders(false) }),
+        authenticatedFetch(`${API_ROOT}/social-posts/connections`, { credentials: "include", headers: authHeaders(false) }),
       ])
       if (postsRes.ok) {
         const json = await postsRes.json()
@@ -117,7 +118,7 @@ export default function PostPage() {
     if (platforms.length === 0) return toast.error("Selecciona al menos una red social")
     setSaving(true)
     try {
-      const res = await fetch(`${API_ROOT}/social-posts/series`, {
+      const res = await authenticatedFetch(`${API_ROOT}/social-posts/series`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),

@@ -1,5 +1,15 @@
 'use strict';
 
+const {
+  runAuthUserTransaction,
+} = require('../services/auth/auth-user-lock');
+const {
+  createSessionRecord,
+  deleteOtherSessionsForUser,
+  deleteSessionsByPresentedToken,
+  rotateSessionByPresentedToken,
+} = require('../services/auth/session-token-persistence');
+
 /**
  * SessionRepository — single-responsibility data access for the
  * `session` table. Owns every prisma.session.* call used by the auth
@@ -30,7 +40,7 @@ class SessionRepository {
    * @param {<T>(fn: () => Promise<T>, opts?: object) => Promise<T>} deps.withRetry
    * @param {Console} [deps.logger]
    */
-  constructor({ prisma, withRetry, logger = console }) {
+  constructor({ prisma, withRetry, logger = console, env = process.env }) {
     if (!prisma) throw new Error('SessionRepository: prisma is required');
     if (typeof withRetry !== 'function') {
       throw new Error('SessionRepository: withRetry must be a function');
@@ -38,6 +48,7 @@ class SessionRepository {
     this.prisma = prisma;
     this.withRetry = withRetry;
     this.logger = logger;
+    this.env = env;
   }
 
   /**
@@ -57,16 +68,34 @@ class SessionRepository {
   async create({ userId, token, expiresAt, fingerprint }) {
     const baseData = { userId, token, expiresAt };
     const dataWithFp = fingerprint != null ? { ...baseData, fingerprint } : baseData;
+    const supportsAuthTransaction = (
+      typeof this.prisma.$transaction === 'function'
+      && typeof this.prisma.$queryRawUnsafe === 'function'
+      && typeof this.prisma.user?.findUnique === 'function'
+    );
+    const createForActiveUser = (data) => {
+      if (!supportsAuthTransaction) {
+        // Narrow unit-test doubles and legacy repository consumers may expose
+        // only `session.create`. The production Prisma client always takes the
+        // serialized active-user transaction path above.
+        return createSessionRecord(this.prisma, data, { env: this.env });
+      }
+      return runAuthUserTransaction(
+        this.prisma,
+        userId,
+        (tx) => createSessionRecord(tx, data, { env: this.env }),
+      );
+    };
 
     return this.withRetry(async () => {
       try {
-        return await this.prisma.session.create({ data: dataWithFp });
+        return await createForActiveUser(dataWithFp);
       } catch (err) {
         if (fingerprint != null && SessionRepository._isFingerprintColumnMissing(err)) {
           this.logger.warn?.(
             '[session-repo] fingerprint column missing on create; retrying without it'
           );
-          return this.prisma.session.create({ data: baseData });
+          return createForActiveUser(baseData);
         }
         throw err;
       }
@@ -81,8 +110,20 @@ class SessionRepository {
    */
   deleteByToken(token) {
     return this.withRetry(
-      () => this.prisma.session.deleteMany({ where: { token } }),
+      () => deleteSessionsByPresentedToken(this.prisma, token),
       { label: 'session-repo.deleteByToken' }
+    );
+  }
+
+  /**
+   * Revoke the complete session family for a user. Authentication paths use
+   * this when an account is found soft-deleted so another still-valid token
+   * cannot keep the account active.
+   */
+  deleteAllForUser(userId) {
+    return this.withRetry(
+      () => this.prisma.session.deleteMany({ where: { userId } }),
+      { label: 'session-repo.deleteAllForUser' }
     );
   }
 
@@ -149,9 +190,7 @@ class SessionRepository {
    */
   deleteAllForUserExceptToken(userId, keepToken) {
     return this.withRetry(
-      () => this.prisma.session.deleteMany({
-        where: { userId, NOT: { token: keepToken } },
-      }),
+      () => deleteOtherSessionsForUser(this.prisma, userId, keepToken),
       { label: 'session-repo.deleteAllForUserExceptToken' }
     );
   }
@@ -167,19 +206,23 @@ class SessionRepository {
 
     return this.withRetry(async () => {
       try {
-        return await this.prisma.session.update({
-          where: { token: oldToken },
-          data: dataWithFp,
-        });
+        return await rotateSessionByPresentedToken(
+          this.prisma,
+          oldToken,
+          dataWithFp,
+          { env: this.env },
+        );
       } catch (err) {
         if (fingerprint != null && SessionRepository._isFingerprintColumnMissing(err)) {
           this.logger.warn?.(
             '[session-repo] fingerprint column missing on update; retrying without it'
           );
-          return this.prisma.session.update({
-            where: { token: oldToken },
-            data: baseData,
-          });
+          return rotateSessionByPresentedToken(
+            this.prisma,
+            oldToken,
+            baseData,
+            { env: this.env },
+          );
         }
         throw err;
       }

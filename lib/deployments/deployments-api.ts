@@ -2,6 +2,8 @@
 // (/api/deployments/*). Mirrors lib/codex/codex-api.ts: localStorage JWT Bearer
 // + credentials:include. Management clone of Replit's Deployments tab.
 
+import { authenticatedFetch } from "../authenticated-fetch"
+
 const BASE = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")}/deployments`
 
 function authHeaders(): Record<string, string> {
@@ -10,7 +12,7 @@ function authHeaders(): Record<string, string> {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { credentials: "include", headers: authHeaders(), ...init })
+  const res = await authenticatedFetch(`${BASE}${path}`, { credentials: "include", headers: authHeaders(), ...init })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) throw Object.assign(new Error((body as any)?.message || (body as any)?.error || `deployments http ${res.status}`), { status: res.status, body })
   return body as T
@@ -164,9 +166,23 @@ export interface CreateDeploymentInput {
 
 export type DeploymentPatch = Partial<Pick<Deployment, "buildCommand" | "runCommand" | "publicDir" | "visibility" | "deploymentType" | "machineTier" | "externalPort">>
 
+async function getPublicHealth(): Promise<DeploymentsHealth> {
+  const res = await fetch(`${BASE}/health`, {
+    cache: "no-store",
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw Object.assign(
+      new Error((body as any)?.message || (body as any)?.error || `deployments http ${res.status}`),
+      { status: res.status, body },
+    )
+  }
+  return body as DeploymentsHealth
+}
+
 export const deploymentsApi = {
   // no-store: the flag can flip; a cached enabled:false would strand the UI.
-  health: () => req<DeploymentsHealth>("/health", { cache: "no-store" }),
+  health: getPublicHealth,
 
   list: () => req<{ deployments: Deployment[] }>("/").then((r) => r.deployments),
   providers: () => req<{ providers: DeploymentProvider[] }>("/providers", { cache: "no-store" }).then((r) => r.providers),

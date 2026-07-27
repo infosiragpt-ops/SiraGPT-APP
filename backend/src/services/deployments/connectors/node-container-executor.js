@@ -274,9 +274,13 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
     push(`[bundle] migraciones: ${migrate}`);
     try {
       const { code } = await d.sshExec.exec(conn, `docker exec ${containerName} sh -lc ${shQuote(migrate)}`, { onLog: push });
-      if (code !== 0) push(`[bundle] ⚠ migraciones terminaron con código ${code} (continuando)`);
+      if (code !== 0) {
+        push(`[bundle] ✗ migraciones terminaron con código ${code}; promoción cancelada`);
+        return fail('bundle', 'las migraciones de base de datos fallaron');
+      }
     } catch (err) {
-      push(`[bundle] ⚠ migraciones fallaron: ${d.friendlyError(err)}`);
+      push(`[bundle] ✗ migraciones fallaron; promoción cancelada`);
+      return fail('bundle', d.friendlyError(err));
     }
   }
 

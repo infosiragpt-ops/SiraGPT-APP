@@ -16,7 +16,9 @@ const prisma = require('../config/database');
 const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 const {
   tryGenerateSourcePreservingDocumentEdit,
+  isSourcePreservingEditRequest,
 } = require('../services/source-preserving-document-edit');
+const { isDocumentEditRequest } = require('../services/agents/agentic-trigger');
 const {
   buildProjectPromptHeader,
   buildProjectRuntimeDocuments,
@@ -29,6 +31,12 @@ const {
   findPreviousAssistantContent,
   isPreviousContentExportRequest,
 } = require('../services/document-followup-context');
+const {
+  MAX_OUTLINE_ITEMS,
+  MAX_RESEARCH_SOURCES,
+  appendResearchGroundingInstructions,
+  normalizeResearchArtifactInput,
+} = require('../services/document-pipeline/research-artifact-input');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -190,6 +198,13 @@ router.post(
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
     body('fileIds').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('fileIds.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
+    body('outline').optional().isArray({ max: MAX_OUTLINE_ITEMS }),
+    body('outline.*').optional().isString().trim().isLength({ min: 3, max: 120 }),
+    body('researchSources').optional().isArray({ max: MAX_RESEARCH_SOURCES }),
+    body('researchSources.*').optional().isObject(),
+    body('researchSources.*.title').optional().isString().trim().isLength({ min: 1, max: 320 }),
+    body('researchSources.*.abstract').optional({ nullable: true }).isString().isLength({ max: 6000 }),
+    body('researchSources.*.doi').optional({ nullable: true }).isString().isLength({ max: 220 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -221,6 +236,10 @@ router.post(
     let content = null, file = null, format = null, errorMsg = null;
 
     try {
+      const researchArtifact = normalizeResearchArtifactInput({
+        researchSources: req.body.researchSources,
+        outline: req.body.outline,
+      });
       const shouldUsePreviousAssistantContent = isPreviousContentExportRequest(prompt);
       const requestedFileIds = normalizeRequestedFileIds(req.body);
       const [explicitReferenceFiles, projectContext, previousAssistantContent] = await Promise.all([
@@ -231,6 +250,7 @@ router.post(
           : Promise.resolve(null),
       ]);
       const referenceFiles = [
+        ...researchArtifact.referenceFiles,
         ...(projectContext?.referenceFiles || []),
         ...explicitReferenceFiles,
       ].filter((file, index, arr) => {
@@ -266,40 +286,53 @@ router.post(
         format = preservedEdit.format;
         send({ type: 'stage', label: 'Documento editado sin regenerar el archivo', pct: 92 });
       } else {
-        const effectivePrompt = previousAssistantContent
-          ? buildPreviousContentDocumentPrompt({
-              prompt,
-              sourceContent: previousAssistantContent,
-              format: req.body.format || 'docx',
-            })
-          : prompt;
-        if (previousAssistantContent) {
-          send({ type: 'stage', label: 'Recuperando contenido anterior', pct: 6 });
-        }
-        const projectPrompt = projectContext?.promptPrefix
-          ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${effectivePrompt}`
-          : effectivePrompt;
-        const pipelineOptions = {
-          prompt: projectPrompt,
-          model: req.body.model,
-          format: req.body.format,
-          template: req.body.template,
-          complexity: req.body.complexity || 'standard',
-          referenceFiles,
-          outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
-          telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
-          signal: controller.signal,
-          // Threaded into ArtifactUrlResolver so the persisted artifact
-          // is owner-scoped — the GET /api/agent/artifact/:id route
-          // refuses any caller that isn't the owner.
-          userId: req.user?.id || null,
-          chatId,
-        };
-        for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
-          if (clientGone) break;
-          if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
-          if (ev.type === 'error') { errorMsg = ev.error; continue; }
-          send(ev);
+        // When the user attached a file AND asked to EDIT it, regenerating a
+        // brand-new document via the advanced pipeline is the wrong answer —
+        // it silently replaces their upload with unrelated content. Fail
+        // loudly so the chat path / document_edit tool can retry instead.
+        const editIntent = isSourcePreservingEditRequest(prompt, requestedFileIds)
+          || (requestedFileIds.length > 0 && isDocumentEditRequest(prompt));
+        if (editIntent && requestedFileIds.length > 0) {
+          errorMsg = 'No pude editar el documento adjunto preservando su formato. Reintenta con una instrucción más concreta (por ejemplo: "borra el párrafo X", "cambia el título a Y") o vuelve a adjuntar el archivo.';
+        } else {
+          const effectivePrompt = previousAssistantContent
+            ? buildPreviousContentDocumentPrompt({
+                prompt,
+                sourceContent: previousAssistantContent,
+                format: req.body.format || 'docx',
+              })
+            : prompt;
+          if (previousAssistantContent) {
+            send({ type: 'stage', label: 'Recuperando contenido anterior', pct: 6 });
+          }
+          const projectPrompt = projectContext?.promptPrefix
+            ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${effectivePrompt}`
+            : effectivePrompt;
+          const groundedPrompt = appendResearchGroundingInstructions(projectPrompt, researchArtifact.sources);
+          const pipelineOptions = {
+            prompt: groundedPrompt,
+            model: req.body.model,
+            format: req.body.format,
+            template: req.body.template,
+            complexity: req.body.complexity || 'standard',
+            referenceFiles,
+            outline: researchArtifact.outline,
+            researchSources: researchArtifact.sources,
+            outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
+            telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
+            signal: controller.signal,
+            // Threaded into ArtifactUrlResolver so the persisted artifact
+            // is owner-scoped — the GET /api/agent/artifact/:id route
+            // refuses any caller that isn't the owner.
+            userId: req.user?.id || null,
+            chatId,
+          };
+          for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
+            if (clientGone) break;
+            if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
+            if (ev.type === 'error') { errorMsg = ev.error; continue; }
+            send(ev);
+          }
         }
       }
     } catch (err) {

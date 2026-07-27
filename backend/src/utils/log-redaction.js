@@ -13,6 +13,8 @@ const REDACTION_CENSOR = '[REDACTED]';
 const DEFAULT_MAX_DEPTH = 8;
 const DEFAULT_MAX_ARRAY_ITEMS = 50;
 
+const { redactString } = require('./secret-redactor');
+
 const SENSITIVE_KEYS = new Set([
   'password',
   'passcode',
@@ -42,6 +44,16 @@ const SENSITIVE_KEYS = new Set([
   'secret_access_key',
   'webhooksecret',
   'webhook_secret',
+  // Database DSNs are credentials even when the password is absent (remote
+  // host/database names and signed Prisma URLs are still sensitive).
+  'databaseurl',
+  'database_url',
+  'directdatabaseurl',
+  'direct_database_url',
+  'prismadatabaseurl',
+  'prisma_database_url',
+  'codexdatabasevaultkeys',
+  'codex_database_vault_keys',
 ]);
 
 function normalizeKey(key) {
@@ -53,15 +65,71 @@ function isSensitiveKey(key) {
   return SENSITIVE_KEYS.has(raw) || SENSITIVE_KEYS.has(normalizeKey(raw));
 }
 
+function redactErrorDeep(error, opts, seen, depth) {
+  if (depth >= (opts.maxDepth ?? DEFAULT_MAX_DEPTH)) return '[truncated]';
+  if (seen.has(error)) return '[circular]';
+
+  seen.add(error);
+
+  // Keep the original prototype so Pino's standard Error serializer retains
+  // useful semantics such as `type: "TypeError"`. Copying into a plain object
+  // would avoid the leak, but would also silently change the log contract.
+  const redacted = Object.create(Object.getPrototypeOf(error));
+  for (const key of Object.getOwnPropertyNames(error)) {
+    const descriptor = Object.getOwnPropertyDescriptor(error, key);
+    if (!descriptor) continue;
+
+    let child;
+    try {
+      child = error[key];
+    } catch (_err) {
+      child = '[unavailable]';
+    }
+
+    const value = isSensitiveKey(key)
+      ? (opts.censor || REDACTION_CENSOR)
+      : redactPayloadDeep(child, opts, seen, depth + 1);
+
+    Object.defineProperty(redacted, key, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      writable: true,
+      value,
+    });
+  }
+
+  // Some custom Error implementations inherit rather than own these fields.
+  // Define safe copies so their prototype getters cannot reintroduce secrets.
+  for (const key of ['name', 'message', 'stack']) {
+    if (Object.prototype.hasOwnProperty.call(redacted, key)) continue;
+    let inherited;
+    try {
+      inherited = error[key];
+    } catch (_err) {
+      inherited = '[unavailable]';
+    }
+    if (inherited == null) continue;
+    Object.defineProperty(redacted, key, {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: redactString(inherited),
+    });
+  }
+
+  return redacted;
+}
+
 function redactPayloadDeep(value, opts = {}, seen = new WeakSet(), depth = 0) {
   const censor = opts.censor || REDACTION_CENSOR;
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxArrayItems = opts.maxArrayItems ?? DEFAULT_MAX_ARRAY_ITEMS;
 
+  if (typeof value === 'string') return redactString(value);
   if (value === null || value === undefined || typeof value !== 'object') return value;
   if (value instanceof Date) return value;
-  if (value instanceof Error) return value;
   if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Error) return redactErrorDeep(value, opts, seen, depth);
   if (depth >= maxDepth) return '[truncated]';
   if (seen.has(value)) return '[circular]';
 

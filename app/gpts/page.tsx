@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTFilters } from "@/lib/gpts-service"
 import { useChat } from "@/lib/chat-context-integrated"
+import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 
 type VisibilityFilter = "all" | "mine" | "public"
 
@@ -77,25 +78,41 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue
 }
 
+function getUploadAuthToken() {
+  if (typeof window === "undefined") return null
+  return window.localStorage?.getItem("auth-token") || null
+}
+
 function resolveIconSrc(iconUrl?: string) {
-  if (!iconUrl) return null
-  if (/^(https?:|data:|blob:)/i.test(iconUrl)) return iconUrl
-  if (iconUrl.startsWith("/uploads") || iconUrl.startsWith("/upload")) {
-    const imageHost = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000"
-    return `${imageHost}${iconUrl}`
-  }
-  if (iconUrl.startsWith("/")) return iconUrl
-  return null
+  return resolveGptIconImageUrl(iconUrl, {
+    token: getUploadAuthToken(),
+    baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
+  })
 }
 
 function GPTIcon({ gpt }: { gpt: CustomGPT }) {
   const iconSrc = resolveIconSrc(gpt.iconUrl)
+  // A broken/unreachable icon URL must degrade to the Bot glyph — never the
+  // browser's ugly broken-image placeholder (the "?" box the user reported).
+  const [failed, setFailed] = useState(false)
+  const textIcon = String(gpt.iconUrl || "").trim()
 
-  if (iconSrc) {
+  if (iconSrc && !failed) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={iconSrc} alt={`${gpt.name} icon`} loading="lazy" decoding="async" className="h-full w-full rounded-full object-cover" />
+      <img
+        src={iconSrc}
+        alt={`${gpt.name} icon`}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className="h-full w-full rounded-full object-cover"
+      />
     )
+  }
+
+  if (textIcon && !/^https?:|data:|blob:/i.test(textIcon) && !textIcon.startsWith("/")) {
+    return <span className="text-2xl leading-none">{textIcon}</span>
   }
 
   return <Bot className="h-9 w-9 text-zinc-950" />

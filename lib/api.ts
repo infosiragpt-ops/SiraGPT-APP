@@ -1,6 +1,10 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
+import {
+  authenticatedFetch,
+  prepareAuthenticatedRequest,
+} from "./authenticated-fetch"
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
@@ -214,6 +218,116 @@ export type WebSourcesPayload = {
   query?: string
   elapsedMs?: number
   sources: WebSource[]
+}
+
+export type ResearchCollectionRecord = {
+  id: string
+  name: string
+  description?: string | null
+  folder?: string | null
+  tags: string[]
+  createdAt: string
+  updatedAt: string
+  _count?: { items: number; comments?: number }
+  scope?: 'personal' | 'organization'
+  organizationId?: string | null
+  accessLevel?: 'VIEW' | 'EDIT'
+  canEdit?: boolean
+  isOwner?: boolean
+  user?: { id: string; name: string; avatar?: string | null } | null
+}
+
+export type ResearchReferenceRecord = {
+  id: string
+  title: string
+  doi?: string | null
+  authors?: Array<{ name?: string; orcid?: string | null } | string> | null
+  year?: number | null
+  venue?: string | null
+  abstract?: string | null
+  url?: string | null
+  pdfUrl?: string | null
+  source?: string | null
+  sources: string[]
+  tags: string[]
+  note?: string | null
+  citationCount?: number | null
+  openAccess?: boolean | null
+  publicationStage?: string | null
+  peerReviewStatus?: string | null
+  studyType?: string | null
+  integrityStatus?: string | null
+  collectionItems?: Array<{ collectionId: string }>
+  updatedAt: string
+  isOwned?: boolean
+}
+
+export type ResearchLibraryEnvelope = {
+  references: ResearchReferenceRecord[]
+  collections: ResearchCollectionRecord[]
+  pendingConflicts: number
+  page: number
+  limit: number
+  total: number
+  totalPages: number
+  scope?: 'personal' | 'organization'
+  organizationId?: string | null
+  role?: OrganizationRole | null
+}
+
+export type ResearchCollectionCommentRecord = {
+  id: string
+  collectionId: string
+  organizationId: string
+  body: string
+  mentionedUserIds: string[]
+  createdAt: string
+  updatedAt: string
+  author: { id: string; name: string; avatar?: string | null }
+}
+
+export type ResearchTemplateRecord = {
+  id: string
+  organizationId: string
+  name: string
+  description?: string | null
+  query: string
+  filters?: Record<string, unknown> | null
+  methodology?: Record<string, unknown> | null
+  tags: string[]
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+  createdBy?: { id: string; name: string; avatar?: string | null } | null
+  canManage?: boolean
+}
+
+export type FileVersionRecord = {
+  id: string
+  version: number
+  filename: string
+  summary?: string | null
+  validationPassed: boolean
+  createdAt: string
+  downloadUrl?: string | null
+}
+
+export type ResearchSavedSearchRecord = {
+  id: string
+  name: string
+  query: string
+  kind: 'scientific' | 'general'
+  filters?: Record<string, unknown> | null
+  schedule: 'manual' | 'daily' | 'weekly'
+  active: boolean
+  notifyInApp: boolean
+  lastRunAt?: string | null
+  nextRunAt?: string | null
+  lastResultCount: number
+  lastNewCount: number
+  lastError?: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export type MemoryItem = {
@@ -449,6 +563,13 @@ export type MyOrganizationsEnvelope = {
   items: OrganizationSummary[]
 }
 
+export type OrganizationMember = {
+  id: string
+  role: OrganizationRole
+  joinedAt: string
+  user: { id: string; email: string; name: string; avatar?: string | null } | null
+}
+
 export type OrganizationInvitation = {
   id: string
   email: string
@@ -508,13 +629,6 @@ class ApiClient {
     resolve: (value: any) => void;
     reject: (err: any) => void;
   }> = [];
-
-  // CSRF token state. The backend uses double-submit cookies:
-  // GET /api/csrf-token sets both a public `csrf_token` cookie (non-httpOnly,
-  // JS-readable) and an httpOnly `_csrf_secret` cookie. Mutating requests
-  // must echo the public token in the `X-CSRF-Token` header.
-  private _csrfTokenInFlight: Promise<string | null> | null = null;
-  private _csrfToken: string | null = null; // cached stateless token (Safari ITP path)
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
@@ -629,17 +743,6 @@ class ApiClient {
       headers.set('Idempotency-Key', safeUUID());
     }
 
-    // CSRF double-submit token. Backend requires X-CSRF-Token on mutating
-    // requests to cookie-auth routers (/api/auth, /api/users, /api/chats,
-    // /api/files, /api/projects, /api/payments, /api/bookmarks, /api/orgs,
-    // /api/library, /api/cowork, /api/thesis). Bearer-auth requests skip
-    // CSRF server-side, but we set the header unconditionally on mutating
-    // calls — harmless when not required.
-    if (isMutating && !headers.has('X-CSRF-Token') && !headers.has('x-csrf-token')) {
-      const csrf = await this._ensureCsrfToken();
-      if (csrf) headers.set('X-CSRF-Token', csrf);
-    }
-
     // Track last error for re-throw on final failure
     let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
@@ -667,7 +770,11 @@ class ApiClient {
           signal: controller.signal as AbortSignal,
         };
 
-        const response = await fetch(url, config);
+        const response = await authenticatedFetch(url, config, {
+          bearerToken: isCredentialHandshake(endpoint, method)
+            ? null
+            : this._getAccessTokenSnapshot(),
+        });
 
         // HTTP-level success (2xx)
         if (response.ok) {
@@ -728,27 +835,6 @@ class ApiClient {
               // Reset attempt counter so this doesn't consume a retry slot
               attempt = -1;
               continue;
-            }
-          }
-
-          // 403 csrf_invalid — token rotated or missing. Refresh once and
-          // retry transparently so the UI doesn't surface a CSRF error.
-          if (response.status === 403 && isMutating) {
-            const peek = await response.clone().json().catch(() => null) as { error?: string } | null;
-            if (peek && peek.error === 'csrf_invalid') {
-              // Force a fresh token (clear in-flight + drop stale cookie value
-              // by re-fetching) and retry once. We cap at one CSRF retry by
-              // tagging the headers so we don't loop indefinitely.
-              if (!headers.has('X-CSRF-Retry')) {
-                const fresh = await this._ensureCsrfToken(true);
-                if (fresh) {
-                  headers.set('X-CSRF-Token', fresh);
-                  headers.set('X-CSRF-Retry', '1');
-                  clearTimeout(timeoutId);
-                  attempt = -1;
-                  continue;
-                }
-              }
             }
           }
 
@@ -844,6 +930,23 @@ class ApiClient {
     return this.baseURL;
   }
 
+  private authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    return authenticatedFetch(input, init, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
+  }
+
+  /**
+   * Compatibility seam for non-ApiClient streaming callers that still own
+   * their response reader. Preparation delegates to the same shared manager,
+   * so cookie sessions and ApiClient requests cannot drift on CSRF behavior.
+   */
+  prepareMutatingFetch(init: RequestInit = {}): Promise<RequestInit> {
+    return prepareAuthenticatedRequest(this.baseURL, init, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
+  }
+
   /**
    * _parseRetryAfter — turn an RFC 9110 Retry-After header value into
    * a millisecond delay relative to "now". Returns null when the
@@ -874,56 +977,6 @@ class ApiClient {
   }
 
   /**
-   * Read the `csrf_token` cookie (set by the backend's double-submit CSRF
-   * middleware). Returns null when running on the server, when document.cookie
-   * is unavailable, or when the cookie hasn't been issued yet.
-   */
-  private _readCsrfCookie(): string | null {
-    if (typeof document === 'undefined') return null;
-    const raw = document.cookie || '';
-    const match = raw.match(/(?:^|;\s*)csrf_token=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
-  }
-
-  /**
-   * Ensure we have a CSRF token to attach to mutating requests. If the
-   * cookie is already present we return it immediately; otherwise we hit
-   * GET /api/csrf-token once (deduped via _csrfTokenInFlight) to have the
-   * backend mint a fresh pair and surface the public token in the body.
-   */
-  private async _ensureCsrfToken(forceRefresh = false): Promise<string | null> {
-    if (typeof window === 'undefined') return null;
-    if (forceRefresh) { this._csrfToken = null; this._csrfTokenInFlight = null; }
-    // Reuse the last good stateless token first. On Safari ITP the public
-    // csrf_token cookie is dropped/partitioned (split-host) and goes stale,
-    // so the cached stateless token is the only value that keeps validating.
-    if (this._csrfToken) return this._csrfToken;
-    if (!forceRefresh) {
-      const existing = this._readCsrfCookie();
-      if (existing) return existing; // double-submit path (non-Safari / same-origin)
-    }
-    if (this._csrfTokenInFlight) return this._csrfTokenInFlight;
-    this._csrfTokenInFlight = (async () => {
-      try {
-        const res = await fetch(`${this.baseURL}/auth/csrf-token`, {
-          method: 'GET',
-          credentials: 'include',
-        });
-        if (!res.ok) return null;
-        const data = await res.json().catch(() => null) as { csrfToken?: string } | null;
-        const token = (data && data.csrfToken) || this._readCsrfCookie();
-        if (token) this._csrfToken = token; // cache the freshly minted stateless token
-        return token;
-      } catch {
-        return null;
-      } finally {
-        this._csrfTokenInFlight = null;
-      }
-    })();
-    return this._csrfTokenInFlight;
-  }
-
-  /**
    * Try to refresh the JWT token by calling /auth/refresh.
    * Ensures only one refresh is in-flight at a time.
    * Returns true if successful, false otherwise.
@@ -941,10 +994,11 @@ class ApiClient {
       }
 
       try {
-        const res = await fetch(`${this.baseURL}/auth/refresh`, {
+        const res = await authenticatedFetch(`${this.baseURL}/auth/refresh`, {
           method: 'POST',
           headers,
-          credentials: 'include',
+        }, {
+          bearerToken: includeBearer ? this.token : null,
         });
 
         if (!res.ok) return false;
@@ -1247,12 +1301,20 @@ class ApiClient {
     if (opts.asyncProcessing) formData.append('asyncProcessing', '1');
 
     const url = `${this.baseURL}/files/upload`;
+    const prepared = await prepareAuthenticatedRequest(url, {
+      method: 'POST',
+      headers: opts.idempotencyKey
+        ? { 'Idempotency-Key': opts.idempotencyKey }
+        : undefined,
+    }, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
+    const preparedHeaders = new Headers(prepared.headers);
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
-      if (this.token) xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
-      if (opts.idempotencyKey) xhr.setRequestHeader('Idempotency-Key', opts.idempotencyKey);
+      preparedHeaders.forEach((value, name) => xhr.setRequestHeader(name, value));
       xhr.withCredentials = true;
       // Don't set Content-Type — XHR sets it with boundary for FormData.
 
@@ -1305,12 +1367,9 @@ class ApiClient {
 
   async getFileContent(id: string): Promise<string> {
     const url = `${this.baseURL}/files/${id}/content`;
-    const headers = new Headers();
-    if (this.token) {
-      headers.set('Authorization', `Bearer ${this.token}`);
-    }
-
-    const response = await fetch(url, { headers });
+    const response = await authenticatedFetch(url, {}, {
+      bearerToken: this._getAccessTokenSnapshot(),
+    });
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -1318,6 +1377,17 @@ class ApiClient {
     }
 
     return response.text();
+  }
+
+  async getFileVersions(id: string): Promise<{ fileId: string; versions: FileVersionRecord[] }> {
+    return (await this.request(`/files/${encodeURIComponent(id)}/versions`)) as { fileId: string; versions: FileVersionRecord[] };
+  }
+
+  async restoreFileVersion(fileId: string, versionId: string, chatId?: string): Promise<{ sourceVersion: number; version: FileVersionRecord }> {
+    return (await this.request(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId: chatId || undefined }),
+    })) as { sourceVersion: number; version: FileVersionRecord };
   }
 
   // AI endpoints
@@ -1405,11 +1475,10 @@ class ApiClient {
     options: AIStreamOptions = {}
   ) {
     const url = `${this.baseURL}/ai/generate`;
-    const config: RequestInit = {
+    const baseConfig: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
       body: JSON.stringify(data),
       ...(signal && { signal }),
@@ -1447,7 +1516,8 @@ class ApiClient {
       if (hasDeliveredAnyContent) break;
 
       try {
-        const response = await fetch(url, config);
+        const response = await this.authenticatedFetch(url, baseConfig);
+        if (signal?.aborted) { onError(new Error('Request aborted')); return; }
 
         if (!response.ok) {
           let details: any = {};
@@ -1919,18 +1989,15 @@ class ApiClient {
     signal?: AbortSignal
   ) {
     const url = `${this.baseURL}/document-ai/generate-word`;
-    const config: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
-      body: JSON.stringify(data),
-      ...(signal && { signal })
-    };
 
     try {
-      const response = await fetch(url, config);
+      const config = await this.prepareMutatingFetch({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+        ...(signal && { signal }),
+      });
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         let details: any = {};
@@ -2031,18 +2098,15 @@ class ApiClient {
     signal?: AbortSignal
   ): Promise<{ success: boolean; data: any }> {
     const url = `${this.baseURL}/ai/generate-excel`;
-    const config: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
-      body: JSON.stringify(data),
-      ...(signal && { signal })
-    };
 
     try {
-      const response = await fetch(url, config);
+      const config = await this.prepareMutatingFetch({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+        ...(signal && { signal }),
+      });
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         let details: any = {};
@@ -2117,7 +2181,10 @@ class ApiClient {
   }
 
   async verifyPaymentSession(sessionId: string) {
-    return this.request(`/payments/verify-session?session_id=${sessionId}`);
+    return this.request('/payments/verify-session', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    });
   }
 
   async getSubscriptionInfo() {
@@ -2200,6 +2267,10 @@ class ApiClient {
   // Organization / team endpoints
   async listMyOrganizations(): Promise<MyOrganizationsEnvelope> {
     return (await this.request('/orgs/me')) as MyOrganizationsEnvelope;
+  }
+
+  async listOrganizationMembers(orgId: string): Promise<{ items: OrganizationMember[] }> {
+    return (await this.request(`/orgs/${encodeURIComponent(orgId)}/members`)) as { items: OrganizationMember[] };
   }
 
   async createOrganization(data: { name: string; slug?: string }): Promise<OrganizationSummary> {
@@ -2373,7 +2444,7 @@ class ApiClient {
   }
 
   async downloadInvoice(paymentId: string) {
-    const response = await fetch(`${this.baseURL}/payments/invoice/${paymentId}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/payments/invoice/${paymentId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2388,7 +2459,7 @@ class ApiClient {
   }
 
   async downloadStripeInvoice(invoiceId: string) {
-    const response = await fetch(`${this.baseURL}/payments/stripe/invoice/${invoiceId}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/payments/stripe/invoice/${invoiceId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2459,6 +2530,11 @@ class ApiClient {
     return this.request(`/admin/stats/agents${query ? `?${query}` : ''}`);
   }
 
+  async getAdminProductQualityStats(params?: { from?: string; to?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stats/product-quality${query ? `?${query}` : ''}`);
+  }
+
   async getAdminServiceHealth() {
     return this.request('/admin/health/services');
   }
@@ -2527,7 +2603,7 @@ class ApiClient {
     limit?: number
   }) {
     const query = new URLSearchParams(params as any).toString();
-    const response = await fetch(`${this.baseURL}/admin/audit-logs.csv${query ? `?${query}` : ''}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/audit-logs.csv${query ? `?${query}` : ''}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2548,7 +2624,7 @@ class ApiClient {
   }
 
   async downloadAdminStripeInvoice(invoiceId: string) {
-    const response = await fetch(`${this.baseURL}/admin/stripe/invoice/${invoiceId}`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/stripe/invoice/${invoiceId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2563,7 +2639,7 @@ class ApiClient {
   }
 
   async exportUsersCsv() {
-    const response = await fetch(`${this.baseURL}/admin/users/export/csv`, {
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/users/export/csv`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2580,16 +2656,13 @@ class ApiClient {
   // Download endpoints
   async downloadExcel(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/excel`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2601,16 +2674,13 @@ class ApiClient {
 
   async downloadCSV(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/csv`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2622,16 +2692,13 @@ class ApiClient {
 
   async downloadText(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/text`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2643,16 +2710,13 @@ class ApiClient {
 
   async downloadWord(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/word`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2664,16 +2728,13 @@ class ApiClient {
 
   async downloadPowerPoint(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/powerpoint`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
-    };
+    });
 
-    const response = await fetch(url, config);
+    const response = await this.authenticatedFetch(url, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -2691,6 +2752,34 @@ class ApiClient {
   async getModels() {
     return this.request('/elevenlabs/models');
   }
+
+  async getOfficeSoundscape(
+    soundId: 'coast-day' | 'coast-night' | 'terrace-steps',
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{
+    ok: boolean;
+    soundId: string;
+    audio_url: string;
+    filename: string;
+    cached: boolean;
+    loop: boolean;
+    durationSeconds: number;
+    provider: 'elevenlabs';
+    version: number;
+    fallback: boolean;
+  }> {
+    return this.request(`/elevenlabs/office-soundscapes/${encodeURIComponent(soundId)}`, {
+      method: 'POST',
+      signal: options.signal,
+      timeoutMs: 100000,
+      // Sound generation is billable. The server-side cache and in-flight
+      // dedupe make the operation idempotent, but the browser still avoids
+      // transport retries so it never creates parallel provider work.
+      maxRetries: 0,
+      suppressFailureLog: true,
+    });
+  }
+
   async textToSpeech(data: {
     text: string;
     voice_id?: string;
@@ -2710,12 +2799,17 @@ class ApiClient {
 
   // Deterministic text-to-speech for the chat composer's Voice mode. Unlike the
   // agentic path (which depended on a weak model choosing to call a tool), this
-  // always produces the MP3 and persists it as a "Generation N" chat artifact.
+  // always produces playable audio and persists it as a "Generation N" artifact.
   async generateSpeechMessage(data: {
     text: string;
     chatId?: string | null;
     voiceId?: string;
     modelId?: string;
+    model?: string;
+    language?: string;
+    accent?: string;
+    effect?: string;
+    stability?: number;
     regenerate?: boolean;
     voiceSettings?: {
       stability?: number;
@@ -2723,17 +2817,27 @@ class ApiClient {
       style?: number;
       use_speaker_boost?: boolean;
     };
-  }): Promise<{
+  }, options: { signal?: AbortSignal } = {}): Promise<{
     ok: boolean;
-    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
+    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string; model?: string };
     content: string;
     state: any;
     assistantMessageId: string | null;
     chatId: string | null;
+    provider?: string;
+    model?: string;
   }> {
     return this.request('/ai/generate-speech', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
+      // Long narrations can legitimately take longer than the generic 30s
+      // API ceiling. Keep the browser alive slightly longer than the
+      // provider-side timeout while still allowing immediate user aborts.
+      timeoutMs: 150000,
+      // Speech generation is billable. A transport retry could create a
+      // second audio file after the first provider call already succeeded.
+      maxRetries: 0,
     });
   }
 
@@ -2746,7 +2850,7 @@ class ApiClient {
     effect?: string;
     influence?: number;
     model?: string;
-  }): Promise<{
+  }, options: { signal?: AbortSignal } = {}): Promise<{
     ok: boolean;
     provider?: string;
     model?: string;
@@ -2759,6 +2863,7 @@ class ApiClient {
     return this.request('/ai/generate-music', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
       // Music generation runs synchronously inside the request and can take a
       // while for long (3–4 min) tracks. Give it a generous ceiling and never
       // retry — a retry would double-bill ElevenLabs credits.
@@ -2875,17 +2980,14 @@ class ApiClient {
     onError: (error: Error) => void
   ) {
     const url = `${this.baseURL}/search/web`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    };
+    });
 
     try {
-      const response = await fetch(url, config);
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -2958,7 +3060,7 @@ class ApiClient {
 
   async downloadVideo(filename: string) {
     const url = `${this.apiBaseURL}/video/download/${filename}`;
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -2986,6 +3088,144 @@ class ApiClient {
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
   }
 
+  async getResearchLibrary(params?: { page?: number; limit?: number; search?: string; collectionId?: string; organizationId?: string }) {
+    const query = new URLSearchParams(Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)])).toString();
+    return (await this.request(`/research-library${query ? `?${query}` : ''}`)) as ResearchLibraryEnvelope;
+  }
+
+  async saveResearchReferences(data: { sources: unknown[]; collectionId?: string; collectionName?: string; folder?: string; tags?: string[]; note?: string; organizationId?: string }) {
+    return this.request('/research-library/references', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateResearchReference(id: string, data: { note?: string | null; tags?: string[]; title?: string }) {
+    return this.request(`/research-library/references/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteResearchReference(id: string) {
+    return this.request(`/research-library/references/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async createResearchCollection(data: { name: string; description?: string; folder?: string; tags?: string[]; organizationId?: string }) {
+    return this.request('/research-library/collections', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateResearchCollection(id: string, data: { name?: string; description?: string | null; folder?: string | null; tags?: string[]; organizationId?: string }) {
+    return this.request(`/research-library/collections/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteResearchCollection(id: string, organizationId?: string) {
+    const query = organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : '';
+    return this.request(`/research-library/collections/${encodeURIComponent(id)}${query}`, { method: 'DELETE' });
+  }
+
+  async addReferencesToResearchCollection(collectionId: string, referenceIds: string[], organizationId?: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/references`, { method: 'POST', body: JSON.stringify({ referenceIds, organizationId }) });
+  }
+
+  async shareResearchCollection(collectionId: string, organizationId: string, access: 'VIEW' | 'EDIT') {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/share`, {
+      method: 'POST',
+      body: JSON.stringify({ organizationId, access }),
+    });
+  }
+
+  async unshareResearchCollection(collectionId: string, organizationId: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/share/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+  }
+
+  async getResearchCollectionComments(collectionId: string, organizationId: string): Promise<{ items: ResearchCollectionCommentRecord[]; canComment: boolean; canEdit: boolean }> {
+    return (await this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments?organizationId=${encodeURIComponent(organizationId)}`)) as { items: ResearchCollectionCommentRecord[]; canComment: boolean; canEdit: boolean };
+  }
+
+  async createResearchCollectionComment(collectionId: string, data: { organizationId: string; body: string; mentionedUserIds?: string[] }) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }) as Promise<ResearchCollectionCommentRecord>;
+  }
+
+  async deleteResearchCollectionComment(collectionId: string, commentId: string, organizationId: string) {
+    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments/${encodeURIComponent(commentId)}?organizationId=${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+  }
+
+  async getResearchTemplates(organizationId: string): Promise<{ items: ResearchTemplateRecord[]; role: OrganizationRole }> {
+    return (await this.request(`/research-library/templates?organizationId=${encodeURIComponent(organizationId)}`)) as { items: ResearchTemplateRecord[]; role: OrganizationRole };
+  }
+
+  async createResearchTemplate(data: { organizationId: string; name: string; description?: string; query: string; filters?: Record<string, unknown>; methodology?: Record<string, unknown>; tags?: string[]; isDefault?: boolean }) {
+    return this.request('/research-library/templates', { method: 'POST', body: JSON.stringify(data) }) as Promise<ResearchTemplateRecord>;
+  }
+
+  async deleteResearchTemplate(id: string, organizationId: string) {
+    return this.request(`/research-library/templates/${encodeURIComponent(id)}?organizationId=${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+  }
+
+  async exportResearchReferences(data: { collectionId?: string; referenceIds?: string[]; format: 'bibtex' | 'ris'; organizationId?: string }) {
+    const response = await this.authenticatedFetch(`${this.baseURL}/research-library/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error(`No se pudieron exportar las referencias (${response.status})`);
+    return response.blob();
+  }
+
+  async auditResearchReferences(data: { text: string; collectionId?: string; referenceIds?: string[]; organizationId?: string }) {
+    return this.request('/research-library/audit', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getResearchCitationGraph(data: { collectionId?: string; referenceIds?: string[]; limit?: number; organizationId?: string }) {
+    return this.request('/research-library/citation-graph', { method: 'POST', body: JSON.stringify(data), timeoutMs: 60000 });
+  }
+
+  async getResearchReferenceConflicts(status: 'pending' | 'resolved' = 'pending') {
+    return this.request(`/research-library/conflicts?status=${status}`);
+  }
+
+  async resolveResearchReferenceConflict(id: string, action: 'keep_existing' | 'keep_candidate' | 'merge') {
+    return this.request(`/research-library/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
+  }
+
+  async syncResearchCollectionToZotero(data: { collectionId?: string; referenceIds?: string[]; apiKey: string; zoteroUserId: string; zoteroCollectionKey?: string; collectionName?: string; organizationId?: string }) {
+    return this.request('/research-library/sync/zotero', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
+  }
+
+  async syncResearchCollectionToMendeley(data: { collectionId?: string; referenceIds?: string[]; accessToken: string; mendeleyFolderId?: string; collectionName?: string; organizationId?: string }) {
+    return this.request('/research-library/sync/mendeley', { method: 'POST', body: JSON.stringify(data), timeoutMs: 90000, maxRetries: 0 });
+  }
+
+  async getResearchSavedSearches() {
+    return (await this.request('/search/saved?kind=scientific')) as { items: ResearchSavedSearchRecord[] };
+  }
+
+  async createResearchSavedSearch(data: { name: string; query: string; filters?: Record<string, unknown>; schedule?: 'manual' | 'daily' | 'weekly'; active?: boolean; notifyInApp?: boolean }) {
+    return (await this.request('/search/saved', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, kind: 'scientific' }),
+    })) as ResearchSavedSearchRecord;
+  }
+
+  async updateResearchSavedSearch(id: string, data: { name?: string; query?: string; filters?: Record<string, unknown>; schedule?: 'manual' | 'daily' | 'weekly'; active?: boolean; notifyInApp?: boolean }) {
+    return (await this.request(`/search/saved/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })) as ResearchSavedSearchRecord;
+  }
+
+  async deleteResearchSavedSearch(id: string) {
+    return this.request(`/search/saved/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async runResearchSavedSearch(id: string) {
+    return this.request(`/search/saved/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      timeoutMs: 60000,
+      maxRetries: 0,
+    });
+  }
+
   // Fetch an agent-artifact (audio/music/web-app) as a Blob with the bearer
   // token attached. Plain <audio>/<iframe> tags can't send the Authorization
   // header and the artifact route is owner-scoped, so the library loads these
@@ -2994,7 +3234,7 @@ class ApiClient {
   // /api prefix, so strip it to avoid requesting /api/api/….
   async getMediaArtifactBlob(downloadUrl: string): Promise<Blob> {
     const path = downloadUrl.replace(/^\/api(?=\/)/, '');
-    const res = await fetch(`${this.baseURL}${path}`, {
+    const res = await this.authenticatedFetch(`${this.baseURL}${path}`, {
       headers: this.token ? { Authorization: `Bearer ${this.token}` } : undefined,
       credentials: 'include',
     });
@@ -3052,6 +3292,29 @@ class ApiClient {
       template?: string;
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];
+      outline?: string[];
+      researchSources?: Array<{
+        title?: string | null;
+        abstract?: string | null;
+        authors?: Array<{ name?: string | null } | string> | null;
+        year?: number | null;
+        journal?: string | null;
+        venue?: string | null;
+        doi?: string | null;
+        url?: string | null;
+        htmlUrl?: string | null;
+        pdfUrl?: string | null;
+        citations?: number | null;
+        citationCount?: number | null;
+        studyType?: string | null;
+        peerReviewStatus?: string | null;
+        integrityStatus?: string | null;
+        sampleSize?: number | string | null;
+        sampleSizes?: Array<number | string> | null;
+        keyFinding?: string | null;
+        keyFindings?: Array<string | { sentence?: string | null }> | null;
+        evidence?: { topFinding?: string | null; findings?: Array<{ sentence?: string | null }> | null } | null;
+      }>;
     },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
@@ -3088,17 +3351,15 @@ class ApiClient {
     let res: Response;
 
     while (true) {
-      const token = this._getAccessTokenSnapshot();
-      res = await fetch(`${this.baseURL}${path}`, {
+      const config = await this.prepareMutatingFetch({
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(data),
         signal: opts.signal,
       });
+      res = await this.authenticatedFetch(`${this.baseURL}${path}`, config);
 
       if (res.ok) break;
 
@@ -3152,17 +3413,14 @@ class ApiClient {
     onError: (error: Error) => void,
   ) {
     const url = `${this.baseURL}/ai/generate-webdev`;
-    const config: RequestInit = {
+    const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    };
+    });
 
     try {
-      const response = await fetch(url, config);
+      const response = await this.authenticatedFetch(url, config);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: response.statusText }));
@@ -3227,7 +3485,7 @@ class ApiClient {
   // Download PPT file
   async downloadPPT(filename: string) {
     const url = `${this.apiBaseURL}/uploads/presentations/${filename}`;
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -3416,7 +3674,7 @@ class ApiClient {
       headers.set('Authorization', `Bearer ${this.token}`);
     }
 
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       method: 'GET',
       headers,
       credentials: 'include',
@@ -3466,7 +3724,7 @@ class ApiClient {
   async downloadAccountingExport(path: string, filename: string) {
     const headers = new Headers();
     if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
-    const response = await fetch(`${this.baseURL}/accounting/export/${path}`, { method: 'GET', headers, credentials: 'include' });
+    const response = await this.authenticatedFetch(`${this.baseURL}/accounting/export/${path}`, { method: 'GET', headers, credentials: 'include' });
     if (!response.ok) throw new Error('No se pudo generar la exportación');
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);

@@ -67,6 +67,10 @@ const MEMBER_SAFE_AUDIT_ACTIONS = new Set([
   'org_announcement_delete',
   'org_billing_upgrade',
   'chat_share_to_org',
+  'research_collection_share',
+  'research_collection_unshare',
+  'research_collection_comment',
+  'research_template_create',
 ]);
 
 // Human summaries for known audit actions. Falls back to a generic
@@ -86,6 +90,10 @@ const AUDIT_ACTION_SUMMARIES = Object.freeze({
   org_announcement_delete: 'Deleted an announcement',
   org_billing_upgrade: 'Upgraded the billing plan',
   chat_share_to_org: 'Shared a chat with the org',
+  research_collection_share: 'Shared a scientific collection',
+  research_collection_unshare: 'Removed a scientific collection from the organization',
+  research_collection_comment: 'Commented on a scientific collection',
+  research_template_create: 'Created a reusable research template',
 });
 
 function clampLimit(raw) {

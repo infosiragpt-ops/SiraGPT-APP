@@ -26,6 +26,10 @@ const VALID = {
   checkpoint_created: { checkpointId: 'c1', commitSha: 'abc1234', title: 'feat: layout', createdAt: '2026-06-13' },
   run_summary: { metrics: { timeWorkedMs: 1000, actionsCount: 3, costSource: 'estimated' } },
   action_required: { patternId: 'openrouter_402', title: 'Sin créditos', rawError: '402', blockedCapabilities: ['gen'], remediationUrl: 'https://x' },
+  context_snapshot: { summary: 'El proyecto compila.', tailMessages: [{ role: 'user', content: 'continúa' }], state: { step: 3 } },
+  tool_permission_required: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64), humanDescription: 'Ejecutar npm test', argsPreview: { command: 'npm test' } },
+  tool_permission_resolved: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64), decision: 'allow' },
+  tool_permission_consumed: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64) },
   heartbeat: {},
 };
 

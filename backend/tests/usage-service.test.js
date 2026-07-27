@@ -2,9 +2,8 @@
  * Tests for services/usage-service.js — token calc + Prisma usage
  * recorder for the AI billing layer.
  *
- * We mock prisma via require-cache injection BEFORE requiring the
- * service so `new PrismaClient()` at module-top picks up our stub.
- * The `@prisma/client` package itself is what gets mocked.
+ * We mock the configured shared database module via require-cache injection
+ * BEFORE requiring the service. Runtime code must never open its own pool.
  */
 
 'use strict';
@@ -14,7 +13,7 @@ const Module = require('node:module');
 const path = require('node:path');
 const { describe, it, before, after, beforeEach } = require('node:test');
 
-const PRISMA_PATH = require.resolve('@prisma/client');
+const DATABASE_PATH = require.resolve('../src/config/database');
 const USAGE_PATH = require.resolve('../src/services/usage-service');
 
 const prismaMock = {
@@ -27,31 +26,24 @@ const prismaMock = {
   $transaction: async (ops) => Promise.all(ops),
 };
 
-class FakePrismaClient {
-  constructor() {
-    // Reflect the same surface as the real client.
-    return prismaMock;
-  }
-}
-
-let origPrismaCache;
+let origDatabaseCache;
 let origUsageCache;
 
 function installMocks() {
-  origPrismaCache = require.cache[PRISMA_PATH];
+  origDatabaseCache = require.cache[DATABASE_PATH];
   origUsageCache = require.cache[USAGE_PATH];
-  const m = new Module(PRISMA_PATH);
-  m.filename = PRISMA_PATH;
+  const m = new Module(DATABASE_PATH);
+  m.filename = DATABASE_PATH;
   m.loaded = true;
-  m.exports = { PrismaClient: FakePrismaClient };
-  m.paths = Module._nodeModulePaths(path.dirname(PRISMA_PATH));
-  require.cache[PRISMA_PATH] = m;
+  m.exports = prismaMock;
+  m.paths = Module._nodeModulePaths(path.dirname(DATABASE_PATH));
+  require.cache[DATABASE_PATH] = m;
   delete require.cache[USAGE_PATH];
 }
 
 function restoreMocks() {
-  if (origPrismaCache) require.cache[PRISMA_PATH] = origPrismaCache;
-  else delete require.cache[PRISMA_PATH];
+  if (origDatabaseCache) require.cache[DATABASE_PATH] = origDatabaseCache;
+  else delete require.cache[DATABASE_PATH];
   if (origUsageCache) require.cache[USAGE_PATH] = origUsageCache;
   else delete require.cache[USAGE_PATH];
 }

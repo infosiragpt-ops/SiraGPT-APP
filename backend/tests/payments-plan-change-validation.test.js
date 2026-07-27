@@ -1,5 +1,9 @@
 'use strict';
 
+process.env.NODE_ENV = 'test';
+process.env.RATE_LIMIT_STORE = 'memory';
+process.env.RATE_LIMIT_SENSITIVE_POLICY = 'memory';
+
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');

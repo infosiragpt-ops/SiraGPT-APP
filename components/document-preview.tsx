@@ -5,25 +5,29 @@ import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, File
 import { Button } from "@/components/ui/button"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
+import {
+  createAuthenticatedFetch,
+  isTrustedSiraApiUrl,
+} from "@/lib/authenticated-fetch"
 import { toast } from "sonner"
 import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-/**
- * Build the fetch init the preview uses against the backend asset
- * host. Includes the cookie AND the Bearer token most auth gates
- * look for. Cookie alone is not enough on deploys that protect
- * /uploads/* with a JWT middleware — the request returns 403 and
- * the user sees "No se pudo previsualizar".
- */
-function buildAssetFetchInit(): RequestInit {
-  if (typeof window === "undefined") return { credentials: "include" }
-  const token = window.localStorage?.getItem("auth-token") || ""
-  return {
-    credentials: "include",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  }
+
+const ASSET_BASE_URL = (
+  process.env.NEXT_PUBLIC_IMAGE_URL
+  || process.env.NEXT_PUBLIC_API_URL
+  || "http://localhost:5000"
+).replace(/\/api\/?$/, "").replace(/\/+$/, "")
+const authenticatedAssetFetch = createAuthenticatedFetch({ apiBaseUrl: ASSET_BASE_URL })
+
+function fetchPreviewAsset(url: string): Promise<Response> {
+  const normalized = normalizeBackendAssetUrl(url, process.env.NEXT_PUBLIC_IMAGE_URL)
+  if (/^(data:|blob:)/i.test(normalized)) return fetch(normalized)
+  return isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
+    ? authenticatedAssetFetch(normalized)
+    : fetch(normalized)
 }
 
 /**
@@ -673,7 +677,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       setState({ kind: "loading" })
       ;(async () => {
         try {
-          const resp = await fetch(previewUrl, buildAssetFetchInit())
+          const resp = await fetchPreviewAsset(previewUrl)
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
           const html = await resp.text()
           if (cancelled) return
@@ -717,7 +721,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         if (pdfEndpoint) {
           setState({ kind: "loading", message: "Generando vista previa…" })
           try {
-            const pdfResp = await fetch(pdfEndpoint, buildAssetFetchInit())
+            const pdfResp = await fetchPreviewAsset(pdfEndpoint)
             if (pdfResp.ok && (pdfResp.headers.get("content-type") || "").includes("pdf")) {
               const blob = await pdfResp.blob()
               if (cancelled) return
@@ -732,7 +736,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           setState({ kind: "loading" })
         }
 
-        const resp = await fetch(assetUrl, buildAssetFetchInit())
+        const resp = await fetchPreviewAsset(assetUrl)
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
         if (format === "csv") {

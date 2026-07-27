@@ -20,7 +20,7 @@ function binaryParser(res, cb) {
 describe('media route file serving', () => {
   let tmpDir;
   let oldUploadDir;
-  let restorePrisma;
+  let restoreDatabase;
   let restoreFal;
   let restoreElevenLabs;
   let videoApp;
@@ -36,12 +36,8 @@ describe('media route file serving', () => {
     oldUploadDir = process.env.UPLOAD_DIR;
     process.env.UPLOAD_DIR = tmpDir;
 
-    restorePrisma = mockResolvedModule(require.resolve('@prisma/client'), {
-      PrismaClient: class {
-        constructor() {
-          this.apiUsage = { aggregate: async () => ({ _sum: { tokens: 0 } }), create: async () => ({}) };
-        }
-      },
+    restoreDatabase = mockResolvedModule(require.resolve('../src/config/database'), {
+      apiUsage: { aggregate: async () => ({ _sum: { tokens: 0 } }), create: async () => ({}) },
     });
     restoreFal = mockResolvedModule(require.resolve('@fal-ai/client'), {
       fal: {
@@ -61,7 +57,7 @@ describe('media route file serving', () => {
   after(() => {
     restoreElevenLabs();
     restoreFal();
-    restorePrisma();
+    restoreDatabase();
     if (oldUploadDir === undefined) {
       delete process.env.UPLOAD_DIR;
     } else {

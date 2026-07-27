@@ -45,7 +45,12 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare, Disc3, Menu as MenuIcon} from "lucide-react"
+  MessageSquare,
+  Star,
+  Disc3,
+  Menu as MenuIcon,
+  BriefcaseBusiness,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -104,9 +109,10 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -146,10 +152,24 @@ import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import VoiceCatalogModal from "./voice/voice-catalog-modal"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
+import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
+import {
+  RESEARCH_FOLLOW_UP_EVENT,
+  buildScientificPapersMessage,
+  ensureResearchCommandChat,
+  type ResearchResultSource,
+} from "@/lib/research-results"
+import {
+  RESEARCH_ARTIFACT_EVENT,
+  buildResearchArtifactPrompt,
+  type ResearchArtifactRequest,
+} from "@/lib/research-artifacts"
+import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { safeUUID } from "@/lib/safe-uuid"
+import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
@@ -163,7 +183,6 @@ import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { SourcesPanel } from "@/components/sources-panel"
-import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
 import { CodePreview } from "./code-preview"
@@ -222,6 +241,17 @@ import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
+
+const GPT_RATING_OPTIONS = [
+  { value: 1, label: "Muy malo" },
+  { value: 2, label: "Regular" },
+  { value: 3, label: "Bueno" },
+  { value: 4, label: "Muy bueno" },
+  { value: 5, label: "Excelente" },
+] as const
+
+const getGptRatingLabel = (rating: number): string =>
+  GPT_RATING_OPTIONS.find((option) => option.value === rating)?.label || ""
 
 const resolveUploadFileId = (file: any): string | null => {
   if (!file) return null
@@ -423,6 +453,9 @@ const shouldRenderChatMessage = (message: any, allowEmptyStreamingAssistant = fa
   return allowEmptyStreamingAssistant && role === "ASSISTANT"
 }
 
+const isAssistantMessage = (message: any): boolean =>
+  String(message?.role || "").toUpperCase() === "ASSISTANT"
+
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -449,6 +482,7 @@ type SearchActivityState = {
   totalCollected: number
   dedupedCount?: number
   selectedCount?: number
+  selectedSources?: AgenticSource[]
   elapsedMs?: number
   entries: SearchActivityEntry[]
 }
@@ -459,7 +493,7 @@ type ImageQuality = "512px" | "1K" | "2K" | "4K"
 type VideoResolution = "480p" | "720p"
 type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
 type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
-type VoiceModel = "ElevenLabs" | "Mimo Max 02HD"
+type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
 type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
 type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
 type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
@@ -491,7 +525,7 @@ const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string
   { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
 ]
 const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-const VOICE_MODEL_OPTIONS: VoiceModel[] = ["ElevenLabs", "Mimo Max 02HD"]
+const VOICE_MODEL_OPTIONS: VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
 const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
 const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
 const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
@@ -499,6 +533,53 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const MUSIC_STYLE_PROFILES: Record<MusicStyle, { label: string; description: string; accentClass: string }> = {
+  Auto: {
+    label: "Auto",
+    description: "Deja que el modelo elija el genero segun tu prompt.",
+    accentClass: "bg-zinc-900 dark:bg-white",
+  },
+  Cinematic: {
+    label: "Cinematic",
+    description: "Texturas amplias, tension y final de trailer.",
+    accentClass: "bg-violet-500",
+  },
+  Pop: {
+    label: "Pop",
+    description: "Hook claro, bateria pulida y estructura comercial.",
+    accentClass: "bg-pink-500",
+  },
+  Electronic: {
+    label: "Electronic",
+    description: "Sintetizadores, pulso moderno y energia digital.",
+    accentClass: "bg-cyan-500",
+  },
+  Ambient: {
+    label: "Ambient",
+    description: "Capas suaves, atmosfera y movimiento discreto.",
+    accentClass: "bg-teal-500",
+  },
+  Orchestral: {
+    label: "Orchestral",
+    description: "Cuerdas, metales y dinamica de partitura.",
+    accentClass: "bg-amber-500",
+  },
+  Latin: {
+    label: "Latin",
+    description: "Ritmo calido, percusion marcada y sabor latino.",
+    accentClass: "bg-red-500",
+  },
+  "Hip-Hop": {
+    label: "Hip-Hop",
+    description: "Beat con groove, bajo presente y espacio vocal.",
+    accentClass: "bg-slate-700 dark:bg-slate-300",
+  },
+  Jazz: {
+    label: "Jazz",
+    description: "Armonia rica, swing sutil e instrumentacion organica.",
+    accentClass: "bg-emerald-600",
+  },
+}
 const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
 
 const DEFAULT_IMAGE_MODEL = ""
@@ -711,7 +792,9 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         id: `${evt.type}-${at}-${index}`,
         title: "Preparando búsqueda profesional",
         body: `Consulta: ${evt.query}`,
-        meta: `Objetivo ${evt.target} · lotes de ${evt.batchSize} · top ${evt.topK} · ${evt.providers.join(", ")}`,
+        meta: `Objetivo ${evt.target} · lotes de ${evt.batchSize} · top ${evt.topK}` +
+          (evt.discipline && evt.discipline.id !== "general" ? ` · ${evt.discipline.label}` : "") +
+          ` · ${evt.providers.join(", ")}`,
         at,
         status: "running",
       }
@@ -739,7 +822,7 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         id: `${evt.type}-${evt.provider}-${at}`,
         title: `${evt.provider} completado`,
         body: `${evt.contributed} fuentes aportadas.`,
-        meta: evt.reason,
+        meta: `${evt.reason}` + (typeof evt.durationMs === "number" ? ` · ${formatActivityDuration(evt.durationMs)}` : ""),
         at,
         status: "complete",
       }
@@ -748,7 +831,7 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         id: `${evt.type}-${at}`,
         title: "Recopilación completada",
         body: `${evt.totalCollected} fuentes encontradas, ${evt.deduped} únicas.`,
-        meta: `${evt.requestedCalls} llamadas · ${formatActivityDuration(evt.elapsedMs)}`,
+        meta: `${evt.requestedCalls} llamadas · ${evt.stopReason || "completo"} · ${formatActivityDuration(evt.elapsedMs)}`,
         at,
         status: "complete",
       }
@@ -769,6 +852,42 @@ function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number):
         meta: "Se continúa con orden heurístico.",
         at,
         status: "warning",
+      }
+    case "validation_start":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Comprobando identificadores DOI",
+        body: evt.message,
+        meta: `${evt.candidates} DOI candidatos`,
+        at,
+        status: "running",
+      }
+    case "validation_done":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Comprobación DOI completada",
+        body: `${evt.resolved} resueltos, ${evt.notFound} no localizados.`,
+        meta: `${evt.unavailable} no disponibles`,
+        at,
+        status: evt.notFound > 0 ? "warning" : "complete",
+      }
+    case "validation_error":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Comprobación DOI parcial",
+        body: evt.error,
+        meta: "La búsqueda conserva los resultados y evita afirmar resolución.",
+        at,
+        status: "warning",
+      }
+    case "systematic_review":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Cribado sistemático completado",
+        body: `${evt.prisma.screening.recordsScreened} registros cribados; ${evt.prisma.screening.recordsExcluded} excluidos y ${evt.prisma.screening.recordsUncertain} en duda.`,
+        meta: `${evt.protocol.framework?.toUpperCase() || "Protocolo"} · certeza preliminar ${evt.certainty.level}`,
+        at,
+        status: "complete",
       }
     case "selected":
       return {
@@ -867,6 +986,7 @@ function applySearchActivityEvent(activity: SearchActivityState, evt: AgenticEve
       break
     case "selected":
       next.selectedCount = evt.sources.length
+      next.selectedSources = evt.sources
       break
     case "done":
       next.status = "complete"
@@ -888,7 +1008,10 @@ function applySearchActivityEvent(activity: SearchActivityState, evt: AgenticEve
   return next
 }
 
-function SearchActivityPanel({ activity, onClose }: { activity: SearchActivityState; onClose: () => void }) {
+function SearchActivityPanel({ activity, onClose, onSave }: { activity: SearchActivityState; onClose: () => void; onSave: (activity: SearchActivityState, sources?: ResearchResultSource[]) => Promise<void> }) {
+  const [view, setView] = React.useState<"process" | "results">(
+    activity.status === "complete" && activity.selectedSources?.length ? "results" : "process",
+  )
   const elapsed = activity.elapsedMs ?? activity.updatedAt - activity.startedAt
   const statusLabel = activity.status === "complete"
     ? "Completado"
@@ -925,8 +1048,22 @@ function SearchActivityPanel({ activity, onClose }: { activity: SearchActivitySt
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="px-5 py-5">
+      <div className="flex gap-1 border-b border-border/40 px-5 py-2" role="tablist" aria-label="Vista de investigación">
+        <Button type="button" variant={view === "process" ? "secondary" : "ghost"} size="sm" role="tab" aria-selected={view === "process"} onClick={() => setView("process")}>Proceso</Button>
+        <Button type="button" variant={view === "results" ? "secondary" : "ghost"} size="sm" role="tab" aria-selected={view === "results"} disabled={!activity.selectedSources?.length} onClick={() => setView("results")}>Resultados{activity.selectedSources?.length ? ` (${activity.selectedSources.length})` : ""}</Button>
+      </div>
+
+      {view === "results" && activity.selectedSources?.length ? (
+        <ScrollArea className="flex-1">
+          <ResearchResultsWorkbench
+            compact
+            query={activity.query}
+            sources={activity.selectedSources}
+            onSave={(sources) => onSave(activity, sources)}
+          />
+        </ScrollArea>
+      ) : (
+        <ScrollArea className="flex-1"><div className="px-5 py-5">
           <div className="mb-3 text-sm font-medium text-muted-foreground">Proceso</div>
           <div className="space-y-5">
             {activity.entries.map((entry, entryIndex) => (
@@ -966,8 +1103,8 @@ function SearchActivityPanel({ activity, onClose }: { activity: SearchActivitySt
               </div>
             ))}
           </div>
-        </div>
-      </ScrollArea>
+        </div></ScrollArea>
+      )}
     </div>
   )
 }
@@ -982,6 +1119,8 @@ const ActionsDropdown = ({
   chatType,
   setChatType,
   currentPlan,
+  isWorkModeActive,
+  setIsWorkModeActive,
   isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
@@ -1422,6 +1561,30 @@ const ActionsDropdown = ({
             accept="image/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
             onChange={handleFilesSelected}
           />
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onSelect={(event) => {
+              event.preventDefault();
+              setChatType('text');
+              setIsWorkModeActive(!isWorkModeActive);
+              setIsOpen(false);
+            }}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-950/40">
+                <BriefcaseBusiness className="h-4 w-4 text-[#FF0000]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">
+                  {isWorkModeActive ? 'Trabajo activo' : 'Trabajo'}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Planifica, ejecuta y entrega archivos
+                </div>
+              </div>
+              {isWorkModeActive && <div className="h-2 w-2 shrink-0 rounded-full bg-[#FF0000]" />}
+            </div>
+          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -1549,7 +1712,7 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">{isVoiceGenerationActive ? 'Voz activa' : 'Voz'}</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  Texto a voz · ElevenLabs
+                  Texto a voz · Gemini y ElevenLabs
                 </div>
               </div>
               {isVoiceGenerationActive && (
@@ -2116,6 +2279,8 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
 }, areActiveOptionsDisplayPropsEqual);
 // Active Tools Display Component - Shows INSIDE the textarea at the bottom
 const ActiveToolsDisplay = ({
+  isWorkModeActive,
+  setIsWorkModeActive,
   isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
@@ -2205,6 +2370,8 @@ const ActiveToolsDisplay = ({
   handleWordConnectorToggle,
   handleExcelConnectorToggle
 }: {
+  isWorkModeActive: boolean;
+  setIsWorkModeActive: (value: boolean) => void;
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
   isImageGenerationActive: boolean;
@@ -2324,7 +2491,7 @@ const ActiveToolsDisplay = ({
   ].filter(Boolean) as { id: string; label: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
+  const hasOtherTools = isWorkModeActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
   const visibleImageAspectRatioOptions = React.useMemo(
     () => IMAGE_ASPECT_RATIO_OPTIONS.filter(option => showAllImageRatios || option.visibleByDefault || option.value === selectedImageAspectRatio),
@@ -2448,8 +2615,8 @@ const ActiveToolsDisplay = ({
       voice: VOICE_MODEL_OPTIONS.map((name) => ({
         name,
         displayName: name,
-        provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
-        iconName: "Bot",
+        provider: name === "ElevenLabs" ? "ElevenLabs" : "Google",
+        iconName: name.startsWith("Gemini") ? "GeminiLogo" : "Bot",
       })),
       music: MUSIC_MODEL_OPTIONS.map((name) => ({
         name,
@@ -2674,6 +2841,21 @@ const ActiveToolsDisplay = ({
           </button>
         </span>
       ))}
+      {isWorkModeActive && (
+        <div className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-red-200 bg-red-50 py-0 pl-2.5 pr-1.5 text-xs font-medium text-red-700 dark:border-red-900/70 dark:bg-red-950/35 dark:text-red-300">
+          <BriefcaseBusiness className="h-3.5 w-3.5 shrink-0" />
+          <span>Trabajo</span>
+          <button
+            type="button"
+            onClick={() => setIsWorkModeActive(false)}
+            aria-label="Cerrar modo Trabajo"
+            title="Cerrar modo Trabajo"
+            className="ml-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full transition-colors hover:bg-red-100 dark:hover:bg-red-900/50"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       {isWebSearchActive && (
         <div
           className="group/web-search-tool flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
@@ -2876,13 +3058,13 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Google", surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
               configurations). Sits right after the provider selector per the
               requested order: provider → Voice → configurations. */}
-          <button
+          {selectedVoiceModel === "ElevenLabs" && <button
             type="button"
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
@@ -2891,7 +3073,7 @@ const ActiveToolsDisplay = ({
           >
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
-          </button>
+          </button>}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -3053,12 +3235,24 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
-              <div className="relative z-10 py-1">
+              <div className="relative z-10 p-1.5">
+                <div className="px-2 pb-2 pt-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
+                      <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
+                    </div>
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-rose-200/80 bg-rose-50 text-rose-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200">
+                      <Music className="h-4 w-4" />
+                    </span>
+                  </div>
+                </div>
+                <DropdownMenuSeparator className="mx-1 mb-1 bg-zinc-950/8 dark:bg-white/12" />
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de música</span>
                     <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicModel}</span>
                   </DropdownMenuSubTrigger>
@@ -3075,24 +3269,50 @@ const ActiveToolsDisplay = ({
                 </DropdownMenuSub>
 
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
-                    <span>Style</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicStyle}</span>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-12 cursor-pointer items-center justify-between gap-3 px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span className="min-w-0">
+                      <span className="block leading-none">Estilo</span>
+                      <span className="mt-1 block max-w-[150px] truncate text-[10.5px] font-medium leading-none text-zinc-500 dark:text-white/60">{MUSIC_STYLE_PROFILES[selectedMusicStyle].description}</span>
+                    </span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72">{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
-                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {MUSIC_STYLE_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicStyle(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedMusicStyle === option && <Check className="h-3.5 w-3.5" />}
-                        </DropdownMenuItem>
-                      ))}
+                    <DropdownMenuSubContent sideOffset={10} alignOffset={-8} collisionPadding={12} className="liquid-menu-surface max-h-[min(25rem,calc(100vh-2rem))] w-[min(calc(100vw-1rem),19rem)] overflow-y-auto p-1.5">
+                      <div className="relative z-10 px-2 pb-1.5 pt-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Estilos de producción</p>
+                        <p className="mt-1 text-[11.5px] leading-4 text-zinc-600 dark:text-white/68">Selecciona una dirección sonora clara para que el resultado suene intencional.</p>
+                      </div>
+                      {MUSIC_STYLE_OPTIONS.map(option => {
+                        const selected = selectedMusicStyle === option;
+                        const profile = MUSIC_STYLE_PROFILES[option];
+                        return (
+                          <DropdownMenuItem
+                            key={option}
+                            className={cn(
+                              "relative z-10 flex min-h-[3.65rem] cursor-pointer items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors",
+                              selected
+                                ? "bg-zinc-950/[0.055] text-zinc-950 ring-1 ring-zinc-950/10 dark:bg-white/10 dark:text-white dark:ring-white/12"
+                                : "text-zinc-800 hover:bg-zinc-950/[0.04] focus:bg-zinc-950/[0.04] dark:text-white/86 dark:hover:bg-white/[0.08] dark:focus:bg-white/[0.08]"
+                            )}
+                            onClick={() => setSelectedMusicStyle(option)}
+                          >
+                            <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_0_4px_rgba(0,0,0,0.035)] dark:shadow-[0_0_0_4px_rgba(255,255,255,0.06)]", profile.accentClass)} />
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center justify-between gap-2">
+                                <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" />}
+                              </span>
+                              <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
+                            </span>
+                          </DropdownMenuItem>
+                        )
+                      })}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
 
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Mood</span>
                     <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicMood}</span>
                   </DropdownMenuSubTrigger>
@@ -3142,7 +3362,7 @@ const ActiveToolsDisplay = ({
                 </div>
 
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
                     <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicEffect}</span>
                   </DropdownMenuSubTrigger>
@@ -3158,6 +3378,9 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
 
+                <div className="mt-1 border-t border-zinc-950/8 px-2.5 py-2 text-[10.5px] font-medium leading-4 text-zinc-600 dark:border-white/12 dark:text-white/72">
+                  {MUSIC_STYLE_PROFILES[selectedMusicStyle].label} / {selectedMusicMood} / {selectedMusicEffect} / {selectedMusicDuration < 60 ? `${selectedMusicDuration}s` : `${Math.floor(selectedMusicDuration / 60)}:${String(selectedMusicDuration % 60).padStart(2, "0")}`}
+                </div>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -3394,6 +3617,8 @@ const getNavbarModelSelectorChatSignature = (chat: any) => [
   chat?.title,
   chat?.customGptId,
   chat?.customGpt?.id,
+  chat?.customGpt?.creatorId,
+  chat?.customGpt?.creator?.id,
   chat?.customGpt?.name,
   chat?.customGpt?.iconUrl,
   chat?.customGpt?.modelName,
@@ -3428,6 +3653,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   currentChat,
   setCurrentChat,
 }: any) {
+  const { user } = useAuth()
   const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   // Anti-flicker: hold the last model that actually matched `selectedModel`.
   // refreshModels (dropdown-open / window-focus / tab-visibility) replaces the
@@ -3510,14 +3736,14 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     if (!gptId) return;
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, {
+      const request = await apiClient.prepareMutatingFetch({
         method: "POST",
-        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, request);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat");
       localStorage.setItem("currentChatId", data.chat.id);
@@ -3584,7 +3810,34 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   const [gptFeedback, setGptFeedback] = React.useState("");
   const [gptReport, setGptReport] = React.useState("");
   const [gptRating, setGptRating] = React.useState(0);
+  const [hoveredGptRating, setHoveredGptRating] = React.useState(0);
+  const [gptRatingNote, setGptRatingNote] = React.useState("");
+  const gptRatingButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const [isGptPinned, setIsGptPinned] = React.useState(false);
+
+  const displayGptRating = hoveredGptRating || gptRating;
+  const displayGptRatingLabel = getGptRatingLabel(displayGptRating);
+
+  const handleGptRatingKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, value: number) => {
+    let nextRating = value;
+
+    if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      nextRating = Math.min(GPT_RATING_OPTIONS.length, value + 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      nextRating = Math.max(1, value - 1);
+    } else if (event.key === "Home") {
+      nextRating = 1;
+    } else if (event.key === "End") {
+      nextRating = GPT_RATING_OPTIONS.length;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    setGptRating(nextRating);
+    setHoveredGptRating(nextRating);
+    gptRatingButtonRefs.current[nextRating - 1]?.focus();
+  }, []);
 
   React.useEffect(() => {
     const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
@@ -3638,7 +3891,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       chatId: currentChat?.id,
       kind,
       rating: kind === "rate" ? gptRating : undefined,
-      text: kind === "report" ? gptReport.trim() : gptFeedback.trim(),
+      text: kind === "report" ? gptReport.trim() : kind === "rate" ? gptRatingNote.trim() : gptFeedback.trim(),
       createdAt: new Date().toISOString(),
     };
     try {
@@ -3649,11 +3902,15 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       setGptDialog(null);
       setGptFeedback("");
       setGptReport("");
-      if (kind === "rate") setGptRating(0);
+      if (kind === "rate") {
+        setGptRating(0);
+        setHoveredGptRating(0);
+        setGptRatingNote("");
+      }
     } catch {
       toast.error("No se pudo guardar la acción");
     }
-  }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptReport]);
+  }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptRatingNote, gptReport]);
 
   const project = currentChat?.project;
   const projectName = project?.name || String(currentChat?.title || "Proyecto").replace(/^Chat in\s+/i, "");
@@ -3688,9 +3945,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     if (!projectId) return;
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, {
+      const request = await apiClient.prepareMutatingFetch({
         method: "POST",
-        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -3700,6 +3956,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
           model: activeProjectModelName,
         }),
       });
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, request);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat del proyecto");
       localStorage.setItem("currentChatId", data.chat.id);
@@ -3992,28 +4249,35 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const customGpt = currentChat?.customGpt;
     const customGptName = customGpt?.name || String(currentChat?.title || "Custom GPT").replace(/^Chat with\s+/i, "");
     const customGptIcon = customGpt?.iconUrl;
+    const customGptCreatorId = customGpt?.creatorId || customGpt?.creator?.id;
+    const isCustomGptOwner = Boolean(user?.id && customGptCreatorId && customGptCreatorId === user.id);
+    const customGptIconSrc = resolveGptIconImageUrl(customGptIcon, {
+      token: typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null,
+      baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
+    });
+    const customGptTextIcon = String(customGptIcon || "").trim();
     const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
     const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
     const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
 
-    const GptIcon = () => customGptIcon ? (
-      customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
-        // eslint-disable-next-line @next/next/no-img-element
+    const GptIcon = () => customGptIconSrc ? (
+      <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-background ring-1 ring-border/60 shadow-sm">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={customGptIcon}
-          alt="GPT icon"
-          className="h-7 w-7 rounded-full object-cover"
+          src={customGptIconSrc}
+          alt={`${customGptName} icon`}
+          className="h-full w-full object-cover"
         />
-      ) : (
-        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-sm text-white">
-          {customGptIcon}
-        </div>
-      )
+      </span>
+    ) : customGptTextIcon && !/^https?:|data:|blob:/i.test(customGptTextIcon) && !customGptTextIcon.startsWith("/") ? (
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-indigo-600 text-sm text-white shadow-sm ring-1 ring-white/30">
+        {customGptTextIcon}
+      </span>
     ) : (
-      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-purple-100 text-purple-700 shadow-sm ring-1 ring-purple-200/70 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-400/20">
         <Bot className="h-4 w-4" />
-      </div>
+      </span>
     );
 
     return (
@@ -4102,15 +4366,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                       </div>
                     )}
                   </ScrollArea>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
-                    }}
-                    className="rounded-2xl px-3 py-3 text-[15px]"
-                  >
-                    Configurar GPT...
-                  </DropdownMenuItem>
+                  {isCustomGptOwner && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
+                        }}
+                        className="rounded-2xl px-3 py-3 text-[15px]"
+                      >
+                        Configurar GPT...
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuSubContent>
               </DropdownMenuPortal>
             </DropdownMenuSub>
@@ -4125,16 +4393,18 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               <Info className={gptMenuIconClass} />
               Acerca de
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
-              }}
-              className={gptMenuItemClass}
-            >
-              <Lock className={gptMenuIconClass} />
-              Privacidad
-            </DropdownMenuItem>
+            {isCustomGptOwner && (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
+                }}
+                className={gptMenuItemClass}
+              >
+                <Lock className={gptMenuIconClass} />
+                Configuración de privacidad
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className={gptMenuItemClass}>
               <Pin className={gptMenuIconClass} />
               {isGptPinned ? "Quitar de barra" : "Fijar en barra"}
@@ -4159,8 +4429,31 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Dialog open={gptDialog !== null} onOpenChange={(open) => !open && setGptDialog(null)}>
-          <DialogContent className="max-w-md rounded-3xl">
+        <Dialog
+          open={gptDialog !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setGptDialog(null);
+              setHoveredGptRating(0);
+            }
+          }}
+        >
+          <DialogContent
+            overlayClassName={gptDialog === "rate" ? "bg-black/60 backdrop-blur-sm" : undefined}
+            className={cn(
+              gptDialog === "rate"
+                ? "max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[460px] gap-0 overflow-hidden rounded-[20px] border border-border/70 bg-background/95 p-0 shadow-[0_24px_80px_rgba(15,23,42,0.28)] backdrop-blur-xl sm:rounded-[20px]"
+                : "max-w-md rounded-3xl",
+            )}
+            onOpenAutoFocus={(event) => {
+              if (gptDialog !== "rate") return;
+              event.preventDefault();
+              window.setTimeout(() => {
+                gptRatingButtonRefs.current[(gptRating || 1) - 1]?.focus();
+              }, 0);
+            }}
+            onEscapeKeyDown={() => setHoveredGptRating(0)}
+          >
             {gptDialog === "about" && (
               <>
                 <DialogHeader>
@@ -4181,7 +4474,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setGptDialog(null)}>Cerrar</Button>
-                  {customGpt?.id && <Button onClick={() => { window.location.href = `/gpts/create?edit=${customGpt.id}` }}>Configurar</Button>}
+                  {isCustomGptOwner && customGpt?.id && <Button onClick={() => { window.location.href = `/gpts/create?edit=${customGpt.id}` }}>Configurar</Button>}
                 </DialogFooter>
               </>
             )}
@@ -4202,29 +4495,116 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
             {gptDialog === "rate" && (
               <>
-                <DialogHeader>
-                  <DialogTitle>Valorar GPT</DialogTitle>
-                  <DialogDescription>Selecciona una valoración para este GPT.</DialogDescription>
-                </DialogHeader>
-                <div className="flex items-center justify-center gap-2 py-2">
-                  {[1, 2, 3, 4, 5].map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setGptRating(value)}
-                      className={cn(
-                        "flex h-11 w-11 items-center justify-center rounded-full border text-lg transition",
-                        gptRating >= value ? "border-amber-400 bg-amber-50 text-amber-600" : "border-border text-muted-foreground hover:bg-muted",
-                      )}
-                      aria-label={`${value} estrellas`}
-                    >
-                      ★
-                    </button>
-                  ))}
+                <div className="px-5 pb-5 pt-6 sm:px-7 sm:pb-7 sm:pt-7">
+                  <DialogHeader className="space-y-2 pr-8 text-left">
+                    <DialogTitle className="text-[1.35rem] font-semibold leading-7 tracking-normal sm:text-2xl">
+                      ¿Qué te pareció este GPT?
+                    </DialogTitle>
+                    <DialogDescription className="text-sm leading-6 text-muted-foreground">
+                      Tu valoración ayuda a mejorar la experiencia.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="mt-7 space-y-5">
+                    <div className="space-y-3">
+                      <div
+                        role="radiogroup"
+                        aria-label="Valoración del GPT"
+                        className="flex items-center justify-center gap-2.5 sm:gap-3"
+                        onMouseLeave={() => setHoveredGptRating(0)}
+                      >
+                        {GPT_RATING_OPTIONS.map((option) => {
+                          const { value, label } = option;
+                          const isPreviewed = displayGptRating >= value;
+                          const isSelected = gptRating >= value;
+
+                          return (
+                            <button
+                              key={value}
+                              ref={(node) => {
+                                gptRatingButtonRefs.current[value - 1] = node;
+                              }}
+                              type="button"
+                              role="radio"
+                              aria-checked={gptRating === value}
+                              aria-label={`Valorar con ${value} ${value === 1 ? "estrella" : "estrellas"}: ${label}`}
+                              tabIndex={gptRating === 0 ? (value === 1 ? 0 : -1) : (gptRating === value ? 0 : -1)}
+                              onClick={() => setGptRating(value)}
+                              onFocus={() => setHoveredGptRating(value)}
+                              onBlur={() => setHoveredGptRating(0)}
+                              onMouseEnter={() => setHoveredGptRating(value)}
+                              onKeyDown={(event) => handleGptRatingKeyDown(event, value)}
+                              className={cn(
+                                "group flex h-12 w-12 items-center justify-center rounded-full border shadow-sm transition-all duration-200 sm:h-14 sm:w-14",
+                                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                                "hover:-translate-y-0.5 hover:scale-105 active:translate-y-0 active:scale-100",
+                                isPreviewed
+                                  ? "border-amber-300 bg-amber-50 text-amber-500 shadow-[0_10px_24px_rgba(245,158,11,0.18)] dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300"
+                                  : "border-zinc-200 bg-white text-zinc-400 hover:border-amber-200 hover:bg-amber-50/70 hover:text-amber-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-500 dark:hover:border-amber-400/35 dark:hover:bg-amber-400/10 dark:hover:text-amber-300",
+                                isSelected && "ring-1 ring-amber-300/60 dark:ring-amber-400/35",
+                              )}
+                            >
+                              <Star
+                                aria-hidden="true"
+                                className={cn(
+                                  "h-6 w-6 transition-all duration-200 sm:h-7 sm:w-7",
+                                  isPreviewed && "fill-current drop-shadow-[0_2px_6px_rgba(245,158,11,0.25)]",
+                                )}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="min-h-7 text-center" aria-live="polite">
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full px-3 py-1 text-sm font-medium transition-colors",
+                            displayGptRatingLabel
+                              ? "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {displayGptRatingLabel || "Sin valoración aún"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label htmlFor="gpt-rating-note" className="text-sm font-medium text-foreground">
+                        Comentario opcional
+                      </label>
+                      <Textarea
+                        id="gpt-rating-note"
+                        value={gptRatingNote}
+                        onChange={(event) => setGptRatingNote(event.target.value)}
+                        placeholder="Cuéntanos qué podríamos mejorar…"
+                        aria-label="Comentario opcional para la valoración"
+                        rows={4}
+                        className="min-h-[104px] resize-none rounded-2xl border-border/70 bg-muted/30 px-4 py-3 text-sm leading-6 shadow-inner shadow-black/[0.02] transition focus-visible:ring-2 focus-visible:ring-zinc-400/50 focus-visible:ring-offset-0 dark:bg-white/[0.03]"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setGptDialog(null)}>Cancelar</Button>
-                  <Button onClick={() => submitGptFeedback("rate")} disabled={gptRating === 0}>Guardar valoración</Button>
+
+                <DialogFooter className="gap-2 border-t border-border/60 bg-muted/20 px-5 py-4 sm:flex-row sm:justify-end sm:space-x-0 sm:px-7 [&>button]:w-full sm:[&>button]:w-auto">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setGptDialog(null);
+                      setHoveredGptRating(0);
+                    }}
+                    className="h-11 rounded-xl border-border/70 bg-background px-5 text-foreground hover:bg-muted/70"
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    onClick={() => submitGptFeedback("rate")}
+                    disabled={gptRating === 0}
+                    className="h-11 rounded-xl bg-zinc-950 px-5 text-white shadow-sm hover:bg-zinc-800 disabled:bg-zinc-200 disabled:text-zinc-500 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-white/10 dark:disabled:text-white/35"
+                  >
+                    Guardar valoración
+                  </Button>
                 </DialogFooter>
               </>
             )}
@@ -4370,6 +4750,135 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     </DropdownMenu>
   );
 }, areNavbarModelSelectorPropsEqual);
+
+const WORK_MODE_STORAGE_KEY = 'sira:chat:work-mode';
+
+const EMPTY_CHAT_MESSAGES: any[] = []
+
+type ChatMessageListProps = {
+  messages: any[]
+  isStreaming: boolean
+  radixViewport: HTMLElement | null
+  user: any
+  onRegenerate: (messageId: string) => void | Promise<void>
+  onBranch: (messageId: string) => void | Promise<void>
+  updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void
+  onToggleSplitView: (content: any) => void
+  onDocumentPreview: (target: DocumentPreviewTarget) => void
+  onAttachmentPreview: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void
+  onOpenSources: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void
+}
+
+// The transcript is intentionally isolated from composer state. Typing used
+// to reconcile every message (including Markdown and artifact renderers) on
+// each keystroke because the list lived inside ChatInterfaceContent. Keeping
+// stable callback props lets React skip that entire subtree until messages or
+// streaming state actually change.
+const ChatMessageList = React.memo(function ChatMessageList({
+  messages: rawMessages,
+  isStreaming,
+  radixViewport,
+  user,
+  onRegenerate,
+  onBranch,
+  updateMessageInChat,
+  onToggleSplitView,
+  onDocumentPreview,
+  onAttachmentPreview,
+  onOpenSources,
+}: ChatMessageListProps) {
+  const { stableMessages, streamingMessage } = React.useMemo(() => {
+    // Two passes are deliberate: the first collapses optimistic/server twins;
+    // the second catches duplicates that become adjacent after hidden tool and
+    // metadata messages are removed.
+    const messages = dedupeMessages(rawMessages)
+    const lastMessage = messages[messages.length - 1]
+    const streamingCandidate = isStreaming && isAssistantMessage(lastMessage)
+      ? lastMessage
+      : null
+    const stable = dedupeMessages(
+      streamingCandidate
+        ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
+        : messages.filter((message) => shouldRenderChatMessage(message))
+    )
+    const streaming = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
+      ? streamingCandidate
+      : null
+
+    return { stableMessages: stable, streamingMessage: streaming }
+  }, [isStreaming, rawMessages])
+
+  return (
+    <>
+      {radixViewport && stableMessages.length > 40 ? (
+        <Virtuoso
+          data={stableMessages}
+          customScrollParent={radixViewport}
+          computeItemKey={(_, message) => message.id}
+          increaseViewportBy={400}
+          itemContent={(_, message) => (
+            <ErrorBoundary key={message.id} label={`message:${message.id}`}>
+              <MessageComponent
+                message={message}
+                user={user}
+                onRegenerate={onRegenerate}
+                onBranch={onBranch}
+                updateMessageInChat={updateMessageInChat}
+                isStreaming={false}
+                onToggleSplitView={onToggleSplitView}
+                onDocumentPreview={onDocumentPreview}
+                onAttachmentPreview={onAttachmentPreview}
+                onOpenSources={onOpenSources}
+              />
+            </ErrorBoundary>
+          )}
+        />
+      ) : (
+        stableMessages.map((message) => (
+          <ErrorBoundary key={message.id} label={`message:${message.id}`}>
+            <MessageComponent
+              message={message}
+              user={user}
+              onRegenerate={onRegenerate}
+              onBranch={onBranch}
+              updateMessageInChat={updateMessageInChat}
+              isStreaming={false}
+              onToggleSplitView={onToggleSplitView}
+              onDocumentPreview={onDocumentPreview}
+              onAttachmentPreview={onAttachmentPreview}
+              onOpenSources={onOpenSources}
+            />
+          </ErrorBoundary>
+        ))
+      )}
+      {streamingMessage && (
+        <div
+          className="streaming-message"
+          role="region"
+          aria-live="polite"
+          aria-atomic="false"
+          aria-label="Respuesta del asistente en progreso"
+        >
+          <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
+            <MessageComponent
+              key={streamingMessage.id}
+              message={streamingMessage}
+              user={user}
+              onRegenerate={onRegenerate}
+              updateMessageInChat={updateMessageInChat}
+              isStreaming={true}
+              onToggleSplitView={onToggleSplitView}
+              onDocumentPreview={onDocumentPreview}
+              onAttachmentPreview={onAttachmentPreview}
+            />
+          </ErrorBoundary>
+        </div>
+      )}
+    </>
+  )
+})
+
+ChatMessageList.displayName = "ChatMessageList"
 
 export default function ChatInterface() {
   return <ChatInterfaceContent />
@@ -4517,13 +5026,13 @@ function ChatInterfaceContent() {
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
-  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("ElevenLabs")
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("Gemini 2.5 Flash TTS")
   const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
   const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
   const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
-  // Specific ElevenLabs voice chosen from the Voice Catalog. Persisted so the
-  // selection survives reloads. Empty → backend uses the multilingual default.
+  // Specific ElevenLabs voice chosen from the Voice Catalog. It is only sent
+  // when ElevenLabs is selected; Gemini uses its own production voice.
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
@@ -4557,6 +5066,8 @@ function ChatInterfaceContent() {
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
+  const voiceAbortControllerRef = React.useRef<AbortController | null>(null)
+  const musicAbortControllerRef = React.useRef<AbortController | null>(null)
   // Dedicated cancel handle for video generation, mirroring the image path so
   // every composer-driven media kind cancels through the same mechanism.
   const videoAbortControllerRef = React.useRef<AbortController | null>(null)
@@ -4951,6 +5462,18 @@ function ChatInterfaceContent() {
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
+  const [isWorkModeActive, setIsWorkModeActiveState] = React.useState(false);
+  React.useEffect(() => {
+    try {
+      setIsWorkModeActiveState(window.localStorage.getItem(WORK_MODE_STORAGE_KEY) === '1');
+    } catch { /* storage can be disabled without breaking chat */ }
+  }, []);
+  const setIsWorkModeActive = React.useCallback((value: boolean) => {
+    setIsWorkModeActiveState(value);
+    try {
+      window.localStorage.setItem(WORK_MODE_STORAGE_KEY, value ? '1' : '0');
+    } catch { /* storage can be disabled without breaking chat */ }
+  }, []);
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
   const isWebSearchActiveRef = React.useRef(isWebSearchActive);
   React.useEffect(() => {
@@ -5137,6 +5660,22 @@ function ChatInterfaceContent() {
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
+    }
+    if (voiceAbortControllerRef.current) {
+      const controller = voiceAbortControllerRef.current;
+      voiceAbortControllerRef.current = null;
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+      toast.info('Generación de voz detenida');
+    }
+    if (musicAbortControllerRef.current) {
+      const controller = musicAbortControllerRef.current;
+      musicAbortControllerRef.current = null;
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+      toast.info('Generación de música detenida');
     }
     if (isGeneratingVoiceRef.current) {
       isGeneratingVoiceRef.current = false;
@@ -5573,6 +6112,113 @@ But first, you need to connect your Spotify account securely using the button be
     setActiveSearchActivityId(null);
   }, []);
 
+  const saveSearchActivityToLibrary = React.useCallback(async (activity: SearchActivityState, sources?: ResearchResultSource[]) => {
+    const selection = sources?.length ? sources : activity.selectedSources
+    if (!selection?.length) return
+    try {
+      const result = await apiClient.saveResearchReferences({
+        sources: selection,
+        collectionName: "Fuentes guardadas",
+        tags: ["chat", "investigación"],
+      }) as any
+      toast.success(`${result?.references?.length || selection.length} referencias guardadas en Biblioteca`)
+    } catch (error: any) {
+      toast.error(error?.message || "No se pudieron guardar las referencias")
+    }
+  }, []);
+
+  React.useEffect(() => {
+    const onResearchFollowUp = (event: Event) => {
+      const prompt = (event as CustomEvent<{ prompt?: string }>).detail?.prompt
+      if (!prompt) return
+      setInput(prompt)
+      setActiveSearchActivityId(null)
+    }
+    document.addEventListener(RESEARCH_FOLLOW_UP_EVENT, onResearchFollowUp)
+    return () => document.removeEventListener(RESEARCH_FOLLOW_UP_EVENT, onResearchFollowUp)
+  }, [])
+
+  React.useEffect(() => {
+    const onResearchArtifact = (event: Event) => {
+      const request = (event as CustomEvent<ResearchArtifactRequest>).detail
+      if (!request?.sources?.length || !request?.outline?.length) return
+
+      void (async () => {
+        const model = currentChatRef.current?.model || selectedModelRef.current
+        if (!model) {
+          toast.error("Selecciona un modelo antes de crear el archivo")
+          return
+        }
+
+        let chatId = currentChatRef.current?.id as string | undefined
+        const controller = new AbortController()
+        const toastId = toast.loading(request.format === "pptx" ? "Preparando presentación científica…" : "Preparando documento científico…", { duration: Infinity })
+
+        try {
+          if (!chatId) {
+            const created = await apiClient.createChat({
+              title: request.title.slice(0, 80),
+              model,
+            })
+            chatId = (created?.chat || created)?.id
+            if (!chatId) throw new Error("No se pudo crear la conversación")
+            await selectChat(chatId)
+          }
+
+          markLocalJobBusy(chatId, controller)
+          let streamError = ""
+          let completed = false
+          const prompt = buildResearchArtifactPrompt(request)
+
+          await apiClient.generateDocStream({
+            prompt,
+            displayPrompt: request.format === "pptx"
+              ? `Crear PowerPoint científico: ${request.title}`
+              : `Crear Word científico: ${request.title}`,
+            chatId,
+            model,
+            format: request.format,
+            template: "academic",
+            complexity: "high",
+            outline: request.outline,
+            researchSources: request.sources,
+          }, (streamEvent) => {
+            if (streamEvent?.type === "stage") {
+              toast.loading(streamEvent.label || "Construyendo archivo…", {
+                id: toastId,
+                duration: Infinity,
+                description: Number.isFinite(streamEvent.pct) ? `${streamEvent.pct}%` : undefined,
+              })
+            } else if (streamEvent?.type === "error") {
+              streamError = streamEvent.error || "No se pudo generar el archivo"
+            } else if (streamEvent?.type === "final") {
+              completed = true
+            }
+          }, { signal: controller.signal })
+
+          if (streamError) throw new Error(streamError)
+          if (!completed) throw new Error("La generación terminó sin entregar un archivo")
+          await selectChat(chatId)
+          toast.success(request.format === "pptx" ? "Presentación científica lista" : "Documento científico listo", {
+            id: toastId,
+            description: "Disponible para revisar y descargar",
+          })
+        } catch (error: any) {
+          if (controller.signal.aborted || error?.name === "AbortError") {
+            toast.info("Generación de documento detenida", { id: toastId })
+          } else {
+            toast.error(error?.message || "No se pudo crear el archivo", { id: toastId })
+          }
+        } finally {
+          if (chatId) markLocalJobIdle(chatId, controller)
+        }
+      })()
+    }
+
+    document.addEventListener(RESEARCH_ARTIFACT_EVENT, onResearchArtifact)
+    return () => document.removeEventListener(RESEARCH_ARTIFACT_EVENT, onResearchArtifact)
+  }, [markLocalJobBusy, markLocalJobIdle, selectChat])
+
   const handleMessageAreaClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const trigger = target?.closest<HTMLElement>('[data-search-activity-id]');
@@ -5675,18 +6321,6 @@ But first, you need to connect your Spotify account securely using the button be
     syncComposerHighlightScroll();
   }, [input, hasDetectedLinks, syncComposerHighlightScroll]);
 
-  const getComposerTextareaMaxHeight = React.useCallback(() => {
-    if (typeof window === "undefined") return 200;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight || 720;
-    const isMobileViewport = window.matchMedia("(max-width: 767px)").matches;
-    if (!isMobileViewport) {
-      // ChatGPT-style composer: grows up to ~45% of the viewport so a long
-      // paste reads inline; beyond that the textarea scrolls internally.
-      return Math.max(200, Math.min(560, Math.floor(viewportHeight * 0.45)));
-    }
-    return Math.max(96, Math.min(180, Math.floor(viewportHeight * 0.28)));
-  }, []);
-
   const syncChatLayoutVars = React.useCallback(() => {
     const root = chatViewportRef.current;
     if (!root) return;
@@ -5700,8 +6334,8 @@ But first, you need to connect your Spotify account securely using the button be
 
     setPx("--chat-header-height", chatHeaderRef.current?.getBoundingClientRect().height || 64);
     setPx("--chat-composer-height", chatComposerDockRef.current?.getBoundingClientRect().height || 96);
-    setPx("--chat-textarea-max-height", getComposerTextareaMaxHeight());
-  }, [getComposerTextareaMaxHeight]);
+    setPx("--chat-textarea-max-height", textareaRef.current?.clientHeight || 36);
+  }, []);
 
   const setComposerInputFocused = React.useCallback((focused: boolean) => {
     const root = chatViewportRef.current;
@@ -5713,16 +6347,16 @@ But first, you need to connect your Spotify account securely using the button be
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    const maxHeight = getComposerTextareaMaxHeight();
-    textarea.style.height = "auto";
+    // The approved composer is a stable-size control. Long prompts scroll
+    // inside the textarea instead of resizing the surrounding surface.
+    textarea.style.removeProperty("height");
     const scrollHeight = textarea.scrollHeight;
-    const nextHeight = Math.min(scrollHeight, maxHeight);
-    const nextOverflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+    const nextHeight = textarea.clientHeight;
+    const nextOverflowY = scrollHeight > textarea.clientHeight + 1 ? "auto" : "hidden";
     const previousLayout = textareaLayoutRef.current;
     const heightChanged = previousLayout.height !== nextHeight;
     const overflowChanged = previousLayout.overflowY !== nextOverflowY;
 
-    textarea.style.height = `${nextHeight}px`;
     if (overflowChanged) {
       textarea.style.overflowY = nextOverflowY;
     }
@@ -5734,17 +6368,15 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     syncChatLayoutVars();
-    if (composerResizeFrameRef.current !== null) {
-      window.cancelAnimationFrame(composerResizeFrameRef.current);
-    }
+  }, [syncChatLayoutVars]);
+
+  const scheduleComposerTextareaResize = React.useCallback(() => {
+    if (composerResizeFrameRef.current !== null) return;
     composerResizeFrameRef.current = window.requestAnimationFrame(() => {
       composerResizeFrameRef.current = null;
-      syncChatLayoutVars();
-      if (heightChanged && document.activeElement === textarea) {
-        scrollToBottom();
-      }
+      resizeComposerTextarea();
     });
-  }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+  }, [resizeComposerTextarea]);
 
   React.useEffect(() => {
     return () => {
@@ -5764,7 +6396,7 @@ But first, you need to connect your Spotify account securely using the button be
   };
 
   // Insert text at the textarea caret (replacing any selection), keeping
-  // the draft, the auto-grow height and the caret position consistent.
+  // the draft, internal scroll position and caret position consistent.
   // Used by the universal paste router for orchestrated (non-native)
   // insertions: markdown from rich HTML, link URLs, multi-item pastes.
   const insertTextAtCaret = React.useCallback((snippet: string) => {
@@ -5810,8 +6442,8 @@ But first, you need to connect your Spotify account securely using the button be
   }, [setComposerInputFocused, syncChatLayoutVars]);
 
   React.useEffect(() => {
-    resizeComposerTextarea();
-  }, [input, resizeComposerTextarea]);
+    scheduleComposerTextareaResize();
+  }, [input, scheduleComposerTextareaResize]);
 
   // Instant upgrade function — restringido a super-admins.
   // Para usuarios normales el endpoint devuelve 403, así que evitamos el
@@ -5842,12 +6474,12 @@ But first, you need to connect your Spotify account securely using the button be
         price: planMap[plan].price ?? 0,
       };
 
-      const res = await fetch('/api/payments/instant', {
+      const request = await apiClient.prepareMutatingFetch({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(payload),
       });
+      const res = await authenticatedFetch('/api/payments/instant', request);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -5895,15 +6527,15 @@ But first, you need to connect your Spotify account securely using the button be
     };
   }, [setSubscribeOpen, isMonthlyLimitError]);
 
-  const handleToggleSplitView = (content: any) => {
+  const handleToggleSplitView = React.useCallback((content: any) => {
     setDocumentPreviewUrl(null)
     setComposerPreviewIndex(null)
     setSidePreviewAttachment(null)
     setSidePreviewSiblings([])
     setSplitViewContent(content)
-  }
+  }, [])
 
-  const handleDocumentPreview = (url: DocumentPreviewTarget) => {
+  const handleDocumentPreview = React.useCallback((url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
     setSourcesPanelData(null)
     setComposerPreviewIndex(null)
@@ -5915,7 +6547,7 @@ But first, you need to connect your Spotify account securely using the button be
       return balanced
     })
     setDocumentPreviewUrl(url);
-  };
+  }, []);
 
   const handleAttachmentPreview = React.useCallback((attachment: AttachmentLike, siblings: AttachmentLike[] = [], index = 0) => {
     setSplitViewContent(null);
@@ -7387,6 +8019,8 @@ But first, you need to connect your Spotify account securely using the button be
   const SPLIT_STORAGE_KEY = 'siraGPT-split-ratio';
   const SPLIT_LEFT_MIN_PX = 420;
   const SPLIT_RIGHT_MIN_PX = 460;
+  const SEARCH_ACTIVITY_RIGHT_MIN_PX = 480;
+  const SEARCH_ACTIVITY_RIGHT_MAX_PX = 640;
   const SPLIT_MIN_RATIO = 34;
   const SPLIT_MAX_RATIO = 66;
   const [splitRatio, setSplitRatio] = React.useState<number>(50);
@@ -7529,13 +8163,10 @@ But first, you need to connect your Spotify account securely using the button be
 
   // ── Slash-command dispatcher ───────────────────────────────────────────
   // Routes parsed slash commands (/goal, /research) to dedicated backends.
-  // Streams progress events via SSE and shows the result in a toast (with a
-  // link to copy the full markdown report into the next chat reply).
+  // Streams progress events via SSE or persists scientific result cards.
   //
-  // Important: this function does NOT post the user's message into the
-  // chat history — slash commands are meta-actions, not regular messages.
-  // The result IS surfaced through toast + a final notification with
-  // the markdown body so the user can paste it back into the conversation.
+  // `/goal` remains a meta-action. `/research` creates or reuses a chat and
+  // persists both the query and the scientific result card.
   const runSlashCommand = React.useCallback(async (slash: { command: string; remainder: string }) => {
     const query = slash.remainder.trim();
     if (!query) {
@@ -7561,14 +8192,24 @@ But first, you need to connect your Spotify account securely using the button be
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
+          const researchModel = currentChatRef.current?.model || selectedModelRef.current
+          if (!researchModel) throw new Error("Selecciona un modelo antes de iniciar la investigación")
+          const researchChat = await ensureResearchCommandChat({
+            currentChat: currentChatRef.current,
+            query,
+            model: researchModel,
+            createChat: (data) => apiClient.createChat(data),
+            addMessage: (chatId, data) => apiClient.addMessage(chatId, data),
+          })
+          await selectChat(researchChat.id)
           // /research → one-shot POST over 16 sources; ask for a rich set and
           // free OA PDFs (Unpaywall, gated on SIRAGPT_RESEARCH_EMAIL server-side).
-          const res = await fetch(url, {
+          const request = await apiClient.prepareMutatingFetch({
             method: "POST",
-            credentials: "include",
             headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
             body: JSON.stringify({ query, limit: 25, unpaywall: true }),
           });
+          const res = await authenticatedFetch(url, request);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           // Rank by citations (most-cited first) for the student; nulls last.
@@ -7586,19 +8227,12 @@ But first, you need to connect your Spotify account securely using the button be
           // Persist a rich, clear result card in the conversation instead of a
           // vanishing toast: an assistant message carrying a ```scientific-papers```
           // fenced block that MessageComponent renders as PapersResultCard.
-          if (ranked.length > 0 && currentChat?.id) {
-            const paperMsg = {
-              id: `msg-papers-${Date.now()}`,
-              chatId: currentChat.id,
-              role: "ASSISTANT" as const,
-              content:
-                "```scientific-papers\n" + JSON.stringify(payload) + "\n```",
-              timestamp: new Date().toISOString(),
-            };
-            setCurrentChat?.((prev: any) => {
-              if (!prev || prev.id !== currentChat.id) return prev;
-              return { ...prev, messages: [...(prev.messages || []), paperMsg] };
-            });
+          if (ranked.length > 0) {
+            await apiClient.addMessage(researchChat.id, {
+              role: "ASSISTANT",
+              content: buildScientificPapersMessage(payload),
+            })
+            await selectChat(researchChat.id)
             toast.success(`📚 ${payload.count} artículos · ${payload.providers.length} fuentes`, {
               id: toastId,
               duration: 4000,
@@ -7612,12 +8246,12 @@ But first, you need to connect your Spotify account securely using the button be
           }
         } else {
           // /goal → SSE stream the agent phases
-          const res = await fetch(url, {
+          const request = await apiClient.prepareMutatingFetch({
             method: "POST",
-            credentials: "include",
             headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
             body: JSON.stringify({ query, depth: "standard" }),
           });
+          const res = await authenticatedFetch(url, request);
           if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
@@ -7673,7 +8307,7 @@ But first, you need to connect your Spotify account securely using the button be
 
     toast.error(`Comando desconocido: /${slash.command}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectChat]);
 
   const handleSend = async () => {
     let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
@@ -7697,10 +8331,8 @@ But first, you need to connect your Spotify account securely using the button be
     if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
 
     // ── Slash-command intercept ────────────────────────────────────────
-    // When the message starts with /goal or /research (or any other known
-    // slash command), bypass the normal chat flow and dispatch to the
-    // dedicated backend route. The result is shown via toast + posted
-    // back as an assistant message into the conversation when complete.
+    // Slash commands use their dedicated backend routes. `/research` owns its
+    // chat persistence so new and existing conversations behave identically.
     const slash = parseSlashPrefix(rawMsg);
     if (slash) {
       setInput("");
@@ -8223,23 +8855,45 @@ REWRITTEN TEXT:`;
     // "derivada" → math, "imagen" → image), keep image-only turns out of the
     // agent loop entirely — the vision path reads the image and responds.
     const imageOnlyTurn = isImageOnlyAttachmentTurn(filesToSend);
+    const hasDedicatedConnector = isGmailActive
+      || isGoogleCalendarActive
+      || isGoogleDriveActive
+      || isSpotifyActive
+      || isComputerUseActive
+      || isWordConnectorActive
+      || isExcelConnectorActive;
+    const hasMediaGenerator = isImageGenerationActive
+      || isVoiceGenerationActive
+      || isMusicGenerationActive
+      || isVideoGenerationActive;
+    const shouldUseWorkModeAgent = isWorkModeActive
+      && !hasDedicatedConnector
+      && !hasMediaGenerator
+      && shouldRouteWorkModePromptThroughAgentTask(msg, filesToSend);
+    const shouldUseAcademicSearch = shouldUseDedicatedAcademicSearch(msg, {
+      attachmentCount: filesToSend.length,
+      customGptId: currentChat?.customGptId,
+      customGpt: currentChat?.customGpt,
+    });
     // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
     // enter the durable agent-task path. That backend path owns the current
     // source-preserving Office/PDF editor, artifact persistence and validation.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
-    const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
-      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
-      && !imageOnlyTurn
-      // Same gate as the semantic switch below: no-file analytical turns
-      // (web lookups, formulas, charts) belong on the RELIABLE inline
-      // /generate agentic loop, not the durable queued path. Without this,
-      // the deterministic fast-path queued "busca en la web…" style prompts
-      // straight into the agent-task pipeline and the chat froze on
-      // "Analizando solicitud" whenever the worker/relay hiccupped.
-      && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend);
+    const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
+      || (deterministicAgenticIntent
+        && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
+        && !imageOnlyTurn
+        // Same gate as the semantic switch below: no-file analytical turns
+        // (web lookups, formulas, charts) belong on the RELIABLE inline
+        // /generate agentic loop, not the durable queued path. Without this,
+        // the deterministic fast-path queued "busca en la web…" style prompts
+        // straight into the agent-task pipeline and the chat froze on
+        // "Analizando solicitud" whenever the worker/relay hiccupped.
+        && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend));
+    const shouldStartAgenticLoopForCurrentMessage = shouldStartAgenticLoopImmediately && !shouldUseAcademicSearch;
 
-    if (shouldStartAgenticLoopImmediately) {
+    if (shouldStartAgenticLoopForCurrentMessage) {
       try {
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
       } finally {
@@ -8292,7 +8946,7 @@ REWRITTEN TEXT:`;
       // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
       // For new chats, `createNewChat` will handle creating the chat, and the context will replace the temp chat.
 
-      if (isWebSearchActive) {
+      if (isWebSearchActive || shouldUseAcademicSearch) {
         await handleWebSearch(msg);
         return;
       }
@@ -9593,7 +10247,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // Any active tool/connector/thesis mode? Used to conditionally render active
   // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
-    isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
+    isWorkModeActive || isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
@@ -9618,17 +10272,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isCurrentChatMediaBusy;
   const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
-  const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
-  const composerIsExpanded =
-    composerHasInlineContext ||
-    input.length > 120 ||
-    input.includes("\n");
-
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
   // but the prop contract is identical, so centralising it avoids
   // drift between the two composer instances (initial vs in-chat).
   const activeToolsProps = {
+    isWorkModeActive, setIsWorkModeActive,
     isWebSearchActive, setIsWebSearchActive,
     isImageGenerationActive, setIsImageGenerationActive,
     isGeneratingImage,
@@ -9689,6 +10338,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
+  const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
   // tenant, so if any other viewer becomes active while it's open, close it.
@@ -9983,7 +10633,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const bumpProvider = (name: string, count: number) => {
         const i = progress.providers.findIndex(p => p.name === name);
-        if (i >= 0) progress.providers[i].count = Math.max(progress.providers[i].count, count);
+        if (i >= 0) progress.providers[i].count += Math.max(0, count);
         else progress.providers.push({ name, count });
       };
 
@@ -9995,8 +10645,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         if (!Array.isArray(sources) || sources.length === 0) return "";
         const validate = (s: any) => {
           const checks: string[] = [];
-          const hasDoi = !!s.doi && /^10\.\d{4,9}\//i.test(String(s.doi));
-          if (hasDoi) checks.push("✓ DOI");
+          const hasDoi = s.doiStatus === "format_valid" || (!!s.doi && /^10\.\d{4,9}\//i.test(String(s.doi)));
+          if (s.doiResolutionStatus === "resolved") checks.push("✓ DOI resuelto en línea");
+          else if (s.doiResolutionStatus === "not_found") checks.push("⚠ DOI no localizado");
+          else if (hasDoi) checks.push("DOI con formato válido; resolución no confirmada");
           else if (s.url) checks.push("✓ URL");
           else checks.push("⚠ sin enlace");
           const yr = parseInt(String(s.year || s.published || ""), 10);
@@ -10006,15 +10658,27 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           if (/(\.edu|\.gov|\.ac\.|scielo|pubmed|crossref|wiley|springer|elsevier|nature)/.test(url)) {
             checks.push("✓ autoridad");
           }
+          if (Number(s.sourceCount) >= 2) checks.push(`✓ ${s.sourceCount} índices`);
+          if (s.publicationStage === "preprint") checks.push("⚠ preprint: sin revisión por pares confirmada");
+          else if (s.peerReviewStatus === "confirmed") checks.push("✓ revisión por pares confirmada");
+          else if (s.peerReviewStatus === "likely_peer_reviewed") checks.push("publicado en revista; revisión por pares no confirmada");
+          if (s.studyType && s.studyType !== "unknown") checks.push(`tipo: ${String(s.studyType).replace(/_/g, " ")}`);
+          if (s.integrityStatus === "corrected") checks.push("corrección registrada");
+          if (s.integrityStatus === "expression_of_concern") checks.push("⚠ expresión de preocupación");
+          if (s.integrityStatus === "retracted") checks.push("⚠ retractado");
           return checks.join(" · ");
         };
         const lines: string[] = [];
-        lines.push(`## Resultados verificados`);
+        lines.push(`## Resultados científicos priorizados`);
         lines.push(``);
-        lines.push(`Encontré ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"} relevante${sources.length === 1 ? "" : "s"}, validadas por DOI, año y autoridad de dominio:`);
+        const crossValidated = sources.filter((source) => Number(source.sourceCount) >= 2).length;
+        lines.push(`Encontré ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"} relevante${sources.length === 1 ? "" : "s"}, ordenadas por precisión temática, calidad de metadatos, autoridad del índice y coincidencia entre bases.`);
+        if (crossValidated > 0) {
+          lines.push(`${crossValidated} ${crossValidated === 1 ? "resultado fue corroborado" : "resultados fueron corroborados"} por más de una base académica.`);
+        }
         lines.push(``);
         sources.forEach((s: any, idx: number) => {
-          const link = s.doi ? `https://doi.org/${s.doi}` : (s.url || "");
+          const link = s.doiResolvedUrl || (s.doi ? `https://doi.org/${s.doi}` : (s.url || ""));
           const title = link ? `[${(s.title || "(sin título)").trim()}](${link})` : (s.title || "(sin título)").trim();
           const meta = [
             (s.authors && s.authors.length > 0) ? (Array.isArray(s.authors) ? s.authors.slice(0, 3).join(", ") : String(s.authors)) : null,
@@ -10059,7 +10723,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 progress.label = "Recopilando fuentes";
                 progress.counter = `${done}/${total} fuentes`;
                 progress.percent = 10 + Math.round((done / total) * 50);  // 10→60%
-                if ((evt as any).provider) bumpProvider(String((evt as any).provider), done);
+                if ((evt as any).provider) bumpProvider(String((evt as any).provider), Math.max(0, Number((evt as any).unique) || 0));
                 updateBubble(renderProgress());
                 break;
               }
@@ -10075,6 +10739,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 progress.label = `Validando y rankeando ${evt.pool} fuentes`;
                 progress.counter = `top ${evt.topK}`;
                 progress.percent = 75;
+                updateBubble(renderProgress());
+                break;
+              case 'validation_start':
+                progress.phase = "validate";
+                progress.label = "Comprobando DOI en línea";
+                progress.counter = `${evt.candidates} candidatos`;
+                progress.percent = 82;
+                updateBubble(renderProgress());
+                break;
+              case 'validation_done':
+                progress.phase = "validate";
+                progress.label = "Comprobación DOI completada";
+                progress.counter = `${evt.resolved} resueltos`;
+                progress.percent = 86;
+                updateBubble(renderProgress());
+                break;
+              case 'validation_error':
+                progress.phase = "validate";
+                progress.label = "Comprobación DOI parcial";
+                progress.counter = "sin afirmaciones no verificadas";
+                progress.percent = 86;
+                updateBubble(renderProgress());
+                break;
+              case 'systematic_review':
+                progress.phase = "validate";
+                progress.label = "Cribado sistemático completado";
+                progress.counter = `${evt.prisma.screening.recordsExcluded} excluidos · ${evt.prisma.screening.recordsUncertain} en duda`;
+                progress.percent = 87;
                 updateBubble(renderProgress());
                 break;
               case 'selected':
@@ -10210,7 +10902,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
     }
 
-    markLocalJobBusy(activeChat.id);
+    voiceAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    voiceAbortControllerRef.current = controller;
+    markLocalJobBusy(activeChat.id, controller);
 
     const userMessage = {
       id: `msg-user-${Date.now()}`,
@@ -10226,12 +10921,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     });
 
     const runningState = {
-      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      meta: { goal: narration.slice(0, 200), model: selectedVoiceModel, tools: ['generate_speech'] },
       steps: [{
         id: 'speech-bootstrap',
         label: 'Generando audio',
         icon: 'thought',
-        reasoning: 'Convirtiendo el texto a voz con ElevenLabs.',
+        reasoning: `Convirtiendo el texto a voz con ${selectedVoiceModel}.`,
         status: 'running',
         toolCalls: [],
       }],
@@ -10265,17 +10960,32 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const resp = await apiClient.generateSpeechMessage({
         text: narration,
         chatId: activeChat.id,
-        voiceId: selectedVoiceId || undefined,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        effect: selectedVoiceEffect,
+        stability: selectedVoiceStability,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
-      });
+      }, { signal: controller.signal });
       if (resp?.content) {
         setBubble(resp.content);
       } else {
         throw new Error('El servicio de voz no devolvió audio.');
       }
-      toast.success('Audio generado');
+      toast.success(resp?.model ? `Audio generado con ${resp.model}` : 'Audio generado');
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        const cancelledState = {
+          ...runningState,
+          done: true,
+          error: 'aborted',
+          steps: runningState.steps.map(s => ({ ...s, label: 'Generación detenida', status: 'error' })),
+        };
+        setBubble('```agent-task-state\n' + JSON.stringify(cancelledState) + '\n```');
+        return;
+      }
       const friendly = err?.message || 'No se pudo generar el audio. Intenta de nuevo.';
       const errorState = {
         ...runningState,
@@ -10286,7 +10996,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
       toast.error(friendly);
     } finally {
-      markLocalJobIdle(activeChat.id);
+      if (voiceAbortControllerRef.current === controller) {
+        voiceAbortControllerRef.current = null;
+      }
+      markLocalJobIdle(activeChat.id, controller);
     }
   };
 
@@ -10312,12 +11025,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const messagesUpToEdit = currentChat.messages.slice(0, idx);
     const updatedUserMessage = { ...currentChat.messages[idx], content: narration };
     const runningState = {
-      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      meta: { goal: narration.slice(0, 200), model: selectedVoiceModel, tools: ['generate_speech'] },
       steps: [{
         id: 'speech-bootstrap',
         label: 'Regenerando audio',
         icon: 'thought',
-        reasoning: 'Convirtiendo el texto editado a voz con ElevenLabs.',
+        reasoning: `Convirtiendo el texto editado a voz con ${selectedVoiceModel}.`,
         status: 'running',
         toolCalls: [],
       }],
@@ -10347,7 +11060,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       });
     };
 
-    markLocalJobBusy(chatId);
+    voiceAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    voiceAbortControllerRef.current = controller;
+    markLocalJobBusy(chatId, controller);
     isGeneratingVoiceRef.current = true;
     setIsGeneratingVoice(true);
     try {
@@ -10357,17 +11073,32 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         text: narration,
         chatId,
         regenerate: true,
-        voiceId: selectedVoiceId || undefined,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        effect: selectedVoiceEffect,
+        stability: selectedVoiceStability,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
-      });
+      }, { signal: controller.signal });
       if (resp?.content) {
         setBubble(resp.content);
       } else {
         throw new Error('El servicio de voz no devolvió audio.');
       }
-      toast.success('Audio regenerado');
+      toast.success(resp?.model ? `Audio regenerado con ${resp.model}` : 'Audio regenerado');
       if (chatId) selectChat(chatId);
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        const cancelledState = {
+          ...runningState,
+          done: true,
+          error: 'aborted',
+          steps: runningState.steps.map(s => ({ ...s, label: 'Generación detenida', status: 'error' })),
+        };
+        setBubble('```agent-task-state\n' + JSON.stringify(cancelledState) + '\n```');
+        return;
+      }
       const friendly = err?.message || 'No se pudo regenerar el audio. Intenta de nuevo.';
       const errorState = {
         ...runningState,
@@ -10378,9 +11109,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
       toast.error(friendly);
     } finally {
+      if (voiceAbortControllerRef.current === controller) {
+        voiceAbortControllerRef.current = null;
+      }
       isGeneratingVoiceRef.current = false;
       setIsGeneratingVoice(false);
-      markLocalJobIdle(chatId);
+      markLocalJobIdle(chatId, controller);
     }
   };
 
@@ -10427,7 +11161,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
     }
 
-    markLocalJobBusy(activeChat.id);
+    musicAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    musicAbortControllerRef.current = controller;
+    markLocalJobBusy(activeChat.id, controller);
 
     const userMessage = {
       id: `msg-user-${Date.now()}`,
@@ -10488,7 +11225,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         effect: selectedMusicEffect,
         influence: selectedMusicInfluence,
         model: selectedMusicModel,
-      });
+      }, { signal: controller.signal });
       if (resp?.content) {
         setBubble(resp.content);
       } else {
@@ -10497,6 +11234,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.success(resp?.model ? `Música generada con ${resp.model}` : 'Música generada');
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        const cancelledState = {
+          ...runningState,
+          done: true,
+          error: 'aborted',
+          steps: runningState.steps.map(s => ({ ...s, label: 'Generación detenida', status: 'error' })),
+        };
+        setBubble('```agent-task-state\n' + JSON.stringify(cancelledState) + '\n```');
+        return;
+      }
       const friendly = err?.message || 'No se pudo generar la música. Intenta de nuevo.';
       const errorState = {
         ...runningState,
@@ -10507,7 +11254,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
       toast.error(friendly);
     } finally {
-      markLocalJobIdle(activeChat.id);
+      if (musicAbortControllerRef.current === controller) {
+        musicAbortControllerRef.current = null;
+      }
+      markLocalJobIdle(activeChat.id, controller);
     }
   };
 
@@ -10952,42 +11702,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
           {isInitial ? (
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
-              <div className="w-full max-w-[860px] px-4">
+              <div className="chat-composer-frame">
                   <div className="space-y-3">
-                  {/* Empty-state hero — greeting + rotating capability chips.
-                      Clicking a chip seeds the composer with a starter prompt
-                      and focuses it so the user only has to complete the idea. */}
-                  <ChatEmptyStateHero
-                    userName={user?.name || user?.email || null}
-                    onSelectPrompt={(prompt) => {
-                      setInput(prompt)
-                      window.setTimeout(() => {
-                        const el = textareaRef.current
-                        if (el) {
-                          el.focus()
-                          try { el.setSelectionRange(prompt.length, prompt.length) } catch { /* old Safari */ }
-                        }
-                      }, 0)
-                    }}
-                  />
                   {/*
                     Composer — premium production UI.
-                    In DARK mode, inherits `composer-surface` from globals.css
-                    which applies the design-spec tokens (#0B1118 bg, #1C2430
-                    border, 0 12px 32px rgba(0,0,0,0.28) shadow) with a
-                    violet-tinted focus ring. In LIGHT mode it uses the Tailwind
-                    classes below (soft white surface with layered shadow).
-                    The focus state is the ONLY place accent color appears —
-                    idle never glows.
+                    Light and dark modes inherit `composer-surface` from
+                    globals.css, which owns the half-pixel border, background,
+                    and layered shadow. Focus recolors that same hairline
+                    violet without adding another ring, so its thickness stays
+                    fixed. Idle never glows.
                   */}
-                  {/*
-                    Composer — pill-styled card. rounded-3xl gives the
-                    single-row state a pill feel AND looks balanced when
-                    chips/tools push it taller. All ingestion artifacts
-                    (file chips, selected-text, active tools) live INSIDE
-                    the same surface so the user sees one coherent input
-                    area, not stacked floating elements above the bar.
-                  */}
+                  {/* The input surface keeps one approved size. Attachments and
+                      connector context use the independent tray above it. */}
                   <div className="relative">
                     {pasteCapture.Overlay}
                     {/* Slash-command menu — appears when the input starts with "/" */}
@@ -11009,45 +11735,47 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onClose={() => setSlashMenuOpen(false)}
                     />
                     <CredentialWarning text={input} />
+                    <div className="composer-context-tray">
+                      <ActiveOptionsDisplay
+                        uploadedFiles={uploadedFiles}
+                        removeFile={removeFile}
+                        uploadProgress={uploadProgress}
+                        retryUpload={retryUpload}
+                        restoreLongPasteToInput={restoreLongPasteToInput}
+                        moveFile={moveFile}
+                        onPreviewAttachment={handleComposerAttachmentPreview}
+                        onFileProcessingStatusChange={handleFileProcessingStatusChange}
+                      />
+                      <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                      {hasActiveTools && !shouldInlineActiveTools && (
+                        <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
+                          <ActiveToolsDisplay {...activeToolsProps} />
+                        </div>
+                      )}
+                    </div>
                     <div
+                      data-testid="chat-composer-surface"
                       className={cn(
                         "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                         "bg-background",
-                        "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
                         "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                        "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
-                        "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                        "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
+                        "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
+                        "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                     )}
                   >
-                    {/* Chips zone — rendered ABOVE the input row, INSIDE
-                        the same rounded card. Hidden entirely when there
-                        are no files / selected text / active tools, so
-                        empty composer stays as a clean single line. */}
-                    <ActiveOptionsDisplay
-                      uploadedFiles={uploadedFiles}
-                      removeFile={removeFile}
-                      uploadProgress={uploadProgress}
-                      retryUpload={retryUpload}
-                      restoreLongPasteToInput={restoreLongPasteToInput}
-                      moveFile={moveFile}
-                      onPreviewAttachment={handleComposerAttachmentPreview}
-                      onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                    />
-                    <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    {/* Media controls stay inline with the attach button; other
-                        active tools fall back to the secondary row below. */}
+                    {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
-                        className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
-                        data-expanded={composerIsExpanded ? "true" : undefined}
+                        className="composer-input-row flex items-center gap-2 pl-2 pr-2 py-1.5"
                       >
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
                           chatType={chatType}
                           setChatType={setChatType}
                           currentPlan={currentPlan}
+                          isWorkModeActive={isWorkModeActive}
+                          setIsWorkModeActive={setIsWorkModeActive}
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}
                           isImageGenerationActive={isImageGenerationActive}
@@ -11101,7 +11829,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         )}
 
-                        {/* CENTER — single-line textarea, expands vertically up to ~45% viewport (ChatGPT-style) */}
+                        {/* CENTER — stable-height textarea with internal scrolling. */}
                         <div className="composer-textarea-shell min-w-0 flex-1">
                           {hasDetectedLinks && input ? (
                             <div
@@ -11145,7 +11873,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                               ? tComposer("placeholderSpotify")
                                               : isWordConnectorActive
                                                 ? tComposer("placeholderWord")
-                                                : tComposer("placeholderDefault")
+                                                : isWorkModeActive
+                                                  ? "Describe el resultado que quieres obtener"
+                                                  : tComposer("placeholderDefault")
                             }
                             className={cn(
                               "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
@@ -11280,14 +12010,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       </div>
                     </TooltipProvider>
 
-                    {/* Secondary row — active tool / connector pills.
-                        Only rendered when something is active, so the
-                        composer stays a clean pill in the idle state. */}
-                    {hasActiveTools && !shouldInlineActiveTools && (
-                      <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
-                        <ActiveToolsDisplay {...activeToolsProps} />
-                      </div>
-                    )}
                   </div>
                   </div>
 
@@ -11402,121 +12124,27 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       (mobile) viewport — the "la barra de chat desaparece"
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
-                      {(() => {
-                        // dedupeMessages is the render-layer safety net against
-                        // the optimistic-UI duplication bug: even if an optimistic
-                        // message and its server twin both reach state, only one
-                        // bubble is ever rendered (server id wins). See
-                        // lib/message-preservation.ts.
-                        // dedupeMessages runs TWICE: once on the raw list to
-                        // collapse id-level and optimistic/server twin duplicates,
-                        // then again on the *filtered* list so messages that are
-                        // hidden by shouldRenderChatMessage (tool-use, metadata,
-                        // etc.) cannot mask adjacent duplicates from Pass C.
-                        const messages = dedupeMessages(currentChat?.messages || []);
-                        const stableMessages = dedupeMessages(
-                          isCurrentChatStreaming
-                            ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
-                            : messages.filter((message) => shouldRenderChatMessage(message))
-                        );
-                        const streamingCandidate = isCurrentChatStreaming ? messages[messages.length - 1] : null;
-                        const streamingMessage = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
-                          ? streamingCandidate
-                          : null;
-
-                        return (
-                          <>
-
-                            {radixViewport && stableMessages.length > 40 ? (
-                              // Virtualized path — only items inside the
-                              // visible window (plus a 400px overscan
-                              // buffer) get reconciled. customScrollParent
-                              // hands Virtuoso the existing Radix viewport
-                              // so scrollToBottom() above keeps working.
-                              <Virtuoso
-                                data={stableMessages}
-                                customScrollParent={radixViewport}
-                                computeItemKey={(_, m) => m.id}
-                                increaseViewportBy={400}
-                                itemContent={(_, message) => (
-                                  <ErrorBoundary
-                                    key={message.id}
-                                    label={`message:${message.id}`}
-                                  >
-                                    <MessageComponent
-                                      message={message}
-                                      user={user}
-                                      onRegenerate={regenerateMessage}
-                                      onBranch={branchMessage}
-                                      updateMessageInChat={editAndRegenerateRouter}
-                                      isStreaming={false}
-                                      onToggleSplitView={handleToggleSplitView}
-                                      onDocumentPreview={handleDocumentPreview}
-                                      onAttachmentPreview={handleAttachmentPreview}
-                                      onOpenSources={handleOpenSources}
-                                    />
-                                  </ErrorBoundary>
-                                )}
-                              />
-                            ) : (
-                              // First render before viewport ref resolves —
-                              // identical to the previous non-virtualized
-                              // path. Per-message ErrorBoundary preserved.
-                              stableMessages.map((message) => (
-                                <ErrorBoundary key={message.id} label={`message:${message.id}`}>
-                                  <MessageComponent
-                                    message={message}
-                                    user={user}
-                                    onRegenerate={regenerateMessage}
-                                    onBranch={branchMessage}
-                                    updateMessageInChat={editAndRegenerateRouter}
-                                    isStreaming={false}
-                                    onToggleSplitView={handleToggleSplitView}
-                                    onDocumentPreview={handleDocumentPreview}
-                                    onAttachmentPreview={handleAttachmentPreview}
-                                    onOpenSources={handleOpenSources}
-                                  />
-                                </ErrorBoundary>
-                              ))
-                            )}
-                            {streamingMessage && (
-                              // Isolate layout for the streaming bubble so
-                              // each token delta doesn't relayout the whole
-                              // message list above. See .streaming-message
-                              // in globals.css (contain: layout style).
-                              <div
-                                className="streaming-message"
-                                role="region"
-                                aria-live="polite"
-                                aria-atomic="false"
-                                aria-label="Respuesta del asistente en progreso"
-                              >
-                                <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
-                                  <MessageComponent
-                                    key={streamingMessage.id}
-                                    message={streamingMessage}
-                                    user={user}
-                                    onRegenerate={regenerateMessage}
-                                    updateMessageInChat={editAndRegenerateRouter}
-                                    isStreaming={true}
-                                    onToggleSplitView={handleToggleSplitView}
-                                    onDocumentPreview={handleDocumentPreview}
-                                    onAttachmentPreview={handleAttachmentPreview}
-                                  />
-                                </ErrorBoundary>
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
+                    <div className="chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full">
+                      <ChatMessageList
+                        messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
+                        isStreaming={isCurrentChatStreaming}
+                        radixViewport={radixViewport}
+                        user={user}
+                        onRegenerate={regenerateMessage}
+                        onBranch={branchMessage}
+                        updateMessageInChat={editAndRegenerateRouter}
+                        onToggleSplitView={handleToggleSplitView}
+                        onDocumentPreview={handleDocumentPreview}
+                        onAttachmentPreview={handleAttachmentPreview}
+                        onOpenSources={handleOpenSources}
+                      />
                     </div>
                   </ScrollArea>
 
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="relative max-w-3xl mx-auto space-y-2 bg-background">
+                    <div className="chat-composer-frame relative space-y-2 bg-background">
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
@@ -11584,46 +12212,49 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       {/* Input Area */}
 
-                      {/* Same composer as the initial state — chips
-                          render INSIDE the same rounded card. */}
+                      {/* Same fixed-size composer as the initial state. */}
                       <CredentialWarning text={input} />
                       <div className="relative">
                         {pasteCapture.Overlay}
+                        <div className="composer-context-tray">
+                          <ActiveOptionsDisplay
+                            uploadedFiles={uploadedFiles}
+                            removeFile={removeFile}
+                            uploadProgress={uploadProgress}
+                            retryUpload={retryUpload}
+                            restoreLongPasteToInput={restoreLongPasteToInput}
+                            moveFile={moveFile}
+                            onPreviewAttachment={handleComposerAttachmentPreview}
+                            onFileProcessingStatusChange={handleFileProcessingStatusChange}
+                          />
+                          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                          {hasActiveTools && !shouldInlineActiveTools && (
+                            <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
+                              <ActiveToolsDisplay {...activeToolsProps} />
+                            </div>
+                          )}
+                        </div>
                         <div
+                          data-testid="chat-composer-surface"
                           className={cn(
                             "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                             "bg-background",
-                            "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
                             "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                            "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
-                            "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                            "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
+                            "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
+                            "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                         )}
                       >
-                        <ActiveOptionsDisplay
-                          uploadedFiles={uploadedFiles}
-                          removeFile={removeFile}
-                          uploadProgress={uploadProgress}
-                          retryUpload={retryUpload}
-                          restoreLongPasteToInput={restoreLongPasteToInput}
-                          moveFile={moveFile}
-                          onPreviewAttachment={handleComposerAttachmentPreview}
-                          onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                        />
-                        <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                        {/* Tool pills relocated below the input — see
-                            the matching block after the TooltipProvider
-                            closes. Top surface is reserved for drop-zone. */}
                         <TooltipProvider>
                           <div
-                            className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
-                            data-expanded={composerIsExpanded ? "true" : undefined}
+                            className="composer-input-row flex items-center gap-2 pl-2 pr-2 py-1.5"
                           >
                             <ActionsDropdown
                               chatType={chatType}
                               setChatType={setChatType}
                               currentPlan={currentPlan}
+                              isWorkModeActive={isWorkModeActive}
+                              setIsWorkModeActive={setIsWorkModeActive}
                               isWebSearchActive={isWebSearchActive}
                               setIsWebSearchActive={setIsWebSearchActive}
                               isImageGenerationActive={isImageGenerationActive}
@@ -11718,7 +12349,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                                   ? tComposer("placeholderSpotify")
                                                   : isWordConnectorActive
                                                     ? tComposer("placeholderWord")
-                                                    : tComposer("placeholderDefault")
+                                                    : isWorkModeActive
+                                                      ? "Describe el resultado que quieres obtener"
+                                                      : tComposer("placeholderDefault")
                                 }
                                 className={cn(
                                   "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
@@ -11850,14 +12483,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         </TooltipProvider>
 
-                        {/* Secondary row — active tool / connector pills.
-                            Mirrors the in-chat composer above so both
-                            states feel identical to the user. */}
-                        {hasActiveTools && !shouldInlineActiveTools && (
-                          <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
-                            <ActiveToolsDisplay {...activeToolsProps} />
-                          </div>
-                        )}
                       </div>
                       </div>
                     </div>
@@ -11919,8 +12544,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div
               style={{
                 width: showAudioPanel
-                  ? `clamp(320px, ${100 - splitRatio}%, 420px)`
-                  : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - splitRatio}%, 62%)`,
+                  ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
+                  : searchActivityPanelOpen
+                    ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
+                  : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,
                 transition: isDraggingSplit ? undefined : 'width 300ms ease',
               }}
               className="h-full min-w-0 overflow-hidden shrink-0"
@@ -12007,6 +12634,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
+                  onSave={saveSearchActivityToLibrary}
                 />
               )}
               {!showAudioPanel && !activeSearchActivity && documentPreviewUrl && (

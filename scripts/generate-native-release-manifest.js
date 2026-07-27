@@ -84,7 +84,26 @@ function sha256File(filePath) {
 function classifyArtifact(relativePath) {
   const normalized = relativePath.replaceAll(path.sep, "/").toLowerCase()
   const extension = path.extname(normalized)
+  const fileName = path.basename(normalized)
   const isUnder = (directory) => normalized.startsWith(`${directory}/`) || normalized.includes(`/${directory}/`)
+  const isIosSimulatorZip = extension === ".zip"
+    && /(?:^|[-_.])(?:ios[-_.].*simulator|simulator[-_.].*ios)(?:[-_.]|$)/.test(path.basename(normalized))
+  const isDebugApk = extension === ".apk"
+    && (isUnder("debug") || /(?:^|[-_.])debug(?:[-_.]|$)/.test(path.basename(normalized)))
+
+  if (fileName === "android-upload-certificate-blocker.json") {
+    return {
+      platform: "android",
+      kind: "play-upload-blocker-evidence",
+    }
+  }
+
+  if (fileName.endsWith("-ios-device-build.json")) {
+    return {
+      platform: "ios",
+      kind: "ios-device-build-evidence",
+    }
+  }
 
   if (extension === ".blockmap") {
     return {
@@ -96,11 +115,11 @@ function classifyArtifact(relativePath) {
   if (isUnder("android") || extension === ".aab" || extension === ".apk") {
     return {
       platform: "android",
-      kind: extension === ".apk" ? "debug-apk" : "play-aab",
+      kind: extension === ".apk" ? (isDebugApk ? "debug-apk" : "release-apk") : "play-aab",
     }
   }
 
-  if (isUnder("ios") || extension === ".ipa") {
+  if (isUnder("ios") || extension === ".ipa" || isIosSimulatorZip) {
     return {
       platform: "ios",
       kind: extension === ".ipa"
@@ -118,10 +137,21 @@ function classifyArtifact(relativePath) {
     }
   }
 
-  if (isUnder("windows") || extension === ".exe") {
+  if (
+    isUnder("windows")
+    || extension === ".exe"
+    || extension === ".appx"
+    || fileName === "windows-store-package.json"
+  ) {
     return {
       platform: "windows",
-      kind: normalized.includes("portable") ? "portable-exe" : "installer-exe",
+      kind: extension === ".appx"
+        ? "microsoft-store-appx"
+        : fileName === "windows-store-package.json"
+          ? "microsoft-store-package-metadata"
+          : normalized.includes("portable")
+            ? "portable-exe"
+            : "installer-exe",
     }
   }
 
@@ -213,9 +243,16 @@ function renderMarkdown(manifest) {
 }
 
 function renderChecksums(manifest) {
-  return `${manifest.artifacts
-    .map((artifact) => `${artifact.sha256}  ${artifact.path}`)
-    .join("\n")}\n`
+  const fileNames = new Set()
+  const lines = manifest.artifacts.map((artifact) => {
+    if (fileNames.has(artifact.fileName)) {
+      throw new Error(`Duplicate release asset file name: ${artifact.fileName}`)
+    }
+    fileNames.add(artifact.fileName)
+    return `${artifact.sha256}  ${artifact.fileName}`
+  })
+
+  return `${lines.join("\n")}\n`
 }
 
 function writeIfRequested(filePath, contents) {

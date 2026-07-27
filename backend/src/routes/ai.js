@@ -66,8 +66,10 @@ const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../s
 const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
+const geminiTts = require('../services/ai/gemini-tts');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
+const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -122,6 +124,7 @@ const _hashUserIdForSpan = (_otelSpans && _otelSpans.hashUserId)
   ? _otelSpans.hashUserId
   : (() => null);
 const operationalRag = require('../services/rag/operational-runtime');
+const chatLatencyPolicy = require('../services/chat-latency-policy');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
 const documentBlockBudget = require('../services/document-block-budget');
@@ -147,6 +150,7 @@ const {
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
+const { resolveUserSkillClearance } = require('../services/agents/custom-gpt-agent-policy');
 const { triageIntent } = require('../services/agents/intent-triage');
 const {
   makeGeminiJudge,
@@ -272,6 +276,11 @@ function hasEnv(name) {
 const { inferProviderFromModelId } = require('../services/ai/provider-inference');
 
 function createProviderClient(provider) {
+  if (provider === "Anthropic") {
+    const { createAnthropicOpenAIAdapter } = require('../services/providers/anthropic-openai-adapter');
+    return createAnthropicOpenAIAdapter();
+  }
+
   if (provider === "Gemini") {
     return new OpenAI({
       apiKey: process.env.GEMINI_API_KEY,
@@ -2277,6 +2286,24 @@ router.post(
       // from the critical path (from sequential ~150-300 ms → one ~50-100 ms
       // parallel wait). Results are unpacked below in the same order as the
       // original sequential code so all downstream logic is unchanged.
+      // Preserve the caller's explicit tenant request independently from the
+      // quota middleware's verified context. That middleware is intentionally
+      // fail-open for non-MCP chat availability; MCP receives both values and
+      // fails closed if they do not match.
+      const __requestedOrgIdForAi = (() => {
+        try {
+          const { resolveOrgId } = require('../middleware/enforce-org-quota');
+          return resolveOrgId(req);
+        } catch (_error) {
+          const header = req.headers
+            && (req.headers['x-org-id'] || req.headers['X-Org-Id']);
+          if (typeof header === 'string' && header.trim()) return header.trim();
+          const bodyOrg = req.body && typeof req.body === 'object'
+            ? req.body.organizationId
+            : null;
+          return typeof bodyOrg === 'string' && bodyOrg.trim() ? bodyOrg.trim() : null;
+        }
+      })();
       const __orgIdForAi = (req.orgContext && req.orgContext.orgId) || null;
       const [_chatPrefetch, _userPrefetch, _orgPrefetch] = await Promise.all([
         canPersist
@@ -2515,27 +2542,47 @@ router.post(
       if (userId) {
         const _crossChatMod = (() => { try { return require('../services/cross-chat-retrieval'); } catch { return null; } })();
         const _crossChatEnabled = _crossChatMod && _crossChatMod.isEnabled && _crossChatMod.isEnabled();
+        const _useSemanticEnrichment = chatLatencyPolicy.shouldUseSemanticEnrichment({
+          prompt,
+          files: processedFiles,
+          project,
+          customGpt,
+        });
+        const _enrichmentBudgetMs = chatLatencyPolicy.enrichmentBudgetMs();
+        const _memoryPromise = _useSemanticEnrichment
+          ? longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
+              console.warn('[ai] memory recall failed (continuing without):', e.message); return [];
+            })
+          : Promise.resolve([]);
+        const _crossChatPromise = _useSemanticEnrichment && _crossChatEnabled
+          ? _crossChatMod.recallSimilarTurns({
+              userId,
+              currentPrompt: prompt,
+              excludeChatId: canPersist ? chatId : null,
+              embedder: texts => rag.embed(texts),
+              prismaClient: prisma,
+            }).catch((e) => { console.warn('[cross-chat] recall failed (continuing without):', e?.message || e); return []; })
+          : Promise.resolve([]);
+        const _feedbackPromise = _useSemanticEnrichment
+          ? feedbackLedger.findExemplars({
+              userId,
+              request: prompt,
+              embedder: texts => rag.embed(texts),
+              k: 2,
+              onlyHelpful: true,
+              agent: 'chat',
+            }).catch((e) => { console.warn('[ai] feedback exemplars unavailable (continuing without):', e.message || e); return []; })
+          : Promise.resolve([]);
         const [_memRecalled, _crossChatTurns, _exemplars] = await Promise.all([
-          longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
-            console.warn('[ai] memory recall failed (continuing without):', e.message); return [];
+          chatLatencyPolicy.resolveWithinBudget(_memoryPromise, {
+            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'memory-recall',
           }),
-          _crossChatEnabled
-            ? _crossChatMod.recallSimilarTurns({
-                userId,
-                currentPrompt: prompt,
-                excludeChatId: canPersist ? chatId : null,
-                embedder: texts => rag.embed(texts),
-                prismaClient: prisma,
-              }).catch((e) => { console.warn('[cross-chat] recall failed (continuing without):', e?.message || e); return []; })
-            : Promise.resolve([]),
-          feedbackLedger.findExemplars({
-            userId,
-            request: prompt,
-            embedder: texts => rag.embed(texts),
-            k: 2,
-            onlyHelpful: true,
-            agent: 'chat',
-          }).catch((e) => { console.warn('[ai] feedback exemplars unavailable (continuing without):', e.message || e); return []; }),
+          chatLatencyPolicy.resolveWithinBudget(_crossChatPromise, {
+            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'cross-chat-recall',
+          }),
+          chatLatencyPolicy.resolveWithinBudget(_feedbackPromise, {
+            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'feedback-exemplars',
+          }),
         ]);
         recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
         memoryBlock = longTermMemory.buildMemoryBlock(_memRecalled);
@@ -4247,8 +4294,14 @@ router.post(
           try {
             const __effortOverride = reasoningOrchestrator.computeForEffort(req.body && req.body.reasoningEffort);
             if (__effortOverride && cognitiveDecision) {
-              cognitiveDecision.compute = __effortOverride;
-              console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+              const __defaultMediumOnTrivial = cognitiveDecision.difficulty?.bucket === 'trivial'
+                && __effortOverride.reasoningEffort === 'medium';
+              if (__defaultMediumOnTrivial) {
+                console.log('[reasoning-effort] trivial turn kept on direct mode; default Medio override skipped');
+              } else {
+                cognitiveDecision.compute = __effortOverride;
+                console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+              }
             }
           } catch (_) { /* effort override must never break the turn */ }
           try {
@@ -5548,13 +5601,14 @@ router.post(
                 prompt,
                 history: priorHistory,
                 files: filesForVision || [],
+                customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
               });
               // Tool-calling fallback ladder: 'native' (OpenAI-style
               // tool_calls), 'prompted' (tools described in the system prompt,
               // fenced-JSON calls parsed back — lets ANY model drive the
               // loop), or 'none' (prompted disabled via env → legacy gate).
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
-              if (
+              const __agenticWillRun = (
                 agenticStream.isEnabled()
                 && shouldRunAgentic
                 // Callers that want a plain LLM stream (e.g. the /code chat,
@@ -5563,12 +5617,74 @@ router.post(
                 && req.body.disableAgentic !== true
                 && __toolCallMode !== 'none'
                 && !hasImages
-              ) {
+              );
+              // U3: shadow turn-policy snapshot (observe by default). Never
+              // overrides routing/tool decisions in this unit.
+              let __turnPolicy = null;
+              try {
+                const turnPolicyService = require('../services/turn-policy');
+                const __disabledReason = !agenticStream.isEnabled()
+                  ? 'agentic_disabled'
+                  : (req.body.disableAgentic === true
+                    ? 'caller_disabled'
+                    : (__toolCallMode === 'none'
+                      ? 'tool_call_mode_none'
+                      : (hasImages
+                        ? 'images_attached'
+                        : (shouldRunAgentic ? null : 'routing_gate'))));
+                __turnPolicy = turnPolicyService.buildTurnPolicy({
+                  model: actualModel,
+                  provider: actualProvider,
+                  plan: (req.user && req.user.plan) || 'FREE',
+                  cognitiveDecision: req._cognitiveDecision || null,
+                  toolCallMode: __toolCallMode,
+                  routing: {
+                    shouldRunAgentic: __agenticWillRun,
+                    disabledReason: __agenticWillRun ? null : __disabledReason,
+                  },
+                  capabilities: {
+                    toolCallMode: __toolCallMode,
+                    supportsImages: hasImages,
+                  },
+                  tools: {
+                    hasFiles: Array.isArray(processedFiles) && processedFiles.some(
+                      (file) => file && !isImageMime(file.mimeType || file.type),
+                    ),
+                    hasCode: !!(req._cognitiveDecision
+                      && req._cognitiveDecision.difficulty
+                      && req._cognitiveDecision.difficulty.hasCode),
+                  },
+                  skills: {
+                    clearance: resolveUserSkillClearance(req.user),
+                    recommendedSkillIds: Array.isArray(semanticIntentAnalysis?.skill_plan?.selected_skills)
+                      ? semanticIntentAnalysis.skill_plan.selected_skills.map((skill) => skill?.id).filter(Boolean)
+                      : [],
+                  },
+                  reasons: [
+                    `routing:${__agenticWillRun ? 'agentic' : 'plain'}`,
+                    `toolCallMode:${__toolCallMode}`,
+                  ],
+                });
+                req._turnPolicy = __turnPolicy;
+                if (__turnPolicy && !__agenticWillRun) {
+                  try {
+                    require('../services/cognitive-metrics').recordTurnPolicy(__turnPolicy);
+                  } catch (_) { /* metrics never block */ }
+                }
+              } catch (_) { __turnPolicy = null; }
+              if (__agenticWillRun) {
                 // The agentic loop ALWAYS runs on the model the user picked —
                 // no silent substitution of a stronger model underneath. The
                 // chosen provider/model drives every step (plan → tools →
                 // finalize) in its own tool-call mode.
                 const agenticClient = createProviderClient(actualProvider);
+                // Direct Claude uses a native Anthropic adapter to drive the
+                // ReAct loop. RAG helpers still expect a real OpenAI client and
+                // may hard-code embedding/judge model ids, so keep that
+                // auxiliary dependency separate from the loop transport.
+                const agenticToolOpenAI = actualProvider === 'Anthropic'
+                  ? createProviderClient('OpenAI')
+                  : agenticClient;
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
@@ -5619,6 +5735,11 @@ router.post(
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
+                  customGptSkillPlan: {
+                    selectedSkillIds: Array.isArray(semanticIntentAnalysis?.skill_plan?.selected_skills)
+                      ? semanticIntentAnalysis.skill_plan.selected_skills.map((skill) => skill?.id).filter(Boolean)
+                      : [],
+                  },
                   // Actions execute with the CREATOR's encrypted auth secret, so
                   // only inject them when the current user IS the creator. This
                   // prevents a non-owner (incl. anyone using a PUBLIC GPT, or a
@@ -5633,6 +5754,7 @@ router.post(
                   res,
                   signal,
                   toolCallMode: __toolCallMode,
+                  turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision
                   // (intent/difficulty) lets the agentic loop hand the model a
                   // small, relevant tool subset instead of all ~37-73 tools.
@@ -5645,11 +5767,13 @@ router.post(
                   },
                   toolContext: {
                     userId,
+                    requestedOrganizationId: __requestedOrgIdForAi,
+                    activeOrganizationId: __orgIdForAi,
                     chatId: canPersist ? chatId : null,
                     userEmail: req.user?.email || null,
-                    clearance: req.user?.clearance || null,
+                    clearance: resolveUserSkillClearance(req.user),
                     prisma,
-                    openai: agenticClient,
+                    openai: agenticToolOpenAI,
                     collection: 'default',
                     fileIds: agenticFileIds,
                     // Lets media-intent treat edit phrasings ("mejora la
@@ -5688,6 +5812,15 @@ router.post(
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
                   req._agentRun = agenticResult.agentRun || null;
+                  // The live stream already contains artifact cards. Keep the
+                  // compact persistence envelope separately from the model
+                  // answer so post-processing and token accounting continue to
+                  // operate on real model text only.
+                  req._agentPersistedContent = Array.isArray(agenticResult.artifacts)
+                    && agenticResult.artifacts.length > 0
+                    && typeof agenticResult.persistedContent === 'string'
+                    ? agenticResult.persistedContent
+                    : null;
                   return agenticResult.finalAnswer;
                 }
                 // Stop button / client abort: keep the partial trace and mark
@@ -6431,6 +6564,14 @@ router.post(
             : finalContent;
         }
 
+        // Artifact-producing agent turns stream a fenced state envelope that
+        // mounts the existing preview/download cards. Persist that same compact
+        // envelope after all text/document post-processing so a chat reload
+        // cannot downgrade real deliverables to plain filenames.
+        if (typeof req._agentPersistedContent === 'string' && req._agentPersistedContent.trim()) {
+          finalContent = req._agentPersistedContent;
+        }
+
         const codexMeta = req._codexRunId
           ? { codexRunId: req._codexRunId, taskId: req._codexRunId, type: 'codex_delegated' }
           : null;
@@ -6707,12 +6848,12 @@ router.post(
 // gate blocked, the breaker tripped, and the user got a degraded
 // "service unavailable" answer instead of audio. Voice is an explicit,
 // unambiguous request — like image/video/music it gets a dedicated,
-// deterministic path that ALWAYS produces the MP3 and persists it as a
+// deterministic path that ALWAYS produces an audio file and persists it as a
 // chat artifact that the existing AgenticStepsRenderer shows as "Generation N".
-function buildSpeechAgentState({ displayText, artifact }) {
+function buildSpeechAgentState({ displayText, artifact, model }) {
   const safeText = String(displayText || '').slice(0, 200);
   return {
-    meta: { goal: safeText, model: 'ElevenLabs', tools: ['generate_speech'] },
+    meta: { goal: safeText, model: model || 'Gemini 2.5 Flash TTS', tools: ['generate_speech'] },
     steps: [
       {
         id: 'speech-1',
@@ -6733,6 +6874,14 @@ function buildSpeechAgentState({ displayText, artifact }) {
     finalText: '',
     done: true,
   };
+}
+
+function isRecoverableSpeechProviderError(error) {
+  const status = Number(error?.status || error?.statusCode || 0);
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  return [401, 402, 403, 429, 503].includes(status)
+    || /(payment|required|subscription|quota|credit|rate.?limit|temporar|unavailable)/i.test(`${code} ${message}`);
 }
 
 function buildMusicAgentState({ displayText, artifact, model }) {
@@ -6767,6 +6916,11 @@ router.post(
     body('text').isString().trim().isLength({ min: 1, max: 5000 }),
     body('voiceId').optional().isString().trim().isLength({ max: 120 }),
     body('modelId').optional().isString().trim().isLength({ max: 80 }),
+    body('model').optional().isString().trim().isLength({ max: 80 }),
+    body('language').optional().isString().trim().isLength({ max: 40 }),
+    body('accent').optional().isString().trim().isLength({ max: 40 }),
+    body('effect').optional().isString().trim().isLength({ max: 60 }),
+    body('stability').optional().isFloat({ min: 0, max: 100 }),
     body('chatId').optional({ nullable: true }).isString(),
     body('voiceSettings').optional().isObject(),
     body('regenerate').optional().isBoolean(),
@@ -6777,7 +6931,9 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    if (!elevenLabsTts.isElevenLabsConfigured()) {
+    const elevenReady = elevenLabsTts.isElevenLabsConfigured();
+    const geminiReady = geminiTts.isGeminiTtsConfigured();
+    if (!elevenReady && !geminiReady) {
       return res.status(503).json({ ok: false, error: 'El servicio de voz no está configurado.' });
     }
 
@@ -6789,26 +6945,80 @@ router.post(
     const regenerate = req.body.regenerate === true;
     const voiceId = String(req.body.voiceId || '').trim();
     const modelId = String(req.body.modelId || '').trim();
+    const selectedModel = String(req.body.model || '').trim();
+    const language = String(req.body.language || 'Spanish').trim();
+    const accent = String(req.body.accent || 'Latino').trim();
+    const effect = String(req.body.effect || 'Studio Clean').trim();
+    const stability = Number.isFinite(Number(req.body.stability)) ? Number(req.body.stability) : 100;
     const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
       ? req.body.voiceSettings
       : undefined;
+    const requestAbort = bindRequestAbort(req, res);
 
     try {
-      const result = await elevenLabsTts.generateSpeechFile({ text, voiceId, modelId, voiceSettings });
+      const wantsGemini = /gemini|mimo|minimax/i.test(selectedModel);
+      const providerOrder = wantsGemini
+        ? [geminiReady && 'gemini', elevenReady && 'elevenlabs'].filter(Boolean)
+        : [elevenReady && 'elevenlabs', geminiReady && 'gemini'].filter(Boolean);
+      let result = null;
+      let usedProvider = null;
+      let lastError = null;
+
+      for (const provider of providerOrder) {
+        try {
+          result = provider === 'gemini'
+            ? await geminiTts.generateGeminiSpeechFile({
+              text,
+              language,
+              accent,
+              effect,
+              stability,
+              signal: requestAbort.signal,
+            })
+            : await elevenLabsTts.generateSpeechFile({
+              text,
+              voiceId,
+              modelId,
+              voiceSettings,
+              signal: requestAbort.signal,
+            });
+          usedProvider = provider;
+          break;
+        } catch (providerError) {
+          lastError = providerError;
+          if (requestAbort.signal.aborted || isAbortError(providerError)) break;
+          console.warn(
+            `[ai/generate-speech] ${provider} failed (${providerError?.code || providerError?.status || 'ERR'}): ${providerError?.message || providerError}`,
+          );
+          if (!isRecoverableSpeechProviderError(providerError)) break;
+        }
+      }
+
+      if (!result) throw lastError || new Error('No speech provider is available');
+      if (requestAbort.signal.aborted) {
+        await fs.unlink(result.audioPath).catch(() => {});
+        return;
+      }
+
+      const modelLabel = usedProvider === 'gemini'
+        ? 'Gemini 2.5 Flash TTS'
+        : 'ElevenLabs';
+      const audioFormat = String(result.format || path.extname(result.filename).slice(1) || 'mp3').toLowerCase();
 
       const artifact = {
         id: `speech-${result.filename}`,
-        filename: `voz-${Date.now()}.mp3`,
+        filename: `voz-${Date.now()}.${audioFormat}`,
         mime: result.mime,
-        format: 'mp3',
+        format: audioFormat,
         kind: 'speech',
         category: 'audio',
+        model: modelLabel,
         sizeBytes: result.sizeBytes,
         downloadUrl: result.audioUrl,
         prompt: text.slice(0, 280),
       };
 
-      const state = buildSpeechAgentState({ displayText: text, artifact });
+      const state = buildSpeechAgentState({ displayText: text, artifact, model: modelLabel });
       const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
 
       // Persist the turn so it survives a reload (mirrors how the agentic
@@ -6822,7 +7032,7 @@ router.post(
             text,
             content,
             text.length,
-            'elevenlabs-tts',
+            usedProvider === 'gemini' ? 'gemini-tts' : 'elevenlabs-tts',
             [],
             [],
             regenerate,
@@ -6842,18 +7052,26 @@ router.post(
         state,
         assistantMessageId,
         chatId,
+        provider: usedProvider,
+        model: modelLabel,
         voiceId: result.voiceId,
         modelId: result.modelId,
       });
     } catch (error) {
+      if (requestAbort.signal.aborted || isAbortError(error)) {
+        console.info('[ai/generate-speech] cancelled by client');
+        return;
+      }
       console.error('[ai/generate-speech] error:', error?.message || error);
       const status = error?.code === 'TEXT_REQUIRED' ? 400
-        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
+        : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED') ? 503
           : 502;
       return res.status(status).json({
         ok: false,
         error: 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
       });
+    } finally {
+      requestAbort.cleanup();
     }
   }
 );
@@ -6887,6 +7105,7 @@ router.post(
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
     const selectedModel = String(req.body.model || '').trim();
     const wantsLyria = /lyria/i.test(selectedModel);
+    const requestAbort = bindRequestAbort(req, res);
 
     // Fold the composer's visible settings into the prompt so Style / Mood /
     // Effect / Prompt-influence actually shape the track (displayed prompt = text).
@@ -6915,12 +7134,13 @@ router.post(
     for (const provider of order) {
       try {
         result = provider === 'lyria'
-          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds })
-          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds });
+          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal })
+          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
         usedProvider = provider;
         break;
       } catch (err) {
         lastErr = err;
+        if (requestAbort.signal.aborted || isAbortError(err)) break;
         console.warn(`[ai/generate-music] ${provider} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
         // Only fall through on credit/quota/rate exhaustion; hard errors stop here.
         if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED') break;
@@ -6928,6 +7148,11 @@ router.post(
     }
 
     if (!result) {
+      if (requestAbort.signal.aborted || isAbortError(lastErr)) {
+        console.info('[ai/generate-music] cancelled by client');
+        requestAbort.cleanup();
+        return;
+      }
       const code = lastErr?.code;
       const status = code === 'PROMPT_REQUIRED' ? 400
         : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED') ? 503
@@ -6942,6 +7167,12 @@ router.post(
             ? 'El servicio de música no está configurado.'
             : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
+    }
+
+    if (requestAbort.signal.aborted) {
+      await fs.unlink(result.audioPath).catch(() => {});
+      requestAbort.cleanup();
+      return;
     }
 
     const modelLabel = usedProvider === 'lyria' ? 'Lyria 3 Pro' : 'ElevenLabs Music';
@@ -6980,7 +7211,7 @@ router.post(
       }
     }
 
-    return res.json({
+    const response = res.json({
       ok: true,
       provider: usedProvider,
       model: modelLabel,
@@ -6991,6 +7222,8 @@ router.post(
       chatId,
       durationSeconds: result.durationSeconds,
     });
+    requestAbort.cleanup();
+    return response;
   }
 );
 

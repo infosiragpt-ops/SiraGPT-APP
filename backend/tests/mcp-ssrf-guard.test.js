@@ -2,7 +2,7 @@
 
 // Connect-time SSRF guard for user-registered MCP servers. Verifies that
 // assertMcpHostSafe re-resolves the host and blocks private/reserved IPs
-// (DNS-rebinding defence) while honouring the opt-out + kill-switch.
+// (DNS-rebinding defence). Legacy bypass flags must remain inert.
 //
 // NOTE: requires mcp-client (which pulls zod), so this runs under CI /
 // the built image, not the bare worktree. Behaviour is also verified
@@ -32,18 +32,24 @@ test('blocks hosts that resolve to private / reserved IPs (DNS rebinding)', asyn
   await assert.rejects(() => mcp.assertMcpHostSafe('rebind.example', { lookup: lookupTo('192.168.1.10') }));
 });
 
-test('SIRAGPT_MCP_ALLOW_PRIVATE opt-out skips the guard (LAN servers)', async () => {
+test('SIRAGPT_MCP_ALLOW_PRIVATE cannot bypass the private-address guard', async () => {
   process.env.SIRAGPT_MCP_ALLOW_PRIVATE = '1';
-  await assert.doesNotReject(() => mcp.assertMcpHostSafe('lan.internal', { lookup: lookupTo('10.0.0.5') }));
+  await assert.rejects(
+    () => mcp.assertMcpHostSafe('lan.internal', { lookup: lookupTo('10.0.0.5') }),
+    /private|reserved/i,
+  );
 });
 
-test('SIRAGPT_MCP_SSRF_GUARD=0 kill-switch disables the guard', async () => {
+test('SIRAGPT_MCP_SSRF_GUARD=0 cannot disable the rebinding guard', async () => {
   process.env.SIRAGPT_MCP_SSRF_GUARD = '0';
-  await assert.doesNotReject(() => mcp.assertMcpHostSafe('rebind.example', { lookup: lookupTo('169.254.169.254') }));
+  await assert.rejects(
+    () => mcp.assertMcpHostSafe('rebind.example', { lookup: lookupTo('169.254.169.254') }),
+    /private|metadata|reserved/i,
+  );
 });
 
-test('mcpAllowPrivate reflects the env flag', () => {
+test('mcpAllowPrivate remains disabled even when the legacy flag is set', () => {
   assert.equal(mcp.mcpAllowPrivate(), false);
   process.env.SIRAGPT_MCP_ALLOW_PRIVATE = 'true';
-  assert.equal(mcp.mcpAllowPrivate(), true);
+  assert.equal(mcp.mcpAllowPrivate(), false);
 });

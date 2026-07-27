@@ -56,6 +56,7 @@ import {
   codeWorkspaceKey,
   codexWorkspaceSessionKey,
   createCodeChatSession as createCodeChatSessionRecord,
+  createCodeChatSessionId,
   ensureDefaultSession,
   getActiveSessionId,
   listSessionsForWorkspace,
@@ -65,6 +66,7 @@ import {
   updateCodeChatSessionAgent,
 } from "./code-chat-sessions"
 import type { AgentState } from "./code-agent/types"
+import { readWorkspaceCodexProject } from "./codex/codex-project-link"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
 /** Fired (with detail {id}) when a workspace is deleted elsewhere (e.g. the app
@@ -81,6 +83,16 @@ export const CODE_OPEN_TOOL_LAUNCHER_EVENT = "siragpt:code-open-tool-launcher"
 // { runId: string | null } — null means no live host run (fall back to the
 // client-side pseudo-shell).
 export const CODE_RUNNER_ACTIVE_EVENT = "siragpt:code-runner-active"
+export const CODE_PREVIEW_STATE_EVENT = "siragpt:code-preview-state"
+
+export type CodePreviewState = {
+  phase: "idle" | "starting" | "ready" | "error" | "stuck"
+  src: string
+  staticHtml: string
+  note: string
+  kind: string
+  entry: string | null
+}
 
 // The event is fire-and-forget, so a tool that mounts AFTER the run started
 // (e.g. opening the Shell once the preview is already live) would miss it. Keep
@@ -103,8 +115,14 @@ export function getActiveHostRunId(): string | null {
 // stores the resolved codex project here; PreviewPane checks it before the
 // host-runner path. Same late-consumer singleton pattern as the host run id.
 let _activeCodexProjectId: string | null = null
+export const CODE_ACTIVE_CODEX_PROJECT_EVENT = "siragpt:active-codex-project"
 export function setActiveCodexProject(projectId: string | null) {
   _activeCodexProjectId = projectId
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_CODEX_PROJECT_EVENT, { detail: { projectId } }),
+    )
+  }
 }
 export function getActiveCodexProject(): string | null {
   return _activeCodexProjectId
@@ -211,7 +229,7 @@ export type CodeWorkspaceContextValue = {
   codeChatSessions: CodeChatSession[]
   activeCodeChatSessionId: string | null
   activeCodeChatSession: CodeChatSession | null
-  createCodeChatSession: () => string
+  createCodeChatSession: (opts?: { title?: string }) => string
   setActiveCodeChatSession: (sessionId: string) => void
   patchCodeChatSessionTurns: (
     sessionId: string,
@@ -322,7 +340,9 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   const workspaceSessionKey = codexWorkspaceSessionKey(activeFolder?.id)
 
   React.useEffect(() => {
-    setChatSessionStore((prev) => ensureDefaultSession(workspaceSessionKey, prev))
+    // ensureDefaultSession persists its result. Compute it outside React's
+    // updater so that storage/event side effects cannot re-enter a render.
+    setChatSessionStore(ensureDefaultSession(workspaceSessionKey, readCodeChatStore()))
   }, [workspaceSessionKey])
 
   React.useEffect(() => {
@@ -624,6 +644,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
           setActiveFolder({ id: projectId, name: target.name })
         }
         setWorkspaceSource({ kind: "browser", name: target.name, linked: false })
+        setActiveCodexProject(readWorkspaceCodexProject(projectId))
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
         }
@@ -645,6 +666,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         kind: "local-folder",
         fileCount: Object.keys(persisted.files).length,
       })
+      setActiveCodexProject(readWorkspaceCodexProject(target.id))
       if (!linked && Object.keys(persisted.files).length === 0) {
         toast.info("Vuelve a enlazar la carpeta con + si quieres sincronizar con el disco.")
       }
@@ -810,12 +832,14 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     [chatSessionStore],
   )
 
-  const createCodeChatSession = React.useCallback(() => {
-    const { store, session } = createCodeChatSessionRecord(workspaceSessionKey, undefined, chatSessionStore)
-    setChatSessionStore(store)
+  const createCodeChatSession = React.useCallback((opts?: { title?: string }) => {
+    const sessionId = createCodeChatSessionId()
+    setChatSessionStore((prev) =>
+      createCodeChatSessionRecord(workspaceSessionKey, { ...opts, id: sessionId }, prev).store,
+    )
     focusChat()
-    return session.id
-  }, [chatSessionStore, focusChat, workspaceSessionKey])
+    return sessionId
+  }, [focusChat, workspaceSessionKey])
 
   const setActiveCodeChatSession = React.useCallback(
     (sessionId: string) => {

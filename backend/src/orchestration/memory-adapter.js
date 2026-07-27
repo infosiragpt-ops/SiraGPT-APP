@@ -411,8 +411,9 @@ function createMemoryAdapter(opts = {}) {
       if (!store) return { pruned: 0 };
 
       try {
-        const { PrismaClient } = require('@prisma/client');
-        const prisma = new PrismaClient();
+        // Keep the optional path lazy, but reuse the configured process-wide
+        // client instead of opening and disconnecting an independent pool.
+        const prisma = require('../config/database');
         const cutoff = new Date(Date.now() - olderThanDays * 86400_000);
         const result = await prisma.$executeRawUnsafe(
           `DELETE FROM user_memories
@@ -423,7 +424,6 @@ function createMemoryAdapter(opts = {}) {
           userId,
           cutoff,
         );
-        await prisma.$disconnect();
         return { pruned: Number(result || 0) };
       } catch (_) {
         return { pruned: 0, error: _.message };

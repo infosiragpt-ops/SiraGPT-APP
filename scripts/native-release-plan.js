@@ -50,7 +50,12 @@ const platforms = {
     artifact: "signed Google Play upload .aab",
     releaseGroups: ["android"],
     storeGroups: ["googleplay"],
-    signedWorkflowInputs: {
+    artifactWorkflowInputs: {
+      platform: "android",
+      create_github_release: "true",
+      upload_android_google_play: "false",
+    },
+    storeWorkflowInputs: {
       platform: "android",
       create_github_release: "true",
       upload_android_google_play: "true",
@@ -65,7 +70,12 @@ const platforms = {
     artifact: "signed App Store .ipa",
     releaseGroups: ["ios"],
     storeGroups: ["appstore"],
-    signedWorkflowInputs: {
+    artifactWorkflowInputs: {
+      platform: "ios",
+      create_github_release: "true",
+      upload_ios_app_store_connect: "false",
+    },
+    storeWorkflowInputs: {
       platform: "ios",
       create_github_release: "true",
       upload_ios_app_store_connect: "true",
@@ -78,22 +88,32 @@ const platforms = {
     artifact: "signed and notarized .dmg/.zip",
     releaseGroups: ["macos"],
     storeGroups: [],
-    signedWorkflowInputs: {
+    artifactWorkflowInputs: {
       platform: "macos",
       create_github_release: "true",
     },
+    storeWorkflowInputs: null,
   },
   windows: {
     label: "Windows",
     metadataKey: "windows",
     workflowPlatform: "windows",
     artifact: "signed NSIS installer and portable .exe",
+    storePackageArtifact: "unsigned AppX with exact Partner Center identity; Microsoft Store signs it during certification",
+    storePackageWorkflow: "Native desktop builds",
+    storePackageVariables: [
+      "WINDOWS_STORE_IDENTITY_NAME",
+      "WINDOWS_STORE_PUBLISHER",
+      "WINDOWS_STORE_PUBLISHER_DISPLAY_NAME",
+      "WINDOWS_STORE_APPLICATION_ID",
+    ],
     releaseGroups: ["windows"],
     storeGroups: [],
-    signedWorkflowInputs: {
+    artifactWorkflowInputs: {
       platform: "windows",
       create_github_release: "true",
     },
+    storeWorkflowInputs: null,
   },
 }
 
@@ -275,10 +295,16 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
       storeUploadSecrets: secretStatus(storeSecrets, secrets.names, canAudit),
       allSecrets: secretStatus(allSecrets, secrets.names, canAudit),
       accountActions: metadataPlatform.requiredAccountActions || [],
-      signedWorkflowInputs: platform.signedWorkflowInputs,
+      artifactWorkflowInputs: platform.artifactWorkflowInputs,
+      storeWorkflowInputs: platform.storeWorkflowInputs,
+      storePackageArtifact: platform.storePackageArtifact || null,
+      storePackageWorkflow: platform.storePackageWorkflow || null,
+      storePackageVariables: platform.storePackageVariables || [],
     }
   })
 
+  const missingSigningSecrets = unique(platformPlans.flatMap((platform) => platform.releaseSecrets.missing))
+  const missingStoreUploadSecrets = unique(platformPlans.flatMap((platform) => platform.storeUploadSecrets.missing))
   const missingSecrets = unique(platformPlans.flatMap((platform) => platform.allSecrets.missing))
   const ready = canAudit && missingSecrets.length === 0
   const readyPlatforms = platformPlans
@@ -287,14 +313,39 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
   const blockedPlatforms = platformPlans
     .filter((platform) => !platform.allSecrets.ready)
     .map((platform) => platform.key)
+  const signedPackageReadyPlatforms = platformPlans
+    .filter((platform) => platform.releaseSecrets.ready)
+    .map((platform) => platform.key)
+  const signedPackageBlockedPlatforms = platformPlans
+    .filter((platform) => !platform.releaseSecrets.ready)
+    .map((platform) => platform.key)
+  const storePlatforms = platformPlans.filter((platform) => platform.storeGroups.length > 0)
+  const storeUploadReadyPlatforms = storePlatforms
+    .filter((platform) => platform.allSecrets.ready)
+    .map((platform) => platform.key)
+  const storeUploadBlockedPlatforms = storePlatforms
+    .filter((platform) => !platform.allSecrets.ready)
+    .map((platform) => platform.key)
+  const storeUploadNotApplicablePlatforms = platformPlans
+    .filter((platform) => platform.storeGroups.length === 0)
+    .map((platform) => platform.key)
   const statusReason = !canAudit
     ? "secret-audit-unavailable"
     : ready
-      ? "all-native-signing-secrets-configured"
+      ? "all-selected-signing-and-store-upload-secrets-configured"
       : "missing-native-signing-or-store-upload-secrets"
-  const signedReleaseStatus = ready
+  const signedReleaseStatus = signedPackageReadyPlatforms.length === platformPlans.length
     ? "ready-to-run"
-    : "blocked-missing-signing-secrets"
+    : signedPackageReadyPlatforms.length > 0
+      ? "partially-ready"
+      : "blocked-missing-signing-secrets"
+  const storeUploadStatus = storePlatforms.length === 0
+    ? "not-applicable"
+    : storeUploadReadyPlatforms.length === storePlatforms.length
+      ? "ready-to-run-draft-upload"
+      : storeUploadReadyPlatforms.length > 0
+        ? "partially-ready"
+        : "blocked-missing-store-upload-secrets"
 
   return {
     generatedAt,
@@ -305,18 +356,26 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
       status: ready ? "ready-to-run-signed-release" : "owner-action-required",
       readyPlatforms,
       blockedPlatforms,
+      signedPackageReadyPlatforms,
+      signedPackageBlockedPlatforms,
+      storeUploadReadyPlatforms,
+      storeUploadBlockedPlatforms,
+      storeUploadNotApplicablePlatforms,
       workflow: "Native signed release packages",
       firstSafeUploadMode: "create GitHub Release plus draft/internal store upload only after owner confirmation",
     },
     actionsVsSigningDiagnosis: {
       publicRepoActionsGate: "separate-from-native-signing",
       signedReleaseStatus,
-      message: ready
-        ? "GitHub Actions can run the signed release workflow when the owner approves the selected platform and release target."
-        : "GitHub Actions can run CI and QA workflows in the public repository, but signed native release package jobs still require the missing GitHub Actions secret names below.",
-      nextOwnerAction: ready
-        ? "Run Native signed release packages with the selected platform and upload flags."
-        : "Configure the missing native signing and store-upload secret names as GitHub Actions secrets from a trusted machine.",
+      storeUploadStatus,
+      message: signedPackageReadyPlatforms.length > 0
+        ? `Signed package generation is ready for ${signedPackageReadyPlatforms.join(", ")}. Store upload remains a separate gate and must not block artifact-only releases.`
+        : "GitHub Actions can run CI and QA workflows in the public repository, but signed native package jobs still require the missing signing secret names below.",
+      nextOwnerAction: missingSigningSecrets.length > 0
+        ? "Configure the missing platform-signing secret names from a trusted machine; store-upload credentials can be added independently."
+        : missingStoreUploadSecrets.length > 0
+          ? "Signed packages can be generated now. Configure store-upload credentials only after the owner completes the vendor portal prerequisites."
+          : "Run Native signed release packages with the selected platform; enable store upload only for a verified draft/internal target.",
     },
     githubSecretAudit: {
       source: secrets.source,
@@ -332,6 +391,8 @@ function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
       bundleIds: metadata.app?.bundleIds,
     },
     platformPlans,
+    missingSigningSecrets,
+    missingStoreUploadSecrets,
     missingSecrets,
   }
 }
@@ -363,7 +424,8 @@ function renderMarkdown(plan) {
   lines.push("## Actions vs Signed Release Diagnosis")
   lines.push("")
   lines.push("- Public repository Actions and native signing are separate gates.")
-  lines.push(`- Signed release status: \`${plan.actionsVsSigningDiagnosis.signedReleaseStatus}\``)
+  lines.push(`- Signed package status: \`${plan.actionsVsSigningDiagnosis.signedReleaseStatus}\``)
+  lines.push(`- Store upload status: \`${plan.actionsVsSigningDiagnosis.storeUploadStatus}\``)
   lines.push(`- Diagnosis: ${plan.actionsVsSigningDiagnosis.message}`)
   lines.push(`- Next owner action: ${plan.actionsVsSigningDiagnosis.nextOwnerAction}`)
   lines.push("")
@@ -371,8 +433,13 @@ function renderMarkdown(plan) {
   lines.push("")
   lines.push(`- Gate status: \`${plan.releaseGateSummary.status}\``)
   lines.push(`- Workflow: \`${plan.releaseGateSummary.workflow}\``)
-  lines.push(`- Ready platforms: ${plan.releaseGateSummary.readyPlatforms.length ? plan.releaseGateSummary.readyPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
-  lines.push(`- Blocked platforms: ${plan.releaseGateSummary.blockedPlatforms.length ? plan.releaseGateSummary.blockedPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- End-to-end ready: ${plan.releaseGateSummary.readyPlatforms.length ? plan.releaseGateSummary.readyPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- End-to-end blocked: ${plan.releaseGateSummary.blockedPlatforms.length ? plan.releaseGateSummary.blockedPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- Signed-package ready: ${plan.releaseGateSummary.signedPackageReadyPlatforms.length ? plan.releaseGateSummary.signedPackageReadyPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- Signed-package blocked: ${plan.releaseGateSummary.signedPackageBlockedPlatforms.length ? plan.releaseGateSummary.signedPackageBlockedPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- Store-upload ready: ${plan.releaseGateSummary.storeUploadReadyPlatforms.length ? plan.releaseGateSummary.storeUploadReadyPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- Store-upload blocked: ${plan.releaseGateSummary.storeUploadBlockedPlatforms.length ? plan.releaseGateSummary.storeUploadBlockedPlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
+  lines.push(`- Store upload not applicable: ${plan.releaseGateSummary.storeUploadNotApplicablePlatforms.length ? plan.releaseGateSummary.storeUploadNotApplicablePlatforms.map((platform) => `\`${platform}\``).join(", ") : "none"}`)
   lines.push(`- First safe upload mode: ${plan.releaseGateSummary.firstSafeUploadMode}`)
   lines.push("")
   lines.push("## Native Identity")
@@ -388,11 +455,20 @@ function renderMarkdown(plan) {
   lines.push("")
   lines.push("## Platform Matrix")
   lines.push("")
-  lines.push("| Platform | Signed artifact | Workflow input | GitHub secret status |")
-  lines.push("| --- | --- | --- | --- |")
+  lines.push("| Platform | Signed artifact | Workflow input | Package signing | Store upload |")
+  lines.push("| --- | --- | --- | --- | --- |")
   for (const platform of plan.platformPlans) {
-    lines.push(`| ${platform.label} | ${platform.artifact} | \`${platform.workflowPlatform}\` | \`${platform.allSecrets.status}\` |`)
+    const storeStatus = platform.storeGroups.length ? platform.allSecrets.status : "not-applicable"
+    lines.push(`| ${platform.label} | ${platform.artifact} | \`${platform.workflowPlatform}\` | \`${platform.releaseSecrets.status}\` | \`${storeStatus}\` |`)
   }
+  lines.push("")
+  lines.push("## Missing Package-Signing Secrets")
+  lines.push("")
+  lines.push(formatList(plan.missingSigningSecrets.map((secret) => `\`${secret}\``)))
+  lines.push("")
+  lines.push("## Missing Store-Upload Secrets")
+  lines.push("")
+  lines.push(formatList(plan.missingStoreUploadSecrets.map((secret) => `\`${secret}\``)))
   lines.push("")
   lines.push("## Missing GitHub Actions Secrets")
   lines.push("")
@@ -419,10 +495,23 @@ function renderMarkdown(plan) {
     lines.push(`- Workflow input: \`${platform.workflowPlatform}\``)
     lines.push(`- Release secret groups: ${platform.releaseGroups.map((group) => `\`${group}\``).join(", ") || "none"}`)
     lines.push(`- Store upload secret groups: ${platform.storeGroups.map((group) => `\`${group}\``).join(", ") || "none"}`)
-    lines.push(`- Missing secrets: ${platform.allSecrets.missing.length ? platform.allSecrets.missing.map((secret) => `\`${secret}\``).join(", ") : "none"}`)
-    lines.push("- First signed workflow inputs:")
-    for (const [name, value] of Object.entries(platform.signedWorkflowInputs)) {
+    lines.push(`- Missing package-signing secrets: ${platform.releaseSecrets.missing.length ? platform.releaseSecrets.missing.map((secret) => `\`${secret}\``).join(", ") : "none"}`)
+    lines.push(`- Missing store-upload secrets: ${platform.storeUploadSecrets.missing.length ? platform.storeUploadSecrets.missing.map((secret) => `\`${secret}\``).join(", ") : "none"}`)
+    lines.push("- Artifact-only workflow inputs:")
+    for (const [name, value] of Object.entries(platform.artifactWorkflowInputs)) {
       lines.push(`  - \`${name}\`: \`${value}\``)
+    }
+    if (platform.storeWorkflowInputs) {
+      lines.push("- Draft/internal store-upload inputs (only after owner verification):")
+      for (const [name, value] of Object.entries(platform.storeWorkflowInputs)) {
+        lines.push(`  - \`${name}\`: \`${value}\``)
+      }
+    }
+    if (platform.storePackageArtifact) {
+      lines.push(`- Alternative Store package: ${platform.storePackageArtifact}`)
+      lines.push(`- Store package workflow: \`${platform.storePackageWorkflow}\``)
+      lines.push(`- Required non-secret Partner Center variables: ${platform.storePackageVariables.map((name) => `\`${name}\``).join(", ")}`)
+      lines.push("- Microsoft Store AppX builds do not require the Windows EXE signing certificate; exact reserved identity values remain an owner/account gate.")
     }
     lines.push("")
     lines.push("Account/store actions:")
@@ -438,7 +527,7 @@ function renderMarkdown(plan) {
   lines.push("npm run native:readiness:all")
   lines.push("```")
   lines.push("")
-  lines.push("When all required secrets are configured, run GitHub Actions -> Native signed release packages and choose the matching platform.")
+  lines.push("Run artifact-only releases as soon as that platform's signing group is ready. Enable store upload only after the corresponding vendor portal and upload secret group are verified.")
   lines.push("")
   return `${lines.join("\n")}\n`
 }

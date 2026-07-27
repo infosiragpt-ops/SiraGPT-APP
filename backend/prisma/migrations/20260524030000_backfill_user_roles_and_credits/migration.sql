@@ -27,6 +27,9 @@
 -- pass is fine and much simpler to reason about.
 
 -- ── 1. Global role assignment per user ─────────────────────────────
+-- Prefer users.isSuperAdmin when present; fall back to users.isAdmin
+-- for schemas that never received the later superadmin column (U0
+-- empty-DB migrate deploy path).
 INSERT INTO "user_roles" ("id", "userId", "roleId", "scope", "scopeId", "assignedAt")
 SELECT
   'ur_g_' || substr(md5(u.id), 1, 22),
@@ -36,7 +39,20 @@ SELECT
   NULL,
   CURRENT_TIMESTAMP
 FROM "users" u
-JOIN "roles" r ON r.code = CASE WHEN u."isSuperAdmin" THEN 'SUPERADMIN' ELSE 'USER' END
+JOIN "roles" r ON r.code = CASE
+  WHEN COALESCE(
+    CASE
+      WHEN EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'isSuperAdmin'
+      ) THEN (to_jsonb(u)->>'isSuperAdmin')::boolean
+      ELSE NULL
+    END,
+    u."isAdmin",
+    FALSE
+  ) THEN 'SUPERADMIN'
+  ELSE 'USER'
+END
 WHERE NOT EXISTS (
   SELECT 1 FROM "user_roles" ur
   WHERE ur."userId" = u.id

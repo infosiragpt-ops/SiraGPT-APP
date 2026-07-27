@@ -261,6 +261,25 @@ describe('INTERNAL.combinedScore', () => {
     // rerank=1, w.rerank=2 → 2; other weights zero so no contribution.
     assert.equal(s, 2);
   });
+
+  it('does not let an LLM score or citations rescue an off-topic paper', () => {
+    const topical = INTERNAL.combinedScore({
+      retrievalScore: 0.95,
+      qualityScore: 0.82,
+      providerRank: 1,
+      citationCount: 5,
+      openAccess: true,
+    }, 4, w);
+    const offTopic = INTERNAL.combinedScore({
+      retrievalScore: 0.1,
+      qualityScore: 0.2,
+      providerRank: 0,
+      citationCount: 10000,
+      openAccess: true,
+    }, 10, w);
+
+    assert.ok(topical > offTopic, `topical=${topical} offTopic=${offTopic}`);
+  });
 });
 
 // ── rerankResults ──────────────────────────────────────────────
@@ -337,11 +356,11 @@ describe('rerankResults · LLM path', () => {
     assert.equal(out.results.length, 15);
   });
 
-  it('malformed JSON in one batch leaves those items un-scored (still sorted)', async () => {
+  it('malformed JSON leaves items heuristically sorted and reports reranked:false', async () => {
     const callLLM = async () => ({ content: 'not json' });
     const results = [{ title: 'a' }, { title: 'b' }];
     const out = await rerankResults({ query: 'q', results, callLLM });
-    assert.equal(out.reranked, true);
+    assert.equal(out.reranked, false);
     // No rerankScore on either.
     for (const r of out.results) {
       assert.equal(r.rerankScore, undefined);

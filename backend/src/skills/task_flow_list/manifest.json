@@ -1,0 +1,21 @@
+{
+  "id": "task_flow_list",
+  "name": "List durable task flows",
+  "version": "1.0.0",
+  "description": "List the current user's durable background flows with compact status, revision, step, and child-task counts.",
+  "capabilities": ["agent:read"],
+  "timeoutMs": 5000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum flows to return. Default 25." },
+      "status": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["running", "waiting", "blocked", "cancel_requested", "completed", "failed", "cancelled"] },
+        "maxItems": 7,
+        "description": "Optional status filter."
+      }
+    },
+    "additionalProperties": false
+  }
+}

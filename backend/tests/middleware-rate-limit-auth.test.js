@@ -52,16 +52,29 @@ test('exports makeAuthRateLimit + internal helpers', () => {
   assert.equal(typeof _normalizeResetAt, 'function');
 });
 
-test('_pickIp prefers req.ip, then X-Forwarded-For, then socket remote address', () => {
+test('_pickIp uses Express req.ip then socket address and never raw X-Forwarded-For', () => {
   assert.equal(_pickIp({ ip: '1.2.3.4' }), '1.2.3.4');
-  assert.equal(_pickIp({ headers: { 'x-forwarded-for': '5.6.7.8, 9.9.9.9' } }), '5.6.7.8');
-  assert.equal(_pickIp({ connection: { remoteAddress: '10.0.0.1' } }), '10.0.0.1');
+  assert.equal(
+    _pickIp({
+      headers: { 'x-forwarded-for': '5.6.7.8, 9.9.9.9' },
+      socket: { remoteAddress: '10.0.0.2' },
+    }),
+    '10.0.0.2',
+  );
+  assert.equal(_pickIp({ connection: { remoteAddress: '10.0.0.1' } }), 'unknown');
   assert.equal(_pickIp({}), 'unknown');
 });
 
-test('_pickIp ignores unsafe header values', () => {
-  assert.equal(_pickIp({ headers: { 'x-forwarded-for': '1.2.3.4\r\nx: y' } }), 'unknown');
-  assert.equal(_pickIp({ ip: ' '.repeat(200), connection: { remoteAddress: '10.0.0.2' } }), '10.0.0.2');
+test('_pickIp ignores forwarded headers and unsafe direct values', () => {
+  assert.equal(_pickIp({ headers: { 'x-forwarded-for': '1.2.3.4' } }), 'unknown');
+  assert.equal(
+    _pickIp({
+      ip: ' '.repeat(200),
+      socket: { remoteAddress: '10.0.0.2' },
+      connection: { remoteAddress: '198.51.100.9' },
+    }),
+    '10.0.0.2',
+  );
 });
 
 test('_pickEmail lowercases, trims, and caps at 254 chars', () => {
@@ -166,18 +179,115 @@ test('middleware blocks with 429 and proper headers when consume denies', async 
   assert.equal(captured.headers['X-Content-Type-Options'], 'nosniff');
 });
 
-test('middleware fails open when consume throws (Redis outage)', async () => {
+test('middleware keeps the explicit nonproduction fail-open policy on store errors', async () => {
   consumeStub = async () => { throw new Error('redis down'); };
-  const mw = makeAuthRateLimit({ name: 'login', limit: 5, windowMs: 60_000 });
+  const mw = makeAuthRateLimit({
+    name: 'login',
+    limit: 5,
+    windowMs: 60_000,
+    env: {
+      NODE_ENV: 'test',
+      RATE_LIMIT_SENSITIVE_POLICY: 'fail-open',
+      REDIS_URL: 'redis://mock',
+    },
+  });
   const req = { ip: '1.1.1.1' };
   const { res, captured } = makeRes();
   const { next, calls } = makeNext();
 
   await mw(req, res, next);
 
-  // Auth must never be bricked by a misbehaving limiter — fail open.
   assert.equal(calls.length, 1);
   assert.equal(captured.statusCode, 200);
+});
+
+test('middleware fails closed with a no-store 503 when the production distributed store is unavailable', async () => {
+  let consumeOptions;
+  consumeStub = async (_key, _limit, _windowMs, opts) => {
+    consumeOptions = opts;
+    throw new Error('redis://user:secret@redis.internal unavailable');
+  };
+  const env = {
+    NODE_ENV: 'production',
+    REDIS_URL: 'redis://user:secret@redis.internal:6379',
+  };
+  const mw = makeAuthRateLimit({
+    name: 'login',
+    limit: 5,
+    windowMs: 60_000,
+    env,
+  });
+  const req = { ip: '1.1.1.1', requestId: 'req_store_down_1' };
+  const { res, captured } = makeRes();
+  const { next, calls } = makeNext();
+
+  await mw(req, res, next);
+
+  assert.equal(calls.length, 0);
+  assert.equal(consumeOptions.requireDistributed, true);
+  assert.equal(consumeOptions.env, env);
+  assert.equal(captured.statusCode, 503);
+  assert.equal(captured.body.code, 'RATE_LIMIT_STORE_UNAVAILABLE');
+  assert.equal(captured.body.requestId, 'req_store_down_1');
+  assert.equal(captured.headers['Cache-Control'], 'no-store');
+  assert.equal(captured.headers['X-Content-Type-Options'], 'nosniff');
+  assert.equal(captured.headers['Retry-After'], '5');
+  assert.doesNotMatch(JSON.stringify(captured.body), /user|secret|redis\.internal/i);
+});
+
+test('middleware uses the active breaker Retry-After in literal production', async () => {
+  consumeStub = async () => {
+    const error = new Error('private store detail');
+    error.code = 'RATE_LIMIT_STORE_UNAVAILABLE';
+    error.retryAfterSeconds = 19;
+    throw error;
+  };
+  const mw = makeAuthRateLimit({
+    name: 'login-breaker',
+    limit: 5,
+    windowMs: 60_000,
+    env: {
+      NODE_ENV: 'production',
+      REDIS_URL: 'redis://mock',
+      RATE_LIMIT_STORE_RETRY_AFTER_SECONDS: '5',
+    },
+  });
+  const { res, captured } = makeRes();
+  const { next, calls } = makeNext();
+
+  await mw({ ip: '1.1.1.1' }, res, next);
+
+  assert.equal(calls.length, 0);
+  assert.equal(captured.statusCode, 503);
+  assert.equal(captured.headers['Retry-After'], '19');
+  assert.equal(captured.body.retryAfterSec, 19);
+});
+
+test('middleware keeps explicit test memory mode usable without requiring Redis', async () => {
+  let consumeOptions;
+  consumeStub = async (_key, _limit, _windowMs, opts) => {
+    consumeOptions = opts;
+    return { allowed: true, remaining: 4, resetAt: new Date(Date.now() + 60_000) };
+  };
+  const env = {
+    NODE_ENV: 'test',
+    RATE_LIMIT_STORE: 'memory',
+    RATE_LIMIT_SENSITIVE_POLICY: 'memory',
+  };
+  const mw = makeAuthRateLimit({
+    name: 'login',
+    limit: 5,
+    windowMs: 60_000,
+    env,
+  });
+  const { res } = makeRes();
+  const { next, calls } = makeNext();
+
+  await mw({ ip: '127.0.0.1' }, res, next);
+
+  assert.equal(calls.length, 1);
+  assert.equal(consumeOptions.requireDistributed, false);
+  assert.equal(consumeOptions.env.RATE_LIMIT_STORE, 'memory');
 });
 
 test('middleware uses ip+email key composition when keyBy is set', async () => {

@@ -11,6 +11,9 @@ const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const {
+  findSessionByPresentedToken,
+} = require('../services/auth/session-token-persistence');
 
 const router = express.Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -168,8 +171,7 @@ async function resolveUserFromBearerOrPreviewToken(req) {
     return null;
   }
 
-  const session = await prisma.session.findUnique({
-    where: { token },
+  const session = await findSessionByPresentedToken(prisma, token, {
     include: { user: true },
   });
 

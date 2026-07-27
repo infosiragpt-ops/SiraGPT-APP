@@ -88,8 +88,9 @@ test('PROVIDERS list covers expected vendors', () => {
   }
 });
 
-test('createHealthSystem registers llm probes when env keys present', () => {
+test('createHealthSystem registers llm probes when the feature gate and keys are present', () => {
   const env = {
+    HEALTH_PROVIDER_PROBES_ENABLED: 'true',
     ANTHROPIC_API_KEY: 'sk-test',
     OPENAI_API_KEY: 'sk-openai',
   };

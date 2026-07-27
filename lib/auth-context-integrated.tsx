@@ -20,14 +20,25 @@ interface User {
   updatedAt: string
 }
 
+export type AuthSessionStatus = "loading" | "authenticated" | "unauthenticated" | "error"
+
+export type SessionHydrationResult =
+  | { status: "authenticated"; user: User }
+  | { status: "unauthenticated" }
+  | { status: "error"; error: unknown }
+  | { status: "cancelled" }
+
 interface AuthContextType {
   user: User | null
   login: (email: string, password: string) => Promise<boolean>
   register: (name: string, email: string, password: string) => Promise<boolean>
   logout: () => void
   isLoading: boolean
+  isAuthenticated: boolean
+  sessionStatus: AuthSessionStatus
   token: string | null
   loginWithToken: (token: string) => Promise<boolean>
+  hydrateSession: () => Promise<SessionHydrationResult>
   /**
    * Patch the current user locally. Useful for UI-only updates (e.g. a local fallback when
    * backend subscription endpoint is not yet implemented).
@@ -55,24 +66,95 @@ function withAuthTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
   })
 }
 
+function isUnauthorizedAuthError(error: unknown): boolean {
+  const status = Number((error as { status?: unknown; statusCode?: unknown } | null)?.status
+    ?? (error as { statusCode?: unknown } | null)?.statusCode)
+  return status === 401
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [sessionStatus, setSessionStatus] = useState<AuthSessionStatus>("loading")
   const authEpochRef = useRef(0)
+  const mountedRef = useRef(false)
+  const sessionHydrationRef = useRef<Promise<SessionHydrationResult> | null>(null)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const hydrateSession = useCallback(async (): Promise<SessionHydrationResult> => {
+    if (sessionHydrationRef.current) return sessionHydrationRef.current
+
+    const hydrationEpoch = ++authEpochRef.current
+    const isCurrentHydration = () => (
+      mountedRef.current && authEpochRef.current === hydrationEpoch
+    )
+
+    // SAML establishes an httpOnly cookie session. Explicitly clear any stale
+    // bearer snapshot so /auth/me is authenticated only by that cookie.
+    apiClient.setToken(null)
+    setToken(null)
+    setIsLoading(true)
+    setSessionStatus("loading")
+
+    const hydration = (async (): Promise<SessionHydrationResult> => {
+      try {
+        const response = await withAuthTimeout(
+          apiClient.getCurrentUser(),
+          "Cookie session check timed out",
+        )
+        if (!response?.user) {
+          throw new Error("Invalid cookie session response")
+        }
+        if (!isCurrentHydration()) return { status: "cancelled" }
+
+        setUser(response.user)
+        setSessionStatus("authenticated")
+        return { status: "authenticated", user: response.user }
+      } catch (error) {
+        if (!isCurrentHydration()) return { status: "cancelled" }
+
+        setUser(null)
+        if (isUnauthorizedAuthError(error)) {
+          setSessionStatus("unauthenticated")
+          return { status: "unauthenticated" }
+        }
+
+        console.error("Cookie session hydration failed:", error)
+        setSessionStatus("error")
+        return { status: "error", error }
+      } finally {
+        if (isCurrentHydration()) setIsLoading(false)
+      }
+    })()
+
+    sessionHydrationRef.current = hydration
+    void hydration.finally(() => {
+      if (sessionHydrationRef.current === hydration) {
+        sessionHydrationRef.current = null
+      }
+    })
+    return hydration
+  }, [])
 
   useEffect(() => {
     let cancelled = false
 
     const checkAuth = async () => {
-      const checkEpoch = authEpochRef.current
-      const isCurrentCheck = () => !cancelled && authEpochRef.current === checkEpoch
       const savedToken = localStorage.getItem('auth-token')
       if (!savedToken) {
-        if (!cancelled) setIsLoading(false)
+        await hydrateSession()
         return
       }
 
+      const checkEpoch = authEpochRef.current
+      const isCurrentCheck = () => !cancelled && authEpochRef.current === checkEpoch
       try {
         if (!isCurrentCheck()) return
         setToken(savedToken)
@@ -82,14 +164,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           apiClient.getCurrentUser(),
           'Auth check timed out'
         )
-        if (isCurrentCheck()) setUser(response.user)
+        if (isCurrentCheck()) {
+          setUser(response.user)
+          setSessionStatus("authenticated")
+        }
       } catch (error) {
-        console.error('Auth check failed:', error)
         if (!isCurrentCheck()) return
         localStorage.removeItem('auth-token')
         apiClient.setToken(null)
         setToken(null)
         setUser(null)
+        if (isUnauthorizedAuthError(error)) {
+          setSessionStatus("unauthenticated")
+        } else {
+          console.error('Auth check failed:', error)
+          setSessionStatus("error")
+        }
       } finally {
         if (isCurrentCheck()) setIsLoading(false)
       }
@@ -100,11 +190,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [hydrateSession])
 
   const login = async (email: string, password: string): Promise<boolean> => {
     const loginEpoch = ++authEpochRef.current
     setIsLoading(true)
+    setSessionStatus("loading")
     try {
       const response = await apiClient.login({
         email: email.trim(),
@@ -117,9 +208,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       apiClient.setToken(response.token)
       setUser(response.user)
       setToken(response.token)
+      setSessionStatus("authenticated")
       return true
     } catch (error) {
       console.error('Login failed:', error)
+      if (authEpochRef.current === loginEpoch) {
+        setSessionStatus(isUnauthorizedAuthError(error) ? "unauthenticated" : "error")
+      }
       return false
     } finally {
       if (authEpochRef.current === loginEpoch) setIsLoading(false)
@@ -129,14 +224,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = async (name: string, email: string, password: string): Promise<boolean> => {
     const registerEpoch = ++authEpochRef.current
     setIsLoading(true)
+    setSessionStatus("loading")
     try {
       const response = await apiClient.register({ name, email, password })
       if (authEpochRef.current !== registerEpoch) return false
       setUser(response.user)
       setToken(response.token)
+      setSessionStatus("authenticated")
       return true
     } catch (error) {
       console.error('Registration failed:', error)
+      if (authEpochRef.current === registerEpoch) setSessionStatus("error")
       return false
     } finally {
       if (authEpochRef.current === registerEpoch) setIsLoading(false)
@@ -148,6 +246,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const tokenLoginEpoch = ++authEpochRef.current
     setIsLoading(true);
+    setSessionStatus("loading");
     try {
       // Step 1: Token ko localStorage aur apiClient mein set karein
       localStorage.setItem('auth-token', token);
@@ -161,6 +260,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Step 3: User ki state ko update karein
       setUser(response.user);
+      setSessionStatus("authenticated");
       devLog("Auth context updated with token for user:", response.user.name);
       return true;
 
@@ -171,6 +271,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       apiClient.setToken(null);
       setToken(null);
       setUser(null);
+      setSessionStatus(isUnauthorizedAuthError(error) ? "unauthenticated" : "error");
       return false;
     } finally {
       if (authEpochRef.current === tokenLoginEpoch) setIsLoading(false);
@@ -186,6 +287,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setUser(null)
       setToken(null)
+      setSessionStatus("unauthenticated")
       apiClient.setToken(null)
       // Wipe any saved composer drafts so a different account on the
       // same device cannot see the previous user's unsent chat text.
@@ -194,7 +296,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const refreshUser = useCallback(async () => {
-    if (!token) return
+    if (!user) return
 
     try {
       const latestUser = await apiClient.getCurrentUser()
@@ -207,12 +309,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         apiClient.setToken(null)
         setToken(null)
         setUser(null)
+        setSessionStatus("unauthenticated")
       }
     }
-  }, [token])
+  }, [user])
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, isLoading, token, loginWithToken, refreshUser }}>
+    <AuthContext.Provider value={{
+      user,
+      login,
+      register,
+      logout,
+      isLoading,
+      isAuthenticated: sessionStatus === "authenticated" && user !== null,
+      sessionStatus,
+      token,
+      loginWithToken,
+      hydrateSession,
+      refreshUser,
+    }}>
       {children}
     </AuthContext.Provider>
   )

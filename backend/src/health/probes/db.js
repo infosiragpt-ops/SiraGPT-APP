@@ -7,6 +7,7 @@
 'use strict';
 
 const { Probe, CATEGORY } = require('../probe');
+const { runCoalescedDatabasePing } = require('../db-operation-coalescer');
 
 function createDbProbe({
   prisma,
@@ -28,7 +29,7 @@ function createDbProbe({
       // Prisma exposes $queryRaw as a tagged template; we invoke it as a
       // function with a raw "string-like" array to keep the probe agnostic.
       const t0 = Date.now();
-      const rows = await prisma.$queryRaw`SELECT 1 as ok`;
+      const rows = await runCoalescedDatabasePing(prisma);
       const elapsedMs = Date.now() - t0;
       const okValue = Array.isArray(rows) && rows.length ? rows[0].ok ?? rows[0].OK : null;
       return {

@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { useVoiceControls } from './voice-controls';
 import { getNaturalSpeechEngine, isSpeechSupported } from '@/lib/speech/natural-speech-engine';
 import ReactMarkdown from 'react-markdown'
@@ -73,6 +74,7 @@ import { InteractiveArtifactDisplay } from './artifact/interactive-artifact-disp
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import { PapersResultCard } from "./papers-result-card"
+import { shouldUnwrapInteractiveFence } from "@/lib/interactive-message-blocks"
 import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ExtractedDataDownload from "./ExtractedDataDownload"
@@ -1470,10 +1472,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             pre: ({ children }: any) => {
                 const child = React.Children.toArray(children)[0]
                 const childProps = React.isValidElement(child) ? (child.props as any) : null
-                if (
-                    typeof childProps?.className === "string" &&
-                    childProps.className.includes("language-agent-task-state")
-                ) {
+                if (shouldUnwrapInteractiveFence(childProps?.className)) {
                     return <>{children}</>
                 }
                 return <pre>{children}</pre>
@@ -2179,7 +2178,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         const downloadPPT = async () => {
             try {
                 const url = getPPTDownloadUrl();
-                const response = await fetch(url, { credentials: 'include' });
+                const response = await authenticatedFetch(url);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const blob = await response.blob();
                 const objectUrl = URL.createObjectURL(blob);

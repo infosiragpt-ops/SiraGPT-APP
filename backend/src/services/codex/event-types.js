@@ -24,6 +24,7 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isArr = (v) => Array.isArray(v);
 const optStr = (v) => v === undefined || v === null || typeof v === 'string';
 const optNum = (v) => v === undefined || v === null || (typeof v === 'number' && Number.isFinite(v));
+const bindingHash = (v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 
 /**
  * Per-type validators of the `data` payload. Each returns boolean.
@@ -91,6 +92,36 @@ const VALIDATORS = {
     isStr(d.rawError) &&
     isArr(d.blockedCapabilities) &&
     optStr(d.remediationUrl),
+
+  // Internal durable loop state. The UI intentionally ignores this event, but
+  // boot recovery can resume from the latest bounded summary + transcript tail.
+  context_snapshot: (d) =>
+    isObj(d) &&
+    isStr(d.summary) &&
+    isArr(d.tailMessages) &&
+    d.tailMessages.every((m) => isObj(m) && ['user', 'assistant'].includes(m.role) && isStr(m.content)) &&
+    (d.state === undefined || isObj(d.state)),
+
+  tool_permission_required: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.permissionId) &&
+    nonEmptyStr(d.toolName) &&
+    bindingHash(d.bindingHash) &&
+    isStr(d.humanDescription) &&
+    (d.argsPreview === undefined || isObj(d.argsPreview)),
+
+  tool_permission_resolved: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.permissionId) &&
+    nonEmptyStr(d.toolName) &&
+    bindingHash(d.bindingHash) &&
+    ['allow', 'deny'].includes(d.decision),
+
+  tool_permission_consumed: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.permissionId) &&
+    nonEmptyStr(d.toolName) &&
+    bindingHash(d.bindingHash),
 
   heartbeat: (d) => d === undefined || d === null || isObj(d),
 };

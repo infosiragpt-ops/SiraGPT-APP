@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { getNormalizedApiBaseUrl } from '@/lib/api'
+import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import { devLog, devWarn } from '@/lib/dev-log'
 
 interface ExtractedDataDownloadProps {
@@ -34,7 +35,7 @@ const downloadAsHtml = async () => {
       // Try to get AI-generated HTML from backend
       const backendUrl = getNormalizedApiBaseUrl();
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const response = await fetch(`${backendUrl}/computer-use/generate-html`, {
+      const response = await authenticatedFetch(`${backendUrl}/computer-use/generate-html`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

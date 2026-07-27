@@ -89,6 +89,32 @@ describe('pptx-adapter — listPptxSlides / setSlideTitle', () => {
     const buf = await makeDeck({ slides: 2 });
     assert.throws(() => adapter.setSlideTitle({ buffer: buf, slideNumber: 9, title: 'x' }), /no existe la diapositiva 9/);
   });
+
+  test('replaceSlideText changes body text only in the requested slide', { skip: sharpSkip }, async () => {
+    const buf = await makeDeck({ slides: 3 });
+    const before = snapshot(buf);
+    const result = adapter.replaceSlideText({
+      buffer: buf,
+      slideNumber: 2,
+      needle: 'Cuerpo de la diapositiva 2',
+      replacement: 'Resultados validados del piloto',
+    });
+    const after = snapshot(result.buffer);
+    const changed = Object.keys(before).filter((name) => before[name] !== after[name]);
+    assert.deepEqual(changed, ['ppt/slides/slide2.xml']);
+    assert.match(adapter.listPptxSlides(result.buffer)[1].textSnippet, /Resultados validados del piloto/);
+    assert.match(adapter.listPptxSlides(result.buffer)[0].textSnippet, /Cuerpo de la diapositiva 1/);
+  });
+});
+
+test('generic PPTX planner preserves the requested slide scope', () => {
+  const ops = editor.INTERNAL.planGenericOfficeOperations({
+    requestText: 'En la diapositiva 2 reemplaza "Cuerpo de la diapositiva 2" por "Resultados validados"',
+    format: 'pptx',
+  });
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0].kind, 'replace_text');
+  assert.equal(ops[0].slideNumber, 2);
 });
 
 describe('pptx-adapter — image recolor/replace', () => {

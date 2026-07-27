@@ -16,6 +16,7 @@ const defaultPrisma = (() => {
 })();
 const runQueue = require('./run-queue');
 const eventStoreDefault = require('./event-store');
+const autonomousRunPolicy = require('./autonomous-run-policy');
 
 const MODES = ['plan', 'build'];
 const ACTIVE_STATUSES = ['queued', 'running', 'waiting_approval'];
@@ -59,11 +60,15 @@ function hashInt32(str) {
  * other projects are unaffected. Test doubles (no $transaction/$queryRawUnsafe)
  * fall back to the plain count→create.
  */
-async function insertRunGuarded(prisma, { projectId, activeWhere, data }) {
+async function insertRunGuarded(prisma, { projectId, activeWhere, data, existingWhere = null }) {
   const enforce = async (client) => {
+    if (existingWhere) {
+      const existing = await client.codexRun.findFirst({ where: existingWhere });
+      if (existing) return { row: existing, created: false };
+    }
     const active = await client.codexRun.count({ where: activeWhere });
     if (active > 0) throw new RunServiceError('run_in_progress', 'a run is already active for this project', 409);
-    return client.codexRun.create({ data });
+    return { row: await client.codexRun.create({ data }), created: true };
   };
   const canLock = typeof prisma.$transaction === 'function' && typeof prisma.$queryRawUnsafe === 'function';
   if (!canLock) return enforce(prisma);
@@ -88,7 +93,8 @@ function publicRun(row) {
     model: row.model ?? null,
     tier: row.tier ?? null,
     planRunId: row.planRunId ?? null,
-    prompt: row.prompt ?? null,
+    prompt: row.prompt == null ? null : autonomousRunPolicy.stripAutoExecutePrompt(row.prompt),
+    autoExecute: autonomousRunPolicy.isAutoExecutePrompt(row.prompt),
     error: row.error ?? null,
     createdAt: row.createdAt,
     startedAt: row.startedAt ?? null,
@@ -129,6 +135,7 @@ async function createRun({
   model = null,
   tier = null,
   planRunId = null,
+  autoExecute = false,
   db = defaultPrisma,
   queue = runQueue,
 }) {
@@ -138,9 +145,10 @@ async function createRun({
   const project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
   if (!project) throw new RunServiceError('project_not_found', 'project not found', 404);
 
+  let planRun = null;
   if (mode === 'build') {
     if (!planRunId) throw new RunServiceError('plan_run_required', 'build requires planRunId', 400);
-    const planRun = await prisma.codexRun.findFirst({
+    planRun = await prisma.codexRun.findFirst({
       where: { id: planRunId, projectId, userId, mode: 'plan' },
     });
     if (!planRun || !APPROVABLE_PLAN_STATUSES.includes(planRun.status)) {
@@ -154,21 +162,34 @@ async function createRun({
   const activeWhere = { projectId, status: { in: ACTIVE_STATUSES } };
   if (mode === 'build' && planRunId) activeWhere.id = { not: planRunId };
 
-  const row = await insertRunGuarded(prisma, {
+  const inheritAutoExecute = autoExecute || autonomousRunPolicy.isAutoExecutePrompt(planRun?.prompt);
+  const sourcePrompt = prompt == null && inheritAutoExecute ? planRun?.prompt : prompt;
+  const storedPrompt = inheritAutoExecute
+    ? autonomousRunPolicy.withAutoExecutePrompt(sourcePrompt)
+    : sourcePrompt;
+  const existingWhere = mode === 'build' && planRunId
+    ? { projectId, userId, mode: 'build', planRunId }
+    : null;
+
+  const inserted = await insertRunGuarded(prisma, {
     projectId,
     activeWhere,
-    data: { projectId, userId, mode, status: 'queued', prompt, model, tier, planRunId },
+    existingWhere,
+    data: { projectId, userId, mode, status: 'queued', prompt: storedPrompt, model, tier, planRunId },
   });
+  const { row, created } = inserted;
 
-  try {
-    const job = await queue.enqueueCodexRun({ runId: row.id });
-    if (job?.id) {
-      await prisma.codexRun.update({ where: { id: row.id }, data: { jobId: String(job.id) } });
+  if (created) {
+    try {
+      const job = await queue.enqueueCodexRun({ runId: row.id });
+      if (job?.id) {
+        await prisma.codexRun.update({ where: { id: row.id }, data: { jobId: String(job.id) } });
+      }
+    } catch (err) {
+      // Leave the row `queued`; boot-recovery re-enqueues stuck rows. Surface a
+      // soft signal but don't fail the create — the run exists and is recoverable.
+      if (process.env.NODE_ENV !== 'test') console.warn('[codex run-service] enqueue failed:', err?.message || err);
     }
-  } catch (err) {
-    // Leave the row `queued`; boot-recovery re-enqueues stuck rows. Surface a
-    // soft signal but don't fail the create — the run exists and is recoverable.
-    if (process.env.NODE_ENV !== 'test') console.warn('[codex run-service] enqueue failed:', err?.message || err);
   }
 
   const fresh = await prisma.codexRun.findUnique({ where: { id: row.id } });
@@ -199,6 +220,82 @@ async function cancelRun({ userId, runId, db = defaultPrisma, queue = runQueue, 
 
   const fresh = await prisma.codexRun.findUnique({ where: { id: runId } });
   return publicRun(fresh);
+}
+
+/**
+ * Resolve a build-tool approval and requeue the SAME run. The latest durable
+ * permission request is the authority; arbitrary permission ids or plan runs
+ * cannot be resumed through this endpoint.
+ */
+async function resolveToolPermission({
+  userId,
+  runId,
+  permissionId,
+  decision,
+  db = defaultPrisma,
+  queue = runQueue,
+  eventStore = eventStoreDefault,
+  clock = () => new Date(),
+}) {
+  const prisma = requireDb(db);
+  if (!['allow', 'deny'].includes(decision)) {
+    throw new RunServiceError('invalid_permission_decision', 'decision must be allow or deny', 400);
+  }
+  const run = await prisma.codexRun.findFirst({ where: { id: runId, userId } });
+  if (!run) throw new RunServiceError('run_not_found', 'run not found', 404);
+  if (run.mode !== 'build' || run.status !== 'waiting_approval') {
+    throw new RunServiceError('run_not_waiting_tool_permission', 'build run is not waiting for tool approval', 409);
+  }
+
+  const events = await eventStore.listEvents(run.id, { afterSeq: 0, prisma });
+  const request = [...events].reverse().find(
+    (event) => event?.type === 'tool_permission_required' && event.data?.permissionId === permissionId,
+  );
+  if (!request) throw new RunServiceError('tool_permission_not_found', 'tool permission request not found', 404);
+  const alreadyResolved = events.some(
+    (event) =>
+      event?.type === 'tool_permission_resolved'
+      && event.data?.permissionId === permissionId
+      && Number(event.seq) > Number(request.seq),
+  );
+  if (alreadyResolved) {
+    throw new RunServiceError('tool_permission_already_resolved', 'tool permission was already resolved', 409);
+  }
+
+  await eventStore.appendEvent(
+    run.id,
+    'tool_permission_resolved',
+    {
+      permissionId,
+      toolName: request.data.toolName,
+      bindingHash: request.data.bindingHash,
+      decision,
+    },
+    { prisma },
+  );
+  const flip = await prisma.codexRun.updateMany({
+    where: { id: run.id, userId, status: 'waiting_approval' },
+    data: { status: 'queued', error: null, finishedAt: null },
+  });
+  if (!flip?.count) throw new RunServiceError('tool_permission_race', 'run changed while resolving permission', 409);
+  await eventStore.appendEvent(run.id, 'run_status', { status: 'queued' }, { prisma });
+
+  try {
+    const job = await queue.enqueueCodexRun({
+      runId: run.id,
+      jobId: `${run.id}:permission:${clock().getTime()}`,
+    });
+    if (job?.id) {
+      await prisma.codexRun.update({ where: { id: run.id }, data: { jobId: String(job.id) } });
+    }
+  } catch (error) {
+    // Keep queued: boot recovery will re-enqueue it.
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[codex run-service] permission resume enqueue failed:', error?.message || error);
+    }
+  }
+  const fresh = await prisma.codexRun.findUnique({ where: { id: run.id } });
+  return publicRun(fresh || { ...run, status: 'queued' });
 }
 
 /** True when the project has a queued/running/waiting_approval run. Used by
@@ -233,6 +330,7 @@ async function listRuns({ userId, projectId, db = defaultPrisma, take = 50 }) {
 module.exports = {
   createRun,
   cancelRun,
+  resolveToolPermission,
   getRun,
   listRuns,
   hasActiveRun,

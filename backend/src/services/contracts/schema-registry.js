@@ -138,7 +138,7 @@ const queueBoardStatusResponseSchema = z.object({
     redisUrlConfigured: z.boolean(),
     queue: z.string(),
     basePath: z.string(),
-    status: z.enum(['disabled', 'ready', 'degraded']),
+    status: z.enum(['disabled', 'ready', 'degraded', 'unhealthy']),
     reason: z.string().optional(),
     counts: z.union([z.record(z.any()), z.null()]).optional(),
   }).passthrough(),

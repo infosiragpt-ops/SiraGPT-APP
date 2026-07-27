@@ -26,6 +26,12 @@ const prisma = require('../src/config/database');
 const { buildRouteTestApp, installAuthSessionMock } = require('./http-test-utils');
 const appshotsRouter = require('../src/routes/appshots');
 const { authenticateToken } = require('../src/middleware/auth');
+const {
+  onUserSessionsRevoked,
+} = require('../src/services/auth/user-session-revocation-events');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 function makeAppshotsToken(userId) {
   return jwt.sign(
@@ -530,11 +536,12 @@ describe('authenticateToken metadata.scope tagging (Task 22/25)', () => {
 
   it('writes metadata.scope when an Appshots session row has expired', async () => {
     const token = makeAppshotsToken('user-22-expired');
+    const tokenHash = hashSessionToken(token);
     prisma.session.findUnique = async ({ where }) => {
-      if (where?.token !== token) return null;
+      if (where?.token !== tokenHash) return null;
       return {
         id: 'sess-22-expired',
-        token,
+        token: tokenHash,
         userId: 'user-22-expired',
         user: { id: 'user-22-expired', email: 'expired@example.com' },
         expiresAt: new Date(Date.now() - 1000),
@@ -557,11 +564,12 @@ describe('authenticateToken metadata.scope tagging (Task 22/25)', () => {
 
   it('writes metadata.scope on fingerprint mismatch for Appshots tokens', async () => {
     const token = makeAppshotsToken('user-22-fingerprint');
+    const tokenHash = hashSessionToken(token);
     prisma.session.findUnique = async ({ where }) => {
-      if (where?.token !== token) return null;
+      if (where?.token !== tokenHash) return null;
       return {
         id: 'sess-22-fp',
-        token,
+        token: tokenHash,
         userId: 'user-22-fingerprint',
         user: { id: 'user-22-fingerprint', email: 'fp@example.com' },
         expiresAt: new Date(Date.now() + 60_000),
@@ -591,11 +599,12 @@ describe('authenticateToken metadata.scope tagging (Task 22/25)', () => {
 
   it('does NOT tag scope on plain (non-scoped) JWT expiry — sanity check', async () => {
     const token = makePlainToken('user-22-plain');
+    const tokenHash = hashSessionToken(token);
     prisma.session.findUnique = async ({ where }) => {
-      if (where?.token !== token) return null;
+      if (where?.token !== tokenHash) return null;
       return {
         id: 'sess-22-plain',
-        token,
+        token: tokenHash,
         userId: 'user-22-plain',
         user: { id: 'user-22-plain', email: 'plain@example.com' },
         expiresAt: new Date(Date.now() - 1000),
@@ -661,7 +670,10 @@ describe('DELETE /api/appshots/sessions/:id', () => {
     };
   });
 
-  it('revokes own appshots session', async () => {
+  it('revokes own appshots session and publishes the revocation', async (t) => {
+    const events = [];
+    const unsubscribe = onUserSessionsRevoked((event) => events.push(event));
+    t.after(unsubscribe);
     const app = buildRouteTestApp('/api/appshots', appshotsRouter);
     const res = await request(app)
       .delete('/api/appshots/sessions/sess-appshots-1')
@@ -671,6 +683,10 @@ describe('DELETE /api/appshots/sessions/:id', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.ok, true);
     assert.ok(!remaining.includes('sess-appshots-1'));
+    assert.deepEqual(events, [{
+      userId: 'task8-user',
+      reason: 'session_revoked',
+    }]);
   });
 
   it('refuses to revoke a session that belongs to someone else (404)', async () => {

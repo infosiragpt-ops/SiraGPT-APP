@@ -23,6 +23,11 @@
  * downstream code uses to gate behaviour.
  */
 
+const {
+  qualityProfileForPipeline,
+  recommendImprovements,
+} = require('../platform-improvements');
+
 const PIPELINES = {
   "visual-artifact": {
     id: "visual-artifact",
@@ -242,6 +247,8 @@ function listPipelines() {
     requiredTools: p.requiredTools,
     recommendedTools: p.recommendedTools,
     forbiddenTools: p.forbiddenTools,
+    qualityProfile: qualityProfileForPipeline(p.id),
+    recommendedImprovements: recommendImprovements({ pipelineId: p.id, limit: 5 }),
   }));
 }
 

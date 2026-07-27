@@ -27,6 +27,7 @@ describe('CAPABILITIES enum', () => {
       NET_OUTBOUND: 'net:outbound',
       NET_LLM: 'net:outbound:llm',
       BROWSER: 'browser',
+      MEDIA_PROCESS: 'media:process',
       SCHEDULE: 'schedule',
       AGENT_SPAWN: 'agent:spawn',
       AGENT_READ: 'agent:read',
@@ -50,8 +51,8 @@ describe('ALL_CAPABILITIES', () => {
     assert.throws(() => ALL_CAPABILITIES.push('hack'), TypeError);
   });
 
-  it('has exactly 10 capabilities (catches accidental additions)', () => {
-    assert.equal(ALL_CAPABILITIES.length, 10);
+  it('has exactly 11 capabilities (catches accidental additions)', () => {
+    assert.equal(ALL_CAPABILITIES.length, 11);
   });
 });
 

@@ -453,6 +453,7 @@ import {
 } from "@/components/ui/select"
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
+import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import { normalizeChatInput, shouldWarnUser } from '@/lib/chat-input-normalize'
 import { useAuth } from '@/lib/auth-context-integrated'
 import VoiceSelector from './voice-selector' // Assume this component is working
@@ -658,7 +659,7 @@ const downloadAudio = async () => {
     toast({ title: "Downloading...", description: "Your audio is being prepared for download." });
 
     // 🔹 Fetch the real audio file as blob
-    const res = await fetch(`${apiClient.apiBaseURL}${audioUrl}`, {
+    const res = await authenticatedFetch(`${apiClient.apiBaseURL}${audioUrl}`, {
       credentials: 'include', // only if needed
     });
     if (!res.ok) throw new Error("Failed to fetch audio file");

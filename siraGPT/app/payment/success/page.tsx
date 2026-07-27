@@ -63,44 +63,25 @@ function PaymentSuccessContent() {
     // Verify payment success with backend
     const verifyPayment = async () => {
       try {
-        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
-        const response = await fetch(`${apiBaseUrl}/payments/verify-session?session_id=${sessionId}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-          }
-        })
+        const data = await apiClient.verifyPaymentSession(sessionId)
+        setSuccess(true)
+        setSessionInfo(data)
 
-        if (response.ok) {
-          const data = await response.json()
-          setSuccess(true)
-          setSessionInfo(data)
-
-          // Fetch updated user data and update context
+        // Fetch updated user data and update context
+        try {
+          refreshUser();
+          // Fetch subscription details
           try {
-            refreshUser();
-            // Fetch subscription details
-            try {
-              const subResponse = await fetch(`${apiBaseUrl}/payments/subscription`, {
-                headers: {
-                  'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-                }
-              })
-              if (subResponse.ok) {
-                const subData = await subResponse.json()
-                setSubscriptionInfo(subData)
-              }
-            } catch (subError) {
-              console.warn('Failed to fetch subscription details:', subError)
-            }
-          } catch (userError) {
-            console.warn('Failed to update user context:', userError)
+            const subData = await apiClient.getSubscriptionInfo()
+            setSubscriptionInfo(subData)
+          } catch (subError) {
+            console.warn('Failed to fetch subscription details:', subError)
           }
-
-          toast.success('Payment successful! Your subscription has been activated.')
-        } else {
-          setSuccess(false)
-          toast.error('Payment verification failed. Please contact support.')
+        } catch (userError) {
+          console.warn('Failed to update user context:', userError)
         }
+
+        toast.success('Payment successful! Your subscription has been activated.')
       } catch (error) {
         console.error('Payment verification error:', error)
         setSuccess(false)

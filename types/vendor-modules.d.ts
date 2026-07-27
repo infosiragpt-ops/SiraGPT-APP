@@ -29,9 +29,3 @@ declare module "turndown" {
   }
   export default TurndownService
 }
-
-declare module "three" {
-  export class Color {
-    constructor(color?: string | number)
-  }
-}

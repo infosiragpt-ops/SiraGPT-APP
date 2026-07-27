@@ -1430,7 +1430,10 @@ class ApiClient {
   }
 
   async verifyPaymentSession(sessionId: string) {
-    return this.request(`/payments/verify-session?session_id=${sessionId}`);
+    return this.request('/payments/verify-session', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    });
   }
 
   async getSubscriptionInfo() {

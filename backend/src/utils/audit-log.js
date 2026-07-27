@@ -77,6 +77,10 @@ async function writeAuditLog(prisma, entry) {
     return null;
   }
 
+  return repo.safeCreate(buildAuditLogData(entry));
+}
+
+function buildAuditLogData(entry) {
   const req = entry.req;
   const ip = entry.ip
     ?? (req && (req.ip || req.headers?.['x-forwarded-for'] || req.socket?.remoteAddress))
@@ -114,10 +118,7 @@ async function writeAuditLog(prisma, entry) {
     if (cleaned.length) metadata.tags = cleaned;
   }
 
-  // Repository handles its own try/catch and logs failures with the
-  // same `[AUDIT] write failed` prefix the previous inline path used,
-  // so ops greps continue to work unchanged.
-  return repo.safeCreate({
+  return {
     actorType,
     actorId: userId,
     actorName,
@@ -128,7 +129,31 @@ async function writeAuditLog(prisma, entry) {
     after: entry.after ?? null,
     diff: null,
     metadata: Object.keys(metadata).length ? metadata : null,
-  });
+  };
 }
 
-module.exports = { writeAuditLog };
+/**
+ * Security-control-plane audit writer. Unlike writeAuditLog(), this function
+ * is deliberately fail-closed: it writes through the exact transaction client
+ * supplied by the caller and propagates any persistence error so Prisma rolls
+ * the surrounding mutation back.
+ */
+async function writeAuditLogStrict(prisma, entry) {
+  if (!prisma?.auditLog || typeof prisma.auditLog.create !== 'function') {
+    const error = new Error('AUDIT_MODEL_UNAVAILABLE');
+    error.code = 'AUDIT_MODEL_UNAVAILABLE';
+    throw error;
+  }
+  if (!entry || typeof entry !== 'object' || typeof entry.action !== 'string') {
+    const error = new TypeError('AUDIT_ENTRY_INVALID');
+    error.code = 'AUDIT_ENTRY_INVALID';
+    throw error;
+  }
+  return prisma.auditLog.create({ data: buildAuditLogData(entry) });
+}
+
+module.exports = {
+  writeAuditLog,
+  writeAuditLogStrict,
+  buildAuditLogData,
+};

@@ -7,10 +7,17 @@
  *   - MAX_SPAWN_DEPTH is exported so skills can reason about it
  */
 
-const { test } = require('node:test');
+const { after, test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { runAgent, MAX_SPAWN_DEPTH } = require('../src/services/agents/agent-entry');
+
+after(async () => {
+  // CI provides REDIS_URL, so enqueueDelegatedTask opens the real BullMQ
+  // producer. Close it explicitly or this focused test process never exits.
+  const { closeAgentTaskQueue } = require('../src/services/agents/agent-task-queue');
+  await closeAgentTaskQueue({ force: true });
+});
 
 test('MAX_SPAWN_DEPTH is a sane positive integer', () => {
   assert.equal(typeof MAX_SPAWN_DEPTH, 'number');
@@ -84,6 +91,22 @@ test('buildAllTools returns a non-empty array of unique tool objects', () => {
   // Task tools that should be available
   assert.ok(toolNames.has('python_exec'), 'python_exec tool missing');
   assert.ok(toolNames.has('create_document'), 'create_document tool missing');
+  assert.ok(toolNames.has('run_skill'), 'run_skill tool missing');
+  assert.ok(toolNames.has('run_skill_pipeline'), 'run_skill_pipeline tool missing');
+});
+
+test('buildAllTools enforces the declared skillIds allow-list', () => {
+  const { buildAllTools } = require('../src/services/agents/agent-entry');
+  const tools = buildAllTools('low', {
+    skillIds: ['apa7_format'],
+    clearance: 'enterprise',
+  });
+  const runSkill = tools.find((tool) => tool.name === 'run_skill');
+  assert.ok(runSkill, 'run_skill tool missing');
+  assert.deepEqual(runSkill.parameters.properties.skillId.enum, ['apa7_format']);
+  const runPipeline = tools.find((tool) => tool.name === 'run_skill_pipeline');
+  assert.ok(runPipeline, 'run_skill_pipeline tool missing');
+  assert.deepEqual(runPipeline.parameters.properties.steps.items.properties.skillId.enum, ['apa7_format']);
 });
 
 test('buildAllTools deduplicates by name', () => {

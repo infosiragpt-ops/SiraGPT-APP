@@ -122,7 +122,14 @@ function resolveMaxSimilarity(mode, explicit) {
   return MODE_SIMILARITY_CEILINGS[canonical] || MODE_SIMILARITY_CEILINGS.standard;
 }
 
-async function runParaphrasePipeline({ source, rewriteFn, mode = 'standard', maxSimilarity }) {
+async function runParaphrasePipeline({
+  source,
+  rewriteFn,
+  mode = 'standard',
+  language,
+  customInstruction,
+  maxSimilarity,
+}) {
   if (!source || typeof source !== 'string') {
     return { ok: false, error: 'empty_source' };
   }
@@ -131,9 +138,21 @@ async function runParaphrasePipeline({ source, rewriteFn, mode = 'standard', max
   }
   const effectiveMaxSim = resolveMaxSimilarity(mode, maxSimilarity);
 
-  const pass1 = await rewriteFn({ text: source, pass: 1, mode });
+  const pass1 = await rewriteFn({
+    text: source,
+    pass: 1,
+    mode,
+    language,
+    customInstruction,
+  });
   const pass2Text = structuralVariation(pass1 || source);
-  const pass2 = await rewriteFn({ text: pass2Text, pass: 2, mode });
+  const pass2 = await rewriteFn({
+    text: pass2Text,
+    pass: 2,
+    mode,
+    language,
+    customInstruction,
+  });
   const finalText = (pass2 || pass2Text || pass1 || '').trim();
 
   const similarity = jaccardSimilarity(source, finalText);

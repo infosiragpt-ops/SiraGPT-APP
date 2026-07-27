@@ -14,6 +14,8 @@ import {
   ImageIcon,
   Code,
   Palette,
+  FileText,
+  Sparkles,
   Plus,
   Mic,
   ArrowUp,
@@ -38,6 +40,7 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTKnowledgeFile } from "@/lib/gpts-service"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { GptActionsEditor, type GptAction } from "@/components/gpts/gpt-actions-editor"
@@ -50,6 +53,18 @@ const liquidField =
 
 const liquidGhost =
   "rounded-full border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl hover:bg-white/90 hover:text-zinc-950 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
+
+function getUploadAuthToken() {
+  if (typeof window === "undefined") return null
+  return window.localStorage?.getItem("auth-token") || null
+}
+
+function resolveIconPreviewUrl(iconUrl?: string | null) {
+  return resolveGptIconImageUrl(iconUrl, {
+    token: getUploadAuthToken(),
+    baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
+  })
+}
 
 interface GPTFormData {
   name: string
@@ -70,11 +85,13 @@ interface GPTFormData {
     dataAnalysis: boolean
     imageGeneration: boolean
     codeInterpreter: boolean
+    documents: boolean
+    skillsEnabled: boolean
   }
 }
 
 export default function CreateGPTPage() {
-  const { user } = useAuth()
+  const { user, isLoading: isAuthLoading } = useAuth()
   const { availableModels } = useChat()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -121,6 +138,8 @@ export default function CreateGPTPage() {
       dataAnalysis: true,
       imageGeneration: true,
       codeInterpreter: false,
+      documents: true,
+      skillsEnabled: true,
     }
   })
 
@@ -137,13 +156,17 @@ export default function CreateGPTPage() {
   useEffect(() => {
     if (editId) {
       setIsEditMode(true)
+      if (isAuthLoading) {
+        setIsLoading(true)
+        return
+      }
       loadGPTForEdit(editId)
     }
     // loadGPTForEdit is defined below in the component body, so adding
     // it to deps would lint-loop. Intent: re-fetch only when the
-    // URL-bound editId changes.
+    // URL-bound editId or current authenticated user changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editId])
+  }, [editId, isAuthLoading, user?.id])
 
   useEffect(() => {
     if (!editId && categoryParam && !formData.category) {
@@ -155,6 +178,12 @@ export default function CreateGPTPage() {
     setIsLoading(true)
     try {
       const gpt = await gptsService.getGPT(gptId)
+      const ownerId = gpt.creator?.id || gpt.creatorId
+      if (!ownerId || ownerId !== user?.id) {
+        toast.error("Solo el creador puede configurar este GPT")
+        router.replace('/gpts')
+        return
+      }
 
       // Convert GPT data to form data
       setFormData({
@@ -178,13 +207,12 @@ export default function CreateGPTPage() {
           dataAnalysis: gpt.capabilities?.dataAnalysis ?? false,
           imageGeneration: gpt.capabilities?.imageGeneration ?? false,
           codeInterpreter: gpt.capabilities?.codeInterpreter ?? false,
+          documents: gpt.capabilities?.documents ?? true,
+          skillsEnabled: gpt.capabilities?.skillsEnabled ?? true,
         }
       })
 
-      // If existing GPT has an icon URL, show it as preview
-      if (gpt.iconUrl && (gpt.iconUrl.startsWith('http') || gpt.iconUrl.startsWith('https') || gpt.iconUrl.startsWith('data:'))) {
-        setUploadedImage(gpt.iconUrl)
-      }
+      setUploadedImage(resolveIconPreviewUrl(gpt.iconUrl))
 
       // Load existing knowledge files (best-effort — a failure here must not
       // block editing the rest of the GPT).
@@ -625,9 +653,9 @@ export default function CreateGPTPage() {
   }
 
   return (
-    <div className="flex min-h-full flex-col bg-[linear-gradient(180deg,#fbfbfb_0%,#f6f7f8_100%)] text-zinc-950 dark:bg-[linear-gradient(180deg,#09090b_0%,#111113_100%)] dark:text-zinc-50">
+    <div className="flex min-h-full flex-col bg-[linear-gradient(180deg,#fbfbfb_0%,#f6f7f8_100%)] text-zinc-950 dark:bg-[linear-gradient(180deg,#09090b_0%,#111113_100%)] dark:text-zinc-50 lg:h-full lg:min-h-0 lg:overflow-hidden">
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-white/80 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/80">
+      <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-white/80 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/80 lg:static lg:shrink-0">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <SidebarTrigger className="md:hidden" />
@@ -713,11 +741,14 @@ export default function CreateGPTPage() {
       </header>
 
       {/* Two-pane builder */}
-      <div className="flex-1">
-        <div className="mx-auto w-full max-w-6xl lg:grid lg:grid-cols-2 lg:gap-0">
+      <div className="flex-1 lg:min-h-0 lg:overflow-hidden">
+        <div className="mx-auto w-full max-w-6xl lg:grid lg:h-full lg:min-h-0 lg:grid-cols-2 lg:gap-0">
 
           {/* LEFT — Configurar (form) */}
-          <div className="px-4 py-6 sm:px-6 sm:py-8 lg:border-r lg:border-black/[0.06] dark:lg:border-white/10">
+          <div
+            aria-label="Campos de configuración del GPT"
+            className="px-4 py-6 sm:px-6 sm:py-8 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:border-r lg:border-black/[0.06] lg:[scrollbar-gutter:stable] dark:lg:border-white/10"
+          >
             <div className="mx-auto w-full max-w-xl space-y-6">
 
               {/* Avatar */}
@@ -961,9 +992,11 @@ export default function CreateGPTPage() {
                 <div className="mt-1 overflow-hidden rounded-lg border border-border/60 bg-background/40">
                   {([
                     { key: "webBrowsing", icon: Globe, label: "Búsqueda en la web", desc: "Consulta información actualizada en internet." },
-                    { key: "dataAnalysis", icon: Palette, label: "Lienzo", desc: "Crea y edita documentos y diagramas." },
+                    { key: "dataAnalysis", icon: Palette, label: "Lienzo", desc: "Crea gráficas, diagramas y contenido visual." },
+                    { key: "documents", icon: FileText, label: "Docs", desc: "Crea, edita y analiza Word, PDF, Excel y presentaciones." },
                     { key: "imageGeneration", icon: ImageIcon, label: "Generación de imagen", desc: "Genera imágenes a partir de texto." },
                     { key: "codeInterpreter", icon: Code, label: "Intérprete de código y análisis de datos", desc: "Ejecuta código y analiza archivos." },
+                    { key: "skillsEnabled", icon: Sparkles, label: "Skills", desc: "Usa habilidades especializadas según la tarea." },
                   ] as { key: keyof GPTFormData["capabilities"]; icon: any; label: string; desc: string }[]).map((cap) => {
                     const Icon = cap.icon
                     return (
@@ -1000,7 +1033,7 @@ export default function CreateGPTPage() {
           </div>
 
           {/* RIGHT — Vista previa (live, desktop only) */}
-          <div className="hidden bg-[#fafafa] dark:bg-zinc-900/40 lg:flex lg:min-h-[calc(100vh-7rem)] lg:flex-col">
+          <div className="hidden bg-[#fafafa] dark:bg-zinc-900/40 lg:flex lg:h-full lg:min-h-0 lg:overflow-hidden lg:flex-col">
             <div className="flex min-h-0 flex-1 flex-col px-6 py-8">
               <p className="mb-6 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">Vista previa</p>
 
@@ -1088,6 +1121,7 @@ export default function CreateGPTPage() {
                     type="button"
                     onClick={() => sendPreviewMessage(previewInput)}
                     disabled={previewLoading || !previewInput.trim()}
+                    aria-label="Enviar mensaje de prueba"
                     className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-zinc-950 text-white transition-opacity disabled:opacity-40 dark:bg-white dark:text-zinc-950"
                   >
                     <ArrowUp className="h-4 w-4" />

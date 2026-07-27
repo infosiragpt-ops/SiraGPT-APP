@@ -15,6 +15,10 @@
  */
 
 const metrics = require('../services/agents/metrics');
+const {
+  isMetricsRequest,
+  matchedRouteLabel,
+} = require('../services/observability/metrics-paths');
 
 const RED_REQUESTS_TOTAL = 'http_requests_total';
 const RED_ERRORS_TOTAL = 'http_request_errors_total';
@@ -54,16 +58,12 @@ function statusClass(code) {
 // `req.route` when a handler matched, so for 404s and middleware-level
 // rejections we fall back to "unmatched".
 function routeLabel(req) {
-  const matched = req.route && req.route.path;
-  if (matched) {
-    const base = req.baseUrl || '';
-    return `${base}${matched}` || matched;
-  }
-  return 'unmatched';
+  return matchedRouteLabel(req);
 }
 
 function redMetricsMiddleware(req, res, next) {
   ensureRegistered();
+  if (isMetricsRequest(req)) return next();
   const startNs = process.hrtime.bigint();
 
   // Use the `finish` event so we capture the response status that the

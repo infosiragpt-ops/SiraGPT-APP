@@ -1,5 +1,6 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
 import { streamSseJson } from "./sse-client"
 
 /**
@@ -71,7 +72,7 @@ async function handle<T>(res: Response): Promise<T> {
 export const designService = {
   async list(search?: string): Promise<DesignSummary[]> {
     const qs = search ? `?search=${encodeURIComponent(search)}` : ""
-    const res = await fetch(`${API_ROOT}/design${qs}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/design${qs}`, {
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },
     })
@@ -80,7 +81,7 @@ export const designService = {
   },
 
   async get(id: string): Promise<DesignDetail> {
-    const res = await fetch(`${API_ROOT}/design/${id}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/design/${id}`, {
       credentials: "include",
       headers: authHeader(),
     })
@@ -89,7 +90,7 @@ export const designService = {
   },
 
   async create(input: CreateDesignInput): Promise<DesignSummary> {
-    const res = await fetch(`${API_ROOT}/design`, {
+    const res = await authenticatedFetch(`${API_ROOT}/design`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },
@@ -100,7 +101,7 @@ export const designService = {
   },
 
   async update(id: string, body: { name?: string; html?: string | null }): Promise<DesignSummary> {
-    const res = await fetch(`${API_ROOT}/design/${id}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/design/${id}`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },
@@ -111,7 +112,7 @@ export const designService = {
   },
 
   async remove(id: string): Promise<void> {
-    const res = await fetch(`${API_ROOT}/design/${id}`, {
+    const res = await authenticatedFetch(`${API_ROOT}/design/${id}`, {
       method: "DELETE",
       credentials: "include",
       headers: authHeader(),
@@ -134,7 +135,7 @@ export const designService = {
     opts: { model?: string; effort?: DesignEffort; signal?: AbortSignal } = {},
   ): AsyncGenerator<GenerateEvent> {
     const { model, effort, signal } = opts
-    const res = await fetch(`${API_ROOT}/design/${id}/generate`, {
+    const res = await authenticatedFetch(`${API_ROOT}/design/${id}/generate`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },

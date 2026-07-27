@@ -8,6 +8,7 @@ const {
   runAdvancedDocumentPipeline,
   streamAdvancedDocumentPipeline,
 } = require('../src/services/document-pipeline/advanced-document-pipeline');
+const { normalizeResearchArtifactInput } = require('../src/services/document-pipeline/research-artifact-input');
 
 test('document SSE output does not expose internal prompt contracts', async () => {
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-chat-'));
@@ -60,6 +61,39 @@ test('document pipeline incorporates authenticated reference-file metadata and s
   assert.equal(telemetry.plan.referenceFiles.length, 1);
   assert.equal(telemetry.plan.referenceFiles[0].extractedChars > 0, true);
   assert.equal(telemetry.plan.referenceBriefs, undefined);
+});
+
+test('scientific DOCX preserves the approved outline and embeds an editable evidence table', async () => {
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-science-'));
+  const input = normalizeResearchArtifactInput({
+    outline: ['Pregunta clínica', 'Método', 'Hallazgos', 'Limitaciones', 'Conclusiones'],
+    researchSources: [{
+      title: 'Randomized telemedicine trial',
+      abstract: 'Results showed improved follow-up.',
+      year: 2025,
+      doi: '10.1000/trial',
+      studyType: 'rct',
+      sampleSize: 420,
+      keyFinding: 'Improved follow-up compared with usual care.',
+    }],
+  });
+  const result = await runAdvancedDocumentPipeline({
+    prompt: 'Crea un Word científico editable sobre telemedicina',
+    format: 'docx',
+    template: 'academic',
+    outputDir,
+    outline: input.outline,
+    researchSources: input.sources,
+    referenceFiles: input.referenceFiles,
+  });
+
+  assert.deepEqual(result.plan.sections, input.outline);
+  const zip = new PizZip(result.buffer);
+  const documentXml = zip.file('word/document.xml')?.asText() || '';
+  assert.match(documentXml, /Matriz de evidencia cient[ií]fica/i);
+  assert.match(documentXml, /Randomized telemedicine trial/);
+  assert.match(documentXml, /10\.1000\/trial/);
+  assert.match(documentXml, /w:tbl/);
 });
 
 test('document pipeline embeds uploaded image references into generated DOCX', async () => {

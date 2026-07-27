@@ -8,8 +8,9 @@ function createAgentCheckpointStore({ prisma } = {}) {
     if (client === null) {
       throw new Error('agent checkpoint store requires a prisma client');
     }
-    const { PrismaClient } = require('@prisma/client');
-    client = new PrismaClient();
+    // Resolve lazily so constructing an unused store stays lightweight while
+    // every active store shares the configured process-wide Prisma pool.
+    client = require('../config/database');
     return client;
   }
 

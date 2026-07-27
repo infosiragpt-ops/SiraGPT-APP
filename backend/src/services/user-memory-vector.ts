@@ -17,10 +17,25 @@
  */
 
 import crypto from "node:crypto";
+import type { PrismaClient } from "@prisma/client";
 import pino from "pino";
 
 const EMBED_DIM = 1024;
 const logger = pino({ name: "user-memory-vector", level: process.env.LOG_LEVEL || "info" });
+
+type MemoryPrismaClient = Pick<
+  PrismaClient,
+  "$executeRawUnsafe" | "$queryRawUnsafe"
+>;
+
+interface MemoryDatabaseAdapter {
+  execute(query: string, params: any[]): any;
+}
+
+interface UserMemoryVectorOptions {
+  gateway?: any;
+  db?: MemoryDatabaseAdapter;
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -60,10 +75,7 @@ export function importanceH(
 export function createUserMemoryVector({
   gateway,
   db,
-}: {
-  gateway?: any;
-  db?: any;
-} = {}) {
+}: UserMemoryVectorOptions = {}) {
   if (!gateway && !db) {
     throw new Error(
       "createUserMemoryVector requires at least one of `gateway` or `db`",
@@ -90,14 +102,14 @@ export function createUserMemoryVector({
     return embeddings;
   }
 
-  let _prisma: any = null;
-  function getPrisma(): any {
+  let _prisma: MemoryPrismaClient | null = null;
+  function getPrisma(): MemoryPrismaClient {
     if (_prisma) return _prisma;
     try {
-      const { PrismaClient } = require("@prisma/client");
-      _prisma = new PrismaClient();
-    } catch (err: any) {
-      throw new Error(`Prisma not available: ${err.message}`);
+      _prisma = require("../config/database") as MemoryPrismaClient;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Prisma not available: ${message}`);
     }
     return _prisma;
   }
@@ -292,7 +304,7 @@ export function createUserMemoryVector({
         mentions: Number(r.access_count || 0),
         lastAccessedDaysAgo: Number(r.access_age_days || 0),
       }))
-      .filter((r) => r.importance >= minImportance);
+      .filter((r: { importance: number }) => r.importance >= minImportance);
   }
 
   // ─── consolidate ─────────────────────────────────────────────────────

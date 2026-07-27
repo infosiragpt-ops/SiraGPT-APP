@@ -538,6 +538,7 @@ interface Chat {
   } | null
   customGpt?: {
     id: string
+    creatorId?: string
     name: string
     description?: string
     iconUrl?: string
@@ -546,8 +547,25 @@ interface Chat {
     conversationStarters?: string[]
     modelName?: string
     temperature?: number
+    capabilities?: {
+      webBrowsing?: boolean
+      dataAnalysis?: boolean
+      imageGeneration?: boolean
+      codeInterpreter?: boolean
+      documents?: boolean
+      agentMode?: "off" | "auto" | "always"
+      skillsEnabled?: boolean
+      skillIds?: string[]
+      multipleArtifacts?: boolean
+      maxArtifactsPerTurn?: number
+    }
     visibility?: string
     shareId?: string
+    creator?: {
+      id: string
+      name?: string | null
+      avatar?: string | null
+    }
     knowledgeFiles?: Array<{
       id: string
       originalName: string
@@ -610,7 +628,7 @@ interface ChatContextType {
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { user, token } = useAuth()
+  const { user, isAuthenticated } = useAuth()
   // Mirror streaming state into the BackgroundStreams context so
   // the sidebar can show an "N chats in progress" pill and streams
   // keep advertising progress even when the user navigates to a
@@ -785,13 +803,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   // Load user's chats
   useEffect(() => {
-    if (user && token) {
+    if (user && isAuthenticated) {
       initializeChat()
     }
     // initializeChat has its own hasInitialized guard so it runs once
     // per session; listing it would lint-loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, token])
+  }, [user, isAuthenticated])
 
   const initializeChat = async () => {
     if (hasInitialized) return
@@ -1052,7 +1070,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const addMessage = useCallback(
     async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: { idempotencyKey?: string }) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
-      if (!activeChat || !user || !token) return;
+      if (!activeChat || !user || !isAuthenticated) return;
       const displayFiles = Array.isArray(fileIds)
         ? fileIds.filter(Boolean).map(normalizeMessageAttachment)
         : [];
@@ -1940,7 +1958,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, token, selectedModel, uploadedFiles, markChatStreaming, markChatIdle]
+    [currentChat, user, isAuthenticated, selectedModel, uploadedFiles, markChatStreaming, markChatIdle]
   );
 
   const retryPendingMessage = useCallback(async (msg: PendingMessage) => {
@@ -2004,10 +2022,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, [addMessage])
 
   useEffect(() => {
-    if (!user || !token) return
+    if (!user || !isAuthenticated) return
     void retryAll(retryPendingMessage)
     return subscribeOnlineRetry(retryPendingMessage)
-  }, [user, token, retryPendingMessage])
+  }, [user, isAuthenticated, retryPendingMessage])
 
   const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
     const displayFiles = Array.isArray(uploadedFiles)
@@ -2044,7 +2062,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
   ) => {
     const chatModel = options?.model || selectedModel;
-    if (!user || !token || !chatModel) return;
+    if (!user || !isAuthenticated || !chatModel) return;
     setChatType(type);
     try {
       const response = await apiClient.createChat({
@@ -2192,7 +2210,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // and adding them here would be use-before-define. Latest closure is
     // captured at call time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, token, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder, selectProvider, uploadedFiles]);
+  }, [user, isAuthenticated, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder, selectProvider, uploadedFiles]);
 
   const selectChat = useCallback(
     async (chatId: string) => {
@@ -2288,7 +2306,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   )
 
   const clearCurrentChat = useCallback(async () => {
-    if (!currentChat || !token) return
+    if (!currentChat || !isAuthenticated) return
 
     try {
       await apiClient.clearChat(currentChat.id)
@@ -2312,11 +2330,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Failed to clear chat:", error)
     }
-  }, [currentChat, token])
+  }, [currentChat, isAuthenticated])
 
   const deleteChat = useCallback(
     async (chatId: string): Promise<boolean> => {
-      if (!token) return false
+      if (!isAuthenticated) return false
 
       const wasCurrentChat = currentChatRef.current?.id === chatId
       discardActiveStreamForChat(chatId, { notifyBackend: true })
@@ -2341,7 +2359,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         return false
       }
     },
-    [discardActiveStreamForChat, token],
+    [discardActiveStreamForChat, isAuthenticated],
   )
 
 
@@ -3279,14 +3297,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
       setUploadedFiles([]); // Clear uploaded files after processing
     }
-    // `token` intentionally omitted — apiClient reads the latest auth
-    // token at call time, so adding it here only triggers unnecessary
-    // re-creations of this callback on token refresh.
+    // Auth transport intentionally omitted — apiClient reads the latest
+    // bearer state or browser cookie at call time, so transport changes do
+    // not need to recreate this callback.
   }, [currentChat, user, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
 
   const addThesisMessage = useCallback(async (topics: string[], chat?: any) => {
     const activeChat = chat || currentChat;
-    if (!activeChat || !user) return;
+    if (!activeChat || !user || !isAuthenticated) return;
 
     setIsLoading(true);
     try {
@@ -3335,7 +3353,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // be a use-before-define. We use the latest closure (recreated
     // each render is fine for a long-running stream-start handler).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat, user, token, selectChat]);
+  }, [currentChat, user, isAuthenticated, selectChat]);
 
   const pollThesisStatus = useCallback((sessionId: string, messageId: string, chatId: string) => {
     const interval = setInterval(async () => {

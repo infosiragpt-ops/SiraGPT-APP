@@ -13,6 +13,24 @@
 // ──────────────────────────────────────────────────────────────
 
 const crypto = require('crypto');
+const {
+  DATABASE_RUNTIME_URL_CONFLICT_CODE,
+  DATABASE_DIRECT_URL_CONFLICT_CODE,
+  DIRECT_DATABASE_URL_INVALID_CODE,
+  isDirectPostgresUrl,
+  isRemotePrismaUrl,
+  resolveDirectMigrationDatabaseUrl,
+  resolveRuntimeDatabaseUrl,
+} = require('../config/database-url');
+const { resolveSensitiveRateLimitPolicy } = require('../middleware/rate-limit-policy');
+const {
+  hasWildcardOrigin,
+  validateAllowedOrigins,
+} = require('../middleware/cors-policy');
+const {
+  isInvalidEnvironmentAlias,
+  isProductionLike,
+} = require('./environment');
 
 // Known placeholder patterns — matches both obvious examples and
 // common copy-paste defaults that should never reach production.
@@ -183,8 +201,19 @@ function checkNumeric(key, value, min, max, label) {
  */
 function validateStartupEnvironment(env = process.env, options = {}) {
   const { failOnBlocking = true } = options;
+  const production = isProductionLike(env);
 
   issues.length = 0; // Reset
+
+  if (isInvalidEnvironmentAlias(env)) {
+    issues.push({
+      key: 'NODE_ENV',
+      code: 'NODE_ENV_INVALID_ALIAS',
+      label: 'Runtime environment',
+      severity: Severity.BLOCKING,
+      message: 'NODE_ENV uses an unsupported alias; use the literal production environment name.',
+    });
+  }
 
   // ─── Required secrets (blocking if missing) ─────────────
   checkRequired('JWT_SECRET', env.JWT_SECRET, 'JWT Secret');
@@ -202,24 +231,97 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   checkEntropy('JWT_SECRET', env.JWT_SECRET, 'JWT Secret');
   checkEntropy('SESSION_SECRET', env.SESSION_SECRET, 'Session Secret');
 
+  // ─── RBAC rollout mode ─────────────────────────────────
+  // Production defaults to enforce when omitted. An explicit value must use
+  // the two-state contract; never echo the supplied value into diagnostics.
+  if (
+    env.RBAC_ENFORCEMENT_MODE != null
+    && !['shadow', 'enforce'].includes(String(env.RBAC_ENFORCEMENT_MODE).trim().toLowerCase())
+  ) {
+    issues.push({
+      key: 'RBAC_ENFORCEMENT_MODE',
+      code: 'RBAC_ENFORCEMENT_MODE_INVALID',
+      label: 'RBAC enforcement mode',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'RBAC_ENFORCEMENT_MODE must be either shadow or enforce.',
+    });
+  }
+
+  // ─── Session-token hash rolling migration ────────────────
+  // Production intentionally defaults to compat for this release. A hash-mode
+  // pod is rollback-incompatible with old readers, so the explicit drain
+  // acknowledgement is a blocking prerequisite for the flip.
+  const sessionTokenHashMode = String(env.SESSION_TOKEN_HASH_MODE || '').trim().toLowerCase();
+  if (sessionTokenHashMode && !['compat', 'hash'].includes(sessionTokenHashMode)) {
+    issues.push({
+      key: 'SESSION_TOKEN_HASH_MODE',
+      code: 'SESSION_TOKEN_HASH_MODE_INVALID',
+      label: 'Session token hash mode',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'SESSION_TOKEN_HASH_MODE must be either compat or hash.',
+    });
+  } else if (
+    production
+    && sessionTokenHashMode === 'hash'
+    && !/^(1|true|yes|on)$/i.test(String(env.SESSION_TOKEN_HASH_COMPAT_DRAINED || '').trim())
+  ) {
+    issues.push({
+      key: 'SESSION_TOKEN_HASH_MODE',
+      code: 'SESSION_TOKEN_HASH_MODE_UNSAFE_FLIP',
+      label: 'Session token hash mode',
+      severity: Severity.BLOCKING,
+      message: 'Hash mode requires confirmation that every compat-release replica has drained.',
+      hint: 'Drain old replicas, then set SESSION_TOKEN_HASH_MODE=hash and SESSION_TOKEN_HASH_COMPAT_DRAINED=1.',
+    });
+  }
+
   // ─── Database URL ──────────────────────────────────────
-  if (env.PRISMA_DATABASE_URL) {
-    if (!env.PRISMA_DATABASE_URL.startsWith('postgresql://') &&
-        !env.PRISMA_DATABASE_URL.startsWith('prisma+postgres://') &&
-        !env.PRISMA_DATABASE_URL.startsWith('postgres://')) {
+  let databaseUrl = null;
+  let databaseUrlConflict = false;
+  try {
+    databaseUrl = resolveRuntimeDatabaseUrl(env);
+  } catch (error) {
+    databaseUrlConflict = true;
+    issues.push({
+      key: 'PRISMA_DATABASE_URL',
+      code: DATABASE_RUNTIME_URL_CONFLICT_CODE,
+      label: 'Database URL',
+      severity: Severity.BLOCKING,
+      message: 'Conflicting runtime database URL aliases are configured. Refusing to choose between them.',
+    });
+  }
+  try {
+    resolveDirectMigrationDatabaseUrl(env);
+  } catch (error) {
+    const code = error?.code === DATABASE_DIRECT_URL_CONFLICT_CODE
+      ? DATABASE_DIRECT_URL_CONFLICT_CODE
+      : DIRECT_DATABASE_URL_INVALID_CODE;
+    issues.push({
+      key: 'DIRECT_DATABASE_URL',
+      code,
+      label: 'Direct migration database URL',
+      severity: Severity.BLOCKING,
+      message: code === DATABASE_DIRECT_URL_CONFLICT_CODE
+        ? 'Conflicting direct migration database URL aliases are configured.'
+        : 'DIRECT_DATABASE_URL must use the postgres: or postgresql: protocol.',
+    });
+  }
+  if (databaseUrl) {
+    if (!isDirectPostgresUrl(databaseUrl) && !isRemotePrismaUrl(databaseUrl)) {
       issues.push({
         key: 'PRISMA_DATABASE_URL',
+        code: 'RUNTIME_DATABASE_URL_INVALID',
         label: 'Database URL',
         severity: Severity.BLOCKING,
-        message: 'Database URL must start with postgresql://, postgres://, or prisma+postgres://',
+        message: 'Runtime database URL must start with postgresql://, postgres://, or prisma+postgres://',
       });
     }
-  } else {
+  } else if (!databaseUrlConflict) {
     issues.push({
       key: 'PRISMA_DATABASE_URL',
       label: 'Database URL',
       severity: Severity.BLOCKING,
-      message: 'PRISMA_DATABASE_URL is required but not set.',
+      message: 'PRISMA_DATABASE_URL (or DATABASE_URL fallback) is required but not set.',
     });
   }
 
@@ -233,13 +335,169 @@ function validateStartupEnvironment(env = process.env, options = {}) {
     });
   }
 
+  const sensitiveRateLimitPolicy = resolveSensitiveRateLimitPolicy(env);
+  if (!sensitiveRateLimitPolicy.valid) {
+    issues.push({
+      key: 'RATE_LIMIT_SENSITIVE_POLICY',
+      code: 'SENSITIVE_RATE_LIMIT_POLICY_INVALID',
+      label: 'Sensitive rate-limit policy',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'Sensitive rate-limit policy is invalid.',
+      hint: 'Use distributed in production; memory and fail-open are restricted to local/test environments.',
+    });
+  }
+  if (production) {
+    if (!env.REDIS_URL) {
+      issues.push({
+        key: 'REDIS_URL',
+        code: 'SENSITIVE_RATE_LIMIT_REDIS_REQUIRED',
+        label: 'Sensitive rate-limit distributed store',
+        severity: Severity.BLOCKING,
+        message: 'Production sensitive rate limits require a configured distributed store.',
+      });
+    }
+    if (String(env.RATE_LIMIT_STORE || '').trim().toLowerCase() === 'memory') {
+      issues.push({
+        key: 'RATE_LIMIT_STORE',
+        code: 'SENSITIVE_RATE_LIMIT_STORE_UNSAFE',
+        label: 'Rate-limit store',
+        severity: Severity.BLOCKING,
+        message: 'Production sensitive rate limits cannot use process-local storage.',
+      });
+    }
+    if (
+      sensitiveRateLimitPolicy.valid
+      && sensitiveRateLimitPolicy.configuredMode !== 'distributed'
+    ) {
+      issues.push({
+        key: 'RATE_LIMIT_SENSITIVE_POLICY',
+        code: 'SENSITIVE_RATE_LIMIT_POLICY_UNSAFE',
+        label: 'Sensitive rate-limit policy',
+        severity: Severity.BLOCKING,
+        message: 'Production sensitive rate limits must fail closed on distributed-store errors.',
+      });
+    }
+  }
+
   // ─── CORS origins (important for security) ─────────────
-  if (env.NODE_ENV === 'production' && (!env.CORS_ORIGINS || env.CORS_ORIGINS === '*')) {
+  const corsOrigins = String(env.CORS_ORIGINS || '').trim();
+  if (production && !corsOrigins) {
     issues.push({
       key: 'CORS_ORIGINS',
+      code: 'CORS_ORIGINS_REQUIRED',
       label: 'CORS Origins',
-      severity: Severity.WARNING,
-      message: 'CORS_ORIGINS is "*" in production. Restrict to specific origins.',
+      severity: Severity.BLOCKING,
+      message: 'Production requires an explicit CORS_ORIGINS allowlist.',
+    });
+  }
+  if (production && hasWildcardOrigin(corsOrigins)) {
+    issues.push({
+      key: 'CORS_ORIGINS',
+      code: 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN',
+      label: 'CORS Origins',
+      severity: Severity.BLOCKING,
+      message: 'Credentialed CORS cannot use a wildcard origin in production.',
+    });
+  } else if (production && corsOrigins) {
+    try {
+      validateAllowedOrigins(
+        corsOrigins.split(',').map((origin) => origin.trim()).filter(Boolean),
+      );
+    } catch (_error) {
+      issues.push({
+        key: 'CORS_ORIGINS',
+        code: 'CORS_ORIGINS_INVALID',
+        label: 'CORS Origins',
+        severity: Severity.BLOCKING,
+        message: 'Production CORS_ORIGINS contains an invalid origin.',
+      });
+    }
+  }
+  if (
+    production
+    && ['1', 'true'].includes(String(env.CSRF_DISABLED || '').trim().toLowerCase())
+  ) {
+    issues.push({
+      key: 'CSRF_DISABLED',
+      code: 'CSRF_DISABLED_IN_PRODUCTION',
+      label: 'CSRF protection',
+      severity: Severity.BLOCKING,
+      message: 'CSRF protection cannot be disabled in production.',
+    });
+  }
+
+  // ─── External MCP transport policy ──────────────────────
+  // Production is fail-closed: every user-registered MCP endpoint must be
+  // HTTPS and its normalized hostname must intersect this global allowlist.
+  // Diagnostics intentionally expose only stable codes, never host values.
+  try {
+    const { resolveMcpPolicyConfig } = require('../services/agent-harness/mcp-policy');
+    const mcpConfig = resolveMcpPolicyConfig(env);
+    const codes = new Set(mcpConfig.errors.map((entry) => entry.code));
+    if (codes.has('MCP_ALLOWED_HOSTS_REQUIRED')) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOWED_HOSTS',
+        code: 'MCP_ALLOWED_HOSTS_REQUIRED',
+        label: 'MCP allowed hosts',
+        severity: Severity.WARNING,
+        message: 'MCP is deny-all until a production hostname allowlist is configured.',
+      });
+    }
+    if (
+      mcpConfig.configured
+      && mcpConfig.errors.some((entry) => (
+        entry.code !== 'MCP_ALLOWED_HOSTS_REQUIRED'
+        && entry.code !== 'MCP_HTTP_FORBIDDEN_PRODUCTION'
+      ))
+    ) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOWED_HOSTS',
+        code: 'MCP_ALLOWED_HOSTS_INVALID',
+        label: 'MCP allowed hosts',
+        severity: production ? Severity.BLOCKING : Severity.WARNING,
+        message: 'MCP hostname allowlist contains an invalid or unsafe pattern.',
+      });
+    }
+    if (codes.has('MCP_HTTP_FORBIDDEN_PRODUCTION')) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOW_HTTP',
+        code: 'MCP_HTTP_FORBIDDEN_PRODUCTION',
+        label: 'MCP HTTP loopback override',
+        severity: Severity.BLOCKING,
+        message: 'Production MCP connections require HTTPS; the local HTTP override is forbidden.',
+      });
+    }
+    if (
+      production
+      && /^(1|true|yes|on)$/i.test(String(env.SIRAGPT_MCP_ALLOW_PRIVATE || '').trim())
+    ) {
+      issues.push({
+        key: 'SIRAGPT_MCP_ALLOW_PRIVATE',
+        code: 'MCP_PRIVATE_BYPASS_UNSUPPORTED',
+        label: 'MCP private-network bypass',
+        severity: Severity.BLOCKING,
+        message: 'Production cannot bypass MCP private-network protections.',
+      });
+    }
+    if (
+      production
+      && /^(0|false|no|off)$/i.test(String(env.SIRAGPT_MCP_SSRF_GUARD || '').trim())
+    ) {
+      issues.push({
+        key: 'SIRAGPT_MCP_SSRF_GUARD',
+        code: 'MCP_SSRF_GUARD_REQUIRED',
+        label: 'MCP DNS rebinding guard',
+        severity: Severity.BLOCKING,
+        message: 'Production cannot disable MCP DNS rebinding protections.',
+      });
+    }
+  } catch (_error) {
+    issues.push({
+      key: 'SIRAGPT_MCP_ALLOWED_HOSTS',
+      code: 'MCP_POLICY_VALIDATION_UNAVAILABLE',
+      label: 'MCP transport policy',
+      severity: production ? Severity.BLOCKING : Severity.WARNING,
+      message: 'MCP transport policy could not be validated.',
     });
   }
 
@@ -298,7 +556,7 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   }
 
   // ─── Production-specific checks ────────────────────────
-  if (env.NODE_ENV === 'production') {
+  if (production) {
     if (!env.CORS_ORIGINS || env.CORS_ORIGINS === '*') {
       // Already warned above — this is an extra nudge
     }

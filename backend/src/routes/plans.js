@@ -22,6 +22,7 @@
 const express = require('express');
 const { z } = require('zod');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const prisma = require('../config/database');
 
 const router = express.Router();
@@ -123,8 +124,9 @@ router.get('/:code', optionalAuth, async (req, res, next) => {
 
 // Admin write endpoints — mounted under /api/admin/plans (see index.js).
 const adminRouter = express.Router();
+adminRouter.use(authenticateToken, requireAdminRoutePermission);
 
-adminRouter.post('/', authenticateToken, async (req, res, next) => {
+adminRouter.post('/', async (req, res, next) => {
   try {
     if (!requireSuperAdmin(req, res)) return;
     const parse = CreatePlanSchema.safeParse(req.body);
@@ -146,7 +148,7 @@ adminRouter.post('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-adminRouter.patch('/:id', authenticateToken, async (req, res, next) => {
+adminRouter.patch('/:id', async (req, res, next) => {
   try {
     if (!requireSuperAdmin(req, res)) return;
     const parse = UpdatePlanSchema.safeParse(req.body);

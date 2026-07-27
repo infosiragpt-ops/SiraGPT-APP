@@ -80,20 +80,32 @@ function listFilesRecursive(directory) {
   return files
 }
 
-function readPngDimensions(filePath) {
+function readPngInfo(filePath) {
   const buffer = fs.readFileSync(filePath)
   const signature = "89504e470d0a1a0a"
-  if (buffer.length < 24 || buffer.subarray(0, 8).toString("hex") !== signature) {
+  if (buffer.length < 26 || buffer.subarray(0, 8).toString("hex") !== signature) {
     throw new Error("invalid PNG signature")
+  }
+
+  const colorType = buffer[25]
+  let hasTransparencyChunk = false
+  let offset = 8
+  while (offset + 12 <= buffer.length) {
+    const chunkLength = buffer.readUInt32BE(offset)
+    const chunkType = buffer.subarray(offset + 4, offset + 8).toString("ascii")
+    if (chunkType === "tRNS") hasTransparencyChunk = true
+    offset += 12 + chunkLength
+    if (chunkType === "IEND") break
   }
 
   return {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
+    hasAlpha: colorType === 4 || colorType === 6 || hasTransparencyChunk,
   }
 }
 
-function readJpegDimensions(filePath) {
+function readJpegInfo(filePath) {
   const buffer = fs.readFileSync(filePath)
   if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
     throw new Error("invalid JPEG signature")
@@ -128,6 +140,7 @@ function readJpegDimensions(filePath) {
       return {
         height: buffer.readUInt16BE(offset + 5),
         width: buffer.readUInt16BE(offset + 7),
+        hasAlpha: false,
       }
     }
 
@@ -137,9 +150,9 @@ function readJpegDimensions(filePath) {
   throw new Error("JPEG dimensions not found")
 }
 
-function readImageDimensions(filePath, format) {
-  if (format === "png") return readPngDimensions(filePath)
-  if (format === "jpg" || format === "jpeg") return readJpegDimensions(filePath)
+function readImageInfo(filePath, format) {
+  if (format === "png") return readPngInfo(filePath)
+  if (format === "jpg" || format === "jpeg") return readJpegInfo(filePath)
   return null
 }
 
@@ -165,6 +178,16 @@ function validateDimensions(actual, expected) {
   if (Number.isInteger(expected.maxHeight) && actual.height > expected.maxHeight) {
     issues.push(`expected height <= ${expected.maxHeight}, got ${actual.height}`)
   }
+  if (Array.isArray(expected.allowedSizes) && expected.allowedSizes.length > 0) {
+    const allowed = expected.allowedSizes.some(
+      (size) => size.width === actual.width && size.height === actual.height,
+    )
+    if (!allowed) {
+      issues.push(
+        `expected one of ${expected.allowedSizes.map((size) => `${size.width}x${size.height}`).join(", ")}, got ${actual.width}x${actual.height}`,
+      )
+    }
+  }
 
   return issues
 }
@@ -183,6 +206,7 @@ function validateAsset(platformKey, asset, required) {
     format: asset.format || normalizeExtension(filePath),
     sizeBytes: 0,
     dimensions: null,
+    hasAlpha: null,
     issues: [],
   }
 
@@ -214,10 +238,15 @@ function validateAsset(platformKey, asset, required) {
   }
 
   try {
-    result.dimensions = readImageDimensions(filePath, expectedFormat || actualFormat)
+    const imageInfo = readImageInfo(filePath, expectedFormat || actualFormat)
+    result.dimensions = imageInfo ? { width: imageInfo.width, height: imageInfo.height } : null
+    result.hasAlpha = imageInfo?.hasAlpha ?? null
     result.issues.push(...validateDimensions(result.dimensions, asset.dimensions))
+    if (asset.allowAlpha === false && result.hasAlpha === true) {
+      result.issues.push("alpha/transparency is not allowed")
+    }
   } catch (error) {
-    if (asset.dimensions) result.issues.push(error.message)
+    if (asset.dimensions || asset.allowAlpha === false) result.issues.push(error.message)
   }
 
   if (result.issues.length > 0 && result.status === "ready") {
@@ -269,6 +298,7 @@ function validateCollection(platformKey, collection, required) {
       format,
       sizeBytes: fs.statSync(filePath).size,
       dimensions: null,
+      hasAlpha: null,
       issues: [],
     }
 
@@ -277,8 +307,13 @@ function validateCollection(platformKey, collection, required) {
     }
 
     try {
-      fileResult.dimensions = readImageDimensions(filePath, format)
+      const imageInfo = readImageInfo(filePath, format)
+      fileResult.dimensions = imageInfo ? { width: imageInfo.width, height: imageInfo.height } : null
+      fileResult.hasAlpha = imageInfo?.hasAlpha ?? null
       fileResult.issues.push(...validateDimensions(fileResult.dimensions, collection.dimensions))
+      if (collection.allowAlpha === false && fileResult.hasAlpha === true) {
+        fileResult.issues.push("alpha/transparency is not allowed")
+      }
     } catch (error) {
       fileResult.issues.push(error.message)
     }

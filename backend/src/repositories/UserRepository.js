@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  assertRbacSystemPrincipalMutable,
+} = require('../services/rbac-system-assignments');
+
 /**
  * UserRepository — single-responsibility data access for the `user`
  * table. Owns every prisma.user.* call that the auth flow uses and
@@ -26,13 +30,24 @@ class UserRepository {
    * @param {import('@prisma/client').PrismaClient} deps.prisma
    * @param {<T>(fn: () => Promise<T>, opts?: object) => Promise<T>} deps.withRetry
    */
-  constructor({ prisma, withRetry }) {
+  constructor({ prisma, withRetry, rbacAssignments = null }) {
     if (!prisma) throw new Error('UserRepository: prisma is required');
     if (typeof withRetry !== 'function') {
       throw new Error('UserRepository: withRetry must be a function');
     }
     this.prisma = prisma;
     this.withRetry = withRetry;
+    this.rbacAssignments = rbacAssignments;
+  }
+
+  _createUserWithRbac(data) {
+    if (!this.rbacAssignments
+        || typeof this.rbacAssignments.createLegacyAdminUser !== 'function') {
+      const error = new Error('USER_REPOSITORY_RBAC_LIFECYCLE_REQUIRED');
+      error.code = 'USER_REPOSITORY_RBAC_LIFECYCLE_REQUIRED';
+      throw error;
+    }
+    return this.rbacAssignments.createLegacyAdminUser({ data });
   }
 
   findByEmail(email, { select } = {}) {
@@ -50,6 +65,7 @@ class UserRepository {
   }
 
   updateGoogleIdentity(userId, { googleId, gmailTokens, googleServicesTokens }) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -60,6 +76,7 @@ class UserRepository {
   }
 
   clearGmailTokens(userId) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -76,6 +93,7 @@ class UserRepository {
    * for that path to keep intent obvious at the call site).
    */
   updateGmailTokens(userId, sealedBlob) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -91,6 +109,7 @@ class UserRepository {
    * Same contract as `updateGmailTokens` — ciphertext only.
    */
   updateGoogleServicesTokens(userId, sealedBlob) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -106,6 +125,7 @@ class UserRepository {
    * with `clearGmailTokens` so disconnect handlers look symmetric.
    */
   clearGoogleServicesTokens(userId) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -132,17 +152,16 @@ class UserRepository {
     monthlyLimit = 10000,
   }) {
     return this.withRetry(
-      () => this.prisma.user.create({
-        data: {
+      () => this._createUserWithRbac({
           name,
           email,
           password: passwordHash,
           plan,
           isAdmin,
+          isSuperAdmin: false,
           apiUsage,
           monthlyCallLimit,
           monthlyLimit,
-        },
       }),
       { label: 'user-repo.createPasswordUser' }
     );
@@ -154,6 +173,7 @@ class UserRepository {
    * callers don't need the full row.
    */
   updateRecoveryCodes(userId, totpRecoveryCodes) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -169,6 +189,7 @@ class UserRepository {
    * WebAuthn authentication so the signCount stays monotonic.
    */
   updateWebauthnCredentials(userId, webauthnCredentials) {
+    assertRbacSystemPrincipalMutable(userId);
     return this.withRetry(
       () => this.prisma.user.update({
         where: { id: userId },
@@ -194,8 +215,7 @@ class UserRepository {
     monthlyLimit = 10000,
   }) {
     return this.withRetry(
-      () => this.prisma.user.create({
-        data: {
+      () => this._createUserWithRbac({
           googleId,
           name,
           email,
@@ -203,12 +223,12 @@ class UserRepository {
           password: passwordHash,
           plan,
           isAdmin,
+          isSuperAdmin: false,
           apiUsage,
           monthlyCallLimit,
           monthlyLimit,
           gmailTokens,
           googleServicesTokens,
-        },
       }),
       { label: 'user-repo.createOAuthUser' }
     );

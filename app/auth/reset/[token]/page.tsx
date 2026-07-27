@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "@/lib/api"
 import { toast } from "sonner"
 
@@ -35,11 +36,11 @@ function ResetPasswordPageContent() {
     setError(null)
     setIsLoading(true)
     try {
-      const res = await fetch(`${getNormalizedApiBaseUrl()}/auth/reset-password`, {
+      const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/auth/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, password }),
-      })
+      }, { bearerToken: null })
       if (res.ok) {
         setDone(true)
         toast.success("Contraseña actualizada. Ya puedes iniciar sesión.")

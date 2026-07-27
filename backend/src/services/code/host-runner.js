@@ -68,7 +68,18 @@ function flagEnabled(value, fallback = false) {
 
 function enabled() {
   const flag = String(process.env.CODE_HOST_RUNNER || '').toLowerCase();
-  if (flag === '1' || flag === 'true' || flag === 'on') return true;
+  if (flag === '1' || flag === 'true' || flag === 'on') {
+    // This runner executes npm lifecycle scripts and `/bin/sh -c` in the same
+    // container/process namespace as the API. An allowlist limits WHO can reach
+    // it; it does not isolate WHAT their generated code can access. Production
+    // therefore needs an intentionally loud second key and remains off by
+    // default even when an old deployment still carries CODE_HOST_RUNNER=1.
+    if (process.env.NODE_ENV === 'production') {
+      return String(process.env.CODE_HOST_RUNNER_UNSAFE_PRODUCTION_ACK || '').trim()
+        === 'I_UNDERSTAND_THIS_EXECUTES_UNTRUSTED_CODE_ON_THE_API_HOST';
+    }
+    return true;
+  }
   if (flag === '0' || flag === 'false' || flag === 'off') return false;
   // Default: on for dev, off in production (don't run untrusted installs on the web server).
   return process.env.NODE_ENV !== 'production';

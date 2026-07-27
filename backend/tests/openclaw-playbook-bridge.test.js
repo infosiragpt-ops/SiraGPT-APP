@@ -91,9 +91,21 @@ test('buildOpenClawIntegrationMap can audit a live external root without activat
   assert.equal(matrix.source.commit, 'testsha');
   assert.equal(matrix.counts.upstreamSkills, 1);
   assert.equal(matrix.counts.upstreamPublicSkills, 1);
+  assert.equal(matrix.counts.publicSkillCoverage.covered, 1);
   assert.ok(matrix.skills.some((skill) => skill.upstream === 'verify-release' && skill.availableSkills.includes('quality-gates')));
-  assert.ok(matrix.public_skills.some((skill) => skill.upstream === 'weather'));
+  assert.ok(matrix.public_skills.some((skill) => skill.upstream === 'weather' && skill.status === 'covered'));
   assert.ok(matrix.folders.some((folder) => folder.openclaw === 'src' && folder.upstream_file_count === 1));
+});
+
+test('recommendAdaptedPlaybooks includes native public capabilities', () => {
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-public-recommend-'));
+  fs.mkdirSync(path.join(dir, '.agents', 'skills'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'skills', 'summarize'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'skills', 'summarize', 'SKILL.md'), '---\nname: summarize\ndescription: Summarize URLs and files\n---\n# Summarize\n');
+  const matrix = buildOpenClawIntegrationMap({ repoRoot, upstreamRepoRoot: dir });
+  const recs = recommendAdaptedPlaybooks('summarize este archivo', { matrix });
+  assert.ok(recs.some((rec) => rec.upstream === 'summarize' && rec.adaptedSkills.includes('summarize')));
 });
 
 test('legacy skill registry exposes OpenClaw playbook import for runtime recommendation', () => {

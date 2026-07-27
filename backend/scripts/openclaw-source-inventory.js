@@ -13,11 +13,13 @@ const upstreamCommitIndex = args.indexOf('--upstream-commit');
 const upstreamCommit = upstreamCommitIndex >= 0 ? args[upstreamCommitIndex + 1] : undefined;
 const maxSlicesIndex = args.indexOf('--max-slices');
 const maxActiveSlicesPerPass = maxSlicesIndex >= 0 ? Number(args[maxSlicesIndex + 1]) : undefined;
+const requireGitTree = args.includes('--require-git-tree');
 
 const inventory = buildOpenClawSourceInventory({
   upstreamRepoRoot,
   upstreamCommit,
   maxActiveSlicesPerPass,
+  requireGitTree,
 });
 
 if (json) {
@@ -27,10 +29,12 @@ if (json) {
 
 console.log(`OpenClaw source inventory: ${inventory.source.repository}@${inventory.source.commit || 'unknown'}`);
 console.log(`Audit root: ${inventory.source.auditRoot}`);
+console.log(`Inventory mode: ${inventory.source.inventoryMode}`);
 console.log(`License: ${inventory.source.license} (${inventory.source.licenseConfidence})`);
 console.log(`Folders present: ${inventory.totals.foldersPresent}/${inventory.totals.foldersInventoried}`);
 console.log(`Files: ${inventory.totals.files}`);
-console.log(`Estimated text lines: ${inventory.totals.lines}`);
+console.log(`Coverage: ${inventory.coverage.percent == null ? 'working-tree only' : `${inventory.coverage.percent}% of tracked files`}`);
+console.log(`Estimated text lines: ${inventory.totals.lines == null ? 'not materialized' : inventory.totals.lines}`);
 console.log(`Package manifests: ${inventory.totals.packageManifests}`);
 console.log(`Native rewrite candidates: ${inventory.totals.nativeRewriteCandidates}`);
 console.log(`Blocked/reference-only: ${inventory.totals.blockedOrReferenceOnly}`);

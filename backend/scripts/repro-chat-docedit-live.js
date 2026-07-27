@@ -20,6 +20,7 @@ const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const { parseZip } = require('../src/services/zip-parser');
 const { isValidOoxml } = require('../src/services/doc-agent');
+const { createSessionRecord } = require('../src/services/auth/session-token-persistence');
 
 const prisma = new PrismaClient();
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5151';
@@ -59,7 +60,12 @@ async function main() {
     data: { email, name: 'Chat DocEdit E2E', password: 'x', plan: 'ENTERPRISE', monthlyLimit: 99999999, monthlyCallLimit: 99999999 },
   });
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h', audience: 'siragpt-clients', issuer: 'siragpt-api' });
-  await prisma.session.create({ data: { userId: user.id, token, fingerprint: null, expiresAt: new Date(Date.now() + 3600_000) } });
+  await createSessionRecord(prisma, {
+    userId: user.id,
+    token,
+    fingerprint: null,
+    expiresAt: new Date(Date.now() + 3600_000),
+  });
   const H = { Authorization: `Bearer ${token}` };
 
   let pass = false;

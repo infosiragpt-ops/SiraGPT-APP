@@ -57,7 +57,7 @@ function splitBullet(value) {
 function businessAdministrationSlides(title) {
   return [
     {
-      title: 'Panorama ejecutivo',
+      title: 'La gestión alinea toda la empresa',
       kicker: 'Propósito de gestión',
       summary: 'La administración de empresas convierte recursos limitados en resultados sostenibles. Integra personas, procesos, finanzas y mercado para crear valor con control y dirección.',
       bullets: [
@@ -74,7 +74,7 @@ function businessAdministrationSlides(title) {
       notes: 'Abrir explicando que administrar no es solo supervisar tareas: es diseñar un sistema para lograr objetivos, anticipar riesgos y aprender de los resultados.',
     },
     {
-      title: 'Funciones administrativas',
+      title: 'El ciclo directivo reduce incertidumbre',
       kicker: 'Ciclo directivo',
       summary: 'El ciclo clásico de administración ordena el trabajo directivo en planificación, organización, dirección y control. Cada función reduce incertidumbre y mejora la ejecución.',
       bullets: [
@@ -92,7 +92,7 @@ function businessAdministrationSlides(title) {
       notes: 'Presentar el ciclo como una rueda: cada vuelta entrega datos para mejorar la siguiente planificación.',
     },
     {
-      title: 'Áreas funcionales de la empresa',
+      title: 'Las áreas funcionan como un sistema',
       kicker: 'Sistema empresarial',
       summary: 'Una empresa funciona como un sistema interdependiente. Finanzas, marketing, operaciones, talento y tecnología deben trabajar con objetivos compartidos.',
       bullets: [
@@ -100,6 +100,23 @@ function businessAdministrationSlides(title) {
         { label: 'Marketing y ventas', text: 'entiende el mercado, posiciona la oferta y desarrolla ingresos' },
         { label: 'Operaciones', text: 'transforma recursos en productos o servicios con calidad y eficiencia' },
         { label: 'Talento y tecnología', text: 'habilitan capacidades, cultura, datos y mejora continua' },
+      ],
+      layout: 'two_column',
+      columns: [
+        {
+          heading: 'Finanzas y mercado',
+          items: [
+            'gestiona liquidez, inversión, costos, margen y riesgo financiero',
+            'entiende el mercado, posiciona la oferta y desarrolla ingresos',
+          ],
+        },
+        {
+          heading: 'Operaciones y capacidades',
+          items: [
+            'transforma recursos en productos o servicios con calidad y eficiencia',
+            'habilita talento, tecnología, cultura, datos y mejora continua',
+          ],
+        },
       ],
       metrics: [
         { label: 'Finanzas', value: 86 },
@@ -110,7 +127,7 @@ function businessAdministrationSlides(title) {
       notes: 'Usar esta lámina para explicar por qué los problemas empresariales rara vez pertenecen a una sola área.',
     },
     {
-      title: 'Modelo de gestión profesional',
+      title: 'La disciplina convierte estrategia en hábitos',
       kicker: 'Gobernanza y ejecución',
       summary: 'La gestión profesional combina objetivos claros, procesos simples, roles definidos y reuniones de seguimiento. El valor aparece cuando la estrategia se traduce en hábitos operativos.',
       bullets: [
@@ -127,7 +144,7 @@ function businessAdministrationSlides(title) {
       notes: 'Conectar la gestión profesional con disciplina de ejecución: lo que no tiene dueño, fecha y métrica suele quedarse en intención.',
     },
     {
-      title: 'Toma de decisiones empresariales',
+      title: 'Definir el problema mejora las decisiones',
       kicker: 'De intuición a evidencia',
       summary: 'La administración de empresas mejora cuando las decisiones combinan experiencia, datos y análisis de alternativas. La calidad de decisión depende del problema que se define.',
       bullets: [
@@ -145,7 +162,7 @@ function businessAdministrationSlides(title) {
       notes: 'Resaltar que decidir rápido no siempre es decidir bien; la rapidez debe estar apoyada en información suficiente y criterios explícitos.',
     },
     {
-      title: 'Indicadores clave de desempeño',
+      title: 'Los KPI convierten objetivos en señales',
       kicker: 'Control ejecutivo',
       summary: 'Los KPI convierten objetivos en señales de gestión. Deben medir productividad, rentabilidad, satisfacción, cumplimiento y salud operativa sin saturar al equipo.',
       bullets: [
@@ -163,7 +180,7 @@ function businessAdministrationSlides(title) {
       notes: 'Recomendar pocos indicadores bien definidos. Un tablero útil muestra causas probables y acciones, no solo números.',
     },
     {
-      title: 'Riesgos de gestión y controles',
+      title: 'Los controles protegen velocidad y valor',
       kicker: 'Prevención ejecutiva',
       summary: 'La administración profesional identifica riesgos antes de que se conviertan en crisis. Los controles deben ser proporcionales, simples y visibles para los equipos.',
       bullets: [
@@ -181,9 +198,9 @@ function businessAdministrationSlides(title) {
       notes: 'Explicar que el control no debe frenar la empresa; debe proteger la velocidad con límites claros.',
     },
     {
-      title: 'Plan de acción 30-60-90',
+      title: 'Próximos pasos con un plan 30-60-90',
       kicker: 'Implementación',
-      summary: 'Una presentación sobre administración de empresas debe cerrar con ejecución. El plan 30-60-90 transforma el diagnóstico en prioridades concretas.',
+      summary: 'La ejecución comienza con un plan 30-60-90 que transforma el diagnóstico en prioridades concretas, responsables visibles y revisiones periódicas.',
       bullets: [
         { label: '30 días', text: 'diagnosticar procesos críticos, KPIs actuales y brechas de coordinación' },
         { label: '60 días', text: 'rediseñar responsabilidades, tablero de control y cadencia de seguimiento' },
@@ -318,14 +335,34 @@ function genericSlides({ title, prompt, sections = [], blocks = [] }) {
 function normalizeSlides(slides) {
   return slides
     .filter(Boolean)
-    .map((slide, index) => ({
-      title: cleanText(slide.title || `Sección ${index + 1}`, 70),
-      kicker: cleanText(slide.kicker || `Parte ${index + 1}`, 42),
-      summary: cleanText(slide.summary || '', 280),
-      bullets: (slide.bullets || []).map(splitBullet).filter((bullet) => bullet.text).slice(0, 5),
-      metrics: (slide.metrics || []).filter((metric) => metric && metric.label).slice(0, 4),
-      notes: cleanText(slide.notes || `Presentar ${slide.title || `sección ${index + 1}`}.`, 320),
-    }))
+    .map((slide, index) => {
+      const bullets = (slide.bullets || []).map(splitBullet).filter((bullet) => bullet.text).slice(0, 5);
+      const explicitColumns = (Array.isArray(slide.columns) ? slide.columns : [])
+        .slice(0, 2)
+        .map((column) => ({
+          heading: cleanText(column?.heading || '', 42),
+          items: (Array.isArray(column?.items) ? column.items : []).map((item) => cleanText(item, 120)).filter(Boolean).slice(0, 4),
+        }))
+        .filter((column) => column.items.length > 0);
+      const useColumns = explicitColumns.length === 2 || (index > 0 && index % 3 === 2 && bullets.length >= 4);
+      return {
+        layout: useColumns ? 'two_column' : (slide.layout || 'bullets'),
+        title: cleanText(slide.title || `Sección ${index + 1}`, 70),
+        kicker: cleanText(slide.kicker || `Parte ${index + 1}`, 42),
+        summary: cleanText(slide.summary || '', 280),
+        bullets,
+        columns: useColumns ? (explicitColumns.length === 2 ? explicitColumns : [
+          { heading: [bullets[0]?.label, bullets[1]?.label].filter(Boolean).join(' y ') || 'Prioridades', items: bullets.slice(0, 2).map((bullet) => bullet.text) },
+          { heading: [bullets[2]?.label, bullets[3]?.label].filter(Boolean).join(' y ') || 'Ejecución', items: bullets.slice(2, 4).map((bullet) => bullet.text) },
+        ]) : undefined,
+        takeaway: cleanText(slide.takeaway || bullets[0]?.text || '', 130),
+        // Decorative percentages such as "claridad 82" or "impacto 78"
+        // are deliberately discarded. Charts only survive the grounded LLM
+        // path, where every numeric value must exist in source evidence.
+        metrics: [],
+        notes: cleanText(slide.notes || `Presentar ${slide.title || `sección ${index + 1}`}.`, 320),
+      };
+    })
     .filter((slide) => slide.summary || slide.bullets.length > 0);
 }
 

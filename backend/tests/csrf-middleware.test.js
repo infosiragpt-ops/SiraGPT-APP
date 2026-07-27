@@ -114,6 +114,38 @@ describe('requireCsrf — bearer auth bypass', () => {
 });
 
 describe('requireCsrf — validation', () => {
+  function withCsrfEnv(overrides, fn) {
+    const keys = ['NODE_ENV', 'CORS_ORIGINS', 'CSRF_DISABLED'];
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    Object.assign(process.env, overrides);
+    for (const key of keys) {
+      if (overrides[key] === undefined) delete process.env[key];
+    }
+    try {
+      return fn();
+    } finally {
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  }
+
+  function validCookieRequest(token, overrides = {}) {
+    return mockReq({
+      headers: {
+        origin: 'https://app.example.com',
+        'sec-fetch-site': 'same-origin',
+        'x-csrf-token': token,
+      },
+      cookies: {
+        token: 'session-jwt',
+        _csrf_secret: hashToken(token),
+      },
+      ...overrides,
+    });
+  }
+
   test('rejects missing token + secret with 403 csrf_invalid/missing_token', () => {
     const req = mockReq({ headers: { 'x-request-id': 'req-csrf-missing' } });
     const res = mockRes();
@@ -154,6 +186,61 @@ describe('requireCsrf — validation', () => {
     assert.equal(called, true);
   });
 
+  test('cookie-auth mutations require a trusted Origin in addition to a valid token', () => {
+    withCsrfEnv({
+      NODE_ENV: 'test',
+      CORS_ORIGINS: 'https://app.example.com',
+      CSRF_DISABLED: undefined,
+    }, () => {
+      const token = generateToken();
+      for (const origin of [undefined, 'https://evil.example.com', 'null']) {
+        const req = validCookieRequest(token);
+        if (origin === undefined) delete req.headers.origin;
+        else req.headers.origin = origin;
+        const res = mockRes();
+        requireCsrf(req, res, () => assert.fail('untrusted cookie-auth Origin must not pass'));
+        assert.equal(res.statusCode, 403);
+        assert.equal(res.body.reason, 'untrusted_origin');
+      }
+    });
+  });
+
+  test('cookie-auth mutations require same-origin or same-site fetch metadata', () => {
+    withCsrfEnv({
+      NODE_ENV: 'test',
+      CORS_ORIGINS: 'https://app.example.com',
+      CSRF_DISABLED: undefined,
+    }, () => {
+      const token = generateToken();
+      for (const fetchSite of [undefined, 'cross-site', 'none']) {
+        const req = validCookieRequest(token);
+        if (fetchSite === undefined) delete req.headers['sec-fetch-site'];
+        else req.headers['sec-fetch-site'] = fetchSite;
+        const res = mockRes();
+        requireCsrf(req, res, () => assert.fail('unsafe fetch-site must not pass'));
+        assert.equal(res.statusCode, 403);
+        assert.equal(res.body.reason, 'invalid_fetch_site');
+      }
+    });
+  });
+
+  test('cookie-auth mutations accept trusted same-origin and same-site contexts', () => {
+    withCsrfEnv({
+      NODE_ENV: 'test',
+      CORS_ORIGINS: 'https://app.example.com',
+      CSRF_DISABLED: undefined,
+    }, () => {
+      for (const fetchSite of ['same-origin', 'same-site']) {
+        const token = generateToken();
+        const req = validCookieRequest(token);
+        req.headers['sec-fetch-site'] = fetchSite;
+        let called = false;
+        requireCsrf(req, mockRes(), () => { called = true; });
+        assert.equal(called, true);
+      }
+    });
+  });
+
   test('accepts body _csrf field as fallback', () => {
     const token = generateToken();
     const req = mockReq({
@@ -176,6 +263,32 @@ describe('requireCsrf — validation', () => {
     let called = false;
     requireCsrf(req, mockRes(), () => { called = true; });
     assert.equal(called, true);
+  });
+
+  test('stateless fallback tokens are bound to the issuing session when available', () => {
+    withCsrfEnv({
+      NODE_ENV: 'test',
+      CORS_ORIGINS: 'https://app.example.com',
+      CSRF_DISABLED: undefined,
+    }, () => {
+      const token = makeStatelessToken('session-1');
+      const matching = validCookieRequest(token, {
+        sessionID: 'session-1',
+        cookies: { token: 'session-jwt' },
+      });
+      let called = false;
+      requireCsrf(matching, mockRes(), () => { called = true; });
+      assert.equal(called, true);
+
+      const wrongSession = validCookieRequest(token, {
+        sessionID: 'session-2',
+        cookies: { token: 'session-jwt' },
+      });
+      const res = mockRes();
+      requireCsrf(wrongSession, res, () => assert.fail('cross-session token replay must fail'));
+      assert.equal(res.statusCode, 403);
+      assert.equal(res.body.reason, 'missing_token');
+    });
   });
 
   test('rejects a forged token when the secret cookie is absent', () => {
@@ -232,15 +345,30 @@ describe('requireCsrf — validation', () => {
   });
 
   test('CSRF_DISABLED=1 bypasses for tests/dev', () => {
-    const prev = process.env.CSRF_DISABLED;
-    process.env.CSRF_DISABLED = '1';
-    try {
+    withCsrfEnv({ NODE_ENV: 'test', CSRF_DISABLED: '1' }, () => {
       let called = false;
       requireCsrf(mockReq(), mockRes(), () => { called = true; });
       assert.equal(called, true);
-    } finally {
-      if (prev === undefined) delete process.env.CSRF_DISABLED;
-      else process.env.CSRF_DISABLED = prev;
-    }
+    });
+  });
+
+  test('CSRF_DISABLED cannot bypass protection in literal production', () => {
+    withCsrfEnv({
+      NODE_ENV: 'production',
+      CORS_ORIGINS: 'https://app.example.com',
+      CSRF_DISABLED: '1',
+    }, () => {
+      const req = mockReq({
+        headers: {
+          origin: 'https://app.example.com',
+          'sec-fetch-site': 'same-origin',
+        },
+        cookies: { token: 'session-jwt' },
+      });
+      const res = mockRes();
+      requireCsrf(req, res, () => assert.fail('production CSRF bypass must be ignored'));
+      assert.equal(res.statusCode, 403);
+      assert.equal(res.body.reason, 'missing_token');
+    });
   });
 });

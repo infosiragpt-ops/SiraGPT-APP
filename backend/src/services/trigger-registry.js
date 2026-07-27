@@ -186,6 +186,21 @@ function getSlackSender() {
 }
 function __setSlackSender(fn) { slackSenderRef = fn; }
 
+function isSlackWebhookUrl(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      && url.hostname === 'hooks.slack.com'
+      && url.port === ''
+      && url.username === ''
+      && url.password === ''
+      && url.pathname.startsWith('/services/');
+  } catch {
+    return false;
+  }
+}
+
 // ---------------- idempotency LRU ----------------
 const idemLru = new Map(); // hash → expiresAt
 
@@ -279,6 +294,14 @@ async function publish(event, payload, userId, opts = {}) {
 
   let dispatched = 0;
   const errors = [];
+  const integrations = {
+    slack: {
+      configured: false,
+      attempted: false,
+      ok: true,
+      skipped: 'not_configured',
+    },
+  };
 
   // --- 0. In-app notification inbox (ratchet 45, Task 1)
   // Persist a Notification row for events that surface in the user
@@ -392,23 +415,62 @@ async function publish(event, payload, userId, opts = {}) {
         });
       }
       if (slack && slack.webhookUrl) {
+        integrations.slack = {
+          configured: true,
+          attempted: false,
+          ok: false,
+        };
         const slackSender = getSlackSender();
-        if (slackSender && typeof slackSender.sendEventNotification === 'function') {
-          await slackSender.sendEventNotification({
-            webhookUrl: slack.webhookUrl,
-            event,
-            userId,
-            payload,
+        if (
+          slackSender
+          && typeof slackSender.decryptToken === 'function'
+          && typeof slackSender.sendEventNotification === 'function'
+        ) {
+          const webhookUrl = slackSender.decryptToken(slack.webhookUrl);
+          if (!isSlackWebhookUrl(webhookUrl)) {
+            errors.push({
+              stage: 'slack',
+              message: 'Slack integration credential is invalid',
+            });
+          } else {
+            integrations.slack.attempted = true;
+            const result = await slackSender.sendEventNotification({
+              webhookUrl,
+              event,
+              userId,
+              payload,
+            });
+            integrations.slack.status = result?.status;
+            if (result?.ok !== true) {
+              errors.push({
+                stage: 'slack',
+                message: `Slack delivery returned ok:false${result?.status ? ` (${result.status})` : ''}`,
+              });
+            } else {
+              integrations.slack.ok = true;
+              dispatched += 1;
+            }
+          }
+        } else {
+          errors.push({
+            stage: 'slack',
+            message: 'Slack integration is configured but its sender is unavailable',
           });
-          dispatched += 1;
         }
       }
-    } catch (err) {
-      errors.push({ stage: 'slack', message: err?.message || String(err) });
+    } catch {
+      integrations.slack.ok = false;
+      // Sender/fetch errors can embed the request URL. Never return the
+      // decrypted Slack credential in a publish result or log payload.
+      errors.push({ stage: 'slack', message: 'Slack integration delivery failed' });
     }
   }
 
-  return { dispatched, deduped: false, errors };
+  // A failed fan-out is not a completed idempotent effect. Let a durable
+  // caller (for example, the Stripe outbox) retry the same payload instead
+  // of converting the retry into a false-positive dedupe success.
+  if (errors.length > 0) idemLru.delete(hash);
+  return { dispatched, deduped: false, errors, integrations };
 }
 
 function isKnownTrigger(name) { return KNOWN_SET.has(name); }
@@ -444,4 +506,5 @@ module.exports = {
   eventMatches,
   endpointMatchesEvent,
   endpointFiltersAllow,
+  isSlackWebhookUrl,
 };

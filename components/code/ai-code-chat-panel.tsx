@@ -23,6 +23,7 @@
 import * as React from "react"
 import {
   AlertTriangle,
+  ArrowLeft,
   ArrowUp,
   BookOpen,
   BrainCircuit,
@@ -52,6 +53,7 @@ import {
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
+import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
 import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
@@ -85,6 +87,15 @@ import {
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
+import {
+  agentCompanyDisplayName,
+} from "@/lib/code-agent-company"
+import {
+  buildProactiveCompanySystemBlock,
+  claimPendingSeedPrompt,
+  getProactiveCompanyState,
+  setProactiveCompanyObjective,
+} from "@/lib/code-agent-company-proactive"
 import { CODE_OPEN_TOOL_LAUNCHER_EVENT, setActiveCodexProject, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
@@ -124,6 +135,17 @@ import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi } from "@/lib/codex/codex-api"
+import { runWhenCodexProjectIdle } from "@/lib/codex/run-slot"
+import {
+  clearSessionCodexProject,
+  clearWorkspaceCodexProject,
+  linkedCodexProject,
+  persistSessionCodexProject,
+  persistSessionCodexSyncedRun,
+  persistWorkspaceCodexProject,
+  readSessionCodexSyncedRun,
+} from "@/lib/codex/codex-project-link"
+import { selectCodexContinuityRun } from "@/lib/codex/run-continuity"
 import { openRunStream } from "@/lib/codex/run-stream"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
 import {
@@ -180,6 +202,20 @@ type CodeDispatchOptions = {
 type PendingCodeInput = {
   text: string
   files?: string[]
+}
+
+type CodexResumeTarget = {
+  projectId: string
+  runId: string
+  mode: "plan" | "build"
+  status: string
+}
+
+type CodexEngineOptions = {
+  iterate?: boolean
+  displayText?: string
+  omitUserTurn?: boolean
+  resume?: CodexResumeTarget
 }
 
 function codeAttachmentId(file: CodeComposerAttachment): string {
@@ -794,6 +830,7 @@ function buildSystemContext(
   activePath: string | null,
   folder: { name: string; description?: string | null; instructions?: string | null } | null,
   mode?: ComposerMode,
+  proactiveBlock?: string | null,
 ) {
   const fileList = Object.values(files)
     .map((f) => `- ${f.path} (${f.language})`)
@@ -872,47 +909,12 @@ function buildSystemContext(
     previewBlock,
     "",
     AGENT_STYLE_BLOCK,
+    proactiveBlock ? `\n${proactiveBlock}\n` : "",
     "",
     "Archivos disponibles:",
     fileList || "(workspace vacío)",
     activeBlock,
-  ].join("\n")
-}
-
-// ── Persistent chat→Codex-project mapping ───────────────────────────────────
-// The in-memory ref used to be the ONLY record of which Codex project a chat
-// session drives, so a reload created a fresh empty project and iterate then
-// edited THAT one and overwrote the local workspace (audit 3.1-ALTA). Backed
-// by localStorage, keyed by chatSessionId; every access is try/catch'd and
-// SSR-safe (storage may be unavailable or full — the in-memory ref still works
-// for the lifetime of the panel).
-const CODEX_PROJECT_STORE_PREFIX = "siragpt:codex-project:"
-
-function readPersistedCodexProject(sid: string): string | null {
-  if (typeof window === "undefined") return null
-  try {
-    return window.localStorage.getItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`)
-  } catch {
-    return null
-  }
-}
-
-function persistCodexProject(sid: string, projectId: string): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`, projectId)
-  } catch {
-    /* storage unavailable/full — the in-memory ref still covers this session */
-  }
-}
-
-function clearPersistedCodexProject(sid: string): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.removeItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`)
-  } catch {
-    /* ignore */
-  }
+  ].filter((part) => part !== "").join("\n")
 }
 
 // Backend import caps (POST /api/codex/projects/:id/files): 200 files, 500KB
@@ -943,7 +945,14 @@ function collectWorkspaceFilesForImport(
   return out
 }
 
-export function AICodeChatPanel() {
+export type AICodeChatPanelProps = {
+  embedded?: boolean
+  title?: string
+  onBack?: () => void
+  proactive?: boolean
+}
+
+export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -988,8 +997,13 @@ export function AICodeChatPanel() {
   const [codeDraggingFiles, setCodeDraggingFiles] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [buildingApp, setBuildingApp] = React.useState(false)
+  const proactiveEnabled = proactive ?? getProactiveCompanyState().enabled
   const agentsActive =
-    busy || buildingApp || agentPhase === "generating" || agentPhase === "debugging"
+    busy ||
+    buildingApp ||
+    proactiveEnabled ||
+    agentPhase === "generating" ||
+    agentPhase === "debugging"
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
   const [selectingTarget, setSelectingTarget] = React.useState(false)
@@ -1105,15 +1119,45 @@ export function AICodeChatPanel() {
   // Map<chatSessionId, engineSessionId> so each code chat reuses one engine session.
   const engineSessionRef = React.useRef<Record<string, string>>({})
   // Codex Agent V2 — the REAL server-driven agent (plan→build runs, durable
-  // SSE). Health-gated: when the backend flag is off everything below falls
-  // back to the OpenCode/deterministic tiers exactly as before.
+  // SSE). Availability requires BOTH the public feature flag and this user's
+  // effective access. Health alone sent ordinary users into a guaranteed 403
+  // instead of the deterministic builder.
   const codexHealth = useCodexHealth()
-  const codexAvailable = codexHealth.enabled === true
+  const [codexCanRun, setCodexCanRun] = React.useState(false)
+  React.useEffect(() => {
+    if (codexHealth.enabled !== true || !user?.id) {
+      setCodexCanRun(false)
+      return
+    }
+    let cancelled = false
+    setCodexCanRun(false)
+    codexApi
+      .access()
+      .then((access) => {
+        if (!cancelled) setCodexCanRun(access.enabled === true && access.canRun === true)
+      })
+      .catch(() => {
+        if (!cancelled) setCodexCanRun(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [codexHealth.enabled, user?.id])
+  const codexAvailable = codexHealth.enabled === true && codexCanRun
   // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
   // In-memory cache only — the durable mapping lives in localStorage (see
-  // readPersistedCodexProject/persistCodexProject), so a reload reattaches to
+  // session/workspace links), so a reload reattaches to
   // the SAME project instead of iterating on a fresh empty one.
   const codexProjectRef = React.useRef<Record<string, string>>({})
+  const detachCodexProjectForLocalFallback = React.useCallback(
+    (sid: string) => {
+      delete codexProjectRef.current[sid]
+      clearSessionCodexProject(sid)
+      if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
+      setActiveCodexProject(null)
+    },
+    [activeFolder?.id],
+  )
   // Keep the module-level active-codex-project in sync with the visible chat
   // session so PreviewPane's ▶/auto-run targets THIS chat's server workspace
   // (or falls back to the host/srcdoc path when the chat has no codex project).
@@ -1122,8 +1166,12 @@ export function AICodeChatPanel() {
       setActiveCodexProject(null)
       return
     }
-    setActiveCodexProject(codexProjectRef.current[sessionId] ?? readPersistedCodexProject(sessionId))
-  }, [sessionId])
+    const projectId =
+      linkedCodexProject({ sessionId, workspaceId: activeFolder?.id }) ??
+      codexProjectRef.current[sessionId]
+    if (projectId && codexAvailable) codexProjectRef.current[sessionId] = projectId
+    setActiveCodexProject(codexAvailable ? projectId : null)
+  }, [activeFolder?.id, codexAvailable, sessionId])
 
   const abortRef = React.useRef<AbortController | null>(null)
   const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -1244,7 +1292,7 @@ export function AICodeChatPanel() {
   const uploadCodeFiles = React.useCallback(
     async (fileList: FileList, sourceChannel: string = "picker") => {
       if (fileList.length === 0) return
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para adjuntar archivos.")
         return
       }
@@ -1408,7 +1456,7 @@ export function AICodeChatPanel() {
         toast.success(`${accepted.length} archivos adjuntados al agente de APPS.`)
       }
     },
-    [showCodeUploadRejections, token, user],
+    [showCodeUploadRejections, user],
   )
 
   const removeCodeAttachment = React.useCallback((index: number) => {
@@ -1569,7 +1617,7 @@ export function AICodeChatPanel() {
     | ((
         text: string,
         sid: string,
-        opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
+        opts?: CodexEngineOptions,
       ) => Promise<void | "workspace_sync_failed">)
     | null
   >(null)
@@ -1601,7 +1649,7 @@ export function AICodeChatPanel() {
       }
       const text = normalized.value.trim()
       if (!text || busy) return
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
@@ -1665,11 +1713,23 @@ export function AICodeChatPanel() {
         .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
         .join("\n\n")
       const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      const proactiveState = getProactiveCompanyState()
+      if (proactiveState.enabled && text.trim() && !proactiveState.objective) {
+        // First real CEO instruction becomes the company objective.
+        const looksLikeKickoff = /modo PROACTIVO|matrix\.build|0-person company/i.test(text)
+        if (!looksLikeKickoff) setProactiveCompanyObjective(text)
+      }
+      const proactiveBlock = getProactiveCompanyState().enabled
+        ? buildProactiveCompanySystemBlock({
+            companyName: agentCompanyDisplayName(activeFolder?.name),
+            objective: getProactiveCompanyState().objective,
+          })
+        : null
       const finalPrompt = override?.systemPrompt
-        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
+        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}${proactiveBlock ? `\n\n${proactiveBlock}` : ""}\n\n${convoBlock}Usuario: ${text}`
         : includeContext
-          ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
-          : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          ? `${buildSystemContext(files, activePath, activeFolder, composerMode, proactiveBlock)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          : `${proactiveBlock ? `${proactiveBlock}\n\n` : ""}${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
       if (!conversational) {
         patchAssistant({
@@ -1986,13 +2046,13 @@ export function AICodeChatPanel() {
       activeProvider,
       applyBlock,
       busy,
+      codexAvailable,
       composerMode,
       files,
       includeContext,
       markVoiced,
       sessionId,
       setTurns,
-      token,
       turns,
       user,
     ],
@@ -2014,7 +2074,7 @@ export function AICodeChatPanel() {
     ) => {
       const text = prompt.trim()
       if (!text || busy || buildingApp) return
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para construir la app.")
         return
       }
@@ -2143,7 +2203,7 @@ export function AICodeChatPanel() {
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, codexAvailable, files, markVoiced, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -2211,7 +2271,7 @@ export function AICodeChatPanel() {
   const repairFromLog = React.useCallback(
     async (log: string, visibleLabel?: string) => {
       const text = log.trim()
-      if (!text || !user || !token || !sessionId) return
+      if (!text || !user || !sessionId) return
       const sid = sessionId
       patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
       const verdict = classifyBuildError(text)
@@ -2236,7 +2296,7 @@ export function AICodeChatPanel() {
         await runDeterministicSRE(text, "Detecté un error en el build — diagnóstico automático.", sid)
       }
     },
-    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, token, user],
+    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, user],
   )
   const repairFromLogRef = React.useRef(repairFromLog)
   repairFromLogRef.current = repairFromLog
@@ -2310,31 +2370,55 @@ export function AICodeChatPanel() {
     [applyBlock],
   )
 
-  // Run the deterministic builder for a context and apply its files. Returns the
-  // file count. Used as the reliable fallback when the engine yields no code.
-  // It emits real project files and a self-contained index.html so APPS lands on
-  // localhost / index.html immediately while the full stack remains editable.
-  const runDeterministicInto = React.useCallback(
-    // Returns the applied files so engine-fallback callers can hand them to
-    // finish({written}) — that attaches the same actions/metrics/voice a
-    // direct build gets (a fallback delivery still IS a completed build).
-    async (ctx: AgentBuildContext): Promise<Array<{ path: string; content: string }>> => {
-      const prompt = promptFromContext(ctx)
+  // Run the deterministic builder from either a raw Codex prompt or an intake
+  // context and apply its files INSIDE the current engine turn. Calling
+  // buildApp() from an engine fallback used to return immediately because that
+  // outer turn already held `busy=true`, leaving the workspace empty while the
+  // UI falsely claimed that the deterministic builder had completed.
+  const runDeterministicPromptInto = React.useCallback(
+    async (
+      prompt: string,
+      ctx?: AgentBuildContext,
+      isCancelled?: () => boolean,
+    ): Promise<Array<{ path: string; content: string }>> => {
+      const throwIfCancelled = () => {
+        if (!isCancelled?.()) return
+        const error = new Error("Generación detenida.")
+        error.name = "AbortError"
+        throw error
+      }
+
+      throwIfCancelled()
       try {
         const result = await intakeService.generate(prompt)
         const files = result.files || []
         if (files.length > 0) {
+          throwIfCancelled()
           applyFilesToWorkspace(files)
           return files
         }
       } catch {
+        throwIfCancelled()
         /* backend unreachable -> offline index.html shell below */
       }
+      throwIfCancelled()
       const fallback = buildLocalIndexFallbackFiles(prompt, ctx)
+      throwIfCancelled()
       applyFilesToWorkspace(fallback)
       return fallback
     },
     [applyFilesToWorkspace],
+  )
+
+  // Context-shaped wrapper used by the OpenCode engine. Returns the applied
+  // files so finish({written}) can attach real actions/metrics/voice.
+  const runDeterministicInto = React.useCallback(
+    async (
+      ctx: AgentBuildContext,
+      isCancelled?: () => boolean,
+    ): Promise<Array<{ path: string; content: string }>> =>
+      runDeterministicPromptInto(promptFromContext(ctx), ctx, isCancelled),
+    [runDeterministicPromptInto],
   )
 
   const runDeterministicPatch = React.useCallback(
@@ -2650,7 +2734,7 @@ export function AICodeChatPanel() {
             return
           }
           // Engine produced nothing usable → reliable deterministic fallback.
-          const fallbackFiles = await runDeterministicInto(ctx)
+          const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn)
           finish(
             reply
               ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
@@ -2710,7 +2794,7 @@ export function AICodeChatPanel() {
         if (ctx) {
           // Engine unreachable/error during a build → still deliver via the builder.
           try {
-            const fallbackFiles = await runDeterministicInto(ctx)
+            const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn)
             finish(`✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El motor no respondió.`, {
               written: fallbackFiles,
             })
@@ -2757,9 +2841,10 @@ export function AICodeChatPanel() {
     async (
       text: string,
       sid: string,
-      opts?: { iterate?: boolean; displayText?: string; omitUserTurn?: boolean },
+      opts?: CodexEngineOptions,
     ) => {
-      const iterate = !!opts?.iterate
+      const resuming = !!opts?.resume
+      const iterate = resuming || !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
@@ -2770,11 +2855,22 @@ export function AICodeChatPanel() {
         {
           id: assistantId,
           role: "assistant",
-          content: iterate ? "⚙️ Agente Codex trabajando…" : "⚙️ Agente Codex construyendo…",
+          content: resuming
+            ? "⚙️ Retomando el trabajo del Agente Codex…"
+            : iterate
+              ? "⚙️ Agente Codex trabajando…"
+              : "⚙️ Agente Codex construyendo…",
           streaming: true,
-          agentLabel: iterate ? "Agente Codex trabajando" : "Construyendo con Agente Codex",
+          agentLabel: resuming
+            ? "Retomando ejecución"
+            : iterate
+              ? "Agente Codex trabajando"
+              : "Construyendo con Agente Codex",
           agentPhases: buildCodeAgentPhases("plan", {
-            plan: { status: "running", detail: iterate ? "Preparando turno" : "Preparando build" },
+            plan: {
+              status: "running",
+              detail: resuming ? "Reconectando con el backend" : iterate ? "Preparando turno" : "Preparando build",
+            },
           }),
         },
       ])
@@ -2957,6 +3053,32 @@ export function AICodeChatPanel() {
           }),
         })
 
+      const runWithProjectSlot = <T,>(projectId: string, operation: () => Promise<T>) =>
+        runWhenCodexProjectIdle({
+          projectId,
+          operation,
+          listRuns: codexApi.listRuns,
+          signal: controller.signal,
+          onWait: (activeRun) => {
+            const status =
+              activeRun?.status === "waiting_approval"
+                ? "esperando aprobación"
+                : activeRun?.status === "queued"
+                  ? "en cola"
+                  : "trabajando"
+            setEnginePhase(
+              "En cola con CEO Office",
+              buildCodeAgentPhases("context", {
+                plan: { status: "done", detail: "Solicitud recibida" },
+                context: {
+                  status: "running",
+                  detail: `Otro departamento está ${status}; este turno conserva su lugar`,
+                },
+              }),
+            )
+          },
+        })
+
       try {
         // 1) Ensure ONE Codex project per chat session. The in-memory ref is a
         //    fast cache; localStorage is the durable record so a reload does
@@ -2964,35 +3086,52 @@ export function AICodeChatPanel() {
         //    sync back over the local workspace. A persisted id is verified
         //    against the backend (it may have been deleted or belong to another
         //    account after a re-login) before being trusted.
-        let projectId: string | undefined = codexProjectRef.current[sid]
+        let projectId: string | undefined =
+          opts?.resume?.projectId || codexProjectRef.current[sid]
         if (!projectId) {
-          const persisted = readPersistedCodexProject(sid)
+          const persisted = linkedCodexProject({
+            sessionId: sid,
+            workspaceId: activeFolder?.id,
+          })
           if (persisted) {
             try {
               const existing = await codexApi.getProject(persisted)
               if (existing?.id) projectId = existing.id
             } catch {
-              clearPersistedCodexProject(sid)
+              clearSessionCodexProject(sid)
+              if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
             }
           }
         }
         if (!projectId) {
           const title = compactGeneratedTitle(text)
-          const project = await codexApi.createProject(title)
+          const project = await codexApi.createProject(title, text)
           projectId = project.id
         }
         codexProjectRef.current[sid] = projectId
-        persistCodexProject(sid, projectId)
+        persistSessionCodexProject(sid, projectId)
+        if (activeFolder?.id) persistWorkspaceCodexProject(activeFolder.id, projectId)
         // Publish the codex project so PreviewPane runs the app in the CODEX
         // runner (tokenized proxy) instead of pushing a partial local mirror
         // to the owner-gated host runner (which degraded to a black srcdoc).
         setActiveCodexProject(projectId)
 
         setEnginePhase(
-          iterate ? "Preparando turno del agente" : "Planificando la construcción",
+          resuming
+            ? "Reconectando con el trabajo en curso"
+            : iterate
+              ? "Preparando turno del agente"
+              : "Planificando la construcción",
           buildCodeAgentPhases("context", {
             plan: { status: "done", detail: "Proyecto Codex listo" },
-            context: { status: "running", detail: iterate ? "Sincronizando workspace" : "Preparando build" },
+            context: {
+              status: "running",
+              detail: resuming
+                ? "Recuperando eventos y archivos"
+                : iterate
+                  ? "Sincronizando workspace"
+                  : "Preparando build",
+            },
           }),
         )
 
@@ -3002,11 +3141,13 @@ export function AICodeChatPanel() {
         //     if the import fails, abort this tier (editing a stale/foreign
         //     tree and overwriting the local files with it is strictly worse
         //     than falling back) and let dispatch use the next engine.
-        if (iterate) {
+        if (iterate && !resuming) {
           const workspaceFiles = collectWorkspaceFilesForImport(files)
           if (workspaceFiles.length > 0) {
             try {
-              await codexApi.importFiles(projectId, workspaceFiles)
+              await runWithProjectSlot(projectId, () =>
+                codexApi.importFiles(projectId, workspaceFiles),
+              )
             } catch (err: any) {
               if (cancelledTurn()) {
                 finishStopped()
@@ -3033,42 +3174,65 @@ export function AICodeChatPanel() {
           }
         }
 
-        // 2) Start a `plan` run for the user's order. Codex requires a plan run
-        //    before a build; the plan auto-approves into build below.
-        const planRun = await codexApi.createRun(projectId, {
-          mode: "plan",
-          // APPS-mode envelope → backend forces the Vite SPA stack + runs the
-          // ensureAppsVitePreviewable auto-repair, so the generated app opens in
-          // the preview instead of an error overlay (root cause of the overlays).
-          prompt: buildAppsModePrompt(text),
-          model: activeModelName || undefined,
-          // The runs API speaks eco|standard|power — a provider name here used
-          // to reach the backend as an unknown tier and always fell to Eco.
-          tier: tierForModelChoice(activeProvider, activeModelName),
-        })
-
         setEnginePhase(
-          "Generando con Agente Codex",
+          resuming ? "Retomando con Agente Codex" : "Generando con Agente Codex",
           buildCodeAgentPhases("generate", {
             plan: { status: "done", detail: "Proyecto Codex listo" },
             context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
-            generate: { status: "running", detail: "El agente está trabajando" },
+            generate: {
+              status: "running",
+              detail: resuming ? "Recuperando la ejecución durable" : "El agente está trabajando",
+            },
           }),
         )
 
-        // 3) Stream the plan run to its terminal / waiting_approval status, then
-        //    approve it → build run, and stream that to a terminal status.
-        let fold = await streamRun(planRun.id, initialCodexEngineFold())
-        // Detener during the plan stream: the stream resolves (close(), not a
-        // reject) — bail out before approving a plan the user just cancelled.
-        if (cancelledTurn()) {
-          finishStopped()
-          return
-        }
-        if (fold.status === "waiting_approval") {
-          const buildRun = await codexApi.approvePlan(projectId, planRun.id, tierForModelChoice(activeProvider, activeModelName))
-          // Reset the fold for the build run's own event/seq stream.
-          fold = await streamRun(buildRun.id, initialCodexEngineFold())
+        // 2) A fresh order starts as plan → backend auto-continues to build.
+        // A restored tab reconnects directly to whichever durable run is
+        // already active (or pulls a completed build) instead of creating a
+        // duplicate project/run.
+        let fold: CodexEngineFoldState
+        let completedBuildRunId: string | null = null
+        if (opts?.resume?.mode === "build") {
+          const seed = initialCodexEngineFold()
+          seed.status = opts.resume.status
+          completedBuildRunId = opts.resume.runId
+          fold = await streamRun(opts.resume.runId, seed)
+        } else {
+          const planRun = opts?.resume
+            ? {
+                id: opts.resume.runId,
+                status: opts.resume.status,
+              }
+            : await runWithProjectSlot(projectId, () =>
+                codexApi.createRun(projectId, {
+                  mode: "plan",
+                  // APPS-mode envelope → backend forces the Vite SPA stack +
+                  // preview repair, so generated software opens immediately.
+                  prompt: buildAppsModePrompt(text),
+                  model: activeModelName || undefined,
+                  tier: tierForModelChoice(activeProvider, activeModelName),
+                  // The backend owns continuation even when this tab closes.
+                  autoExecute: true,
+                }),
+              )
+          const seed = initialCodexEngineFold()
+          if (opts?.resume) seed.status = planRun.status
+          fold = await streamRun(planRun.id, seed)
+          if (cancelledTurn()) {
+            finishStopped()
+            return
+          }
+          if (fold.status === "waiting_approval") {
+            // Idempotent: if the backend already continued this plan, the same
+            // build run is returned rather than a second one being created.
+            const buildRun = await codexApi.approvePlan(
+              projectId,
+              planRun.id,
+              tierForModelChoice(activeProvider, activeModelName),
+            )
+            completedBuildRunId = buildRun.id
+            fold = await streamRun(buildRun.id, initialCodexEngineFold())
+          }
         }
         // Detener during the build stream: same shape — no files, no fallback.
         if (cancelledTurn()) {
@@ -3078,6 +3242,11 @@ export function AICodeChatPanel() {
 
         const narrative = codexLiveContent(fold)
         const succeeded = fold.status === "done"
+        const markBuildSynchronized = () => {
+          if (completedBuildRunId) {
+            persistSessionCodexSyncedRun(sid, completedBuildRunId)
+          }
+        }
 
         if (succeeded) {
           // 4) Pull the workspace back. Written paths first (freshest), then
@@ -3122,6 +3291,7 @@ export function AICodeChatPanel() {
           }
           if (written.length > 0) {
             applyFilesToWorkspace(written)
+            markBuildSynchronized()
             const tally =
               pullFailed.length > 0
                 ? `${written.length} de ${sourcePaths.length} archivo(s) (${pullFailed.length} no se pudieron leer)`
@@ -3139,23 +3309,37 @@ export function AICodeChatPanel() {
           // Run finished OK but produced no files (e.g. a pure Q&A/plan turn):
           // render the narrative if any, else fall through to the fallback.
           if (narrative && iterate) {
+            markBuildSynchronized()
             finish(narrative)
             return
           }
+          // A successful run with no pullable files has still been inspected.
+          // Do not replay it after every reload; a fresh user turn can iterate
+          // on the same durable project normally.
+          markBuildSynchronized()
         }
 
         // 5) FALLBACK: the run failed / produced nothing usable → deterministic
-        //    builder so the user is NEVER left empty (mirrors runEngine). A
-        //    cancelled turn NEVER reaches here (early returns above) — Detener
-        //    must not trigger a build of the very app the user just stopped.
-        if (!iterate) {
-          // omitUserTurn: this codex turn already rendered the user's message.
-          await buildApp(text, undefined, { omitUserTurn: true })
+        //    builder so the user is NEVER left empty (mirrors runEngine). Apply
+        //    it in this turn; buildApp() cannot be called here because this
+        //    engine already owns the shared busy latch.
+        if (!iterate && !resuming) {
+          // The generated files below live in the browser workspace, not in the
+          // remote Codex project. Force PreviewPane onto the local/static path
+          // so it cannot boot a stale remote tree and hide this fallback.
+          detachCodexProjectForLocalFallback(sid)
+          const fallbackFiles = await runDeterministicPromptInto(
+            text,
+            { goal: "app", productType: text },
+            cancelledTurn,
+          )
           finish(
             narrative
-              ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista.)_`
-              : "✅ App generada (builder determinista).",
+              ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
+              : `✅ App generada (builder determinista, ${fallbackFiles.length} archivos).`,
+            { written: fallbackFiles },
           )
+          toast.success("App generada (builder determinista) →")
           return
         }
         finish(narrative || "_(el agente no devolvió cambios)_")
@@ -3171,15 +3355,26 @@ export function AICodeChatPanel() {
               generate: { status: "done", detail: "Detenida" },
             }),
           })
-        } else if (!opts?.iterate) {
+        } else if (!opts?.iterate && !opts?.resume) {
           // Project provisioning / plan-run error during a BUILD → still deliver
-          // via the deterministic builder in the same turn (omitUserTurn: this
-          // codex turn already rendered the user's message).
+          // via the deterministic builder in the same turn.
           try {
-            await buildApp(text, undefined, { omitUserTurn: true })
-            finish("✅ App generada (builder determinista). El Agente Codex no respondió.")
+            detachCodexProjectForLocalFallback(sid)
+            const fallbackFiles = await runDeterministicPromptInto(
+              text,
+              { goal: "app", productType: text },
+              cancelledTurn,
+            )
+            finish(
+              `✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El Agente Codex no respondió.`,
+              { written: fallbackFiles },
+            )
             toast.success("App generada (builder determinista) →")
-          } catch {
+          } catch (fallbackError: any) {
+            if (cancelledTurn() || fallbackError?.name === "AbortError") {
+              finishStopped()
+              return
+            }
             finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
               label: "Error en el turno",
               phases: buildCodeAgentPhases("generate", {
@@ -3212,7 +3407,7 @@ export function AICodeChatPanel() {
         }
       }
     },
-    [activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
+    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, detachCodexProjectForLocalFallback, files, markVoiced, runDeterministicPromptInto, setTurns, token],
   )
 
   // Keep the resilience-fallback ref pointing at the freshest engine closure.
@@ -3220,10 +3415,84 @@ export function AICodeChatPanel() {
     codexEngineRef.current = runCodexEngine
   }, [runCodexEngine])
 
+  // Reload/close continuity: the backend keeps auto-executable runs alive.
+  // When this chat mounts again, reconnect to the newest active run or pull
+  // the newest completed build that has not reached this browser workspace.
+  const resumedCodexRunsRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
+    const projectId = linkedCodexProject({
+      sessionId,
+      workspaceId: activeFolder?.id,
+    })
+    if (!projectId) return
+
+    let cancelled = false
+    let resumeKey: string | null = null
+    let targetRunId: string | null = null
+    void (async () => {
+      try {
+        const runs = await codexApi.listRuns(projectId)
+        if (cancelled || busyRef.current || buildingAppRef.current) return
+        const target = selectCodexContinuityRun(
+          runs,
+          readSessionCodexSyncedRun(sessionId),
+        )
+        if (!target || (target.mode !== "plan" && target.mode !== "build")) return
+        resumeKey = `${projectId}:${target.id}`
+        targetRunId = target.id
+        if (resumedCodexRunsRef.current.has(resumeKey)) return
+        resumedCodexRunsRef.current.add(resumeKey)
+        codexProjectRef.current[sessionId] = projectId
+        setActiveCodexProject(projectId)
+        await runCodexEngine(
+          target.prompt?.trim() || "Retoma y completa el trabajo pendiente.",
+          sessionId,
+          {
+            omitUserTurn: true,
+            resume: {
+              projectId,
+              runId: target.id,
+              mode: target.mode,
+              status: target.status,
+            },
+          },
+        )
+      } catch {
+        // A stale/deleted project is handled by the next explicit user turn,
+        // which verifies the durable link before creating a replacement.
+      } finally {
+        // Session switches abort the browser stream but not the backend run.
+        // Permit a later remount to reconnect unless this exact build already
+        // reached the local workspace.
+        if (
+          resumeKey &&
+          targetRunId &&
+          readSessionCodexSyncedRun(sessionId) !== targetRunId
+        ) {
+          resumedCodexRunsRef.current.delete(resumeKey)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeFolder?.id,
+    buildingApp,
+    busy,
+    codexAvailable,
+    runCodexEngine,
+    sessionId,
+    user?.id,
+  ])
+
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: CodeDispatchOptions) => {
-      const text = rawInput.trim()
-      if (!text) return
+      const displayText = rawInput.trim()
+      if (!displayText) return
+      const text = expandCodexSlashCommand(displayText).prompt
       const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
       if (busy || buildingApp) {
         // The live dev server can fire a BACKGROUND auto-repair turn (it failed
@@ -3241,7 +3510,7 @@ export function AICodeChatPanel() {
         toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
         return
       }
-      if (!user || !token) {
+      if (!user) {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
@@ -3377,7 +3646,7 @@ export function AICodeChatPanel() {
             // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
             // run whose file writes are read back into the workspace, with a
             // deterministic buildApp fallback inside so a build always lands.
-            await runCodexEngine(buildText, sid, { displayText: text })
+            await runCodexEngine(buildText, sid, { displayText })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else if (!opts?.forceDeterministic && engineMode && engineAvailable) {
             // OpenCode agent (only truly available in Docker AND opt-in via the
@@ -3489,7 +3758,6 @@ export function AICodeChatPanel() {
       sendPrompt,
       sessionId,
       setTurns,
-      token,
       user,
     ],
   )
@@ -3527,16 +3795,27 @@ export function AICodeChatPanel() {
   // and the idle-drain above runs it as soon as the current turn settles.
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const handler = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
-      if (!text) return
+    const runRequest = (text: string) => {
       if (busyRef.current || buildingAppRef.current) {
         pendingInputRef.current.push({ text })
         return
       }
       void dispatchRef.current?.(text)
     }
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string; consumed?: boolean }>).detail
+      const text = detail?.text?.trim()
+      if (!text) return
+      // Handshake with requestProactiveSeedPrompt: mark the shared detail so
+      // the sender knows the kickoff was received and doesn't stash it.
+      if (detail) detail.consumed = true
+      runRequest(text)
+    }
     window.addEventListener("siragpt:code-agent-request", handler)
+    // A PROACTIVO kickoff fired before this panel mounted lands in the stash
+    // (the 120ms race made the button look dead). Claim it exactly once.
+    const pending = claimPendingSeedPrompt()
+    if (pending) runRequest(pending)
     return () => window.removeEventListener("siragpt:code-agent-request", handler)
   }, [])
 
@@ -3622,7 +3901,7 @@ export function AICodeChatPanel() {
       if (hasFailedCodeAttachments) toast.error("Reintenta o elimina los adjuntos con error.")
       return
     }
-    if (!user || !token) {
+    if (!user) {
       toast.error("Inicia sesión para usar el chat de código.")
       return
     }
@@ -3644,7 +3923,6 @@ export function AICodeChatPanel() {
     input,
     readyCodeAttachments,
     sessionId,
-    token,
     user,
   ])
 
@@ -3694,6 +3972,7 @@ export function AICodeChatPanel() {
   const activeSessionTitle =
     codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
     "Nuevo chat"
+  const visibleSessionTitle = title?.trim() || activeSessionTitle
 
   // Replit-style "Plan" pill: flips the composer into plan mode and back to
   // whatever mode was active before (defaults to "app").
@@ -3718,11 +3997,24 @@ export function AICodeChatPanel() {
       {/* Replit-style panel header: current thread title + history / new-chat
           actions (the session tabs collapsed into the history dropdown). */}
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
+        {onBack ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="-ml-1 h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+            aria-label="Volver a la empresa"
+            title="Volver a la empresa"
+            onClick={onBack}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        ) : null}
         <span
           className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
-          title={activeSessionTitle}
+          title={visibleSessionTitle}
         >
-          {activeSessionTitle}
+          {visibleSessionTitle}
         </span>
         {activeFileLabel ? (
           <span
@@ -3732,7 +4024,7 @@ export function AICodeChatPanel() {
             {activeFileLabel}
           </span>
         ) : null}
-        <DropdownMenu>
+        {!embedded ? <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
@@ -3765,8 +4057,8 @@ export function AICodeChatPanel() {
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
+        </DropdownMenu> : null}
+        {!embedded ? <Button
           type="button"
           variant="ghost"
           size="icon"
@@ -3776,12 +4068,12 @@ export function AICodeChatPanel() {
           onClick={() => createCodeChatSession()}
         >
           <Plus className="h-3.5 w-3.5" />
-        </Button>
+        </Button> : null}
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} />
+          <EmptyChat active={agentsActive} proactive={proactiveEnabled} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -4064,17 +4356,19 @@ function CodeAttachmentTray({
   )
 }
 
-function EmptyChat({ active }: { active: boolean }) {
+function EmptyChat({ active, proactive = false }: { active: boolean; proactive?: boolean }) {
   return (
     <div className="flex min-h-full flex-col items-center justify-center px-6 py-10 text-center">
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
         <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
       </span>
       <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        ¿Qué quieres construir?
+        {proactive ? "Objetivo de la empresa" : "¿Qué quieres construir?"}
       </h2>
       <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-muted-foreground">
-        Describe tu idea, pide paquetes npm y el agente crea, ejecuta, verifica y corrige el preview en vivo.
+        {proactive
+          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
+          : "Describe tu idea, pide paquetes npm y el agente crea, ejecuta, verifica y corrige el preview en vivo."}
       </p>
     </div>
   )

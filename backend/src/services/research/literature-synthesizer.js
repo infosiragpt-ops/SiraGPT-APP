@@ -112,25 +112,33 @@ function directionTally(papers, idxs) {
 function buildConsensus(papers, themes, lang = 'es') {
   const consensus = [];
   const contradictions = [];
+  const consensusEvidence = [];
+  const contradictionEvidence = [];
   for (const theme of themes) {
     const tally = directionTally(papers, theme.paperIndexes);
     const directional = tally.positive + tally.negative;
     if (directional < 2) continue;
     if (tally.positive >= 2 && tally.negative >= 2) {
-      contradictions.push(lang === 'es'
+      const text = lang === 'es'
         ? `Sobre "${theme.label}", la evidencia está dividida: ${tally.positive} estudio(s) reportan efectos positivos frente a ${tally.negative} con efectos negativos.`
-        : `On "${theme.label}", evidence is split: ${tally.positive} study(ies) report positive effects vs. ${tally.negative} reporting negative ones.`);
+        : `On "${theme.label}", evidence is split: ${tally.positive} study(ies) report positive effects vs. ${tally.negative} reporting negative ones.`;
+      contradictions.push(text);
+      contradictionEvidence.push({ text, theme: theme.label, paperIndexes: theme.paperIndexes.slice(), tally });
     } else if (tally.positive >= 2 && tally.negative === 0) {
-      consensus.push(lang === 'es'
+      const text = lang === 'es'
         ? `Hay consenso en que "${theme.label}" se asocia con efectos positivos (${tally.positive} estudios convergen).`
-        : `There is consensus that "${theme.label}" is associated with positive effects (${tally.positive} studies converge).`);
+        : `There is consensus that "${theme.label}" is associated with positive effects (${tally.positive} studies converge).`;
+      consensus.push(text);
+      consensusEvidence.push({ text, theme: theme.label, paperIndexes: theme.paperIndexes.slice(), tally });
     } else if (tally.negative >= 2 && tally.positive === 0) {
-      consensus.push(lang === 'es'
+      const text = lang === 'es'
         ? `Los estudios coinciden en efectos negativos/decrecientes relacionados con "${theme.label}" (${tally.negative} estudios).`
-        : `Studies agree on negative/declining effects related to "${theme.label}" (${tally.negative} studies).`);
+        : `Studies agree on negative/declining effects related to "${theme.label}" (${tally.negative} studies).`;
+      consensus.push(text);
+      consensusEvidence.push({ text, theme: theme.label, paperIndexes: theme.paperIndexes.slice(), tally });
     }
   }
-  return { consensus, contradictions };
+  return { consensus, contradictions, consensusEvidence, contradictionEvidence };
 }
 
 function buildGaps(papers, stats, queryAnalysis) {
@@ -194,7 +202,7 @@ function synthesize(papers, queryAnalysis = {}) {
   const lang = queryAnalysis.language === 'en' ? 'en' : 'es';
   const stats = computeStats(papers);
   const themes = buildThemes(papers, queryAnalysis.terms || [], {});
-  const { consensus, contradictions } = buildConsensus(papers, themes, lang);
+  const { consensus, contradictions, consensusEvidence, contradictionEvidence } = buildConsensus(papers, themes, lang);
   const gaps = buildGaps(papers, stats, queryAnalysis);
   const keyFindings = buildKeyFindings(papers, {});
 
@@ -205,7 +213,7 @@ function synthesize(papers, queryAnalysis = {}) {
     ? `Se analizaron ${stats.count} estudios sobre ${topic || 'el tema'} (${rangeTxt}). ${stats.openAccessRate}% de acceso abierto; ${stats.totalCitations} citas acumuladas.${themeTxt ? ` Los ejes temáticos dominantes son: ${themeTxt}.` : ''}`
     : `${stats.count} studies on ${topic || 'the topic'} were analysed (${rangeTxt}). ${stats.openAccessRate}% open access; ${stats.totalCitations} cumulative citations.${themeTxt ? ` Dominant thematic axes: ${themeTxt}.` : ''}`;
 
-  return { stats, themes, consensus, contradictions, gaps, keyFindings, overview };
+  return { stats, themes, consensus, contradictions, consensusEvidence, contradictionEvidence, gaps, keyFindings, overview };
 }
 
 module.exports = {

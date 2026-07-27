@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const childProcess = require('child_process');
 
 const {
   buildOpenClawSourceInventory,
@@ -39,10 +40,11 @@ test('buildOpenClawSourceInventory inventories source without activating upstrea
     maxActiveSlicesPerPass: 2,
   });
 
-  assert.equal(inventory.version, 'openclaw-source-inventory-2026-06');
+  assert.equal(inventory.version, 'openclaw-source-inventory-2026-07');
   assert.equal(inventory.source.license, 'MIT');
   assert.equal(inventory.source.commit, 'test-openclaw-sha');
   assert.equal(inventory.source.snapshot, 'external-reference-only');
+  assert.equal(inventory.source.inventoryMode, 'working_tree');
   assert.ok(inventory.totals.files >= 5);
   assert.ok(inventory.totals.lines >= 5);
   assert.equal(inventory.activationBudget.maxActiveSlicesPerPass, 2);
@@ -75,6 +77,40 @@ test('buildOpenClawSourceInventory inventories source without activating upstrea
   assert.ok(extensions.qualityGates.includes('secret_and_channel_config_redacted'));
 });
 
+test('buildOpenClawSourceInventory covers every tracked file from an exact Git tree without checkout materialization', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-git-tree-inventory-'));
+  writeFile(path.join(dir, 'LICENSE'), 'MIT License\n\nCopyright OpenClaw\n');
+  writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'openclaw-git-reference' }));
+  writeFile(path.join(dir, 'src', 'hidden-runtime.ts'), 'export const hiddenRuntime = true;\n');
+  writeFile(path.join(dir, 'extensions', 'sample', 'index.ts'), 'export const extension = true;\n');
+  writeFile(path.join(dir, 'ui', 'App.tsx'), 'export function App() { return null; }\n');
+
+  childProcess.execFileSync('git', ['init', '-q', dir]);
+  childProcess.execFileSync('git', ['-C', dir, 'config', 'user.email', 'inventory@example.invalid']);
+  childProcess.execFileSync('git', ['-C', dir, 'config', 'user.name', 'Inventory Test']);
+  childProcess.execFileSync('git', ['-C', dir, 'add', '.']);
+  childProcess.execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'fixture']);
+  const commit = childProcess.execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+  fs.rmSync(path.join(dir, 'src', 'hidden-runtime.ts'));
+  const inventory = buildOpenClawSourceInventory({ upstreamRepoRoot: dir, upstreamCommit: commit });
+
+  assert.equal(inventory.source.inventoryMode, 'git_tree');
+  assert.equal(inventory.source.commit, commit);
+  assert.equal(inventory.source.auditedReleaseMatch, false);
+  assert.equal(inventory.source.license, 'MIT');
+  assert.equal(inventory.coverage.percent, 100);
+  assert.equal(inventory.coverage.trackedFiles, 5);
+  assert.equal(inventory.totals.files, 5);
+  assert.equal(inventory.totals.lines, null);
+
+  const source = inventory.folders.find((folder) => folder.folder === 'src');
+  assert.equal(source.fileCount, 1);
+  assert.ok(source.sampleFiles.includes('src/hidden-runtime.ts'));
+  const ui = inventory.folders.find((folder) => folder.folder === 'ui');
+  assert.equal(ui.activationPolicy, 'blocked_until_product_or_ui_scope');
+});
+
 test('buildOpenClawSourceInventory handles missing roots as empty audit material', () => {
   const missing = path.join(os.tmpdir(), `missing-openclaw-${Date.now()}`);
   const inventory = buildOpenClawSourceInventory({ upstreamRepoRoot: missing });
@@ -84,4 +120,8 @@ test('buildOpenClawSourceInventory handles missing roots as empty audit material
   assert.equal(inventory.totals.files, 0);
   assert.equal(inventory.activationBudget.nextSlices.length, 0);
   assert.equal(inventory.source.snapshot, 'external-reference-only');
+  assert.throws(
+    () => buildOpenClawSourceInventory({ upstreamRepoRoot: missing, requireGitTree: true }),
+    /Unable to inventory/
+  );
 });

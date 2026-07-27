@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  publishUserSessionsRevoked,
+} = require('./auth/user-session-revocation-events');
+
 /**
  * SessionService — owns the session-lifecycle business logic that
  * previously lived inline inside the `POST /refresh` and `POST /logout`
@@ -38,6 +42,7 @@ class SessionService {
     prisma,
     signSessionToken,
     computeFingerprint,
+    publishSessionsRevoked = publishUserSessionsRevoked,
     sessionTtlMs = 7 * 24 * 60 * 60 * 1000,
     now = () => new Date(),
     logger = console,
@@ -62,6 +67,9 @@ class SessionService {
     this.computeFingerprint = typeof computeFingerprint === 'function'
       ? computeFingerprint
       : () => null;
+    this.publishSessionsRevoked = typeof publishSessionsRevoked === 'function'
+      ? publishSessionsRevoked
+      : async () => {};
     this.sessionTtlMs = sessionTtlMs;
     this.now = now;
     this.logger = logger;
@@ -104,6 +112,12 @@ class SessionService {
    */
   async revoke({ user, token, req }) {
     await this.sessions.deleteByToken(token);
+    if (user?.id) {
+      await this.publishSessionsRevoked({
+        userId: user.id,
+        reason: 'session_revoked',
+      });
+    }
 
     this._fireAudit(req, {
       action: 'logout',

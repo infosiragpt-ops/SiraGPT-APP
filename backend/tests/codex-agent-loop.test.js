@@ -3,7 +3,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { runAgentLoop } = require('../src/services/codex/agent-loop');
+const {
+  closeBuild,
+  runAgentLoop,
+  verifyWorkspace,
+} = require('../src/services/codex/agent-loop');
 const { buildPlanMessages } = require('../src/services/codex/plan-mode');
 
 // Scripted llmTurn: shift the next response off a queue.
@@ -371,6 +375,162 @@ test('build close creates a checkpoint when the workspace has changes', async ()
   assert.ok(f.events.some((e) => e.type === 'checkpoint_created'));
 });
 
+test('strict proactive gate fails closed when runtime evidence is unavailable', async () => {
+  const events = [];
+  const result = await verifyWorkspace({
+    runner: {
+      readFile: async (_project, path) => ({
+        content: path === 'tsconfig.json'
+          ? '{"compilerOptions":{"jsx":"react-jsx"}}'
+          : '{"scripts":{}}',
+      }),
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    },
+    projectId: 'p1',
+    run: { id: 'run-strict' },
+    eventStore: { appendEvent: async (_runId, type, data) => { events.push({ type, data }); } },
+    prisma: null,
+    clock: () => new Date(),
+    env: { NODE_ENV: 'test' },
+    actionId: 'quality-1',
+    groupId: 'quality',
+    strict: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.kind, 'infra');
+  assert.equal(result.gates.typeCheck.ok, true);
+  assert.equal(result.gates.devServer.ok, false);
+});
+
+test('QA gate requires an executable smoke-test contract', async () => {
+  const result = await verifyWorkspace({
+    runner: {
+      readFile: async (_project, path) => ({
+        content: path === 'tsconfig.json'
+          ? '{"compilerOptions":{"jsx":"react-jsx"}}'
+          : '{"scripts":{}}',
+      }),
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    },
+    projectId: 'p1',
+    run: { id: 'run-qa' },
+    eventStore: { appendEvent: async () => {} },
+    prisma: null,
+    clock: () => new Date(),
+    env: { NODE_ENV: 'test' },
+    actionId: 'quality-1',
+    groupId: 'quality',
+    strict: true,
+    requireSmoke: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.kind, 'smoke');
+  assert.match(result.errors, /exige smoke tests/i);
+});
+
+test('failed proactive gate records the ledger and refuses to checkpoint', async () => {
+  const commands = [];
+  const events = [];
+  const projectState = {
+    id: 'p1',
+    userId: 'u1',
+    brief: { proactive: { enabled: true } },
+  };
+  const prompt = [
+    '[PROACTIVO · Producto] Gate estricto: corrige la app',
+    '[SIRA_PROACTIVE_META]{"department":"Producto","departmentId":"product-engineering","title":"Gate estricto","acceptanceCriteria":["La app abre"],"objectiveIds":[],"qaCycle":false}',
+  ].join('\n');
+  const result = await closeBuild({
+    run: { id: 'run-gate', projectId: 'p1', userId: 'u1', prompt },
+    project: projectState,
+    runner: {
+      readFile: async (_project, path) => {
+        if (path === 'tsconfig.json') return { content: '{"compilerOptions":{"jsx":"react-jsx"}}' };
+        if (path === 'package.json') return { content: '{"scripts":{}}' };
+        throw new Error('not found');
+      },
+      exec: async (_project, cmd) => {
+        commands.push(cmd);
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      writeFiles: async () => {},
+    },
+    eventStore: { appendEvent: async (_runId, type, data) => { events.push({ type, data }); } },
+    prisma: {
+      codexProject: {
+        findUnique: async () => projectState,
+        update: async ({ data }) => {
+          Object.assign(projectState, data);
+          return projectState;
+        },
+      },
+      user: { findUnique: async () => ({ plan: 'FREE' }) },
+    },
+    llmTurn: async () => ({ text: 'No pude reparar.', toolCalls: [] }),
+    clock: () => new Date('2026-07-26T12:00:00.000Z'),
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_PROACTIVE_REPAIR_ROUNDS: '1' },
+    metrics: { recordAction: () => {}, recordLlmUsage: () => {}, finalize: async () => ({ costAppliedUsd: 0.02 }) },
+    sourcePrompt: prompt,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.checkpoint, null);
+  assert.equal(projectState.brief.ledger[0].outcome, 'failed');
+  assert.equal(commands.some((cmd) => cmd[0] === 'git' && cmd.includes('commit')), false);
+  assert.ok(events.some((event) => event.type === 'narrative_delta' && /No cerré ni promoví/.test(event.data.text)));
+});
+
+test('project verification unavailable fails closed and never checkpoints', async () => {
+  const commands = [];
+  const events = [];
+  const result = await closeBuild({
+    run: { id: 'run-unavailable-gate', projectId: 'p1', userId: 'u1', prompt: 'corrige la app' },
+    project: { id: 'p1', userId: 'u1', brief: {} },
+    runner: {
+      readFile: async () => {
+        const error = new Error('workspace unavailable');
+        error.code = 'EIO';
+        throw error;
+      },
+      exec: async (_project, command) => {
+        commands.push(command);
+        if (command[0] === 'git' && command[1] === 'status') {
+          return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      writeFiles: async () => ({ ok: true }),
+    },
+    eventStore: {
+      appendEvent: async (_runId, type, data) => {
+        events.push({ type, data });
+      },
+    },
+    prisma: null,
+    llmTurn: async () => ({ text: 'sin cambios', toolCalls: [] }),
+    clock: () => new Date('2026-07-26T12:00:00.000Z'),
+    env: {
+      NODE_ENV: 'test',
+      CODEX_AUTO_VERIFY: '1',
+      CODEX_RUN_BRANCHES: '1',
+    },
+    metrics: null,
+    sourcePrompt: 'corrige la app',
+    backgroundTaskService: {
+      quiesce: async () => ({ ok: true, stopped: 0 }),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checkpoint, null);
+  assert.equal(result.projectGateVerification.clean, null);
+  assert.equal(commands.some((command) => command[0] === 'git' && command.includes('commit')), false);
+  assert.ok(events.some((event) => (
+    event.type === 'narrative_delta'
+    && /fallaron los gates obligatorios/i.test(event.data.text)
+  )));
+});
+
 test('metrics hooks receive usage, actions and lines read', async () => {
   const rec = { usage: [], actions: [], lines: 0 };
   const metrics = {
@@ -439,7 +599,10 @@ test('a turn of ONLY run_subagent calls runs the delegations in parallel', async
     return { text: `informe de ${/PLANNER/.test(sys) ? 'planner' : 'qa'}`, toolCalls: [] };
   };
 
-  const f = fakeDeps({ llmTurn });
+  const f = fakeDeps({
+    llmTurn,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_PARALLEL_WRITE_SUBAGENTS: '1' },
+  });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'haz una app' }, project: { id: 'p1' }, deps: f.deps });
   assert.equal(res.status, 'done');
 
@@ -449,4 +612,94 @@ test('a turn of ONLY run_subagent calls runs the delegations in parallel', async
   const ends = f.events.filter((e) => e.type === 'action_end');
   assert.ok(ends.every((e) => e.data.status === 'done'), JSON.stringify(ends.map((e) => e.data.outputSummary)));
   assert.ok(ends.some((e) => /planner: completado/.test(e.data.outputSummary || '')));
+});
+
+test('subagent delegations are serialized by default on a shared checkout', async () => {
+  let mainCalls = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const llmTurn = async ({ messages }) => {
+    const sys = messages[0].content;
+    if (/agente de software senior/.test(sys)) {
+      if (mainCalls++ === 0) {
+        return {
+          text: 'Delego dos revisiones.',
+          toolCalls: [
+            { name: 'run_subagent', args: { agent: 'planner', task: 'planea la UI' } },
+            { name: 'run_subagent', args: { agent: 'qa_reviewer', task: 'revisa el estado' } },
+          ],
+        };
+      }
+      return { text: 'fin', toolCalls: [] };
+    }
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    inFlight -= 1;
+    return { text: 'informe', toolCalls: [] };
+  };
+
+  const f = fakeDeps({ llmTurn });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'haz una app' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.equal(maxInFlight, 1);
+});
+
+// ── Plan-aware budget extension (auto-continue) ──────────────────────────────
+
+function endlessToolLlm() {
+  let calls = 0;
+  const fn = async () => { calls += 1; return { text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] }; };
+  fn.count = () => calls;
+  return fn;
+}
+
+test('build loop extends the step budget when the plan still has pending tasks', async () => {
+  const llm = endlessToolLlm();
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '1' },
+    plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'Construir el dashboard' }] },
+  });
+  // Neutral prompt: 'crm'/'tienda' would trigger the big-playbook doubled
+  // budget (CODEX_MAX_STEPS_LARGE) and change the arithmetic under test.
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea una landing simple' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  // base 2 steps + one extension of max(4, ceil(2/2)) = 4 → 6 turns total.
+  assert.equal(llm.count(), 6, 'the loop must keep working through the extension');
+  const ext = f.events.find((e) => e.type === 'narrative_delta' && /extensión 1\/1/.test(e.data.text || ''));
+  assert.ok(ext, 'an extension narrative must be emitted');
+  const close = f.events.filter((e) => e.type === 'narrative_delta').map((e) => e.data.text).join('\n');
+  assert.match(close, /pendiente/, 'the final close mentions the still-pending plan');
+});
+
+test('CODEX_PLAN_EXTENSIONS=0 disables the extension (explicit falsy-0 respected)', async () => {
+  const llm = endlessToolLlm();
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '0' },
+    plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'algo' }] },
+  });
+  await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(llm.count(), 2, 'no extension: exactly the base budget');
+  assert.ok(!f.events.some((e) => e.type === 'narrative_delta' && /extensión/.test(e.data.text || '')));
+});
+
+test('no extension when the plan is fully completed (update_plan marks all done)', async () => {
+  let calls = 0;
+  const llm = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'update_plan', args: { tasks: [{ id: 't1', title: 'algo', status: 'completed' }] } }] };
+    }
+    return { text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] };
+  };
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '2' },
+    plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'algo' }] },
+  });
+  await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(calls, 2, 'completed plan → no extension');
+  assert.ok(!f.events.some((e) => e.type === 'narrative_delta' && /extensión/.test(e.data.text || '')));
 });

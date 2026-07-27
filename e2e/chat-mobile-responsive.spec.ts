@@ -233,7 +233,7 @@ test("375px mobile chat keeps header, messages, composer, tools, and chips withi
   await openMobileChat(page, 375, 667)
 
   await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
-  await page.getByRole("menuitem", { name: /Web Search/i }).click()
+  await page.getByRole("menuitem", { name: /Web Search|Búsqueda web/i }).click()
 
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {

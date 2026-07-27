@@ -38,6 +38,10 @@ const CAPABILITIES = Object.freeze({
   // because it can also see auth'd sessions on the host.
   BROWSER:       'browser',
 
+  // Fixed-function multimedia processing. This permits bounded ffmpeg/
+  // ffprobe contracts, never arbitrary command or shell execution.
+  MEDIA_PROCESS: 'media:process',
+
   // Scheduling — create/list/cancel cron jobs + webhooks. Separate from
   // net:outbound because a scheduled job can run when the user isn't
   // watching, so the trust model is different.

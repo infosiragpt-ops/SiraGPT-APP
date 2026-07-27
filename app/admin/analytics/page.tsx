@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   Bar,
   BarChart,
@@ -8,6 +8,7 @@ import {
   Cell,
   Line,
   LineChart,
+  Legend,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -15,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { RefreshCw } from "lucide-react"
+import { Ban, CircleCheckBig, RefreshCw, ShieldCheck, ThumbsUp, UsersRound } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { SidebarTrigger } from "@/components/ui/sidebar"
@@ -45,10 +46,48 @@ type UsageStatsPayload = {
   totalCost?: number
 }
 
+type ProductQualityPayload = {
+  adoption?: {
+    activeUsers?: number
+    adopters?: number
+    adoptionRate?: number | null
+  }
+  outcomes?: {
+    started?: number
+    terminal?: number
+    completed?: number
+    failed?: number
+    cancelled?: number
+    successRate?: number | null
+    cancellationRate?: number | null
+  }
+  satisfaction?: {
+    assistantMessages?: number
+    feedbackResponses?: number
+    satisfactionRate?: number | null
+    feedbackCoverageRate?: number | null
+    suppressed?: boolean
+  }
+  trend?: Array<{
+    date: string
+    started: number | null
+    completed: number | null
+    failed: number | null
+    cancelled: number | null
+    suppressed?: boolean
+  }>
+  privacy?: {
+    containsPii?: boolean
+    aggregationOnly?: boolean
+    minimumCohort?: number
+  }
+}
+
 type AnalyticsState = {
   summary: AnalyticsPayload
   userStats: UserStatsPayload | null
   usageStats: UsageStatsPayload | null
+  productQuality: ProductQualityPayload | null
 }
 
 function rangeFor(value: string) {
@@ -77,6 +116,40 @@ function safePercent(part: unknown, total: unknown) {
   return ((p / t) * 100).toFixed(1)
 }
 
+function formatRate(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(Number(value))) return "Protegido"
+  return `${(Number(value) * 100).toFixed(1)}%`
+}
+
+function QualityMetric({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: ReactNode
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <Card>
+      <CardContent className="p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-muted-foreground">{label}</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
+          </div>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-foreground">
+            {icon}
+          </div>
+        </div>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">{detail}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsState | null>(null)
   const [timeRange, setTimeRange] = useState("7d")
@@ -86,10 +159,11 @@ export default function AnalyticsPage() {
     setLoading(true)
     try {
       const range = rangeFor(timeRange)
-      const [summaryResult, userStatsResult, usageStatsResult] = await Promise.allSettled([
+      const [summaryResult, userStatsResult, usageStatsResult, productQualityResult] = await Promise.allSettled([
         apiClient.getAnalytics(),
         apiClient.getAdminUserStats(range),
         apiClient.getAdminUsageStats(range),
+        apiClient.getAdminProductQualityStats(range),
       ])
 
       if (summaryResult.status !== "fulfilled") throw summaryResult.reason
@@ -98,6 +172,9 @@ export default function AnalyticsPage() {
         summary: summaryResult.value as AnalyticsPayload,
         userStats: userStatsResult.status === "fulfilled" ? (userStatsResult.value as UserStatsPayload) : null,
         usageStats: usageStatsResult.status === "fulfilled" ? (usageStatsResult.value as UsageStatsPayload) : null,
+        productQuality: productQualityResult.status === "fulfilled"
+          ? (productQualityResult.value as ProductQualityPayload)
+          : null,
       })
     } catch (error: any) {
       console.error("Failed to load analytics:", error)
@@ -144,11 +221,30 @@ export default function AnalyticsPage() {
     }))
   }, [analytics])
 
+  const productQualityTrend = useMemo(() => {
+    return (analytics?.productQuality?.trend || []).map((row) => ({
+      date: row.date,
+      Iniciadas: row.started,
+      Completadas: row.completed,
+      Fallidas: row.failed,
+      Canceladas: row.cancelled,
+    }))
+  }, [analytics])
+
   const usersByPlan = analytics?.userStats?.breakdownByPlan || analytics?.summary.usersByPlan || {}
   const totalUsers = Number(analytics?.summary.totalUsers || 0)
   const totalRevenue = Number(analytics?.summary.totalRevenue || 0)
   const activeUsers = Number(analytics?.summary.activeUsers || 0)
   const totalApiUsage = Number(analytics?.summary.totalApiUsage || 0)
+  const productQuality = analytics?.productQuality
+  const adoption = productQuality?.adoption
+  const outcomes = productQuality?.outcomes
+  const satisfaction = productQuality?.satisfaction
+  const hasProductQualityEvents = productQualityTrend.some((row) =>
+    [row.Iniciadas, row.Completadas, row.Fallidas, row.Canceladas].some(
+      (value) => typeof value === "number" && value > 0,
+    ),
+  )
 
   if (!analytics && loading) {
     return (
@@ -198,6 +294,88 @@ export default function AnalyticsPage() {
           </Button>
         </div>
       </div>
+
+      <section aria-labelledby="product-quality-title" className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 id="product-quality-title" className="text-lg font-semibold sm:text-xl">Calidad del producto</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Adopción, resultados y satisfacción en el periodo seleccionado
+            </p>
+          </div>
+          {productQuality?.privacy?.aggregationOnly && (
+            <div className="inline-flex w-fit items-center gap-2 rounded-md border px-3 py-2 text-xs text-muted-foreground">
+              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+              Datos agregados · cohorte mínima {productQuality.privacy.minimumCohort || 5}
+            </div>
+          )}
+        </div>
+
+        {!productQuality ? (
+          <Card>
+            <CardContent className="py-10 text-center text-sm text-muted-foreground">
+              La analítica de calidad no está disponible para esta cuenta administrativa.
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <QualityMetric
+                icon={<UsersRound className="h-5 w-5" aria-hidden="true" />}
+                label="Adopción activa"
+                value={formatRate(adoption?.adoptionRate)}
+                detail={`${formatNumber(adoption?.adopters)} de ${formatNumber(adoption?.activeUsers)} usuarios activos`}
+              />
+              <QualityMetric
+                icon={<CircleCheckBig className="h-5 w-5" aria-hidden="true" />}
+                label="Generaciones exitosas"
+                value={formatRate(outcomes?.successRate)}
+                detail={`${formatNumber(outcomes?.completed)} de ${formatNumber(outcomes?.terminal)} resultados finalizados`}
+              />
+              <QualityMetric
+                icon={<Ban className="h-5 w-5" aria-hidden="true" />}
+                label="Cancelaciones"
+                value={formatRate(outcomes?.cancellationRate)}
+                detail={`${formatNumber(outcomes?.cancelled)} cancelaciones en el periodo`}
+              />
+              <QualityMetric
+                icon={<ThumbsUp className="h-5 w-5" aria-hidden="true" />}
+                label="Satisfacción"
+                value={formatRate(satisfaction?.satisfactionRate)}
+                detail={`${formatNumber(satisfaction?.feedbackResponses)} valoraciones · ${formatRate(satisfaction?.feedbackCoverageRate)} de cobertura`}
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base sm:text-lg">Evolución de ejecuciones</CardTitle>
+                <CardDescription>Inicios y resultados diarios de chat y agentes</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!hasProductQualityEvents ? (
+                  <div className="h-[280px] content-center text-center text-sm text-muted-foreground">
+                    Sin ejecuciones registradas en el periodo.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={productQualityTrend} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="date" interval="preserveStartEnd" minTickGap={24} />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="Iniciadas" fill="#334155" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="Completadas" fill="#16a34a" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="Fallidas" fill="#dc2626" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="Canceladas" fill="#d97706" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+          </>
+        )}
+      </section>
 
       <Card>
         <CardHeader>

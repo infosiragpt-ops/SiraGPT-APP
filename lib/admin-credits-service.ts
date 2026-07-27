@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * admin-credits-service — client for /api/admin/credits/* (F2 PR7).
  *
@@ -48,7 +50,7 @@ export async function grantCredits(input: TopUpInput): Promise<{
   replay: boolean
 }> {
   const idempotencyKey = input.idempotencyKey || crypto.randomUUID()
-  const res = await fetch(`${API_ROOT}/admin/credits/grant`, {
+  const res = await authenticatedFetch(`${API_ROOT}/admin/credits/grant`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -84,7 +86,7 @@ export async function getUserCredits(userId: string): Promise<{
     lifetimeSpent: string
   } | null
 }> {
-  const res = await fetch(
+  const res = await authenticatedFetch(
     `${API_ROOT}/admin/credits/users/${encodeURIComponent(userId)}`,
     { headers: authHeader() },
   )

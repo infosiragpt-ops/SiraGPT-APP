@@ -144,7 +144,10 @@ function buildAllTools(thinking = 'low', opts = {}) {
     const taskTools = require('./task-tools');
     // buildTaskTools() returns the array of tool objects with
     // {name, description, parameters, execute} shape — direct match
-    const taskToolArray = taskTools.buildTaskTools();
+    // Skills are added below with this sub-agent's own clearance and allow-list.
+    // Keeping them out of the generic task bundle prevents an earlier,
+    // unrestricted run_skill tool from winning during name deduplication.
+    const taskToolArray = taskTools.buildTaskTools({ includeSkills: false });
     if (Array.isArray(taskToolArray)) {
       tools.push(...taskToolArray);
     }
@@ -161,6 +164,26 @@ function buildAllTools(thinking = 'low', opts = {}) {
     tools.push(...buildHermesTools());
   } catch (err) {
     console.warn('[agent-entry] hermes-tools unavailable:', err?.message);
+  }
+
+  // 5. Filesystem skills. `skillIds` is an execution allow-list, not merely a
+  // prompt hint: the runner enforces it again when the model calls run_skill.
+  try {
+    const skillRunner = require('./skill-runner');
+    const skillOptions = {
+      ctx: {
+        clearance: opts.clearance || 'authenticated',
+        ...(Array.isArray(opts.skillIds) ? { allowedSkillIds: opts.skillIds } : {}),
+      },
+      allowedSkillIds: Array.isArray(opts.skillIds) ? opts.skillIds : null,
+      recommendedSkillIds: Array.isArray(opts.skillIds) ? opts.skillIds : [],
+    };
+    const runSkillTool = skillRunner.buildRunSkillTool(skillOptions);
+    const runSkillPipelineTool = skillRunner.buildRunSkillPipelineTool(skillOptions);
+    if (runSkillTool) tools.push(runSkillTool);
+    if (runSkillPipelineTool) tools.push(runSkillPipelineTool);
+  } catch (err) {
+    console.warn('[agent-entry] skill-runner unavailable:', err?.message);
   }
 
   // Deduplicate by name
@@ -215,7 +238,7 @@ async function enqueueDelegatedTask(prompt, ctx, opts = {}) {
  * @param {string|number} opts.userId
  * @param {string} opts.prompt
  * @param {'low'|'medium'|'high'} [opts.thinking='low']
- * @param {string[]} [opts.skillIds] — restrict visible skills (only used in thinking medium/high)
+ * @param {string[]} [opts.skillIds] — restrict executable skills for every thinking mode
  * @param {string} [opts.collection='default']
  * @param {number} [opts.maxSteps=8]
  * @param {string} [opts.model='gpt-4o']
@@ -252,7 +275,17 @@ async function runAgent(opts) {
   }
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const ctx = { openai, userId, collection, source, depth, taskId: opts.taskId || null };
+  const clearance = opts.clearance || 'authenticated';
+  const ctx = {
+    openai,
+    userId,
+    collection,
+    source,
+    depth,
+    clearance,
+    ...(Array.isArray(skillIds) ? { allowedSkillIds: skillIds } : {}),
+    taskId: opts.taskId || null,
+  };
 
   const startTime = Date.now();
   const spanId = String(startTime);
@@ -261,7 +294,11 @@ async function runAgent(opts) {
 
   log.info({ userId: String(userId), thinking, depth, source }, 'agent_run_started');
 
-  const tools = buildAllTools(thinking);
+  const tools = buildAllTools(thinking, {
+    skillIds,
+    clearance,
+    toolset: opts.toolset || null,
+  });
 
   try {
     if (signal?.aborted) {
@@ -332,7 +369,11 @@ async function runAgent(opts) {
  */
 async function runSubAgent(goal, ctx, opts = {}) {
   const openai = ctx.openai || new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const tools = buildAllTools('low');
+  const tools = buildAllTools('low', {
+    skillIds: opts.skillIds || null,
+    clearance: opts.clearance || ctx.clearance || 'authenticated',
+    toolset: opts.toolset || null,
+  });
   const maxSteps = opts.maxSteps || 6;
 
   const r = await reactAgent.run(openai, {

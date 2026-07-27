@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 function authHeader(): Record<string, string> {
@@ -34,7 +36,7 @@ export type WorkspaceWorkflowStartResult = {
 export async function startWorkspaceWorkflow(
   args: WorkspaceWorkflowStartArgs,
 ): Promise<WorkspaceWorkflowStartResult> {
-  const resp = await fetch(`${API_ROOT}/agent/workspace-workflow`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/agent/workspace-workflow`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },

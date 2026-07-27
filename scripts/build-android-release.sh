@@ -6,6 +6,7 @@ ANDROID_DIR="$ROOT_DIR/android"
 KEYSTORE_PROPS="$ANDROID_DIR/keystore.properties"
 OUTPUT_DIR="$ROOT_DIR/output"
 OUTPUT_AAB="$OUTPUT_DIR/SiraGPT-android-release.aab"
+OUTPUT_APK="$OUTPUT_DIR/SiraGPT-android-release.apk"
 
 if [ ! -f "$KEYSTORE_PROPS" ]; then
   cat >&2 <<'MSG'
@@ -39,7 +40,8 @@ cd "$ROOT_DIR"
 npm run mobile:sync
 
 cd "$ANDROID_DIR"
-./gradlew bundleRelease
+./gradlew bundleRelease assembleRelease
 
 cp "$ANDROID_DIR/app/build/outputs/bundle/release/app-release.aab" "$OUTPUT_AAB"
-ls -lh "$OUTPUT_AAB"
+cp "$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk" "$OUTPUT_APK"
+ls -lh "$OUTPUT_AAB" "$OUTPUT_APK"

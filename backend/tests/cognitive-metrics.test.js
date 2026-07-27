@@ -80,6 +80,17 @@ describe('toPrometheusText', () => {
     assert.match(text, /sira_cognitive_faithfulness_grade\{grade="B"\} 1/);
     assert.match(text, /sira_cognitive_compute_mode\{mode="extended"\} 1/);
   });
+
+  test('escapes CR/LF, quotes, and backslashes in dynamic labels', () => {
+    metrics.recordRoutingDecision(decision({
+      action: 'keep\r\ninjected_metric 1"\\tail',
+    }));
+    const text = metrics.toPrometheusText();
+
+    assert.equal(text.includes('\r'), false);
+    assert.equal(text.split('\n').some((line) => line.startsWith('injected_metric ')), false);
+    assert.ok(text.includes('action="keep\\ninjected_metric 1\\"\\\\tail"'));
+  });
 });
 
 describe('cardinality cap', () => {

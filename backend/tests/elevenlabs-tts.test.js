@@ -21,9 +21,10 @@ function makeFakeClientCtor(captured) {
     constructor({ apiKey }) {
       captured.apiKey = apiKey;
       this.textToSpeech = {
-        convert: async (voiceId, opts) => {
+        convert: async (voiceId, opts, requestOptions) => {
           captured.voiceId = voiceId;
           captured.opts = opts;
+          captured.requestOptions = requestOptions;
           return (async function* () {
             yield Buffer.from('ID3');
             yield Buffer.from(`-${opts.text}`);
@@ -81,6 +82,33 @@ test('generateSpeechFile: clamps voice settings into [0,1]', async () => {
   assert.equal(captured.opts.voice_settings.similarity_boost, 0);
   assert.equal(captured.opts.voice_settings.style, 0.3);
   assert.equal(captured.opts.voice_settings.use_speaker_boost, false);
+});
+
+test('generateSpeechFile: forwards cancellation to the ElevenLabs SDK', async () => {
+  const captured = {};
+  const controller = new AbortController();
+  await tts.generateSpeechFile({
+    text: 'Audio cancelable',
+    signal: controller.signal,
+    ElevenLabsClientCtor: makeFakeClientCtor(captured),
+  });
+  assert.equal(captured.requestOptions.abortSignal, controller.signal);
+  assert.equal(captured.requestOptions.maxRetries, 0);
+});
+
+test('generateSpeechFile: rejects a pre-aborted request before calling the provider', async () => {
+  const captured = {};
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    () => tts.generateSpeechFile({
+      text: 'No generar',
+      signal: controller.signal,
+      ElevenLabsClientCtor: makeFakeClientCtor(captured),
+    }),
+    (err) => err?.name === 'AbortError'
+  );
+  assert.equal(captured.voiceId, undefined);
 });
 
 test('generateSpeechFile: rejects empty text', async () => {

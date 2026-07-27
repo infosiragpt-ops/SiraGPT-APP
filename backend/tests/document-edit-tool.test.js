@@ -390,3 +390,45 @@ test('in-process fast path falls through to the sandbox when the editor returns 
   assert.equal(outThrow.driver, 'local');
   fs.rmSync(inputPath, { force: true });
 });
+
+test('sandbox path materializes r2: attachments instead of fs.readFile on the ref', async () => {
+  let agentArgs = null;
+  let readSourceCalled = false;
+  const tool = buildDocumentEditTool({
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => null,
+      readSourceBuffer: async (row) => {
+        readSourceCalled = true;
+        assert.equal(row.path, 'r2:uploads/u1/informe.docx');
+        return { buffer: Buffer.from('r2-bytes'), cleanup: async () => {} };
+      },
+    },
+    objectStorage: { isRemote: (ref) => String(ref || '').startsWith('r2:') },
+    prisma: fakePrisma([{
+      id: 'f1',
+      userId: 'u1',
+      path: 'r2:uploads/u1/informe.docx',
+      originalName: 'informe.docx',
+      filename: 'informe.docx',
+    }]),
+    fsImpl: {
+      readFile: async () => {
+        throw new Error('fs.readFile must not be called for r2: refs');
+      },
+    },
+    runDocumentAgent: async (opts) => {
+      agentArgs = opts;
+      return {
+        outputs: [{ name: 'informe-editado.docx', buffer: Buffer.from('edited'), valid: true }],
+        finalText: 'ok',
+        iterations: 1,
+        driver: 'local',
+      };
+    },
+  });
+
+  const out = await tool.execute({ instruction: 'corrige el título del documento' }, baseCtx());
+  assert.equal(out.ok, true);
+  assert.equal(readSourceCalled, true, 'r2: attachments must go through readSourceBuffer');
+  assert.equal(agentArgs.files[0].buffer.toString('utf8'), 'r2-bytes');
+});

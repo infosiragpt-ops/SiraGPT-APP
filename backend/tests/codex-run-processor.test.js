@@ -35,13 +35,52 @@ function makeDeps({ run, project } = {}) {
 
 test('build run: queued → running → done with run_status events in order', async () => {
   const d = makeDeps();
-  const loop = async () => ({ status: 'done' });
+  let nativeInput;
+  const loop = async (args) => { nativeInput = args; return { status: 'done' }; };
   const res = await processCodexRunJob({ runId: 'run-1', prisma: d.prisma, eventStore: d.eventStore, runAgentLoop: loop, clock: d.clock });
   assert.equal(res.status, 'done');
   assert.equal(d.runRow.status, 'done');
   assert.ok(d.runRow.startedAt && d.runRow.finishedAt);
+  assert.equal(nativeInput.run.userId, 'u1');
+  assert.equal(nativeInput.project.name, 'Demo');
+  assert.equal(nativeInput.deps.prisma, d.prisma);
+  assert.equal(nativeInput.deps.eventStore, d.eventStore);
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running', 'done']);
+});
+
+test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
+  const d = makeDeps();
+  let nativeInput;
+  const loopState = {
+    summary: 'La API ya está implementada.',
+    tailMessages: [{ role: 'user', content: 'continúa con las pruebas' }],
+    state: { verifyRounds: 1 },
+  };
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: async (args) => { nativeInput = args; return { status: 'done' }; },
+    sessionService: {
+      async readSnapshot() {
+        return {
+          version: 1,
+          projectId: 'p1',
+          sessionId: 'run-1',
+          cursorSeq: 7,
+          checkpointSha: 'deadbee',
+          loopState,
+        };
+      },
+    },
+    resumeSnapshot: { sessionId: 'run-1', cursorSeq: 7, checkpointSha: 'deadbee' },
+    clock: d.clock,
+    env: { NODE_ENV: 'test' },
+  });
+
+  assert.equal(res.status, 'done');
+  assert.deepEqual(nativeInput.deps.resumeSnapshot, loopState);
 });
 
 test('plan run ends in waiting_approval with no finishedAt', async () => {
@@ -53,6 +92,48 @@ test('plan run ends in waiting_approval with no finishedAt', async () => {
   assert.equal(d.runRow.finishedAt, null);
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running', 'waiting_approval']);
+});
+
+test('auto-executable plan continues into build inside the backend', async () => {
+  const d = makeDeps({
+    run: {
+      mode: 'plan',
+      prompt: '[SIRAGPT_AUTOEXEC_V1]\nIntegra OpenClaw y construye frontend, backend y pruebas durante horas.',
+    },
+  });
+  let nativeInput;
+  const created = [];
+  const loop = async (args) => {
+    nativeInput = args;
+    return { status: 'waiting_approval' };
+  };
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: loop,
+    runService: {
+      async createRun(args) {
+        created.push(args);
+        return { id: 'build-auto', status: 'queued' };
+      },
+    },
+    clock: d.clock,
+    env: {},
+  });
+
+  assert.equal(res.status, 'waiting_approval');
+  assert.equal(res.autoContinuedRunId, 'build-auto');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].mode, 'build');
+  assert.equal(created[0].planRunId, 'run-1');
+  assert.equal(created[0].autoExecute, true);
+  assert.doesNotMatch(nativeInput.run.prompt, /SIRAGPT_AUTOEXEC/);
+  assert.equal(nativeInput.deps.env.CODEX_RUN_TIMEOUT_MS, String(4 * 60 * 60_000));
+  assert.equal(nativeInput.deps.env.CODEX_MAX_STEPS, '120');
+  assert.equal(nativeInput.deps.env.CODEX_VERIFY_DEV_SERVER, '1');
+  assert.match(nativeInput.deps.openclawPromptBlock, /OpenClaw-Level Runtime Policy/);
+  assert.ok(d.events.some((event) => event.type === 'auto_continue' && event.data.buildRunId === 'build-auto'));
 });
 
 test('a thrown loop becomes a captured error (no throw out, no zombie)', async () => {
@@ -146,4 +227,82 @@ test('missing run returns not_found', async () => {
   const d = makeDeps();
   const res = await processCodexRunJob({ runId: 'nope', prisma: d.prisma, eventStore: d.eventStore, runAgentLoop: async () => ({ status: 'done' }) });
   assert.equal(res.status, 'not_found');
+});
+
+test('processor executes the selected adapter with the v1 envelope and owned lifecycle context', async () => {
+  const d = makeDeps();
+  let selectedEnv;
+  let received;
+  const agentAdapterRegistry = {
+    resolveImplementer({ env }) {
+      selectedEnv = env;
+      return {
+        execute(request, context) {
+          received = { request, context };
+          return { status: 'done' };
+        },
+      };
+    },
+  };
+  const env = { CODEX_IMPLEMENTER_ADAPTER: 'native', CODEX_RUN_TIMEOUT_MS: '60000', CODEX_MAX_STEPS: '7' };
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    agentAdapterRegistry,
+    clock: d.clock,
+    env,
+  });
+
+  assert.equal(res.status, 'done');
+  assert.equal(selectedEnv, env);
+  assert.equal(received.request.schemaVersion, 'sira.agent.v1');
+  assert.equal(received.request.role, 'implementer');
+  assert.equal(received.request.run.id, 'run-1');
+  assert.equal(received.request.project.id, 'p1');
+  assert.equal(Object.hasOwn(received.request.run, 'userId'), false);
+  assert.equal(Object.hasOwn(received.request.project, 'workspacePath'), false);
+  assert.deepEqual(received.request.budget, { timeoutMs: 60_000, maxSteps: 7 });
+  assert.deepEqual(received.context.deps, {});
+  assert.equal(received.context.nativeRun, undefined);
+  assert.equal(received.context.nativeProject, undefined);
+  assert.equal(typeof received.context.isCancelled, 'function');
+  assert.equal(received.context.signal.aborted, false);
+});
+
+test('unknown implementer configuration fails the run closed without calling native loop', async () => {
+  const d = makeDeps();
+  let loopCalled = false;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: async () => { loopCalled = true; return { status: 'done' }; },
+    clock: d.clock,
+    env: { CODEX_IMPLEMENTER_ADAPTER: 'not-installed' },
+  });
+
+  assert.equal(loopCalled, false);
+  assert.equal(res.status, 'error');
+  assert.match(res.error, /CODEX_IMPLEMENTER_ADAPTER=not-installed is unsupported/);
+  assert.deepEqual(
+    d.events.filter((event) => event.type === 'run_status').map((event) => event.data.status),
+    ['running', 'error'],
+  );
+});
+
+test('malformed adapter outcomes fail closed as error instead of defaulting to done', async () => {
+  for (const malformed of [undefined, null, { status: 'mystery' }]) {
+    const d = makeDeps();
+    const res = await processCodexRunJob({
+      runId: 'run-1',
+      prisma: d.prisma,
+      eventStore: d.eventStore,
+      runAgentLoop: async () => malformed,
+      clock: d.clock,
+    });
+    assert.equal(res.status, 'error');
+    assert.match(res.error, /AgentAdapter\.execute\(\)|unsupported outcome status/);
+    assert.equal(d.runRow.status, 'error');
+  }
 });

@@ -1,8 +1,8 @@
 "use client"
 
 /**
- * RealPublishingPanel — Replit-Deployments-style Publishing for /code.
- * Deploys the project's BOUND GitHub repo to Hostinger (build → SFTP/FTP upload).
+ * RealPublishingPanel — Publishing for /code. Codex projects use immutable,
+ * verified checkpoints; legacy Git-bound projects retain Hostinger publishing.
  *
  * Layout mirrors Replit: tabs Overview · Logs · Domains · Manage.
  *   no git binding  → connect a repo in the Git tab first
@@ -46,6 +46,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { getGitBinding } from "@/lib/code-git-mirror"
+import {
+  CODE_ACTIVE_CODEX_PROJECT_EVENT,
+  getActiveCodexProject,
+} from "@/lib/code-workspace-context"
+import { codexApi, type CodexPublication } from "@/lib/codex/codex-api"
+import { readWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
 import {
   hostingService,
   type HostingTarget,
@@ -136,7 +142,91 @@ function relativeTime(iso: string): string {
   return `hace ${Math.floor(h / 24)}d`
 }
 
+const emptyPublication: CodexPublication = {
+  hostname: null,
+  url: null,
+  currentReleaseId: null,
+  publishedAt: null,
+  releases: [],
+}
+
+function CodexCheckpointPublishingPanel({ projectId }: { projectId: string }) {
+  const [publication, setPublication] = React.useState(emptyPublication)
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    void codexApi.getPublication(projectId)
+      .then((value) => setPublication(value || emptyPublication))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo cargar."))
+  }, [projectId])
+
+  async function update(action: () => Promise<{ publication: CodexPublication }>) {
+    if (busy) return
+    setBusy(true)
+    try {
+      setPublication((await action()).publication)
+    } catch (actionError) {
+      toast.error(actionError instanceof Error ? actionError.message : "La operación falló.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="h-full bg-[#1f1f1f] p-4 text-[12px] text-white">
+      <header className="mb-4 flex items-center justify-between">
+        <h2 className="text-[13px] font-semibold">Producción</h2>
+        <button
+          type="button"
+          className="h-8 rounded bg-[#1677d2] px-3 disabled:opacity-50"
+          disabled={busy}
+          onClick={() => void update(() => codexApi.publishProject(projectId))}
+        >
+          {busy ? "Procesando..." : "Publicar"}
+        </button>
+      </header>
+
+      {publication.url ? (
+        <a href={publication.url} target="_blank" rel="noreferrer" className="mb-4 block truncate text-[#78b7ff] hover:underline">{publication.url}</a>
+      ) : <p className="mb-4 text-[#999]">Sin publicar</p>}
+
+      <label className="block text-[#999]">
+        Release
+        <select
+          className="mt-1 block h-9 w-full rounded border border-[#3a3a3a] bg-[#242424] px-2 font-mono text-white"
+          value={publication.currentReleaseId || ""}
+          disabled={!publication.releases.length || busy}
+          onChange={(event) => void update(() => codexApi.rollbackPublication(projectId, event.target.value))}
+        >
+          {!publication.releases.length ? <option value="">No hay releases</option> : null}
+          {publication.releases.map((release) => (
+            <option key={release.id} value={release.id}>{release.commitSha.slice(0, 8)}</option>
+          ))}
+        </select>
+      </label>
+    </div>
+  )
+}
+
 export function RealPublishingPanel({ projectId }: { projectId: string | null }) {
+  const [codexProjectId, setCodexProjectId] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    const resolve = () => {
+      setCodexProjectId(getActiveCodexProject() || readWorkspaceCodexProject(projectId))
+    }
+    resolve()
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, resolve)
+    return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, resolve)
+  }, [projectId])
+
+  if (codexProjectId) {
+    return <CodexCheckpointPublishingPanel projectId={codexProjectId} />
+  }
+  return <ExternalPublishingPanel projectId={projectId} />
+}
+
+function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
   const [connectionId, setConnectionId] = React.useState<string | null>(null)
   const [targets, setTargets] = React.useState<HostingTarget[]>([])
   const [plan, setPlan] = React.useState<BuildPlan | null>(null)

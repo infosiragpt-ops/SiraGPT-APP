@@ -26,6 +26,9 @@ const prisma = require('../src/config/database');
 const aiService = require('../src/services/ai-service');
 const { buildRouteTestApp } = require('./http-test-utils');
 const appshotsRouter = require('../src/routes/appshots');
+const {
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
 
 const TEST_USER = {
   id: 'appshots-capture-user',
@@ -47,6 +50,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 function installPrismaMocks(token) {
+  const tokenHash = hashSessionToken(token);
   const originals = {
     sessionFindUnique: prisma.session.findUnique,
     sessionUpdate: prisma.session.update,
@@ -59,10 +63,10 @@ function installPrismaMocks(token) {
   const calls = { file: [], chat: [], message: [], sessionUpdate: [] };
 
   prisma.session.findUnique = async ({ where } = {}) => {
-    if (where?.token === token) {
+    if (where?.token === tokenHash) {
       return {
         id: 'sess-capture-1',
-        token,
+        token: tokenHash,
         userId: TEST_USER.id,
         user: TEST_USER,
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),

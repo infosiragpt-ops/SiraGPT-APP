@@ -1,5 +1,6 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
 import { streamSseJson } from "./sse-client"
 
 /**
@@ -71,7 +72,7 @@ function authHeader(): Record<string, string> {
  * parses the `data: {...}\n\n` framing.
  */
 export async function* generate({ projectId, signal, ...body }: GenerateArgs): AsyncGenerator<MarcoEvent> {
-  const resp = await fetch(`${API_ROOT}/projects/${projectId}/marco-teorico/generate`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/marco-teorico/generate`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -109,7 +110,7 @@ export async function save({
   markdown: string
   sources?: MarcoSource[]
 }): Promise<{ id: string; title: string; projectId: string | null }> {
-  const resp = await fetch(`${API_ROOT}/projects/${projectId}/marco-teorico/save`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/marco-teorico/save`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },

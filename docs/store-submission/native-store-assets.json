@@ -34,6 +34,7 @@
           "stage": "store-listing",
           "path": "docs/store-submission/assets/android/feature-graphic.png",
           "format": "png",
+          "allowAlpha": false,
           "dimensions": {
             "width": 1024,
             "height": 500
@@ -82,6 +83,7 @@
           "stage": "packaged",
           "path": "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png",
           "format": "png",
+          "allowAlpha": false,
           "dimensions": {
             "width": 1024,
             "height": 1024
@@ -105,9 +107,16 @@
           "pattern": "^iphone-[0-9a-z-]+\\.(png|jpg|jpeg)$",
           "minCount": 3,
           "formats": ["png", "jpg", "jpeg"],
+          "allowAlpha": false,
           "dimensions": {
-            "minWidth": 1170,
-            "minHeight": 2532
+            "allowedSizes": [
+              { "width": 1260, "height": 2736 },
+              { "width": 2736, "height": 1260 },
+              { "width": 1290, "height": 2796 },
+              { "width": 2796, "height": 1290 },
+              { "width": 1320, "height": 2868 },
+              { "width": 2868, "height": 1320 }
+            ]
           }
         }
       ],
@@ -120,9 +129,12 @@
           "pattern": "^ipad-[0-9a-z-]+\\.(png|jpg|jpeg)$",
           "minCount": 3,
           "formats": ["png", "jpg", "jpeg"],
+          "allowAlpha": false,
           "dimensions": {
-            "minWidth": 2048,
-            "minHeight": 2732
+            "allowedSizes": [
+              { "width": 2048, "height": 2732 },
+              { "width": 2732, "height": 2048 }
+            ]
           }
         }
       ]
@@ -159,9 +171,14 @@
           "pattern": "^desktop-[0-9a-z-]+\\.(png|jpg|jpeg)$",
           "minCount": 2,
           "formats": ["png", "jpg", "jpeg"],
+          "allowAlpha": false,
           "dimensions": {
-            "minWidth": 1280,
-            "minHeight": 720
+            "allowedSizes": [
+              { "width": 1280, "height": 800 },
+              { "width": 1440, "height": 900 },
+              { "width": 2560, "height": 1600 },
+              { "width": 2880, "height": 1800 }
+            ]
           }
         }
       ],

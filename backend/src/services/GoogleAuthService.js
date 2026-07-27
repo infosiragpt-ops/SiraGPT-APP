@@ -126,6 +126,16 @@ class GoogleAuthService {
       throw err;
     }
 
+    // Resolve account state before encrypting/updating provider credentials.
+    // A soft-deleted account must never be revived through OAuth or reach the
+    // passport callback that mints its application session.
+    const existing = await this.users.findByEmail(email);
+    if (existing?.deletedAt != null) {
+      const err = new Error('Account is inactive');
+      err.code = 'ACCOUNT_INACTIVE';
+      throw err;
+    }
+
     let effectiveRefreshToken = refreshToken;
     if (!effectiveRefreshToken) {
       this.logger.error?.(
@@ -145,7 +155,6 @@ class GoogleAuthService {
       scope: this.googleServicesScopes,
     });
 
-    const existing = await this.users.findByEmail(email);
     if (existing) {
       const updated = await this.users.updateGoogleIdentity(existing.id, {
         googleId: profile.id,

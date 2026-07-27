@@ -64,7 +64,7 @@ describe('createSyntheticPingProbe', () => {
   it('returns warn (not fail) when apiKey missing', async () => {
     const fetchImpl = makeFetch(() => fakeResponse());
     const probe = createSyntheticPingProbe({
-      apiKey: undefined,
+      apiKey: '',
       ttlMs: 0,
       fetchImpl,
     });

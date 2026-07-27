@@ -30,18 +30,43 @@ const { authenticateToken } = require('../middleware/auth');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const { canUseCodexAgent, publicAccess } = require('../services/codex/access-control');
 const projectService = require('../services/codex/project-service');
-const { createRunnerClient, runnerDevUrl, codexExportHostPath } = require('../services/codex/runner-client');
+const { createSandboxClient } = require('../services/codex/sandbox-provider');
+const { runnerDevUrl, codexExportHostPath } = require('../services/codex/runner-client');
 const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
 const checkpointService = require('../services/codex/checkpoint-service');
 const {
+  CodexSessionError,
+  createSessionService,
+} = require('../services/codex/session-service');
+const codexDb = require('../config/database');
+const publicationService = require('../services/codex/publication-service');
+const {
   STRIP_REQUEST_HEADERS,
   HOP_BY_HOP_HEADERS,
 } = require('../utils/proxy-headers');
+const {
+  attachWebSocketProxy,
+} = require('../services/codex/preview-websocket-proxy');
 
 const router = express.Router();
+let sessionRunner = null;
+let sessionService = null;
+
+function codexSessionRuntime() {
+  sessionRunner = sessionRunner || createSandboxClient();
+  sessionService = sessionService || createSessionService({ db: codexDb });
+  return { runner: sessionRunner, service: sessionService };
+}
+
+function mapSessionError(error, res) {
+  if (error instanceof CodexSessionError) {
+    return res.status(400).json({ error: error.code, message: error.message, details: error.details || undefined });
+  }
+  return res.status(502).json({ error: 'codex_session_failed', message: String(error?.message || error) });
+}
 
 function base64urlJson(value) {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -111,7 +136,7 @@ async function resolvePreviewPort(projectId, env = process.env) {
   const hit = previewPortCache.get(projectId);
   if (hit && Date.now() - hit.ts < previewPortTtlMs(env)) return hit.port;
   try {
-    const st = await createRunnerClient().devStatus(projectId);
+    const st = await createSandboxClient().devStatus(projectId);
     const port = st && st.running && Number.isInteger(st.port) ? st.port : null;
     previewPortCache.set(projectId, { port, ts: Date.now() });
     return port;
@@ -130,6 +155,56 @@ function previewProxyHostHeader(upstreamBase, env = process.env) {
   // loopback host Vite allows.
   if (/^(runner|code-runner)$/i.test(upstreamBase.hostname)) return `localhost:${port}`;
   return upstreamBase.host;
+}
+
+function previewUpgradeParts(request) {
+  try {
+    const url = new URL(String(request?.url || ''), 'http://preview.local');
+    const match = /^\/api\/codex\/projects\/([^/]+)\/preview\/([^/]+)\/app(?:\/.*)?$/.exec(url.pathname);
+    if (!match) return null;
+    return {
+      projectId: decodeURIComponent(match[1]),
+      token: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function previewUpgradeError(statusCode) {
+  const error = new Error('preview_websocket_rejected');
+  error.statusCode = statusCode;
+  return error;
+}
+
+async function previewWebSocketTarget(request, env = process.env) {
+  const parts = previewUpgradeParts(request);
+  if (!parts) throw previewUpgradeError(404);
+  const payload = verifyPreviewToken(parts.token, env);
+  if (!payload || payload.projectId !== parts.projectId) throw previewUpgradeError(403);
+
+  const projectPort = await resolvePreviewPort(parts.projectId, env);
+  let upstreamBase;
+  try {
+    upstreamBase = new URL(codexPreviewInternalUrl(env, projectPort));
+  } catch {
+    throw previewUpgradeError(503);
+  }
+  if (!['http:', 'https:'].includes(upstreamBase.protocol)) throw previewUpgradeError(503);
+
+  const target = new URL(String(request.url || '/'), upstreamBase);
+  target.protocol = upstreamBase.protocol === 'https:' ? 'wss:' : 'ws:';
+  return {
+    url: target.toString(),
+    host: previewProxyHostHeader(upstreamBase, env),
+  };
+}
+
+function attachPreviewWebSocketProxy(server, env = process.env) {
+  return attachWebSocketProxy(server, {
+    shouldHandle: (request) => Boolean(previewUpgradeParts(request)),
+    resolveTarget: (request) => previewWebSocketTarget(request, env),
+  });
 }
 
 function requireCodexAgentAccess(req, res, next) {
@@ -247,6 +322,7 @@ router.post(
         userId: req.user.id,
         name: req.body.name.trim(),
         brief: req.body.brief ?? null,
+        repository: req.body.repository ?? null,
       });
       return res.status(201).json({ project });
     } catch (err) {
@@ -273,6 +349,111 @@ router.get('/projects/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Modo PROACTIVO (compañía de agentes autónoma, estilo matrix.build) ──────
+// GET  /projects/:id/proactive  → estado + departamentos
+// POST /projects/:id/proactive  { enabled } → toggle; al ENCENDER dispara un
+// primer ciclo inmediato (fire-and-forget) para que el usuario vea acción ya.
+router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const proactive = require('../services/codex/proactive-engine');
+    const memory = require('../services/codex/progress-ledger').readProgressContext(project);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      state: proactive.readProactiveState(project),
+      departments: proactive.DEPARTMENTS,
+      memory,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
+router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const enabled = req.body && req.body.enabled === true;
+    // Enabling starts autonomous code execution immediately. Keep the same
+    // isolation/access gate as manual runs; disabling remains available to
+    // the project owner so a previously enabled loop can always be stopped.
+    if (enabled && !canUseCodexAgent(req.user, process.env)) {
+      return res.status(403).json({
+        error: 'codex_forbidden',
+        message: 'Tu cuenta no puede ejecutar APPS en producción.',
+      });
+    }
+    const proactive = require('../services/codex/proactive-engine');
+    const prisma = require('../config/database');
+    const out = await proactive.setProactive({ prisma, projectId: project.id, userId: req.user.id, enabled });
+    if (!out) return res.status(404).json({ error: 'project_not_found' });
+    if (enabled) {
+      // Primer ciclo inmediato — best-effort, nunca bloquea la respuesta.
+      prisma.codexProject.findFirst({ where: { id: project.id, userId: req.user.id } })
+        .then((fresh) => (fresh ? proactive.runCycle({ project: fresh, deps: { prisma } }) : null))
+        .catch((err) => console.warn('[codex proactive] first cycle failed:', err?.message || err));
+    }
+    return res.json({ state: out.state, departments: proactive.DEPARTMENTS });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
+function sendPublicationError(res, err) {
+  const status = Number(err?.status) || 500;
+  return res.status(status).json({
+    error: err?.code || 'codex_publication_failed',
+    message: String(err?.message || 'Publication failed').slice(0, 2_000),
+  });
+}
+
+router.get('/projects/:id/publication', authenticateToken, async (req, res) => {
+  try {
+    const publication = await publicationService.getPublication({
+      userId: req.user.id,
+      projectId: req.params.id,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ publication });
+  } catch (err) {
+    return sendPublicationError(res, err);
+  }
+});
+
+router.post('/projects/:id/publication', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  const checkpointId = req.body?.checkpointId == null ? null : String(req.body.checkpointId).trim();
+  if (checkpointId != null && (!checkpointId || checkpointId.length > 180)) {
+    return res.status(400).json({ error: 'checkpoint_id_invalid' });
+  }
+  try {
+    const result = await publicationService.publishProject({
+      userId: req.user.id,
+      projectId: req.params.id,
+      checkpointId,
+    });
+    return res.status(201).json(result);
+  } catch (err) {
+    return sendPublicationError(res, err);
+  }
+});
+
+router.post('/projects/:id/publication/rollback', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  const releaseId = String(req.body?.releaseId || '').trim();
+  if (!releaseId || releaseId.length > 180) {
+    return res.status(400).json({ error: 'release_id_required' });
+  }
+  try {
+    return res.json(await publicationService.rollbackPublication({
+      userId: req.user.id,
+      projectId: req.params.id,
+      releaseId,
+    }));
+  } catch (err) {
+    return sendPublicationError(res, err);
+  }
+});
+
 // Ownership gate compartido por las rutas de preview.
 async function loadOwnedProject(req, res) {
   const project = await projectService.getProject({ userId: req.user.id, id: req.params.id });
@@ -290,7 +471,7 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
     }
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const runner = createRunnerClient();
+    const runner = createSandboxClient();
     // REUSE a live dev server before minting anything: the tokenized base is
     // baked into Vite's --base, so restarting re-mints it and instantly 404s
     // ("public base URL" error) every asset URL an already-open iframe holds —
@@ -330,7 +511,7 @@ router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentA
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().devStatus(project.id);
+    const out = await createSandboxClient().devStatus(project.id);
     return res.json({ ...out, devUrl: runnerDevUrl(process.env, Number.isInteger(out?.port) ? out.port : null) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -341,7 +522,7 @@ router.post('/projects/:id/preview/stop', authenticateToken, requireCodexAgentAc
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    await createRunnerClient().stopDev(project.id);
+    await createSandboxClient().stopDev(project.id);
     previewPortCache.delete(project.id);
     return res.json({ ok: true });
   } catch (err) {
@@ -357,7 +538,7 @@ router.post('/projects/:id/export', authenticateToken, requireCodexAgentAccess, 
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().exportWorkspace(project.id);
+    const out = await createSandboxClient().exportWorkspace(project.id);
     return res.json({ ...out, hostPath: codexExportHostPath(project.id) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -433,7 +614,7 @@ router.get('/projects/:id/files', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().exec(project.id, ['git', 'ls-files', '-co', '--exclude-standard']);
+    const out = await createSandboxClient().exec(project.id, ['git', 'ls-files', '-co', '--exclude-standard']);
     const files = String(out?.stdout || '')
       .split('\n')
       .map((s) => s.trim())
@@ -515,7 +696,7 @@ router.post(
 
     try {
       const files = req.body.files.map((f) => ({ path: String(f.path), content: String(f.content) }));
-      await createRunnerClient().writeFiles(project.id, files);
+      await createSandboxClient().writeFiles(project.id, files);
       return res.json({ ok: true, written: files.length });
     } catch (err) {
       return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -529,7 +710,7 @@ router.get('/projects/:id/file', authenticateToken, async (req, res) => {
     if (!project) return undefined;
     const path = String(req.query.path || '').trim();
     if (!path) return res.status(400).json({ error: 'path_required' });
-    const out = await createRunnerClient().readFile(project.id, path);
+    const out = await createSandboxClient().readFile(project.id, path);
     return res.json(out);
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -558,6 +739,7 @@ router.post(
     body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
     body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
+    body('autoExecute').optional().isBoolean(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -571,6 +753,7 @@ router.post(
         model: req.body.model ?? null,
         tier: req.body.tier ?? null,
         planRunId: req.body.planRunId ?? null,
+        autoExecute: req.body.autoExecute === true,
       });
       return res.status(201).json({ run });
     } catch (err) {
@@ -580,6 +763,7 @@ router.post(
 );
 
 router.get('/projects/:projectId/runs', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const runs = await runService.listRuns({ userId: req.user.id, projectId: req.params.projectId });
     return res.json({ runs });
@@ -598,6 +782,135 @@ router.get('/projects/:projectId/runs/:runId', authenticateToken, async (req, re
   }
 });
 
+async function requireOwnedScopedRun(req, res) {
+  const run = await runService.getRun({ userId: req.user.id, runId: req.params.runId });
+  if (!run || run.projectId !== req.params.projectId) {
+    res.status(404).json({ error: 'run_not_found' });
+    return null;
+  }
+  return run;
+}
+
+router.get('/projects/:projectId/runs/:runId/transcript', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!await requireOwnedScopedRun(req, res)) return undefined;
+    const { service } = codexSessionRuntime();
+    const transcript = await service.readTranscript({
+      projectId: req.params.projectId,
+      sessionId: req.params.runId,
+      afterSeq: Math.max(0, Number.parseInt(req.query.afterSeq, 10) || 0),
+      limit: Math.max(1, Math.min(500, Number.parseInt(req.query.limit, 10) || 200)),
+    });
+    return res.json({ transcript });
+  } catch (error) {
+    return mapSessionError(error, res);
+  }
+});
+
+router.post(
+  '/projects/:projectId/runs/:runId/session/continue',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      if (!await requireOwnedScopedRun(req, res)) return undefined;
+      const { service } = codexSessionRuntime();
+      const session = await service.continueSession({
+        projectId: req.params.projectId,
+        sessionId: req.params.runId,
+        afterSeq: req.body?.afterSeq == null ? null : Math.max(0, Number(req.body.afterSeq) || 0),
+        limit: Math.max(1, Math.min(500, Number(req.body?.limit) || 200)),
+      });
+      return res.json({ session });
+    } catch (error) {
+      return mapSessionError(error, res);
+    }
+  },
+);
+
+router.post(
+  '/projects/:projectId/runs/:runId/session/fork',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      if (!await requireOwnedScopedRun(req, res)) return undefined;
+      const { service } = codexSessionRuntime();
+      const targetSessionId = `fork-${crypto.randomUUID()}`;
+      const session = await service.forkSession({
+        projectId: req.params.projectId,
+        sourceSessionId: req.params.runId,
+        targetSessionId,
+        atSeq: req.body?.atSeq == null ? Number.MAX_SAFE_INTEGER : Math.max(0, Number(req.body.atSeq) || 0),
+      });
+      return res.status(201).json({ session });
+    } catch (error) {
+      return mapSessionError(error, res);
+    }
+  },
+);
+
+router.post(
+  '/projects/:projectId/runs/:runId/session/rewind',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    const toSeq = Number(req.body?.toSeq);
+    if (!Number.isSafeInteger(toSeq) || toSeq < 0) {
+      return res.status(400).json({ error: 'invalid_rewind_cursor' });
+    }
+    try {
+      const ownedRun = await requireOwnedScopedRun(req, res);
+      if (!ownedRun) return undefined;
+      const activeStatuses = new Set(['queued', 'running', 'waiting_approval']);
+      const projectRuns = await runService.listRuns({
+        userId: req.user.id,
+        projectId: req.params.projectId,
+      });
+      if (activeStatuses.has(ownedRun.status) || projectRuns.some((run) => activeStatuses.has(run.status))) {
+        return res.status(409).json({ error: 'rewind_run_active' });
+      }
+      const { runner, service } = codexSessionRuntime();
+      const checkpointId = req.body?.checkpointId == null ? null : String(req.body.checkpointId).trim();
+      let previousSha = null;
+      const session = await service.rewindSession({
+        projectId: req.params.projectId,
+        sessionId: req.params.runId,
+        toSeq,
+        checkpointId,
+        restoreCheckpoint: checkpointId
+          ? async () => {
+            const restored = await checkpointService.rollbackCheckpoint({
+              checkpointId,
+              userId: req.user.id,
+              projectId: req.params.projectId,
+              runId: req.params.runId,
+              deps: { runner },
+            });
+            previousSha = restored?.previousSha || null;
+            return restored?.error ? { ok: false, ...restored } : { ok: true, ...restored };
+          }
+          : null,
+        undoCheckpointRestore: checkpointId
+          ? async () => (
+            previousSha
+              ? checkpointService.restoreWorkspaceSha({
+                projectId: req.params.projectId,
+                commitSha: previousSha,
+                deps: { runner },
+              })
+              : { ok: false, error: 'previous_sha_unavailable' }
+          )
+          : null,
+      });
+      return res.json({ session });
+    } catch (error) {
+      return mapSessionError(error, res);
+    }
+  },
+);
+
 router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, async (req, res) => {
   try {
     const run = await runService.cancelRun({ userId: req.user.id, runId: req.params.id });
@@ -606,6 +919,31 @@ router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, asyn
     return mapRunError(err, res);
   }
 });
+
+router.post(
+  '/runs/:id/tool-permission',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('permissionId').isString().isLength({ min: 3, max: 240 }),
+    body('decision').isString().isIn(['allow', 'deny']),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const run = await runService.resolveToolPermission({
+        userId: req.user.id,
+        runId: req.params.id,
+        permissionId: req.body.permissionId,
+        decision: req.body.decision,
+      });
+      return res.json({ run });
+    } catch (err) {
+      return mapRunError(err, res);
+    }
+  },
+);
 
 // ── Checkpoints (feature 07) ────────────────────────────────────────────────
 // /checkpoints/* and /projects/:id/checkpoints do not collide with the legacy
@@ -616,7 +954,7 @@ router.post('/checkpoints/:id/rollback', authenticateToken, async (req, res) => 
     const out = await checkpointService.rollbackCheckpoint({
       checkpointId: req.params.id,
       userId: req.user.id,
-      deps: { runner: createRunnerClient() },
+      deps: { runner: createSandboxClient() },
     });
     if (out.error) return res.status(out.status || 400).json({ error: out.error, detail: out.detail });
     return res.json(out);
@@ -630,7 +968,7 @@ router.get('/checkpoints/:id/diff', authenticateToken, async (req, res) => {
     const out = await checkpointService.getCheckpointDiff({
       checkpointId: req.params.id,
       userId: req.user.id,
-      deps: { runner: createRunnerClient() },
+      deps: { runner: createSandboxClient() },
     });
     if (out.error) return res.status(out.status || 400).json({ error: out.error });
     return res.json(out);
@@ -640,6 +978,7 @@ router.get('/checkpoints/:id/diff', authenticateToken, async (req, res) => {
 });
 
 router.get('/projects/:projectId/checkpoints', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const checkpoints = await checkpointService.listCheckpoints({ userId: req.user.id, projectId: req.params.projectId });
     if (checkpoints === null) return res.status(404).json({ error: 'project_not_found' });
@@ -762,5 +1101,7 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   }
   return undefined;
 });
+
+router.attachPreviewWebSocketProxy = attachPreviewWebSocketProxy;
 
 module.exports = router;

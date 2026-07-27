@@ -136,8 +136,7 @@ const memoryBackend = {
 function pgBackend() {
   let prisma;
   try {
-    const { PrismaClient } = require('@prisma/client');
-    prisma = new PrismaClient();
+    prisma = require('../config/database');
   } catch (err) {
     throw new Error(`USE_PG_STORE=1 but Prisma client isn't available: ${err.message}`);
   }

@@ -40,16 +40,25 @@ const AUDIO_MIME_MAP = {
  * Transcribe an audio or video file using OpenAI Whisper.
  * Returns { text, method: 'whisper' | 'placeholder' }
  */
-async function transcribe(filePath, mimeType, originalName) {
+async function transcribe(filePath, mimeType, originalName, options = {}) {
   const info = AUDIO_MIME_MAP[mimeType];
   const label = info ? info.label : 'Media File';
   const fileName = originalName || path.basename(filePath);
+  const language = typeof options.language === 'string' && options.language.trim()
+    ? options.language.trim()
+    : WHISPER_LANGUAGE;
+  const prompt = typeof options.prompt === 'string' && options.prompt.trim()
+    ? options.prompt.trim().slice(0, 1000)
+    : process.env.WHISPER_PROMPT || undefined;
+  const model = options.model || WHISPER_MODEL;
 
-  // Check if OpenAI key is available
-  if (!process.env.OPENAI_API_KEY) {
+  // An injected client is the test/provider-router seam. Production falls
+  // back to the deployment key exactly as the legacy upload pipeline did.
+  if (!options.openai && !process.env.OPENAI_API_KEY) {
     return {
       text: generatePlaceholder(fileName, label, mimeType, 'OpenAI API key not configured'),
       method: 'placeholder',
+      reasonCode: 'provider_not_configured',
     };
   }
 
@@ -66,26 +75,34 @@ async function transcribe(filePath, mimeType, originalName) {
     return {
       text: generatePlaceholder(fileName, label, mimeType, `File too large (${(fileSize / 1024 / 1024).toFixed(1)}MB > ${(AUDIO_MAX_FILE_BYTES / 1024 / 1024).toFixed(0)}MB)`),
       method: 'placeholder',
+      reasonCode: 'file_too_large',
     };
   }
 
   // Try Whisper transcription
   try {
-    const OpenAI = require('openai');
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = options.openai || (() => {
+      const OpenAI = require('openai');
+      return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    })();
 
     const fileBuffer = await fsPromises.readFile(filePath);
 
     // OpenAI needs the file as a proper Blob-like object with a name
-    const blob = new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
+    const blob = typeof options.createFile === 'function'
+      ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
+      : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
 
-    const transcription = await openai.audio.transcriptions.create({
-      model: WHISPER_MODEL,
+    const request = {
+      model,
       file: blob,
-      language: WHISPER_LANGUAGE,
       response_format: 'verbose_json',
       timestamp_granularities: ['segment'],
-    });
+    };
+    if (language) request.language = language;
+    if (prompt) request.prompt = prompt;
+    const requestOptions = options.signal ? { signal: options.signal } : undefined;
+    const transcription = await openai.audio.transcriptions.create(request, requestOptions);
 
     const text = transcription.text || '';
 
@@ -93,17 +110,21 @@ async function transcribe(filePath, mimeType, originalName) {
       return {
         text: generatePlaceholder(fileName, label, mimeType, 'No speech detected'),
         method: 'whisper',
+        reasonCode: 'no_speech',
       };
     }
 
     const header = `${label} transcription — ${text.length} characters, ` +
-      `model: ${WHISPER_MODEL}` +
-      (WHISPER_LANGUAGE ? `, language: ${WHISPER_LANGUAGE}` : '') +
+      `model: ${model}` +
+      (language ? `, language: ${language}` : '') +
       `\n---\n`;
 
     return {
       text: header + text,
+      transcript: text,
       method: 'whisper',
+      model,
+      language: language || null,
       segments: transcription.segments?.map(s => ({
         start: s.start,
         end: s.end,
@@ -115,6 +136,7 @@ async function transcribe(filePath, mimeType, originalName) {
     return {
       text: generatePlaceholder(fileName, label, mimeType, `Transcription failed: ${err.message}`),
       method: 'placeholder',
+      reasonCode: 'provider_error',
     };
   }
 }
@@ -132,4 +154,4 @@ function generatePlaceholder(fileName, label, mimeType, reason) {
   ].join('\n');
 }
 
-module.exports = { transcribe };
+module.exports = { transcribe, AUDIO_MAX_FILE_BYTES, AUDIO_MIME_MAP };

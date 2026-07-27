@@ -1,5 +1,6 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
 import { streamSseJson } from "./sse-client"
 
 /**
@@ -31,6 +32,8 @@ export interface AgentArtifact {
   downloadUrl: string
   previewHtml?: string | null
   validation?: Record<string, unknown> | null
+  sourceFileId?: string | null
+  documentVersion?: { id: string; version: number; sourceFileId: string } | null
 }
 
 export interface DocumentPolicy {
@@ -326,9 +329,8 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
     else signal.addEventListener("abort", onUpstreamAbort, { once: true })
   }
 
-  const resp = await fetch(`${API_ROOT}${postPath}`, {
+  const resp = await authenticatedFetch(`${API_ROOT}${postPath}`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(body),
     signal: internal.signal,
@@ -640,8 +642,24 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
           s.id === evt.id ? { ...s, status: evt.ok ? "done" : "error" } : s
         ),
       }
-    case "file_artifact":
-      return { ...state, artifacts: [...state.artifacts, evt.artifact] }
+    case "file_artifact": {
+      const artifacts = [...state.artifacts]
+      const filename = String(evt.artifact.filename || "").trim().toLowerCase()
+      const format = String(evt.artifact.format || evt.artifact.mime || "").trim().toLowerCase()
+      const existingIndex = artifacts.findIndex(artifact => (
+        artifact.id === evt.artifact.id
+        || (
+          filename
+          && String(artifact.filename || "").trim().toLowerCase() === filename
+          && String(artifact.format || artifact.mime || "").trim().toLowerCase() === format
+        )
+      ))
+
+      if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact)
+      else artifacts.push(evt.artifact)
+
+      return { ...state, artifacts }
+    }
     case "final_text":
       return { ...state, finalText: evt.markdown }
     case "done":
@@ -711,9 +729,8 @@ export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks 
 }
 
 export async function cancelTask(taskId: string): Promise<{ ok: boolean; taskId?: string; status?: string; error?: string }> {
-  const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/cancel`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/cancel`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
   })
   let payload: any = null
@@ -729,9 +746,8 @@ export async function cancelTask(taskId: string): Promise<{ ok: boolean; taskId?
 }
 
 export async function retryTask(taskId: string): Promise<{ ok: boolean; taskId?: string; jobId?: string; status?: string; queue?: string; error?: string }> {
-  const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/retry`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/retry`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
   })
   let payload: any = null
@@ -745,9 +761,8 @@ export async function resolveApproval(
   decision: "approve" | "reject" | "edit",
   payload: Record<string, unknown> = {},
 ): Promise<{ ok: boolean; taskId?: string; approvalId?: string; decision?: string; error?: string }> {
-  const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/approval`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/approval`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify({ decision, payload }),
   })
@@ -762,7 +777,7 @@ export async function getTaskEvents(
   after = 0,
   options: { signal?: AbortSignal } = {},
 ): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; streamState?: AgentTaskState; error?: string }> {
-  const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
+  const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
     method: "GET",
     credentials: "include",
     headers: { ...authHeader() },

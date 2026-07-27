@@ -7,7 +7,7 @@
 //   GET    /api/gpts/:id/knowledge
 //
 // No real DB / network / disk. We inject fakes for the router's four runtime
-// dependencies (@prisma/client, middleware/auth, middleware/upload,
+// dependencies (shared config/database client, middleware/auth, middleware/upload,
 // services/fileProcessor) into require.cache BEFORE requiring the router, then
 // drive it with supertest. This exercises the REAL route logic — ownership
 // gating, File-record linking (customGptId), best-effort extraction, and the
@@ -137,7 +137,7 @@ function buildApp() {
   // fresh fakes and the latest currentUserId / behavior.
   for (const p of [
     ROUTER_PATH,
-    resolveFrom('@prisma/client'),
+    resolveFrom('../config/database'),
     resolveFrom('../middleware/auth'),
     resolveFrom('../middleware/upload'),
     resolveFrom('../services/fileProcessor'),
@@ -148,8 +148,8 @@ function buildApp() {
 
   const fakePrisma = buildFakePrisma();
 
-  // @prisma/client → PrismaClient constructor returns our fake.
-  injectFakeModule('@prisma/client', { PrismaClient: function () { return fakePrisma; } });
+  // The route consumes the configured shared client directly.
+  injectFakeModule('../config/database', fakePrisma);
 
   // auth → sets req.user from the test-controlled currentUserId.
   injectFakeModule('../middleware/auth', {

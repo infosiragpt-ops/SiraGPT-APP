@@ -37,13 +37,20 @@ function makeLockout(over = {}) {
 
 function makeSvc(over = {}) {
   const sessionCalls = [];
+  const sessionDeleteCalls = [];
   const auditCalls = [];
+  const revocationCalls = [];
   const users = {
     findByEmail: over.findByEmail || (async () => makeUser()),
   };
   const sessions = {
-    create: async (row) => { sessionCalls.push(row); return row; },
+    create: over.sessionCreate || (async (row) => { sessionCalls.push(row); return row; }),
+    deleteAllForUser: async (userId) => {
+      sessionDeleteCalls.push(userId);
+      return { count: 1 };
+    },
     _calls: sessionCalls,
+    _deleteCalls: sessionDeleteCalls,
   };
   const audit = over.audit || ((_prisma, payload) => { auditCalls.push(payload); });
   audit._calls = auditCalls;
@@ -65,9 +72,13 @@ function makeSvc(over = {}) {
     sessionTtlMs: over.sessionTtlMs,
     now: over.now || (() => new Date('2026-05-22T12:00:00Z')),
     logger: silentLogger,
+    publishSessionsRevoked: over.publishSessionsRevoked || (async (event) => {
+      revocationCalls.push(event);
+    }),
   });
   svc._audit = audit;
   svc._sessions = sessions;
+  svc._revocations = revocationCalls;
   return svc;
 }
 
@@ -173,6 +184,59 @@ test('login: bad password crossing lockout threshold also fires account_locked w
   assert.equal(svc._audit._calls[1].resourceId, 'u-77');
 });
 
+test('login: soft-deleted user is rejected and sessions are revoked before password verification', async () => {
+  let passwordCompared = false;
+  let tokenSigned = false;
+  const svc = makeSvc({
+    findByEmail: async () => makeUser({
+      id: 'deleted-user',
+      deletedAt: new Date('2026-05-20T00:00:00Z'),
+    }),
+    comparePassword: async () => {
+      passwordCompared = true;
+      return true;
+    },
+    signSessionToken: () => {
+      tokenSigned = true;
+      return 'MUST_NOT_MINT';
+    },
+  });
+
+  const result = await svc.login({
+    email: 'u@x.com',
+    password: 'correct-password',
+    req: {},
+  });
+
+  assert.deepEqual(result, { ok: false, kind: 'invalid_credentials' });
+  assert.equal(passwordCompared, false);
+  assert.equal(tokenSigned, false);
+  assert.deepEqual(svc._sessions._deleteCalls, ['deleted-user']);
+  assert.deepEqual(svc._revocations, [{
+    userId: 'deleted-user',
+    reason: 'account_inactive',
+  }]);
+  assert.equal(svc._sessions._calls.length, 0);
+  assert.equal(svc._audit._calls[0].metadata.reason, 'inactive_user');
+});
+
+test('login: deletion queued during password verification cannot mint a session', async () => {
+  const inactive = new Error('Account is inactive');
+  inactive.code = 'ACCOUNT_INACTIVE';
+  const svc = makeSvc({
+    sessionCreate: async () => { throw inactive; },
+  });
+
+  const result = await svc.login({
+    email: 'u@x.com',
+    password: 'correct-password',
+    req: {},
+  });
+
+  assert.deepEqual(result, { ok: false, kind: 'invalid_credentials' });
+  assert.deepEqual(svc._sessions._deleteCalls, ['u-1']);
+});
+
 test('login: org requires 2FA and user has none → org_2fa_required + audit', async () => {
   const prisma = {
     orgMembership: {
@@ -273,6 +337,30 @@ test('login: SMS challenge mint throws → kind:sms_2fa_mint_failed', async () =
   assert.deepEqual(r, { ok: false, kind: 'sms_2fa_mint_failed' });
 });
 
+test('login: deletion detected while minting SMS challenge is an inactive-account denial', async () => {
+  const inactive = new Error('account inactive');
+  inactive.code = 'ACCOUNT_INACTIVE';
+  const twoFASms = {
+    isValidPhone: () => true,
+    createSmsChallenge: async () => { throw inactive; },
+    sendSms: async () => ({ sent: true }),
+  };
+  const svc = makeSvc({
+    twoFASms,
+    findByEmail: async () => makeUser({
+      twoFactorEnabled: true,
+      phone: '+15551234',
+      phoneVerifiedAt: new Date(),
+    }),
+  });
+
+  const result = await svc.login({ email: 'u@x.com', password: 'pw', req: {} });
+
+  assert.deepEqual(result, { ok: false, kind: 'invalid_credentials' });
+  assert.deepEqual(svc._sessions._deleteCalls, ['u-1']);
+  assert.equal(svc._sessions._calls.length, 0);
+});
+
 test('login: TOTP-only user (totpEnabled, !twoFactorEnabled) → totp_2fa_required + partial token', async () => {
   const svc = makeSvc({
     findByEmail: async () => makeUser({ totpEnabled: true, twoFactorEnabled: false }),
@@ -295,6 +383,21 @@ test('login: TOTP partial mint throws → kind:totp_partial_mint_failed', async 
   });
   const r = await svc.login({ email: 'u@x.com', password: 'pw', req: {} });
   assert.deepEqual(r, { ok: false, kind: 'totp_partial_mint_failed' });
+});
+
+test('login: deletion detected while minting TOTP partial session is an inactive-account denial', async () => {
+  const inactive = new Error('account inactive');
+  inactive.code = 'ACCOUNT_INACTIVE';
+  const svc = makeSvc({
+    findByEmail: async () => makeUser({ totpEnabled: true, twoFactorEnabled: false }),
+    mintPartialSession: async () => { throw inactive; },
+  });
+
+  const result = await svc.login({ email: 'u@x.com', password: 'pw', req: {} });
+
+  assert.deepEqual(result, { ok: false, kind: 'invalid_credentials' });
+  assert.deepEqual(svc._sessions._deleteCalls, ['u-1']);
+  assert.equal(svc._sessions._calls.length, 0);
 });
 
 test('login: SMS-enabled user wins over TOTP (TOTP branch not used)', async () => {

@@ -159,6 +159,21 @@ test('capToolsForPrompted keeps pinned + preferred tools under the cap', () => {
   assert.ok(names.includes('create_chart'));
 });
 
+test('capToolsForPrompted keeps skill and artifact contract tools together', () => {
+  const tools = Array.from({ length: 40 }, (_, i) => ({ name: `tool_${i}` }));
+  tools.push(
+    { name: 'run_skill' },
+    { name: 'create_document' },
+    { name: 'verify_artifact' },
+    { name: 'web_search' },
+  );
+  const pinned = ['run_skill', 'create_document', 'verify_artifact'];
+  const names = capToolsForPrompted(tools, { pinned }).map((tool) => tool.name);
+
+  assert.deepEqual(names.slice(0, 3), pinned);
+  assert.ok(names.includes('web_search'));
+});
+
 test('capToolsForPrompted is a no-op for already-small toolsets', () => {
   const tools = [{ name: 'a' }, { name: 'b' }];
   assert.deepEqual(capToolsForPrompted(tools), tools);

@@ -14,8 +14,9 @@
  * Counters are exposed through the shared Prometheus registry
  * (`src/utils/metrics.js`) so `/metrics` scrapers pick them up.
  *
- * Memory footprint: a few O(routes) maps. No per-request allocation
- * beyond the histogram observe path that metrics.js already does.
+ * Memory footprint is bounded by SIRAGPT_SLO_MAX_ROUTE_STATES. No
+ * per-request allocation beyond the histogram observe path that
+ * metrics.js already does.
  *
  * Public API:
  *   record({ route, statusCode, durationMs })
@@ -26,6 +27,10 @@
  */
 
 const metrics = require('../utils/metrics');
+const {
+  isMetricsRequest,
+  matchedRouteLabel,
+} = require('./observability/metrics-paths');
 
 const SLO_TARGETS = Object.freeze({
   latency_p995_under_500ms: 0.995,
@@ -33,6 +38,23 @@ const SLO_TARGETS = Object.freeze({
   error_rate_max:           0.01,
   availability:             0.999,
 });
+
+const DEFAULT_SLO_ROUTE_STATE_LIMIT = 128;
+const MAX_SLO_ROUTE_STATE_LIMIT = 2_000;
+const SLO_OVERFLOW_ROUTE = '__other__';
+
+function resolveRouteStateLimit(value) {
+  if (value === undefined || value === null || value === '') {
+    return DEFAULT_SLO_ROUTE_STATE_LIMIT;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_SLO_ROUTE_STATE_LIMIT;
+  return Math.max(1, Math.min(MAX_SLO_ROUTE_STATE_LIMIT, Math.floor(parsed)));
+}
+
+const SLO_ROUTE_STATE_LIMIT = resolveRouteStateLimit(
+  process.env.SIRAGPT_SLO_MAX_ROUTE_STATES,
+);
 
 const PROM_FAMILIES = {
   total:           'siragpt_slo_requests_total',
@@ -49,18 +71,31 @@ function _ensureFamiliesRegistered() {
   if (_registered) return;
   _registered = true;
   if (typeof metrics.registerCounter === 'function') {
-    metrics.registerCounter(PROM_FAMILIES.total,           { help: 'Total requests counted for SLO budgets', labels: ['route'] });
-    metrics.registerCounter(PROM_FAMILIES.fast,            { help: 'Requests under 500ms (99.5% target)',     labels: ['route'] });
-    metrics.registerCounter(PROM_FAMILIES.acceptable,      { help: 'Requests under 2s (99% target)',          labels: ['route'] });
-    metrics.registerCounter(PROM_FAMILIES.errors,          { help: 'Requests counted as errors (5xx)',        labels: ['route'] });
-    metrics.registerCounter(PROM_FAMILIES.available,       { help: 'Requests counted as available (non-5xx)', labels: ['route'] });
+    const options = { labels: ['route'], maxSeries: SLO_ROUTE_STATE_LIMIT };
+    metrics.registerCounter(PROM_FAMILIES.total,           { ...options, help: 'Total requests counted for SLO budgets' });
+    metrics.registerCounter(PROM_FAMILIES.fast,            { ...options, help: 'Requests under 500ms (99.5% target)' });
+    metrics.registerCounter(PROM_FAMILIES.acceptable,      { ...options, help: 'Requests under 2s (99% target)' });
+    metrics.registerCounter(PROM_FAMILIES.errors,          { ...options, help: 'Requests counted as errors (5xx)' });
+    metrics.registerCounter(PROM_FAMILIES.available,       { ...options, help: 'Requests counted as available (non-5xx)' });
   }
   if (typeof metrics.registerGauge === 'function') {
-    metrics.registerGauge(PROM_FAMILIES.endpointMeets,     { help: 'Whether the endpoint currently meets its SLO target (1=yes, 0=no), per objective', labels: ['route', 'objective'] });
+    metrics.registerGauge(PROM_FAMILIES.endpointMeets, {
+      help: 'Whether the endpoint currently meets its SLO target (1=yes, 0=no), per objective',
+      labels: ['route', 'objective'],
+      maxSeries: SLO_ROUTE_STATE_LIMIT * 4,
+    });
   }
 }
 
 const _state = new Map(); // route → { total, fast, acceptable, errors, available }
+
+function _boundedRoute(route) {
+  if (_state.has(route) || route === SLO_OVERFLOW_ROUTE) return route;
+  const hasOverflow = _state.has(SLO_OVERFLOW_ROUTE);
+  const concreteCount = _state.size - (hasOverflow ? 1 : 0);
+  const concreteLimit = Math.max(0, SLO_ROUTE_STATE_LIMIT - 1);
+  return concreteCount < concreteLimit ? route : SLO_OVERFLOW_ROUTE;
+}
 
 function _entry(route) {
   let s = _state.get(route);
@@ -73,7 +108,8 @@ function _entry(route) {
 
 function record({ route, statusCode, durationMs } = {}) {
   _ensureFamiliesRegistered();
-  const r = (typeof route === 'string' && route) ? route : 'unmatched';
+  const requestedRoute = (typeof route === 'string' && route) ? route : 'unmatched';
+  const r = _boundedRoute(requestedRoute);
   const ms = Number.isFinite(durationMs) ? durationMs : 0;
   const status = Number.isFinite(statusCode) ? statusCode : 0;
   const isError = status >= 500 && status < 600;
@@ -150,13 +186,11 @@ function reset() {
 
 function middleware() {
   return function sloTrackerMiddleware(req, res, next) {
+    if (isMetricsRequest(req)) return next();
     const startNs = process.hrtime.bigint();
     res.on('finish', () => {
       try {
-        const route = (req.route && req.route.path)
-          || (req.baseUrl ? `${req.baseUrl}${req.route ? req.route.path : ''}` : '')
-          || req.path
-          || 'unmatched';
+        const route = matchedRouteLabel(req);
         const durationMs = Number(process.hrtime.bigint() - startNs) / 1e6;
         record({ route, statusCode: res.statusCode, durationMs });
       } catch { /* never throw from instrumentation */ }
@@ -166,8 +200,11 @@ function middleware() {
 }
 
 module.exports = {
+  SLO_OVERFLOW_ROUTE,
+  SLO_ROUTE_STATE_LIMIT,
   SLO_TARGETS,
   record,
+  resolveRouteStateLimit,
   slos,
   getEndpointStats,
   reset,

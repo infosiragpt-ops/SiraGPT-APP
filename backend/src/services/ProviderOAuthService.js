@@ -68,8 +68,8 @@ class ProviderOAuthService {
    * @param {object} deps
    * @param {ProviderDescriptor} deps.provider
    * @param {import('./TokenVault').TokenVault} deps.tokenVault
-   * @param {(payload: {userId:string, service:string}) => string} deps.signState
-   * @param {(rawState:string, opts:{service:string}) => {userId:string}} deps.verifyState
+   * @param {(payload: {userId:string, service:string, redirectUri:string}) => Promise<string>|string} deps.signState
+   * @param {(rawState:string, opts:{service:string, redirectUri:string}) => Promise<{userId:string}>|{userId:string}} deps.verifyState
    * @param {Console} [deps.logger]
    */
   constructor({ provider, tokenVault, signState, verifyState, logger = console }) {
@@ -104,12 +104,17 @@ class ProviderOAuthService {
    * every connect; `/gmail/reauth` used to spin up an ad-hoc client
    * just to flip the prompt — now it's a flag.
    */
-  buildAuthUrl(userId, { forceConsent = true } = {}) {
+  async buildAuthUrl(userId, { forceConsent = true } = {}) {
+    const redirectUri = this._redirectUri();
     return this.provider.oauth2Client.generateAuthUrl({
       access_type: 'offline',
       prompt: forceConsent ? 'consent' : undefined,
       scope: this.provider.scopes,
-      state: this.signState({ userId, service: this.provider.service }),
+      state: await this.signState({
+        userId,
+        service: this.provider.service,
+        redirectUri,
+      }),
     });
   }
 
@@ -129,11 +134,23 @@ class ProviderOAuthService {
 
     let userId;
     try {
-      ({ userId } = this.verifyState(state, { service: this.provider.service }));
+      ({ userId } = await this.verifyState(state, {
+        service: this.provider.service,
+        redirectUri: this._redirectUri(),
+      }));
     } catch (stateError) {
       this.logger.warn?.(
         `[oauth/${this.provider.service}] state validation failed: ${stateError.message}`
       );
+      if (stateError?.code === 'OAUTH_STATE_STORE_UNAVAILABLE') {
+        return {
+          ok: false,
+          service: this.provider.service,
+          error: 'oauth_state_store_unavailable',
+          status: 503,
+          retryable: true,
+        };
+      }
       return { ok: false, service: this.provider.service, error: 'invalid_state' };
     }
 
@@ -172,6 +189,14 @@ class ProviderOAuthService {
    */
   disconnect(userId) {
     return this.provider.clearTokens(userId);
+  }
+
+  _redirectUri() {
+    return String(
+      this.provider.redirectUri
+      || this.provider.oauth2Client.redirectUri
+      || `http://localhost/oauth/${this.provider.service}/callback`,
+    );
   }
 
   /**

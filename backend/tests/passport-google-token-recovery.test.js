@@ -39,6 +39,9 @@ describe('passport Google OAuth token recovery', () => {
   const restores = [];
   const originalEnv = { ...process.env };
   let capturedGoogleVerify;
+  let capturedJwtVerify;
+  let capturedDeserialize;
+  let existingUser;
   let updateCalls;
 
   beforeEach(() => {
@@ -46,6 +49,8 @@ describe('passport Google OAuth token recovery', () => {
       delete require.cache[modulePath];
     }
     capturedGoogleVerify = null;
+    capturedJwtVerify = null;
+    capturedDeserialize = null;
     updateCalls = [];
 
     process.env.GOOGLE_CLIENT_ID = 'google-client-id';
@@ -62,7 +67,9 @@ describe('passport Google OAuth token recovery', () => {
         return strategy;
       },
       serializeUser() {},
-      deserializeUser() {},
+      deserializeUser(callback) {
+        capturedDeserialize = callback;
+      },
     }));
 
     class GoogleStrategyMock {
@@ -74,6 +81,7 @@ describe('passport Google OAuth token recovery', () => {
     class JwtStrategyMock {
       constructor(_options, verify) {
         this.verify = verify;
+        capturedJwtVerify = verify;
       }
     }
 
@@ -83,7 +91,7 @@ describe('passport Google OAuth token recovery', () => {
       ExtractJwt: { fromAuthHeaderAsBearerToken: () => 'jwt-extractor' },
     }));
 
-    const existingUser = {
+    existingUser = {
       id: 'user-existing-1',
       email: 'oauth@example.com',
       gmailTokens: 'corrupt-ciphertext',
@@ -92,7 +100,11 @@ describe('passport Google OAuth token recovery', () => {
     restores.push(installCacheMock(databasePath, {
       user: {
         async findUnique(args) {
-          assert.equal(args.where.email, existingUser.email);
+          if (args.where.email) {
+            assert.equal(args.where.email, existingUser.email);
+          } else {
+            assert.equal(args.where.id, existingUser.id);
+          }
           return applySelectedFields(existingUser, args.select);
         },
         async update(args) {
@@ -151,5 +163,57 @@ describe('passport Google OAuth token recovery', () => {
     assert.equal(updateCalls.length, 2);
     assert.equal(updateCalls[0].where.id, 'user-existing-1');
     assert.equal(updateCalls[0].data.gmailTokens, null);
+  });
+
+  it('rejects a soft-deleted user in JWT verification and session deserialization', async () => {
+    existingUser.deletedAt = new Date('2026-07-01T00:00:00Z');
+    require(passportConfigPath);
+    assert.equal(typeof capturedGoogleVerify, 'function');
+    assert.equal(typeof capturedJwtVerify, 'function');
+    assert.equal(typeof capturedDeserialize, 'function');
+
+    let oauthError;
+    let oauthUser;
+    let oauthInfo;
+    await capturedGoogleVerify(
+      'access-token',
+      'refresh-token',
+      {
+        id: 'google-user-1',
+        displayName: 'OAuth User',
+        emails: [{ value: existingUser.email }],
+        photos: [],
+        _json: { scope: 'openid email profile' },
+      },
+      (error, user, info) => {
+        oauthError = error;
+        oauthUser = user;
+        oauthInfo = info;
+      },
+    );
+    assert.equal(oauthError, null);
+    assert.equal(oauthUser, false);
+    assert.deepEqual(oauthInfo, { message: 'account_inactive' });
+
+    let jwtError;
+    let jwtUser;
+    await capturedJwtVerify(
+      { userId: existingUser.id },
+      (error, user) => {
+        jwtError = error;
+        jwtUser = user;
+      },
+    );
+    assert.equal(jwtError, null);
+    assert.equal(jwtUser, false);
+
+    let sessionError;
+    let sessionUser;
+    await capturedDeserialize(existingUser.id, (error, user) => {
+      sessionError = error;
+      sessionUser = user;
+    });
+    assert.equal(sessionError, null);
+    assert.equal(sessionUser, false);
   });
 });

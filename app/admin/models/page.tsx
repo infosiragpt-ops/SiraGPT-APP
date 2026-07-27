@@ -33,6 +33,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 import { IconProvider } from "@/components/icon-provider"
 import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { resolveModelIconName } from "@/lib/model-icons"
 import { devLog } from "@/lib/dev-log"
 
@@ -146,7 +147,7 @@ export default function ModelsPage() {
   const loadModels = async () => {
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models`, {
         headers: adminAuthHeaders(token)
       })
 
@@ -164,7 +165,7 @@ export default function ModelsPage() {
   const loadProviders = async () => {
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/providers`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/providers`, {
         headers: adminAuthHeaders(token)
       })
 
@@ -180,7 +181,7 @@ export default function ModelsPage() {
   const loadStats = async () => {
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/stats`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/stats`, {
         headers: adminAuthHeaders(token)
       })
 
@@ -196,7 +197,7 @@ export default function ModelsPage() {
   const loadSyncStatus = async () => {
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/sync/status`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/sync/status`, {
         headers: adminAuthHeaders(token)
       })
 
@@ -216,7 +217,7 @@ export default function ModelsPage() {
     setIsFetching(true)
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/fetch`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/fetch`, {
         headers: adminAuthHeaders(token)
       })
 
@@ -241,7 +242,7 @@ export default function ModelsPage() {
     setIsSyncing(true)
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/sync`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/sync`, {
         method: 'POST',
         headers: adminAuthHeaders(token)
       })
@@ -267,7 +268,7 @@ export default function ModelsPage() {
       const token = localStorage.getItem('auth-token')
       const action = syncStatus?.isScheduled ? 'stop' : 'start'
       
-      const response = await fetch(`${API_ROOT}/admin/models/sync/scheduler`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/sync/scheduler`, {
         method: 'POST',
         headers: adminAuthHeaders(token, true),
         body: JSON.stringify({ action })
@@ -291,7 +292,7 @@ export default function ModelsPage() {
     setIsSyncing(true)
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/sync/run`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/sync/run`, {
         method: 'POST',
         headers: adminAuthHeaders(token)
       })
@@ -316,7 +317,7 @@ export default function ModelsPage() {
     e.preventDefault()
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models`, {
         method: 'POST',
         headers: adminAuthHeaders(token, true),
         body: JSON.stringify(formData)
@@ -346,7 +347,7 @@ export default function ModelsPage() {
 
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/${editingModel.id}`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/${editingModel.id}`, {
         method: 'PUT',
         headers: adminAuthHeaders(token, true),
         body: JSON.stringify({
@@ -376,7 +377,7 @@ export default function ModelsPage() {
   const toggleModelStatus = async (modelId: string, currentStatus: boolean) => {
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/${modelId}`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/${modelId}`, {
         method: 'PUT',
         headers: adminAuthHeaders(token, true),
         body: JSON.stringify({ isActive: !currentStatus })

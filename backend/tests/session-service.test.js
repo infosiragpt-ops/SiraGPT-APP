@@ -10,6 +10,7 @@ function makeSvc(over = {}) {
   const updateCalls = [];
   const deleteCalls = [];
   const auditCalls = [];
+  const revocationCalls = [];
 
   const sessions = over.sessions || {
     updateByToken: async (oldToken, data) => {
@@ -33,10 +34,14 @@ function makeSvc(over = {}) {
     sessionTtlMs: over.sessionTtlMs,
     now: over.now || (() => new Date('2026-05-22T12:00:00Z')),
     logger: silentLogger,
+    publishSessionsRevoked: over.publishSessionsRevoked || (async (event) => {
+      revocationCalls.push(event);
+    }),
   });
   svc._updateCalls = updateCalls;
   svc._deleteCalls = deleteCalls;
   svc._auditCalls = auditCalls;
+  svc._revocationCalls = revocationCalls;
   return svc;
 }
 
@@ -170,6 +175,10 @@ test('SessionService.revoke deletes by token and audits logout', async () => {
 
   assert.deepEqual(out, { ok: true });
   assert.deepEqual(svc._deleteCalls, ['OLD']);
+  assert.deepEqual(svc._revocationCalls, [{
+    userId: 'u-9',
+    reason: 'session_revoked',
+  }]);
   assert.equal(svc._auditCalls.length, 1);
   assert.deepEqual(svc._auditCalls[0], {
     req,

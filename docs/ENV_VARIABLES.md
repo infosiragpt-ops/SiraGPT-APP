@@ -108,10 +108,113 @@
 |----------|---------|---------|
 | `CSRF_DISABLED` | `0` | Disable CSRF double-submit protection (test env only) |
 | `CSRF_PEPPER` | (derived from JWT_SECRET) | HMAC pepper for CSRF token hashing |
-| `CORS_ORIGINS` | `*` in dev, `siragpt.io,localhost:3000` in prod | Comma-separated CORS allowlist |
-| `CSP_ENABLED` | `0` in dev, `1` in prod | Enable Content-Security-Policy |
+| `CORS_ORIGINS` | localhost in development; required in production | Comma-separated exact-origin allowlist; wildcard is rejected in production |
+| `FRONTEND_URL` | `http://localhost:3000` outside production | Canonical browser origin used for the token-free SAML `303` completion redirect |
+| `TRUST_PROXY_HOPS` | `0` | Number of known reverse-proxy hops Express may trust; production Compose pins the single Caddy hop |
+| `TRUST_PROXY_CIDR` | (empty) | Alternative comma-separated exact proxy CIDRs; mutually exclusive with `TRUST_PROXY_HOPS` |
+| `CSP_ENABLED` | `0` in development, `1` in production | Enable Content-Security-Policy |
 | `CSP_REPORT_ONLY` | `1` | CSP report-only mode |
 | `JWT_SECRET` | required | JWT signing secret |
+| `SIRAGPT_MCP_ALLOWED_HOSTS` | empty (MCP deny-all in production) | Global comma-separated hostname ceiling for user-registered external MCP servers |
+| `SIRAGPT_MCP_ALLOW_HTTP` | `0` | Outside production only, permits HTTP for loopback MCP endpoints when explicitly set to `1` |
+| `SESSION_TOKEN_HASH_MODE` | `compat` in production/staging; `hash` elsewhere | Two-phase session persistence mode. `compat` reads raw/hash but writes raw and never upgrades; `hash` writes hashes and atomically upgrades legacy rows |
+| `SESSION_TOKEN_HASH_COMPAT_DRAINED` | `0` | Must be `1` before production may start in `hash` mode, confirming all compat/legacy replicas are drained |
+| `SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE` | `100` | Maximum raw session rows converted in one hash-activation transaction (1–1000) |
+| `SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES` | `10` | Maximum transactions per readiness pass (1–100); later probes continue until no raw rows remain |
+| `AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO` | `0.8` | Production readiness ceiling for Redis used/max memory after Lua and `noeviction` checks |
+| `AUTH_SECURITY_READY_RETRY_BASE_MS` | `250` | Initial auth-security readiness retry delay after Redis/backfill failure (10–60000 ms) |
+| `AUTH_SECURITY_READY_RETRY_MAX_MS` | `5000` | Maximum exponential readiness retry delay (10–60000 ms; never below the base) |
+| `OAUTH_STATE_TTL` | `10m` | Signed OAuth state lifetime, clamped to 1–15 minutes; the Redis entry uses the same effective expiry |
+| `OAUTH_STATE_RETRY_AFTER_SECONDS` | `5` | Bounded `Retry-After` for fail-closed OAuth state-store outages |
+| `OAUTH_STATE_CACHE_MAX_ENTRIES` | `10000` | Maximum live OAuth states in Redis or the non-production memory fallback |
+| `OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for OAuth state (10–2000 ms) |
+| `OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS` | `500` | ioredis and wrapper deadline for each OAuth state command (10–2000 ms) |
+| `OAUTH_STATE_REDIS_PREFIX` | `sira:oauth-state:` | Dedicated Redis namespace; state JTIs are SHA-256 keyed |
+| `IMPERSONATION_TARGET_LIMIT` | `3` | Attempts in one admin+target sliding window |
+| `IMPERSONATION_ADMIN_LIMIT` | `10` | Attempts in the global per-admin sliding window |
+| `IMPERSONATION_WINDOW_MS` | `3600000` | Impersonation sliding-window duration (1 second–24 hours) |
+| `IMPERSONATION_MEMORY_MAX_KEYS` | `10000` | Maximum local limiter keys outside production |
+| `IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for impersonation limiting (10–2000 ms) |
+| `IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS` | `500` | ioredis and wrapper deadline for atomic limiter commands (10–2000 ms) |
+| `IMPERSONATION_REDIS_PREFIX` | `sira:impersonation:` | Dedicated Redis namespace; admin identifiers are SHA-256 keyed |
+| `IMPERSONATION_STORE_RETRY_AFTER_SECONDS` | `5` | Bounded `Retry-After` for fail-closed limiter-store outages (1–300 seconds) |
+| `GOOGLE_AUTH_BASE_URL` | backend origin | Canonical public backend origin used to build provider callbacks; HTTPS and non-localhost in production |
+| `GOOGLE_AUTH_URI` | derived | Google login callback URL |
+| `GOOGLE_REDIRECT_URI` | derived | Gmail callback URL |
+| `GOOGLE_REDIRECT_CALENDAR_DRIVE_URI` | derived | Google Calendar/Drive callback URL |
+| `OAUTH_POST_CALLBACK_ALLOWED_ORIGINS` | unset | Optional comma-separated exact HTTPS origins for intentional post-OAuth browser handoffs; production also trusts configured frontend origins; capped at 10 entries and 2048 characters |
+| `GITHUB_OAUTH_REDIRECT_URI` | derived | GitHub callback URL |
+| `GITHUB_OAUTH_SUCCESS_REDIRECT` | `<FRONTEND_URL>/settings` | GitHub post-callback destination |
+| `SPOTIFY_REDIRECT_URI` | derived | Spotify callback URL |
+| `SPOTIFY_OAUTH_SUCCESS_REDIRECT` | `<FRONTEND_URL>/chat` | Spotify success destination |
+| `SPOTIFY_OAUTH_FAILURE_REDIRECT` | `<FRONTEND_URL>/connections` | Spotify failure destination |
+| `SAML_REQUEST_TTL_MS` | `300000` | Lifetime for SP-initiated AuthnRequest IDs and RelayState (clamped to 1–15 minutes) |
+| `SAML_REQUEST_CACHE_MAX_ENTRIES` | `5000` | Maximum live SAML request/state entries in the bounded cache |
+| `SAML_REDIS_CONNECT_TIMEOUT_MS` | `500` | Redis connection deadline for SAML request state (10–2000 ms) |
+| `SAML_REDIS_COMMAND_TIMEOUT_MS` | `500` | ioredis and wrapper deadline for every SAML cache command (10–2000 ms) |
+| `SAML_REDIS_RETRY_BASE_MS` | `100` | Initial SAML Redis initialization retry delay (10–5000 ms) |
+| `SAML_REDIS_RETRY_MAX_MS` | `5000` | Maximum exponential-backoff delay for SAML Redis initialization (10–60000 ms) |
+| `SAML_REDIS_PREFIX` | `sira:saml:` | Dedicated Redis namespace for SAML request/state keys |
+| `SAML_RELAY_STATE_SECRET` | (derived from `JWT_SECRET`) | Optional dedicated HMAC secret for signed RelayState |
+| `SAML_ACS_BODY_LIMIT_BYTES` | `262144` | Exact ACS URL-encoded body limit, clamped to 64–512 KiB |
+| `SAML_ACS_RATE_LIMIT_MAX` | `30` | Maximum exact ACS POST attempts per normalized IP bucket/window |
+| `SAML_ACS_RATE_LIMIT_WINDOW_MS` | `60000` | Exact ACS distributed limiter window (1 second–15 minutes) |
+
+External MCP registrations require HTTPS in production. The global
+`SIRAGPT_MCP_ALLOWED_HOSTS` policy accepts normalized exact hosts and safe
+leading-* subdomain patterns such as `*.tools.example.com`; a wildcard never
+matches its apex, and wildcards over a public suffix such as `*.com` or
+`*.co.uk` are rejected. IP literals, userinfo, private/reserved destinations,
+and unsafe non-default HTTPS ports are rejected. Optional
+`User.settings.mcpAllowedHosts` and
+`Organization.settings.mcpAllowedHosts` lists intersect the global policy and
+can only restrict it. Organization restrictions apply only when the agent turn
+has an explicit, membership-verified active organization; personal chats use
+the global and user layers only. A missing production global allowlist activates
+MCP deny-all and reports a degraded MCP health status without preventing the
+rest of the backend from starting. HTTP is available only for loopback during
+non-production development with `SIRAGPT_MCP_ALLOW_HTTP=1`.
+
+Cookie-authenticated state-changing requests under `/api/*` use the CSRF
+double-submit guard. Safe methods and Bearer/API-key clients bypass it. The
+Stripe webhook is exempt only at the exact signed webhook path. A standard
+`SAMLResponse` POST bypasses Sira CSRF only at the exact
+`/api/auth/sso/:orgSlug/callback` assertion-consumer path; SAML signature and
+InResponseTo/replay validation still run. Public generated-app mounts
+(`/api/apps-ai`, `/api/apps-kv`) remain cookieless. Production requires a
+valid explicit `CORS_ORIGINS`, rejects wildcards and enabled `CSRF_DISABLED`,
+and requires cookie-auth mutations to send a trusted Origin plus
+`Sec-Fetch-Site: same-origin|same-site`.
+
+SP-initiated SAML starts at `GET /api/auth/sso/:orgSlug/login`, where
+`@node-saml/node-saml` generates an AuthnRequest and redirects to the IdP.
+Each request uses `validateInResponseTo: 'always'`, a short-lived request ID,
+and signed one-time RelayState bound to the organization and request. The ACS
+also verifies exact Destination and configured Audience before provisioning.
+In production, Redis is mandatory for this state and an unavailable store
+fails closed with `503`, `Cache-Control: no-store`, and `Retry-After`; bounded
+memory fallback exists only outside production. A bounded exponential-backoff
+Redis circuit remains fail-closed per attempt and recovers on a later request
+without a process restart.
+
+RelayState is also bound to the initiating browser by a high-entropy pre-auth
+nonce cookie. It is `HttpOnly`, narrowly scoped to that organization's ACS,
+and uses `SameSite=None` (`Secure` in production) for the cross-site SAML POST.
+Redis stores only the nonce's SHA-256 hash. The ACS atomically compares and
+consumes the hash and clears the cookie, so another browser cannot complete or
+burn the initiating browser's login.
+
+On success the form ACS sets the normal session cookie, issues the existing
+CSRF cookie pair, and sends a `303` to the `/auth/callback` path on the
+validated origin of `FRONTEND_URL`, without a JWT in the URL or response body.
+Trusted API/test callers may request JSON only with both
+`Accept: application/json` and `X-Sira-Response-Mode: json`; that response also
+omits the JWT. IdP CORS is not required:
+the exact URL-encoded ACS POST bypasses credentialed app CORS and emits no
+credentialed CORS headers, while OIDC GET and all sibling auth routes keep
+the normal allowlist. A dedicated fail-closed ACS rate limiter runs before its
+bounded body parser and request telemetry; production Redis outages return
+`503`, exhausted buckets return `429`, and oversized bodies return `413`.
 
 ---
 
@@ -123,8 +226,31 @@
 | `RATE_LIMIT_EXPENSIVE_MAX` | `180` | Max expensive (LLM) requests per window |
 | `RATE_LIMIT_API_MAX` | `3000` | Max general API requests per window |
 | `RATE_LIMIT_WINDOW_MS` | `900000` (15 min) | Rate limit window duration |
-| `RATE_LIMIT_STORE` | `redis` | Rate limit store: `redis` or `memory` |
+| `RATE_LIMIT_STORE` | `auto` (`redis` in Compose) | General store selection: `auto`, `redis`, or `memory` |
 | `RATE_LIMIT_REDIS_PREFIX` | `rl:` | Redis key prefix for rate limit counters |
+| `RATE_LIMIT_SENSITIVE_POLICY` | `distributed` in production | Sensitive auth/API-key/billing policy: `distributed`, `memory`, or `fail-open`; production accepts only `distributed` |
+| `RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS` | `1000` | Per-command/pipeline ioredis and outer wrapper timeout (10–30000 ms) |
+| `RATE_LIMIT_STORE_RETRY_AFTER_SECONDS` | `5` | `Retry-After` for fail-closed 503 responses (1–300 seconds) |
+| `RATE_LIMIT_BILLING_CHECKOUT_MAX` | `10` | Checkout attempts per user |
+| `RATE_LIMIT_BILLING_CHECKOUT_IP_MAX` | `100` | Checkout attempts per normalized shared IP |
+| `RATE_LIMIT_BILLING_VERIFY_MAX` | `20` | Checkout verification attempts per user |
+| `RATE_LIMIT_BILLING_VERIFY_IP_MAX` | `200` | Verification attempts per normalized shared IP |
+| `RATE_LIMIT_BILLING_PLAN_CHANGE_MAX` | `5` | Plan/subscription mutations per user |
+| `RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX` | `50` | Plan/subscription mutations per normalized shared IP |
+| `RATE_LIMIT_BILLING_WINDOW_MS` | `900000` | Checkout and verification window |
+| `RATE_LIMIT_BILLING_PLAN_WINDOW_MS` | `3600000` | Plan/subscription mutation window |
+| `RATE_LIMIT_BILLING_REFUND_MAX` | `5` | Admin grant/refund attempts per admin |
+| `RATE_LIMIT_BILLING_REFUND_IP_MAX` | `50` | Admin grant/refund attempts per normalized shared IP |
+| `RATE_LIMIT_BILLING_REFUND_WINDOW_MS` | `3600000` | Admin refund window |
+| `SIRAGPT_API_KEY_AUDIT_COUNTER_MAX` | `10000` | Maximum in-process API-key audit-sampling counters |
+
+Billing atomically consumes its user and IP dimensions, with a higher IP
+ceiling for offices and carrier NAT. IPv6 addresses are grouped by `/64`;
+IPv4 is canonicalized from Express `req.ip`/the socket only, never raw
+`X-Forwarded-For`. Production startup rejects a missing Redis URL,
+process-memory sensitive limiting, and `memory`/`fail-open` sensitive
+policies. The general catch-all API limiter remains fail-open on store errors
+so a Redis incident does not brick unrelated API reads.
 
 ---
 
@@ -132,10 +258,72 @@
 
 | Variable | Purpose |
 |----------|---------|
-| `PRISMA_DATABASE_URL` | PostgreSQL connection string used by Prisma |
-| `DATABASE_URL` | Optional legacy/adapter PostgreSQL connection string |
+| `PRISMA_DATABASE_URL` | Runtime Prisma datasource; direct PostgreSQL or remote `prisma+postgres:` |
+| `DIRECT_DATABASE_URL` | Direct PostgreSQL datasource for migrations, pg preflight, and advisory locking |
+| `DATABASE_URL` | Legacy runtime fallback and direct-migration candidate |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED` | PostgreSQL TLS certificate verification; defaults to `true`, disabled only by explicit `false` |
+| `DATABASE_SSL_CA` | Optional inline PEM CA or CA file path; overrides URL `sslrootcert` and is never logged |
+| `DATABASE_SSL_CERT` | Optional inline PEM client certificate or file path; overrides URL `sslcert` and is never logged |
+| `DATABASE_SSL_KEY` | Optional inline PEM client private key or file path; overrides URL `sslkey` and is never logged |
+| `POSTGRES_HOST` | Host used for the POSTGRES-only local compatibility fallback |
+| `POSTGRES_PORT` | Port used for the POSTGRES-only local compatibility fallback (default `5432`) |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials and database used by the POSTGRES-only fallback |
+| `MIGRATION_COMMAND_TIMEOUT_MS` | Per-Prisma-child hard deadline (default `300000`) |
+| `BOOT_COMMAND_TIMEOUT_MS` | Auxiliary boot-command deadline, including `fuser` cleanup (default `5000`) |
+| `MIGRATION_DB_CONNECT_TIMEOUT_MS` | Boot `pg` connection timeout (default `10000`) |
+| `MIGRATION_DB_QUERY_TIMEOUT_MS` | Boot `pg` query timeout (default `15000`) |
+| `MIGRATION_DB_STATEMENT_TIMEOUT_MS` | Boot PostgreSQL statement timeout (default `15000`) |
+| `MIGRATION_LOCK_TIMEOUT_MS` | Total lock deadline including connect/query (default `120000`) |
+| `MIGRATION_BASELINE_CONFIRM` | Exact confirm phrase for reviewed U0 one-off `scripts/baseline-migration-history.js` (`I_REVIEWED_PRODUCTION_SCHEMA`); never read by boot/`--migrate-only` |
+| `MIGRATION_BASELINE_DRY_RUN` | Inventory + equivalence check only for the U0 baseline script (default `0`) |
+| `SKIP_MIGRATIONS` | Skip migrations during normal local boot only; rejected by `--migrate-only` (default `0`) |
+| `MIGRATION_NONFATAL` | Explicit degraded policy for normal boot only; `--migrate-only` remains strict |
+| `DATABASE_POOL_MIN` | Instrumentation lower bound (default `2`, capped by max) |
+| `DATABASE_POOL_MAX` | Prisma v6 `connection_limit` (default `10`, clamp `1..100`) |
+| `DATABASE_POOL_TIMEOUT_MS` | Prisma acquire timeout in ms (default `10000`, clamp `1000..300000`, rounded up to `pool_timeout` seconds) |
+| `DATABASE_POOL_AUTOSCALE_ENABLED` | Enable advisory-only pool recommendations; never resizes live Prisma |
+| `DATABASE_POOL_AUTOSCALE_INTERVAL_MS` | Recommendation sampling interval (default `30000`, clamp `1000..3600000`) |
+| `DATABASE_POOL_AUTOSCALE_MIN` | Advisory recommendation floor (default `2`, clamp `1..100`) |
+| `DATABASE_POOL_AUTOSCALE_MAX` | Advisory recommendation ceiling (default `50`, clamp `1..100` and never below min) |
+| `DATABASE_POOL_AUTOSCALE_COLD_SAMPLES` | Consecutive cold samples before advisory scale-down (default `3`, clamp `1..20`) |
 | `REDIS_URL` | Redis connection string (sessions, queues, rate limits, cache) |
 | `SESSION_SECRET` | Express session signing secret |
+
+Local pool URL controls and estimated capacity telemetry apply only to direct
+`postgres:`/`postgresql:` datasources. `prisma+postgres:` remote/Accelerate
+URLs are not rewritten and expose capacity as unobservable, so local pool
+estimates and recommendations are omitted.
+
+Runtime resolution prefers `PRISMA_DATABASE_URL` and uses `DATABASE_URL` only
+as fallback. Direct migration resolution prefers `DIRECT_DATABASE_URL`, then a
+direct `DATABASE_URL`, then a direct `PRISMA_DATABASE_URL`. A remote runtime and
+different direct migration URL are valid; conflicting aliases for one role
+fail closed without logging values. Remote-only migration startup exits with
+`DIRECT_DATABASE_URL_REQUIRED` instead of copying the remote URL.
+
+When all three URL roles are empty, the pure resolver may synthesize one local
+runtime/direct URL from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, and `POSTGRES_DB`. Any explicit URL disables synthesis:
+a direct `PRISMA_DATABASE_URL` remains the migration fallback, while a remote
+`PRISMA_DATABASE_URL` without a direct URL fails closed.
+
+Boot-time PostgreSQL connections map URL `sslrootcert`/`sslcert`/`sslkey` to
+an explicit `pg` `ssl.ca`/`cert`/`key` object, then strip URL-level SSL
+controls so they cannot override it. `DATABASE_SSL_CA`, `DATABASE_SSL_CERT`,
+and `DATABASE_SSL_KEY` take precedence per field. Each accepts inline PEM or a
+regular PEM file up to 1 MiB; certificate and key must be paired. Unusable URL
+material fails with a stable value-free code, and contents/paths are never
+logged. Insecure or conflicting URL modes fail closed unless
+`DATABASE_SSL_REJECT_UNAUTHORIZED=false` is explicit.
+
+P3005 never auto-baselines from boot or `--migrate-only` and never invokes
+`prisma migrate resolve` on those paths. After U0, unbaselined databases fail
+closed with `MIGRATION_HISTORY_BASELINE_REQUIRED`. The reviewed one-off
+`scripts/baseline-migration-history.js` (via `deploy-production-baseline-*`)
+proves schema equivalence and marks existing directories applied without
+replaying DDL — do this before schema-bearing units. Release `--migrate-only`
+fails non-zero on preflight, lock, migration, release, or `SKIP_MIGRATIONS=1`;
+only normal local boot may skip or use `MIGRATION_NONFATAL=1`.
 
 ---
 
@@ -144,7 +332,7 @@
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PORT` | `5000` | Express backend port |
-| `NODE_ENV` | `development` | Environment: `development`, `production`, `test` |
+| `NODE_ENV` | `development` | Environment: `development`, literal `production`, or `test`; the `prod` alias is rejected at startup |
 | `SIRAGPT_RESEARCH_EMAIL` | — | Email for polite User-Agent in scientific search |
 | `IDEMPOTENCY_ENABLED` | `false` | Enable Stripe-style replay protection |
 | `MAINTENANCE_MODE_ENABLED` | `false` | Enable 503 maintenance mode |

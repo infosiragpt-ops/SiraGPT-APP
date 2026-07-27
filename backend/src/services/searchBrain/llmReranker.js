@@ -23,6 +23,9 @@ Rubric:
 Rules:
 - Score EVERY candidate.
 - Use the full 0..10 range — don't cluster at 7.
+- The central topic, population and context in the query are mandatory.
+- A candidate missing a central concept cannot score above 3, even if its
+  methodology, publication year or study type matches a preference.
 - Use only the title + abstract snippet shown.`;
 
 function parseJson(text) {
@@ -64,15 +67,36 @@ function validateScores(raw) {
 }
 
 function combinedScore(result, rerankScore, weights) {
-  const rerank = typeof rerankScore === "number" ? rerankScore / 10 : 0;
+  const hasRerank = typeof rerankScore === "number";
+  const rerank = hasRerank ? rerankScore / 10 : 0;
   const providerRankScore = 1 / (1 + (result.providerRank ?? 0));
   const citationScore = Math.min(1, Math.log1p(result.citationCount ?? 0) / Math.log1p(1000));
   const oaBoost = result.openAccess ? 1 : 0;
-  return (
-    weights.rerank * rerank +
+  const deterministicQuality = Math.max(0, Math.min(1,
+    Number.isFinite(result.qualityScore)
+      ? result.qualityScore
+      : (Number.isFinite(result.retrievalScore) ? result.retrievalScore : 0)
+  ));
+  const corroboration = Math.min(1, Math.max(0, (Number(result.sourceCount) || 1) - 1) / 3);
+  const hasTopicalScore = Number.isFinite(result.retrievalScore);
+  const topicalAlignment = hasTopicalScore
+    ? Math.max(0, Math.min(1, Number(result.retrievalScore)))
+    : 1;
+  // The LLM may correctly notice a requested methodology while overlooking
+  // that the paper is about another subject. Relevance is therefore a gate on
+  // every secondary signal: citations, authority and even the LLM score cannot
+  // rescue a result that barely matches the user's central topic.
+  const topicalFactor = hasTopicalScore ? (0.2 + topicalAlignment * 0.8) : 1;
+  const supportingSignals = (
+    corroboration * 0.15 +
     weights.providerRank * providerRankScore +
     weights.citations * citationScore +
     weights.openAccessBoost * oaBoost
+  ) * topicalFactor;
+  return (
+    weights.rerank * rerank * topicalFactor +
+    deterministicQuality * (hasRerank ? 1.25 : 1.5) +
+    supportingSignals
   );
 }
 
@@ -95,6 +119,7 @@ async function rerankResults({ query, results, weights, batchSize = 10, callLLM 
     return { results: pool, reranked: false };
   }
 
+  let scoredCount = 0;
   for (let start = 0; start < pool.length; start += batchSize) {
     const batch = pool.slice(start, start + batchSize);
     try {
@@ -108,7 +133,10 @@ async function rerankResults({ query, results, weights, batchSize = 10, callLLM 
       const scores = validateScores(parsed);
       for (const s of scores) {
         const target = batch[s.idx - 1];
-        if (target) target.rerankScore = s.score;
+        if (target) {
+          target.rerankScore = s.score;
+          scoredCount += 1;
+        }
       }
     } catch {
       // leave rerankScore undefined for this batch
@@ -116,7 +144,7 @@ async function rerankResults({ query, results, weights, batchSize = 10, callLLM 
   }
 
   pool.sort((a, b) => combinedScore(b, b.rerankScore, w) - combinedScore(a, a.rerankScore, w));
-  return { results: pool, reranked: true };
+  return { results: pool, reranked: scoredCount > 0 };
 }
 
 module.exports = {

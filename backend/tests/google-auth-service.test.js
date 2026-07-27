@@ -108,6 +108,32 @@ test('handleVerify: updates existing user without re-creating', async () => {
   assert.equal(upd[2].googleId, 'g123');
 });
 
+test('handleVerify: rejects a soft-deleted provider account before updating identity data', async () => {
+  const existing = {
+    id: 'deleted-oauth-user',
+    email: 'sira@x.com',
+    deletedAt: new Date('2026-07-01T00:00:00Z'),
+  };
+  const users = makeUsers({ byEmail: { 'sira@x.com': existing } });
+  const svc = new GoogleAuthService({
+    users,
+    tokens: makeTokens(),
+    bcrypt: fakeBcrypt,
+    logger: silentLogger,
+  });
+
+  await assert.rejects(
+    svc.handleVerify({ accessToken: 'at', refreshToken: 'rt', profile }),
+    { code: 'ACCOUNT_INACTIVE' },
+  );
+  assert.equal(
+    users.calls.some(([name]) => (
+      name === 'updateGoogleIdentity' || name === 'createOAuthUser'
+    )),
+    false,
+  );
+});
+
 test('handleVerify: recovers refresh token from stored blob when Google omits it', async () => {
   const existing = { id: 'u1', gmailTokens: 'BLOB' };
   const users = makeUsers({ byEmail: { 'sira@x.com': existing } });

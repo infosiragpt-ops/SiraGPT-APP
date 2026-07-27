@@ -42,6 +42,53 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
   assert.equal(state.meta.goal, 'Investiga fuentes');
 });
 
+test('agent task route: keeps only the latest generated version for the same delivery slot', () => {
+  let state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'file_artifact',
+    artifact: { id: 'artifact-v1', filename: 'Informe.docx', format: 'docx', sizeBytes: 1200 },
+  });
+  state = INTERNAL.reduceAgentState(state, {
+    type: 'file_artifact',
+    artifact: { id: 'artifact-v2', filename: 'Informe.docx', format: 'docx', sizeBytes: 1600 },
+  });
+
+  assert.equal(state.artifacts.length, 1);
+  assert.equal(state.artifacts[0].id, 'artifact-v2');
+  assert.equal(state.artifacts[0].sizeBytes, 1600);
+});
+
+test('agent task route: continues edits from the latest generated document', () => {
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: 'Cambia el título de mi documento y agrega una conclusión',
+      hasGeneratedArtifact: true,
+    }),
+    true,
+  );
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: 'Cambia el título de mi documento',
+      providedFileIds: ['new-upload'],
+      hasGeneratedArtifact: true,
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: 'Cambia el título de mi documento',
+      hasGeneratedArtifact: false,
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldResumeGeneratedArtifactForDocumentFollowup({
+      goal: '¿De qué trata mi documento?',
+      hasGeneratedArtifact: true,
+    }),
+    false,
+  );
+});
+
 test('agent task route: safeJsonStringify keeps oversized SSE events parseable', () => {
   const serialized = INTERNAL.safeJsonStringify({
     type: 'framework_status',

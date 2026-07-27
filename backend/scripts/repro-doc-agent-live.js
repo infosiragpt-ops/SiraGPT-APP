@@ -18,6 +18,9 @@ const os = require('os');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const { parseZip } = require('../src/services/zip-parser');
+const {
+  createSessionRecord,
+} = require('../src/services/auth/session-token-persistence');
 
 const prisma = new PrismaClient();
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:5000';
@@ -39,7 +42,12 @@ async function main() {
     data: { email, name: 'Repro DocAgent', password: 'x', plan: 'ENTERPRISE', monthlyLimit: 99999999, monthlyCallLimit: 99999999 },
   });
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h', audience: 'siragpt-clients', issuer: 'siragpt-api' });
-  await prisma.session.create({ data: { userId: user.id, token, fingerprint: null, expiresAt: new Date(Date.now() + 3600_000) } });
+  await createSessionRecord(prisma, {
+    userId: user.id,
+    token,
+    fingerprint: null,
+    expiresAt: new Date(Date.now() + 3600_000),
+  });
   const H = { Authorization: `Bearer ${token}` };
 
   const createdFileIds = [];
@@ -99,7 +107,7 @@ async function main() {
     createdFileIds.push(...artifacts.map((a) => a.id));
 
     // Download the deliverable through the real static route and verify.
-    const dl = await fetch(`${BASE}${artifacts[0].url}?token=${encodeURIComponent(token)}`, { headers: H });
+    const dl = await fetch(`${BASE}${artifacts[0].url}`, { headers: H });
     if (dl.status !== 200) throw new Error(`download HTTP ${dl.status}`);
     const outBuf = Buffer.from(await dl.arrayBuffer());
     const tmp = path.join(os.tmpdir(), `docagent-live-${Date.now()}.docx`);

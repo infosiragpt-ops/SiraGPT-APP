@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiClient as api } from '@/lib/api'
 import { reportClientLog } from '@/lib/client-logs'
+import { authenticatedFetch, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
 
 vi.mock('@/lib/client-logs', () => ({
   reportClientLog: vi.fn(),
@@ -12,9 +13,12 @@ globalThis.fetch = mockFetch
 
 describe('api client core', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
+    mockFetch.mockReset()
     vi.clearAllMocks()
     api.setToken(null)
-    ;(api as any)._ensureCsrfToken = vi.fn().mockResolvedValue(null)
+    clearAuthenticatedFetchCsrfCache()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
   it('includes Authorization header when token is set', async () => {
@@ -29,6 +33,21 @@ describe('api client core', () => {
 
     const [, opts] = mockFetch.mock.calls[0]
     expect(opts.headers.get('Authorization')).toBe('Bearer my-token')
+  })
+
+  it('uses browser credentials without inventing an Authorization header for cookie session hydration', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ user: { id: 'cookie-user' } }),
+    })
+
+    await api.getCurrentUser()
+
+    const [, opts] = mockFetch.mock.calls[0]
+    expect(opts.credentials).toBe('include')
+    expect(opts.headers.has('Authorization')).toBe(false)
+    expect(localStorage.getItem('auth-token')).toBeNull()
   })
 
   it('sanitizes decorated headers before constructing request headers', async () => {
@@ -53,6 +72,23 @@ describe('api client core', () => {
     expect(opts.headers.get('x-count')).toBe('2')
     expect(opts.headers.has('x-null')).toBe(false)
     expect(opts.headers.has('x-symbol-value')).toBe(false)
+  })
+
+  it('verifies payment sessions with a CSRF-aware POST body', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ updated: true }),
+    })
+    vi.mocked(authenticatedFetch.csrfManager.getToken).mockResolvedValue('csrf-payment-token')
+
+    await api.verifyPaymentSession('cs_test_123')
+
+    const [url, opts] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/payments\/verify-session$/)
+    expect(opts.method).toBe('POST')
+    expect(JSON.parse(String(opts.body))).toEqual({ session_id: 'cs_test_123' })
+    expect(opts.headers.get('X-CSRF-Token')).toBe('csrf-payment-token')
   })
 
   it('returns null for 204 No Content (via getCurrentUser)', async () => {

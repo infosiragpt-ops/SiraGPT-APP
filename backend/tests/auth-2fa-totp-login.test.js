@@ -64,11 +64,13 @@ const state = {
     totpSecret: `plain:${SECRET_B32}`,
     isAdmin: false,
     isSuperAdmin: false,
+    deletedAt: null,
   },
   partial: [], // PartialSession rows
   twoFAChallenges: [],
   sessions: [],
   orgMemberships: [],
+  userReadsBeforeDelete: null,
 };
 
 const authMock = {
@@ -80,7 +82,16 @@ const prismaMock = {
     findUnique: async ({ where, select }) => {
       let row = null;
       if (where.email) row = state.user.email === where.email ? state.user : null;
-      else if (where.id) row = state.user.id === where.id ? state.user : null;
+      else if (where.id) {
+        if (Number.isInteger(state.userReadsBeforeDelete)) {
+          state.userReadsBeforeDelete -= 1;
+          if (state.userReadsBeforeDelete <= 0) {
+            state.user.deletedAt = new Date();
+            state.userReadsBeforeDelete = null;
+          }
+        }
+        row = state.user.id === where.id ? state.user : null;
+      }
       if (!row) return null;
       if (select) {
         const out = {};
@@ -124,6 +135,15 @@ const prismaMock = {
       }
       return { count: n };
     },
+    deleteMany: async ({ where }) => {
+      const before = state.partial.length;
+      for (let i = state.partial.length - 1; i >= 0; i -= 1) {
+        if (!where.userId || state.partial[i].userId === where.userId) {
+          state.partial.splice(i, 1);
+        }
+      }
+      return { count: before - state.partial.length };
+    },
   },
   twoFAChallenge: {
     create: async ({ data }) => {
@@ -152,6 +172,15 @@ const prismaMock = {
       state.sessions.push(row);
       return row;
     },
+    deleteMany: async ({ where }) => {
+      const before = state.sessions.length;
+      for (let i = state.sessions.length - 1; i >= 0; i -= 1) {
+        if (!where.userId || state.sessions[i].userId === where.userId) {
+          state.sessions.splice(i, 1);
+        }
+      }
+      return { count: before - state.sessions.length };
+    },
   },
   organization: {
     findFirst: async () => null,
@@ -160,11 +189,19 @@ const prismaMock = {
     findMany: async ({ where } = {}) =>
       state.orgMemberships.filter((row) => !where?.userId || row.userId === where.userId),
   },
+  async $queryRawUnsafe() {
+    return [{ locked: true }];
+  },
+  async $transaction(callbackOrOperations) {
+    if (Array.isArray(callbackOrOperations)) return Promise.all(callbackOrOperations);
+    return callbackOrOperations(prismaMock);
+  },
 };
 
 const auditMock = {
   _calls: [],
   writeAuditLog: (_db, payload) => { auditMock._calls.push(payload); },
+  writeAuditLogStrict: async (_db, payload) => { auditMock._calls.push(payload); },
 };
 
 const emailMock = {
@@ -249,10 +286,12 @@ function resetState() {
   state.user.twoFactorEnabled = false;
   state.user.totpEnabled = true;
   state.user.totpSecret = `plain:${SECRET_B32}`;
+  state.user.deletedAt = null;
   state.partial.length = 0;
   state.twoFAChallenges.length = 0;
   state.sessions.length = 0;
   state.orgMemberships.length = 0;
+  state.userReadsBeforeDelete = null;
   auditMock._calls.length = 0;
 }
 
@@ -308,6 +347,17 @@ describe('POST /api/auth/login — TOTP gate', () => {
     assert.ok(res.body.token);
     assert.equal(state.sessions.length, 1);
     assert.equal(state.partial.length, 0);
+  });
+
+  test('partial-session issuance re-reads and rejects a soft-deleted user', async () => {
+    state.user.deletedAt = new Date();
+
+    await assert.rejects(
+      authRouter.__twoFAHelpers.mintPartialSession(state.user.id),
+      (error) => error?.code === 'ACCOUNT_INACTIVE',
+    );
+    assert.equal(state.partial.length, 0);
+    assert.equal(state.sessions.length, 0);
   });
 
   test('blocks password login when an org requires 2FA and user has no factor', async () => {
@@ -366,6 +416,41 @@ describe('POST /api/auth/2fa/totp/verify', () => {
     assert.equal(state.sessions.length, 1);
     assert.ok(state.partial[0].consumedAt instanceof Date);
     assert.ok(auditMock._calls.some((c) => c.action === 'login_totp_verified'));
+  });
+
+  test('rejects redemption when the user was deleted after partial-session issuance', async () => {
+    const partialToken = await loginAndGetPartial();
+    state.user.deletedAt = new Date();
+    const code = generateTotp(base32Decode(SECRET_B32));
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/2fa/totp/verify',
+      body: { partialToken, code },
+      mount: '/api/auth',
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'account_inactive');
+    assert.equal(state.sessions.length, 0);
+    assert.equal(state.partial.length, 0);
+  });
+
+  test('rejects redemption when deletion wins the final session-issuance lock', async () => {
+    const partialToken = await loginAndGetPartial();
+    state.userReadsBeforeDelete = 3;
+    const code = generateTotp(base32Decode(SECRET_B32));
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/2fa/totp/verify',
+      body: { partialToken, code },
+      mount: '/api/auth',
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'account_inactive');
+    assert.equal(state.sessions.length, 0);
   });
 
   test('401 on wrong code; partial session NOT consumed', async () => {

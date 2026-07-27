@@ -132,27 +132,44 @@ test('modelSupportsFunctionCalling allowlist', () => {
 test('shouldUseAgenticChat skips greetings and trivial smalltalk', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'gracias!' }), false);
-  // Agent-first default: a real question IS an agent turn (the route still
-  // falls back to the plain stream on any degraded loop run).
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'Responde únicamente: OK' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
 });
 
-test('shouldUseAgenticChat agent-first default routes plain chat turns through the agent', () => {
-  assert.equal(agenticStream.agentFirstEnabled(), true);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), true);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), true);
+test('shouldUseAgenticChat keeps ordinary chat on the plain stream by default', () => {
+  assert.equal(agenticStream.agentFirstEnabled(), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
 });
 
-test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=0 restores the legacy heuristic routing', () => {
+test('shouldUseAgenticChat routes a custom GPT auto-agent without slowing greetings', () => {
+  const capabilities = { agentMode: 'auto', skillsEnabled: true, skillIds: ['openalex_search'] };
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'Ayúdame a estructurar el marco teórico de mi investigación',
+    customGptCapabilities: capabilities,
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola', customGptCapabilities: capabilities }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'Busca artículos científicos para contrastar este documento adjunto',
+    files: [{ id: 'f1' }],
+    customGptCapabilities: capabilities,
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'Ayúdame a estructurar este texto',
+    customGptCapabilities: { ...capabilities, agentMode: 'off' },
+  }), false);
+});
+
+test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=1 enables agent-first routing', () => {
   const prev = process.env.SIRAGPT_AGENT_FIRST;
-  process.env.SIRAGPT_AGENT_FIRST = '0';
+  process.env.SIRAGPT_AGENT_FIRST = '1';
   try {
-    assert.equal(agenticStream.agentFirstEnabled(), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
-    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
-    // Tool-heavy turns still enter the loop with agent-first off.
+    assert.equal(agenticStream.agentFirstEnabled(), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), true);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), true);
+    // Tool-heavy turns stay agentic regardless of the default.
     assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
   } finally {
     if (prev === undefined) delete process.env.SIRAGPT_AGENT_FIRST;
@@ -242,6 +259,45 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('host_file'));
   assert.ok(names.includes('check_ci_status'));
   assert.ok(names.includes('monitor_ci'));
+  assert.ok(names.includes('run_skill'));
+  assert.ok(names.includes('run_skill_pipeline'));
+});
+
+test('custom GPT capability gates keep Docs, Skills and Canvas independent', () => {
+  const { buildDefaultTools, applyCustomGptCapabilityGates } = agenticStream._internal;
+
+  const docsDisabled = buildDefaultTools({
+    userQuery: 'crea un informe y una gráfica',
+    capabilities: { documents: false, skillsEnabled: false },
+  }).map((tool) => tool.name);
+  assert.ok(!docsDisabled.includes('create_document'));
+  assert.ok(!docsDisabled.includes('rag_retrieve'));
+  assert.ok(!docsDisabled.includes('run_skill'));
+  assert.ok(docsDisabled.includes('create_chart'));
+
+  const canvasDisabled = buildDefaultTools({
+    userQuery: 'crea un informe y una gráfica',
+    capabilities: { documents: true, dataAnalysis: false },
+  }).map((tool) => tool.name);
+  assert.ok(canvasDisabled.includes('create_document'));
+  assert.ok(!canvasDisabled.includes('create_chart'));
+
+  const postHarness = applyCustomGptCapabilityGates(
+    [
+      { name: 'web_fetch' },
+      { name: 'run_javascript' },
+      { name: 'document_edit' },
+      { name: 'run_skill_pipeline' },
+      { name: 'finalize' },
+    ],
+    {
+      webBrowsing: false,
+      codeInterpreter: false,
+      documents: false,
+      skillsEnabled: false,
+    },
+  ).map((tool) => tool.name);
+  assert.deepEqual(postHarness, ['finalize']);
 });
 
 test('default toolset now ships creation tools on every turn (media-always default)', () => {
@@ -275,14 +331,14 @@ test('resolveToolCallMode: native for allowlisted models, prompted for the rest'
   assert.equal(agenticStream.resolveToolCallMode('Cerebras', 'llama-3.1-8b'), 'native');
   // Models WITHOUT native function calling now reach the loop via prompted
   // tool-calling (tools described in the system prompt, fenced-JSON calls).
-  assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'prompted');
+  assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'native');
   assert.equal(agenticStream.resolveToolCallMode('Mistral', 'mistral-large-2'), 'prompted');
   assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'davinci-002'), 'prompted');
   // Env kill-switch restores the legacy hard gate.
   const prev = process.env.SIRAGPT_PROMPTED_TOOLS;
   process.env.SIRAGPT_PROMPTED_TOOLS = '0';
   try {
-    assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'none');
+    assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'native');
     assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'gpt-4o-mini'), 'native');
   } finally {
     if (prev === undefined) delete process.env.SIRAGPT_PROMPTED_TOOLS;
@@ -460,7 +516,7 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
   ]);
   const { res, frames } = makeFakeRes();
 
-  await agenticStream.runAgenticChat({
+  const result = await agenticStream.runAgenticChat({
     openai,
     model: 'gpt-4o-mini',
     userQuery: 'créame una imagen de prueba',
@@ -500,6 +556,68 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
   assert.equal(state.artifacts[0].kind, 'music');
   assert.equal(state.artifacts[0].durationSeconds, 30);
   assert.equal(state.artifacts[0].prompt, 'lofi test');
+
+  assert.match(result.persistedContent, /^```agent-task-state\n/);
+  assert.match(result.persistedContent, /\n\nImagen lista\.$/);
+  const persistedJson = result.persistedContent.match(/^```agent-task-state\n([\s\S]*?)\n```/)?.[1];
+  assert.ok(persistedJson, 'expected a persisted artifact envelope');
+  const persistedState = JSON.parse(persistedJson);
+  assert.equal(persistedState.done, true);
+  assert.deepEqual(persistedState.steps, []);
+  assert.equal(persistedState.artifacts.length, 1);
+  assert.equal(persistedState.artifacts[0].id, 'art1');
+});
+
+test('buildPersistedContent leaves non-artifact answers as plain text', () => {
+  const { buildPersistedContent, freshState } = agenticStream._internal;
+  assert.equal(buildPersistedContent(freshState(), 'Respuesta simple.'), 'Respuesta simple.');
+});
+
+test('runAgenticChat blocks finalize until every requested artifact is created and verified', async () => {
+  const openai = makeFakeOpenAI([
+    toolCallMessage('create_document', { filename: 'informe.docx' }, 'create_word'),
+    toolCallMessage('verify_artifact', { artifactId: 'word1' }, 'verify_word'),
+    finalizeMessage('Entregables listos.'),
+    toolCallMessage('create_document', { filename: 'informe.pdf' }, 'create_pdf'),
+    toolCallMessage('verify_artifact', { artifactId: 'pdf1' }, 'verify_pdf'),
+    finalizeMessage('Entregables listos.'),
+  ]);
+  const { res } = makeFakeRes();
+  const artifacts = {
+    'informe.docx': { id: 'word1', filename: 'informe.docx', format: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', downloadUrl: '/word1' },
+    'informe.pdf': { id: 'pdf1', filename: 'informe.pdf', format: 'pdf', mime: 'application/pdf', downloadUrl: '/pdf1' },
+  };
+
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'Crea el informe en Word y PDF',
+    res,
+    customGptCapabilities: { agentMode: 'auto', multipleArtifacts: true, maxArtifactsPerTurn: 6 },
+    toolsOverride: [
+      {
+        name: 'create_document',
+        description: 'create file',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+        execute: async ({ filename }, ctx) => {
+          const artifact = artifacts[filename];
+          ctx.onEvent({ type: 'file_artifact', artifact });
+          return { ok: true, ...artifact };
+        },
+      },
+      {
+        name: 'verify_artifact',
+        description: 'verify file',
+        parameters: { type: 'object', properties: { artifactId: { type: 'string' } }, required: ['artifactId'] },
+        execute: async ({ artifactId }) => ({ ok: true, artifactId }),
+      },
+    ],
+  });
+
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.artifacts.length, 2);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.format).sort(), ['docx', 'pdf']);
+  assert.ok(result.steps.length >= 6, 'guard should force the missing PDF workflow before finalizing');
 });
 
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {
@@ -844,4 +962,228 @@ test('runAgenticChat caps iterations at maxSteps', async () => {
   assert.ok(elapsed < 10000, `expected fast cap, took ${elapsed}ms`);
   // Loop ended without an explicit finalize → fallback final answer is set.
   assert.ok(typeof result.finalAnswer === 'string' && result.finalAnswer.length > 0);
+});
+
+test('runAgenticChat source-preserving pre-loop short-circuits edit turns before the LLM', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => ({
+          content: 'Listo. Conservé el DOCX original y cambié el título.',
+          artifact: {
+            id: 'art-preloop',
+            filename: 'informe_editado.docx',
+            format: 'docx',
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            sizeBytes: 1234,
+            downloadUrl: '/api/agent/artifact/art-preloop',
+          },
+          file: {
+            type: 'doc',
+            format: 'docx',
+            filename: 'informe_editado.docx',
+            url: '/api/agent/artifact/art-preloop',
+          },
+          validation: { passed: true },
+          previewHtml: null,
+        }),
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  // Re-require so the patched module is visible to the pre-loop require().
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita el documento: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: ['f1'],
+        prisma: {},
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.equal(llmCalls, 0, 'pre-loop must skip the LLM entirely on a successful surgical edit');
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+    assert.match(result.finalAnswer, /Conservé el DOCX original/);
+    assert.equal(result.artifacts[0].id, 'art-preloop');
+    const body = frames();
+    assert.ok(body.some((f) => f && f.type === 'file_artifact' && f.artifact && f.artifact.id === 'art-preloop'));
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat forces document_edit and drops create_document on attachment edit turns', async () => {
+  let firstArgs = null;
+  let calls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          calls += 1;
+          if (!firstArgs) firstArgs = args;
+          if (calls === 1) {
+            return toolCallMessage('document_edit', { instruction: 'cambia el título' }, 'call_edit');
+          }
+          return finalizeMessage('Listo, aquí está el archivo editado.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  // Bypass the pre-loop by making isSourcePreservingEditRequest return false
+  // while isDocumentEditRequest still matches (via the real detector on the
+  // userQuery). We stub the source-preserving module so the pre-loop no-ops.
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => false,
+        tryGenerateSourcePreservingDocumentEdit: async () => null,
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: ['f1'],
+        prisma: {},
+      },
+      toolsOverride: [
+        {
+          name: 'document_edit',
+          description: 'edit attached document',
+          parameters: {
+            type: 'object',
+            properties: { instruction: { type: 'string' } },
+            required: ['instruction'],
+          },
+          execute: async () => ({
+            ok: true,
+            engine: 'in-process',
+            edited: [{ filename: 'x.docx', downloadUrl: '/a', sizeBytes: 1, valid: true }],
+            summary: 'editado',
+          }),
+        },
+        {
+          name: 'create_document',
+          description: 'create a NEW document',
+          parameters: {
+            type: 'object',
+            properties: { filename: { type: 'string' } },
+          },
+          execute: async () => ({ ok: true }),
+        },
+      ],
+    });
+    assert.ok(firstArgs, 'the model must be called at least once when pre-loop no-ops');
+    assert.equal(
+      firstArgs.tool_choice?.function?.name,
+      'document_edit',
+      'first step must force document_edit for attachment edit turns',
+    );
+    const toolNames = (firstArgs.tools || []).map((t) => t.function?.name || t.name);
+    assert.ok(toolNames.includes('document_edit'));
+    assert.ok(
+      !toolNames.includes('create_document'),
+      'create_document must be dropped so the model cannot regenerate a new file',
+    );
+    const system = firstArgs.messages.find((m) => m.role === 'system')?.content || '';
+    assert.match(system, /EDITAR el documento que ADJUNTO/);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('turnPolicy observe mode attaches summary without changing behaviour', async () => {
+  const cognitiveMetrics = require('../src/services/cognitive-metrics');
+  const turnPolicy = require('../src/services/turn-policy');
+  cognitiveMetrics.reset();
+  const { res, frames } = makeFakeRes();
+  const openai = makeFakeOpenAI([finalizeMessage('ok shadow')]);
+  const policy = turnPolicy.buildTurnPolicy({
+    model: 'gpt-4o-mini',
+    provider: 'OpenAI',
+    toolCallMode: 'native',
+    routing: { shouldRunAgentic: true },
+    capabilities: { toolCallMode: 'native' },
+  });
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    provider: 'OpenAI',
+    userQuery: 'busca fuentes recientes sobre Prisma migrate',
+    history: [],
+    res,
+    toolCallMode: 'native',
+    turnPolicy: policy,
+    toolsOverride: [{
+      name: 'finalize',
+      description: 'finalize',
+      parameters: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+      execute: async ({ answer }) => ({ answer }),
+    }],
+  });
+  assert.match(String(result.finalAnswer || ''), /ok shadow/);
+  const snap = cognitiveMetrics.snapshot();
+  assert.equal(snap.turnPolicy.total, 1);
+  let foundPolicy = null;
+  for (const frame of frames()) {
+    if (!frame || typeof frame.content !== 'string') continue;
+    const match = frame.content.match(/```agent-task-state\n([\s\S]*?)\n```/);
+    if (!match) continue;
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed?.meta?.runtime?.turnPolicy) {
+        foundPolicy = parsed.meta.runtime.turnPolicy;
+        break;
+      }
+    } catch {
+      // keep scanning
+    }
+  }
+  assert.ok(foundPolicy, 'sentinel should include turnPolicy summary');
+  assert.equal(foundPolicy.toolCallMode, 'native');
+  assert.equal(foundPolicy.shouldRunAgentic, true);
+  cognitiveMetrics.reset();
 });

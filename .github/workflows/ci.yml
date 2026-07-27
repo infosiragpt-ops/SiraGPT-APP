@@ -25,12 +25,12 @@ env:
 jobs:
   # ───────────────────────────────────────────────────────────────────
   # FRONTEND — Next.js 14 at repo root
-  # Gates: install, lint, type-check, build — all blocking.
+  # Gates: install, lint, type-check, compiled tests, Vitest, build — all blocking.
   # ───────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend · build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -106,6 +106,12 @@ jobs:
       - name: Unit & integration tests
         run: npm test
 
+      # Hard gate for the jsdom/component suites that the compiled root
+      # node:test runner intentionally does not discover. Threads is the
+      # stable pool for this repository (the forks pool can hang in CI).
+      - name: Vitest component & lib tests (hard gate)
+        run: npm run test:unit -- --pool=threads
+
       # Hard gate — `next build` is the source of truth. Catches
       # missing modules, import errors, static-analysis failures, and
       # env-usage bugs that lint/tsc may miss.
@@ -152,12 +158,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
-      # Sharded test execution — round-robin over the explicit test-file list
+      # Sharded test execution — round-robin over the discovered test-file list
       # so each runner gets ~1/N of the suite. `fail-fast: false` lets us see
       # failures from every shard in a single run instead of cancelling on
       # the first red shard.
       fail-fast: false
-      max-parallel: 2
+      # All four shards run concurrently. At `2` the shards ran in two waves,
+      # which was affordable at 164 files each; discovery-based selection took
+      # each shard to ~437 files, and serialising two waves of that would push
+      # the backend past the frontend build and onto the critical path.
+      max-parallel: 4
       matrix:
         shard: [1, 2, 3, 4]
         total: [4]
@@ -202,9 +212,10 @@ jobs:
       JWT_SECRET: 9a4f0c9e2d8b7a6c5f4e3d2c1b0a9f8e7d6c5b4a39281716f5e4d3c2b1a0f9e8d
       SESSION_SECRET: 83a7c5e19f2d4b6a9071e3c5d7f9a1b20486ace13579bd02468ace13579bd024
       ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      FRONTEND_URL: http://localhost:3000
-      BASE_URL: http://localhost:5000
-      CORS_ORIGINS: "*"
+      FRONTEND_URL: https://web.ci.example.test
+      BASE_URL: https://api.ci.example.test
+      BACKEND_PUBLIC_URL: https://api.ci.example.test
+      CORS_ORIGINS: "https://web.ci.example.test"
       MAX_FILE_SIZE: 50
       UPLOAD_DIR: uploads
       # passport-google-oauth20 requires non-empty clientID/clientSecret at
@@ -213,9 +224,15 @@ jobs:
       # are not exercised by the smoke test.
       GOOGLE_CLIENT_ID: 123456789012-ci-smoke-oauth.apps.googleusercontent.com
       GOOGLE_CLIENT_SECRET: ciSmokeOauthSecret0123456789abcdef
-      GOOGLE_AUTH_URI: http://localhost:5000/api/auth/google/callback
-      GOOGLE_REDIRECT_URI: http://localhost:5000/api/auth/gmail/callback
-      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: http://localhost:5000/api/auth/google-services/callback
+      GOOGLE_AUTH_BASE_URL: https://api.ci.example.test
+      GOOGLE_AUTH_URI: https://api.ci.example.test/api/auth/google/callback
+      GOOGLE_REDIRECT_URI: https://api.ci.example.test/api/auth/gmail/callback
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: https://api.ci.example.test/api/auth/google-services/callback
+      GITHUB_OAUTH_REDIRECT_URI: https://api.ci.example.test/api/github/callback
+      GITHUB_OAUTH_SUCCESS_REDIRECT: https://web.ci.example.test/settings
+      SPOTIFY_REDIRECT_URI: https://api.ci.example.test/api/spotify/callback
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: https://web.ci.example.test/chat
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: https://web.ci.example.test/connections
       # Multiple routes (files.js, api.js, computer-use.js, thesis.js,
       # elevenlabs.js) instantiate SDK clients at require-time. Without
       # keys the constructors throw and Express never binds. Dummies let
@@ -242,8 +259,21 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
+      - name: Setup Python document runtime
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install DOCX test dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir 'python-docx>=1.1.0'
+
+      - name: Configure Redis for auth-security readiness
+        run: |
+          docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET maxmemory 268435456
+          docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET maxmemory-policy noeviction
 
       # Prisma engine cache — keyed on the schema. Avoids re-downloading
       # the query-engine + introspection-engine binaries each run.
@@ -262,19 +292,29 @@ jobs:
       - name: Prisma · generate client
         run: npx prisma generate --schema prisma/schema.prisma
 
-      # Using `db push` (not `migrate deploy`) because the repo has no
-      # migration history yet — push materializes the schema directly
-      # from `schema.prisma`. Switch to `migrate deploy` once migrations
-      # start shipping from the team's workflow.
-      # `db push` won't run CREATE EXTENSION for Unsupported() columns,
-      # so the vector extension is created explicitly first.
+      # CI and production share the same `prisma migrate deploy` path (U0).
+      # `db push` alone is intentionally not used — it skips migration history
+      # and would hide P3005 / baseline gaps that production must surface.
+      # After migrate deploy succeeds on an empty service DB, align residual
+      # schema.prisma drift additively so the test suite sees the same models
+      # production already has from the reviewed U0 baseline.
       - name: Prisma · enable pgvector on service DB
         run: |
           npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
           CREATE EXTENSION IF NOT EXISTS vector;
           SQL
-      - name: Prisma · push schema to Postgres service
+      - name: Prisma · migrate deploy on Postgres service
+        run: npx prisma migrate deploy --schema prisma/schema.prisma
+      - name: Prisma · align residual schema.prisma drift for tests
         run: npx prisma db push --schema prisma/schema.prisma --accept-data-loss --skip-generate
+
+      - name: Release provenance contracts
+        if: matrix.shard == 1
+        run: npm run test:release-provenance
+
+      - name: OpenClaw native capability contracts
+        if: matrix.shard == 1
+        run: npm run test:openclaw-native
 
       # Shard execution — round-robin slice of the full backend suite.
       # Coverage is collected on shard 1 only as an lcov artifact. Global
@@ -282,10 +322,14 @@ jobs:
       # enforce repository-wide minimums.
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }}) with coverage
         if: matrix.shard == 1
+        env:
+          NODE_ENV: test
         run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
         if: matrix.shard != 1
+        env:
+          NODE_ENV: test
         run: bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Upload coverage report

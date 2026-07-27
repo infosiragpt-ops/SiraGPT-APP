@@ -23,6 +23,17 @@ test('advanced document pipeline: Word requests with mixed Excel/PDF wording sta
   assert.equal(detectFormat('Convierte mi Word a PDF profesional'), 'pdf');
 });
 
+test('advanced document pipeline: explicit format wins over grounding text that names other formats', () => {
+  const groundedPrompt = [
+    'Crea una presentación PowerPoint editable con exactamente 8 diapositivas.',
+    'En Word incluye una matriz de evidencia editable.',
+    'En PowerPoint muestra las citas en cada lámina.',
+  ].join(' ');
+
+  assert.equal(detectFormat(groundedPrompt, 'pptx'), 'pptx');
+  assert.equal(detectFormat('Crea una presentación PowerPoint editable.', 'docx'), 'docx');
+});
+
 test('advanced document pipeline: generated DOCX satisfies semantic Word quality gates', async () => {
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-word-quality-'));
   const prompt = [

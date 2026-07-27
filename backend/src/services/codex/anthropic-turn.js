@@ -20,6 +20,7 @@ const DEFAULT_MODEL_STANDARD = 'claude-haiku-4-5-20251001';
 // exceeds it → tool_use arrives without `content`, cycle-16 finding). Sonnet
 // supports far more output; 16K is the cost/latency sweet spot here.
 const DEFAULT_MAX_TOKENS = 16384;
+const CACHE_CONTROL_EPHEMERAL = Object.freeze({ type: 'ephemeral' });
 
 function getAnthropicTurnConfig({ env = process.env, tier = null } = {}) {
   const apiKey = String(env.ANTHROPIC_API_KEY || '').trim();
@@ -48,17 +49,45 @@ function getAnthropicTurnConfig({ env = process.env, tier = null } = {}) {
 function toAnthropicMessages(messages) {
   const systemParts = [];
   const turns = [];
+  const asBlocks = (content) => {
+    if (typeof content === 'string') return [{ type: 'text', text: content }];
+    if (!Array.isArray(content)) return [];
+    return content.filter((block) => (
+      block
+      && typeof block === 'object'
+      && (
+        (block.type === 'text' && typeof block.text === 'string')
+        || block.type === 'image'
+      )
+    )).map((block) => ({ ...block }));
+  };
   for (const m of Array.isArray(messages) ? messages : []) {
-    const content = typeof m?.content === 'string' ? m.content : '';
-    if (!content) continue;
+    const content = m?.content;
     if (m.role === 'system') {
-      systemParts.push(content);
+      const text = asBlocks(content)
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n');
+      if (text) systemParts.push(text);
       continue;
     }
+    const blocks = asBlocks(content);
+    if (!blocks.length) continue;
     const role = m.role === 'assistant' ? 'assistant' : 'user';
     const last = turns[turns.length - 1];
-    if (last && last.role === role) last.content = `${last.content}\n\n${content}`;
-    else turns.push({ role, content });
+    if (last && last.role === role) {
+      if (typeof last.content === 'string' && typeof content === 'string') {
+        last.content = `${last.content}\n\n${content}`;
+      } else {
+        const previous = asBlocks(last.content);
+        last.content = [...previous, { type: 'text', text: '\n\n' }, ...blocks];
+      }
+    } else {
+      turns.push({
+        role,
+        content: typeof content === 'string' ? content : blocks,
+      });
+    }
   }
   if (turns.length === 0 || turns[0].role !== 'user') {
     turns.unshift({ role: 'user', content: 'Continúa con la tarea.' });
@@ -75,6 +104,53 @@ function toAnthropicTools(tools) {
   }));
 }
 
+function addCacheBreakpoint(content) {
+  if (typeof content === 'string' && content) {
+    return [{
+      type: 'text',
+      text: content,
+      cache_control: { ...CACHE_CONTROL_EPHEMERAL },
+    }];
+  }
+  if (!Array.isArray(content)) return content;
+
+  const blocks = content.map((block) => (
+    block && typeof block === 'object' ? { ...block } : block
+  ));
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
+      blocks[i] = { ...block, cache_control: { ...CACHE_CONTROL_EPHEMERAL } };
+      return blocks;
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Cache every completed turn while leaving the current tail outside the
+ * breakpoint. On the next model step that tail becomes part of the stable
+ * prefix, so cache hits grow with the transcript without freezing new input.
+ */
+function cacheStableTranscriptPrefix(turns) {
+  const cached = (Array.isArray(turns) ? turns : []).map((turn) => ({
+    ...turn,
+    content: Array.isArray(turn?.content)
+      ? turn.content.map((block) => (
+        block && typeof block === 'object' ? { ...block } : block
+      ))
+      : turn?.content,
+  }));
+  if (cached.length < 2) return cached;
+
+  const stableTail = cached.length - 2;
+  cached[stableTail] = {
+    ...cached[stableTail],
+    content: addCacheBreakpoint(cached[stableTail].content),
+  };
+  return cached;
+}
+
 /** Prompt caching on/off. Default ON — cache_control is GA in @anthropic-ai/sdk
  * >=0.20 (no beta header needed). Env kill-switch for any deploy on a very old
  * SDK: CODEX_ANTHROPIC_CACHE=0 degrades to the plain (uncached) request shape. */
@@ -82,11 +158,20 @@ function cacheEnabled(env = process.env) {
   return String(env.CODEX_ANTHROPIC_CACHE ?? '1') !== '0';
 }
 
-function defaultCreateClient({ env = process.env } = {}) {
-  // Lazy require so offline tests (which always inject createClient) never load the SDK.
+function defaultCreateClient({ env = process.env, fetchImpl = null } = {}) {
+  // Lazy require keeps config-only callers independent from the SDK.
   const Anthropic = require('@anthropic-ai/sdk');
   const Ctor = Anthropic.default || Anthropic;
-  return new Ctor({ apiKey: String(env.ANTHROPIC_API_KEY || '').trim() });
+  const options = {
+    apiKey: String(env.ANTHROPIC_API_KEY || '').trim(),
+  };
+  const baseURL = String(env.ANTHROPIC_BASE_URL || '').trim();
+  if (baseURL) options.baseURL = baseURL;
+  if (typeof fetchImpl === 'function') options.fetch = fetchImpl;
+  // The SDK supplies x-api-key, content-type and anthropic-version. Prompt
+  // caching is GA, so adding the retired prompt-caching beta header here would
+  // make the request less portable instead of more correct.
+  return new Ctor(options);
 }
 
 function parseResponse(resp, model) {
@@ -100,6 +185,11 @@ function parseResponse(resp, model) {
     else if (b.type === 'tool_use') toolCalls.push({ id: b.id || null, name: b.name, args: b.input && typeof b.input === 'object' ? b.input : {} });
   }
   const u = resp?.usage || {};
+  const cacheCreation = u.cache_creation && typeof u.cache_creation === 'object'
+    ? u.cache_creation
+    : {};
+  const cacheReadTokens = Number(u.cache_read_input_tokens ?? 0) || 0;
+  const cacheCreationTokens = Number(u.cache_creation_input_tokens ?? 0) || 0;
   return {
     text: textParts.join('\n').trim(),
     reasoning: reasoningParts.length
@@ -109,6 +199,11 @@ function parseResponse(resp, model) {
     usage: {
       tokensIn: Number(u.input_tokens ?? 0) || 0,
       tokensOut: Number(u.output_tokens ?? 0) || 0,
+      cacheReadTokens,
+      cacheCreationTokens,
+      cacheCreation5mTokens: Number(cacheCreation.ephemeral_5m_input_tokens ?? 0) || 0,
+      cacheCreation1hTokens: Number(cacheCreation.ephemeral_1h_input_tokens ?? 0) || 0,
+      cacheHit: cacheReadTokens > 0,
       provider: 'Anthropic',
       model,
       generationId: resp?.id || null,
@@ -121,12 +216,21 @@ function parseResponse(resp, model) {
  * model. Throws on transport/config errors — the caller (llm-turn) decides
  * whether to fall back to the Cerebras path.
  */
-async function anthropicTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient = defaultCreateClient, maxTokens = null } = {}) {
+async function anthropicTurn({
+  messages,
+  tools = [],
+  signal,
+  env = process.env,
+  tier = null,
+  createClient = defaultCreateClient,
+  fetchImpl = null,
+  maxTokens = null,
+} = {}) {
   const envMax = Number(env.CODEX_ANTHROPIC_MAX_TOKENS);
   const effectiveMaxTokens = maxTokens || (Number.isFinite(envMax) && envMax > 0 ? Math.floor(envMax) : DEFAULT_MAX_TOKENS);
   const cfg = getAnthropicTurnConfig({ env, tier });
   if (!cfg.enabled) throw new Error('codex anthropic-turn: ANTHROPIC_API_KEY no configurada');
-  const client = createClient({ env });
+  const client = createClient({ env, fetchImpl });
   if (!client?.messages?.create) throw new Error('codex anthropic-turn: cliente inválido');
 
   const { system, turns } = toAnthropicMessages(messages);
@@ -134,14 +238,14 @@ async function anthropicTurn({ messages, tools = [], signal, env = process.env, 
   const req = {
     model: cfg.model,
     max_tokens: effectiveMaxTokens,
-    messages: turns,
+    messages: useCache ? cacheStableTranscriptPrefix(turns) : turns,
   };
-  // Prompt caching: mark the stable prefix (system + tools) so Anthropic caches
-  // it (~10× cheaper on cache-read, 5 min TTL). With up to 24 steps per run the
-  // system + tools prefix is otherwise re-billed as full input on every step.
+  // Prompt caching: mark system, tools and the completed transcript prefix.
+  // With up to 24 steps per run that stable context would otherwise be
+  // re-processed as full input on every step.
   if (system) {
     req.system = useCache
-      ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+      ? [{ type: 'text', text: system, cache_control: { ...CACHE_CONTROL_EPHEMERAL } }]
       : system;
   }
   const anthropicTools = toAnthropicTools(tools);
@@ -150,7 +254,7 @@ async function anthropicTurn({ messages, tools = [], signal, env = process.env, 
       // Mark the LAST tool: a cache breakpoint caches everything up to and
       // including it — the whole (large, stable) tool definition block.
       const last = anthropicTools.length - 1;
-      anthropicTools[last] = { ...anthropicTools[last], cache_control: { type: 'ephemeral' } };
+      anthropicTools[last] = { ...anthropicTools[last], cache_control: { ...CACHE_CONTROL_EPHEMERAL } };
     }
     req.tools = anthropicTools;
   }
@@ -164,7 +268,9 @@ module.exports = {
   getAnthropicTurnConfig,
   toAnthropicMessages,
   toAnthropicTools,
+  cacheStableTranscriptPrefix,
   cacheEnabled,
+  defaultCreateClient,
   parseResponse,
   DEFAULT_MODEL_POWER,
   DEFAULT_MODEL_STANDARD,

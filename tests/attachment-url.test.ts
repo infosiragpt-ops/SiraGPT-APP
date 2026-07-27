@@ -6,6 +6,7 @@ import {
   resolveBackendAssetUrl,
   resolveImageAttachmentUrl,
 } from '../lib/attachment-url';
+import { resolveGptIconImageUrl } from '../lib/gpt-icon-url';
 
 test('resolves uploaded image URLs against the backend asset host', () => {
   assert.equal(
@@ -102,10 +103,14 @@ test('normalizeBackendAssetUrl passes through data: and blob: URLs verbatim', ()
   assert.equal(normalizeBackendAssetUrl('blob:http://localhost:3000/abc-def'), 'blob:http://localhost:3000/abc-def');
 });
 
-test('appendUploadAuthToken appends JWTs only to upload URLs', () => {
+test('appendUploadAuthToken never places a session JWT in an upload URL', () => {
   assert.equal(
     appendUploadAuthToken('https://api.siragpt.com/uploads/user-1/image.png', 'jwt-123'),
-    'https://api.siragpt.com/uploads/user-1/image.png?token=jwt-123',
+    'https://api.siragpt.com/uploads/user-1/image.png',
+  );
+  assert.equal(
+    appendUploadAuthToken('/uploads/user-1/image.png', 'jwt-123'),
+    '/uploads/user-1/image.png',
   );
   assert.equal(
     appendUploadAuthToken('https://cdn.example.com/image.png', 'jwt-123'),
@@ -141,4 +146,24 @@ test('normalizeBackendAssetUrl returns absolute URL unchanged when no baseUrl is
     if (savedImage !== undefined) process.env.NEXT_PUBLIC_IMAGE_URL = savedImage;
     if (savedApi !== undefined) process.env.NEXT_PUBLIC_API_URL = savedApi;
   }
+});
+
+test('resolveGptIconImageUrl authenticates uploaded GPT avatars without treating emoji as images', () => {
+  assert.equal(
+    resolveGptIconImageUrl('/uploads/user-1/icon.png', {
+      token: 'jwt-123',
+      baseUrl: '/api',
+    }),
+    '/uploads/user-1/icon.png',
+  );
+
+  assert.equal(
+    resolveGptIconImageUrl('/uploads/gpt-icons/gpt-1-icon.png', {
+      token: 'jwt-123',
+      baseUrl: '/api',
+    }),
+    '/uploads/gpt-icons/gpt-1-icon.png',
+  );
+
+  assert.equal(resolveGptIconImageUrl('🤖', { token: 'jwt-123', baseUrl: '/api' }), null);
 });

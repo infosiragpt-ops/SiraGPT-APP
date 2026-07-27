@@ -93,7 +93,8 @@ test('authenticate rejects bad secret in constant time', () => {
   resetFile();
   process.env.AGENT_DM_POLICY = 'open';
   const created = keys.createKey({ userId: 'u1', label: 'cli' });
-  const bad = created.secret.slice(0, -1) + '0'; // mutate last char
+  const replacement = created.secret.endsWith('0') ? '1' : '0';
+  const bad = created.secret.slice(0, -1) + replacement;
   const res = keys.authenticate({
     authHeader: `Bearer ${bad}`,
     ip: 'x', userAgent: 'y',

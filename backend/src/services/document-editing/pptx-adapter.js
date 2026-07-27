@@ -100,6 +100,31 @@ function extractAllText(slideXml) {
     .map((t) => unescapeXmlText(t[1])).join(' ').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeText(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function replaceVisibleText(value, needle, replacement) {
+  const source = String(value || '');
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle) return source;
+  const directIndex = normalizeText(source).indexOf(normalizedNeedle);
+  if (directIndex < 0) return source;
+  // Exact-run replacement is intentionally conservative. Slide text split
+  // across multiple OOXML runs is left untouched instead of rewriting the
+  // shape and losing character-level formatting.
+  const escaped = String(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const direct = new RegExp(escaped, 'i');
+  if (direct.test(source)) return source.replace(direct, String(replacement || ''));
+  if (normalizeText(source) === normalizedNeedle) return String(replacement || '');
+  return source;
+}
+
 /**
  * Replace the title of slide N (1-based, presentation order). The new text
  * lands in the FIRST run of the title shape — inheriting its font/size/color
@@ -136,6 +161,44 @@ function setSlideTitle({ buffer, slideNumber, title }) {
     partName: slide.partName,
     previousTitle: slide.title,
     newTitle: title,
+  };
+}
+
+/**
+ * Replace body text only inside one slide, preserving all other package
+ * parts byte-for-byte. This is the scoped counterpart to the legacy
+ * deck-wide replace operation.
+ */
+function replaceSlideText({ buffer, slideNumber, needle, replacement = '' }) {
+  const normalizedNeedle = normalizeText(needle);
+  if (normalizedNeedle.length < 3) {
+    throw new Error('no se especificó el texto exacto que debo reemplazar');
+  }
+  const zip = new PizZip(buffer);
+  const slides = listPptxSlides(buffer);
+  const slide = slides.find((item) => item.number === Number(slideNumber));
+  if (!slide) {
+    throw new Error(`la presentación tiene ${slides.length} diapositiva(s); no existe la diapositiva ${slideNumber}`);
+  }
+  const xml = zip.file(slide.partName)?.asText() || '';
+  let changedCount = 0;
+  const updated = xml.replace(/<a:t\b([^>]*)>([\s\S]*?)<\/a:t>/g, (full, attrs, value) => {
+    const visible = unescapeXmlText(value);
+    if (!normalizeText(visible).includes(normalizedNeedle)) return full;
+    const next = replaceVisibleText(visible, needle, replacement);
+    if (next === visible) return full;
+    changedCount += 1;
+    return `<a:t${attrs}>${xmlEscape(next)}</a:t>`;
+  });
+  if (changedCount === 0) {
+    throw new Error(`no encontré el texto "${needle}" dentro de la diapositiva ${slideNumber}`);
+  }
+  zip.file(slide.partName, updated);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    slideNumber: slide.number,
+    partName: slide.partName,
+    changedCount,
   };
 }
 
@@ -240,7 +303,8 @@ module.exports = {
   listPptxSlides,
   listPptxImages,
   setSlideTitle,
+  replaceSlideText,
   recolorPptxImage,
   replacePptxImage,
-  INTERNAL: { findTitleShape, extractSlideTitle, extractAllText, parseRels, resolveSlideRelTarget },
+  INTERNAL: { findTitleShape, extractSlideTitle, extractAllText, parseRels, resolveSlideRelTarget, normalizeText, replaceVisibleText },
 };

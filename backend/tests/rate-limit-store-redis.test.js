@@ -66,18 +66,21 @@ class MockRedis {
       exec: async () => {
         this.calls.push("exec");
         if (this.failOn === "exec") throw new Error("redis_down");
+        if (this.failOn === "exec_stall") return new Promise(() => {});
         return ops.map((fn) => fn());
       },
     };
     return chain;
   }
   async zrem(k, member) {
+    if (this.failOn === "zrem_stall") return new Promise(() => {});
     const set = this._get(k);
     const idx = set.findIndex((e) => e.member === member);
     if (idx >= 0) set.splice(idx, 1);
     return idx >= 0 ? 1 : 0;
   }
   async zrange(k, start, stop, withScores) {
+    if (this.failOn === "zrange_stall") return new Promise(() => {});
     const set = this._get(k);
     const slice = set.slice(start, stop + 1);
     if (withScores === "WITHSCORES") {
@@ -94,6 +97,29 @@ class MockRedis {
 beforeEach(() => {
   store._resetForTests();
 });
+
+async function expectStoreUnavailableWithin(promise, maxMs = 250) {
+  let timer;
+  const startedAt = Date.now();
+  try {
+    await assert.rejects(
+      Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("test_deadline_exceeded")), maxMs);
+        }),
+      ]),
+      (error) => {
+        assert.equal(error.code, store.RATE_LIMIT_STORE_UNAVAILABLE);
+        assert.notEqual(error.message, "test_deadline_exceeded");
+        return true;
+      },
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.ok(Date.now() - startedAt < maxMs, "rate-limit store must fail promptly");
+}
 
 test("consume: allows requests up to the limit, then denies", async () => {
   const redis = new MockRedis();
@@ -130,6 +156,129 @@ test("consume: distinct keys have independent counters", async () => {
   assert.equal(a2.allowed, false);
 });
 
+test("consumeMany: atomically consumes user and IP buckets with one Redis command", async () => {
+  const calls = [];
+  const redis = {
+    async eval(script, numberOfKeys, ...args) {
+      calls.push({ script, numberOfKeys, args });
+      return [1, 2, Date.now() + 60_000];
+    },
+  };
+  const result = await store.consumeMany(
+    ["billing:user:u1", "billing:ip:203.0.113.5"],
+    3,
+    60_000,
+    {
+      env: { REDIS_URL: "redis://mock" },
+      redis,
+    },
+  );
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.remaining, 2);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].numberOfKeys, 2);
+  assert.deepEqual(
+    calls[0].args.slice(0, 2),
+    ["billing:user:u1", "billing:ip:203.0.113.5"],
+  );
+  assert.match(calls[0].script, /ZCARD/);
+  assert.match(calls[0].script, /ZADD/);
+});
+
+test("consumeMany: atomically applies a distinct limit to each key", async () => {
+  const calls = [];
+  const redis = {
+    async eval(script, numberOfKeys, ...args) {
+      calls.push({ script, numberOfKeys, args });
+      return [1, 2, Date.now() + 60_000];
+    },
+  };
+
+  const result = await store.consumeMany(
+    ["billing:user:u1", "billing:ip:203.0.113.5"],
+    3,
+    60_000,
+    {
+      env: { REDIS_URL: "redis://mock" },
+      redis,
+      limits: [3, 50],
+    },
+  );
+
+  assert.equal(result.allowed, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].script, /ARGV\[4 \+ index\]/);
+  assert.deepEqual(calls[0].args.slice(-2), [3, 50]);
+});
+
+test("consumeMany: denied memory bucket does not partially burn another bucket", async () => {
+  const env = { RATE_LIMIT_STORE: "memory" };
+  await store.consume("billing:ip:full", 1, 60_000, { env });
+
+  const denied = await store.consumeMany(
+    ["billing:user:untouched", "billing:ip:full"],
+    1,
+    60_000,
+    { env },
+  );
+  assert.equal(denied.allowed, false);
+
+  const userAfterDenial = await store.consume(
+    "billing:user:untouched",
+    1,
+    60_000,
+    { env },
+  );
+  assert.equal(userAfterDenial.allowed, true);
+});
+
+test("consumeMany: heterogeneous memory limits allow shared-IP users without weakening user caps", async () => {
+  const env = { RATE_LIMIT_STORE: "memory" };
+  for (let index = 1; index <= 4; index += 1) {
+    const result = await store.consumeMany(
+      [`billing:user:u${index}`, "billing:ip:shared"],
+      1,
+      60_000,
+      { env, limits: [1, 4] },
+    );
+    assert.equal(result.allowed, true, `shared-IP user ${index} should be allowed`);
+  }
+
+  const repeatedUser = await store.consumeMany(
+    ["billing:user:u1", "billing:ip:other"],
+    1,
+    60_000,
+    { env, limits: [1, 4] },
+  );
+  assert.equal(repeatedUser.allowed, false, "tight per-user quota must still deny");
+
+  const sharedIpFull = await store.consumeMany(
+    ["billing:user:u5", "billing:ip:shared"],
+    1,
+    60_000,
+    { env, limits: [1, 4] },
+  );
+  assert.equal(sharedIpFull.allowed, false, "higher shared-IP quota must still cap abuse");
+});
+
+test("consumeMany: bounds a stalled atomic Redis command", async () => {
+  const env = {
+    NODE_ENV: "production",
+    REDIS_URL: "redis://mock",
+    RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: "20",
+  };
+  const redis = { eval: async () => new Promise(() => {}) };
+
+  await expectStoreUnavailableWithin(
+    store.consumeMany(["billing:user:u1", "billing:ip:ip1"], 2, 60_000, {
+      env,
+      redis,
+      requireDistributed: true,
+    }),
+  );
+});
+
 test("consume: falls back to in-memory when Redis pipeline throws", async () => {
   const redis = new MockRedis({ failOn: "exec" });
   const env = { REDIS_URL: "redis://mock" };
@@ -143,6 +292,139 @@ test("consume: falls back to in-memory when Redis pipeline throws", async () => 
   assert.equal(r2.remaining, 0);
   const r3 = await store.consume(key, 2, 60_000, { env, redis });
   assert.equal(r3.allowed, false);
+});
+
+test("consume: requireDistributed rejects with a stable value-free error when Redis is not configured", async () => {
+  await assert.rejects(
+    () => store.consume("sensitive:no-redis", 2, 60_000, {
+      env: { NODE_ENV: "production" },
+      requireDistributed: true,
+    }),
+    (error) => {
+      assert.equal(error.code, store.RATE_LIMIT_STORE_UNAVAILABLE);
+      assert.equal(error.message, "RATE_LIMIT_STORE_UNAVAILABLE");
+      assert.doesNotMatch(JSON.stringify(error), /redis:\/\/|localhost|password/i);
+      return true;
+    },
+  );
+  assert.equal(store._fallbackSize(), 0);
+});
+
+test("consume: requireDistributed never falls back after a Redis pipeline failure or while its breaker is open", async () => {
+  const failingRedis = new MockRedis({ failOn: "exec" });
+  const env = {
+    NODE_ENV: "production",
+    REDIS_URL: "redis://user:secret@redis.internal:6379",
+  };
+
+  await assert.rejects(
+    () => store.consume("sensitive:redis-down", 2, 60_000, {
+      env,
+      redis: failingRedis,
+      requireDistributed: true,
+    }),
+    (error) => {
+      assert.equal(error.code, "RATE_LIMIT_STORE_UNAVAILABLE");
+      assert.equal(error.message, "RATE_LIMIT_STORE_UNAVAILABLE");
+      assert.doesNotMatch(error.stack || "", /redis_down|secret|redis\.internal/);
+      return true;
+    },
+  );
+  assert.equal(store._fallbackSize(), 0);
+
+  const healthyRedis = new MockRedis();
+  await assert.rejects(
+    () => store.consume("sensitive:breaker-open", 2, 60_000, {
+      env,
+      redis: healthyRedis,
+      requireDistributed: true,
+    }),
+    (error) => error.code === "RATE_LIMIT_STORE_UNAVAILABLE",
+  );
+  assert.equal(healthyRedis.calls.length, 0, "open breaker must not issue a Redis command");
+  assert.equal(store._fallbackSize(), 0);
+});
+
+test("consume: bounds a stalled Redis pipeline and reports the breaker retry interval", async () => {
+  const env = {
+    NODE_ENV: "production",
+    REDIS_URL: "redis://mock",
+    RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: "20",
+    RATE_LIMIT_STORE_RETRY_AFTER_SECONDS: "7",
+  };
+  let captured;
+  try {
+    await expectStoreUnavailableWithin(
+      store.consume("sensitive:stalled-pipeline", 2, 60_000, {
+        env,
+        redis: new MockRedis({ failOn: "exec_stall" }),
+        requireDistributed: true,
+      }),
+    );
+  } catch (error) {
+    captured = error;
+    throw error;
+  }
+
+  await assert.rejects(
+    () => store.consume("sensitive:breaker-retry", 2, 60_000, {
+      env,
+      redis: new MockRedis(),
+      requireDistributed: true,
+    }),
+    (error) => {
+      captured = error;
+      assert.equal(error.retryAfterSeconds, 7);
+      return true;
+    },
+  );
+  assert.equal(captured.retryAfterSeconds, 7);
+});
+
+test("consume: bounds denied-entry cleanup and reset lookup Redis commands", async () => {
+  for (const failOn of ["zrem_stall", "zrange_stall"]) {
+    store._resetForTests();
+    const redis = new MockRedis();
+    const env = {
+      NODE_ENV: "production",
+      REDIS_URL: "redis://mock",
+      RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: "20",
+    };
+    await store.consume(`sensitive:${failOn}`, 1, 60_000, {
+      env,
+      redis,
+      requireDistributed: true,
+    });
+    redis.failOn = failOn;
+    await expectStoreUnavailableWithin(
+      store.consume(`sensitive:${failOn}`, 1, 60_000, {
+        env,
+        redis,
+        requireDistributed: true,
+      }),
+    );
+  }
+});
+
+test("Redis client options and arbitrary commands use the same bounded timeout", async () => {
+  assert.equal(typeof store._redisClientOptions, "function");
+  assert.equal(typeof store._withRedisTimeout, "function");
+  assert.equal(
+    store._redisClientOptions({ RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: "37" }).commandTimeout,
+    37,
+  );
+  assert.equal(
+    store._redisClientOptions({ RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: "invalid" }).commandTimeout,
+    1000,
+  );
+
+  await assert.rejects(
+    () => store._withRedisTimeout(
+      new Promise(() => {}),
+      20,
+    ),
+    (error) => error.code === "RATE_LIMIT_REDIS_COMMAND_TIMEOUT",
+  );
 });
 
 test("consume: uses memory store when REDIS_URL is unset", async () => {

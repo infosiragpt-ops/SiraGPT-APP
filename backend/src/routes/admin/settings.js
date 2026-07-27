@@ -12,7 +12,8 @@
  */
 
 const express = require('express');
-const { authenticateToken, requireAdmin } = require('../../middleware/auth');
+const { authenticateToken } = require('../../middleware/auth');
+const requireAdminRoutePermission = require('../../services/admin-route-policy');
 const { writeAuditLog } = require('../../utils/audit-log');
 const maintenanceMode = require('../../middleware/maintenance-mode');
 
@@ -77,7 +78,7 @@ async function readSettings(prismaClient) {
 
 function createRouter({ prismaClient }) {
   const router = express.Router();
-  router.use(authenticateToken, requireAdmin);
+  router.use(authenticateToken, requireAdminRoutePermission);
 
   router.get('/', async (_req, res) => {
     try {

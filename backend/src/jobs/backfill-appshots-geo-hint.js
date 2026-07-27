@@ -13,10 +13,9 @@
  *     with thousands of stale rows doesn't pin the connection or the
  *     upstream rate limit. Each batch awaits a configurable inter-call
  *     delay to stay polite with the keyless ipwho.is endpoint.
- *   - Scope filter is applied in JS by decoding the JWT (the Session
- *     model doesn't store the scope as a column — same approach as
- *     routes/appshots.js#isAppshotsToken). Non-appshots / unverifiable
- *     tokens are skipped with a counter bump.
+ *   - Scope filter is applied in JS. Versioned hashes are classified from
+ *     their bounded scope prefix; compat plaintext rows require a verified
+ *     JWT signature. A one-way digest is never decoded.
  *   - `ipHint` is a /24 or /64 prefix from reduceIp(). We re-hydrate it
  *     to a representative usable address (`a.b.c.1` / `…::1`) before
  *     calling resolveGeoHint — the keyless lookup returns the same
@@ -45,6 +44,10 @@
 'use strict';
 
 const jwt = require('jsonwebtoken');
+const {
+  SESSION_TOKEN_SCOPE_APPSHOTS,
+  parseSessionTokenHash,
+} = require('../services/auth/session-token-persistence');
 const { resolveGeoHint: defaultResolveGeoHint } = require('../utils/geo-lookup');
 
 const DEFAULT_BATCH = 200;
@@ -78,20 +81,20 @@ function ipFromHint(hint) {
   return base;
 }
 
-function isAppshotsToken(token, secret) {
-  if (!token || typeof token !== 'string' || !secret) return false;
+function isAppshotsSession(row, secret) {
+  const token = row?.token;
+  if (!token || typeof token !== 'string') return false;
+  const storedHash = parseSessionTokenHash(token);
+  if (storedHash) return storedHash.scope === SESSION_TOKEN_SCOPE_APPSHOTS;
+  if (!secret) return false;
   try {
-    const decoded = jwt.verify(token, secret);
+    const decoded = jwt.verify(token, secret, {
+      algorithms: ['HS256'],
+      ignoreExpiration: true,
+    });
     return decoded?.scope === 'appshots:capture';
   } catch (_) {
-    // Includes expired tokens — we still want to backfill them so the
-    // user's settings page shows a uniform list before they revoke.
-    try {
-      const decoded = jwt.decode(token);
-      return decoded?.scope === 'appshots:capture';
-    } catch (_e) {
-      return false;
-    }
+    return false;
   }
 }
 
@@ -171,7 +174,7 @@ async function run(opts = {}) {
     // eslint-disable-next-line no-await-in-loop
     const rows = await prisma.session.findMany({
       where: { geoHint: null, ipHint: { not: null } },
-      select: { id: true, token: true, ipHint: true },
+      select: { id: true, token: true, userAgent: true, ipHint: true },
       orderBy: { id: 'asc' },
       take: batchSize,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -183,7 +186,7 @@ async function run(opts = {}) {
     for (const row of rows) {
       if (summary.filled >= limit) break;
 
-      if (!isAppshotsToken(row.token, jwtSecret)) {
+      if (!isAppshotsSession(row, jwtSecret)) {
         summary.skippedNonAppshots += 1;
         continue;
       }
@@ -285,4 +288,10 @@ if (require.main === module) {
     });
 }
 
-module.exports = { run, ipFromHint, isAppshotsToken };
+module.exports = {
+  run,
+  ipFromHint,
+  isAppshotsSession,
+  // Backward-compatible unit-test/export surface for legacy plaintext rows.
+  isAppshotsToken: (token, secret) => isAppshotsSession({ token }, secret),
+};

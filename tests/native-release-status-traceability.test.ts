@@ -91,6 +91,12 @@ type NativeReleaseStatus = {
       size: number
       sha256: string
     }
+    apk: {
+      name: string
+      kind: string
+      size: number
+      sha256: string
+    }
     releaseAssets: string[]
     verification: string
   }
@@ -123,7 +129,7 @@ describe("native release status traceability", () => {
 
     assert.equal(status.latestTraceabilityCommit.sha, status.latestTraceabilityCommit.validatedManagementSha)
     assert.equal(status.latestTraceabilityCommit.message, status.latestTraceabilityCommit.validatedManagementCommit)
-    assert.equal(status.distributionMilestone.title, "Native Store Distribution v0.4.3")
+    assert.equal(status.distributionMilestone.title, "Native Store Distribution v0.4.4")
     assert.match(status.distributionMilestone.url, /\/milestone\/1$/)
     assert.equal(status.distributionMilestone.status, "open")
     assert.equal(status.distributionMilestone.openIssues, 5)
@@ -146,14 +152,19 @@ describe("native release status traceability", () => {
     assert.match(status.latestSignedAndroidRelease.run, /^\d+$/)
     assert.match(status.latestSignedAndroidRelease.runUrl, /\/actions\/runs\/\d+$/)
     assert.match(status.latestSignedAndroidRelease.sourceSha, /^[a-f0-9]{40}$/)
-    assert.equal(status.latestSignedAndroidRelease.status, "verified-signed-android-aab")
+    assert.equal(status.latestSignedAndroidRelease.status, "verified-signed-android-apk-and-aab")
     assert.equal(status.latestSignedAndroidRelease.createGithubRelease, true)
     assert.equal(status.latestSignedAndroidRelease.googlePlayUpload, "skipped-owner-service-account-missing")
     assert.equal(status.latestSignedAndroidRelease.aab.name, `SiraGPT-${signedAndroidShortSha}.aab`)
     assert.equal(status.latestSignedAndroidRelease.aab.kind, "play-aab")
     assert.ok(status.latestSignedAndroidRelease.aab.size > 0)
     assert.match(status.latestSignedAndroidRelease.aab.sha256, /^[a-f0-9]{64}$/)
+    assert.equal(status.latestSignedAndroidRelease.apk.name, `SiraGPT-${signedAndroidShortSha}.apk`)
+    assert.equal(status.latestSignedAndroidRelease.apk.kind, "release-apk")
+    assert.ok(status.latestSignedAndroidRelease.apk.size > 0)
+    assert.match(status.latestSignedAndroidRelease.apk.sha256, /^[a-f0-9]{64}$/)
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes(status.latestSignedAndroidRelease.aab.name))
+    assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes(status.latestSignedAndroidRelease.apk.name))
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("SHA256SUMS.txt"))
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("native-release-manifest.json"))
     assert.ok(status.latestSignedAndroidRelease.releaseAssets.includes("preflight.json"))
@@ -187,8 +198,8 @@ describe("native release status traceability", () => {
     assert.match(status.latestSignedPreflight.run, /^\d+$/)
     assert.match(status.latestSignedPreflight.url, /\/actions\/runs\/\d+$/)
     assert.match(status.latestSignedPreflight.sourceSha, /^[a-f0-9]{40}$/)
-    assert.equal(status.latestSignedPreflight.status, "blocked-missing-signing-secrets")
-    assert.equal(status.latestSignedPreflight.platform, "all")
+    assert.equal(status.latestSignedPreflight.status, "ready-to-run")
+    assert.equal(status.latestSignedPreflight.platform, "android")
     assert.equal(status.latestSignedPreflight.artifact.name, "siragpt-native-signed-release-preflight")
     assert.match(status.latestSignedPreflight.artifact.id, /^\d+$/)
     assert.equal(status.latestSignedPreflight.artifact.expired, false)
@@ -196,10 +207,10 @@ describe("native release status traceability", () => {
     assert.ok(status.latestSignedPreflight.artifact.verifiedFiles.includes("preflight.json"))
     assert.equal(
       status.latestSignedPreflight.summarySignals.status,
-      "native-signed-preflight-status=blocked-missing-signing-secrets",
+      "native-signed-preflight-status=ready-to-run",
     )
-    assert.equal(status.latestSignedPreflight.summarySignals.platform, "native-signed-preflight-platform=all")
-    assert.equal(status.latestSignedPreflight.summarySignals.missingSecrets, "native-signed-preflight-missing-secrets=14")
+    assert.equal(status.latestSignedPreflight.summarySignals.platform, "native-signed-preflight-platform=android")
+    assert.equal(status.latestSignedPreflight.summarySignals.missingSecrets, "native-signed-preflight-missing-secrets=0")
 
     for (const key of ["android", "ios", "macos", "windows"]) {
       assert.ok(status.latestCurrentProductionValidation.platforms[key], `missing ${key} validation`)
@@ -225,6 +236,11 @@ describe("native release status traceability", () => {
     assert.ok(
       status.latestCurrentProductionValidation.platforms.ios.expectedFiles.includes(
         `SiraGPT-${currentWrapperShortSha}-ios-simulator-app.zip`,
+      ),
+    )
+    assert.ok(
+      status.latestCurrentProductionValidation.platforms.ios.expectedFiles.includes(
+        `SiraGPT-${currentWrapperShortSha}-ios-device-build.json`,
       ),
     )
 

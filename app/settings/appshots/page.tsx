@@ -5,6 +5,7 @@ import {
   describeGeoHintStatus,
   type AppshotsGeoHintStatus,
 } from './geo-status';
+import { authenticatedFetch } from '@/lib/authenticated-fetch';
 
 /**
  * Página de vinculación de la extensión Sira Appshots.
@@ -63,7 +64,7 @@ export default function AppshotsSettingsPage() {
   const loadSessions = useCallback(async () => {
     setSessionsError(null);
     try {
-      const resp = await fetch(`${API_BASE}/api/appshots/sessions`, {
+      const resp = await authenticatedFetch(`${API_BASE}/api/appshots/sessions`, {
         method: 'GET',
         credentials: 'include',
       });
@@ -79,7 +80,7 @@ export default function AppshotsSettingsPage() {
   const loadRevocations = useCallback(async () => {
     setRevocationsError(null);
     try {
-      const resp = await fetch(`${API_BASE}/api/appshots/revocations`, {
+      const resp = await authenticatedFetch(`${API_BASE}/api/appshots/revocations`, {
         method: 'GET',
         credentials: 'include',
       });
@@ -117,11 +118,9 @@ export default function AppshotsSettingsPage() {
       setRevokingId(id);
       setSessionsError(null);
       try {
-        const csrfToken = await ensureCsrfToken();
-        const resp = await fetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
+        const resp = await authenticatedFetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
           method: 'DELETE',
           credentials: 'include',
-          headers: { 'x-csrf-token': csrfToken || '' },
         });
         if (!resp.ok) throw new Error(`No se pudo revocar (${resp.status}).`);
         await loadSessions();
@@ -150,14 +149,12 @@ export default function AppshotsSettingsPage() {
       setSavingRenameId(id);
       setSessionsError(null);
       try {
-        const csrfToken = await ensureCsrfToken();
         const trimmed = renameDraft.trim();
-        const resp = await fetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
+        const resp = await authenticatedFetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
           method: 'PATCH',
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'x-csrf-token': csrfToken || '',
           },
           body: JSON.stringify({ label: trimmed === '' ? null : trimmed }),
         });
@@ -180,13 +177,11 @@ export default function AppshotsSettingsPage() {
     setToken(null);
     setCopied(false);
     try {
-      const csrfToken = await ensureCsrfToken();
-      const resp = await fetch(`${API_BASE}/api/appshots/pair`, {
+      const resp = await authenticatedFetch(`${API_BASE}/api/appshots/pair`, {
         method: 'POST',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'x-csrf-token': csrfToken || '',
         },
         body: JSON.stringify({}),
       });
@@ -508,37 +503,4 @@ function formatDate(iso: string): string {
   } catch (_) {
     return iso;
   }
-}
-
-async function ensureCsrfToken(): Promise<string> {
-  // CSRF: backend uses the `csrf_token` cookie (underscore) paired with the
-  // httpOnly `_csrf_secret`. If the public cookie hasn't been issued yet
-  // (fresh tab, never POSTed before), prime it by hitting the dedicated
-  // endpoint — same pattern as lib/api.ts._ensureCsrfToken.
-  let csrfToken = readCookie('csrf_token');
-  if (csrfToken) return csrfToken;
-  try {
-    const seed = await fetch(`${API_BASE}/api/auth/csrf-token`, {
-      method: 'GET',
-      credentials: 'include',
-    });
-    if (seed.ok) {
-      const data = (await seed.json().catch(() => null)) as { csrfToken?: string } | null;
-      csrfToken = data?.csrfToken || readCookie('csrf_token') || '';
-    }
-  } catch (_) {
-    // fall through — request will fail with csrf_invalid and surface
-    // the real reason to the user instead of a silent retry loop.
-  }
-  return csrfToken || '';
-}
-
-function readCookie(name: string): string | null {
-  if (typeof document === 'undefined') return null;
-  const pairs = document.cookie.split(';');
-  for (const raw of pairs) {
-    const [k, ...rest] = raw.trim().split('=');
-    if (k === name) return decodeURIComponent(rest.join('='));
-  }
-  return null;
 }

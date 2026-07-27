@@ -25,7 +25,10 @@ deploymentTarget = "gce"
 # --max-old-space-size=4096 here (explicit, so an external NODE_OPTIONS can't
 # bypass it) and enable experimental.webpackMemoryOptimizations in next.config.
 build = "rm -rf node_modules backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-deploy-install.cjs && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 NODE_OPTIONS=--max-old-space-size=4096 npm run build"
-run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 npm start"
+# start-all waits 50s for both children after SIGTERM/SIGINT. Override with
+# SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS (clamped to 40000-120000ms / 40-120s).
+# Windows relays backend drain over IPC; process-tree force kill is deadline-only.
+run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS=50000 REPLIT_DEPLOYMENT=1 npm start"
 
 [packager.features]
 # The deployment build command above owns installation. Disabling hosting's

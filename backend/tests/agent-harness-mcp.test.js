@@ -22,6 +22,8 @@ const {
   discoverServerTools,
 } = require('../src/services/agent-harness/mcp-client');
 
+const TEST_ENV = Object.freeze({ NODE_ENV: 'test' });
+
 test('mcp: server names slugify into stable namespaces', () => {
   assert.equal(slugifyServerName('DeepWiki Docs!'), 'deepwiki_docs');
   assert.equal(slugifyServerName('  Mi Servidor (β) '), 'mi_servidor');
@@ -62,24 +64,52 @@ test('mcp: third-party input schemas are coerced into AJV/OpenAI-safe objects', 
 });
 
 test('mcp: registration validation — schemes, private hosts and shape', () => {
-  assert.equal(validateServerInput({ name: 'docs', url: 'https://mcp.example.com/mcp' }).ok, true);
-  assert.equal(validateServerInput({ name: 'docs', url: 'ftp://mcp.example.com' }).ok, false);
-  assert.equal(validateServerInput({ name: '', url: 'https://x.com' }).ok, false);
-  assert.equal(validateServerInput({ name: 'docs', url: 'not-a-url' }).ok, false);
-  const priv = validateServerInput({ name: 'lan', url: 'http://192.168.1.50:8080/mcp' });
+  assert.equal(validateServerInput(
+    { name: 'docs', url: 'https://mcp.example.com/mcp' },
+    { env: TEST_ENV },
+  ).ok, true);
+  assert.equal(validateServerInput(
+    { name: 'docs', url: 'ftp://mcp.example.com' },
+    { env: TEST_ENV },
+  ).ok, false);
+  assert.equal(validateServerInput(
+    { name: '', url: 'https://x.com' },
+    { env: TEST_ENV },
+  ).ok, false);
+  assert.equal(validateServerInput(
+    { name: 'docs', url: 'not-a-url' },
+    { env: TEST_ENV },
+  ).ok, false);
+  const priv = validateServerInput(
+    { name: 'lan', url: 'http://192.168.1.50:8080/mcp' },
+    { env: TEST_ENV },
+  );
   assert.equal(priv.ok, false);
   assert.match(priv.error, /private|localhost/i);
-  const localhost = validateServerInput({ name: 'dev', url: 'http://localhost:3845/mcp' });
+  const localhost = validateServerInput(
+    { name: 'dev', url: 'http://localhost:3845/mcp' },
+    { env: TEST_ENV },
+  );
   assert.equal(localhost.ok, false);
-  const transport = validateServerInput({ name: 'docs', url: 'https://x.com/mcp', transport: 'sse' });
+  const transport = validateServerInput(
+    { name: 'docs', url: 'https://x.com/mcp', transport: 'sse' },
+    { env: TEST_ENV },
+  );
   assert.equal(transport.ok, true);
   assert.equal(transport.data.transport, 'sse');
 });
 
 test('mcp: auth headers roundtrip through AES encryption and never store plaintext', (t) => {
   const prev = process.env.ENCRYPTION_KEY;
+  const originalWarn = console.warn;
+  const warnings = [];
   process.env.ENCRYPTION_KEY = 'a'.repeat(64);
-  t.after(() => { if (prev === undefined) delete process.env.ENCRYPTION_KEY; else process.env.ENCRYPTION_KEY = prev; });
+  console.warn = (...args) => warnings.push(args.map(String).join(' '));
+  t.after(() => {
+    console.warn = originalWarn;
+    if (prev === undefined) delete process.env.ENCRYPTION_KEY;
+    else process.env.ENCRYPTION_KEY = prev;
+  });
 
   assert.equal(encryptHeaders(null), null);
   assert.equal(encryptHeaders({}), null);
@@ -87,6 +117,7 @@ test('mcp: auth headers roundtrip through AES encryption and never store plainte
   assert.ok(sealed && !sealed.includes('secreto-123'), 'ciphertext must not contain the secret');
   assert.deepEqual(decryptHeaders(sealed), { authorization: 'Bearer secreto-123' });
   assert.deepEqual(decryptHeaders('garbage'), {}, 'corrupt ciphertext degrades to no headers');
+  assert.deepEqual(warnings, ['[mcp-client] failed to decrypt server headers']);
 });
 
 test('mcp: discovery degrades to zero tools without prisma or rows — never throws', async () => {
@@ -111,7 +142,14 @@ test('mcp: unreachable servers are skipped with an error entry, chat keeps its t
       }],
     },
   };
-  const out = await loadUserMcpTools({ userId: 'u1', prisma });
+  const out = await loadUserMcpTools({
+    userId: 'u1',
+    prisma,
+    env: {
+      NODE_ENV: 'test',
+      SIRAGPT_MCP_ALLOWED_HOSTS: '*.example.com',
+    },
+  });
   assert.equal(out.tools.length, 0);
   assert.equal(out.errors.length, 1);
   assert.equal(out.errors[0].server, 'down server');
@@ -136,7 +174,14 @@ test('mcp: a public hostname that DNS-resolves to metadata is rejected before co
       }],
     },
   };
-  const out = await loadUserMcpTools({ userId: 'u1', prisma });
+  const out = await loadUserMcpTools({
+    userId: 'u1',
+    prisma,
+    env: {
+      NODE_ENV: 'test',
+      SIRAGPT_MCP_ALLOWED_HOSTS: '*.example.com',
+    },
+  });
   assert.equal(out.tools.length, 0, 'no tools discovered from a rebinding host');
   assert.equal(out.errors.length, 1);
   assert.equal(out.errors[0].server, 'rebinding server');
@@ -155,7 +200,14 @@ test('mcp: a public hostname resolving to a public IP passes the DNS gate (then 
     transport: 'streamable-http',
     headersEncrypted: null,
     updatedAt: new Date(),
+    _env: {
+      NODE_ENV: 'test',
+      SIRAGPT_MCP_ALLOWED_HOSTS: 'mcp.example.com',
+    },
     _lookup: async () => [{ address: '93.184.216.34', family: 4 }], // public IP
+    _fetch: async () => {
+      throw new Error('offline test transport');
+    },
   };
   // The DNS gate must pass; discovery still fails at the transport layer
   // (no real server), but NOT with the SSRF-block message.
@@ -165,7 +217,7 @@ test('mcp: a public hostname resolving to a public IP passes the DNS gate (then 
   );
 });
 
-test('mcp: SIRAGPT_MCP_ALLOW_PRIVATE=1 skips the DNS gate so LAN hosts are permitted', async (t) => {
+test('mcp: SIRAGPT_MCP_ALLOW_PRIVATE=1 cannot bypass the DNS gate', async (t) => {
   const prev = process.env.SIRAGPT_MCP_ALLOW_PRIVATE;
   process.env.SIRAGPT_MCP_ALLOW_PRIVATE = '1';
   t.after(() => { if (prev === undefined) delete process.env.SIRAGPT_MCP_ALLOW_PRIVATE; else process.env.SIRAGPT_MCP_ALLOW_PRIVATE = prev; });
@@ -174,18 +226,22 @@ test('mcp: SIRAGPT_MCP_ALLOW_PRIVATE=1 skips the DNS gate so LAN hosts are permi
   const server = {
     id: 'lan',
     name: 'lan server',
-    url: 'http://mcp.lan.internal/mcp',
+    url: 'https://mcp.example.com/mcp',
     transport: 'streamable-http',
     headersEncrypted: null,
     updatedAt: new Date(),
+    _env: {
+      NODE_ENV: 'test',
+      SIRAGPT_MCP_ALLOWED_HOSTS: 'mcp.example.com',
+    },
     _lookup: async () => { lookupCalled = true; return [{ address: '10.0.0.5', family: 4 }]; },
   };
-  // Gate is skipped: DNS is never consulted and we fail only at the transport.
+  // The legacy bypass is ignored: DNS is consulted and the private answer is blocked.
   await assert.rejects(
     () => discoverServerTools(server),
-    (err) => !/private|loopback|metadata/i.test(String(err && err.message)),
+    /private|loopback|metadata|reserved/i,
   );
-  assert.equal(lookupCalled, false, 'DNS gate skipped when SIRAGPT_MCP_ALLOW_PRIVATE=1');
+  assert.equal(lookupCalled, true, 'DNS gate remains active despite the legacy flag');
 });
 
 test('mcp: namespaceToolNames caps at 64 chars and de-dupes collisions per server', () => {

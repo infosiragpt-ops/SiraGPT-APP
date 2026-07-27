@@ -89,6 +89,14 @@ describe('validateStartupEnvironment · happy path', () => {
     assert.deepEqual(issues, [], `unexpected issues: ${JSON.stringify(issues, null, 2)}`);
   });
 
+  it('defaults RBAC enforcement to shadow outside production', () => {
+    const issues = runValidator(happyEnv({ RBAC_ENFORCEMENT_MODE: undefined }));
+    assert.equal(
+      issues.some((issue) => issue.key === 'RBAC_ENFORCEMENT_MODE'),
+      false,
+    );
+  });
+
   it('accepts postgres:// (no -ql suffix) for database URL', () => {
     const issues = runValidator(happyEnv({
       PRISMA_DATABASE_URL: 'postgres://user@host/db',
@@ -101,6 +109,92 @@ describe('validateStartupEnvironment · happy path', () => {
       PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=xxx',
     }));
     assert.equal(issues.filter(i => i.key === 'PRISMA_DATABASE_URL').length, 0);
+  });
+});
+
+describe('validateStartupEnvironment · NODE_ENV', () => {
+  it('blocks the prod alias without reflecting the configured value', () => {
+    const issues = runValidator(happyEnv({ NODE_ENV: 'prod' }));
+    const issue = issues.find((entry) => entry.code === 'NODE_ENV_INVALID_ALIAS');
+    assert.ok(issue);
+    assert.equal(issue.key, 'NODE_ENV');
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.equal(Object.hasOwn(issue, 'value'), false);
+    assert.doesNotMatch(issue.message, /NODE_ENV\s*=\s*prod/i);
+  });
+});
+
+describe('validateStartupEnvironment · RBAC enforcement mode', () => {
+  it('accepts explicit shadow and enforce modes', () => {
+    for (const mode of ['shadow', 'enforce']) {
+      const issues = runValidator(happyEnv({ RBAC_ENFORCEMENT_MODE: mode }));
+      assert.equal(
+        issues.some((issue) => issue.key === 'RBAC_ENFORCEMENT_MODE'),
+        false,
+        `unexpected RBAC issue for ${mode}`,
+      );
+    }
+  });
+
+  it('treats an invalid production mode as a blocking boot failure', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RBAC_ENFORCEMENT_MODE: 'permissive',
+    }));
+    const issue = result.find((entry) => entry.key === 'RBAC_ENFORCEMENT_MODE');
+    assert.ok(issue);
+    assert.equal(issue.code, 'RBAC_ENFORCEMENT_MODE_INVALID');
+    assert.equal(issue.severity, 'BLOCKING');
+    assert.doesNotMatch(issue.message, /permissive/);
+  });
+});
+
+describe('validateStartupEnvironment · session token hash rollout', () => {
+  it('keeps production in compat mode when no explicit rollout mode is configured', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: undefined,
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: undefined,
+    }));
+    assert.equal(
+      result.some((entry) => entry.key === 'SESSION_TOKEN_HASH_MODE'),
+      false,
+    );
+  });
+
+  it('blocks unsupported production session token hash modes', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: 'dual-write',
+    }));
+    const issue = result.find((entry) => entry.code === 'SESSION_TOKEN_HASH_MODE_INVALID');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.doesNotMatch(JSON.stringify(issue), /dual-write/);
+  });
+
+  it('blocks the production hash flip until operators acknowledge compat replicas are drained', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: 'hash',
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: undefined,
+    }));
+    const issue = result.find((entry) => entry.code === 'SESSION_TOKEN_HASH_MODE_UNSAFE_FLIP');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.match(issue.hint, /SESSION_TOKEN_HASH_COMPAT_DRAINED=1/);
+  });
+
+  it('accepts an explicit production hash flip after compat replicas are drained', () => {
+    const result = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      SESSION_TOKEN_HASH_MODE: 'hash',
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: '1',
+    }));
+    assert.equal(
+      result.some((entry) => entry.key === 'SESSION_TOKEN_HASH_MODE'),
+      false,
+    );
   });
 });
 
@@ -319,6 +413,71 @@ describe('validateStartupEnvironment · PRISMA_DATABASE_URL', () => {
     assert.equal(db.severity, 'BLOCKING');
     assert.match(db.message, /postgresql:\/\/|postgres:\/\//);
   });
+
+  it('accepts DATABASE_URL as a fallback when the canonical variable is absent', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: undefined,
+      DATABASE_URL: '  postgres://fallback.internal/app  ',
+    }));
+    assert.equal(issues.some(i => i.key === 'PRISMA_DATABASE_URL'), false);
+  });
+
+  it('accepts an Accelerate runtime URL with a separate direct migration URL', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=runtime-secret',
+      DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/app',
+      DATABASE_URL: undefined,
+    }));
+
+    assert.equal(issues.some(i => i.key === 'PRISMA_DATABASE_URL'), false);
+    assert.equal(issues.some(i => i.key === 'DIRECT_DATABASE_URL'), false);
+  });
+
+  it('blocks same-role runtime aliases without logging either value', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'prisma+postgres://runtime-a.invalid/?api_key=runtime-secret-a',
+      DATABASE_URL: 'prisma+postgres://runtime-b.invalid/?api_key=runtime-secret-b',
+      DIRECT_DATABASE_URL: 'postgresql://migration-user:migration-secret@db.internal/app',
+    }));
+    const db = issues.find(i => i.code === 'DATABASE_RUNTIME_URL_CONFLICT');
+
+    assert.ok(db);
+    assert.equal(db.severity, 'BLOCKING');
+    assert.doesNotMatch(
+      JSON.stringify(db),
+      /runtime-a|runtime-b|runtime-secret|migration-user|migration-secret|db\.internal/,
+    );
+  });
+
+  it('blocks an invalid direct migration scheme without logging its value', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'prisma+postgres://accelerate.prisma-data.net/?api_key=runtime-secret',
+      DIRECT_DATABASE_URL: 'mysql://migration-user:migration-secret@db.internal/app',
+      DATABASE_URL: undefined,
+    }));
+    const db = issues.find(i => i.code === 'DIRECT_DATABASE_URL_INVALID');
+
+    assert.ok(db);
+    assert.equal(db.severity, 'BLOCKING');
+    assert.doesNotMatch(
+      JSON.stringify(db),
+      /runtime-secret|migration-user|migration-secret|db\.internal/,
+    );
+  });
+
+  it('blocks divergent aliases without logging either database URL', () => {
+    const issues = runValidator(happyEnv({
+      PRISMA_DATABASE_URL: 'postgres://canonical-user:canonical-secret@primary.internal/app',
+      DATABASE_URL: 'postgres://legacy-user:legacy-secret@legacy.internal/app',
+    }));
+    const db = issues.find(i => i.code === 'DATABASE_RUNTIME_URL_CONFLICT');
+    assert.ok(db);
+    assert.equal(db.severity, 'BLOCKING');
+    assert.doesNotMatch(
+      JSON.stringify(db),
+      /canonical-user|canonical-secret|primary\.internal|legacy-user|legacy-secret|legacy\.internal/,
+    );
+  });
 });
 
 // ── Redis check ───────────────────────────────────────────────────
@@ -336,28 +495,114 @@ describe('validateStartupEnvironment · REDIS_URL', () => {
     const redis = issues.find(i => i.key === 'REDIS_URL');
     assert.equal(redis, undefined);
   });
+
+  it('blocks production when sensitive limiters have no distributed store', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      REDIS_URL: undefined,
+      RATE_LIMIT_STORE: 'redis',
+    }));
+    const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_REDIS_REQUIRED');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.doesNotMatch(JSON.stringify(issue), /redis:\/\//i);
+  });
+
+  it('blocks production process-memory rate limiting', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RATE_LIMIT_STORE: 'memory',
+    }));
+    const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_STORE_UNSAFE');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+  });
+
+  it('blocks production fail-open or memory sensitive policies', () => {
+    for (const policy of ['fail-open', 'memory']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'production',
+        RATE_LIMIT_STORE: 'redis',
+        RATE_LIMIT_SENSITIVE_POLICY: policy,
+      }));
+      const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_POLICY_UNSAFE');
+      assert.ok(issue, `expected unsafe policy issue for ${policy}`);
+      assert.equal(issue.severity, Severity.BLOCKING);
+      assert.doesNotMatch(JSON.stringify(issue), /fail-open/i);
+    }
+  });
+
+  it('blocks an unknown production sensitive policy without reflecting its value', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RATE_LIMIT_SENSITIVE_POLICY: 'redis://user:secret@internal',
+    }));
+    const issue = issues.find(i => i.code === 'SENSITIVE_RATE_LIMIT_POLICY_INVALID');
+    assert.ok(issue);
+    assert.equal(issue.severity, Severity.BLOCKING);
+    assert.doesNotMatch(JSON.stringify(issue), /user|secret|internal/i);
+  });
+
+  it('allows explicit memory and fail-open policies in nonproduction', () => {
+    for (const policy of ['memory', 'fail-open']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'test',
+        RATE_LIMIT_STORE: policy === 'memory' ? 'memory' : 'redis',
+        RATE_LIMIT_SENSITIVE_POLICY: policy,
+      }));
+      assert.equal(
+        issues.some(i => String(i.code || '').startsWith('SENSITIVE_RATE_LIMIT_')),
+        false,
+      );
+    }
+  });
+
+  it('accepts explicit distributed production rate limiting', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      RATE_LIMIT_STORE: 'redis',
+      RATE_LIMIT_SENSITIVE_POLICY: 'distributed',
+    }));
+    assert.equal(
+      issues.some(i => String(i.code || '').startsWith('SENSITIVE_RATE_LIMIT_')),
+      false,
+    );
+  });
 });
 
 // ── CORS in production ────────────────────────────────────────────
 
 describe('validateStartupEnvironment · CORS in production', () => {
-  it('warns when NODE_ENV=production and CORS_ORIGINS is "*"', () => {
-    const issues = runValidator(happyEnv({
-      NODE_ENV: 'production',
-      CORS_ORIGINS: '*',
-    }));
-    const cors = issues.find(i => i.key === 'CORS_ORIGINS');
-    assert.ok(cors);
-    assert.equal(cors.severity, 'WARNING');
+  it('blocks wildcard credentialed CORS in production', () => {
+    for (const CORS_ORIGINS of ['*', 'https://app.example.com, *']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'production',
+        CORS_ORIGINS,
+      }));
+      const cors = issues.find(i => i.code === 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN');
+      assert.ok(cors);
+      assert.equal(cors.severity, Severity.BLOCKING);
+    }
   });
 
-  it('warns when NODE_ENV=production and CORS_ORIGINS is missing', () => {
+  it('blocks when NODE_ENV=production and CORS_ORIGINS is missing', () => {
     const issues = runValidator(happyEnv({
       NODE_ENV: 'production',
       CORS_ORIGINS: undefined,
     }));
-    const cors = issues.find(i => i.key === 'CORS_ORIGINS');
+    const cors = issues.find(i => i.code === 'CORS_ORIGINS_REQUIRED');
     assert.ok(cors);
+    assert.equal(cors.severity, Severity.BLOCKING);
+  });
+
+  it('blocks malformed production CORS origins', () => {
+    const issues = runValidator(happyEnv({
+      NODE_ENV: 'production',
+      CORS_ORIGINS: 'https://siragpt.com, not-an-origin',
+    }));
+    const cors = issues.find(i => i.code === 'CORS_ORIGINS_INVALID');
+    assert.ok(cors);
+    assert.equal(cors.severity, Severity.BLOCKING);
   });
 
   it('no CORS warning in development with "*"', () => {
@@ -367,6 +612,19 @@ describe('validateStartupEnvironment · CORS in production', () => {
     }));
     const cors = issues.find(i => i.key === 'CORS_ORIGINS');
     assert.equal(cors, undefined);
+  });
+
+  it('blocks CSRF_DISABLED in production', () => {
+    for (const CSRF_DISABLED of ['1', 'true', 'TRUE']) {
+      const issues = runValidator(happyEnv({
+        NODE_ENV: 'production',
+        CSRF_DISABLED,
+        CORS_ORIGINS: 'https://app.example.com',
+      }));
+      const csrf = issues.find(i => i.code === 'CSRF_DISABLED_IN_PRODUCTION');
+      assert.ok(csrf);
+      assert.equal(csrf.severity, Severity.BLOCKING);
+    }
   });
 });
 

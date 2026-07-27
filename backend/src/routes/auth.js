@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('node:crypto');
 const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
@@ -14,16 +15,67 @@ const { SsoCallbackService } = require('../services/SsoCallbackService');
 const { RegistrationService } = require('../services/RegistrationService');
 const { LoginService } = require('../services/LoginService');
 const { SessionService } = require('../services/SessionService');
+const {
+  createRbacAssignmentSyncService,
+} = require('../services/rbac-assignment-sync');
+const {
+  sendRbacMutationBusyResponse,
+} = require('../services/rbac-mutation-http');
+const {
+  IMPERSONATION_LIMITER_CAPACITY,
+  IMPERSONATION_LIMITER_UNAVAILABLE,
+  createImpersonationRateLimiter,
+} = require('../services/auth/impersonation-rate-limiter');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
+const {
+  sessionTokenMatches,
+} = require('../services/auth/session-token-persistence');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
 // Accelerate retry, token envelope crypto, fire-and-forget audit
 // writes) live inside them so handlers stay focused on policy.
 const sessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
-const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
+const rbacAssignments = createRbacAssignmentSyncService({ prisma });
+const users = new UserRepository({
+  prisma,
+  withRetry: withAccelerateRetry,
+  rbacAssignments,
+});
 const partialSessions = new PartialSessionRepository({ prisma, withRetry: withAccelerateRetry });
 const auditLogs = new AuditLogRepository({ prisma, withRetry: withAccelerateRetry });
 const tokenVault = new TokenVault({ encrypt: encryptToken, decrypt: decryptToken });
+const impersonationLimiter = createImpersonationRateLimiter({ env: process.env });
+const {
+  publishUserSessionsRevoked,
+} = require('../services/auth/user-session-revocation-events');
+
+async function revokeInactiveAuthenticationState(userId) {
+  if (!userId) return;
+  const tasks = [];
+  if (typeof sessions.deleteAllForUser === 'function') {
+    tasks.push(sessions.deleteAllForUser(userId));
+  } else if (typeof prisma.session?.deleteMany === 'function') {
+    tasks.push(prisma.session.deleteMany({ where: { userId } }));
+  }
+  if (
+    typeof partialSessions.deleteMany === 'function'
+    && typeof prisma.partialSession?.deleteMany === 'function'
+  ) {
+    tasks.push(partialSessions.deleteMany({ userId }));
+  }
+  if (typeof prisma.twoFAChallenge?.deleteMany === 'function') {
+    tasks.push(prisma.twoFAChallenge.deleteMany({ where: { userId } }));
+  }
+  await Promise.all(tasks);
+  await publishUserSessionsRevoked({ userId, reason: 'account_inactive' });
+}
+
+function inactiveAccountResponse(res) {
+  return res.status(403).json({
+    error: 'Account is inactive',
+    code: 'account_inactive',
+  });
+}
 // RegistrationService is wired here even though `resolveOrgBySsoDomain`
 // and `signSessionToken` are declared further down: both are hoisted
 // (async function declaration + module-level import respectively) so
@@ -80,6 +132,11 @@ const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
 const refreshRotation = require('../services/auth/refresh-token-rotation');
 const { clearSessionCookie, setSessionCookie } = require('../utils/session-cookie');
+const { isProductionLike } = require('../utils/environment');
+const {
+  clearSamlPreAuthCookie,
+  setSamlPreAuthCookie,
+} = require('../services/saml-preauth-cookie');
 const {
   validateBody,
   formatExpressValidatorErrors,
@@ -111,9 +168,9 @@ const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'siragpt-clients';
 const JWT_ACCESS_TTL = process.env.JWT_ACCESS_TTL || '7d';
 
 // Rate limiters scoped per sensitive endpoint. See rate-limit-auth.js
-// for the sliding-window semantics and Redis/in-memory fallback. We
-// build these once at module load so the closures share state across
-// requests.
+// for sliding-window semantics: production requires Redis and fails closed;
+// explicit local/test policy may use process memory. We build these once at
+// module load so the closures share state across requests.
 const loginRateLimit = makeAuthRateLimit({
   name: 'login',
   limit: 5,
@@ -166,8 +223,14 @@ const {
   verifyOAuthState,
 } = require('../services/oauth-state');
 const {
+  isOAuthStateInfrastructureError,
+  sendOAuthStateUnavailable,
+} = require('../services/auth/oauth-state-http');
+const {
   getFrontendUrl,
+  getGoogleCallbackURL,
   getGoogleGmailCallbackURL,
+  getGooglePostCallbackURL,
   getGoogleServicesCallbackURL,
 } = require('../config/oauth-url-policy');
 const twoFASms = require('../services/two-fa-sms');
@@ -251,6 +314,7 @@ const GOOGLE_SERVICES_SCOPES = [
 const gmailOAuth = new ProviderOAuthService({
   provider: {
     service: 'gmail',
+    redirectUri: getGoogleGmailCallbackURL(),
     oauth2Client: gmailOauth2Client,
     scopes: GMAIL_SCOPES,
     scopeFallback: 'gmail',
@@ -273,6 +337,7 @@ const gmailOAuth = new ProviderOAuthService({
 const googleServicesOAuth = new ProviderOAuthService({
   provider: {
     service: 'google_services',
+    redirectUri: getGoogleServicesCallbackURL(),
     oauth2Client: googleServicesOauth2Client,
     scopes: GOOGLE_SERVICES_SCOPES,
     scopeFallback: 'calendar,drive',
@@ -295,30 +360,73 @@ const googleServicesOAuth = new ProviderOAuthService({
   verifyState: verifyOAuthState,
 });
 
-// Google OAuth routes
-router.get('/google',
-  requireGoogleOAuth,
-  passport.authenticate('google', {
-    scope: [
-      'profile',
-      'email',
-      // 'https://www.googleapis.com/auth/gmail.readonly',
-      // 'https://www.googleapis.com/auth/gmail.send',
-      // 'https://www.googleapis.com/auth/gmail.modify',
-      // 'https://www.googleapis.com/auth/calendar',
-      // 'https://www.googleapis.com/auth/calendar.events',
-      // 'https://www.googleapis.com/auth/drive',
-      // 'https://www.googleapis.com/auth/drive.file',
-      // 'https://www.googleapis.com/auth/drive.readonly',
-      // 'https://www.googleapis.com/auth/drive.metadata.readonly'
-    ],
-    accessType: 'offline',
-    prompt: 'consent'
-  })
-);
+function googleLoginStateUser(req) {
+  const browserSessionId = req.sessionID || req.session?.id;
+  if (!browserSessionId) throw new Error('Google OAuth browser session is unavailable');
+  return crypto
+    .createHash('sha256')
+    .update('siragpt:google-oauth-browser:v1')
+    .update('\0')
+    .update(String(browserSessionId))
+    .digest('hex');
+}
+
+function persistGoogleLoginStateBinding(req) {
+  if (!req.session || typeof req.session !== 'object') {
+    throw new Error('Google OAuth browser session is unavailable');
+  }
+  const binding = googleLoginStateUser(req);
+  // express-session uses saveUninitialized:false. Mutating the session makes
+  // it persist the cookie + Redis row before Passport ends the redirect, so a
+  // callback landing on another replica derives the same browser binding.
+  req.session.oauthStateBinding = binding;
+  return binding;
+}
+
+// General Google login also uses the distributed one-time state service. The
+// user is not known before Google authenticates them, so the state is bound to
+// a domain-separated digest of the browser's server-side session id.
+router.get('/google', requireGoogleOAuth, async (req, res, next) => {
+  try {
+    const stateUser = persistGoogleLoginStateBinding(req);
+    const state = await signOAuthState({
+      userId: stateUser,
+      service: 'google',
+      redirectUri: getGoogleCallbackURL(),
+    });
+    return passport.authenticate('google', {
+      scope: ['profile', 'email'],
+      accessType: 'offline',
+      prompt: 'consent',
+      state,
+    })(req, res, next);
+  } catch (error) {
+    console.error('Google OAuth state issuance failed:', error?.code || error?.message);
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'google', error });
+    }
+    return res.redirect(getGooglePostCallbackURL('oauth_state_unavailable'));
+  }
+});
 
 router.get('/google/callback',
   requireGoogleOAuth,
+  async (req, res, next) => {
+    try {
+      await verifyOAuthState(req.query.state, {
+        userId: googleLoginStateUser(req),
+        service: 'google',
+        redirectUri: getGoogleCallbackURL(),
+      });
+      return next();
+    } catch (error) {
+      console.warn('Google OAuth state validation failed:', error?.code || error?.message);
+      if (isOAuthStateInfrastructureError(error)) {
+        return sendOAuthStateUnavailable(res, { provider: 'google', error });
+      }
+      return res.redirect(getGooglePostCallbackURL('invalid_state'));
+    }
+  },
   // Custom-callback form of passport.authenticate so we can distinguish
   // between a real auth failure and a transient database outage. When
   // passport returns `info.message === 'database_unavailable'` (set by
@@ -330,11 +438,11 @@ router.get('/google/callback',
     passport.authenticate('google', { session: false }, (err, user, info) => {
       if (err) {
         console.error('Google passport.authenticate error:', err && err.message ? err.message : err);
-        return res.redirect(`${getFrontendUrl()}/auth/login?error=auth_failed`);
+        return res.redirect(getGooglePostCallbackURL('auth_failed'));
       }
       if (!user) {
         const reason = info && info.message === 'database_unavailable' ? 'db_unavailable' : 'auth_failed';
-        return res.redirect(`${getFrontendUrl()}/auth/login?error=${reason}`);
+        return res.redirect(getGooglePostCallbackURL(reason));
       }
       req.user = user;
       return next();
@@ -360,8 +468,11 @@ router.get('/google/callback',
         expiresAt,
       });
 
-      // Redirect to frontend with token
-      res.redirect(`${getFrontendUrl()}/auth/callback?token=${token}`);
+      // Keep the bearer out of browser history, referrers, proxy logs, and
+      // analytics. The existing callback page hydrates cookie-authenticated
+      // sessions when `sso=success`.
+      setSessionCookie(res, token);
+      return res.redirect(getGooglePostCallbackURL('success'));
     } catch (error) {
       console.error('Google auth callback error:', error);
       // Same Accelerate-aware soft-failure treatment as passport.js:
@@ -369,7 +480,7 @@ router.get('/google/callback',
       // `db_unavailable` code so the login UI shows the friendly
       // Spanish message instead of the generic auth_failed.
       const reason = isAccelerateTransientError(error) ? 'db_unavailable' : 'auth_failed';
-      res.redirect(`${getFrontendUrl()}/auth/login?error=${reason}`);
+      res.redirect(getGooglePostCallbackURL(reason));
     }
   }
 );
@@ -380,6 +491,9 @@ router.get('/google/callback',
 // codes, popup HTML, auth/middleware) — every provider concern lives
 // in the service.
 function _renderCallbackResult(res, result, { successMessage } = {}) {
+  if (result.status === 503 && result.error === 'oauth_state_store_unavailable') {
+    return sendOAuthStateUnavailable(res, { provider: result.service });
+  }
   res.set('Content-Type', 'text/html');
   if (result.ok) {
     return res.send(popupResponseHtml({
@@ -395,12 +509,15 @@ function _renderCallbackResult(res, result, { successMessage } = {}) {
   }));
 }
 
-router.get('/gmail', authenticateToken, requireGoogleIntegrations, (req, res) => {
+router.get('/gmail', authenticateToken, requireGoogleIntegrations, async (req, res) => {
   try {
-    res.json({ authUrl: gmailOAuth.buildAuthUrl(req.user.id) });
+    res.json({ authUrl: await gmailOAuth.buildAuthUrl(req.user.id) });
   } catch (error) {
     console.error('Gmail OAuth error:', error);
-    res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'gmail', error });
+    }
+    return res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
   }
 });
 
@@ -432,21 +549,27 @@ router.get('/gmail/status', authenticateToken, async (req, res) => {
 // `prompt: 'consent'` — the service already forces consent by
 // default, so this endpoint is now identical to /gmail. Kept as a
 // separate path so existing frontend code doesn't have to change.
-router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, (req, res) => {
+router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, async (req, res) => {
   try {
-    res.json({ authUrl: gmailOAuth.buildAuthUrl(req.user.id, { forceConsent: true }) });
+    res.json({ authUrl: await gmailOAuth.buildAuthUrl(req.user.id, { forceConsent: true }) });
   } catch (error) {
     console.error('Gmail reauth error:', error);
-    res.status(500).json({ error: 'Failed to generate reauth URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'gmail', error });
+    }
+    return res.status(500).json({ error: 'Failed to generate reauth URL' });
   }
 });
 
-router.get('/google-services', authenticateToken, requireGoogleIntegrations, (req, res) => {
+router.get('/google-services', authenticateToken, requireGoogleIntegrations, async (req, res) => {
   try {
-    res.json({ authUrl: googleServicesOAuth.buildAuthUrl(req.user.id) });
+    res.json({ authUrl: await googleServicesOAuth.buildAuthUrl(req.user.id) });
   } catch (error) {
     console.error('Google Services OAuth error:', error);
-    res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'google_services', error });
+    }
+    return res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
   }
 });
 
@@ -559,7 +682,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip — `issueCsrfToken`
     // resets both the public + secret cookies with brand-new randomness.
-    const csrfToken = issueCsrfToken(res);
+    const csrfToken = issueCsrfToken(res, req);
 
     res.status(201).json({
       user: userWithoutPassword,
@@ -568,6 +691,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     });
   } catch (error) {
     console.error('Registration error:', error);
+    if (sendRbacMutationBusyResponse(res, error)) return;
     res.status(500).json({ error: 'Registration failed' });
   }
 });
@@ -682,7 +806,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,
     // task 2). Token rotates on every login.
-    const csrfToken = issueCsrfToken(res);
+    const csrfToken = issueCsrfToken(res, req);
 
     res.json({
       user: serializedUser,
@@ -803,41 +927,46 @@ router.post('/refresh', authenticateToken, async (req, res) => {
 //     cookie has a much smaller blast radius.
 //   - Caller must provide `reason` (>= 10 chars) so the audit row
 //     answers "why did admin X log in as user Y".
-//   - Per-target rate limit: max 3 impersonations / hour, keyed
-//     on `${adminId}:${targetUserId}`. Mitigates abuse without
-//     blocking legitimate "admin needs to reproduce a bug" flows.
+//   - A distributed atomic sliding window enforces both admin+target and
+//     global-admin limits across every backend replica.
 //   - Every successful + denied attempt is logged with the
 //     `[SUPER_ADMIN_AUDIT]` tag for grep / SIEM ingestion.
 //
-// The rate-limit map lives in-process. For multi-instance deploys
-// promote this to the existing rate-limit-store (Redis) when
-// REDIS_URL is configured.
-const IMPERSONATE_LIMIT = 3;
-const IMPERSONATE_WINDOW_MS = 60 * 60 * 1000;
-const impersonateAttempts = new Map(); // key: `${adminId}:${targetId}` → number[] (timestamps)
 const IMPERSONATE_TTL_MS = 30 * 60 * 1000;
+const MAX_IMPERSONATION_RETRY_AFTER_SECONDS = 24 * 60 * 60;
 
-function recordImpersonationAttempt(adminId, targetId) {
-  const key = `${adminId}:${targetId}`;
-  const now = Date.now();
-  const arr = (impersonateAttempts.get(key) || []).filter((t) => now - t < IMPERSONATE_WINDOW_MS);
-  if (arr.length >= IMPERSONATE_LIMIT) {
-    return { ok: false, retryAfterMs: IMPERSONATE_WINDOW_MS - (now - arr[0]) };
-  }
-  arr.push(now);
-  impersonateAttempts.set(key, arr);
-  return { ok: true };
+function boundedImpersonationRetryAfter(seconds) {
+  const parsed = Number(seconds);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(MAX_IMPERSONATION_RETRY_AFTER_SECONDS, Math.ceil(parsed)));
+}
+
+function auditImpersonationDenied(req, targetId, denialReason, metadata = {}) {
+  void writeAuditLog(prisma, {
+    req,
+    action: 'impersonate_denied',
+    resource: 'user',
+    resourceId: targetId || null,
+    userId: req.user?.id,
+    actorName: req.user?.email,
+    metadata: {
+      reason: denialReason,
+      ...metadata,
+    },
+  });
 }
 
 router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
   try {
     if (!req.user.isSuperAdmin) {
       console.warn(`[SUPER_ADMIN_AUDIT] impersonate_denied non_admin=${req.user.email} target=${req.params.userId}`);
+      auditImpersonationDenied(req, req.params.userId, 'super_admin_required');
       return res.status(403).json({ error: 'Super admin access required' });
     }
 
     const reason = String((req.body && req.body.reason) || '').trim();
     if (reason.length < 10) {
+      auditImpersonationDenied(req, req.params.userId, 'reason_required');
       return res.status(400).json({
         error: 'Impersonation reason required (min 10 chars) for the audit log',
       });
@@ -845,23 +974,51 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
 
     const { userId } = req.params;
 
-    const rate = recordImpersonationAttempt(req.user.id, userId);
-    if (!rate.ok) {
-      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_rate_limited admin=${req.user.email} target=${userId}`);
-      const retryAfterSec = Math.max(1, Math.ceil(rate.retryAfterMs / 1000));
+    let rate;
+    try {
+      rate = await impersonationLimiter.consume({
+        adminId: req.user.id,
+        targetId: userId,
+      });
+    } catch (error) {
+      if (
+        error?.code !== IMPERSONATION_LIMITER_UNAVAILABLE
+        && error?.code !== IMPERSONATION_LIMITER_CAPACITY
+      ) {
+        throw error;
+      }
+      const retryAfterSec = boundedImpersonationRetryAfter(error.retryAfterSeconds);
       res.set('Retry-After', String(retryAfterSec));
+      auditImpersonationDenied(req, userId, 'rate_limit_store_unavailable', {
+        retryAfterSeconds: retryAfterSec,
+      });
+      return res.status(503).json({
+        error: 'Impersonation rate limit is temporarily unavailable',
+        retryAfterMs: retryAfterSec * 1000,
+      });
+    }
+    if (!rate.allowed) {
+      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_rate_limited admin=${req.user.email} target=${userId}`);
+      const retryAfterSec = boundedImpersonationRetryAfter(rate.retryAfterMs / 1000);
+      res.set('Retry-After', String(retryAfterSec));
+      auditImpersonationDenied(req, userId, 'rate_limited', {
+        dimension: rate.dimension,
+        retryAfterSeconds: retryAfterSec,
+      });
       return res.status(429).json({
         error: 'Too many impersonations for this target. Try again later.',
-        retryAfterMs: rate.retryAfterMs,
+        retryAfterMs: retryAfterSec * 1000,
       });
     }
 
     const targetUser = await users.findById(userId);
     if (!targetUser) {
+      auditImpersonationDenied(req, userId, 'target_not_found');
       return res.status(404).json({ error: 'User not found' });
     }
     if (targetUser.isSuperAdmin) {
       console.warn(`[SUPER_ADMIN_AUDIT] impersonate_denied_super_admin admin=${req.user.email} target=${targetUser.email}`);
+      auditImpersonationDenied(req, userId, 'target_is_super_admin');
       return res.status(403).json({ error: 'Cannot impersonate other super admins' });
     }
 
@@ -1021,7 +1178,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     };
 
     const items = rows.map((s) => {
-      const isCurrent = s.token === req.token;
+      const isCurrent = sessionTokenMatches(s.token, req.token);
       const meta = pickAuditFor(s.createdAt) || (isCurrent ? currentReqMeta : null) || {};
       return {
         id: s.id,
@@ -1055,7 +1212,7 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
       // status code as a genuine 404 keeps enumeration noisy.
       return res.status(404).json({ error: 'Session not found' });
     }
-    if (target.token === req.token) {
+    if (sessionTokenMatches(target.token, req.token)) {
       // Refuse to nuke the active session via this endpoint — that's
       // what /logout is for and avoids a confusing "Suddenly logged out"
       // surprise after a misclick in the sessions UI.
@@ -1066,6 +1223,10 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
     }
 
     await sessions.deleteById(id);
+    await publishUserSessionsRevoked({
+      userId: req.user.id,
+      reason: 'session_revoked',
+    });
     void writeAuditLog(prisma, {
       req,
       action: 'session_revoked',
@@ -1092,6 +1253,12 @@ router.post('/sessions/revoke-all', authenticateToken, async (req, res) => {
   try {
     const result = await sessions.deleteAllForUserExceptToken(req.user.id, req.token);
     const count = (result && typeof result.count === 'number') ? result.count : 0;
+    if (count > 0) {
+      await publishUserSessionsRevoked({
+        userId: req.user.id,
+        reason: 'sessions_revoked',
+      });
+    }
 
     void writeAuditLog(prisma, {
       req,
@@ -1109,20 +1276,14 @@ router.post('/sessions/revoke-all', authenticateToken, async (req, res) => {
   }
 });
 
-// ─── SSO scaffold (ratchet 45) ──────────────────────────────────────
-// Two public endpoints that resolve an org by slug and *would* hand off
-// to the configured SAML/OIDC provider. The handshake itself is not
-// implemented yet — both endpoints return 501 with the redacted config
-// so the FE can wire its "Continue with SSO" button and integration
-// tests can assert the contract before the real implementation lands.
+// ─── SSO entry points (ratchet 45) ───────────────────────────────────
+// SAML login is SP-initiated: the GET endpoint creates a one-time
+// AuthnRequest + RelayState and redirects to the configured IdP. OIDC login
+// retains its legacy 501 scaffold; OIDC callbacks remain unchanged.
 //
-//   GET /api/auth/sso/:orgSlug/login     — redirect target placeholder
-//   GET /api/auth/sso/:orgSlug/callback  — IdP callback placeholder
-//
-// When the integration ships the login route should 302 to
-// `org.ssoConfig.entryPoint` with the provider-specific query params,
-// and the callback should validate the SAML response / OIDC code and
-// mint a Sira session for the matched user.
+//   GET  /api/auth/sso/:orgSlug/login     — SAML IdP redirect
+//   GET  /api/auth/sso/:orgSlug/callback  — OIDC callback
+//   POST /api/auth/sso/:orgSlug/callback  — SAML ACS
 
 function redactSsoConfigForPublic(config) {
   if (!config || typeof config !== 'object') return null;
@@ -1150,20 +1311,50 @@ async function resolveOrgForSso(slug) {
   }
 }
 
-router.get('/sso/:orgSlug/login', async (req, res) => {
-  const org = await resolveOrgForSso(req.params.orgSlug);
+async function ssoLoginHandler(req, res, deps = {}) {
+  const resolveOrg = deps.resolveOrgForSso || resolveOrgForSso;
+  const samlHandler = deps.samlHandler || require('../services/saml-handler');
+  const org = await resolveOrg(req.params.orgSlug);
   if (!org) return res.status(404).json({ error: 'organization not found' });
   if (!org.ssoEnabled || !org.ssoConfig) {
     return res.status(400).json({ error: 'SSO is not enabled for this organization' });
   }
-  return res.status(501).json({
-    ok: false,
-    implemented: false,
-    message: 'SSO login redirect not implemented',
+  // Preserve the existing OIDC placeholder exactly. This endpoint only
+  // implements the SAML HTTP-Redirect binding in this hardening cycle.
+  if (org.ssoConfig.provider !== 'saml') {
+    return res.status(501).json({
+      ok: false,
+      implemented: false,
+      message: 'SSO login redirect not implemented',
+      orgSlug: org.slug,
+      config: redactSsoConfigForPublic(org.ssoConfig),
+    });
+  }
+
+  const result = await samlHandler.initiateSamlLogin(org.ssoConfig, {
     orgSlug: org.slug,
-    config: redactSsoConfigForPublic(org.ssoConfig),
   });
-});
+  if (!result.ok) {
+    if (result.status === 503) {
+      res.set('Cache-Control', 'no-store');
+      res.set('Retry-After', String(result.retryAfter || 1));
+    }
+    return res.status(result.status || 500).json({
+      ok: false,
+      error: result.error || 'saml_login_initialization_failed',
+      orgSlug: org.slug,
+    });
+  }
+  const setPreAuthCookie = deps.setSamlPreAuthCookie || setSamlPreAuthCookie;
+  setPreAuthCookie(res, {
+    orgSlug: org.slug,
+    nonce: result.preAuthNonce,
+    maxAgeMs: result.ttlMs,
+  }, deps.env || process.env);
+  return res.redirect(302, result.url);
+}
+
+router.get('/sso/:orgSlug/login', (req, res) => ssoLoginHandler(req, res));
 
 router.get('/sso/:orgSlug/callback', async (req, res) => {
   const org = await resolveOrgForSso(req.params.orgSlug);
@@ -1196,14 +1387,75 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
 // three existing regression test files so they keep passing without
 // modification: deps overrides any of {prisma, writeAuditLog,
 // samlHandler, oidcHandler, resolveOrgForSso}.
+function requestHeader(req, name) {
+  if (typeof req?.get === 'function') return req.get(name);
+  return req?.headers?.[String(name).toLowerCase()];
+}
+
+function wantsTrustedSamlJson(req) {
+  const accept = String(requestHeader(req, 'accept') || '').toLowerCase();
+  const mode = String(requestHeader(req, 'x-sira-response-mode') || '').trim().toLowerCase();
+  return mode === 'json' && accept.includes('application/json');
+}
+
+function resolveSamlFrontendCallback(env = process.env) {
+  const configured = String(env.FRONTEND_URL || getFrontendUrl(env) || '').trim();
+  let frontend;
+  try {
+    frontend = new URL(configured);
+  } catch (_error) {
+    return null;
+  }
+  if (!['http:', 'https:'].includes(frontend.protocol)) return null;
+  if (frontend.username || frontend.password) return null;
+  if (isProductionLike(env) && frontend.protocol !== 'https:') return null;
+  const callback = new URL('/auth/callback', `${frontend.origin}/`);
+  callback.searchParams.set('sso', 'success');
+  return callback.toString();
+}
+
+function completeSamlBrowserLogin(req, res, result, deps = {}) {
+  const env = deps.env || process.env;
+  const callbackUrl = resolveSamlFrontendCallback(env);
+  if (!callbackUrl) {
+    return res.status(500).json({
+      ok: false,
+      error: 'saml_frontend_callback_invalid',
+    });
+  }
+
+  const setCookie = deps.setSessionCookie || setSessionCookie;
+  const issueCsrf = deps.issueCsrfToken || issueCsrfToken;
+  setCookie(res, result.token, env);
+  const csrfToken = issueCsrf(res, req);
+
+  if (wantsTrustedSamlJson(req)) {
+    const { token: _token, ...safeResult } = result;
+    return res.status(200).json({ ...safeResult, csrfToken });
+  }
+  return res.redirect(303, callbackUrl);
+}
+
 async function ssoSamlCallbackHandler(req, res, deps = {}) {
+  const isSamlPost = typeof req?.body?.SAMLResponse === 'string';
+  if (isSamlPost && typeof res?.clearCookie === 'function') {
+    const clearPreAuthCookie = deps.clearSamlPreAuthCookie || clearSamlPreAuthCookie;
+    clearPreAuthCookie(res, req.params.orgSlug, deps.env || process.env);
+  }
   const svc = new SsoCallbackService({
     prisma: deps.prisma || prisma,
     audit: deps.writeAuditLog || writeAuditLog,
     samlHandler: deps.samlHandler || require('../services/saml-handler'),
     oidcHandler: deps.oidcHandler || require('../services/oidc-handler'),
     resolveOrg: deps.resolveOrgForSso || resolveOrgForSso,
-    signSessionToken,
+    signSessionToken: deps.signSessionToken || signSessionToken,
+    // Injected narrow Prisma adapters used by callback contract tests do not
+    // expose the RBAC transaction surface. Production (no override) always
+    // receives the strict lifecycle service.
+    rbacAssignments: deps.rbacAssignments || (deps.prisma ? null : rbacAssignments),
+    completeSamlLogin: (request, response, result) => (
+      completeSamlBrowserLogin(request, response, result, deps)
+    ),
   });
   return svc.handle(req, res);
 }
@@ -1246,6 +1498,10 @@ router.__ssoHelpers = {
   resolveOrgForSso,
   extractEmailDomain,
   resolveOrgBySsoDomain,
+  ssoLoginHandler,
+  completeSamlBrowserLogin,
+  resolveSamlFrontendCallback,
+  wantsTrustedSamlJson,
   ssoSamlCallbackHandler,
 };
 
@@ -1515,7 +1771,10 @@ router.post(
       // fails — opaque expiresAt + opaque challengeId — so an
       // attacker can't enumerate "is this email registered?" by
       // poking the endpoint. We DO NOT mint a row in that case.
-      if (!user || !user.phone || !twoFASms.isValidPhone(user.phone)) {
+      if (user?.deletedAt != null) {
+        await revokeInactiveAuthenticationState(user.id);
+      }
+      if (!user || user.deletedAt != null || !user.phone || !twoFASms.isValidPhone(user.phone)) {
         // Audit the miss without leaking which contact field tripped.
         void writeAuditLog(prisma, {
           req,
@@ -1564,6 +1823,16 @@ router.post(
       }
       return res.json(body);
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        if (error.userId) await revokeInactiveAuthenticationState(error.userId);
+        return res.json({
+          ok: true,
+          challengeId: twoFASms.mintChallengeId(),
+          expiresAt: new Date(Date.now() + twoFASms.ttlMs()).toISOString(),
+          smsSent: false,
+          smsSkippedReason: 'unknown-contact',
+        });
+      }
       if (error?.code === 'invalid_phone' || error?.code === 'unknown_contact') {
         return res.status(400).json({ error: 'invalid contact for 2FA' });
       }
@@ -1628,6 +1897,10 @@ router.post(
         // The row's user disappeared between challenge mint and verify.
         return res.status(404).json({ error: 'User no longer exists' });
       }
+      if (user.deletedAt != null) {
+        await revokeInactiveAuthenticationState(user.id);
+        return inactiveAccountResponse(res);
+      }
 
       const token = signSessionToken({
         userId: user.id,
@@ -1651,7 +1924,7 @@ router.post(
       });
 
       setSessionCookie(res, token);
-      const csrfToken = issueCsrfToken(res);
+      const csrfToken = issueCsrfToken(res, req);
 
       return res.json({
         ok: true,
@@ -1660,6 +1933,10 @@ router.post(
         csrfToken,
       });
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        if (error.userId) await revokeInactiveAuthenticationState(error.userId);
+        return inactiveAccountResponse(res);
+      }
       console.error('[auth/2fa/sms/verify] failed:', error?.message || error);
       return res.status(500).json({ error: 'Failed to verify 2FA challenge' });
     }
@@ -1675,6 +1952,15 @@ router.post(
 const PARTIAL_SESSION_TTL_MS = 5 * 60 * 1000;
 
 async function mintPartialSession(userId) {
+  const user = await users.findById(userId, {
+    select: { id: true, deletedAt: true },
+  });
+  if (!user || user.deletedAt != null) {
+    if (user?.id) await revokeInactiveAuthenticationState(user.id);
+    const error = new Error('Account is inactive');
+    error.code = 'ACCOUNT_INACTIVE';
+    throw error;
+  }
   const { randomBytes } = require('node:crypto');
   const token = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + PARTIAL_SESSION_TTL_MS);
@@ -1724,6 +2010,10 @@ router.post(
       }
 
       const user = await users.findById(row.userId);
+      if (user?.deletedAt != null) {
+        await revokeInactiveAuthenticationState(user.id);
+        return inactiveAccountResponse(res);
+      }
       if (!user || !user.totpSecret || !user.totpEnabled) {
         return res.status(400).json({ error: 'TOTP not enabled for user' });
       }
@@ -1801,17 +2091,27 @@ router.post(
         }
       }
 
+      // Re-read immediately before minting: account deletion may have raced
+      // the TOTP/recovery-code verification work above.
+      const activeUser = await users.findById(user.id);
+      if (!activeUser || activeUser.deletedAt != null) {
+        if (activeUser?.id || user.id) {
+          await revokeInactiveAuthenticationState(activeUser?.id || user.id);
+        }
+        return inactiveAccountResponse(res);
+      }
+
       // Mint the full session JWT — mirrors the email/password path.
       const token = signSessionToken({
-        userId: user.id,
-        isAdmin: Boolean(user.isAdmin),
-        isSuperAdmin: Boolean(user.isSuperAdmin),
+        userId: activeUser.id,
+        isAdmin: Boolean(activeUser.isAdmin),
+        isSuperAdmin: Boolean(activeUser.isSuperAdmin),
       });
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const fingerprint = computeFingerprint(req);
-      await sessions.create({ userId: user.id, token, expiresAt, fingerprint });
+      await sessions.create({ userId: activeUser.id, token, expiresAt, fingerprint });
 
-      const { password: _pw, ...userWithoutPassword } = user;
+      const { password: _pw, ...userWithoutPassword } = activeUser;
       const serializedUser = serializeUser(userWithoutPassword);
 
       void writeAuditLog(prisma, {
@@ -1825,7 +2125,7 @@ router.post(
       });
 
       setSessionCookie(res, token);
-      const csrfToken = issueCsrfToken(res);
+      const csrfToken = issueCsrfToken(res, req);
 
       return res.json({
         ok: true,
@@ -1834,6 +2134,10 @@ router.post(
         csrfToken,
       });
     } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        if (error.userId) await revokeInactiveAuthenticationState(error.userId);
+        return inactiveAccountResponse(res);
+      }
       console.error('[auth/2fa/totp/verify] failed:', error?.message || error);
       return res.status(500).json({ error: 'Failed to verify TOTP code' });
     }
@@ -1905,6 +2209,13 @@ router.post('/webauthn/authentication-verify', async (req, res) => {
     console.error('WebAuthn authentication-verify error:', error);
     return res.status(500).json({ error: 'webauthn_authentication_verify_failed' });
   }
+});
+
+router.securityRuntime = Object.freeze({
+  health: () => impersonationLimiter.health(),
+  config: () => impersonationLimiter.config(),
+  ready: () => impersonationLimiter.ready(),
+  close: () => impersonationLimiter.close(),
 });
 
 module.exports = router;

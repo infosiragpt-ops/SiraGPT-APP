@@ -66,6 +66,15 @@ test('POST /projects/:id/runs validates mode and forwards userId+projectId', asy
   assert.equal(call.prompt, 'hola');
 });
 
+test('POST /projects/:id/runs forwards backend-owned auto execution', async () => {
+  const res = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', prompt: 'construye', autoExecute: true });
+  assert.equal(res.status, 201);
+  const call = calls.find((c) => c[0] === 'createRun')[1];
+  assert.equal(call.autoExecute, true);
+});
+
 test('createRun service errors are mapped to their HTTP status', async () => {
   createImpl = async () => { throw new RunServiceError('run_in_progress', 'busy', 409); };
   const res = await request(app()).post('/api/codex/projects/p1/runs').send({ mode: 'plan' });
@@ -91,4 +100,5 @@ test('GET /projects/:id/runs lists project runs', async () => {
   const res = await request(app()).get('/api/codex/projects/p1/runs');
   assert.equal(res.status, 200);
   assert.equal(res.body.runs.length, 1);
+  assert.equal(res.headers['cache-control'], 'no-store');
 });

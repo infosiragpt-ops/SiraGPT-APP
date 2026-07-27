@@ -13,8 +13,10 @@ import {
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
+  shouldRouteWorkModePromptThroughAgentTask,
   isImageAnalysisPrompt,
   isImageOnlyAttachmentTurn,
+  SEMANTIC_INTENT_BUDGET_MS,
   shouldUseFastTextRoute,
   shouldAnswerFromExistingDocument,
   shouldEditExistingDocument,
@@ -22,6 +24,10 @@ import {
 } from "../lib/ai-service"
 
 describe("ai-service · deterministic intent routing", () => {
+  it("keeps semantic routing outside the user's three-second critical path", () => {
+    assert.ok(SEMANTIC_INTENT_BUDGET_MS <= 750)
+  })
+
   it("routes research plus a deliverable file to the long-running agent", async () => {
     const intent = await aiService.classifyIntent(
       "investiga 30 artículos científicos sobre ansiedad adolescente y dame un Word con citas APA",
@@ -562,6 +568,31 @@ describe("ai-service · deterministic intent routing", () => {
     for (const intent of ["gmail", "google_services", "image", "video", "figma", "artifact", "webdev", "plan"] as const) {
       assert.equal(shouldRouteThroughAgenticRuntime(intent), false)
     }
+  })
+
+  it("keeps Trabajo conversational for greetings and durable for real work", () => {
+    assert.equal(shouldRouteWorkModePromptThroughAgentTask("hola"), false)
+    assert.equal(shouldRouteWorkModePromptThroughAgentTask("gracias"), false)
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("crea un informe Word profesional con conclusiones"),
+      true,
+    )
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("investiga el mercado y entrega una hoja de cálculo"),
+      true,
+    )
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("edita este archivo", [
+        { name: "informe.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+      ]),
+      true,
+    )
+    assert.equal(
+      shouldRouteWorkModePromptThroughAgentTask("describe esta imagen", [
+        { name: "captura.png", mimeType: "image/png" },
+      ]),
+      false,
+    )
   })
 
   it("adds professional execution contracts without replacing the user prompt", () => {

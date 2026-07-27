@@ -43,6 +43,7 @@
   const { listDirTool, globFilesTool, codeGrepTool } = require('./agents/host-code-search-tool');
   const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
+  const { prepareAgentPluginLifecycle } = require('./agents/agent-plugin-lifecycle');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
   const { isAgenticActionRequest, isArtifactDeliverableRequest, isDocumentEditRequest } = require('./agents/agentic-trigger');
@@ -52,6 +53,16 @@
     buildExecutionProfilePrompt,
     validateFinalize,
   } = require('./agents/agentic-execution-profile');
+  const {
+    buildSkillExecutionPrompt,
+    inferRecommendedSkills,
+    resolveCustomGptAgentPolicy,
+  } = require('./agents/custom-gpt-agent-policy');
+  const {
+    buildArtifactDeliveryContract,
+    buildArtifactDeliveryPrompt,
+    validateArtifactDelivery,
+  } = require('./agents/artifact-delivery-contract');
 
   const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
   const SENTINEL_FENCE_CLOSE = '\n```';
@@ -75,10 +86,11 @@
     'memory_recall', 'rag_retrieve', 'self_rag_answer',
     'python_exec', 'run_tests',
     'create_document', 'verify_artifact', 'document_edit',
+    'run_skill', 'run_skill_pipeline',
     'session_search', 'session_list', 'session_history',
   ];
 
-  const STAGE_LABELS = {
+const STAGE_LABELS = {
     update_plan: () => 'Actualizando el plan',
     search_tools: (args) => `Buscando herramientas: "${truncate(args?.query, 50)}"`,
     web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
@@ -117,6 +129,8 @@
     generate_music: (args) => `Componiendo música${args?.prompt ? `: ${truncate(args.prompt, 36)}` : ''}`,
     create_chart: (args) => `Creando gráfica${args?.title ? `: ${truncate(args.title, 40)}` : ''}`,
     verify_artifact: () => 'Verificando archivo generado',
+    run_skill: (args) => `Aplicando skill ${truncate(args?.skillId || 'especializada', 44)}`,
+    run_skill_pipeline: (args) => `Aplicando ${Array.isArray(args?.steps) ? args.steps.length : 'varias'} skills`,
     run_tests: () => 'Ejecutando pruebas',
     npm_install: () => 'Instalando dependencias',
     commit_changes: () => 'Haciendo commit de cambios',
@@ -124,8 +138,54 @@
     monitor_ci: () => 'Esperando verificación CI en verde',
     check_ci_status: () => 'Verificando estado de CI',
     create_pr: () => 'Creando Pull Request',
-    finalize:   () => 'Componiendo respuesta',
-  };
+  finalize:   () => 'Componiendo respuesta',
+};
+
+const CUSTOM_GPT_DOCUMENT_TOOL_NAMES = new Set([
+  'rag_retrieve',
+  'self_rag_answer',
+  'docintel_analyze',
+  'docintel_retrieve',
+  'docintel_extract_tables',
+  'docintel_compare',
+  'deep_analyze',
+  'auto_file',
+  'compare_documents',
+  'search_docs',
+  'create_document',
+  'verify_artifact',
+  'document_edit',
+]);
+
+function applyCustomGptCapabilityGates(tools, capabilities) {
+  const source = Array.isArray(tools) ? tools : [];
+  const capGate = String(process.env.SIRAGPT_GPT_CAPABILITIES_GATING || '').trim().toLowerCase();
+  if (!capabilities || typeof capabilities !== 'object' || capGate === '0' || capGate === 'off') {
+    return source;
+  }
+
+  const blocked = new Set();
+  if (capabilities.webBrowsing === false) {
+    ['web_search', 'web_fetch', 'read_url', 'web_extract', 'deep_search', 'x_search'].forEach((name) => blocked.add(name));
+  }
+  if (capabilities.imageGeneration === false) {
+    ['generate_image', 'generate_video', 'generate_speech', 'generate_music'].forEach((name) => blocked.add(name));
+  }
+  if (capabilities.codeInterpreter === false) {
+    ['run_javascript', 'run_code', 'code_sandbox', 'python_exec', 'bash_exec'].forEach((name) => blocked.add(name));
+  }
+  if (capabilities.skillsEnabled === false) {
+    ['run_skill', 'run_skill_pipeline'].forEach((name) => blocked.add(name));
+  }
+
+  return source.filter((tool) => {
+    const name = tool && typeof tool.name === 'string' ? tool.name : '';
+    if (!name || blocked.has(name)) return false;
+    if (capabilities.documents === false && CUSTOM_GPT_DOCUMENT_TOOL_NAMES.has(name)) return false;
+    if (capabilities.dataAnalysis === false && name.startsWith('create_') && name !== 'create_document') return false;
+    return true;
+  });
+}
 
 function truncate(s, n) {
   if (!s) return '';
@@ -316,9 +376,9 @@ function promptedToolsEnabled() {
   return envFlagEnabled(process.env.SIRAGPT_PROMPTED_TOOLS, true);
 }
 
-/** Agent-first chat (every non-trivial turn enters the agentic loop) — default ON. */
+/** Optional agent-first chat (every non-trivial turn enters the agentic loop). */
 function agentFirstEnabled() {
-  return envFlagEnabled(process.env.SIRAGPT_AGENT_FIRST, true);
+  return envFlagEnabled(process.env.SIRAGPT_AGENT_FIRST, false);
 }
 
 /**
@@ -345,25 +405,30 @@ function resolveToolCallMode(provider, model) {
 }
 
 const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
+const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\s*:?[\s\S]{1,120}$/i;
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
 /**
  * Decide whether a normal chat turn should enter the agentic loop.
  *
- * AGENT-FIRST (default since 2026-06): every chat turn IS an agent turn —
- * search, write, summarize, create images/video/diagrams/documents — except
- * the cases where the plain stream is strictly better:
+ * Tool-intent routing keeps ordinary conversation on the lower-latency plain
+ * stream and enters the agent only when the request needs search, tools,
+ * artifacts, files, browser work, or an explicit operator opt-in:
  *   - greetings / trivial smalltalk (SIMPLE_CHAT_PROMPT),
+ *   - exact short-answer directives (DIRECT_ONLY_PROMPT),
  *   - plain Q&A over an attached document (its text is already injected
  *     into the prompt; the loop adds latency without adding capability).
- * The route still falls back to the plain stream on ANY degraded loop run,
- * so being agent-first never costs the user a real answer. Operators can
- * restore the legacy heuristic routing with SIRAGPT_AGENT_FIRST=0.
+ * Operators can restore agent-first behavior with SIRAGPT_AGENT_FIRST=1.
  */
-function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
+function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapabilities = null } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return false;
   if (SIMPLE_CHAT_PROMPT.test(text)) return false;
+  if (DIRECT_ONLY_PROMPT.test(text)) return false;
+  const customGptPolicy = resolveCustomGptAgentPolicy({
+    prompt: text,
+    capabilities: customGptCapabilities,
+  });
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (isCognitionUpgradeRequest(text)) return true;
   // ── Attachment turns ──────────────────────────────────────────────────
@@ -389,7 +454,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       const { isDocumentMergeRequest } = require('./agents/document-merge');
       if (isDocumentMergeRequest(text, { fileCount: files.length })) return true;
     } catch (_) { /* detector is best-effort */ }
-    return isArtifactDeliverableRequest(text) || isDocumentEditRequest(text);
+    return isArtifactDeliverableRequest(text)
+      || isDocumentEditRequest(text)
+      || customGptPolicy.requiresSkill;
   }
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
   // Auto web-search routing: send freshness / live-data / factual-lookup
@@ -419,9 +486,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     return true;
   }
 
-  // Agent-first default: anything that reached this point is a normal chat
-  // turn with no special signals — it still gets the full agent (tools,
-  // web search, artifact creation) unless the operator opted out.
+  // Custom GPTs can opt into an automatic agent runtime. This routes every
+  // non-trivial turn through the bounded ReAct loop while still letting the
+  // model decide whether a skill is actually necessary. Greetings, exact
+  // short-answer directives and simple attachment Q&A remain on the fast path.
+  if (customGptPolicy.routeNonTrivial) return true;
+
+  // Normal chat stays on the plain stream unless the operator explicitly
+  // opts into agent-first behavior.
   return agentFirstEnabled();
 }
 
@@ -474,6 +546,30 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // cap the payload — long observation strings would otherwise inflate
     // the persisted message body without helping the UI.
     return SENTINEL_FENCE_OPEN + JSON.stringify(state) + SENTINEL_FENCE_CLOSE;
+  }
+
+  function buildPersistedContent(state, finalAnswer) {
+    const answer = String(finalAnswer || '').trim();
+    const artifacts = Array.isArray(state?.artifacts) ? state.artifacts : [];
+    if (artifacts.length === 0) return answer;
+
+    // The live sentinel contains the complete, frequently-updated timeline.
+    // History already hydrates that timeline from agent_metadata, so persist
+    // only the deliverables required to rebuild preview/download cards after a
+    // reload. This keeps the message compact and avoids billing UI state as
+    // model output tokens.
+    const persistedState = {
+      meta: state?.meta || {},
+      steps: [],
+      artifacts,
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: answer,
+      done: true,
+    };
+    return `${serializeSentinel(persistedState)}\n\n${answer}`;
   }
 
   async function writeSse(res, payload) {
@@ -531,9 +627,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       customGptPersona = '',
       // Per-GPT tool capability toggles (null = legacy GPT → no gating).
       customGptCapabilities = null,
+      // Semantic skill-plan ids from the preflight router. These are advisory
+      // and are mapped to concrete filesystem skills by the custom-GPT policy.
+      customGptSkillPlan = null,
       // Creator-defined external API Actions (CustomGpt.actions, stored shape
       // WITH the encrypted auth secret). Built into agent tools below.
       customGptActions = null,
+      // U3: optional turn-policy snapshot (observe/enforce). Observe mode only
+      // attaches telemetry + shadow diffs; never changes tool/routing behaviour.
+      turnPolicy = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -541,7 +643,104 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
 
-    let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance, capabilities: customGptCapabilities });
+    // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
+    // attached a document and asked to edit it, run the surgical
+    // source-preserving editor BEFORE the LLM loop. Without this, weak models
+    // answer in prose / call create_document and the user never gets an edited
+    // copy of THEIR file. Fail-open: any error falls through to the agentic
+    // loop (which still forces document_edit as initialToolChoice below).
+    const preloopFileIds = Array.isArray(toolContext.fileIds)
+      ? toolContext.fileIds.map(String).filter(Boolean)
+      : [];
+    if (
+      preloopFileIds.length > 0
+      && toolContext.prisma
+      && toolContext.userId
+      && customGptCapabilities?.documents !== false
+      && isDocumentEditRequest(userQuery)
+    ) {
+      try {
+        const {
+          isSourcePreservingEditRequest,
+          tryGenerateSourcePreservingDocumentEdit,
+        } = require('./source-preserving-document-edit');
+        if (isSourcePreservingEditRequest(userQuery, preloopFileIds)) {
+          await writeSse(res, { type: 'stage', label: 'Editando documento original', tool: 'document_edit' });
+          const preserved = await tryGenerateSourcePreservingDocumentEdit({
+            prisma: toolContext.prisma,
+            userId: toolContext.userId,
+            chatId: toolContext.chatId || null,
+            fileIds: preloopFileIds,
+            prompt: userQuery,
+            displayPrompt: userQuery,
+            signal,
+          });
+          if (preserved?.clarification) {
+            await writeSse(res, {
+              replace: true,
+              content: String(preserved.content || '').trim(),
+            });
+            return {
+              finalAnswer: String(preserved.content || '').trim(),
+              stoppedReason: 'image_edit_clarification_needed',
+              artifacts: [],
+            };
+          }
+          if (preserved?.artifact?.id && preserved?.file) {
+            const artifactEvent = {
+              id: preserved.artifact.id,
+              filename: preserved.artifact.filename,
+              format: preserved.artifact.format,
+              mime: preserved.artifact.mime,
+              sizeBytes: preserved.artifact.sizeBytes,
+              downloadUrl: preserved.artifact.downloadUrl,
+              previewHtml: preserved.previewHtml || null,
+              validation: preserved.validation || null,
+            };
+            await writeSse(res, { type: 'file_artifact', artifact: artifactEvent });
+            const answer = String(preserved.content || 'Listo. Conservé el documento original y apliqué la edición solicitada.').trim();
+            await writeSse(res, { replace: true, content: answer });
+            return {
+              finalAnswer: answer,
+              stoppedReason: 'source_preserving_document_edit',
+              artifacts: [artifactEvent],
+            };
+          }
+        }
+      } catch (preErr) {
+        try {
+          console.warn('[agentic-chat] source-preserving pre-loop failed (falling through to agent):', preErr && preErr.message);
+        } catch (_) { /* noop */ }
+      }
+    }
+
+    const customGptAgentPolicy = resolveCustomGptAgentPolicy({
+      prompt: userQuery,
+      capabilities: customGptCapabilities,
+      semanticSkillIds: Array.isArray(customGptSkillPlan?.selectedSkillIds)
+        ? customGptSkillPlan.selectedSkillIds
+        : [],
+    });
+    const allowedSkillSet = Array.isArray(customGptAgentPolicy.allowedSkillIds)
+      ? new Set(customGptAgentPolicy.allowedSkillIds)
+      : null;
+    const runtimeRecommendedSkillIds = Array.from(new Set([
+      ...(customGptAgentPolicy.recommendedSkillIds || []),
+      ...inferRecommendedSkills(userQuery, customGptSkillPlan?.selectedSkillIds || []),
+    ])).filter((skillId) => !allowedSkillSet || allowedSkillSet.has(skillId));
+    const runtimeSkillPolicy = {
+      ...customGptAgentPolicy,
+      recommendedSkillIds: runtimeRecommendedSkillIds,
+    };
+    const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
+
+    let tools = toolsOverride || buildDefaultTools({
+      userQuery,
+      selection,
+      clearance: toolContext && toolContext.clearance,
+      capabilities: customGptCapabilities,
+      skillPolicy: runtimeSkillPolicy,
+    });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
     // AFTER buildDefaultTools (so the per-turn selector cannot drop them) and
@@ -564,6 +763,37 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         } catch (actionErr) {
           console.warn('[gpt-actions] tool injection failed (skipping):', actionErr && actionErr.message);
         }
+      }
+    }
+
+    // Activate backend plugins inside the real chat loop. Plugins can add
+    // tools and observe lifecycle events, while identity, tool arguments,
+    // results, and the AbortSignal remain immutable at the plugin boundary.
+    // Boot failures are fail-open; explicit blocks from trusted system
+    // plugins and user cancellation remain authoritative.
+    let pluginLifecycle = null;
+    if (!toolsOverride) {
+      try {
+        pluginLifecycle = await prepareAgentPluginLifecycle({
+          userId: toolContext.userId || null,
+          chatId: toolContext.chatId || null,
+          organizationId: toolContext.activeOrganizationId || toolContext.requestedOrganizationId || null,
+          signal,
+        });
+        tools = pluginLifecycle.addPluginSkills(tools, {
+          enabled: customGptCapabilities?.skillsEnabled !== false,
+          ctx: { clearance: toolContext?.clearance || null },
+          allowedSkillIds: Array.isArray(customGptAgentPolicy.allowedSkillIds)
+            ? customGptAgentPolicy.allowedSkillIds
+            : null,
+          recommendedSkillIds: Array.isArray(runtimeSkillPolicy.recommendedSkillIds)
+            ? runtimeSkillPolicy.recommendedSkillIds
+            : [],
+        });
+        tools = pluginLifecycle.addPluginTools(tools);
+      } catch (pluginBootError) {
+        if (pluginBootError?.code === 'ABORT_ERR') throw pluginBootError;
+        console.warn('[agentic-chat] plugin lifecycle unavailable (continuing without plugins):', pluginBootError?.message || pluginBootError);
       }
     }
     // Bilingual media-intent detection: when the user asks to create an
@@ -596,6 +826,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           write: (payload) => writeSse(res, payload),
           chatId: toolContext.chatId || null,
           userId: toolContext.userId || null,
+          requestedOrganizationId: toolContext.requestedOrganizationId || null,
+          activeOrganizationId: toolContext.activeOrganizationId || null,
           prisma: toolContext.prisma || null,
           signal,
           describeTool: stageLabelFor,
@@ -606,7 +838,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           // Attachment IDs (ownership-verified upstream) — gates document_edit.
           fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
         });
-        if (__harness) tools = __harness.tools;
+        if (__harness) tools = applyCustomGptCapabilityGates(__harness.tools, customGptCapabilities);
       } catch (harnessErr) {
         console.warn('[agent-harness] attach failed — continuing without harness:', harnessErr && harnessErr.message);
       }
@@ -621,6 +853,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
         const pinned = [
           ...mediaIntents.map((intent) => intent && intent.tool),
+          ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
+          ...(artifactDeliveryContract.active ? ['create_document', 'verify_artifact'] : []),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
@@ -637,7 +871,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // Document merge ("combina estos 2 words en 1"): force document_edit as
     // the FIRST tool call — its deterministic merge fast-path produces the
     // fused .docx without depending on the model choosing the right tool.
+    // Single-file EDIT intents get the same treatment: without it, weak models
+    // answer in prose or call create_document and the user never gets an
+    // edited copy of THEIR attachment.
     let documentMergeIntent = false;
+    let documentEditIntent = false;
     const attachedFileCount = Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean).length : 0;
     if (!initialToolChoice && attachedFileCount >= 2 && availableToolNames.has('document_edit')) {
       try {
@@ -647,6 +885,26 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           initialToolChoice = 'document_edit';
         }
       } catch (_) { /* best-effort */ }
+    }
+    if (!initialToolChoice && attachedFileCount >= 1 && availableToolNames.has('document_edit')) {
+      try {
+        if (isDocumentEditRequest(userQuery)) {
+          documentEditIntent = true;
+          initialToolChoice = 'document_edit';
+        }
+      } catch (_) { /* best-effort */ }
+    }
+    // When the user is editing an attached document, create_document would
+    // regenerate a NEW file from scratch — the opposite of what they asked.
+    // Drop it from the effective tool set so the model can't take that path.
+    if ((documentEditIntent || documentMergeIntent) && Array.isArray(tools)) {
+      tools = tools.filter((t) => t && t.name !== 'create_document');
+    }
+    // A strong specialized-skill intent gets one deterministic first call. The
+    // model still selects the concrete id/args and can chain further skills
+    // after observing the first result.
+    if (!initialToolChoice && customGptAgentPolicy.requiresSkill && availableToolNames.has('run_skill')) {
+      initialToolChoice = 'run_skill';
     }
     // Aggressive auto-search: when the question clearly needs fresh/live/factual
     // web data and no media tool was force-selected, force the FIRST step to be
@@ -666,6 +924,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
       availableToolNames,
     });
+    if (customGptAgentPolicy.requiresSkill && availableToolNames.has('run_skill')) {
+      executionProfile.requiredTools = Array.from(new Set([...(executionProfile.requiredTools || []), 'run_skill']));
+      executionProfile.minimumToolCalls = { ...(executionProfile.minimumToolCalls || {}), run_skill: 1 };
+    }
     const openclawProfile = openclawCapabilityKernel.buildCapabilityProfile({
       prompt: userQuery,
       userId: toolContext.userId || null,
@@ -700,6 +962,47 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       requiredTools: executionProfile.requiredTools,
       minimumToolCalls: executionProfile.minimumToolCalls,
     };
+    state.meta.skillPolicy = {
+      enabled: customGptAgentPolicy.skillsEnabled,
+      recommendedSkillIds: runtimeSkillPolicy.recommendedSkillIds,
+      requiresSkill: customGptAgentPolicy.requiresSkill,
+    };
+    if (artifactDeliveryContract.active) state.meta.artifactDelivery = artifactDeliveryContract;
+
+    const isGoalCommand = /^\s*(\/goal|\/plan)\b/i.test(userQuery);
+    const isRepoTask = /\b(clon|repo|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige)\b/i.test(userQuery);
+    const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
+
+    let maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
+    const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
+    // Prompted mode: budgets enforced in code, not prompts. Weak models drift
+    // on long horizons; a tighter step budget converges to finalize sooner
+    // (the loop already force-narrows to finalize on the last step).
+    if (toolCallMode === 'prompted') {
+      const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
+      maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
+    }
+
+    // U3 observe/enforce: attach policy summary + non-fatal shadow diffs before
+    // the first sentinel so telemetry is visible from the first UI frame.
+    if (turnPolicy && typeof turnPolicy === 'object') {
+      try {
+        const turnPolicyService = require('./turn-policy');
+        const diffs = turnPolicyService.diffTurnPolicyAgainstRuntime(turnPolicy, {
+          toolCallMode,
+          model,
+          provider,
+          maxSteps: maxStepsOverride,
+        });
+        state.meta.runtime.turnPolicy = turnPolicyService.summarizeTurnPolicy(turnPolicy);
+        if (diffs.length > 0) {
+          state.meta.runtime.turnPolicyShadowDiffs = diffs.slice(0, 8);
+        }
+        try {
+          require('./cognitive-metrics').recordTurnPolicy(turnPolicy);
+        } catch (_) { /* metrics never block */ }
+      } catch (_) { /* turn-policy is best-effort */ }
+    }
 
     // Initial sentinel — gives the UI an immediate step indicator even
     // before the first model call returns.
@@ -726,29 +1029,39 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       })
       .join('\n');
 
-    const isGoalCommand = /^\s*(\/goal|\/plan)\b/i.test(userQuery);
-    const isRepoTask = /\b(clon|repo|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige)\b/i.test(userQuery);
-    const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
-
-    let maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
-    const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
-    // Prompted mode: budgets enforced in code, not prompts. Weak models drift
-    // on long horizons; a tighter step budget converges to finalize sooner
-    // (the loop already force-narrows to finalize on the last step).
-    if (toolCallMode === 'prompted') {
-      const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
-      maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
+    let pluginPromptBlock = '';
+    if (pluginLifecycle) {
+      try {
+        const pluginBeforeRun = await pluginLifecycle.beforeRun({
+          query: userQuery,
+          model,
+          toolNames: tools.map((tool) => tool?.name).filter(Boolean),
+        });
+        pluginPromptBlock = pluginBeforeRun.promptBlock;
+        state.meta.plugins = pluginLifecycle.summary();
+      } catch (pluginBeforeError) {
+        if (pluginBeforeError?.code === 'ABORT_ERR' || pluginBeforeError?.code === 'PLUGIN_RUN_BLOCKED') {
+          throw pluginBeforeError;
+        }
+        console.warn('[agentic-chat] plugin beforeRun failed (continuing):', pluginBeforeError?.message || pluginBeforeError);
+      }
     }
 
     const extraSystem = [
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
+      pluginPromptBlock,
+      buildSkillExecutionPrompt(customGptAgentPolicy),
+      buildArtifactDeliveryPrompt(artifactDeliveryContract),
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
       'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
       initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',
       documentMergeIntent
         ? 'El usuario quiere FUSIONAR sus documentos adjuntos en UN solo archivo. Llama `document_edit` UNA vez con una instrucción completa tipo "fusiona todos los documentos adjuntos en un solo .docx, en el orden adjuntado, conservando el contenido y formato de cada uno" (más cualquier ajuste que pidió el usuario). La herramienta devuelve el archivo fusionado como tarjeta de descarga: menciónalo brevemente y finaliza. NO pegues el contenido de los documentos en tu respuesta.'
+        : '',
+      documentEditIntent
+        ? 'El usuario quiere EDITAR el documento que ADJUNTO (no crear uno nuevo). Llama `document_edit` UNA vez con una instrucción completa que liste TODOS los cambios pedidos. La herramienta edita el archivo original preservando formato/estructura y devuelve una copia editada como tarjeta de descarga. Menciónala brevemente y finaliza. PROHIBIDO inventar un documento nuevo, responder solo con sugerencias, o decir que no puedes editar el archivo adjunto.'
         : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
@@ -768,7 +1081,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `web_extract` o `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
-      'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
+      'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
       attachedDocuments
@@ -832,6 +1145,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       getState: () => state,
       emit: async () => { await writeSse(res, { replace: true, content: serializeSentinel(state) }); },
     })]);
+    if (pluginLifecycle) tools = pluginLifecycle.wrapTools(tools);
 
     let coreTools = tools;
     let deferredAgentTools = [];
@@ -850,6 +1164,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       executionProfile.requiredTools.length
         ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
         : null,
+      artifactDeliveryContract.active
+        ? ({ steps, unavailableTools }) => validateArtifactDelivery(artifactDeliveryContract, {
+          artifacts: state.artifacts,
+          steps,
+          unavailableTools,
+        })
+        : null,
       planVerify.createAnswerVerifier({ openai, model, userQuery }),
     ]);
 
@@ -864,32 +1185,34 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     } catch (_) { /* capability registry unavailable → omit the param */ }
 
     let stepCounter = 0;
-    const result = await reactAgent.run(openai, {
-      query: userQuery,
-      tools: coreTools,
-      deferredTools: deferredAgentTools,
-      model,
-      maxSteps: maxStepsOverride,
-      maxRuntimeMs: maxRuntimeOverride,
-      extraSystem,
-      initialToolChoice,
-      toolCallMode,
-      parallelToolCalls: __parallelToolCalls,
-      ctx: {
-        ...toolContext,
-        signal,
-        onEvent,
-        toolGate,
-        toolAuthCtx: {
-          userId: toolContext.userId || null,
-          clearance: toolContext.clearance || null,
+    let result;
+    try {
+      result = await reactAgent.run(openai, {
+        query: userQuery,
+        tools: coreTools,
+        deferredTools: deferredAgentTools,
+        model,
+        maxSteps: maxStepsOverride,
+        maxRuntimeMs: maxRuntimeOverride,
+        extraSystem,
+        initialToolChoice,
+        toolCallMode,
+        parallelToolCalls: __parallelToolCalls,
+        ctx: {
+          ...toolContext,
+          signal,
+          onEvent,
+          toolGate,
+          toolAuthCtx: {
+            userId: toolContext.userId || null,
+            clearance: toolContext.clearance || null,
+          },
         },
-      },
-      finalizeGuard: composedFinalizeGuard,
-      onCompact: ({ step, removedMessages, chars }) => {
-        try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
-      },
-      onStepStart: async (stepRec) => {
+        finalizeGuard: composedFinalizeGuard,
+        onCompact: ({ step, removedMessages, chars }) => {
+          try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
+        },
+        onStepStart: async (stepRec) => {
         // Harness first (synchronous prefix): registers the step's planned
         // tool calls and emits typed tool_call_start frames BEFORE the
         // sentinel replace below, so the AgentTrace timeline leads the UI.
@@ -936,8 +1259,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           });
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
-      },
-      onStepDone: async (stepRec) => {
+        },
+        onStepDone: async (stepRec) => {
         // Harness first: settle tool calls that never reached execute()
         // (duplicate-cache hits, exhausted tools, invalid args) from their
         // observations so every tool_call_start gets its tool_result.
@@ -974,8 +1297,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           }
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
-      },
-    });
+        },
+      });
+    } catch (agentRunError) {
+      if (pluginLifecycle && agentRunError?.code !== 'ABORT_ERR') {
+        try { await pluginLifecycle.error(agentRunError, { phase: 'run' }); } catch (_) { /* plugin telemetry must not mask the run error */ }
+      }
+      throw agentRunError;
+    }
+
+    if (pluginLifecycle && !signal?.aborted) {
+      try {
+        await pluginLifecycle.afterRun(result);
+        state.meta.plugins = pluginLifecycle.summary();
+      } catch (pluginAfterError) {
+        if (pluginAfterError?.code !== 'ABORT_ERR') {
+          console.warn('[agentic-chat] plugin afterRun failed (continuing):', pluginAfterError?.message || pluginAfterError);
+        }
+      }
+    }
 
     // Mark any leftover running steps as done — react-agent guarantees a
     // finalize on the last step, but defensive coding keeps stale running
@@ -1056,8 +1396,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
 
     return {
       finalAnswer,
+      persistedContent: buildPersistedContent(state, finalAnswer),
       stoppedReason: result?.stoppedReason || 'finalized',
       steps: result?.steps || [],
+      artifacts: state.artifacts,
       agentRun,
     };
   }
@@ -1348,8 +1690,23 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // user's clearance. Skipped when SIRAGPT_SKILLS_IN_CHAT=0 or unavailable.
     try {
       const skillRunner = require('./agents/skill-runner');
-      const runSkillTool = skillRunner.buildRunSkillTool({ ctx: { clearance: (opts && opts.clearance) || null } });
-      if (runSkillTool) base.push(runSkillTool);
+      const skillPolicy = opts?.skillPolicy || null;
+      if (opts?.capabilities?.skillsEnabled !== false) {
+        const skillToolOptions = {
+          ctx: {
+            clearance: (opts && opts.clearance) || null,
+            ...(Array.isArray(skillPolicy?.allowedSkillIds)
+              ? { allowedSkillIds: skillPolicy.allowedSkillIds }
+              : {}),
+          },
+          allowedSkillIds: Array.isArray(skillPolicy?.allowedSkillIds) ? skillPolicy.allowedSkillIds : null,
+          recommendedSkillIds: Array.isArray(skillPolicy?.recommendedSkillIds) ? skillPolicy.recommendedSkillIds : [],
+        };
+        const runSkillTool = skillRunner.buildRunSkillTool(skillToolOptions);
+        if (runSkillTool) base.push(runSkillTool);
+        const runSkillPipelineTool = skillRunner.buildRunSkillPipelineTool(skillToolOptions);
+        if (runSkillPipelineTool) base.push(runSkillPipelineTool);
+      }
     } catch (skillToolErr) {
       console.warn('[skills-in-chat] run_skill tool unavailable:', skillToolErr && skillToolErr.message);
     }
@@ -1375,24 +1732,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // no gating. A tool is dropped only when its capability is EXPLICITLY false;
     // missing keys stay ON so partial objects never silently disable tools.
     // Kill switch: SIRAGPT_GPT_CAPABILITIES_GATING=0.
-    let gated = deduped;
-    const caps = opts && opts.capabilities;
-    const capGate = String(process.env.SIRAGPT_GPT_CAPABILITIES_GATING || '').trim().toLowerCase();
-    if (caps && typeof caps === 'object' && capGate !== '0' && capGate !== 'off') {
-      const blocked = new Set();
-      if (caps.webBrowsing === false) ['web_search', 'web_fetch'].forEach((n) => blocked.add(n));
-      if (caps.imageGeneration === false) ['generate_image', 'generate_video', 'generate_speech', 'generate_music'].forEach((n) => blocked.add(n));
-      if (caps.codeInterpreter === false) ['run_javascript', 'run_code', 'code_sandbox'].forEach((n) => blocked.add(n));
-      const blockVisuals = caps.dataAnalysis === false;
-      gated = deduped.filter((tool) => {
-        const name = tool && typeof tool.name === 'string' ? tool.name : '';
-        if (blocked.has(name)) return false;
-        if (blockVisuals && name.startsWith('create_')) return false;
-        return true;
-      });
-      if (gated.length !== deduped.length) {
-        console.log(`[gpt-capabilities] gated ${deduped.length - gated.length} tools (web=${caps.webBrowsing !== false} img=${caps.imageGeneration !== false} canvas=${caps.dataAnalysis !== false} code=${caps.codeInterpreter !== false})`);
-      }
+    const gated = applyCustomGptCapabilityGates(deduped, opts && opts.capabilities);
+    if (gated.length !== deduped.length) {
+      const caps = opts && opts.capabilities;
+      console.log(`[gpt-capabilities] gated ${deduped.length - gated.length} tools (web=${caps?.webBrowsing !== false} img=${caps?.imageGeneration !== false} canvas=${caps?.dataAnalysis !== false} code=${caps?.codeInterpreter !== false} docs=${caps?.documents !== false} skills=${caps?.skillsEnabled !== false})`);
     }
 
     // A1: per-turn tool selection. Hand the model a small, relevant subset
@@ -1426,9 +1769,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
 
   /**
    * Read the runtime feature flag for the agentic chat path. Agentic chat
-   * is now the default for tool-capable models because otherwise normal
-   * chat silently behaves like a plain completion. Operators can still
-   * disable it without a deploy by setting either flag to false/0/off/no.
+   * remains available for tool-capable models. The turn-level policy above
+   * decides whether tools are warranted; operators can still disable the
+   * runtime entirely without a deploy.
    */
   function isEnabled() {
     const explicit = process.env.SIRAGPT_AGENTIC_CHAT_ENABLED;
@@ -1455,12 +1798,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     _internal: {
       freshState,
       serializeSentinel,
+      buildPersistedContent,
       extractObservationError,
       stageLabelFor,
       buildThreadWorkContext,
       adaptAgentTool,
       baseWebTools,
       buildDefaultTools,
+      applyCustomGptCapabilityGates,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
     },

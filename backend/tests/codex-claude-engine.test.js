@@ -339,7 +339,7 @@ test('build loop: verificación falla → ronda de reparación → done', async 
     writeFiles: async (_p, writes) => { for (const w of writes) files.set(w.path, w.content); return { ok: true }; },
     exec: async (_p, cmd) => {
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') {
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') {
         tscRuns += 1;
         // Primera verificación falla; tras la reparación pasa.
         return tscRuns === 1
@@ -371,6 +371,7 @@ test('build loop: verificación falla → ronda de reparación → done', async 
       eventStore: { appendEvent: async (_r, type, data) => { events.push({ type, data }); }, listEvents: async () => [] },
       actionStore: { recordAction: async () => {} },
       clock: (() => { let t = 0; return () => new Date(1_000_000 + (t += 10)); })(),
+      env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
     },
   });
   assert.equal(res.status, 'done');
@@ -394,7 +395,7 @@ function devRunner({ devStatusSeq = [], startDevImpl, files = new Map([['tsconfi
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -473,7 +474,7 @@ test('build loop: flag on + dev server error → inyecta [VERIFICACIÓN RUNTIME]
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -526,7 +527,7 @@ test('build loop: flag OFF → NO arranca el dev server (startDev nunca se llama
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -581,6 +582,7 @@ test('build loop: tool calls por encima del budget se reportan al modelo', async
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');
@@ -615,7 +617,7 @@ test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucl
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
-    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', CODEX_AUTO_VERIFY: '0', NODE_ENV: 'test' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');
@@ -647,7 +649,7 @@ test('build loop: reescrituras INTERCALADAS del mismo archivo también disparan 
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
-    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', CODEX_AUTO_VERIFY: '0', NODE_ENV: 'test' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');

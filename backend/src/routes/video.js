@@ -602,7 +602,6 @@ const requirePaidPlan = require('../middleware/require-paid-plan');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { PrismaClient } = require('@prisma/client');
 const { fal } = require('@fal-ai/client');
 const {
   contentDispositionHeader,
@@ -622,7 +621,7 @@ const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
 
 // Configure Fal.ai client from server-only env. The SDK sends it as
 // `Authorization: Key <credentials>`; keep aliases for existing deployments.

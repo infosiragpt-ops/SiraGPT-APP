@@ -9,7 +9,7 @@
  *       target?:   number,                    // total sources to collect, [10..1000], default 500
  *       batchSize?: number,                   // sources per batch, [5..50], default 10
  *       topK?:     number,                    // best-of selection size, [1..100], default 25
- *       providers?: string[],                 // subset of [wos, scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
+ *       providers?: string[],                 // subset of the registered worldwide scientific indexes
  *       language?: string                     // ISO 639-1 (filters Crossref/SciELO)
  *     }
  *
@@ -26,6 +26,8 @@ const express = require("express");
 const { body, validationResult } = require("express-validator");
 const { authenticateToken } = require("../middleware/auth");
 const { runAgenticBatch, DEFAULT_PROVIDERS } = require("../services/searchBrain/agenticBatch");
+const { REGISTRY } = require("../services/searchBrain/providers");
+const { DISCIPLINE_IDS } = require("../services/research/research-discipline-router");
 
 const prisma = (() => {
   try { return require("../config/database"); } catch { return null; }
@@ -36,7 +38,7 @@ const serializer = (() => {
 
 const router = express.Router();
 
-const VALID_PROVIDERS = new Set(["wos", "scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
+const VALID_PROVIDERS = new Set(Object.keys(REGISTRY));
 
 function pickProviders(raw) {
   if (!Array.isArray(raw)) return undefined;
@@ -67,7 +69,9 @@ router.post(
     body("topK").optional().isInt({ min: 1, max: 100 }),
     body("providers").optional().isArray(),
     body("language").optional().isString().isLength({ min: 2, max: 8 }),
+    body("discipline").optional().isIn(DISCIPLINE_IDS),
     body("mailto").optional().isString(),
+    body("resolveDois").optional().isBoolean(),
   ],
   authenticateToken,
   async (req, res) => {
@@ -109,8 +113,10 @@ router.post(
         topK: req.body.topK,
         providers: pickProviders(req.body.providers),
         language: typeof req.body.language === "string" ? req.body.language : undefined,
+        discipline: typeof req.body.discipline === "string" ? req.body.discipline : undefined,
         mailto: pickMailto(req),
         signal: controller.signal,
+        resolveDois: req.body.resolveDois,
       })) {
         send(evt);
         if (evt.type === "summary" && typeof evt.markdown === "string") {
@@ -183,17 +189,41 @@ router.get("/agentic/providers", (_req, res) => {
       semantic:  "Semantic Scholar (alta cobertura en STEM)",
       crossref:  "Crossref (registro autoritativo de DOIs)",
       pubmed:    "PubMed (biomédico, NCBI E-utilities)",
+      europepmc: "Europe PMC (biomedicina y ciencias de la vida, texto completo cuando está disponible)",
       doaj:      "DOAJ (Directory of Open Access Journals)",
+      redalyc:   "Redalyc (revistas científicas de América Latina, Caribe, España y Portugal)",
+      arxiv:     "arXiv (preprints de física, matemáticas, computación y disciplinas afines)",
+      dblp:      "DBLP (bibliografía mundial de informática)",
+      datacite:  "DataCite (datasets, software, preprints y tesis con DOI)",
+      biorxiv:   "bioRxiv (preprints de ciencias biológicas)",
+      medrxiv:   "medRxiv (preprints de ciencias de la salud)",
+      core:      "CORE (agregador mundial de publicaciones de acceso abierto; requiere CORE_API_KEY)",
     },
     configured: {
+      wos: hasUsableEnvKey("WOS_API_KEY", "WEB_OF_SCIENCE_API_KEY"),
+      scopus: Boolean(process.env.SCOPUS_API_KEY),
+      openalex: true,
+      semantic: true,
+      pubmed: true,
+      europepmc: true,
+      doaj: true,
+      scielo: true,
+      crossref: true,
+      redalyc: true,
+      arxiv: true,
+      dblp: true,
+      datacite: true,
+      biorxiv: true,
+      medrxiv: true,
+      core: Boolean(process.env.CORE_API_KEY),
+    },
+    keysConfigured: {
       wos: hasUsableEnvKey("WOS_API_KEY", "WEB_OF_SCIENCE_API_KEY"),
       scopus: Boolean(process.env.SCOPUS_API_KEY),
       openalex: Boolean(process.env.OPENALEX_API_KEY),
       semantic: Boolean(process.env.SEMANTIC_SCHOLAR_API_KEY || process.env.SEMANTIC_API_KEY || process.env.S2_API_KEY),
       pubmed: Boolean(process.env.NCBI_API_KEY || process.env.PUBMED_API_KEY),
-      doaj: true,
-      scielo: true,
-      crossref: true,
+      core: Boolean(process.env.CORE_API_KEY),
     },
   });
 });

@@ -29,6 +29,9 @@
 
 const crypto = require('node:crypto');
 const bcrypt = require('bcryptjs');
+const {
+  runAuthUserTransaction,
+} = require('./auth/auth-user-lock');
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_VERIFY_ATTEMPTS = 5;
@@ -197,6 +200,48 @@ async function createSmsChallenge(prisma, user, destination) {
   const codeHash = await hashCode(code);
   const challengeId = mintChallengeId();
   const expiresAt = new Date(Date.now() + ttlMs());
+  const challengeData = {
+    challengeId,
+    userId: user.id,
+    channel: 'sms',
+    destination,
+    lookup: lookupKey(destination),
+    codeHash,
+    expiresAt,
+  };
+  const supportsAuthTransaction = (
+    typeof prisma.$transaction === 'function'
+    && typeof prisma.$queryRawUnsafe === 'function'
+    && typeof prisma.user?.findUnique === 'function'
+  );
+  if (supportsAuthTransaction) {
+    const row = await runAuthUserTransaction(
+      prisma,
+      user.id,
+      async (tx) => {
+        await tx.twoFAChallenge.updateMany({
+          where: { userId: user.id, consumedAt: null },
+          data: { consumedAt: new Date() },
+        });
+        return tx.twoFAChallenge.create({ data: challengeData });
+      },
+      { select: { id: true, deletedAt: true } },
+    );
+    return { challengeId, code, expiresAt, row };
+  }
+
+  let currentUser = user;
+  if (typeof prisma?.user?.findUnique === 'function') {
+    currentUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, deletedAt: true },
+    });
+  }
+  if (!currentUser || currentUser.deletedAt != null) {
+    const err = new Error('account_inactive');
+    err.code = 'ACCOUNT_INACTIVE';
+    throw err;
+  }
 
   // Invalidate prior unconsumed challenges AND mint the new one as one unit —
   // otherwise a failure between them could consume every active challenge yet
@@ -207,15 +252,7 @@ async function createSmsChallenge(prisma, user, destination) {
       data: { consumedAt: new Date() },
     }),
     prisma.twoFAChallenge.create({
-      data: {
-        challengeId,
-        userId: user.id,
-        channel: 'sms',
-        destination,
-        lookup: lookupKey(destination),
-        codeHash,
-        expiresAt,
-      },
+      data: challengeData,
     }),
   ];
   // Fall back to sequential writes if the client lacks $transaction (test doubles).
@@ -300,12 +337,30 @@ async function verifyChallenge(prisma, challengeId, code) {
   // for issuing the final JWT; this keeps the verification primitive
   // pure and decouples it from the not-yet-built partial-session model.
   const verifiedAt = new Date();
-  try {
-    await prisma.twoFAChallenge.update({
-      where: { id: row.id },
-      data: { consumedAt: verifiedAt },
-    });
-  } catch { /* best-effort */ }
+  if (typeof prisma.twoFAChallenge.updateMany === 'function') {
+    try {
+      const consumed = await prisma.twoFAChallenge.updateMany({
+        where: { id: row.id, consumedAt: null },
+        data: { consumedAt: verifiedAt },
+      });
+      if (!consumed || consumed.count !== 1) {
+        return { ok: false, code: 'not_found' };
+      }
+    } catch {
+      return { ok: false, code: 'not_found' };
+    }
+  } else {
+    // Compatibility for narrow injected test stores. Production Prisma always
+    // supports the conditional updateMany path above.
+    try {
+      await prisma.twoFAChallenge.update({
+        where: { id: row.id },
+        data: { consumedAt: verifiedAt },
+      });
+    } catch {
+      return { ok: false, code: 'not_found' };
+    }
+  }
   return { ok: true, userId: row.userId, channel: row.channel, verifiedAt };
 }
 

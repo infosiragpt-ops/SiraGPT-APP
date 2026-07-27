@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "../authenticated-fetch"
+
 /**
  * Frontend client for /api/code-runner — the no-Docker host runner that boots a
  * generated project as a real dev server (vite/next dev) on a localhost port.
@@ -48,7 +50,7 @@ export const hostRunnerService = {
   /** Is the local host runner enabled in this environment? */
   async health(): Promise<{ ok: boolean; enabled: boolean }> {
     try {
-      const res = await fetch(`${baseUrl}/health`, { credentials: "include", headers: authHeaders() })
+      const res = await fetch(`${baseUrl}/health`)
       if (!res.ok) return { ok: false, enabled: false }
       return (await res.json()) as { ok: boolean; enabled: boolean }
     } catch {
@@ -63,7 +65,7 @@ export const hostRunnerService = {
     env?: Record<string, string>,
   ): Promise<{ runId?: string; phase?: string; devUrl?: string; error?: string; disabled?: boolean }> {
     try {
-      const res = await fetch(`${baseUrl}/start`, {
+      const res = await authenticatedFetch(`${baseUrl}/start`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
@@ -90,7 +92,7 @@ export const hostRunnerService = {
   /** Dev-server status: { running, ready, framework, error, tail, devUrl }. */
   async status(runId: string): Promise<HostRunStatus> {
     try {
-      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/status`, {
+      const res = await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/status`, {
         credentials: "include",
         headers: authHeaders(),
       })
@@ -110,7 +112,7 @@ export const hostRunnerService = {
    */
   async verifyRuntime(runId: string): Promise<RuntimeVerdict> {
     try {
-      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/verify-runtime`, {
+      const res = await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/verify-runtime`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
@@ -125,7 +127,7 @@ export const hostRunnerService = {
   /** Stop the running dev server. */
   async stop(runId: string): Promise<void> {
     try {
-      await fetch(`${baseUrl}/${encodeURIComponent(runId)}/stop`, {
+      await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/stop`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
@@ -142,7 +144,7 @@ export const hostRunnerService = {
    */
   async verify(runId: string): Promise<HostRunVerify> {
     try {
-      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/verify`, {
+      const res = await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/verify`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
@@ -162,7 +164,7 @@ export const hostRunnerService = {
    */
   async exec(runId: string, command: string): Promise<HostRunExec> {
     try {
-      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/exec`, {
+      const res = await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/exec`, {
         method: "POST",
         credentials: "include",
         headers: { ...authHeaders(), "Content-Type": "application/json" },

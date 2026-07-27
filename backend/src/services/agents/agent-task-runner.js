@@ -136,6 +136,21 @@ function summarizeForChat(text, policy) {
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
 }
 
+function upsertArtifactForDelivery(artifacts, artifact) {
+  if (!Array.isArray(artifacts) || !artifact) return null;
+  const filename = String(artifact.filename || '').trim().toLowerCase();
+  const format = String(artifact.format || artifact.mime || '').trim().toLowerCase();
+  const existingIndex = filename
+    ? artifacts.findIndex((item) => (
+      String(item?.filename || '').trim().toLowerCase() === filename
+      && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+    ))
+    : -1;
+  if (existingIndex >= 0) artifacts.splice(existingIndex, 1, artifact);
+  else artifacts.push(artifact);
+  return artifact;
+}
+
 function normalizeAttachmentFallbackContent(text) {
   const tableHeaderCells = new Set([
     'n', 'no', 'titulo', 'titulo del articulo', 'autores', 'ano de publicacion',
@@ -1384,15 +1399,21 @@ function agentModelFailoverEnabled(env = process.env) {
 /**
  * Runtime de respaldo cross-provider para cuando el modelo seleccionado
  * falla EN EJECUCIÓN (402 sin créditos, 401, caída del proveedor) aunque
- * su key exista. Elige el primer proveedor DISTINTO al que acaba de
- * fallar que tenga key configurada. Devuelve null si no hay alternativa.
+ * su key exista. Devuelve todos los proveedores alternativos configurados
+ * en orden de preferencia para poder continuar si el primero también falla.
  */
-function resolveAgentModelFailoverRuntime(profile, env = process.env) {
+function resolveAgentModelFailoverRuntimes(profile, env = process.env) {
   const failedProvider = String(profile?.detected?.provider || 'OpenAI');
   const fallbackModel = String(
     env.AGENT_TASK_OPENAI_MODEL || env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
   ).trim() || 'gpt-4o-mini';
   const candidates = [
+    {
+      provider: 'Cerebras',
+      apiKeyEnv: 'CEREBRAS_API_KEY',
+      baseURL: env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
+      model: env.AGENT_TASK_CEREBRAS_MODEL || env.FREE_IA_MODEL_ID || 'gpt-oss-120b',
+    },
     { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: fallbackModel },
     {
       provider: 'Gemini',
@@ -1402,13 +1423,22 @@ function resolveAgentModelFailoverRuntime(profile, env = process.env) {
     },
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
   ];
+  const runtimes = [];
   for (const target of candidates) {
     if (target.provider === failedProvider) continue;
     if (!env[target.apiKeyEnv]) continue;
     const client = buildOpenAICompatibleClient(target, env);
-    if (client) return { client, model: target.model, provider: target.provider };
+    if (client) runtimes.push({ client, model: target.model, provider: target.provider });
   }
-  return null;
+  return runtimes;
+}
+
+function resolveAgentModelFailoverRuntime(profile, env = process.env) {
+  return resolveAgentModelFailoverRuntimes(profile, env)[0] || null;
+}
+
+function isUnrecoveredModelFailure(reason) {
+  return String(reason || '').startsWith('model_error');
 }
 
 // Resolve the OpenAI-compatible client the agent runtime should drive.
@@ -1533,6 +1563,15 @@ function resolveAgentToolScopes(user = {}) {
   return Array.from(scopes);
 }
 
+function shouldRunSourcePreservingEdit({
+  request = '',
+  fileIds = [],
+  preferRecentArtifact = false,
+} = {}) {
+  return Boolean(preferRecentArtifact)
+    || isSourcePreservingEditRequest(request, fileIds);
+}
+
 function runAgentTaskJob(payload = {}, job = null) {
   const taskId = payload && payload.taskId;
   if (!taskId) return _runAgentTaskJobImpl(payload, job);
@@ -1564,6 +1603,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     systemContract,
     files = [],
     fileMetadata = [],
+    preferRecentArtifact = false,
     chatId = null,
     model = 'gpt-4o',
     maxSteps = 100,
@@ -1575,10 +1615,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
-  let wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
+  const hasEditableDocumentContext = hasAttachedFiles || Boolean(preferRecentArtifact);
+  let wantsSourcePreservingEdit = shouldRunSourcePreservingEdit({
+    request: displayGoal || goal,
+    fileIds: files,
+    preferRecentArtifact,
+  });
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
     hasAttachedFiles;
-  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasAttachedFiles) {
+  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasEditableDocumentContext) {
     throw new Error('OPENAI_API_KEY not configured');
   }
 
@@ -1871,7 +1916,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     executionProfile,
     universalTaskContract,
   });
-  const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
+  const tools = buildTaskTools({
+    skillContext: {
+      clearance: user.clearance || 'authenticated',
+      userId: user.id,
+      chatId,
+    },
+  }).filter((tool) => !forbiddenToolNames.has(tool.name));
   const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
   emit({
     type: 'framework_status',
@@ -2134,6 +2185,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     taskStore.markTaskStatus(task, status, {
       streamState,
+      documentPolicy,
       stats: {
         steps,
         artifacts: artifactsList.length,
@@ -2175,7 +2227,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   };
 
   try {
-    if (wantsSourcePreservingEdit && documentPolicy?.autoGenerate) {
+    // Editing the user's existing file is not the same as auto-generating a
+    // new document. Prompts such as "devuélveme el mismo Word; no crees uno
+    // nuevo" intentionally set autoGenerate=false, but must still enter this
+    // source-preserving path before the thin-attachment guard.
+    if (wantsSourcePreservingEdit) {
       stepIdCounter = 1;
       currentStepId = 's1';
       emit({ type: 'step_start', id: currentStepId, label: 'Editando documento original', icon: 'file-text' });
@@ -2243,6 +2299,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           downloadUrl: preserved.artifact.downloadUrl,
           previewHtml: preserved.previewHtml,
           validation: preserved.validation,
+          sourceFileId: preserved.version?.sourceFileId || null,
+          documentVersion: preserved.version || null,
         };
         artifacts.push(artifactEvent);
         emit({ type: 'file_artifact', artifact: artifactEvent });
@@ -2802,6 +2860,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const toolCtx = {
       userId: user.id,
       userEmail: user.email,
+      clearance: user.clearance || 'authenticated',
       openai,
       signal: controller.signal,
       chatId,
@@ -2827,7 +2886,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       onEvent: (evt) => {
         const payloadEvent = { ...evt, stepId: evt.stepId || currentStepId };
         if (evt.type === 'file_artifact' && evt.artifact) {
-          artifacts.push(evt.artifact);
+          upsertArtifactForDelivery(artifacts, evt.artifact);
           void persistence.persistGeneratedArtifact({ artifact: evt.artifact, task, validation: evt.artifact.validation });
         }
         if (evt.type === 'contract_review') {
@@ -2996,12 +3055,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     // The tool stack (búsquedas científicas key-free, documentos, etc.) es
     // agnóstico del modelo: si el modelo seleccionado muere (402 sin
     // créditos, 401 key inválida, caída del proveedor), la tarea NO debe
-    // morir con él. Reintentamos UNA vez con el primer runtime sano de
-    // otro proveedor antes de degradar la respuesta.
-    const modelFailed = String(result.stoppedReason || '').startsWith('model_error');
+    // morir con él. Recorremos los runtimes de proveedores distintos hasta
+    // obtener una respuesta válida o agotar las alternativas configuradas.
+    const modelFailed = isUnrecoveredModelFailure(result.stoppedReason);
     if (modelFailed && agentModelFailoverEnabled()) {
-      const failoverRuntime = resolveAgentModelFailoverRuntime(runtimeModelProfile);
-      if (failoverRuntime?.client) {
+      const failoverRuntimes = resolveAgentModelFailoverRuntimes(runtimeModelProfile);
+      for (const failoverRuntime of failoverRuntimes) {
         console.warn(`[agent-task] model failover: ${runtimeModelProfile.runtimeModel} → ${failoverRuntime.provider}:${failoverRuntime.model} (task ${taskId})`);
         emit({
           type: 'checkpoint',
@@ -3024,6 +3083,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           model: failoverRuntime.model,
           resumeCheckpoint: failoverResume,
         });
+        if (!isUnrecoveredModelFailure(result.stoppedReason)) break;
       }
     }
 
@@ -3102,15 +3162,36 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           : 'Se explicó cómo aportar contenido legible en lugar de dejar el chat vacío.',
       });
     }
-    documentPolicy = buildDocumentDeliveryPolicy({
-      goal,
-      displayGoal,
-      finalText: finalMarkdown,
-      files,
-      requestedFormat: documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required'
-        ? documentPolicy?.format
-        : null,
-    });
+    if (isUnrecoveredModelFailure(stoppedReason) && artifacts.length === 0) {
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: 'No se generó un archivo porque ningún proveedor de IA pudo producir contenido válido.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          modelFailure: true,
+          originalStoppedReason: stoppedReason,
+        },
+      };
+      emit({
+        type: 'quality_gate',
+        gate: 'model_failure_artifact_guard',
+        label: 'Archivo no generado',
+        passed: false,
+        summary: 'Se evitó adjuntar como documento un mensaje de error del proveedor.',
+      });
+    } else {
+      documentPolicy = buildDocumentDeliveryPolicy({
+        goal,
+        displayGoal,
+        finalText: finalMarkdown,
+        files,
+        requestedFormat: documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required'
+          ? documentPolicy?.format
+          : null,
+      });
+    }
     task.documentPolicy = documentPolicy;
     emit({ type: 'document_policy', policy: documentPolicy });
 
@@ -3303,6 +3384,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     taskStore.markTaskStatus(task, status, {
       streamState,
+      documentPolicy,
       stats: {
         steps: completedStepCount,
         artifacts: artifacts.length,
@@ -3469,9 +3551,13 @@ module.exports = {
   pickAttachmentRecoveryRuntime,
   agentModelFailoverEnabled,
   resolveAgentModelFailoverRuntime,
+  resolveAgentModelFailoverRuntimes,
+  isUnrecoveredModelFailure,
+  upsertArtifactForDelivery,
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
   resolveAgentToolScopes,
+  shouldRunSourcePreservingEdit,
   shouldUseDeterministicAttachmentAnswer,
 };

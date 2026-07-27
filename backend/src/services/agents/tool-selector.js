@@ -35,7 +35,7 @@ const MIN_KEPT = Number(process.env.SIRAGPT_TOOL_SELECTION_MIN) || 8;
 
 // General-purpose tools kept on (almost) every agentic turn. `run_skill` gives
 // access to all policy-allowed specialized skills, so it stays available.
-const CORE_TOOLS = Object.freeze(['web_search', 'read_url', 'read_file', 'search_docs', 'run_skill']);
+const CORE_TOOLS = Object.freeze(['web_search', 'read_url', 'read_file', 'search_docs', 'run_skill', 'run_skill_pipeline']);
 
 // Tool-name → capability category (a tool can match several).
 const CATEGORY_PATTERNS = Object.freeze({

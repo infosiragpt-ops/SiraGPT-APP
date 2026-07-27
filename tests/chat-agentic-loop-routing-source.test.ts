@@ -111,6 +111,11 @@ describe("chat agentic loop routing source contract", () => {
   })
 
   it("renders generated speech artifacts as playable downloadable audio cards", () => {
+    const audioArtifactSource = sliceBetween(
+      "function AudioArtifactPlayer",
+      "function ArtifactDeliveryList",
+      agenticStepsSource,
+    )
     assert.match(agenticStepsSource, /function isAudioArtifact\(artifact: AgentArtifact\)/)
     assert.match(agenticStepsSource, /mime\.startsWith\("audio\/"\)/)
     assert.match(agenticStepsSource, /function AudioArtifactPlayer/)
@@ -120,14 +125,15 @@ describe("chat agentic loop routing source contract", () => {
     assert.match(agenticStepsSource, /const objectUrl = window\.URL\.createObjectURL\(blob\)/)
     assert.match(
       agenticStepsSource,
-      /fetch\(href, \{[\s\S]{0,120}credentials: "include"[\s\S]{0,120}headers: authHeaders\(\)/,
-      "audio playback must load owner-scoped artifacts through an authenticated blob fetch",
+      /function fetchArtifact\(href: string\)[\s\S]{0,220}isTrustedSiraApiUrl\(href, BACKEND_ROOT\)[\s\S]{0,120}authenticatedArtifactFetch\(href\)/,
+      "trusted artifact requests must use the shared authenticated transport",
     )
-    assert.match(
-      agenticStepsSource,
-      /downloadUrlAsFile\(href, filename, \{[\s\S]{0,120}credentials: "include"/,
-      "audio downloads must fetch the protected artifact as a real file",
+    assert.equal(
+      audioArtifactSource.match(/const response = await fetchArtifact\(href\)/g)?.length,
+      2,
+      "audio playback and download must both fetch through the trusted-origin transport",
     )
+    assert.match(audioArtifactSource, /downloadBlob\(await response\.blob\(\), filename\)/)
     assert.match(
       agenticStepsSource,
       /if \(isAudioArtifact\(artifact\)\) \{[\s\S]{0,180}<AudioArtifactPlayer/,

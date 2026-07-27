@@ -11,9 +11,13 @@ function freshRequire() {
   return require('../src/routes/metrics');
 }
 
+function processFormatter() {
+  return require('../src/services/observability/process-metrics-exposition');
+}
+
 test('formatExposition: emits Prometheus 0.0.4 format with required metrics', () => {
-  const { formatExposition } = freshRequire();
-  const text = formatExposition();
+  const { formatProcessMetricsExposition } = processFormatter();
+  const text = formatProcessMetricsExposition();
   // Required metrics + their TYPE lines
   for (const name of [
     'siragpt_build_info',
@@ -32,46 +36,47 @@ test('formatExposition: emits Prometheus 0.0.4 format with required metrics', ()
   assert.match(text, /siragpt_uptime_seconds \d+(\.\d+)?/);
 });
 
-test('checkAuth: open when METRICS_TOKEN unset', () => {
-  const { checkAuth } = freshRequire();
-  const orig = process.env.METRICS_TOKEN;
-  delete process.env.METRICS_TOKEN;
-  const req = { get: () => undefined };
-  assert.deepEqual(checkAuth(req), { ok: true });
-  if (orig) process.env.METRICS_TOKEN = orig;
-});
-
-test('checkAuth: rejects missing/wrong Bearer when METRICS_TOKEN set', () => {
-  const { checkAuth } = freshRequire();
-  const orig = process.env.METRICS_TOKEN;
-  process.env.METRICS_TOKEN = 'secret-xyz';
-  try {
-    assert.equal(checkAuth({ get: () => undefined }).ok, false);
-    assert.equal(checkAuth({ get: () => 'Bearer wrong' }).ok, false);
-    assert.equal(checkAuth({ get: () => 'Basic abc' }).ok, false);
-    assert.equal(checkAuth({ get: () => 'Bearer secret-xyz' }).ok, true);
-  } finally {
-    if (orig === undefined) delete process.env.METRICS_TOKEN;
-    else process.env.METRICS_TOKEN = orig;
-  }
-});
-
-test('router: exposes a single GET / handler', () => {
+test('router: delegates its compatibility path to the shared protected handler', () => {
   const router = freshRequire();
+  const { metricsHandler } = require('../src/services/observability/metrics-exposition');
   assert.equal(typeof router, 'function');
   const gets = router.stack.filter((l) => l.route?.methods?.get);
   assert.equal(gets.length, 1);
+  assert.equal(gets[0].route.path, '/');
+  assert.equal(gets[0].route.stack.at(-1).handle, metricsHandler);
 });
 
 test('formatExposition: ends with a newline (Prometheus parser requirement)', () => {
-  const { formatExposition } = freshRequire();
-  const text = formatExposition();
+  const { formatProcessMetricsExposition } = processFormatter();
+  const text = formatProcessMetricsExposition();
   assert.ok(text.endsWith('\n'));
 });
 
 test('formatExposition: includes FlashGPT/free-ia fallback counters', () => {
-  const { formatExposition } = freshRequire();
-  const text = formatExposition();
+  const { formatProcessMetricsExposition } = processFormatter();
+  const text = formatProcessMetricsExposition();
   assert.ok(/sira_free_ia_fallback_total/.test(text),
     'free-ia counters must be scrapeable from the main /metrics endpoint');
+});
+
+test('process formatter propagates cognitive exporter failures', () => {
+  const { formatProcessMetricsExposition } = processFormatter();
+  assert.throws(
+    () => formatProcessMetricsExposition({
+      cognitiveMetrics: { toPrometheusText() { throw new Error('cognitive export failed'); } },
+      freeIaMetrics: { toPrometheusText: () => '# HELP free ok\n# TYPE free counter\nfree 0\n' },
+    }),
+    /cognitive export failed/,
+  );
+});
+
+test('process formatter propagates Free-IA exporter failures', () => {
+  const { formatProcessMetricsExposition } = processFormatter();
+  assert.throws(
+    () => formatProcessMetricsExposition({
+      cognitiveMetrics: { toPrometheusText: () => '# HELP cognitive ok\n# TYPE cognitive counter\ncognitive 0\n' },
+      freeIaMetrics: { toPrometheusText() { throw new Error('free-ia export failed'); } },
+    }),
+    /free-ia export failed/,
+  );
 });

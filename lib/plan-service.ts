@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 export interface PlanResponse {
@@ -14,7 +16,7 @@ function authHeader(): Record<string, string> {
 
 export const planService = {
   async generate(brief: string, opts: { model?: string; signal?: AbortSignal } = {}): Promise<PlanResponse> {
-    const res = await fetch(`${API_ROOT}/plan/generate`, {
+    const res = await authenticatedFetch(`${API_ROOT}/plan/generate`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },

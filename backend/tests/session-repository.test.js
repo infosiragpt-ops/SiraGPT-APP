@@ -3,9 +3,31 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { SessionRepository } = require('../src/repositories/SessionRepository');
+const {
+  SESSION_TOKEN_SCOPE_APPSHOTS,
+  SESSION_TOKEN_SCOPE_SESSION,
+  digestSessionToken,
+  formatSessionTokenHash,
+  hashSessionToken,
+} = require('../src/services/auth/session-token-persistence');
+
+// This repository suite exercises the post-drain persistence contract. Compat
+// behavior has dedicated coverage in session-token-hashing.test.js.
+process.env.SESSION_TOKEN_HASH_MODE = 'hash';
+process.env.SESSION_TOKEN_HASH_COMPAT_DRAINED = '1';
 
 const passthroughRetry = (fn) => fn();
 const silentLogger = { warn: () => {}, log: () => {}, error: () => {} };
+
+function storedCandidates(token) {
+  const digest = digestSessionToken(token);
+  return [
+    token,
+    formatSessionTokenHash(digest, SESSION_TOKEN_SCOPE_SESSION),
+    formatSessionTokenHash(digest, SESSION_TOKEN_SCOPE_APPSHOTS),
+    digest,
+  ];
+}
 
 function makePrismaSpy({ createImpl, updateImpl, deleteManyImpl } = {}) {
   const calls = { create: [], update: [], deleteMany: [] };
@@ -44,8 +66,52 @@ test('create: writes fingerprint when supplied', async () => {
   const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
   await repo.create({ userId: 'u1', token: 'tok', expiresAt: new Date(0), fingerprint: 'fp1' });
   assert.deepEqual(prisma._calls.create[0].data, {
-    userId: 'u1', token: 'tok', expiresAt: new Date(0), fingerprint: 'fp1',
+    userId: 'u1', token: hashSessionToken('tok'), expiresAt: new Date(0), fingerprint: 'fp1',
   });
+});
+
+test('create: locks the user and re-reads active state inside the session transaction', async () => {
+  const calls = [];
+  const tx = {
+    async $queryRawUnsafe(sql) {
+      calls.push(/pg_advisory_xact_lock/i.test(sql) ? 'lock' : 'timeout');
+      return [{ locked: true }];
+    },
+    user: {
+      async findUnique() {
+        calls.push('user.read');
+        return { id: 'u1', deletedAt: null };
+      },
+    },
+    session: {
+      async create({ data }) {
+        calls.push('session.create');
+        return { id: 's1', ...data };
+      },
+    },
+  };
+  const prisma = {
+    user: { findUnique() {} },
+    session: { create() {} },
+    async $queryRawUnsafe() {},
+    async $transaction(callback) {
+      calls.push('transaction.begin');
+      const result = await callback(tx);
+      calls.push('transaction.commit');
+      return result;
+    },
+  };
+  const repo = new SessionRepository({
+    prisma,
+    withRetry: passthroughRetry,
+    logger: silentLogger,
+  });
+
+  await repo.create({ userId: 'u1', token: 'tok', expiresAt: new Date(0) });
+
+  assert.ok(calls.indexOf('lock') < calls.indexOf('user.read'));
+  assert.ok(calls.indexOf('user.read') < calls.indexOf('session.create'));
+  assert.ok(calls.indexOf('session.create') < calls.indexOf('transaction.commit'));
 });
 
 test('create: omits fingerprint key when not supplied (does not insert null)', async () => {
@@ -53,7 +119,7 @@ test('create: omits fingerprint key when not supplied (does not insert null)', a
   const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
   await repo.create({ userId: 'u1', token: 'tok', expiresAt: new Date(0) });
   assert.deepEqual(prisma._calls.create[0].data, {
-    userId: 'u1', token: 'tok', expiresAt: new Date(0),
+    userId: 'u1', token: hashSessionToken('tok'), expiresAt: new Date(0),
   });
   assert.equal('fingerprint' in prisma._calls.create[0].data, false);
 });
@@ -102,11 +168,20 @@ test('create: does NOT retry when fingerprint was not supplied (no false fallbac
   assert.equal(prisma._calls.create.length, 1);
 });
 
-test('deleteByToken: forwards token to deleteMany (idempotent)', async () => {
+test('deleteByToken: revokes hashed and rolling-deploy legacy rows (idempotent)', async () => {
   const prisma = makePrismaSpy();
   const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
   await repo.deleteByToken('tok');
-  assert.deepEqual(prisma._calls.deleteMany[0], { where: { token: 'tok' } });
+  assert.deepEqual(prisma._calls.deleteMany[0], {
+    where: { token: { in: storedCandidates('tok').slice(1).concat('tok') } },
+  });
+});
+
+test('deleteAllForUser: revokes every existing session for an inactive account', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
+  await repo.deleteAllForUser('deleted-user');
+  assert.deepEqual(prisma._calls.deleteMany[0], { where: { userId: 'deleted-user' } });
 });
 
 test('updateByToken: writes new token + fingerprint', async () => {
@@ -114,8 +189,8 @@ test('updateByToken: writes new token + fingerprint', async () => {
   const repo = new SessionRepository({ prisma, withRetry: passthroughRetry, logger: silentLogger });
   await repo.updateByToken('old', { newToken: 'new', expiresAt: new Date(0), fingerprint: 'fp2' });
   assert.deepEqual(prisma._calls.update[0], {
-    where: { token: 'old' },
-    data: { token: 'new', expiresAt: new Date(0), fingerprint: 'fp2' },
+    where: { token: hashSessionToken('old') },
+    data: { token: hashSessionToken('new'), expiresAt: new Date(0), fingerprint: 'fp2' },
   });
 });
 
@@ -187,7 +262,9 @@ test('deleteById + countActiveByUser + findActiveByUserPaged + deleteAllForUserE
   assert.equal(rows[0]._arg.take, 5);
   const del = await repo.deleteAllForUserExceptToken('u1', 'keep-tok');
   assert.equal(del.count, 7);
-  assert.deepEqual(del._arg.where.NOT, { token: 'keep-tok' });
+  assert.deepEqual(del._arg.where.NOT, {
+    token: { in: storedCandidates('keep-tok') },
+  });
 });
 
 test('countActiveByUser: returns null when prisma lacks count() (legacy test mocks)', async () => {
@@ -209,7 +286,7 @@ test('updateByToken: legacy-schema fallback drops fingerprint', async () => {
   await repo.updateByToken('old', { newToken: 'new', expiresAt: new Date(0), fingerprint: 'fp2' });
   assert.equal(prisma._calls.update.length, 2);
   assert.equal(prisma._calls.update[1].data.fingerprint, undefined);
-  assert.equal(prisma._calls.update[1].data.token, 'new');
+  assert.equal(prisma._calls.update[1].data.token, hashSessionToken('new'));
 });
 
 test('routes calls through withRetry with stable labels', async () => {

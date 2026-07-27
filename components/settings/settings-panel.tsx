@@ -33,6 +33,7 @@ import {
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
 import { useRouter as useNextRouter } from "next/navigation"
@@ -812,9 +813,8 @@ function ModelsSection() {
   const [loading, setLoading] = React.useState(true)
 
   React.useEffect(() => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
     const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-    fetch(`${base}/ai/models?type=TEXT`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+    fetch(`${base}/ai/models?type=TEXT`)
       .then((r) => r.ok ? r.json() : { models: [] })
       .then((d) => setModels(d.models || []))
       .catch(() => setModels([]))
@@ -1220,9 +1220,8 @@ function DataControlsSection() {
   const downloadData = async () => {
     setExporting(true)
     try {
-      const token = localStorage.getItem("auth-token")
       const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-      const r = await fetch(`${base}/users/data-export`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+      const r = await authenticatedFetch(`${base}/users/data-export`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const blob = await r.blob()
       const url = URL.createObjectURL(blob)

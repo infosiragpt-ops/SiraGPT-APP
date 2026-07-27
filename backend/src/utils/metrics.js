@@ -15,45 +15,74 @@
 
 'use strict';
 
+const {
+  decodeLabelKeyValue,
+  escapePrometheusLabelValue,
+  resolveMaxSeriesPerFamily,
+  selectSeriesKey,
+} = require('./prometheus-labels');
+
 // name → { type, help, labels, series: Map<labelKey, value|histogramRecord> [, buckets] }
 const registry = new Map();
 
-function _normalizeLabels(labels) {
-  if (!labels) return {};
-  if (typeof labels !== 'object') return {};
-  return labels;
-}
-
-function _labelKey(labelNames, labels) {
-  const norm = _normalizeLabels(labels);
-  return labelNames
-    .map((n) => `${n}=${String(norm[n] ?? '').replace(/[\\"\n,]/g, '_')}`)
-    .join(',');
-}
-
-function registerCounter(name, { help = '', labels = [] } = {}) {
+function registerCounter(name, {
+  help = '',
+  labels = [],
+  maxSeries,
+} = {}) {
   if (registry.has(name)) return;
-  registry.set(name, { type: 'counter', help, labels, series: new Map() });
+  registry.set(name, {
+    type: 'counter',
+    help,
+    labels,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
-function registerGauge(name, { help = '', labels = [] } = {}) {
+function registerGauge(name, {
+  help = '',
+  labels = [],
+  maxSeries,
+  suppressWhenEmpty = false,
+} = {}) {
   if (registry.has(name)) return;
-  registry.set(name, { type: 'gauge', help, labels, series: new Map() });
+  registry.set(name, {
+    type: 'gauge',
+    help,
+    labels,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    suppressWhenEmpty: Boolean(suppressWhenEmpty),
+    series: new Map(),
+  });
 }
 
-function registerHistogram(name, { help = '', labels = [], buckets = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10] } = {}) {
+function registerHistogram(name, {
+  help = '',
+  labels = [],
+  buckets = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  maxSeries,
+} = {}) {
   if (registry.has(name)) return;
   // Defensive copy, sorted ascending
   const sortedBuckets = Array.from(new Set(buckets.map(Number).filter((n) => Number.isFinite(n))))
     .sort((a, b) => a - b);
-  registry.set(name, { type: 'histogram', help, labels, buckets: sortedBuckets, series: new Map() });
+  registry.set(name, {
+    type: 'histogram',
+    help,
+    labels,
+    buckets: sortedBuckets,
+    maxSeries: resolveMaxSeriesPerFamily(maxSeries),
+    series: new Map(),
+  });
 }
 
 function counter(name, labels = {}, delta = 1) {
   const m = registry.get(name);
   if (!m || m.type !== 'counter') return;
   if (!Number.isFinite(delta) || delta < 0) return;
-  const k = _labelKey(m.labels, labels);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
   m.series.set(k, (m.series.get(k) || 0) + delta);
 }
 
@@ -61,14 +90,17 @@ function gauge(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'gauge') return;
   if (!Number.isFinite(value)) return;
-  m.series.set(_labelKey(m.labels, labels), value);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
+  m.series.set(k, value);
 }
 
 function observe(name, labels = {}, value = 0) {
   const m = registry.get(name);
   if (!m || m.type !== 'histogram') return;
   if (!Number.isFinite(value) || value < 0) return;
-  const k = _labelKey(m.labels, labels);
+  const k = selectSeriesKey(m, labels);
+  if (k === null) return;
   let rec = m.series.get(k);
   if (!rec) {
     rec = { count: 0, sum: 0, bucketCounts: new Array(m.buckets.length).fill(0) };
@@ -83,18 +115,15 @@ function observe(name, labels = {}, value = 0) {
 
 // ── Rendering ────────────────────────────────────────────────────────────
 
-function _escapeLabelValue(v) {
-  return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-}
-
 function _renderLabelString(labelNames, key, extra) {
   const parts = [];
   if (key) {
     const pieces = key.split(',');
     for (let i = 0; i < pieces.length; i += 1) {
       const eq = pieces[i].indexOf('=');
-      const value = eq >= 0 ? pieces[i].slice(eq + 1) : '';
-      parts.push(`${labelNames[i]}="${_escapeLabelValue(value)}"`);
+      const encodedValue = eq >= 0 ? pieces[i].slice(eq + 1) : '';
+      const value = decodeLabelKeyValue(encodedValue);
+      parts.push(`${labelNames[i]}="${escapePrometheusLabelValue(value)}"`);
     }
   }
   if (extra) parts.push(extra);
@@ -116,7 +145,7 @@ function _renderCounter(name, m) {
 function _renderGauge(name, m) {
   const out = [`# HELP ${name} ${m.help || ''}`, `# TYPE ${name} gauge`];
   if (m.series.size === 0) {
-    out.push(`${name} 0`);
+    if (!m.suppressWhenEmpty) out.push(`${name} 0`);
   } else {
     for (const [k, v] of m.series) {
       out.push(`${name}${_renderLabelString(m.labels, k)} ${v}`);
@@ -161,17 +190,60 @@ function _clearRegistry() {
 
 // ── Default metric families used by /metrics ─────────────────────────────
 registerCounter('siragpt_http_requests_total', {
-  help: 'Total HTTP requests served by SiraGPT, labelled by method, matched route, and status code',
-  labels: ['method', 'route', 'status'],
+  help: 'Total HTTP requests served by SiraGPT, labelled by method, matched route, status code, and bounded request class',
+  labels: ['method', 'route', 'status', 'request_class'],
 });
 registerHistogram('siragpt_http_request_duration_seconds', {
-  help: 'HTTP request latency in seconds, bucketed for Prometheus histograms',
-  labels: ['method', 'route'],
-  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  help: 'HTTP request latency in seconds, bucketed by matched route and bounded request class',
+  labels: ['method', 'route', 'request_class'],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2.5, 3, 5, 10],
+});
+registerCounter('siragpt_http_slo_requests_total', {
+  help: 'Low-cardinality HTTP requests for SLOs, labelled only by bounded request and status classes',
+  labels: ['request_class', 'status_class'],
+  // 3 request classes × 6 status classes, plus one defensive overflow slot.
+  maxSeries: 19,
+});
+registerHistogram('siragpt_http_slo_request_duration_seconds', {
+  help: 'Low-cardinality HTTP request latency for SLOs, labelled only by bounded request class',
+  labels: ['request_class'],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2.5, 3, 5, 10],
+  // 3 request classes, plus one defensive overflow slot.
+  maxSeries: 4,
 });
 registerGauge('siragpt_circuit_breaker_state', {
   help: 'Circuit breaker state per named breaker (0=closed, 1=half_open, 2=open)',
   labels: ['name'],
+});
+registerGauge('siragpt_queue_jobs', {
+  help: 'BullMQ jobs observed by the shared health probe, labelled by physical queue and state',
+  labels: ['queue', 'state'],
+  maxSeries: 100,
+  suppressWhenEmpty: true,
+});
+registerGauge('siragpt_queue_probe_up', {
+  help: 'Whether the shared health probe reached each configured physical queue (1=ready, 0=failed)',
+  labels: ['queue'],
+  maxSeries: 20,
+  suppressWhenEmpty: true,
+});
+registerGauge('siragpt_queue_probe_status', {
+  help: 'Current aggregate shared queue probe status as a one-hot gauge',
+  labels: ['status'],
+  maxSeries: 10,
+  suppressWhenEmpty: true,
+});
+registerGauge('siragpt_queue_probe_last_success_timestamp_seconds', {
+  help: 'Unix timestamp in seconds of the last successful shared health probe for each physical queue',
+  labels: ['queue'],
+  maxSeries: 20,
+  suppressWhenEmpty: true,
+});
+registerGauge('siragpt_queue_probe_staleness_seconds', {
+  help: 'Seconds elapsed since the last successful shared health probe for each physical queue',
+  labels: ['queue'],
+  maxSeries: 20,
+  suppressWhenEmpty: true,
 });
 registerGauge('siragpt_async_guards_active', {
   help: 'Active AsyncGuard tokens currently tracked in this process',
@@ -390,6 +462,84 @@ function recordAIStreamUsage(opts) {
 // ── Helpers that snapshot live state into the registry ───────────────────
 
 const CB_STATE_VALUE = { CLOSED: 0, HALF_OPEN: 1, OPEN: 2 };
+const QUEUE_JOB_STATES = Object.freeze([
+  'waiting',
+  'active',
+  'completed',
+  'failed',
+  'delayed',
+  'paused',
+]);
+const QUEUE_PROBE_STATUSES = new Set(['ready', 'degraded', 'unhealthy', 'disabled']);
+
+/**
+ * Replace queue gauges from one shared health-probe snapshot. Only bounded
+ * queue/state/status labels are exported; diagnostic errors stay in the
+ * protected health response and never become Prometheus labels or samples.
+ */
+function refreshQueueStalenessMetrics(nowMs = Date.now()) {
+  try {
+    const lastSuccessMetric = registry.get('siragpt_queue_probe_last_success_timestamp_seconds');
+    const stalenessMetric = registry.get('siragpt_queue_probe_staleness_seconds');
+    if (!lastSuccessMetric || !stalenessMetric) return false;
+    const nowSeconds = Math.max(0, Number(nowMs) / 1000);
+    if (!Number.isFinite(nowSeconds)) return false;
+    stalenessMetric.series.clear();
+    for (const [key, timestampSeconds] of lastSuccessMetric.series) {
+      const timestamp = Number(timestampSeconds);
+      if (!Number.isFinite(timestamp) || timestamp < 0) continue;
+      stalenessMetric.series.set(key, Math.max(0, nowSeconds - timestamp));
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function refreshQueueMetrics(snapshot, { nowMs = Date.now() } = {}) {
+  try {
+    const jobsMetric = registry.get('siragpt_queue_jobs');
+    const upMetric = registry.get('siragpt_queue_probe_up');
+    const statusMetric = registry.get('siragpt_queue_probe_status');
+    jobsMetric?.series.clear();
+    upMetric?.series.clear();
+    statusMetric?.series.clear();
+
+    const aggregateStatus = String(snapshot?.status || '');
+    if (QUEUE_PROBE_STATUSES.has(aggregateStatus)) {
+      gauge('siragpt_queue_probe_status', { status: aggregateStatus }, 1);
+    }
+
+    for (const queue of Array.isArray(snapshot?.queues) ? snapshot.queues : []) {
+      const queueName = String(queue?.name || '').trim().slice(0, 128);
+      if (!queueName) continue;
+      if (queue.status !== 'skipped') {
+        gauge('siragpt_queue_probe_up', { queue: queueName }, queue.status === 'ready' ? 1 : 0);
+      }
+      if (queue.status === 'ready') {
+        gauge(
+          'siragpt_queue_probe_last_success_timestamp_seconds',
+          { queue: queueName },
+          Math.max(0, Math.floor(Number(nowMs) / 1000)),
+        );
+      }
+      if (!queue.jobs || typeof queue.jobs !== 'object') continue;
+      for (const state of QUEUE_JOB_STATES) {
+        const count = Number(queue.jobs[state]);
+        gauge(
+          'siragpt_queue_jobs',
+          { queue: queueName, state },
+          Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0,
+        );
+      }
+    }
+    refreshQueueStalenessMetrics(nowMs);
+    return true;
+  } catch {
+    // Queue instrumentation must never alter readiness behavior.
+    return false;
+  }
+}
 
 /**
  * Track a CircuitBreaker instance — every time the breaker transitions
@@ -497,6 +647,7 @@ function refreshProcessMetrics() {
     gauge('siragpt_nodejs_memory_bytes', { type: 'heapUsed' }, mem.heapUsed);
     gauge('siragpt_nodejs_memory_bytes', { type: 'heapTotal' }, mem.heapTotal);
     gauge('siragpt_nodejs_memory_bytes', { type: 'external' }, mem.external || 0);
+    refreshQueueStalenessMetrics();
   } catch {
     // never throw from instrumentation
   }
@@ -512,6 +663,8 @@ module.exports = {
   renderText,
   registry,
   trackCircuitBreaker,
+  refreshQueueMetrics,
+  refreshQueueStalenessMetrics,
   incActiveGuards,
   decActiveGuards,
   getActiveGuards,

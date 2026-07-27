@@ -48,12 +48,17 @@ test('backfill migration: every INSERT is idempotent via WHERE NOT EXISTS', () =
   );
 });
 
-test('backfill migration: maps isSuperAdmin to SUPERADMIN role and others to USER', () => {
+test('backfill migration: maps isSuperAdmin/isAdmin to SUPERADMIN role and others to USER', () => {
   const sql = readMigration();
+  // U0 empty-DB path: prefer isSuperAdmin when the column exists, else
+  // fall back to isAdmin so migrate deploy never references a missing col.
+  assert.match(sql, /information_schema\.columns/, 'must probe column presence');
+  assert.match(sql, /to_jsonb\(u\)->>'isSuperAdmin'/, 'must read isSuperAdmin dynamically');
+  assert.match(sql, /u\."isAdmin"/, 'must fall back to isAdmin');
   assert.match(
     sql,
-    /CASE WHEN u\."isSuperAdmin" THEN 'SUPERADMIN' ELSE 'USER' END/,
-    'global role assignment must branch on isSuperAdmin',
+    /THEN 'SUPERADMIN'\s+ELSE 'USER'\s+END/,
+    'global role assignment must map truthy admin flag → SUPERADMIN else USER',
   );
 });
 

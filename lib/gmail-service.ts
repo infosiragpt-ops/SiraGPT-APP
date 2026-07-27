@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 // Simple Gmail service - only handles OAuth connection
 class GmailService {
   private baseURL: string
@@ -22,7 +24,7 @@ class GmailService {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const response = await fetch(`${this.baseURL}/auth/gmail`, {
+      const response = await authenticatedFetch(`${this.baseURL}/auth/gmail`, {
         method: 'GET',
         credentials: 'include',
         headers,

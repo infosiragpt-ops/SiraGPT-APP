@@ -1,9 +1,9 @@
 'use strict';
 
 const bcrypt = require('bcryptjs');
-
-const DEV_ADMIN_EMAIL = 'carrerajorge874@gmail.com';
-const DEV_ADMIN_PASSWORD = '123456';
+const {
+  publishUserSessionsRevoked,
+} = require('./auth/user-session-revocation-events');
 
 /**
  * LoginService — owns the email/password login pipeline:
@@ -56,6 +56,7 @@ class LoginService {
     orgRequiresTwoFactor,
     twoFASms,
     mintPartialSession,
+    publishSessionsRevoked = publishUserSessionsRevoked,
     sessionTtlMs = 7 * 24 * 60 * 60 * 1000,
     now = () => new Date(),
     logger = console,
@@ -104,6 +105,9 @@ class LoginService {
     this.mintPartialSession = typeof mintPartialSession === 'function'
       ? mintPartialSession
       : null;
+    this.publishSessionsRevoked = typeof publishSessionsRevoked === 'function'
+      ? publishSessionsRevoked
+      : async () => {};
     this.sessionTtlMs = sessionTtlMs;
     this.now = now;
     this.logger = logger;
@@ -115,20 +119,6 @@ class LoginService {
    * try/catch can return 500 with the legacy body shape.
    */
   async login({ email, password, req }) {
-    const isDevAdminLogin = this._isDevAdminLogin(email, password);
-    if (isDevAdminLogin) {
-      const user = await this._ensureDevAdminUser(email);
-      this.lockout.recordSuccess(email);
-      this._fireAudit(req, {
-        action: 'login_success',
-        resource: 'user',
-        resourceId: user.id,
-        actorName: email,
-        metadata: { reason: 'dev_admin_bypass' },
-      });
-      return this._mintFullSession(user, req);
-    }
-
     // SSO domain claim — if any org has claimed the user's email
     // domain AND ssoEnabled = true, bounce password auth so it can't
     // bypass the org's IdP.
@@ -181,6 +171,14 @@ class LoginService {
         });
       }
       return { ok: false, kind: 'invalid_credentials' };
+    }
+
+    // A tombstoned account is never eligible for password verification, 2FA
+    // challenge minting, or session minting. Revoke the whole session family
+    // so tokens issued before deletion cannot remain usable, while returning
+    // the same opaque response as unknown/bad credentials.
+    if (user.deletedAt != null) {
+      return this._denyInactiveUser(user, req);
     }
 
     const isValidPassword = await this.comparePassword(password, user.password);
@@ -246,6 +244,9 @@ class LoginService {
         }
         return result;
       } catch (e) {
+        if (e?.code === 'ACCOUNT_INACTIVE') {
+          return this._denyInactiveUser(user, req);
+        }
         this.logger.error?.('[auth/login] 2fa challenge mint failed:', e?.message || e);
         return { ok: false, kind: 'sms_2fa_mint_failed' };
       }
@@ -273,64 +274,22 @@ class LoginService {
           expiresAt: partial.expiresAt,
         };
       } catch (e) {
+        if (e?.code === 'ACCOUNT_INACTIVE') {
+          return this._denyInactiveUser(user, req);
+        }
         this.logger.error?.('[auth/login] partial-session mint failed:', e?.message || e);
         return { ok: false, kind: 'totp_partial_mint_failed' };
       }
     }
 
-    return this._mintFullSession(user, req);
-  }
-
-  _isDevAdminLogin(email, password) {
-    return process.env.NODE_ENV === 'development'
-      && String(email || '').toLowerCase() === DEV_ADMIN_EMAIL
-      && password === DEV_ADMIN_PASSWORD;
-  }
-
-  async _ensureDevAdminUser(email) {
-    if (!this.prisma?.user) {
-      throw new Error('LoginService: prisma.user is required for dev admin bypass');
+    try {
+      return await this._mintFullSession(user, req);
+    } catch (error) {
+      if (error?.code === 'ACCOUNT_INACTIVE') {
+        return this._denyInactiveUser(user, req);
+      }
+      throw error;
     }
-
-    const passwordHash = await bcrypt.hash(DEV_ADMIN_PASSWORD, 10);
-    const existing = await this.users.findByEmail(email).catch(() => null);
-    if (!existing) {
-      return this.prisma.user.create({
-        data: {
-          name: 'Admin Dev',
-          email,
-          password: passwordHash,
-          plan: 'ENTERPRISE',
-          isAdmin: true,
-          isSuperAdmin: true,
-          monthlyCallLimit: 1000000,
-          monthlyLimit: 1000000000,
-          emailVerifiedAt: new Date(),
-        },
-      });
-    }
-
-    if (
-      existing.isAdmin
-      && existing.isSuperAdmin
-      && existing.emailVerifiedAt
-      && existing.password
-    ) {
-      return existing;
-    }
-
-    return this.prisma.user.update({
-      where: { id: existing.id },
-      data: {
-        password: existing.password || passwordHash,
-        isAdmin: true,
-        isSuperAdmin: true,
-        plan: 'ENTERPRISE',
-        monthlyCallLimit: 1000000,
-        monthlyLimit: 1000000000,
-        emailVerifiedAt: existing.emailVerifiedAt || new Date(),
-      },
-    });
   }
 
   async _mintFullSession(user, req) {
@@ -345,6 +304,33 @@ class LoginService {
     await this.sessions.create({ userId: user.id, token, expiresAt, fingerprint });
 
     return { ok: true, user, token, expiresAt };
+  }
+
+  async _denyInactiveUser(user, req) {
+    try {
+      if (typeof this.sessions.deleteAllForUser === 'function') {
+        await this.sessions.deleteAllForUser(user.id);
+      } else if (typeof this.prisma?.session?.deleteMany === 'function') {
+        await this.prisma.session.deleteMany({ where: { userId: user.id } });
+      }
+    } catch (error) {
+      this.logger.error?.(
+        '[auth/login] failed to revoke inactive-user sessions:',
+        error?.message || error,
+      );
+    }
+    await this.publishSessionsRevoked({
+      userId: user.id,
+      reason: 'account_inactive',
+    });
+    this._fireAudit(req, {
+      action: 'login_failed',
+      resource: 'user',
+      resourceId: user.id,
+      actorName: user.email,
+      metadata: { reason: 'inactive_user' },
+    });
+    return { ok: false, kind: 'invalid_credentials' };
   }
 
   _shouldGateSms(user) {

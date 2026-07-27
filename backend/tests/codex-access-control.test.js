@@ -3,7 +3,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { canUseCodexAgent, parseAllowlist, publicAccess } = require('../src/services/codex/access-control');
+const {
+  canUseCodexAgent,
+  parseAllowlist,
+  publicAccess,
+  openToAll,
+  openToAllRequested,
+  multiTenantIsolationReady,
+} = require('../src/services/codex/access-control');
 
 test('codex access allows admins and superadmins', () => {
   assert.equal(canUseCodexAgent({ id: 'u-1', isAdmin: true }, {}), true);
@@ -18,15 +25,68 @@ test('codex access allows explicit user ids from env allowlist', () => {
   assert.equal(canUseCodexAgent({ id: 'other' }, env), false);
 });
 
-test('CODEX_AGENT_OPEN_TO_ALL lets any authenticated user through (but not anonymous)', () => {
+test('CODEX_AGENT_OPEN_TO_ALL still requires an isolated provider (and authentication)', () => {
   const env = { CODEX_AGENT_OPEN_TO_ALL: '1' };
-  assert.equal(canUseCodexAgent({ id: 'anyone' }, env), true);
+  const isolatedRuntime = {
+    attestation: {
+      isolation: { isolated: true, tenantScope: 'workspace' },
+      capabilities: { publicMultiTenant: true },
+    },
+  };
+  assert.equal(canUseCodexAgent({ id: 'anyone' }, env), false);
+  assert.equal(canUseCodexAgent({ id: 'anyone' }, env, isolatedRuntime), true);
   assert.equal(canUseCodexAgent(null, env), false); // still needs a user
-  assert.equal(canUseCodexAgent({ id: 'x' }, { CODEX_AGENT_OPEN_TO_ALL: 'true' }), true);
+  assert.equal(canUseCodexAgent({ id: 'x' }, { CODEX_AGENT_OPEN_TO_ALL: 'true' }, isolatedRuntime), true);
   assert.equal(canUseCodexAgent({ id: 'x' }, { CODEX_AGENT_OPEN_TO_ALL: 'off' }), false);
   assert.equal(canUseCodexAgent({ id: 'x' }, {}), false); // default off
-  assert.equal(publicAccess({ id: 'u' }, env).canRun, true);
-  assert.equal(publicAccess({ id: 'u' }, env).allowlistConfigured, true);
+  assert.equal(publicAccess({ id: 'u' }, env, isolatedRuntime).canRun, true);
+  assert.equal(publicAccess({ id: 'u' }, env, isolatedRuntime).allowlistConfigured, true);
+});
+
+test('production public access fails closed on a shared runner', () => {
+  const shared = {
+    NODE_ENV: 'production',
+    CODEX_AGENT_OPEN_TO_ALL: '1',
+    CODEX_RUNNER_ISOLATION_MODE: 'shared-container',
+  };
+  assert.equal(openToAllRequested(shared), true);
+  assert.equal(multiTenantIsolationReady(shared), false);
+  assert.equal(openToAll(shared), false);
+  assert.equal(canUseCodexAgent({ id: 'ordinary-user' }, shared), false);
+  // Trusted operators/canaries remain available while migration is underway.
+  assert.equal(canUseCodexAgent({ id: 'admin', isAdmin: true }, shared), true);
+  assert.equal(canUseCodexAgent({ id: 'canary' }, { ...shared, CODEX_AGENT_ALLOWED_USER_IDS: 'canary' }), true);
+});
+
+test('production public access ignores operator isolation labels without provider attestation', () => {
+  for (const mode of ['opensandbox', 'gvisor', 'kata', 'microvm', 'e2b']) {
+    const env = { NODE_ENV: 'production', CODEX_AGENT_OPEN_TO_ALL: 'true', CODEX_RUNNER_ISOLATION_MODE: mode };
+    assert.equal(multiTenantIsolationReady(env), false, mode);
+    assert.equal(openToAll(env), false, mode);
+    assert.equal(canUseCodexAgent({ id: 'u' }, env), false, mode);
+  }
+});
+
+test('production public access requires a boot-validated isolated provider attestation', () => {
+  const env = { NODE_ENV: 'production', CODEX_AGENT_OPEN_TO_ALL: 'true' };
+  const isolatedRuntime = {
+    attestation: {
+      isolation: { isolated: true, tenantScope: 'workspace' },
+      capabilities: { publicMultiTenant: true },
+    },
+  };
+  assert.equal(multiTenantIsolationReady(env, isolatedRuntime), true);
+  assert.equal(openToAll(env, isolatedRuntime), true);
+  assert.equal(canUseCodexAgent({ id: 'u' }, env, isolatedRuntime), true);
+
+  const falseAttestation = {
+    attestation: {
+      isolation: { isolated: false, tenantScope: 'shared' },
+      capabilities: { publicMultiTenant: true },
+    },
+  };
+  assert.equal(multiTenantIsolationReady(env, falseAttestation), false);
+  assert.equal(openToAll(env, falseAttestation), false);
 });
 
 test('publicAccess exposes only coarse gate state', () => {

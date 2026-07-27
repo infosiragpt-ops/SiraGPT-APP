@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 type PageSettings = {
   siteName: string
@@ -47,15 +48,12 @@ const EMPTY_SETTINGS: PageSettings = {
 }
 
 async function adminFetch(path: string, init?: RequestInit): Promise<any> {
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
-  const res = await fetch(path, {
+  const res = await authenticatedFetch(path, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers || {}),
     },
-    credentials: "include",
   })
   if (!res.ok) {
     const err: any = new Error(`HTTP ${res.status}`)

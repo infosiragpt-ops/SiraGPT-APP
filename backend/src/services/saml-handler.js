@@ -1,5 +1,17 @@
 'use strict';
 
+const crypto = require('node:crypto');
+const { XMLParser, XMLValidator } = require('fast-xml-parser');
+const {
+  DEFAULT_SAML_REQUEST_TTL_MS,
+  SAML_REQUEST_STORE_UNAVAILABLE,
+  getDefaultSamlRequestStore,
+} = require('./saml-request-store');
+const {
+  createSamlPreAuthNonce,
+  hashSamlPreAuthNonce,
+} = require('./saml-preauth-cookie');
+
 /**
  * SAML response handler — ratchet 45 (extends cycle 87 SSO scaffold).
  *
@@ -22,6 +34,7 @@
 
 let cachedSdk;
 let sdkLoadAttempted = false;
+const MAX_SAML_RESPONSE_BASE64_BYTES = 1024 * 1024;
 
 function loadNodeSaml() {
   if (sdkLoadAttempted) return cachedSdk;
@@ -83,11 +96,15 @@ function isReady(ssoConfig) {
   return { ok: true, sdk };
 }
 
-function buildSamlClient(sdk, ssoConfig) {
+function buildSamlClient(sdk, ssoConfig, {
+  cacheProvider,
+  generateUniqueId,
+  requestIdExpirationPeriodMs = DEFAULT_SAML_REQUEST_TTL_MS,
+} = {}) {
   // @node-saml/node-saml exports a `SAML` class. We instantiate per-request
   // with the org's config so we never accidentally cross-pollinate certs.
   const SAML = sdk.SAML || sdk.default?.SAML || sdk;
-  return new SAML({
+  const options = {
     entryPoint: ssoConfig.entryPoint,
     issuer: ssoConfig.issuer,
     callbackUrl: ssoConfig.callbackUrl,
@@ -95,8 +112,128 @@ function buildSamlClient(sdk, ssoConfig) {
     cert: ssoConfig.cert, // alias for older lib versions
     audience: ssoConfig.audience || ssoConfig.issuer,
     wantAssertionsSigned: true,
+    wantAuthnResponseSigned: true,
+    validateInResponseTo: 'always',
+    requestIdExpirationPeriodMs,
+    cacheProvider,
+    signatureAlgorithm: 'sha256',
     disableRequestedAuthnContext: true,
-  });
+  };
+  if (typeof generateUniqueId === 'function') options.generateUniqueId = generateUniqueId;
+  return new SAML(options);
+}
+
+function requestStoreUnavailable() {
+  return {
+    ok: false,
+    status: 503,
+    error: 'saml_request_store_unavailable',
+    retryAfter: 1,
+  };
+}
+
+function samlRejection(error, hint) {
+  return {
+    ok: false,
+    status: 401,
+    error,
+    ...(hint ? { hint } : {}),
+  };
+}
+
+function inspectSamlResponseEnvelope(samlResponse) {
+  if (
+    typeof samlResponse !== 'string'
+    || !samlResponse.trim()
+    || Buffer.byteLength(samlResponse, 'utf8') > MAX_SAML_RESPONSE_BASE64_BYTES
+    || !/^[A-Za-z0-9+/]*={0,2}$/.test(samlResponse)
+  ) {
+    throw new Error('SAML_RESPONSE_ENVELOPE_INVALID');
+  }
+
+  const xml = Buffer.from(samlResponse, 'base64').toString('utf8');
+  if (!xml || Buffer.byteLength(xml, 'utf8') > MAX_SAML_RESPONSE_BASE64_BYTES) {
+    throw new Error('SAML_RESPONSE_ENVELOPE_INVALID');
+  }
+  if (/<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) {
+    throw new Error('SAML_RESPONSE_ENVELOPE_INVALID');
+  }
+
+  let parsed;
+  try {
+    parsed = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '',
+      removeNSPrefix: true,
+      processEntities: false,
+      parseAttributeValue: false,
+      trimValues: true,
+    }).parse(xml);
+  } catch (_error) {
+    throw new Error('SAML_RESPONSE_ENVELOPE_INVALID');
+  }
+  const response = parsed?.Response;
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('SAML_RESPONSE_ENVELOPE_INVALID');
+  }
+  return {
+    destination: typeof response.Destination === 'string' ? response.Destination : null,
+    inResponseTo: typeof response.InResponseTo === 'string' ? response.InResponseTo : null,
+  };
+}
+
+function randomRequestId(randomBytes = crypto.randomBytes) {
+  return `_${Buffer.from(randomBytes(20)).toString('hex')}`;
+}
+
+async function initiateSamlLogin(ssoConfig, deps = {}) {
+  const loader = deps.loadSaml || loadNodeSaml;
+  const ready = (() => {
+    if (!ssoConfig || typeof ssoConfig !== 'object' || ssoConfig.provider !== 'saml') {
+      return { ok: false, problem: notConfigured('provider is not "saml"') };
+    }
+    if (!ssoConfig.cert || !ssoConfig.entryPoint || !ssoConfig.issuer || !ssoConfig.callbackUrl) {
+      return { ok: false, problem: notConfigured('entryPoint/issuer/callbackUrl/cert missing') };
+    }
+    const sdk = loader();
+    return sdk ? { ok: true, sdk } : { ok: false, problem: libMissing() };
+  })();
+  if (!ready.ok) return ready.problem;
+
+  const orgSlug = String(deps.orgSlug || '').trim().toLowerCase();
+  const requestStore = deps.requestStore || getDefaultSamlRequestStore();
+  try {
+    await requestStore.ensureAvailable();
+    const requestId = randomRequestId(deps.randomBytes || crypto.randomBytes);
+    const preAuthNonce = createSamlPreAuthNonce(deps.randomBytes || crypto.randomBytes);
+    const relayState = await requestStore.issueRelayState({
+      orgSlug,
+      requestId,
+      preAuthNonceHash: hashSamlPreAuthNonce(preAuthNonce),
+    });
+    const client = buildSamlClient(ready.sdk, ssoConfig, {
+      cacheProvider: requestStore.createCacheProvider(orgSlug),
+      generateUniqueId: () => requestId,
+      requestIdExpirationPeriodMs: requestStore.status().ttlMs,
+    });
+    const url = await client.getAuthorizeUrlAsync(relayState, undefined, {});
+    return {
+      ok: true,
+      url,
+      requestId,
+      preAuthNonce,
+      ttlMs: requestStore.status().ttlMs,
+    };
+  } catch (error) {
+    if (error?.code === SAML_REQUEST_STORE_UNAVAILABLE) {
+      return requestStoreUnavailable();
+    }
+    return {
+      ok: false,
+      status: 500,
+      error: 'saml_login_initialization_failed',
+    };
+  }
 }
 
 function extractEmailFromProfile(profile) {
@@ -175,8 +312,53 @@ async function verifySamlResponse(samlResponse, ssoConfig, deps = {}) {
     };
   }
 
+  const requestStore = deps.requestStore || getDefaultSamlRequestStore();
+  const orgSlug = String(deps.orgSlug || '').trim().toLowerCase();
+  let requestId;
+  let envelope;
   try {
-    const client = buildSamlClient(ready.sdk, ssoConfig);
+    await requestStore.ensureAvailable();
+    if (typeof deps.relayState !== 'string' || !deps.relayState) {
+      return samlRejection('saml_relay_state_invalid');
+    }
+    let preAuthNonceHash;
+    try {
+      preAuthNonceHash = hashSamlPreAuthNonce(deps.preAuthNonce);
+    } catch (_error) {
+      return samlRejection('saml_browser_binding_invalid');
+    }
+    try {
+      ({ requestId } = await requestStore.consumeRelayState({
+        relayState: deps.relayState,
+        orgSlug,
+        preAuthNonceHash,
+      }));
+    } catch (error) {
+      if (error?.code === 'SAML_RELAY_STATE_EXPIRED') {
+        return samlRejection('saml_relay_state_expired');
+      }
+      if (error?.code === 'SAML_BROWSER_BINDING_INVALID') {
+        return samlRejection('saml_browser_binding_invalid');
+      }
+      return samlRejection('saml_relay_state_invalid');
+    }
+
+    try {
+      envelope = inspectSamlResponseEnvelope(samlResponse);
+    } catch (_error) {
+      return samlRejection('saml_response_invalid', 'invalid SAML response envelope');
+    }
+    if (!envelope.inResponseTo || envelope.inResponseTo !== requestId) {
+      return samlRejection('saml_in_response_to_invalid');
+    }
+    if (!envelope.destination || envelope.destination !== ssoConfig.callbackUrl) {
+      return samlRejection('saml_destination_invalid');
+    }
+
+    const client = buildSamlClient(ready.sdk, ssoConfig, {
+      cacheProvider: requestStore.createCacheProvider(orgSlug),
+      requestIdExpirationPeriodMs: requestStore.status().ttlMs,
+    });
     // node-saml exposes `validatePostResponseAsync({ SAMLResponse })`.
     const result = await client.validatePostResponseAsync({ SAMLResponse: samlResponse });
     const profile = (result && (result.profile || result)) || null;
@@ -195,6 +377,9 @@ async function verifySamlResponse(samlResponse, ssoConfig, deps = {}) {
       displayName: extractNameFromProfile(profile),
     };
   } catch (err) {
+    if (err?.code === SAML_REQUEST_STORE_UNAVAILABLE) {
+      return requestStoreUnavailable();
+    }
     return {
       ok: false,
       status: 401,
@@ -205,6 +390,9 @@ async function verifySamlResponse(samlResponse, ssoConfig, deps = {}) {
 }
 
 module.exports = {
+  buildSamlClient,
+  initiateSamlLogin,
+  inspectSamlResponseEnvelope,
   verifySamlResponse,
   extractEmailFromProfile,
   extractNameFromProfile,

@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { toast } from "sonner"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 type ReportType = {
   id: string
@@ -44,11 +45,7 @@ function rangeParams(days: string): string {
 }
 
 async function adminFetch(path: string): Promise<any> {
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
-  const res = await fetch(path, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    credentials: "include",
-  })
+  const res = await authenticatedFetch(path)
   if (!res.ok) {
     const err: any = new Error(`HTTP ${res.status}`)
     err.status = res.status
@@ -92,11 +89,7 @@ export default function ReportsPage() {
 
   const downloadCsv = async (type: string) => {
     try {
-      const token = window.localStorage.getItem("auth-token")
-      const res = await fetch(`/api/admin/reports/${type}?${rangeParams(days)}&format=csv`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        credentials: "include",
-      })
+      const res = await authenticatedFetch(`/api/admin/reports/${type}?${rangeParams(days)}&format=csv`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)

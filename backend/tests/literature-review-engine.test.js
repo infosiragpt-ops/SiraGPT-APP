@@ -1,5 +1,16 @@
 'use strict';
 
+// The backend test command maintains an explicit allowlist. Requiring the R2
+// suites here keeps DOI resolution and systematic-review contracts in that CI
+// gate without duplicating the already very large package script.
+require('./doi-resolver.test');
+require('./systematic-review-protocol.test');
+require('./search-agentic-doi-resolution.test');
+require('./research-discipline-routing.test');
+require('./research-library.test');
+require('./research-saved-search-alerts.test');
+require('./research-quality-agents.test');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -28,6 +39,29 @@ test('analyzeQuery: bilingual expansion adds English synonyms for gestión', () 
   assert.ok(r.searchQueries.some((q) => /management/.test(q)));
 });
 
+test('analyzeQuery: separates the scientific topic from ranking and metadata instructions', () => {
+  const r = qi.analyzeQuery(
+    'Busca 5 artículos científicos publicados entre 2021 y 2026 sobre aprendizaje autorregulado en educación superior. ' +
+    'Prioriza revisiones sistemáticas y estudios empíricos, acceso abierto, DOI verificable y alta pertinencia temática.',
+  );
+
+  assert.deepEqual(r.terms, ['aprendizaje', 'autorregulado', 'educacion', 'superior']);
+  assert.equal(r.filters.yearFrom, 2021);
+  assert.equal(r.filters.yearTo, 2026);
+  assert.equal(r.filters.openAccessOnly, true);
+  assert.ok(r.searchQueries.some((q) => /self-regulated learning/i.test(q)), `queries=${r.searchQueries}`);
+  assert.ok(r.searchQueries.some((q) => /higher education/i.test(q)), `queries=${r.searchQueries}`);
+  assert.ok(r.searchQueries.every((q) => !/doi|pertinencia|verificable/i.test(q)), `queries=${r.searchQueries}`);
+  assert.ok(r.conceptGroups.some((group) => group.includes('aprendizaje autorregulado')));
+  assert.ok(r.conceptGroups.some((group) => group.includes('educacion superior')));
+});
+
+test('analyzeQuery: does not activate a compound concept from one generic word', () => {
+  const collaborative = qi.analyzeQuery('aprendizaje colaborativo en educación inicial');
+  assert.ok(!collaborative.expansions.some((term) => /self-regulated/i.test(term)));
+  assert.ok(!collaborative.expansions.some((term) => /higher education/i.test(term)));
+});
+
 test('extractFilters: year range, recency, study type, open access, language', () => {
   assert.deepEqual(qi.extractFilters('entre 2018 y 2022'), { yearFrom: 2018, yearTo: 2022 });
   const recent = qi.extractFilters('estudios recientes');
@@ -35,6 +69,10 @@ test('extractFilters: year range, recency, study type, open access, language', (
   assert.equal(qi.extractFilters('una revisión sistemática').studyType, 'systematic_review');
   assert.equal(qi.extractFilters('papers open access').openAccessOnly, true);
   assert.equal(qi.extractFilters('artículos en español').language, 'es');
+  assert.equal(qi.extractFilters('solo artículos revisados por pares').peerReviewedOnly, true);
+  assert.equal(qi.extractFilters('solo artículos revisados por pares').excludePreprints, true);
+  assert.equal(qi.extractFilters('estudio de artículos retractados').includeRetracted, true);
+  assert.equal(qi.extractFilters('solo revisiones sistemáticas').studyTypeRequired, true);
 });
 
 test('analyzeQuery: "últimos 3 años" sets a recent yearFrom', () => {
@@ -133,6 +171,8 @@ test('synthesize: builds themes + consensus from aligned findings', () => {
   assert.ok(out.stats.count === 2);
   assert.ok(out.themes.some((t) => t.keyword === 'motivation'), `themes=${out.themes.map((t) => t.keyword)}`);
   assert.ok(out.overview.includes('estudios'));
+  assert.ok(out.consensusEvidence.length >= 1);
+  assert.ok(out.consensusEvidence[0].paperIndexes.length >= 2);
 });
 
 // ── End-to-end engine (offline, injected search) ───────────────────────
@@ -163,6 +203,8 @@ test('buildLiteratureReview: full deliverable from an injected search', async ()
   // Synthesis stats are real.
   assert.equal(review.synthesis.stats.count, 3);
   assert.ok(review.meta.durationMs >= 0);
+  assert.equal(review.agents.evidenceCritic.agent, 'evidence_critic');
+  assert.equal(review.agents.citationVerifier.agent, 'citation_verifier');
 });
 
 test('buildLiteratureReview: applies a year filter from the query', async () => {
@@ -180,6 +222,84 @@ test('applyFilters: openAccessOnly keeps OA + pdf, drops closed', () => {
     { year: 2020, openAccess: null, pdfUrl: 'x' },
   ], { openAccessOnly: true });
   assert.equal(out.length, 2);
+});
+
+test('applyFilters: excludes retracted records by default and preserves integrity metadata', () => {
+  const out = applyFilters([
+    { source: 'openalex', title: 'Retracted result', raw: { is_retracted: true } },
+    { source: 'pubmed', title: 'Published result', journal: 'Journal of Evidence' },
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].integrityStatus, 'unknown');
+  assert.equal(out[0].publicationStage, 'published_article');
+});
+
+test('buildLiteratureReview: reports how many unsafe records were excluded', async () => {
+  const searchImpl = async () => ({
+    papers: [
+      ...FIXTURE,
+      { source: 'openalex', doi: '10.1/retracted', title: 'Retracted administrative study', raw: { is_retracted: true } },
+    ],
+    errors: [],
+    providers: ['openalex'],
+  });
+  const review = await buildLiteratureReview('gestión administrativa', { searchImpl });
+  assert.equal(review.papers.some((p) => p.integrityStatus === 'retracted'), false);
+  assert.equal(review.meta.integrityExcluded, 1);
+});
+
+test('buildLiteratureReview: resolves selected DOI through an injected verifier', async () => {
+  const searchImpl = async () => ({
+    papers: [{ ...FIXTURE[0], doi: '10.1234/live-doi' }],
+    errors: [],
+    providers: ['crossref'],
+  });
+  const doiResolver = async (papers) => papers.map((item) => ({
+    ...item,
+    doiResolutionStatus: 'resolved',
+    doiResolvedUrl: 'https://publisher.example/live-doi',
+  }));
+  const review = await buildLiteratureReview('gestión administrativa', { searchImpl, doiResolver });
+  assert.equal(review.papers[0].doiResolutionStatus, 'resolved');
+  assert.equal(review.meta.doiResolved, 1);
+  assert.match(review.comparisonTable, /\| ✓ \|/);
+});
+
+test('buildLiteratureReview: degrades safely when the DOI resolver is unavailable', async () => {
+  const searchImpl = async () => ({ papers: [{ ...FIXTURE[0], doi: '10.1234/transient' }], errors: [], providers: ['crossref'] });
+  const review = await buildLiteratureReview('gestión administrativa', {
+    searchImpl,
+    doiResolver: async () => { throw new Error('resolver unavailable'); },
+  });
+  assert.equal(review.papers.length, 1);
+  assert.equal(review.meta.doiResolved, 0);
+  assert.equal(review.meta.doiResolutionError, 'resolver unavailable');
+  assert.ok(review.meta.errors.some((error) => error.provider === 'doi-resolver'));
+});
+
+test('buildLiteratureReview: produces PICO, screening, PRISMA and preliminary certainty', async () => {
+  const searchImpl = async (query) => ({
+    papers: [
+      { source: 'pubmed', doi: '10.1234/telemedicine', title: 'Telemedicine for adults with diabetes', year: 2024, journal: 'Clinical Evidence', abstract: 'Adults with diabetes received telemedicine compared with usual care. Glycemic control improved significantly (p<0.05).' },
+      { source: 'openalex', doi: '10.1234/old', title: 'Older diabetes study', year: 2017, abstract: 'Adults with diabetes received telemedicine.' },
+    ],
+    errors: [],
+    providers: ['pubmed'],
+    query,
+  });
+  const raw = 'Revisión sistemática PICO entre 2020 y 2026; Población: adultos con diabetes; Intervención: telemedicina; Comparación: atención habitual; Resultado: control glucémico';
+  const review = await buildLiteratureReview(raw, { searchImpl, resolveDois: false });
+  assert.equal(review.protocol.framework, 'pico');
+  assert.match(review.meta.queriesRun[0], /"adultos con diabetes" AND "telemedicina"/);
+  assert.equal(review.prisma.screening.recordsExcluded, 1);
+  assert.equal(review.screeningDecisions.find((item) => item.year === 2017).screening.decision, 'exclude');
+  assert.equal(review.papers[0].riskOfBias.requiresFullTextAssessment, true);
+  assert.ok(['very_low', 'low', 'moderate'].includes(review.certainty.level));
+  assert.match(review.report, /Protocolo de búsqueda/);
+  assert.match(review.report, /Flujo PRISMA preliminar/);
+  assert.match(review.report, /Riesgo de sesgo preliminar/);
+  assert.match(review.protocolExport.content, /```mermaid/);
+  assert.match(review.protocolExport.filename, /^protocolo-/);
 });
 
 test('buildLiteratureReview: empty query returns a graceful empty review', async () => {

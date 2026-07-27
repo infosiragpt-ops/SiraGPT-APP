@@ -12,13 +12,11 @@
  *
  * Behavior:
  *   - `CORS_ORIGINS=a.com,b.com` → allowlist = ['a.com', 'b.com'].
- *   - `CORS_ORIGINS=*` → explicitly allow every browser origin. The
- *     cors package reflects the request origin when the callback
- *     returns `true`, so credentialed local requests still work.
- *   - Empty CORS_ORIGINS in production → empty allowlist (every browser-
- *     issued request rejected). This is the deliberate fail-closed
- *     posture; index.js logs a loud warn at startup so the misconfig
- *     surfaces in the access log.
+ *   - `CORS_ORIGINS=*` → explicitly allow every browser origin outside
+ *     production. Production-like environments reject this credentialed
+ *     wildcard configuration at startup and runtime.
+ *   - Empty CORS_ORIGINS in production → startup error. Production must
+ *     provide an explicit allowlist; no product-domain fallback is applied.
  *   - Empty CORS_ORIGINS outside production → localhost:3000 / 3001
  *     fallback so `npm run dev` works without further config.
  *   - No `Origin` header on the request (curl, server-to-server, same-
@@ -26,21 +24,16 @@
  *     header in that case.
  */
 
+const {
+  isInvalidEnvironmentAlias,
+  isProductionLike,
+} = require('../utils/environment');
+
 const DEV_FALLBACK = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3001',
-];
-
-// Production fallback — known-good public origins for the deployed
-// product. Used ONLY when CORS_ORIGINS is unset in production so the
-// site doesn't fail closed on a fresh deploy where the operator
-// forgot to set the env var. A loud security warning is logged
-// at boot in index.js when this fallback is hit.
-const PROD_FALLBACK = [
-  'https://siragpt.io',
-  'https://www.siragpt.io',
 ];
 
 /**
@@ -123,11 +116,31 @@ function resolvePreviewOrigin(env = process.env) {
   try { return [new URL(raw).origin]; } catch { return []; }
 }
 
+function hasWildcardOrigin(value) {
+  return String(value || '')
+    .split(',')
+    .some((origin) => origin.trim() === '*');
+}
+
 function resolveAllowedOrigins(env = process.env) {
   const list = String(env.CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+  if (isInvalidEnvironmentAlias(env)) {
+    const error = new Error('NODE_ENV uses an unsupported environment alias.');
+    error.code = 'NODE_ENV_INVALID_ALIAS';
+    throw error;
+  }
+  const production = isProductionLike(env);
+
+  if (production && list.includes('*')) {
+    const error = new Error(
+      'Credentialed CORS cannot use a wildcard origin in production.',
+    );
+    error.code = 'CORS_WILDCARD_CREDENTIALS_FORBIDDEN';
+    throw error;
+  }
 
   // Always merge in Replit-provided domains (*.replit.app and custom domains
   // set by the platform) so the published app never hits a CORS wall, plus
@@ -137,17 +150,19 @@ function resolveAllowedOrigins(env = process.env) {
 
   if (list.length > 0) {
     const merged = [...new Set([...list, ...replitOrigins, ...previewOrigins])];
-    return validateAllowedOrigins(merged);
+    try {
+      return validateAllowedOrigins(merged);
+    } catch (cause) {
+      if (!production) throw cause;
+      const error = new Error('Production CORS_ORIGINS contains an invalid origin.');
+      error.code = 'CORS_ORIGINS_INVALID';
+      throw error;
+    }
   }
-  if (env.NODE_ENV === 'production') {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '⚠️  [cors] CORS_ORIGINS env var is unset in production. '
-      + `Falling back to safe defaults: ${PROD_FALLBACK.join(', ')}. `
-      + 'Set CORS_ORIGINS=https://yourdomain.com to override.'
-    );
-    const merged = [...new Set([...PROD_FALLBACK, ...replitOrigins, ...previewOrigins])];
-    return merged;
+  if (production) {
+    const error = new Error('Production requires an explicit CORS_ORIGINS allowlist.');
+    error.code = 'CORS_ORIGINS_REQUIRED';
+    throw error;
   }
   return [...new Set([...DEV_FALLBACK, ...previewOrigins])];
 }
@@ -165,4 +180,20 @@ function makeOriginCallback(allowed) {
   };
 }
 
-module.exports = { resolveAllowedOrigins, makeOriginCallback, validateAllowedOrigins, resolvePreviewOrigin, DEV_FALLBACK, PROD_FALLBACK };
+function createCredentialedCorsOptions(allowed) {
+  return {
+    origin: makeOriginCallback(allowed),
+    credentials: true,
+    optionsSuccessStatus: 200,
+  };
+}
+
+module.exports = {
+  createCredentialedCorsOptions,
+  resolveAllowedOrigins,
+  makeOriginCallback,
+  validateAllowedOrigins,
+  resolvePreviewOrigin,
+  hasWildcardOrigin,
+  DEV_FALLBACK,
+};

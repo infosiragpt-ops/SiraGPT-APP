@@ -23,11 +23,12 @@ services:
       - uploads_data:/app/uploads
     environment:
       NODE_ENV: development
-      # schema.prisma migrated its datasource to env("DATABASE_URL") (commit
-      # "Fix Google login: bypass Prisma Accelerate") but the base compose only
-      # provides PRISMA_DATABASE_URL. Mirror the same direct postgres URL here so
-      # `prisma migrate deploy` + the runtime client resolve in dev.
-      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-siragpt}"
+      # Keep runtime and direct migration roles independent. Values come from
+      # .env.example through the base Compose file.
+      DIRECT_DATABASE_URL: "${DIRECT_DATABASE_URL:-}"
+      DATABASE_URL: "${DATABASE_URL:-}"
+      MIGRATION_COMMAND_TIMEOUT_MS: "${MIGRATION_COMMAND_TIMEOUT_MS:-300000}"
+      BOOT_COMMAND_TIMEOUT_MS: "${BOOT_COMMAND_TIMEOUT_MS:-5000}"
     ports:
       - "9229:9229"   # Node.js inspector (debugger)
     # Apply pending Prisma migrations on boot (so the DB never drifts behind the
@@ -36,7 +37,19 @@ services:
     # codex_* tables added after the image was built — are present in the
     # runtime client, then start with --watch for dev auto-reload.
     # Set SKIP_MIGRATIONS=1 to bypass the migrate step.
-    command: ["sh", "-c", "if [ \"$$SKIP_MIGRATIONS\" != \"1\" ]; then npx prisma migrate deploy --schema=prisma/schema.prisma; fi; npx prisma generate --schema=prisma/schema.prisma; exec node --watch index.js"]
+    command:
+      - "sh"
+      - "-c"
+      - |
+        set -eu
+        run_prisma() {
+          node -e 'const boot = require("./scripts/start-with-migrations"); boot.runPrisma(process.argv.slice(1)).then((result) => { process.exitCode = boot.prismaCommandExitStatus(result); }).catch((error) => { console.error(error && error.code ? error.code : "MIGRATION_COMMAND_FAILED"); process.exitCode = 1; });' "$$@"
+        }
+        if [ "$${SKIP_MIGRATIONS:-0}" != "1" ]; then
+          run_prisma migrate deploy --schema=prisma/schema.prisma
+        fi
+        run_prisma generate --schema=prisma/schema.prisma
+        exec node --watch index.js
 
   # ── Frontend (dev) ────────────────────────────────────────
   # Runs Next.js in dev mode with Turbopack for HMR.

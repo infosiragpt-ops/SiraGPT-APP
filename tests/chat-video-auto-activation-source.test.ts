@@ -5,6 +5,7 @@ import path from "node:path"
 
 const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const source = fs.readFileSync(componentPath, "utf8")
+const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
 
 describe("chat video auto-activation source contract", () => {
   it("auto-enables the video tool from normal chat intent before send", () => {
@@ -223,6 +224,39 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
+  it("renders Music Style as a professional guided selector", () => {
+    assert.match(
+      source,
+      /const MUSIC_STYLE_PROFILES: Record<MusicStyle,/,
+      "Music style options should carry UI labels, descriptions and accents"
+    )
+    assert.match(
+      source,
+      /Estilos de producción[\s\S]{0,180}Selecciona una dirección sonora clara/,
+      "The style submenu should explain what the selection controls"
+    )
+    assert.match(
+      source,
+      /MUSIC_STYLE_OPTIONS\.map\(option => \{[\s\S]{0,160}const profile = MUSIC_STYLE_PROFILES\[option\]/,
+      "Style rows should render from the professional style profile metadata"
+    )
+    assert.match(
+      source,
+      /min-h-\[3\.65rem\]/,
+      "Style options should be taller descriptive rows instead of a plain option list"
+    )
+    assert.match(
+      source,
+      /\{profile\.description\}<\/span>/,
+      "Each style option should show its production description"
+    )
+    assert.match(
+      source,
+      /MUSIC_STYLE_PROFILES\[selectedMusicStyle\]\.description/,
+      "The active Style row should show the selected style description"
+    )
+  })
+
   it("keeps Voice mode visible and cancellable while speech generation is running", () => {
     assert.match(
       source,
@@ -283,5 +317,39 @@ describe("chat video auto-activation source contract", () => {
       /isStopButtonVisible && \(input\.trim\(\)\.length === 0 \|\| shouldPrioritizeStopButton\)/,
       "The stop button should remain available even if the composer has text during Voice generation"
     )
+  })
+
+  it("cancels Voice and Music transport instead of only clearing the spinner", () => {
+    assert.match(source, /const voiceAbortControllerRef = React\.useRef<AbortController \| null>\(null\)/)
+    assert.match(source, /const musicAbortControllerRef = React\.useRef<AbortController \| null>\(null\)/)
+    assert.match(
+      source,
+      /voiceAbortControllerRef\.current = controller;[\s\S]{0,220}markLocalJobBusy\(activeChat\.id, controller\)/,
+      "Voice generation must register its real request controller"
+    )
+    assert.match(
+      source,
+      /musicAbortControllerRef\.current = controller;[\s\S]{0,220}markLocalJobBusy\(activeChat\.id, controller\)/,
+      "Music generation must register its real request controller"
+    )
+    assert.match(source, /generateSpeechMessage\(\{[\s\S]{0,720}\}, \{ signal: controller\.signal \}\)/)
+    assert.match(source, /generateMusicMessage\(\{[\s\S]{0,420}\}, \{ signal: controller\.signal \}\)/)
+    assert.match(source, /error: 'aborted'/)
+    assert.match(apiSource, /generateSpeechMessage\([\s\S]{0,520}options: \{ signal\?: AbortSignal \}/)
+    assert.match(apiSource, /generateMusicMessage\([\s\S]{0,520}options: \{ signal\?: AbortSignal \}/)
+    assert.match(apiSource, /signal: options\.signal/)
+  })
+
+  it("uses the working Gemini TTS provider and sends professional voice controls", () => {
+    assert.match(source, /type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs"/)
+    assert.match(source, /const VOICE_MODEL_OPTIONS: VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs"\]/)
+    assert.match(source, /useState<VoiceModel>\("Gemini 2\.5 Flash TTS"\)/)
+    assert.match(
+      source,
+      /generateSpeechMessage\(\{[\s\S]{0,420}model: selectedVoiceModel,[\s\S]{0,260}language: selectedVoiceLanguage,[\s\S]{0,260}accent: selectedVoiceAccent/,
+    )
+    assert.match(source, /voiceId: selectedVoiceModel === 'ElevenLabs'/)
+    assert.match(apiSource, /model\?: string;/)
+    assert.match(apiSource, /language\?: string;/)
   })
 })

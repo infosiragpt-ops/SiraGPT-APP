@@ -33,6 +33,14 @@ function makeFakeChallengeDb(challenge) {
         }
         return { ...challenge };
       },
+      updateMany: async ({ where, data }) => {
+        if (where.id !== challenge.id) return { count: 0 };
+        if (where.consumedAt === null && challenge.consumedAt !== null) {
+          return { count: 0 };
+        }
+        Object.assign(challenge, data);
+        return { count: 1 };
+      },
     },
   };
 }
@@ -78,6 +86,30 @@ test('verifyChallenge: concurrent wrong codes increment atomically and trip the 
   assert.equal(after.code, 'not_found'); // consumedAt set → treated as not-found
 });
 
+test('verifyChallenge: concurrent valid redemptions consume the challenge exactly once', async () => {
+  const challengeId = twoFASms.mintChallengeId();
+  const challenge = {
+    id: 'c1',
+    challengeId,
+    userId: 'u1',
+    channel: 'sms',
+    attempts: 0,
+    consumedAt: null,
+    expiresAt: new Date(Date.now() + 600000),
+    codeHash: await twoFASms.hashCode('123456'),
+  };
+  const prisma = makeFakeChallengeDb(challenge);
+
+  const results = await Promise.all([
+    twoFASms.verifyChallenge(prisma, challengeId, '123456'),
+    twoFASms.verifyChallenge(prisma, challengeId, '123456'),
+  ]);
+
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.equal(results.filter((result) => result.code === 'not_found').length, 1);
+  assert.ok(challenge.consumedAt instanceof Date);
+});
+
 function makeCreateDb({ withTransaction = true } = {}) {
   const calls = [];
   const db = {
@@ -102,6 +134,68 @@ test('createSmsChallenge invalidates prior + creates the new row in one $transac
   assert.ok(ops.includes('updateMany'), 'invalidates prior challenges');
   assert.ok(ops.includes('create'), 'creates the new challenge');
   assert.ok(ops.includes('$transaction'), 'both writes routed through a transaction');
+});
+
+test('createSmsChallenge locks and re-reads the active user before challenge writes', async () => {
+  const calls = [];
+  const tx = {
+    async $queryRawUnsafe(sql) {
+      calls.push(/pg_advisory_xact_lock/i.test(sql) ? 'lock' : 'timeout');
+      return [{ locked: true }];
+    },
+    user: {
+      async findUnique() {
+        calls.push('user.read');
+        return { id: 'u-lock', deletedAt: null };
+      },
+    },
+    twoFAChallenge: {
+      async updateMany() {
+        calls.push('challenge.invalidate');
+        return { count: 0 };
+      },
+      async create({ data }) {
+        calls.push('challenge.create');
+        return { id: 'c-lock', ...data };
+      },
+    },
+  };
+  const db = {
+    user: {
+      async findUnique() {
+        calls.push('user.pre-read');
+        return { id: 'u-lock', deletedAt: null };
+      },
+    },
+    twoFAChallenge: {
+      async updateMany() {
+        calls.push('challenge.root-invalidate');
+        return { count: 0 };
+      },
+      async create({ data }) {
+        calls.push('challenge.root-create');
+        return { id: 'root', ...data };
+      },
+    },
+    async $queryRawUnsafe() {},
+    async $transaction(callbackOrOperations) {
+      if (Array.isArray(callbackOrOperations)) return Promise.all(callbackOrOperations);
+      const result = await callbackOrOperations(tx);
+      calls.push('transaction.commit');
+      return result;
+    },
+  };
+
+  await twoFASms.createSmsChallenge(
+    db,
+    { id: 'u-lock', phone: '+14155551234' },
+    '+14155551234',
+  );
+
+  assert.ok(calls.indexOf('lock') < calls.indexOf('user.read'));
+  assert.equal(calls.includes('user.pre-read'), false);
+  assert.ok(calls.indexOf('user.read') < calls.indexOf('challenge.invalidate'));
+  assert.ok(calls.indexOf('challenge.create') < calls.indexOf('transaction.commit'));
 });
 
 test('createSmsChallenge falls back to sequential writes without $transaction (test doubles)', async () => {

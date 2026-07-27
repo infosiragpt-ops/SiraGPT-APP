@@ -119,6 +119,40 @@ function flagForbidden(license, name) {
   return FORBIDDEN_PATTERNS.some((p) => norm.includes(p));
 }
 
+// license-checker-rseidelsohn reads the INSTALLED node_modules tree, not the
+// lockfile. A workspace whose node_modules is stale relative to its lockfile
+// therefore yields a silently *shorter* list: no error, no warning, just an
+// under-reported licence disclosure that looks plausible enough to commit.
+// (Observed for real: a stale backend/node_modules dropped the direct
+// dependency `@node-saml/node-saml` plus six of its transitive deps.)
+//
+// Guard against it by asserting that every directly-declared production
+// dependency actually shows up in the checker output. Unlike a total-count
+// heuristic this has no false positives when a dependency is legitimately
+// removed — dropping it from package.json also drops it from the expected set.
+function directProductionDependencies(cwd) {
+  const pkgPath = path.join(cwd, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  // `optionalDependencies` are host-conditional by design and `devDependencies`
+  // are already excluded by the checker's `--production` flag.
+  return Object.keys(pkg.dependencies || {});
+}
+
+function assertTreeIsFresh(workspace, cwd, installedNames) {
+  const missing = directProductionDependencies(cwd).filter(
+    (name) => !installedNames.has(name) && !isPlatformBinary(name),
+  );
+  if (missing.length === 0) return;
+  const install = cwd === ROOT ? 'npm ci' : `npm ci --prefix ${path.relative(ROOT, cwd)}`;
+  throw new Error(
+    `${workspace}: ${missing.length} directly-declared production ` +
+      `${missing.length === 1 ? 'dependency is' : 'dependencies are'} missing from the ` +
+      `installed tree (${missing.slice(0, 8).join(', ')}${missing.length > 8 ? ', …' : ''}).\n` +
+      `  node_modules is stale relative to the lockfile, so the generated report would ` +
+      `under-declare licences.\n  Fix with: ${install}`,
+  );
+}
+
 function collect() {
   const all = new Map();
   let platformBinariesSkipped = 0;
@@ -127,9 +161,14 @@ function collect() {
     try {
       entries = runChecker(cwd);
     } catch (err) {
-      console.warn(`[licenses] skipped ${workspace}: ${err.message}`);
-      continue;
+      // Never degrade to a partial report: a workspace we cannot enumerate would
+      // silently vanish from the disclosure.
+      throw new Error(`[licenses] ${workspace} could not be enumerated: ${err.message}`);
     }
+    const installedNames = new Set(
+      Object.keys(entries).map((pkgVersion) => pkgVersion.slice(0, pkgVersion.lastIndexOf('@'))),
+    );
+    assertTreeIsFresh(workspace, cwd, installedNames);
     for (const [pkgVersion, info] of Object.entries(entries)) {
       // pkgVersion = "name@x.y.z"
       const at = pkgVersion.lastIndexOf('@');
@@ -308,4 +347,11 @@ function main() {
   }
 }
 
-main();
+try {
+  main();
+} catch (err) {
+  // Freshness/enumeration failures carry their own remediation; a stack trace
+  // would bury it.
+  console.error(`[licenses] ❌ ${err.message}`);
+  process.exit(1);
+}

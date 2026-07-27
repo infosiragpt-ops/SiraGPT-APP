@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 import { getNormalizedApiBaseUrl } from '@/lib/api'
+import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import { devLog } from '@/lib/dev-log'
 
 interface ReasoningStep {
@@ -213,12 +214,6 @@ export const useComputerUse = (): ComputerUseHookReturn => {
     }
 
     const baseUrl = getNormalizedApiBaseUrl()
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
-    if (!token) {
-      setStatus('error')
-      toast.error('Please sign in before starting Computer Use')
-      return
-    }
 
     setStatus('running')
     clearReasoning()
@@ -226,13 +221,12 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
     const headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
     }
 
     try {
       if (chatId) {
         // Chat-integrated session
-        const resp = await fetch(`${baseUrl}/computer-use/chat-integration`, {
+        const resp = await authenticatedFetch(`${baseUrl}/computer-use/chat-integration`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ message: task, chatId, mode })
@@ -251,7 +245,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         setSessionId(newSessionId)
         connectWebSocket(newSessionId)
 
-        const response = await fetch(`${baseUrl}/computer-use/start`, {
+        const response = await authenticatedFetch(`${baseUrl}/computer-use/start`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ task, sessionId: newSessionId, mode })
@@ -275,12 +269,10 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
     try {
       const baseUrl = getNormalizedApiBaseUrl()
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
-      await fetch(`${baseUrl}/computer-use/stop`, {
+      await authenticatedFetch(`${baseUrl}/computer-use/stop`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
         body: JSON.stringify({ sessionId })
       })

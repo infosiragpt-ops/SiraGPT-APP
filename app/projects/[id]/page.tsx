@@ -58,7 +58,6 @@ import { DocumentsSection } from "@/components/projects/documents-section"
 import { MAX_SIMULTANEOUS_DOCUMENTS } from "@/lib/document-batch-limits"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 // ─── Page ─────────────────────────────────────────────────────────────────
 
@@ -193,17 +192,9 @@ export default function ProjectDetailPage() {
     if (!project || !files || files.length === 0) return
     setComposerUploading(true)
     try {
-      const fd = new FormData()
-      Array.from(files).slice(0, MAX_SIMULTANEOUS_DOCUMENTS).forEach((file) => fd.append("files", file))
-      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      const res = await fetch(`${API_ROOT}/files/upload`, {
-        method: "POST",
-        body: fd,
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      })
-      if (!res.ok) throw new Error(`upload failed (${res.status})`)
-      const out = await res.json()
-      const uploaded: Array<{ id: string }> = out.files || []
+      const uploaded = await projectsService.uploadFiles(
+        Array.from(files).slice(0, MAX_SIMULTANEOUS_DOCUMENTS),
+      )
       for (const file of uploaded) await projectsService.attachFile(project.id, file.id)
       await reload()
       toast.success(t("filesAttached", { count: uploaded.length }))
@@ -681,17 +672,7 @@ function FilesSection({
       // Upload first, then attach. We reuse the existing /api/files
       // upload endpoint — projects just borrow the File model via its
       // projectId FK, so no new upload plumbing is needed.
-      const fd = new FormData()
-      for (const f of files) fd.append("files", f)
-      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      const res = await fetch(`${API_ROOT}/files/upload`, {
-        method: "POST",
-        body: fd,
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      })
-      if (!res.ok) throw new Error(`upload failed (${res.status})`)
-      const out = await res.json()
-      const uploaded: Array<{ id: string }> = out.files || []
+      const uploaded = await projectsService.uploadFiles(files)
       for (const u of uploaded) {
         await projectsService.attachFile(project.id, u.id)
       }

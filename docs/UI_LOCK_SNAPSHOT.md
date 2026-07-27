@@ -1,5 +1,7 @@
 # UI Lock Snapshot — originally 2026-05-20T18:05:27Z
 # Re-baselined — 2026-06-03 (intentional UI changes: single recent-chats collapse + chat menu reliability fixes)
+# Re-baselined — 2026-07-11 (authorized non-visual auth logic: cookie-session hydration and SAML callback completion)
+# Re-baselined — 2026-07-11 (authorized non-visual security logic: shared authenticated fetch and CSRF transport migration)
 # Original base commit: f5bd634d5166b633bf6d634c275ea76790124974 (main)
 # Note: docs/UI_LOCK_HASHES.txt is the authoritative baseline (regenerated). File set unchanged; only hashes updated.
 

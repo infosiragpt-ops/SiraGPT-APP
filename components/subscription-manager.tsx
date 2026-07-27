@@ -26,6 +26,7 @@ import {
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
+import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import PlanChangeManager from './plan-change-manager'
 import AnalyticsDashboard from './analytics-dashboard'
 
@@ -143,11 +144,9 @@ export default function SubscriptionManager() {
 
   const fetchSubscriptionData = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        }
-      })
+      const response = await authenticatedFetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription`,
+      )
       
       if (response.ok) {
         const data = await response.json()
@@ -167,11 +166,8 @@ export default function SubscriptionManager() {
 
     setActionLoading('cancel')
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription/cancel`, {
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription/cancel`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        }
       })
 
       if (response.ok) {
@@ -191,11 +187,8 @@ export default function SubscriptionManager() {
   const handleReactivateSubscription = async () => {
     setActionLoading('reactivate')
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription/reactivate`, {
+      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription/reactivate`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        }
       })
 
       if (response.ok) {

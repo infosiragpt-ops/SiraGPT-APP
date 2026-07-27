@@ -653,9 +653,17 @@ function classifyProviderError(error) {
   const status = Number(error?.status || error?.statusCode || error?.response?.status || 0);
   const code = String(error?.code || error?.cause?.code || "").toLowerCase();
   const retryAfterMs = readRetryAfterMs(error);
+  const quotaExhausted = status === 402
+    || code.includes("insufficient_quota")
+    || message.match(/insufficient (?:credits?|quota)|exceeded your current quota|quota (?:is )?exhausted|billing (?:limit|quota)|add more .*credits?/i);
   let errorClass = "unknown";
   if (status === 401 || status === 403 || code.includes("auth") || message.match(/api key|unauthori[sz]ed|forbidden/i)) {
     errorClass = "auth";
+  } else if (quotaExhausted) {
+    // Billing/quota exhaustion cannot recover within the same request. Keep it
+    // distinct from a burst 429 so callers fail over immediately instead of
+    // sleeping and retrying the same unavailable account.
+    errorClass = "quota_exhausted";
   } else if (status === 429 || code.includes("rate") || message.match(/rate limit|too many requests/i)) {
     errorClass = "rate_limit";
   } else if (status === 408 || code.includes("timeout") || code === "etimedout" || message.match(/timeout|timed out|aborted/i)) {

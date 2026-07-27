@@ -1938,8 +1938,8 @@ const reportStage = {
  * @returns {Array<object>} the tools array to pass into react-agent's
  * `tools` parameter.
  */
-function buildTaskTools() {
-  return [
+function buildTaskTools(options = {}) {
+  const tools = [
     pythonExec,
     bashExec,
     webSearch,
@@ -1960,6 +1960,27 @@ function buildTaskTools() {
     // Visual & media generation tools
     ...visualMediaTools,
   ];
+
+  if (options.includeSkills !== false) {
+    try {
+      const skillRunner = require('./skill-runner');
+      const skillOptions = {
+        ctx: options.skillContext || {},
+        allowedSkillIds: Array.isArray(options.allowedSkillIds) ? options.allowedSkillIds : null,
+        recommendedSkillIds: Array.isArray(options.recommendedSkillIds) ? options.recommendedSkillIds : [],
+      };
+      const runSkill = skillRunner.buildRunSkillTool(skillOptions);
+      const runPipeline = skillRunner.buildRunSkillPipelineTool(skillOptions);
+      if (runSkill) tools.push(runSkill);
+      if (runPipeline) tools.push(runPipeline);
+    } catch (error) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('[task-tools] native skill registry unavailable:', error?.message || error);
+      }
+    }
+  }
+
+  return tools;
 }
 
 // Lazy-load visual-media-tools to break circular dependency:

@@ -34,8 +34,9 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     showCloseButton?: boolean
     position?: "center" | "top-start"
+    overlayClassName?: string
   }
->(({ className, children, showCloseButton = true, position = "center", ...props }, ref) => {
+>(({ className, children, showCloseButton = true, position = "center", overlayClassName, ...props }, ref) => {
   const positionClasses =
     position === "top-start"
       ? "top-[8vh] translate-y-0 data-[state=open]:slide-in-from-top-[8vh] data-[state=closed]:slide-out-to-top-[8vh]"
@@ -43,7 +44,7 @@ const DialogContent = React.forwardRef<
 
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(

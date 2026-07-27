@@ -55,6 +55,7 @@ describe("code-chat-sessions", () => {
     assert.ok(firstId)
     store = setActiveCodeChatSession("ws-a", firstId!, store)
     assert.equal(store.activeByWorkspace["ws-a"], firstId)
+    assert.equal(second.session.titleLocked, true)
   })
 
   it("normalizes bare project UUID to project: prefix for sessions", () => {
@@ -96,6 +97,20 @@ describe("code-chat-sessions", () => {
     assert.equal(listSessionsForWorkspace("local:tesis20", store)[0]?.title, "Agente 1")
     const second = createCodeChatSession("local:tesis20", undefined, store)
     assert.equal(second.session.title, "Agente 2")
+  })
+
+  it("accepts caller-generated ids for atomic parallel creation", () => {
+    let store = ensureDefaultSession("local:company")
+    const ceo = createCodeChatSession("local:company", { title: "CEO Office", id: "ceo-id" }, store)
+    store = ceo.store
+    const engineering = createCodeChatSession(
+      "local:company",
+      { title: "Producto e Ingeniería SiraGPT", id: "engineering-id" },
+      store,
+    )
+    const ids = listSessionsForWorkspace("local:company", engineering.store).map((session) => session.id)
+    assert.ok(ids.includes("ceo-id"))
+    assert.ok(ids.includes("engineering-id"))
   })
 
   it("derives title from first user message", () => {

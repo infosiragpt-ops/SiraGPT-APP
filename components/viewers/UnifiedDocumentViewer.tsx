@@ -58,6 +58,10 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
+import {
+  createAuthenticatedFetch,
+  isTrustedSiraApiUrl,
+} from "@/lib/authenticated-fetch"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import dynamic from "next/dynamic"
@@ -297,6 +301,13 @@ function absUrl(u: string) {
   // BASE_URL that isn't reachable from the browser.
   return normalizeBackendAssetUrl(u, process.env.NEXT_PUBLIC_IMAGE_URL)
 }
+
+const ASSET_BASE_URL = (
+  process.env.NEXT_PUBLIC_IMAGE_URL
+  || process.env.NEXT_PUBLIC_API_URL
+  || "http://localhost:5000"
+).replace(/\/api\/?$/, "").replace(/\/+$/, "")
+const authenticatedAssetFetch = createAuthenticatedFetch({ apiBaseUrl: ASSET_BASE_URL })
 
 function useIsDark() {
   const [isDark, setIsDark] = React.useState(false)
@@ -645,15 +656,9 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
   if (inflight) return inflight
 
   const promise = (async () => {
-    const token = typeof window !== "undefined"
-      ? (window.localStorage?.getItem("auth-token") || "")
-      : ""
     const base = process.env.NEXT_PUBLIC_IMAGE_URL || ""
     const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
-    const res = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      credentials: "include",
-    })
+    const res = await fetchAssetBytes(url)
     if (!res.ok) {
       throw new Error(`http-${res.status}`)
     }
@@ -808,29 +813,12 @@ function cacheSet(key: string, partial: { text?: string; buffer?: ArrayBuffer })
   })
 }
 
-/**
- * Build a fetch init that carries both the session cookie and the
- * Bearer token most of the backend's auth middlewares look for.
- * Without the Bearer header, deploys that protect /uploads/* with a
- * JWT gate (and any future auth-gated asset path) reject the request
- * with HTTP 403 even though the user is logged in — the cookie is
- * not enough on its own.
- */
-function authedAssetFetchInit(): RequestInit {
-  if (typeof window === "undefined") return { credentials: "include" }
-  const token = window.localStorage?.getItem("auth-token") || ""
-  return {
-    credentials: "include",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  }
-}
-
 async function fetchAssetBytes(url: string): Promise<Response> {
   const normalized = absUrl(url)
-  const init = /^(data:|blob:)/i.test(normalized)
-    ? undefined
-    : authedAssetFetchInit()
-  return fetch(normalized, init)
+  if (/^(data:|blob:)/i.test(normalized)) return fetch(normalized)
+  return isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
+    ? authenticatedAssetFetch(normalized)
+    : fetch(normalized)
 }
 
 function cloneArrayBuffer(buf: ArrayBuffer): ArrayBuffer {

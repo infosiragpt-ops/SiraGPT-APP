@@ -13,6 +13,8 @@ const assert = require("node:assert/strict");
 const {
   checkDatabase,
   checkMigrations,
+  resolveHealthDbTimeoutMs,
+  resolveHealthRedisTimeoutMs,
   checkRedis,
   checkQueue,
   checkProcess,
@@ -22,6 +24,7 @@ const {
   checkLangfuse,
   checkPostHog,
   checkStartupEnvironment,
+  checkDatabasePool,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
@@ -31,10 +34,20 @@ const {
 
 const metrics = require("../src/services/agents/metrics");
 const siraMetrics = require("../src/services/sira/metrics");
+const { createDbProbe } = require("../src/health/probes/db");
+const delay = (ms, value) => new Promise((resolve) => setTimeout(resolve, ms, value));
 
 // ── checkDatabase ──────────────────────────────────────────────────
 
 describe("checkDatabase", () => {
+  test("HEALTH_DB_TIMEOUT_MS defaults to 1500ms and clamps to 100-10000ms", () => {
+    assert.equal(resolveHealthDbTimeoutMs({}), 1500);
+    assert.equal(resolveHealthDbTimeoutMs({ HEALTH_DB_TIMEOUT_MS: "garbage" }), 1500);
+    assert.equal(resolveHealthDbTimeoutMs({ HEALTH_DB_TIMEOUT_MS: "1" }), 100);
+    assert.equal(resolveHealthDbTimeoutMs({ HEALTH_DB_TIMEOUT_MS: "2500" }), 2500);
+    assert.equal(resolveHealthDbTimeoutMs({ HEALTH_DB_TIMEOUT_MS: "99999" }), 10_000);
+  });
+
   test("healthy when prisma.$queryRawUnsafe resolves", async () => {
     const fakePrisma = { $queryRawUnsafe: async () => 1 };
     const r = await checkDatabase(fakePrisma);
@@ -49,13 +62,81 @@ describe("checkDatabase", () => {
     const r = await checkDatabase(fakePrisma);
     assert.equal(r.status, "unhealthy");
     assert.equal(r.critical, true);
-    assert.match(r.error, /ECONNREFUSED/);
+    assert.equal(r.error, "DATABASE_PROBE_FAILED");
+  });
+
+  test("database failures expose only a stable value-free code", async () => {
+    const secretUrl = "postgresql://private-user:private-password@db.private.internal:5432/sira";
+    const fakePrisma = {
+      $queryRawUnsafe: async () => {
+        const error = new Error(`connection for private-user at db.private.internal failed: ${secretUrl}`);
+        error.code = "P1001";
+        throw error;
+      },
+    };
+
+    const r = await checkDatabase(fakePrisma, { DATABASE_URL: secretUrl });
+    assert.equal(r.error, "DATABASE_PROBE_FAILED");
+    assert.doesNotMatch(
+      JSON.stringify(r),
+      /private-user|private-password|db\.private\.internal|postgresql:\/\//i,
+    );
   });
 
   test("skipped when no client passed", async () => {
     const r = await checkDatabase(null);
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
+  });
+
+  test("a never-settling Prisma query becomes unhealthy within the configured bound", async () => {
+    const outerTimeout = Symbol("outer-timeout");
+    const result = await Promise.race([
+      checkDatabase(
+        { $queryRawUnsafe: () => new Promise(() => {}) },
+        { HEALTH_DB_TIMEOUT_MS: "1" },
+      ),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(result, outerTimeout, "database probe exceeded its 100ms lower bound");
+    assert.equal(result.status, "unhealthy");
+    assert.equal(result.critical, true);
+    assert.equal(result.error, "DATABASE_PROBE_TIMEOUT");
+  });
+
+  test("public and internal DB probes share one unresolved Prisma operation", async () => {
+    let calls = 0;
+    let resolveFirst;
+    const firstOperation = new Promise((resolve) => { resolveFirst = resolve; });
+    const prisma = {
+      $queryRawUnsafe: () => {
+        calls += 1;
+        return calls === 1 ? firstOperation : Promise.resolve([{ ok: 1 }]);
+      },
+      $queryRaw: () => {
+        calls += 1;
+        return calls === 1 ? firstOperation : Promise.resolve([{ ok: 1 }]);
+      },
+    };
+
+    const publicResult = await checkDatabase(prisma, { HEALTH_DB_TIMEOUT_MS: "1" });
+    assert.equal(publicResult.status, "unhealthy");
+    const repeatedPublicResult = await checkDatabase(prisma, { HEALTH_DB_TIMEOUT_MS: "1" });
+    assert.equal(repeatedPublicResult.status, "unhealthy");
+    const internalResult = await createDbProbe({
+      prisma,
+      timeoutMs: 100,
+      ttlMs: 0,
+    }).run({ bypassCache: true });
+    assert.equal(internalResult.status, "timeout");
+    assert.equal(calls, 1, "timed-out public/internal probes must share the unresolved query");
+
+    resolveFirst([{ ok: 1 }]);
+    await new Promise((resolve) => setImmediate(resolve));
+    const recovered = await checkDatabase(prisma, { HEALTH_DB_TIMEOUT_MS: "1" });
+    assert.equal(recovered.status, "healthy");
+    assert.equal(calls, 2, "settled operations must be removed from the coalescer");
   });
 });
 
@@ -79,7 +160,8 @@ describe("checkMigrations", () => {
     assert.equal(r.status, "unhealthy");
     assert.equal(r.critical, true);
     assert.equal(r.details.failed_count, 1);
-    assert.deepEqual(r.details.failed, ["20250919203030_add_model_sync_fields"]);
+    assert.equal(r.details.failed, undefined);
+    assert.equal(r.error, "MIGRATIONS_FAILED");
   });
 
   test("skipped (non-critical) when the migrations table is unreadable", async () => {
@@ -88,12 +170,80 @@ describe("checkMigrations", () => {
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
     assert.equal(r.details.reason, "migrations_table_unreadable");
+    assert.equal(r.error, "MIGRATIONS_PROBE_FAILED");
+  });
+
+  test("migration probe failures never expose database host, user, or URL values", async () => {
+    const secretUrl = "postgresql://migration-user:migration-password@migrations.private:5432/sira";
+    const fakePrisma = {
+      $queryRawUnsafe: async () => {
+        throw new Error(`migration-user cannot reach migrations.private via ${secretUrl}`);
+      },
+    };
+
+    const r = await checkMigrations(fakePrisma, { DIRECT_DATABASE_URL: secretUrl });
+    assert.equal(r.error, "MIGRATIONS_PROBE_FAILED");
+    assert.doesNotMatch(
+      JSON.stringify(r),
+      /migration-user|migration-password|migrations\.private|postgresql:\/\//i,
+    );
   });
 
   test("skipped when no client passed", async () => {
     const r = await checkMigrations(null);
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
+  });
+
+  test("a timed-out migration query absorbs a late rejection", async (t) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    t.after(() => process.removeListener("unhandledRejection", onUnhandled));
+
+    const r = await checkMigrations(
+      {
+        $queryRawUnsafe: () => new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("late migration rejection")), 180);
+        }),
+      },
+      { HEALTH_DB_TIMEOUT_MS: "1" },
+    );
+
+    await delay(120);
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+    assert.equal(r.details.reason, "migrations_table_unreadable");
+    assert.equal(r.error, "MIGRATIONS_PROBE_TIMEOUT");
+    assert.deepEqual(unhandled, []);
+  });
+
+  test("repeated migration timeouts share one operation and late rejection releases it", async () => {
+    let calls = 0;
+    let rejectFirst;
+    const firstOperation = new Promise((_resolve, reject) => { rejectFirst = reject; });
+    const prisma = {
+      $queryRawUnsafe: () => {
+        calls += 1;
+        return calls === 1 ? firstOperation : Promise.resolve([]);
+      },
+    };
+
+    assert.equal(
+      (await checkMigrations(prisma, { HEALTH_DB_TIMEOUT_MS: "1" })).status,
+      "skipped",
+    );
+    assert.equal(
+      (await checkMigrations(prisma, { HEALTH_DB_TIMEOUT_MS: "1" })).status,
+      "skipped",
+    );
+    assert.equal(calls, 1, "repeated timeouts must not multiply migration queries");
+
+    rejectFirst(new Error("late migration failure"));
+    await new Promise((resolve) => setImmediate(resolve));
+    const recovered = await checkMigrations(prisma, { HEALTH_DB_TIMEOUT_MS: "1" });
+    assert.equal(recovered.status, "healthy");
+    assert.equal(calls, 2, "rejected operations must be removed from the coalescer");
   });
 
   test("a failed migration drives readiness to 503-worthy unhealthy", async () => {
@@ -110,8 +260,19 @@ describe("checkMigrations", () => {
 // ── checkRedis ─────────────────────────────────────────────────────
 
 describe("checkRedis", () => {
+  test("HEALTH_REDIS_TIMEOUT_MS defaults to 1000ms and clamps to 100-10000ms", () => {
+    assert.equal(resolveHealthRedisTimeoutMs({}), 1000);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "garbage" }), 1000);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "1" }), 100);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "425" }), 425);
+    assert.equal(resolveHealthRedisTimeoutMs({ HEALTH_REDIS_TIMEOUT_MS: "99999" }), 10_000);
+  });
+
   test("healthy on PONG", async () => {
-    const r = await checkRedis({ ping: async () => "PONG" });
+    const r = await checkRedis(
+      { ping: async () => "PONG" },
+      { HEALTH_REDIS_TIMEOUT_MS: "100" },
+    );
     assert.equal(r.status, "healthy");
     assert.equal(r.critical, true);
   });
@@ -119,7 +280,7 @@ describe("checkRedis", () => {
   test("unhealthy when ping rejects", async () => {
     const r = await checkRedis({ ping: async () => { throw new Error("EHOSTUNREACH"); } });
     assert.equal(r.status, "unhealthy");
-    assert.match(r.error, /EHOSTUNREACH/);
+    assert.equal(r.error, "REDIS_PROBE_FAILED");
   });
 
   test("unhealthy when ping returns unexpected reply", async () => {
@@ -131,6 +292,44 @@ describe("checkRedis", () => {
     const r = await checkRedis(null);
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
+  });
+
+  test("a never-settling ping becomes critically unhealthy within the configured bound", async () => {
+    const outerTimeout = Symbol("outer-timeout");
+    const result = await Promise.race([
+      checkRedis(
+        { ping: () => new Promise(() => {}) },
+        { HEALTH_REDIS_TIMEOUT_MS: "1" },
+      ),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(result, outerTimeout, "Redis probe exceeded its 100ms lower bound");
+    assert.equal(result.status, "unhealthy");
+    assert.equal(result.critical, true);
+    assert.equal(result.error, "REDIS_PROBE_TIMEOUT");
+  });
+
+  test("a timed-out ping absorbs a late rejection", async (t) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    t.after(() => process.removeListener("unhandledRejection", onUnhandled));
+
+    const result = await checkRedis(
+      {
+        ping: () => new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("late Redis rejection")), 180);
+        }),
+      },
+      { HEALTH_REDIS_TIMEOUT_MS: "1" },
+    );
+
+    await delay(120);
+    assert.equal(result.status, "unhealthy");
+    assert.equal(result.critical, true);
+    assert.equal(result.error, "REDIS_PROBE_TIMEOUT");
+    assert.deepEqual(unhandled, []);
   });
 });
 
@@ -170,6 +369,103 @@ describe("checkProcess", () => {
     assert.ok(r.details.rss_mb > 0);
     assert.ok(r.details.heap_used_mb > 0);
     assert.equal(r.details.pid, process.pid);
+  });
+});
+
+describe("checkDatabasePool", () => {
+  test("reports the bounded instrumentation snapshot and advisory recommendation", () => {
+    const poolMetrics = {
+      snapshot: () => ({
+        capacity: { observable: true, reason: "direct_postgres_datasource" },
+        pool: { min: 2, max: 10, idleTimeoutMs: 60_000 },
+        estimated_connections_active: 7,
+        estimated_connections_idle: 3,
+        queries_in_flight: 7,
+        estimated_saturation_ratio: 0.7,
+        estimated_saturation: "ok",
+      }),
+    };
+    const check = checkDatabasePool(poolMetrics, () => ({
+      running: true,
+      mode: "advisory",
+      currentLimit: 10,
+      recommendedLimit: 12,
+      lastRecommendation: "scale_up",
+      lastRecommendationAt: 1234,
+      stats: {
+        ticks: 3,
+        recommendations: 1,
+        applyErrors: 0,
+        lastError: "must not leak into health",
+      },
+      history: [{ reason: "bounded internally but not needed in health" }],
+    }));
+
+    assert.equal(check.name, "database_pool");
+    assert.equal(check.status, "healthy");
+    assert.equal(check.critical, false);
+    assert.equal(check.details.snapshot.pool.max, 10);
+    assert.equal(check.details.snapshot.estimated_connections_active, 7);
+    assert.equal(Object.hasOwn(check.details.snapshot, "connections_active"), false);
+    assert.equal(Object.hasOwn(check.details.snapshot, "saturation_ratio"), false);
+    assert.deepEqual(check.details.recommendation, {
+      enabled: true,
+      running: true,
+      mode: "advisory",
+      currentLimit: 10,
+      recommendedLimit: 12,
+      lastRecommendation: "scale_up",
+      lastRecommendationAt: 1234,
+      stats: {
+        ticks: 3,
+        recommendations: 1,
+        applyErrors: 0,
+      },
+    });
+    assert.equal(check.details.recommendation.history, undefined);
+    assert.equal(check.details.recommendation.stats.lastError, undefined);
+  });
+
+  test("falls back to an advisory hold when autoscaling is disabled", () => {
+    const check = checkDatabasePool({
+      snapshot: () => ({
+        capacity: { observable: true, reason: "direct_postgres_datasource" },
+        pool: { min: 2, max: 9 },
+        estimated_saturation_ratio: 0,
+        estimated_saturation: "ok",
+      }),
+    });
+
+    assert.equal(check.details.recommendation.enabled, false);
+    assert.equal(check.details.recommendation.running, false);
+    assert.equal(check.details.recommendation.currentLimit, 9);
+    assert.equal(check.details.recommendation.recommendedLimit, 9);
+    assert.equal(check.details.recommendation.lastRecommendation, "hold");
+  });
+
+  test("skips local pool health and recommendations when capacity is unobservable", () => {
+    const check = checkDatabasePool({
+      snapshot: () => ({
+        capacity: { observable: false, reason: "remote_prisma_datasource" },
+        pool: null,
+        estimated_connections_active: null,
+        estimated_connections_idle: null,
+        estimated_saturation_ratio: null,
+        estimated_saturation: "unobservable",
+        queries_in_flight: 2,
+      }),
+    }, () => ({
+      running: true,
+      recommendedLimit: 99,
+    }));
+
+    assert.equal(check.status, "skipped");
+    assert.deepEqual(check.details, {
+      capacity: { observable: false, reason: "remote_prisma_datasource" },
+      reason: "pool_capacity_unobservable",
+    });
+    assert.equal(Object.hasOwn(check.details, "snapshot"), false);
+    assert.equal(Object.hasOwn(check.details, "recommendation"), false);
   });
 });
 
@@ -371,6 +667,56 @@ describe("runReadinessCheck", () => {
     assert.equal(r.status, "unhealthy");
     assert.equal(reportToHttpStatus(r), 503);
   });
+
+  test("uses its injected env for bounded database and migration probes", async (t) => {
+    const previous = process.env.HEALTH_DB_TIMEOUT_MS;
+    process.env.HEALTH_DB_TIMEOUT_MS = "1000";
+    t.after(() => {
+      if (previous === undefined) delete process.env.HEALTH_DB_TIMEOUT_MS;
+      else process.env.HEALTH_DB_TIMEOUT_MS = previous;
+    });
+    const prisma = { $queryRawUnsafe: () => new Promise(() => {}) };
+
+    const startedAt = Date.now();
+    const report = await runReadinessCheck({
+      prisma,
+      env: { HEALTH_DB_TIMEOUT_MS: "100" },
+    });
+    const elapsedMs = Date.now() - startedAt;
+    const database = report.checks.find((check) => check.name === "database");
+    const migrations = report.checks.find((check) => check.name === "migrations");
+
+    assert.ok(elapsedMs < 500, `injected 100ms bound was ignored (${elapsedMs}ms)`);
+    assert.equal(database.error, "DATABASE_PROBE_TIMEOUT");
+    assert.equal(migrations.error, "MIGRATIONS_PROBE_TIMEOUT");
+  });
+
+  test("uses its injected env so a never-settling Redis ping cannot leave readiness pending", async (t) => {
+    const previous = process.env.HEALTH_REDIS_TIMEOUT_MS;
+    process.env.HEALTH_REDIS_TIMEOUT_MS = "1000";
+    t.after(() => {
+      if (previous === undefined) delete process.env.HEALTH_REDIS_TIMEOUT_MS;
+      else process.env.HEALTH_REDIS_TIMEOUT_MS = previous;
+    });
+
+    const outerTimeout = Symbol("outer-timeout");
+    const report = await Promise.race([
+      runReadinessCheck({
+        prisma: { $queryRawUnsafe: async () => [] },
+        redis: { ping: () => new Promise(() => {}) },
+        env: { HEALTH_REDIS_TIMEOUT_MS: "1" },
+      }),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(report, outerTimeout, "readiness remained pending on Redis");
+    assert.equal(report.status, "unhealthy");
+    assert.equal(reportToHttpStatus(report), 503);
+    const redis = report.checks.find((check) => check.name === "redis");
+    assert.equal(redis.status, "unhealthy");
+    assert.equal(redis.critical, true);
+    assert.equal(redis.error, "REDIS_PROBE_TIMEOUT");
+  });
 });
 
 describe("checkStartupEnvironment", () => {
@@ -419,6 +765,7 @@ describe("runFullHealthCheck", () => {
       prisma: { $queryRawUnsafe: async () => 1 },
       redis: { ping: async () => "PONG" },
       startupEnv: { checked: true, issues: [{ key: "REDIS_URL", severity: "WARNING", message: "not set" }] },
+      env: { NODE_ENV: "test" },
     });
     const check = r.checks.find((c) => c.name === "startup_env");
     assert.ok(check);
@@ -427,6 +774,117 @@ describe("runFullHealthCheck", () => {
     // A startup-env warning drives the composite to degraded but never 503s.
     assert.equal(r.status, "degraded");
     assert.equal(reportToHttpStatus(r), 200);
+  });
+
+  test("surfaces database pool snapshot and recommendation without affecting readiness", async () => {
+    const poolMetrics = {
+      snapshot: () => ({
+        capacity: { observable: true, reason: "direct_postgres_datasource" },
+        pool: { min: 2, max: 10, idleTimeoutMs: 60_000 },
+        estimated_connections_active: 4,
+        estimated_connections_idle: 6,
+        queries_in_flight: 4,
+        estimated_saturation_ratio: 0.4,
+        estimated_saturation: "ok",
+      }),
+    };
+    const r = await runFullHealthCheck({
+      prisma: { $queryRawUnsafe: async () => 1 },
+      redis: { ping: async () => "PONG" },
+      env: { OPENAI_API_KEY: "test-only" },
+      poolMetrics,
+      getPoolAutoscalerState: () => ({
+        running: true,
+        mode: "advisory",
+        currentLimit: 10,
+        recommendedLimit: 12,
+        lastRecommendation: "scale_up",
+        lastRecommendationAt: 1234,
+        stats: { ticks: 2, recommendations: 1, applyErrors: 0 },
+      }),
+    });
+
+    const check = r.checks.find((item) => item.name === "database_pool");
+    assert.ok(check);
+    assert.equal(check.critical, false);
+    assert.deepEqual(r.databasePool, check.details);
+    assert.equal(r.databasePool.snapshot.pool.max, 10);
+    assert.equal(r.databasePool.recommendation.recommendedLimit, 12);
+  });
+
+  test("critical estimated saturation monotonically degrades composite health", async () => {
+    const r = await runFullHealthCheck({
+      prisma: { $queryRawUnsafe: async () => 1 },
+      redis: { ping: async () => "PONG" },
+      env: { OPENAI_API_KEY: "test-only" },
+      poolMetrics: {
+        snapshot: () => ({
+          capacity: { observable: true, reason: "direct_postgres_datasource" },
+          pool: { min: 2, max: 10 },
+          estimated_connections_active: 10,
+          estimated_connections_idle: 0,
+          queries_in_flight: 10,
+          estimated_saturation_ratio: 1,
+          estimated_saturation: "critical",
+        }),
+      },
+    });
+
+    const check = r.checks.find((item) => item.name === "database_pool");
+    assert.equal(check.status, "degraded");
+    assert.equal(check.critical, false);
+    assert.equal(r.status, "degraded");
+    assert.equal(reportToHttpStatus(r), 200);
+  });
+
+  test("uses its injected env for bounded database and migration probes", async (t) => {
+    const previous = process.env.HEALTH_DB_TIMEOUT_MS;
+    process.env.HEALTH_DB_TIMEOUT_MS = "1000";
+    t.after(() => {
+      if (previous === undefined) delete process.env.HEALTH_DB_TIMEOUT_MS;
+      else process.env.HEALTH_DB_TIMEOUT_MS = previous;
+    });
+    const prisma = { $queryRawUnsafe: () => new Promise(() => {}) };
+
+    const startedAt = Date.now();
+    const report = await runFullHealthCheck({
+      prisma,
+      env: { HEALTH_DB_TIMEOUT_MS: "100" },
+    });
+    const elapsedMs = Date.now() - startedAt;
+    const database = report.checks.find((check) => check.name === "database");
+    const migrations = report.checks.find((check) => check.name === "migrations");
+
+    assert.ok(elapsedMs < 500, `injected 100ms bound was ignored (${elapsedMs}ms)`);
+    assert.equal(database.error, "DATABASE_PROBE_TIMEOUT");
+    assert.equal(migrations.error, "MIGRATIONS_PROBE_TIMEOUT");
+  });
+
+  test("uses its injected env for the bounded Redis probe", async (t) => {
+    const previous = process.env.HEALTH_REDIS_TIMEOUT_MS;
+    process.env.HEALTH_REDIS_TIMEOUT_MS = "1000";
+    t.after(() => {
+      if (previous === undefined) delete process.env.HEALTH_REDIS_TIMEOUT_MS;
+      else process.env.HEALTH_REDIS_TIMEOUT_MS = previous;
+    });
+
+    const outerTimeout = Symbol("outer-timeout");
+    const report = await Promise.race([
+      runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => [] },
+        redis: { ping: () => new Promise(() => {}) },
+        env: {
+          HEALTH_REDIS_TIMEOUT_MS: "1",
+          OPENAI_API_KEY: "test-only",
+        },
+      }),
+      delay(300, outerTimeout),
+    ]);
+
+    assert.notEqual(report, outerTimeout, "full health remained pending on Redis");
+    assert.equal(report.status, "unhealthy");
+    const redis = report.checks.find((check) => check.name === "redis");
+    assert.equal(redis.error, "REDIS_PROBE_TIMEOUT");
   });
 });
 

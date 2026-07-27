@@ -72,7 +72,7 @@ groups:
             sum(rate(http_requests_total{route!=""}[3d]))
           )
 
-      # ---- HTTP latency (SLO-API-2 / SLO-API-3) --------------------
+      # ---- HTTP latency (SLO-API-2) --------------------------------
       - record: siragpt:http_request_duration:p99_5m
         expr: |
           histogram_quantile(

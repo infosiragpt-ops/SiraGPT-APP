@@ -72,4 +72,62 @@ describe('scientific-search /review route', () => {
     assert.ok(res.body.synthesis.stats.count === 1);
     assert.ok(Array.isArray(res.body.meta.providers));
   });
+
+  test('accepts a structured SPIDER protocol and returns the audit trail', async () => {
+    const res = await request(app())
+      .post('/api/scientific-search/review')
+      .set('Authorization', auth.authHeader)
+      .send({
+        query: 'revisión sistemática sobre adopción de IA',
+        resolveDois: false,
+        protocol: {
+          framework: 'spider',
+          fields: { sample: 'docentes', phenomenon: 'adopción de IA', design: 'entrevistas' },
+          inclusionCriteria: ['educación superior'],
+        },
+      });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.protocol.framework, 'spider');
+    assert.ok(res.body.protocol.searchExpression.includes('"docentes"'));
+    assert.ok(Array.isArray(res.body.screeningDecisions));
+    assert.equal(res.body.prisma.scope.includes('metadata'), true);
+  });
+
+  test('downloads an auditable Markdown protocol with decisions and PRISMA diagram', async () => {
+    const res = await request(app())
+      .post('/api/scientific-search/review/export')
+      .set('Authorization', auth.authHeader)
+      .send({
+        query: 'revisión sistemática PICO; Población: funcionarios; Intervención: gestión administrativa; Comparación: práctica habitual; Resultado: desempeño',
+        resolveDois: false,
+      });
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'], /text\/markdown/);
+    assert.match(res.headers['content-disposition'], /^attachment; filename=/);
+    assert.match(res.text, /## Estrategia de búsqueda/);
+    assert.match(res.text, /```mermaid/);
+    assert.match(res.text, /## Decisiones de cribado/);
+  });
+
+  test('refuses protocol export for a non-systematic request', async () => {
+    const res = await request(app())
+      .post('/api/scientific-search/review/export')
+      .set('Authorization', auth.authHeader)
+      .send({ query: 'gestión administrativa', resolveDois: false });
+    assert.equal(res.status, 422);
+    assert.equal(res.body.error, 'systematic_protocol_required');
+  });
+
+  test('assesses full text with risk-of-bias evidence and GRADE effects', async () => {
+    const fullText = `${'Randomized controlled trial methods. '.repeat(20)} Allocation concealment was used. Intention-to-treat analysis. Validated outcome scale. The protocol was registered. n=800. RR=0.75, 95% CI 0.65 to 0.86.`;
+    const res = await request(app())
+      .post('/api/scientific-search/review/assess')
+      .set('Authorization', auth.authHeader)
+      .send({ studies: [{ paper: { id: 'p1', title: 'Randomized controlled trial', studyType: 'rct' }, fullText }] });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.meta.scope, 'full_text');
+    assert.equal(res.body.studies[0].riskOfBias.basis, 'full_text_domain_assessment');
+    assert.equal(res.body.studies[0].effects.estimates[0].measure, 'RR');
+    assert.equal(res.body.certainty.level, 'high');
+  });
 });

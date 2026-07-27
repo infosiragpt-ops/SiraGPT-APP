@@ -39,8 +39,12 @@ const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
+const {
+  createUploadMediaTokenHandler,
+} = require('../middleware/upload-static-access');
 
 const router = express.Router();
+const uploadMediaTokenHandler = createUploadMediaTokenHandler();
 
 function renderPdfFilename(originalName) {
   const stem = path.basename(String(originalName || 'document'), path.extname(String(originalName || '')));
@@ -748,6 +752,8 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 }
 
 // Upload files — parallel batch processing
+router.post('/media-token', authenticateToken, uploadMediaTokenHandler);
+
 router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', UPLOAD_BATCH_MAX), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -1012,6 +1018,41 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: 'No se pudo listar el historial de versiones' });
+  }
+});
+
+// Restore an immutable prior artifact as a new version. This never overwrites
+// the uploaded original and keeps a complete audit trail for undo/redo.
+router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+    const { restoreFileVersion } = require('../services/document-editing/versioning');
+    const result = await restoreFileVersion(prisma, {
+      fileId: file.id,
+      versionId: req.params.versionId,
+      userId: req.user.id,
+      createdByChatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,
+    });
+    if (!result) return res.status(404).json({ error: 'Versión restaurable no encontrada' });
+    const version = result.restored;
+    return res.status(201).json({
+      sourceVersion: result.source.version,
+      version: {
+        id: version.id,
+        version: version.version,
+        filename: version.filename,
+        summary: version.summary,
+        validationPassed: version.validationPassed,
+        createdAt: version.createdAt,
+        downloadUrl: `/api/agent/artifact/${version.artifactId}`,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'No se pudo restaurar la versión' });
   }
 });
 

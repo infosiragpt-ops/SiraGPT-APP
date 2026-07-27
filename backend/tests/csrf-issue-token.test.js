@@ -51,6 +51,13 @@ test('issued token validates statelessly (cookieless iframe fallback)', () => {
   assert.equal(verifyStatelessToken(token), true);
 });
 
+test('issued stateless token is bound to the provided session id', () => {
+  const token = issueCsrfToken(mockRes(), { sessionID: 'session-a' });
+  assert.equal(verifyStatelessToken(token, undefined, 'session-a'), true);
+  assert.equal(verifyStatelessToken(token, undefined, 'session-b'), false);
+  assert.equal(verifyStatelessToken(token), false);
+});
+
 test('issueCsrfToken rotates the token on every call', () => {
   const a = issueCsrfToken(mockRes());
   const b = issueCsrfToken(mockRes());

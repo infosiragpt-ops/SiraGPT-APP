@@ -1,3 +1,5 @@
+import { createAuthenticatedFetch } from "../../authenticated-fetch";
+
 export type CustomFetchOptions = RequestInit & {
   responseType?: "json" | "text" | "blob" | "auto";
 };
@@ -17,6 +19,9 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _authenticatedTransport = createAuthenticatedFetch({
+  getBearerToken: () => (_authTokenGetter ? _authTokenGetter() : null),
+});
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -27,6 +32,10 @@ let _authTokenGetter: AuthTokenGetter | null = null;
  */
 export function setBaseUrl(url: string | null): void {
   _baseUrl = url ? url.replace(/\/+$/, "") : null;
+  _authenticatedTransport = createAuthenticatedFetch({
+    apiBaseUrl: _baseUrl || undefined,
+    getBearerToken: () => (_authTokenGetter ? _authTokenGetter() : null),
+  });
 }
 
 /**
@@ -349,18 +358,9 @@ export async function customFetch<T = unknown>(
     headers.set("accept", DEFAULT_JSON_ACCEPT);
   }
 
-  // Attach bearer token when an auth getter is configured and no
-  // Authorization header has been explicitly provided.
-  if (_authTokenGetter && !headers.has("authorization")) {
-    const token = await _authTokenGetter();
-    if (token) {
-      headers.set("authorization", `Bearer ${token}`);
-    }
-  }
-
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  const response = await _authenticatedTransport(input, { ...init, method, headers });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

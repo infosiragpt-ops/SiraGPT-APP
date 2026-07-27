@@ -1,5 +1,7 @@
 'use strict';
 
+const { routeDiscipline } = require('./research-discipline-router');
+
 /**
  * research-query-intelligence — turn a raw, natural-language research request
  * into a structured search plan: detected language, content terms, extracted
@@ -24,13 +26,22 @@ const STOPWORDS = new Set((
   'about over under between into during such using based study studies research paper papers article articles ' +
   'una un el la los las de del y o en con por para a al se su sus es son lo le les como sobre entre ' +
   'segun según mas más muy entre cuales cuáles sobre acerca trabajo articulo artículo artículos estudio estudios ' +
-  'busca buscame búscame encuentra dame quiero necesito hazme sobre tema temas cientifico científico cientificos científicos'
+  'busca buscame búscame encuentra dame quiero necesito hazme sobre tema temas cientifico científico cientificos científicos ' +
+  'publicado publicada publicados publicadas publicacion publicación publicaciones published publication publications'
 ).split(/\s+/).filter(Boolean).map((w) => _stripDia(w.toLowerCase())));
 
 // Bilingual research-domain lexicon: each entry maps a concept to its ES + EN
 // surface forms. Used both to TRANSLATE detected terms across languages and to
 // add near-synonyms, broadening recall without drifting off-topic.
 const LEXICON = [
+  {
+    es: ['aprendizaje autorregulado', 'autorregulacion del aprendizaje', 'autorregulación del aprendizaje', 'autorregulado'],
+    en: ['self-regulated learning', 'self regulated learning', 'learning self-regulation'],
+  },
+  {
+    es: ['educacion superior', 'educación superior', 'universidad', 'universitario'],
+    en: ['higher education', 'university', 'tertiary education'],
+  },
   { es: ['gestion', 'gestión', 'administracion', 'administración'], en: ['management', 'administration'] },
   { es: ['empresa', 'empresas', 'empresarial'], en: ['business', 'enterprise', 'firm', 'company'] },
   { es: ['educacion', 'educación', 'educativo'], en: ['education', 'educational', 'learning'] },
@@ -72,8 +83,8 @@ const LEXICON = [
 // synthesiser's evidence-quality weighting.
 const STUDY_TYPES = [
   { type: 'meta_analysis', re: /\bmeta[- ]?an[aá]lisis\b|\bmeta[- ]?analysis\b/i },
-  { type: 'systematic_review', re: /\brevisi[oó]n sistem[aá]tica\b|\bsystematic review\b/i },
-  { type: 'review', re: /\brevisi[oó]n( de literatura| bibliogr[aá]fica)?\b|\bliterature review\b|\bscoping review\b/i },
+  { type: 'systematic_review', re: /\brevisi(?:[oó]n|ones) sistem[aá]ticas?\b|\bsystematic reviews?\b/i },
+  { type: 'review', re: /\brevisi(?:[oó]n|ones)( de literatura| bibliogr[aá]ficas?)?\b|\bliterature reviews?\b|\bscoping reviews?\b/i },
   { type: 'rct', re: /\bensayo cl[ií]nico( aleatorizado)?\b|\brandomi[sz]ed controlled trial\b|\brct\b/i },
   { type: 'cohort', re: /\bestudio de cohorte\b|\bcohort study\b/i },
   { type: 'case_study', re: /\bestudio de caso\b|\bcase study\b/i },
@@ -112,6 +123,18 @@ function contentTerms(text) {
   return out;
 }
 
+function retrievalText(text) {
+  return String(text || '')
+    // A trailing preference clause describes how to rank the evidence, not the
+    // scientific topic itself. Keeping it in the provider query made words
+    // such as "sistemática", "DOI" or "pertinencia" outweigh the actual topic.
+    .replace(/(?:^|[.;])\s*(?:prioriza(?:r)?|priorice|prefiere|preferir|prioriti[sz]e|prefer)\b[\s\S]*$/i, ' ')
+    .replace(/\b(?:de\s+)?acceso abierto\b|\bopen access\b/gi, ' ')
+    .replace(/\bdoi(?:\s+verificable)?\b|\bverifiable doi\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function extractFilters(text) {
   const t = String(text || '');
   const lower = t.toLowerCase();
@@ -147,12 +170,57 @@ function extractFilters(text) {
     filters.openAccessOnly = true;
   }
 
+  // Peer review is not asserted from a DOI alone. Downstream integrity logic
+  // accepts explicitly reviewed records and likely journal publications while
+  // still labelling the latter as an inference in the UI.
+  if (/\bpeer[- ]reviewed\b|\brevisad[oa]s? por pares\b|\barbitrad[oa]s?\b/.test(lower)) {
+    filters.peerReviewedOnly = true;
+    filters.excludePreprints = true;
+  }
+
+  // Retractions and withdrawals are excluded by default. They are admitted
+  // only when the research request is explicitly about those records.
+  if (/\bretractad[oa]s?\b|\bretracted\b|\bretractions?\b|\bretractaciones?\b|\bwithdrawn papers?\b/.test(lower)) {
+    filters.includeRetracted = true;
+  }
+
   // Study type
   for (const s of STUDY_TYPES) {
-    if (s.re.test(t)) { filters.studyType = s.type; break; }
+    if (s.re.test(t)) {
+      filters.studyType = s.type;
+      const strictPrefix = /\b(?:solo|solamente|unicamente|únicamente|exclusivamente|only)\b/i;
+      filters.studyTypeRequired = strictPrefix.test(t);
+      break;
+    }
   }
 
   return filters;
+}
+
+function lexiconEntryMatches(entry, terms, fullTextLower) {
+  const haystack = ` ${stripDiacritics(String(fullTextLower || '').toLowerCase())} `;
+  return [...entry.es, ...entry.en].some((form) => {
+    const normalized = stripDiacritics(form.toLowerCase());
+    const formTerms = normalized.split(/\s+/).filter(Boolean);
+    const termMatch = formTerms.length === 1
+      ? terms.includes(formTerms[0])
+      : formTerms.every((term) => terms.includes(term));
+    return termMatch || haystack.includes(` ${normalized} `);
+  });
+}
+
+function matchedConceptGroups(terms, fullTextLower) {
+  const groups = [];
+  for (const entry of LEXICON) {
+    if (!lexiconEntryMatches(entry, terms, fullTextLower)) continue;
+    const forms = Array.from(new Set([...entry.es, ...entry.en]
+      .map((form) => stripDiacritics(form.toLowerCase()).replace(/\s+/g, ' ').trim())
+      .filter(Boolean)));
+    // Single-word synonym sets improve recall, but exact concept validation is
+    // reserved for concepts that have at least one compound form.
+    if (forms.some((form) => form.includes(' '))) groups.push(forms);
+  }
+  return groups;
 }
 
 // Expand the content terms across the bilingual lexicon: every matched concept
@@ -160,20 +228,26 @@ function extractFilters(text) {
 // expansion tokens/phrases (excluding the originals).
 function expandTerms(terms, fullTextLower) {
   const expansions = new Set();
-  const haystack = ` ${fullTextLower} `;
   for (const entry of LEXICON) {
     const all = [...entry.es, ...entry.en];
-    const matched = all.some((form) => {
-      const f = stripDiacritics(form.toLowerCase());
-      return terms.includes(f.split(' ')[0]) || haystack.includes(` ${form.toLowerCase()} `) || haystack.includes(` ${f} `);
-    });
+    const matched = lexiconEntryMatches(entry, terms, fullTextLower);
     if (matched) {
       for (const form of all) expansions.add(form.toLowerCase());
     }
   }
-  // Don't echo back the literal terms as "expansions".
-  for (const t of terms) expansions.delete(t);
-  return Array.from(expansions);
+  // Don't echo the literal topic back as an "expansion". Normalise accents so
+  // "educación superior" and "educacion superior" collapse to one concept,
+  // leaving the limited query budget for actual cross-language alternatives.
+  const literal = ` ${stripDiacritics(fullTextLower)} `;
+  const seen = new Set();
+  const useful = [];
+  for (const form of expansions) {
+    const key = stripDiacritics(String(form).toLowerCase()).replace(/\s+/g, ' ').trim();
+    if (!key || terms.includes(key) || literal.includes(` ${key} `) || seen.has(key)) continue;
+    seen.add(key);
+    useful.push(form);
+  }
+  return useful;
 }
 
 /**
@@ -192,10 +266,21 @@ function analyzeQuery(rawQuery, opts = {}) {
   const original = String(rawQuery || '');
   const normalized = original.replace(/\s+/g, ' ').trim();
   const language = detectLanguage(normalized);
-  const terms = contentTerms(normalized);
+  const topicText = retrievalText(normalized) || normalized;
+  const terms = contentTerms(topicText);
   const filters = extractFilters(normalized);
-  const fullLower = stripDiacritics(normalized.toLowerCase());
-  const expansions = expandTerms(terms, fullLower);
+  const fullLower = stripDiacritics(topicText.toLowerCase());
+  const discipline = routeDiscipline(normalized, opts.discipline);
+  const lexicalExpansions = expandTerms(terms, fullLower);
+  const expansionKeys = new Set();
+  const expansions = [];
+  for (const value of [...lexicalExpansions, ...(discipline.controlledVocabulary || [])]) {
+    const key = stripDiacritics(String(value).toLowerCase()).replace(/\s+/g, ' ').trim();
+    if (!key || expansionKeys.has(key) || ` ${fullLower} `.includes(` ${key} `)) continue;
+    expansionKeys.add(key);
+    expansions.push(value);
+  }
+  const conceptGroups = matchedConceptGroups(terms, fullLower);
 
   // Build search-query variants:
   //   1. the core content terms (literal intent, stopwords stripped)
@@ -209,20 +294,23 @@ function analyzeQuery(rawQuery, opts = {}) {
   };
   pushQ(coreQuery);
   if (expansions.length) {
-    pushQ(`${coreQuery} ${expansions.slice(0, 4).join(' ')}`);
+    pushQ(`${coreQuery} ${expansions.slice(0, 8).join(' ')}`);
     // English-leaning: prefer expansions that look English (ascii-only words).
     const englishish = expansions.filter((e) => /^[a-z0-9 -]+$/.test(e));
-    if (englishish.length) pushQ(englishish.slice(0, 5).join(' '));
+    if (englishish.length) pushQ(englishish.slice(0, 8).join(' '));
   }
   if (!searchQueries.length) pushQ(normalized);
 
   return {
     original,
     normalized,
+    topicText,
     language,
     terms,
     filters,
+    discipline,
     expansions,
+    conceptGroups,
     searchQueries: searchQueries.slice(0, maxQueries),
   };
 }
@@ -234,5 +322,5 @@ module.exports = {
   extractFilters,
   expandTerms,
   STUDY_TYPES,
-  _internal: { stripDiacritics, STOPWORDS, LEXICON },
+  _internal: { stripDiacritics, retrievalText, lexiconEntryMatches, matchedConceptGroups, STOPWORDS, LEXICON },
 };

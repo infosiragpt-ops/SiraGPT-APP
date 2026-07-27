@@ -15,6 +15,7 @@ const {
   joinPaths,
   normalizeRequirePath,
 } = require('../src/services/openapi/route-scanner');
+const { generate } = require('../scripts/generate-openapi');
 
 test('scanRouteSource extracts router.METHOD calls with literal paths', () => {
   const src = `
@@ -200,4 +201,16 @@ test('end-to-end: scanning the live backend produces 100+ routes', () => {
   const doc = buildOpenApiDocument(resolved);
   const { valid, errors } = validateOpenApiDocument(doc);
   assert.equal(valid, true, `errors: ${errors.join(', ')}`);
+});
+
+test('generated SE-agent metrics operation documents the shared protected policy', () => {
+  const { doc } = generate();
+  const operation = doc.paths['/api/se-agents/metrics']?.get;
+
+  assert.ok(operation, 'missing GET /api/se-agents/metrics');
+  assert.match(operation.summary, /socket-peer loopback/i);
+  assert.match(operation.summary, /METRICS_TOKEN/);
+  assert.match(operation.summary, /super-admin/i);
+  assert.match(operation.summary, /API keys are denied/i);
+  assert.deepEqual(operation.security, [{ bearerAuth: [] }]);
 });

@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs').promises;
-const { PrismaClient } = require('@prisma/client');
+const { constants: fsConstants } = require('fs');
+const path = require('path');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
@@ -10,9 +11,127 @@ const {
   getCerebrasConfig,
 } = require('../services/ai/cerebras-client');
 const gptActions = require('../services/gpts/gpt-actions');
+const { mergeCustomGptCapabilities } = require('../services/agents/custom-gpt-agent-policy');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require('../config/database');
+const PUBLIC_GPT_ICON_PREFIX = 'gpt-icons';
+const PUBLIC_GPT_VISIBILITIES = new Set(['PUBLIC', 'UNLISTED']);
+
+function publicGptIconsDir(uploadRoot = upload.uploadDir) {
+  return path.join(path.resolve(uploadRoot || 'uploads'), PUBLIC_GPT_ICON_PREFIX);
+}
+
+function parseUserScopedUploadIconUrl(iconUrl) {
+  const raw = String(iconUrl || '').trim();
+  if (!raw.startsWith('/uploads/')) return null;
+
+  const parts = raw
+    .replace(/^\/uploads\/+/, '')
+    .split('/')
+    .filter(Boolean);
+
+  if (parts.length !== 2) return null;
+  const [userId, filename] = parts;
+  if (userId === PUBLIC_GPT_ICON_PREFIX) return null;
+  if (!upload.safeStorageSegment(userId) || !upload.safeStorageSegment(filename)) return null;
+
+  return { userId, filename };
+}
+
+function safePublicIconFilename({ gptId, sourceFilename }) {
+  const base = path.basename(String(sourceFilename || 'icon'));
+  const ext = path.extname(base).toLowerCase();
+  const stem = path.basename(base, ext)
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'icon';
+  const safeGptId = upload.safeStorageSegment(gptId) || 'gpt';
+  return `${safeGptId}-${stem}${ext}`;
+}
+
+async function moveFileAcrossDevices(sourcePath, destinationPath) {
+  try {
+    await fs.rename(sourcePath, destinationPath);
+  } catch (error) {
+    if (error?.code !== 'EXDEV') throw error;
+    await fs.copyFile(sourcePath, destinationPath);
+    await fs.unlink(sourcePath).catch(() => {});
+  }
+}
+
+async function publicizeGptIconUrl({
+  iconUrl,
+  visibility,
+  gptId,
+  sourcePath,
+  moveSource = false,
+  uploadRoot = upload.uploadDir,
+}) {
+  if (!PUBLIC_GPT_VISIBILITIES.has(visibility)) {
+    return { iconUrl, changed: false };
+  }
+
+  const parsed = parseUserScopedUploadIconUrl(iconUrl);
+  if (!parsed) return { iconUrl, changed: false };
+
+  const root = path.resolve(uploadRoot || 'uploads');
+  const source = sourcePath
+    ? path.resolve(sourcePath)
+    : path.join(root, parsed.userId, parsed.filename);
+  const relativeSource = path.relative(root, source);
+  if (!relativeSource || relativeSource.startsWith('..') || path.isAbsolute(relativeSource)) {
+    return { iconUrl, changed: false };
+  }
+
+  const publicDir = publicGptIconsDir(root);
+  await fs.mkdir(publicDir, { recursive: true });
+  const destinationFilename = safePublicIconFilename({
+    gptId,
+    sourceFilename: parsed.filename,
+  });
+  const destination = path.join(publicDir, destinationFilename);
+
+  try {
+    await fs.access(source, fsConstants.R_OK);
+  } catch {
+    return { iconUrl, changed: false };
+  }
+
+  if (moveSource) {
+    await moveFileAcrossDevices(source, destination);
+  } else {
+    await fs.copyFile(source, destination);
+  }
+
+  return {
+    iconUrl: `/uploads/${PUBLIC_GPT_ICON_PREFIX}/${destinationFilename}`,
+    changed: true,
+  };
+}
+
+async function ensurePublicGptIcon(gpt, options = {}) {
+  if (!gpt?.id) return gpt;
+  const result = await publicizeGptIconUrl({
+    iconUrl: gpt.iconUrl,
+    visibility: gpt.visibility,
+    gptId: gpt.id,
+    ...options,
+  });
+
+  if (!result.changed || result.iconUrl === gpt.iconUrl) return gpt;
+
+  try {
+    await prisma.customGpt.update({
+      where: { id: gpt.id },
+      data: { iconUrl: result.iconUrl },
+    });
+  } catch (error) {
+    console.warn('Failed to update GPT public icon URL:', error.message);
+  }
+
+  return { ...gpt, iconUrl: result.iconUrl };
+}
 
 // Return a GPT object safe to send to the client: its Actions never expose the
 // encrypted auth secret (redactActionsForClient → auth.hasSecret boolean only).
@@ -166,13 +285,18 @@ router.get('/', authenticateToken, async (req, res) => {
       ]
     });
 
-    // Transform the data to match frontend expectations
-    const transformedGpts = gpts.map(gpt => ({
-      ...withRedactedActions(gpt),
-      _count: {
-        conversations: gpt._count.chats,
-        files: gpt._count.knowledgeFiles
-      }
+    // Transform the data to match frontend expectations. Public/unlisted GPT
+    // avatars uploaded before the public icon folder existed are copied lazily
+    // so public listings do not depend on user-scoped upload auth.
+    const transformedGpts = await Promise.all(gpts.map(async (gpt) => {
+      const hydratedGpt = await ensurePublicGptIcon(gpt);
+      return {
+        ...withRedactedActions(hydratedGpt),
+        _count: {
+          conversations: gpt._count.chats,
+          files: gpt._count.knowledgeFiles
+        }
+      };
     }));
 
     res.json({ gpts: transformedGpts });
@@ -241,7 +365,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json({ gpt: withRedactedActions(gpt) });
+    res.json({ gpt: withRedactedActions(await ensurePublicGptIcon(gpt)) });
   } catch (error) {
     console.error('Error fetching GPT:', error);
     res.status(500).json({ error: 'Failed to fetch GPT' });
@@ -276,7 +400,7 @@ router.get('/share/:shareId', async (req, res) => {
       return res.status(403).json({ error: 'This GPT is private' });
     }
 
-    res.json({ gpt: withRedactedActions(gpt) });
+    res.json({ gpt: withRedactedActions(await ensurePublicGptIcon(gpt)) });
   } catch (error) {
     console.error('Error fetching shared GPT:', error);
     res.status(500).json({ error: 'Failed to fetch shared GPT' });
@@ -366,7 +490,9 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
         visibility: visibility || 'PRIVATE',
         category,
         actions: gptActions.normalizeActionsForStore(actions, []),
-        capabilities: capabilities ?? null,
+        capabilities: capabilities === undefined
+          ? null
+          : mergeCustomGptCapabilities(null, capabilities),
       },
       include: {
         creator: {
@@ -379,7 +505,12 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
       }
     });
 
-    res.status(201).json({ gpt: withRedactedActions(gpt) });
+    const responseGpt = await ensurePublicGptIcon(gpt, {
+      sourcePath: req.file?.path,
+      moveSource: Boolean(req.file),
+    });
+
+    res.status(201).json({ gpt: withRedactedActions(responseGpt) });
   } catch (error) {
     console.error('Error creating GPT:', error);
     res.status(500).json({ error: 'Failed to create GPT' });
@@ -477,7 +608,9 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
         ...(actions !== undefined && {
           actions: gptActions.normalizeActionsForStore(actions, existingGpt.actions || []),
         }),
-        ...(capabilities !== undefined && { capabilities }),
+        ...(capabilities !== undefined && {
+          capabilities: mergeCustomGptCapabilities(existingGpt.capabilities, capabilities),
+        }),
       },
       include: {
         creator: {
@@ -490,7 +623,12 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
       }
     });
 
-    res.json({ gpt: withRedactedActions(updatedGpt) });
+    const responseGpt = await ensurePublicGptIcon(updatedGpt, {
+      sourcePath: req.file?.path,
+      moveSource: Boolean(req.file),
+    });
+
+    res.json({ gpt: withRedactedActions(responseGpt) });
   } catch (error) {
     console.error('Error updating GPT:', error);
     res.status(500).json({ error: 'Failed to update GPT' });
@@ -556,17 +694,19 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. This GPT is private.' });
     }
 
+    const hydratedGpt = await ensurePublicGptIcon(gpt);
+
     // Create a new chat with this GPT
     const chat = await prisma.chat.create({
       data: {
         userId,
-        title: `Chat with ${gpt.name}`,
-        model: gpt.modelName, // Use GPT's preferred model
+        title: `Chat with ${hydratedGpt.name}`,
+        model: hydratedGpt.modelName, // Use GPT's preferred model
         customGptId: id, // Link to the custom GPT
         messages: {
-          create: gpt.greetingMessage ? [{
+          create: hydratedGpt.greetingMessage ? [{
             role: 'ASSISTANT',
-            content: gpt.greetingMessage,
+            content: hydratedGpt.greetingMessage,
             timestamp: new Date().toISOString()
           }] : []
         }
@@ -576,13 +716,18 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
         customGpt: {
           select: {
             id: true,
+            creatorId: true,
             name: true,
+            description: true,
             iconUrl: true,
             instructions: true,
             greetingMessage: true,
             modelName: true,
             temperature: true,
-            conversationStarters: true
+            capabilities: true,
+            conversationStarters: true,
+            visibility: true,
+            shareId: true
           }
         }
       }
@@ -592,10 +737,10 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       chat,
       // Include GPT info for frontend
       gptInfo: {
-        name: gpt.name,
-        iconUrl: gpt.iconUrl,
-        instructions: gpt.instructions,
-        conversationStarters: gpt.conversationStarters
+        name: hydratedGpt.name,
+        iconUrl: hydratedGpt.iconUrl,
+        instructions: hydratedGpt.instructions,
+        conversationStarters: hydratedGpt.conversationStarters
       }
     });
   } catch (error) {
@@ -620,13 +765,18 @@ router.get('/chat/:chatId', authenticateToken, async (req, res) => {
         customGpt: {
           select: {
             id: true,
+            creatorId: true,
             name: true,
+            description: true,
             iconUrl: true,
             instructions: true,
             greetingMessage: true,
             modelName: true,
             temperature: true,
+            capabilities: true,
             conversationStarters: true,
+            visibility: true,
+            shareId: true,
             knowledgeFiles: {
               select: {
                 id: true,
@@ -980,5 +1130,13 @@ router.post('/preview-chat', authenticateToken, async (req, res) => {
     return res.status(500).json({ error: 'Failed to generate preview response' });
   }
 });
+
+router._internal = {
+  PUBLIC_GPT_ICON_PREFIX,
+  parseUserScopedUploadIconUrl,
+  publicGptIconsDir,
+  publicizeGptIconUrl,
+  safePublicIconFilename,
+};
 
 module.exports = router;

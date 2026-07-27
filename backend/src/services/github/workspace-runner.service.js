@@ -17,12 +17,17 @@
  * SIRAGPT_WORKSPACE_RUN_DISABLED=1.
  */
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const { buildUntrustedChildEnv } = require('../../utils/untrusted-child-env');
+const {
+  WINDOWS_COMMAND_TIMEOUT_MS,
+  readWindowsProcessList,
+  collectWindowsDescendants,
+} = require('../../utils/windows-process-tree');
 
 const IS_WIN = process.platform === 'win32';
 const DEFAULT_READY_TIMEOUT_MS = 180_000; // 3 min — covers a cold `npm install` + boot
@@ -31,6 +36,8 @@ const LOG_MAX_LINES = 200;
 const PORT_RANGE = [4300, 4999];
 const MAX_ENV_KEYS = 120;
 const MAX_ENV_VALUE_BYTES = 32 * 1024;
+const DEFAULT_STOP_GRACE_MS = 3000;
+const DEFAULT_FORCE_WAIT_MS = 250;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RUNTIME_ENV_FILE_RE = /(^|\/)\.env(?:\.(?!example$|sample$|template$|defaults$)[A-Za-z0-9_-]+)*$/i;
 const BLOCKED_ENV_KEYS = new Set([
@@ -46,6 +53,10 @@ const BLOCKED_ENV_KEYS = new Set([
 
 // connectionId → run state
 const runs = new Map();
+const pendingStarts = new Set();
+const pendingStops = new Set();
+let stopping = false;
+let stopAllPromise = null;
 
 function flagEnabled(value, fallback = false) {
   const raw = String(value == null ? '' : value).trim().toLowerCase();
@@ -61,6 +72,41 @@ function positiveInt(value, fallback) {
 
 function readyTimeoutMs() {
   return positiveInt(process.env.SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS, DEFAULT_READY_TIMEOUT_MS);
+}
+
+function boundedInt(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function stopGraceMs() {
+  return boundedInt(
+    process.env.SIRAGPT_WORKSPACE_RUN_STOP_GRACE_MS,
+    DEFAULT_STOP_GRACE_MS,
+    100,
+    30_000,
+  );
+}
+
+function forceWaitMs() {
+  return boundedInt(
+    process.env.SIRAGPT_WORKSPACE_RUN_FORCE_WAIT_MS,
+    DEFAULT_FORCE_WAIT_MS,
+    10,
+    5000,
+  );
+}
+
+function runnerStoppingError() {
+  const error = new Error('Workspace runner is shutting down');
+  error.status = 503;
+  error.code = 'runner_stopping';
+  return error;
+}
+
+function assertAcceptingStarts() {
+  if (stopping) throw runnerStoppingError();
 }
 
 function workspaceNodeOptions() {
@@ -219,22 +265,48 @@ function startStaticServer(localPath, port, pushLog) {
 /** Poll the dev server until it answers (any HTTP response = ready). */
 function pollReady(port, onReady, onTimeout) {
   const deadline = Date.now() + readyTimeoutMs();
+  let cancelled = false;
+  let timer = null;
+  let request = null;
+
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    if (request) request.destroy();
+    request = null;
+  };
+  const schedule = () => {
+    if (cancelled) return;
+    timer = setTimeout(tick, READY_POLL_MS);
+  };
   const tick = () => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: 2000 }, (res) => {
+    if (cancelled) return;
+    let failed = false;
+    request = http.get({ host: '127.0.0.1', port, path: '/', timeout: 2000 }, (res) => {
       res.resume();
+      cancel();
       onReady();
     });
-    req.on('error', () => {
-      if (Date.now() > deadline) return onTimeout();
-      setTimeout(tick, READY_POLL_MS);
+    request.once('error', () => {
+      if (cancelled || failed) return;
+      failed = true;
+      request = null;
+      if (Date.now() > deadline) {
+        cancel();
+        onTimeout();
+        return;
+      }
+      schedule();
     });
-    req.on('timeout', () => {
-      req.destroy();
-      if (Date.now() > deadline) return onTimeout();
-      setTimeout(tick, READY_POLL_MS);
+    request.once('timeout', () => {
+      if (failed) return;
+      request.destroy();
     });
   };
-  setTimeout(tick, READY_POLL_MS);
+  schedule();
+  return cancel;
 }
 
 function redactRuntimeEnv(text, runtimeEnv = {}) {
@@ -256,32 +328,230 @@ function pushLog(state, line) {
   if (state.log.length > LOG_MAX_LINES) state.log.splice(0, state.log.length - LOG_MAX_LINES);
 }
 
-function killTree(state) {
-  if (state.server) {
+function processSettled(proc) {
+  return !proc || proc.exitCode !== null || proc.signalCode != null;
+}
+
+function createWindowsProcessTreeTracker(proc, {
+  processListImpl = readWindowsProcessList,
+} = {}) {
+  const knownPids = new Set();
+  let initialSnapshotUncertain = false;
+  const readProcessList = () => {
     try {
-      state.server.close();
+      const result = processListImpl();
+      return Array.isArray(result) ? result : null;
     } catch {
-      /* ignore */
+      return null;
     }
-    state.server = null;
+  };
+  const rememberDescendants = (processList) => {
+    const roots = [proc?.pid, ...knownPids];
+    for (const rootPid of roots) {
+      for (const pid of collectWindowsDescendants(rootPid, processList)) knownPids.add(pid);
+    }
+  };
+  const initialProcessList = readProcessList();
+  if (initialProcessList) rememberDescendants(initialProcessList);
+  else initialSnapshotUncertain = true;
+
+  return {
+    knownPids,
+    isAlive() {
+      const processList = readProcessList();
+      if (!processList) return true;
+      rememberDescendants(processList);
+      if (!processSettled(proc)) return true;
+      if (initialSnapshotUncertain) return true;
+      const livePids = new Set(processList.map((processInfo) => Number(processInfo?.pid)));
+      return Array.from(knownPids).some((pid) => livePids.has(pid));
+    },
+  };
+}
+
+function sendGracefulTermination(proc) {
+  if (processSettled(proc)) return;
+  try {
+    proc.kill?.('SIGTERM');
+  } catch {
+    try { proc.kill?.('SIGTERM'); } catch { /* already gone */ }
   }
-  if (state.proc && state.proc.pid && !state.proc.killed) {
-    const pid = state.proc.pid;
+}
+
+function forceKillProcessTree(proc, knownTreePids = []) {
+  if (!proc) return;
+  try {
+    if (IS_WIN && proc.pid) {
+      const pids = new Set([proc.pid, ...knownTreePids]);
+      for (const pid of pids) {
+        const result = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+          timeout: WINDOWS_COMMAND_TIMEOUT_MS,
+          killSignal: 'SIGKILL',
+        });
+        if (result?.error || (Number.isInteger(result?.status) && result.status !== 0)) {
+          try { proc.kill?.('SIGKILL'); } catch { /* already gone */ }
+        }
+      }
+      return;
+    }
+    if (!IS_WIN && proc.pid) {
+      process.kill(-proc.pid, 'SIGKILL');
+      return;
+    }
+    proc.kill?.('SIGKILL');
+  } catch {
+    try { proc.kill?.('SIGKILL'); } catch { /* already gone */ }
+  }
+}
+
+function defaultProcessTreeLiveness(proc) {
+  if (!proc) return false;
+  if (!processSettled(proc)) return true;
+  if (!IS_WIN && proc.pid) {
     try {
-      if (IS_WIN) {
-        spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-      } else {
-        process.kill(-pid, 'SIGTERM'); // negative pid → process group
-      }
-    } catch {
-      try {
-        state.proc.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
+      process.kill(-proc.pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code !== 'ESRCH';
     }
   }
+  return false;
+}
+
+function waitForPoll(timeoutMs, signal, setTimeoutFn, clearTimeoutFn) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    let timer = null;
+    const finish = () => {
+      if (timer) clearTimeoutFn(timer);
+      timer = null;
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    timer = setTimeoutFn(finish, timeoutMs);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
+
+async function waitForProcessTreeQuiescence(proc, {
+  isProcessTreeAlive = defaultProcessTreeLiveness,
+  pollIntervalMs = 50,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+  signal,
+} = {}) {
+  if (!proc) return;
+  while (!signal?.aborted && await isProcessTreeAlive(proc)) {
+    await waitForPoll(
+      Math.max(10, Number(pollIntervalMs) || 50),
+      signal,
+      setTimeoutFn,
+      clearTimeoutFn,
+    );
+  }
+}
+
+function beginServerClose(server) {
+  if (!server) return { done: Promise.resolve(), force: () => {} };
+  let finish;
+  let settled = false;
+  const done = new Promise((resolve) => {
+    finish = () => {
+      if (settled) return;
+      settled = true;
+      server.removeListener?.('close', finish);
+      resolve();
+    };
+    server.once?.('close', finish);
+  });
+  try {
+    server.close(finish);
+  } catch {
+    finish();
+  }
+  return {
+    done,
+    force: () => {
+      try { server.closeAllConnections?.(); } catch { /* best effort */ }
+      try { server.closeIdleConnections?.(); } catch { /* best effort */ }
+      try { server.close(finish); } catch { finish(); }
+    },
+  };
+}
+
+function waitForTimeout(promise, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(true);
+    }, timeoutMs);
+    Promise.resolve(promise).then(
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      },
+    );
+  });
+}
+
+async function stopRunState(state) {
+  try { state.cancelReadyPoll?.(); } catch { /* best effort */ }
+  state.cancelReadyPoll = null;
+
+  const proc = state.proc;
+  const server = state.server;
   state.proc = null;
+  state.server = null;
+
+  const windowsTreeTracker = IS_WIN && proc
+    ? createWindowsProcessTreeTracker(proc)
+    : null;
+  const treeWaitController = new AbortController();
+  const processDone = waitForProcessTreeQuiescence(proc, {
+    isProcessTreeAlive: windowsTreeTracker?.isAlive || defaultProcessTreeLiveness,
+    signal: treeWaitController.signal,
+  });
+  const serverClose = beginServerClose(server);
+  const allDone = Promise.all([processDone, serverClose.done]);
+
+  sendGracefulTermination(proc);
+
+  const graceExpired = await waitForTimeout(allDone, stopGraceMs());
+  if (!graceExpired) return;
+
+  forceKillProcessTree(proc, windowsTreeTracker?.knownPids);
+  serverClose.force();
+  await waitForTimeout(allDone, forceWaitMs());
+  treeWaitController.abort();
+}
+
+function initiateStop(connectionId, state) {
+  if (!state) return null;
+  if (state.stopPromise) return state.stopPromise;
+  state.status = 'stopped';
+  state.ready = false;
+  if (runs.get(connectionId) === state) runs.delete(connectionId);
+  const operation = stopRunState(state);
+  state.stopPromise = operation;
+  pendingStops.add(operation);
+  const remove = () => pendingStops.delete(operation);
+  operation.then(remove, remove);
+  return operation;
 }
 
 function listRuntimeEnvFiles(root) {
@@ -329,7 +599,8 @@ function hideRuntimeEnvFilesForInstall(root) {
 }
 
 /** Start (or restart) the dev server for a workspace. */
-async function start(connectionId, localPath, opts = {}) {
+async function startInternal(connectionId, localPath, opts = {}) {
+  assertAcceptingStarts();
   if (isDisabled()) {
     const e = new Error('Workspace run is disabled on this server');
     e.status = 503;
@@ -337,9 +608,13 @@ async function start(connectionId, localPath, opts = {}) {
     throw e;
   }
   // Restart if already running.
-  if (runs.has(connectionId)) stop(connectionId);
+  if (runs.has(connectionId)) {
+    await initiateStop(connectionId, runs.get(connectionId));
+    assertAcceptingStarts();
+  }
 
   const port = await findFreePort();
+  assertAcceptingStarts();
   const plan = detectRunPlan(localPath, port, connectionId);
   if (plan.kind === 'none') {
     const e = new Error('No runnable entrypoint found (no dev/start script, vite/next dep, or index.html)');
@@ -347,6 +622,7 @@ async function start(connectionId, localPath, opts = {}) {
     e.code = 'not_runnable';
     throw e;
   }
+  assertAcceptingStarts();
 
   const state = {
     connectionId,
@@ -363,10 +639,13 @@ async function start(connectionId, localPath, opts = {}) {
     log: [],
     runtimeEnv: normaliseRuntimeEnv(opts.env),
     previewUrl: publicPreviewUrl(connectionId, port),
+    cancelReadyPoll: null,
+    stopPromise: null,
   };
   runs.set(connectionId, state);
 
   if (plan.kind === 'static') {
+    assertAcceptingStarts();
     state.server = startStaticServer(localPath, port, (l) => pushLog(state, l));
     state.status = 'ready';
     state.ready = true;
@@ -391,7 +670,7 @@ async function start(connectionId, localPath, opts = {}) {
       state.ready = false;
     });
 
-    pollReady(
+    state.cancelReadyPoll = pollReady(
       port,
       () => {
         if (state.status === 'stopped') return;
@@ -408,6 +687,7 @@ async function start(connectionId, localPath, opts = {}) {
   };
 
   const spawnDev = (command) => {
+    if (stopping || state.status === 'stopped') return;
     pushLog(state, `[run] ${command}`);
     attachDevProcess(spawn(command, {
       cwd: localPath,
@@ -455,7 +735,7 @@ async function start(connectionId, localPath, opts = {}) {
     installProc.on('exit', (code) => {
       restoreEnvFiles();
       state.proc = null;
-      if (state.status === 'stopped') return;
+      if (stopping || state.status === 'stopped') return;
       if (code !== 0) {
         state.status = 'error';
         state.error = `npm install exited with code ${code}`;
@@ -471,13 +751,19 @@ async function start(connectionId, localPath, opts = {}) {
   return snapshot(state);
 }
 
+function start(connectionId, localPath, opts = {}) {
+  if (stopping) return Promise.reject(runnerStoppingError());
+  const operation = startInternal(connectionId, localPath, opts);
+  pendingStarts.add(operation);
+  const remove = () => pendingStarts.delete(operation);
+  operation.then(remove, remove);
+  return operation;
+}
+
 function stop(connectionId) {
   const state = runs.get(connectionId);
   if (!state) return { stopped: false };
-  state.status = 'stopped';
-  state.ready = false;
-  killTree(state);
-  runs.delete(connectionId);
+  initiateStop(connectionId, state);
   return { stopped: true };
 }
 
@@ -510,19 +796,27 @@ function getProxyTarget(connectionId) {
   return { port: state.port, status: state.status, framework: state.framework };
 }
 
-// Best-effort cleanup of all child processes on shutdown.
 function stopAll() {
-  for (const id of Array.from(runs.keys())) stop(id);
+  if (stopAllPromise) return stopAllPromise;
+  stopping = true;
+  stopAllPromise = (async () => {
+    for (const [id, state] of Array.from(runs.entries())) initiateStop(id, state);
+    await Promise.allSettled(Array.from(pendingStarts));
+    for (const [id, state] of Array.from(runs.entries())) initiateStop(id, state);
+    await Promise.allSettled(Array.from(pendingStops));
+  })();
+  return stopAllPromise;
 }
-process.once('exit', stopAll);
-process.once('SIGINT', () => {
-  stopAll();
-  process.exit(0);
-});
-process.once('SIGTERM', () => {
-  stopAll();
-  process.exit(0);
-});
+
+function bestEffortExitCleanup() {
+  stopping = true;
+  for (const state of runs.values()) {
+    try { state.cancelReadyPoll?.(); } catch { /* best effort */ }
+    try { state.server?.close(); } catch { /* best effort */ }
+    sendGracefulTermination(state.proc);
+  }
+}
+process.once('exit', bestEffortExitCleanup);
 
 module.exports = {
   start,
@@ -540,4 +834,9 @@ module.exports = {
   normaliseRuntimeEnv,
   isRuntimeEnvFile,
   _runs: runs,
+  _pendingStarts: pendingStarts,
+  _pendingStops: pendingStops,
+  _isStopping: () => stopping,
+  _waitForProcessTreeQuiescence: waitForProcessTreeQuiescence,
+  _createWindowsProcessTreeTracker: createWindowsProcessTreeTracker,
 };

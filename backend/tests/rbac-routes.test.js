@@ -67,6 +67,14 @@ test('AssignRoleSchema: accepts a GLOBAL assignment without scopeId', () => {
   assert.equal(parse.success, true);
 });
 
+test('AssignRoleSchema: accepts the least-privilege PLATFORM_ADMIN role', () => {
+  const parse = AssignRoleSchema.safeParse({
+    roleCode: 'PLATFORM_ADMIN',
+    scope: 'GLOBAL',
+  });
+  assert.equal(parse.success, true);
+});
+
 test('AssignRoleSchema: accepts an ORG assignment with scopeId', () => {
   const parse = AssignRoleSchema.safeParse({
     roleCode: 'ORG_MEMBER',
@@ -74,6 +82,23 @@ test('AssignRoleSchema: accepts an ORG assignment with scopeId', () => {
     scopeId: 'org_abc',
   });
   assert.equal(parse.success, true);
+});
+
+test('AssignRoleSchema: rejects global roles at organization scope', () => {
+  const parse = AssignRoleSchema.safeParse({
+    roleCode: 'PLATFORM_ADMIN',
+    scope: 'ORG',
+    scopeId: 'org_abc',
+  });
+  assert.equal(parse.success, false);
+});
+
+test('AssignRoleSchema: rejects organization roles at global scope', () => {
+  const parse = AssignRoleSchema.safeParse({
+    roleCode: 'ORG_ADMIN',
+    scope: 'GLOBAL',
+  });
+  assert.equal(parse.success, false);
 });
 
 test('AssignRoleSchema: rejects unknown role codes', () => {

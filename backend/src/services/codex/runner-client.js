@@ -20,6 +20,10 @@ function runnerBaseUrl(env = process.env) {
   return String(env.CODE_RUNNER_URL || 'http://runner:4097').replace(/\/+$/, '');
 }
 
+function runnerControlToken(env = process.env) {
+  return String(env.CODE_RUNNER_CONTROL_TOKEN || '').trim();
+}
+
 /**
  * Base URL of the runner's dev server. With `port` (multi-project pool, audit
  * B1) the configured URL's port is swapped for the project's assigned one;
@@ -50,15 +54,28 @@ function codexExportHostPath(projectId, env = process.env) {
   return `${codexExportHostDir(env)}${sep}${projectId}`;
 }
 
-function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), timeoutMs = 30_000 } = {}) {
-  async function call(method, path, body, { callTimeoutMs } = {}) {
+function createRunnerClient({
+  fetchImpl = fetch,
+  baseUrl = runnerBaseUrl(),
+  timeoutMs = 30_000,
+  controlToken = runnerControlToken(),
+} = {}) {
+  async function call(method, path, body, { callTimeoutMs, signal } = {}) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), callTimeoutMs || timeoutMs);
+    const abortFromCaller = () => ctrl.abort();
+    if (signal) {
+      if (signal.aborted) ctrl.abort();
+      else signal.addEventListener('abort', abortFromCaller, { once: true });
+    }
     let res;
     try {
+      const headers = {};
+      if (body) headers['Content-Type'] = 'application/json';
+      if (controlToken) headers.Authorization = `Bearer ${controlToken}`;
       res = await fetchImpl(`${baseUrl}${path}`, {
         method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body ? JSON.stringify(body) : undefined,
         signal: ctrl.signal,
       });
@@ -66,6 +83,7 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
       throw new RunnerError(`runner unreachable: ${err.message}`, { status: 0 });
     } finally {
       clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', abortFromCaller);
     }
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -84,6 +102,7 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
       // 120s `bun install` gets chopped at the client's 30s default.
       call('POST', '/workspace/exec', { project, cmd, timeoutMs: opts.timeoutMs }, {
         callTimeoutMs: opts.timeoutMs ? Math.max(timeoutMs, opts.timeoutMs + 10_000) : undefined,
+        signal: opts.signal,
       }),
     // Multi-project (audit B1): /run answers { port } of the project's slot;
     // /status and /stop accept an optional project. Without one they keep the
@@ -93,7 +112,17 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
       call('GET', project ? `/status?project=${encodeURIComponent(project)}` : '/status'),
     stopDev: (project) => call('POST', '/stop', project ? { project } : {}),
     exportWorkspace: (project) => call('POST', '/workspace/export', { project }),
+    exportBuild: (project, outDir = 'dist') =>
+      call('POST', '/workspace/export-build', { project, outDir }, { callTimeoutMs: 120_000 }),
   };
 }
 
-module.exports = { createRunnerClient, RunnerError, runnerBaseUrl, runnerDevUrl, codexExportHostDir, codexExportHostPath };
+module.exports = {
+  createRunnerClient,
+  RunnerError,
+  runnerBaseUrl,
+  runnerControlToken,
+  runnerDevUrl,
+  codexExportHostDir,
+  codexExportHostPath,
+};

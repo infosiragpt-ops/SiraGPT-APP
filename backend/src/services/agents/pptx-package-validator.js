@@ -81,7 +81,7 @@ function expectsSlides(text) {
   return CONTENT_HINT_RE.test(text);
 }
 
-async function validatePptxPackage({ buffer, prompt, sourceText, minSlides } = {}) {
+async function validatePptxPackage({ buffer, prompt, sourceText, minSlides, expectedSlides } = {}) {
   const structure = await countPptxStructure(buffer);
   const contentExpected = expectsSlides(prompt) || expectsSlides(sourceText);
   if (!structure.ok) {
@@ -94,6 +94,16 @@ async function validatePptxPackage({ buffer, prompt, sourceText, minSlides } = {
       reason: 'no_slides_rendered',
       slideRefs: structure.slideRefs,
       slideFiles: structure.slideFiles,
+      contentExpected,
+    };
+  }
+  if (Number.isInteger(expectedSlides) && structure.slideFiles !== expectedSlides) {
+    return {
+      ok: false,
+      reason: 'requested_slide_count_mismatch',
+      slideRefs: structure.slideRefs,
+      slideFiles: structure.slideFiles,
+      expectedSlides,
       contentExpected,
     };
   }

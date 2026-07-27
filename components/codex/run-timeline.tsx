@@ -51,6 +51,14 @@ function FallbackCard({ item, t }: { item: TimelineItem; t: Translate }) {
       </div>
     )
   }
+  if (item.kind === "tool_permission") {
+    return (
+      <div className="my-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] p-3 text-sm">
+        <div className="font-semibold text-amber-200">Aprobación de herramienta</div>
+        <div className="mt-1 text-zinc-300">{item.humanDescription || item.toolName}</div>
+      </div>
+    )
+  }
   return null
 }
 

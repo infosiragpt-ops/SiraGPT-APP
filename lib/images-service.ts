@@ -1,5 +1,7 @@
 "use client"
 
+import { authenticatedFetch } from "./authenticated-fetch"
+
 /**
  * images-service — client for /api/images/* (F4 PR15).
  *
@@ -75,7 +77,7 @@ export interface CreateImageJobInput {
 }
 
 export async function createImageJob(input: CreateImageJobInput): Promise<JobResponse> {
-  const res = await fetch(`${API_ROOT}/images/jobs`, {
+  const res = await authenticatedFetch(`${API_ROOT}/images/jobs`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -91,7 +93,7 @@ export async function createImageJob(input: CreateImageJobInput): Promise<JobRes
 }
 
 export async function getImageJob(id: string): Promise<GeneratedImage> {
-  const res = await fetch(`${API_ROOT}/images/jobs/${id}`, {
+  const res = await authenticatedFetch(`${API_ROOT}/images/jobs/${id}`, {
     headers: authHeader(),
   })
   if (!res.ok) throw new Error(`getImageJob(${id}): ${res.status}`)
@@ -106,7 +108,7 @@ export async function listImageHistory(opts?: {
   const qs = new URLSearchParams()
   if (opts?.cursor) qs.set("cursor", opts.cursor)
   if (opts?.limit) qs.set("limit", String(opts.limit))
-  const res = await fetch(
+  const res = await authenticatedFetch(
     `${API_ROOT}/images/history${qs.toString() ? `?${qs}` : ""}`,
     { headers: authHeader() },
   )
@@ -115,7 +117,7 @@ export async function listImageHistory(opts?: {
 }
 
 export async function requestVariation(id: string, n = 1): Promise<JobResponse> {
-  const res = await fetch(`${API_ROOT}/images/${id}/variations`, {
+  const res = await authenticatedFetch(`${API_ROOT}/images/${id}/variations`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -127,7 +129,7 @@ export async function requestVariation(id: string, n = 1): Promise<JobResponse> 
 }
 
 export async function requestUpscale(id: string, factor: 2 | 4 = 2): Promise<JobResponse> {
-  const res = await fetch(`${API_ROOT}/images/${id}/upscale`, {
+  const res = await authenticatedFetch(`${API_ROOT}/images/${id}/upscale`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -139,7 +141,7 @@ export async function requestUpscale(id: string, factor: 2 | 4 = 2): Promise<Job
 }
 
 export async function deleteImage(id: string): Promise<GeneratedImage> {
-  const res = await fetch(`${API_ROOT}/images/${id}/delete`, {
+  const res = await authenticatedFetch(`${API_ROOT}/images/${id}/delete`, {
     method: "POST",
     credentials: "include",
     headers: authHeader(),

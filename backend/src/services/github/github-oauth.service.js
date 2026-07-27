@@ -5,19 +5,21 @@
  *
  * Mirrors the project's existing provider-integration shape (Gmail/Google/
  * Spotify): tokens are sealed with the shared AES-256 TokenVault before they
- * ever touch the database, and the OAuth `state` is a short-lived signed JWT
- * so the /callback hit (which arrives without a session cookie) can still be
- * bound to the user who started the flow — no server-side state store needed.
+ * ever touch the database, and OAuth `state` is signed plus consumed through
+ * the shared bounded Redis-backed one-time store.
  *
  * SRP: this module only talks to GitHub's OAuth + identity endpoints and
  * seals/opens the token blob. Persistence lives in GithubAccountRepository;
  * HTTP wiring lives in routes/github.js.
  */
 
-const jwt = require('jsonwebtoken');
 const { TokenVault } = require('../TokenVault');
 const { encrypt, decrypt } = require('../../utils/encryption');
 const githubConfig = require('../../config/github');
+const {
+  signOAuthState,
+  verifyOAuthState,
+} = require('../oauth-state');
 
 const vault = new TokenVault({ encrypt, decrypt });
 
@@ -25,7 +27,6 @@ const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
 
-const STATE_TTL_SECONDS = 600; // 10 min — enough to complete the consent screen
 // Classic OAuth tokens (scope `repo`) do not expire; represent that with a
 // far-future expiry so TokenVault's default (+1h) never marks them stale.
 const NON_EXPIRING_MS = 10 * 365 * 24 * 3600 * 1000;
@@ -35,20 +36,27 @@ function getFetch() {
   throw new Error('global fetch is unavailable — Node >= 18 is required for GitHub OAuth');
 }
 
-/** Sign a short-lived state token that binds the callback to this user. */
-function signState(userId) {
-  return jwt.sign({ uid: userId, kind: 'github_oauth' }, process.env.JWT_SECRET, {
-    expiresIn: STATE_TTL_SECONDS,
+/** Sign and register a short-lived state token that binds this user + callback. */
+async function signState(userId) {
+  const cfg = githubConfig.require();
+  return signOAuthState({
+    userId,
+    service: 'github',
+    redirectUri: cfg.redirectUri,
   });
 }
 
-/** Verify + decode the state token. Returns the userId, or null if invalid/expired. */
-function verifyState(state) {
+/** Atomically consume state. Returns the userId, or null if invalid/expired. */
+async function verifyState(state) {
   try {
-    const decoded = jwt.verify(String(state || ''), process.env.JWT_SECRET);
-    if (!decoded || decoded.kind !== 'github_oauth' || !decoded.uid) return null;
-    return String(decoded.uid);
-  } catch {
+    const cfg = githubConfig.require();
+    const decoded = await verifyOAuthState(state, {
+      service: 'github',
+      redirectUri: cfg.redirectUri,
+    });
+    return decoded.userId;
+  } catch (error) {
+    if (error?.code === 'OAUTH_STATE_STORE_UNAVAILABLE') throw error;
     return null;
   }
 }
@@ -138,5 +146,5 @@ module.exports = {
   sealTokens,
   openTokens,
   // exported for tests
-  _internal: { GITHUB_AUTHORIZE_URL, GITHUB_TOKEN_URL, GITHUB_USER_URL, STATE_TTL_SECONDS },
+  _internal: { GITHUB_AUTHORIZE_URL, GITHUB_TOKEN_URL, GITHUB_USER_URL },
 };

@@ -12,9 +12,16 @@ import { FileText, Download, Eye, MessageSquare, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
+import {
+  authenticatedFetch,
+  createAuthenticatedFetch,
+  isTrustedSiraApiUrl,
+} from "@/lib/authenticated-fetch"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+const BACKEND_ROOT = API_ROOT.replace(/\/api$/, "")
+const authenticatedArtifactFetch = createAuthenticatedFetch({ apiBaseUrl: BACKEND_ROOT })
 
 type ArtifactRow = {
   id: string
@@ -31,6 +38,12 @@ function authHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {}
   const token = window.localStorage.getItem("auth-token")
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+function fetchArtifact(href: string): Promise<Response> {
+  return isTrustedSiraApiUrl(href, BACKEND_ROOT)
+    ? authenticatedArtifactFetch(href)
+    : fetch(href)
 }
 
 function formatLabel(row: ArtifactRow): string {
@@ -74,7 +87,7 @@ export default function DocumentsPage() {
     setRefreshing(true)
     setError(null)
     try {
-      const resp = await fetch(`${API_ROOT}/agent/artifacts?limit=100`, {
+      const resp = await authenticatedFetch(`${API_ROOT}/agent/artifacts?limit=100`, {
         credentials: "include",
         headers: authHeaders(),
       })
@@ -98,7 +111,7 @@ export default function DocumentsPage() {
       ? row.downloadUrl
       : `${API_ROOT.replace(/\/api$/, "")}${row.downloadUrl}`
     try {
-      const resp = await fetch(href, { credentials: "include", headers: authHeaders() })
+      const resp = await fetchArtifact(href)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
       const url = window.URL.createObjectURL(blob)

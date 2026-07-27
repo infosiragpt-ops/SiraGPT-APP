@@ -7,23 +7,20 @@
  * into a single read-only JSON payload.
  *
  * Mount: app.use('/api/admin/user-context', router)
- * Auth: bearer + scope admin:read (reuses authenticateToken +
- * requireScope when present). Falls back to req.user.isAdmin when no
- * scoped permission middleware is registered.
+ * Auth: bearer plus the mount-aware declarative admin route policy.
  */
 
 const express = require('express');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const requireAdminRoutePermission = require('../services/admin-route-policy');
 const { loadInferredProfile } = require('../services/user-profile-inference');
 
 const router = express.Router();
+router.use(authenticateToken, requireAdminRoutePermission);
 
-// Operator-only guard. We try the declarative RBAC middleware first if
-// the project exposes one (requireScope / requirePermission); when it
-// is not registered, we fall back to the legacy isAdmin flag so this
-// route still works in install-from-scratch deployments. Either way,
-// non-admins get a 403.
+// Kept as a pure compatibility helper for existing unit consumers. Runtime
+// authorization is handled by requireAdminRoutePermission above.
 function requireAdminReadable(req, res, next) {
   try {
     if (req.user && (req.user.isSuperAdmin || req.user.isAdmin)) return next();
@@ -129,7 +126,7 @@ function buildHealth({ explicit, inferred, memorySummary, recentChats }) {
   };
 }
 
-router.get('/:userId/audit', authenticateToken, requireAdminReadable, async (req, res) => {
+router.get('/:userId/audit', async (req, res) => {
   const { userId } = req.params;
   if (!userId || typeof userId !== 'string' || userId.length < 4) {
     return res.status(400).json({ error: 'invalid userId' });

@@ -35,8 +35,9 @@ module.exports = {
       restart_delay: 1000,
       exp_backoff_restart_delay: 100,
 
-      // Kill timeout: give the graceful shutdown handler 10s
-      kill_timeout: 10000,
+      // Backend shutdown owns a 30s deadline. PM2 grants 35s, leaving time for
+      // Node to return while still staying below the 40s minimum parent budget.
+      kill_timeout: 35000,
       listen_timeout: 30000,
 
       // ─── Environment ────────────────────────────────────

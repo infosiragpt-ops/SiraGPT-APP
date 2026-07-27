@@ -18,11 +18,18 @@
  */
 
 const planMode = require('./plan-mode');
+const { randomUUID } = require('node:crypto');
 const buildTools = require('./build-tools');
 const actionStoreDefault = require('./action-store');
 const checkpointService = require('./checkpoint-service');
 const runMetrics = require('./run-metrics');
+const progressLedger = require('./progress-ledger');
+const proactiveMetrics = require('./proactive-metrics');
+const toolScheduler = require('./tool-scheduler');
+const projectHooks = require('./project-hooks');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
+const { createSandboxClient } = require('./sandbox-provider');
+const { localCliCommand } = require('./local-cli');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -45,10 +52,73 @@ const MAX_TRUNCATION_RETRIES = 3;
 // recent working set intact; older tool dumps compress well).
 const COMPACT_KEEP_TAIL = 10;
 const COMPACT_TOOL_RESULT_CAP = 300;
+const CONTEXT_SUMMARY_INPUT_CAP = 48_000;
+const CONTEXT_SUMMARY_CAP = 12_000;
+const CONTEXT_SNAPSHOT_MESSAGE_CAP = 8_000;
 
 function readPosInt(raw, fallback) {
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function flagEnabled(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'on';
+}
+
+function productionFeatureEnabled(env, key) {
+  const configured = env?.[key];
+  if (configured !== undefined && configured !== null && String(configured).trim() !== '') {
+    return flagEnabled(configured);
+  }
+  return env?.NODE_ENV === 'production';
+}
+
+function boundedArgsPreview(value, maxChars = 4000) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  try {
+    const text = JSON.stringify(value);
+    if (text.length <= maxChars) return JSON.parse(text);
+    return { summary: `${text.slice(0, maxChars)}…[args recortados]` };
+  } catch {
+    return { summary: '[args no serializables]' };
+  }
+}
+
+function messageContentText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (block?.type === 'text' && typeof block.text === 'string') return block.text;
+      if (block?.type === 'image' || block?.type === 'image_url') return '[captura visual]';
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function toolResultContent(toolName, observation, fallback = '', suffix = '') {
+  const prefix = `[TOOL_RESULT ${toolName}] `;
+  if (!Array.isArray(observation)) return `${prefix}${observation || fallback || ''}${suffix}`;
+  const blocks = observation.map((block) => (
+    block && typeof block === 'object' ? { ...block } : block
+  ));
+  const firstText = blocks.findIndex((block) => block?.type === 'text' && typeof block.text === 'string');
+  if (firstText >= 0) {
+    blocks[firstText] = { ...blocks[firstText], text: `${prefix}${blocks[firstText].text}${suffix}` };
+  } else {
+    blocks.unshift({ type: 'text', text: `${prefix}${fallback || ''}${suffix}` });
+  }
+  return blocks;
+}
+
+/** Plan tasks not yet completed → titles (plan-mode tasks carry no status: pending). */
+function pendingPlanTasks(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  return tasks
+    .filter((t) => t && t.status !== 'completed')
+    .map((t) => String(t.title || t.id || 'tarea'));
 }
 
 function isAppsPrompt(text) {
@@ -195,7 +265,16 @@ async function defaultWebSearch(query) {
   }
 }
 
-function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes }) {
+function buildSystemPrompt({
+  project,
+  plan,
+  fileTree,
+  sourcePrompt,
+  projectNotes,
+  parallelSubagents = false,
+  parallelTools = true,
+  openclawPromptBlock = '',
+}) {
   const appsMode = isAppsPrompt(sourcePrompt);
   const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
   const lines = [
@@ -203,11 +282,14 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
     'Construyes el proyecto usando las herramientas disponibles (no inventes resultados).',
     'Trabajas paso a paso: piensa, usa una herramienta, lee el resultado, continúa.',
+    parallelTools
+      ? 'Cuando varias lecturas, búsquedas o escrituras a archivos DISTINTOS sean independientes, puedes emitirlas en el mismo turno; el runtime preserva automáticamente las dependencias read-after-write.'
+      : 'Emite herramientas de una en una; este runtime tiene desactivada la ejecución paralela.',
     'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css, src/lib/ai.ts (helper askAI: IA real sin API keys) y src/lib/storage.ts (helper `storage`: PERSISTENCIA REAL server-side sin backend propio).',
     'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.',
     'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
-    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git.',
+    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git. En este runner NO uses bunx para tsc, Vitest, Jest o ESLint: usa type_check y los scripts del package.json; los gates ejecutan los binarios locales con Node.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa repo_map (mapa rankeado de símbolos) al retomar un proyecto existente y list_files/grep_search para el detalle, en vez de adivinar rutas.',
     'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
@@ -215,10 +297,15 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
     require('./skills').skillsPromptLine(),
     'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de negocio). Si el proyecto define agentes custom en .sira/agents.json también puedes delegarles.',
-    'Los subagentes son independientes: cuando dos tareas no dependen entre sí (p.ej. frontend_builder para la UI y db_architect para el modelo), emite VARIOS run_subagent en el MISMO turno y correrán en paralelo.',
+    parallelSubagents
+      ? 'Los subagentes son independientes: cuando dos tareas no dependen entre sí, puedes emitir VARIOS run_subagent en el MISMO turno y correrán en paralelo.'
+      : 'Delega a los subagentes de uno en uno. Este workspace aún no usa worktrees separados, así que las delegaciones se serializan para impedir escrituras concurrentes sobre el mismo checkout.',
     'Si el usuario pide software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, punto de venta, gestión de clientes/proveedores/proyectos), delega PRIMERO en enterprise_analyst para convertir el pedido en módulos, entidades, roles y flujos; luego construye una app multi-módulo con navegación lateral, dashboard con KPIs y datos de ejemplo realistas del dominio.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
+  if (openclawPromptBlock) {
+    lines.push(openclawPromptBlock);
+  }
   if (forceViteApps) {
     lines.push('Este run viene de /apps. Stack OBLIGATORIO: React 18 + Vite 7 + TypeScript (el starter ya provisto). Construye componentes .tsx en src/; el entry es src/main.tsx que monta <App/> en #root.');
     lines.push('PROHIBIDO Next.js: NO crees next.config.mjs, app/, pages/ ni cambies package.json a "next dev". Mantén el package.json Vite (script dev="vite"). El resultado debe abrir en el preview de inmediato.');
@@ -233,10 +320,10 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     lines.push(fileTree);
   }
   if (projectNotes) {
-    lines.push('MEMORIA DEL PROYECTO (.sira/notes.md — decisiones y convenciones de runs anteriores; respétalas):');
+    lines.push('MEMORIA DEL PROYECTO (SIRA.md + .sira/notes.md — instrucciones, decisiones y convenciones acumuladas; respétalas):');
     lines.push(projectNotes);
   }
-  lines.push('Mantén la memoria del proyecto: al tomar una decisión estructural (stack, entidades, paleta, convenciones) o dejar trabajo pendiente, actualiza .sira/notes.md con write_file (crea el archivo si no existe; máximo ~60 líneas, lo más nuevo arriba).');
+  lines.push('Mantén la memoria del proyecto: SIRA.md contiene instrucciones y convenciones duraderas; .sira/notes.md conserva notas operativas breves. Cuando tomes una decisión estructural o dejes trabajo pendiente, lee primero el archivo correspondiente y actualiza .sira/notes.md con edit_file; actualiza también SIRA.md cuando cambien instrucciones o convenciones duraderas (crea los archivos si no existen; evita duplicados y conserva lo más importante arriba).');
   // Deterministic skill auto-injection: when the prompt clearly matches a
   // builtin playbook, its full body ships with the system prompt — the E2E
   // validation showed models skip a passively-listed use_skill.
@@ -258,7 +345,7 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
  * COMPACT_KEEP_TAIL messages stay verbatim. Returns how many were compacted.
  */
 function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}) {
-  const total = messages.reduce((n, m) => n + (typeof m?.content === 'string' ? m.content.length : 0), 0);
+  const total = messages.reduce((n, m) => n + messageContentText(m?.content).length, 0);
   if (total <= maxChars) return 0;
   let compacted = 0;
   const lastKeep = Math.max(2, messages.length - COMPACT_KEEP_TAIL);
@@ -271,6 +358,142 @@ function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}
     }
   }
   return compacted;
+}
+
+function messageChars(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .reduce((total, message) => total + messageContentText(message?.content).length, 0);
+}
+
+function boundedTail(messages, count = COMPACT_KEEP_TAIL) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => message && ['user', 'assistant'].includes(message.role))
+    .slice(-Math.max(2, count))
+    .map((message) => ({
+      role: message.role,
+      content: messageContentText(message.content).slice(0, CONTEXT_SNAPSHOT_MESSAGE_CAP),
+    }));
+}
+
+function summaryInput(messages) {
+  const rows = (Array.isArray(messages) ? messages : []).slice(2, -COMPACT_KEEP_TAIL);
+  const parts = [];
+  let remaining = CONTEXT_SUMMARY_INPUT_CAP;
+  for (const row of rows) {
+    if (remaining <= 0) break;
+    const text = messageContentText(row?.content);
+    if (!text) continue;
+    const piece = `${String(row.role || 'unknown').toUpperCase()}:\n${text}\n`;
+    parts.push(piece.slice(0, remaining));
+    remaining -= piece.length;
+  }
+  return parts.join('\n').slice(0, CONTEXT_SUMMARY_INPUT_CAP);
+}
+
+async function summariseContextWithLlm({
+  messages,
+  llmTurn,
+  signal,
+  env,
+  tier,
+  metrics,
+}) {
+  if (typeof llmTurn !== 'function') return '';
+  const input = summaryInput(messages);
+  if (!input.trim()) return '';
+  try {
+    const turn = await llmTurn({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Resume el estado de una sesión de programación para que otro agente continúe sin repetir trabajo.',
+            'Conserva: objetivo, decisiones, archivos leídos/modificados, resultados de tools, errores pendientes, plan y próximo paso.',
+            'No inventes. Devuelve solo un resumen técnico compacto en español.',
+          ].join('\n'),
+        },
+        { role: 'user', content: input },
+      ],
+      tools: [],
+      signal,
+      env,
+      tier,
+    });
+    if (turn?.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(turn.usage);
+    return String(turn?.text || '').trim().slice(0, CONTEXT_SUMMARY_CAP);
+  } catch {
+    return '';
+  }
+}
+
+async function loadLatestContextSnapshot({ runId, eventStore, prisma }) {
+  if (!runId || typeof eventStore?.listEvents !== 'function') return null;
+  try {
+    const events = await eventStore.listEvents(runId, { afterSeq: 0, prisma });
+    return [...events].reverse().find((event) => event?.type === 'context_snapshot')?.data || null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadResolvedToolPermissions({ runId, eventStore, prisma }) {
+  const allowed = new Set();
+  allowed.permissionIds = new Map();
+  allowed.decisions = [];
+  if (!runId || typeof eventStore?.listEvents !== 'function') return allowed;
+  try {
+    const events = await eventStore.listEvents(runId, { afterSeq: 0, prisma });
+    for (const event of events) {
+      const toolName = String(event.data?.toolName || '');
+      const permissionId = String(event.data?.permissionId || '');
+      const bindingHash = String(event.data?.bindingHash || '');
+      if (!/^[a-f0-9]{64}$/.test(bindingHash)) continue;
+      if (event?.type === 'tool_permission_resolved') {
+        if (event.data?.decision === 'allow') {
+          allowed.add(bindingHash);
+          allowed.permissionIds.set(bindingHash, permissionId);
+        }
+        if (event.data?.decision === 'deny') {
+          allowed.delete(bindingHash);
+          allowed.permissionIds.delete(bindingHash);
+        }
+        allowed.decisions.push({ toolName, bindingHash, decision: event.data?.decision });
+      }
+      if (
+        event?.type === 'tool_permission_consumed'
+        && allowed.permissionIds.get(bindingHash) === permissionId
+      ) {
+        allowed.delete(bindingHash);
+        allowed.permissionIds.delete(bindingHash);
+      }
+    }
+  } catch { /* no persisted permission decisions yet */ }
+  return allowed;
+}
+
+async function persistContextSnapshot({
+  run,
+  eventStore,
+  prisma,
+  summary = '',
+  messages,
+  state = {},
+}) {
+  if (!run?.id || typeof eventStore?.appendEvent !== 'function') return;
+  await eventStore.appendEvent(
+    run.id,
+    'context_snapshot',
+    {
+      summary: String(summary || '').slice(0, CONTEXT_SUMMARY_CAP),
+      tailMessages: boundedTail(messages),
+      state: {
+        verifyRounds: Math.max(0, Number(state.verifyRounds) || 0),
+        planExtensionsUsed: Math.max(0, Number(state.planExtensionsUsed) || 0),
+        planTasks: Array.isArray(state.planTasks) ? state.planTasks.slice(0, 80) : [],
+      },
+    },
+    { prisma },
+  ).catch(() => {});
 }
 
 /**
@@ -287,9 +510,26 @@ function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}
  * exactly like the tsc path. When it started the server itself it stops it so the
  * verification never leaves a dev server hanging.
  */
-async function verifyDevServer({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
-  if (String(env.CODEX_VERIFY_DEV_SERVER ?? '0') !== '1') return { ran: false, ok: true };
-  if (typeof runner?.devStatus !== 'function' || typeof runner?.startDev !== 'function') return { ran: false, ok: true };
+async function verifyDevServer({
+  runner,
+  projectId,
+  run,
+  eventStore,
+  prisma,
+  metrics,
+  clock,
+  env = process.env,
+  actionId,
+  groupId,
+  strict = false,
+}) {
+  if (!strict && String(env.CODEX_VERIFY_DEV_SERVER ?? '0') !== '1') return { ran: false, ok: true };
+  if (typeof runner?.devStatus !== 'function' || typeof runner?.startDev !== 'function') {
+    const errors = 'El runner no expone devStatus/startDev; no se puede demostrar que la aplicación arranca.';
+    return strict
+      ? { ran: true, ok: false, kind: 'infra', errors, devServer: { ran: false, ok: false }, browser: { ran: false, ok: false } }
+      : { ran: false, ok: true };
+  }
 
   const timeoutMs = readPosInt(env.CODEX_VERIFY_DEV_TIMEOUT_MS, DEFAULT_VERIFY_DEV_TIMEOUT_MS);
   const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
@@ -316,7 +556,10 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
     // honestly, and stop a server we started so nothing hangs.
     if (startedByUs && typeof runner.stopDev === 'function') await runner.stopDev(projectId).catch(() => {});
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación runtime no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
-    return { ran: false, ok: true };
+    const errors = `verificación runtime no disponible: ${err.message}`;
+    return strict
+      ? { ran: true, ok: false, kind: 'infra', errors, devServer: { ran: false, ok: false }, browser: { ran: false, ok: false } }
+      : { ran: false, ok: true };
   }
 
   const durationMs = Math.max(0, clock().getTime() - t0);
@@ -330,23 +573,74 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
     // clean server log. Drive the system Chromium against the dev URL and feed
     // real user-facing errors back to the repair loop. Best-effort by
     // contract: no browser/infra → still verified-ok. CODEX_VERIFY_BROWSER=0 disables.
-    if (String(env.CODEX_VERIFY_BROWSER || '1').trim() !== '0') {
+    if (strict || String(env.CODEX_VERIFY_BROWSER || '1').trim() !== '0') {
       try {
         // eslint-disable-next-line global-require
         const bc = require('./browser-check');
         const url = bc.devUrlFor(env, status?.port || 5173);
         const view = await bc.checkApp({ url, env });
+        if (view.unavailable && strict) {
+          const report = bc.formatReport(view, url);
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `browser_check obligatorio no disponible:\n${String(report).slice(0, 2000)}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return {
+            ran: true,
+            ok: false,
+            kind: 'browser',
+            errors: String(report).slice(0, 4000),
+            devServer: { ran: true, ok: true },
+            browser: { ran: false, ok: false, unavailable: true },
+          };
+        }
         if (!view.unavailable && !view.ok) {
           const report = bc.formatReport(view, url);
           await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `la app no funciona en el navegador:\n${String(report).slice(0, 2000)}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
           if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-          return { ran: true, ok: false, errors: String(report).slice(0, 4000) };
+          return {
+            ran: true,
+            ok: false,
+            kind: 'browser',
+            errors: String(report).slice(0, 4000),
+            devServer: { ran: true, ok: true },
+            browser: { ran: true, ok: false },
+          };
         }
-      } catch { /* browser verification is an aid, never a blocker */ }
+        if (!view.unavailable) {
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y browser_check renderiza #root sin errores', durationMs }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return {
+            ran: true,
+            ok: true,
+            kind: 'browser',
+            devServer: { ran: true, ok: true },
+            browser: { ran: true, ok: true },
+          };
+        }
+      } catch (err) {
+        if (strict) {
+          const errors = `browser_check obligatorio falló: ${err.message}`;
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: errors, durationMs }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return {
+            ran: true,
+            ok: false,
+            kind: 'browser',
+            errors,
+            devServer: { ran: true, ok: true },
+            browser: { ran: false, ok: false, unavailable: true },
+          };
+        }
+      }
     }
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y la app renderiza en navegador', durationMs }, { prisma }).catch(() => {});
     if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-    return { ran: true, ok: true };
+    return {
+      ran: true,
+      ok: true,
+      kind: 'runtime',
+      devServer: { ran: true, ok: true },
+      browser: { ran: false, ok: !strict },
+    };
   }
 
   // A dev server that never became ready and reported NO error/log tail is an
@@ -355,13 +649,105 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
   if (!status?.ready && !status?.error && !errLines) {
     if (startedByUs && typeof runner.stopDev === 'function') await runner.stopDev(projectId).catch(() => {});
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: 'verificación runtime no disponible: el dev server no respondió a tiempo', durationMs }, { prisma }).catch(() => {});
-    return { ran: false, ok: true };
+    const errors = 'El dev server no respondió a tiempo y no produjo evidencia suficiente.';
+    return strict
+      ? { ran: true, ok: false, kind: 'infra', errors, devServer: { ran: false, ok: false }, browser: { ran: false, ok: false } }
+      : { ran: false, ok: true };
   }
 
   const errors = (status?.error ? `${status.error}\n` : '') + (errLines || tail);
   await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `el dev server no arranca:\n${String(errors).slice(0, 2000)}`, durationMs }, { prisma }).catch(() => {});
   if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-  return { ran: true, ok: false, errors: String(errors).slice(0, 4000) };
+  return {
+    ran: true,
+    ok: false,
+    kind: 'runtime',
+    errors: String(errors).slice(0, 4000),
+    devServer: { ran: true, ok: false },
+    browser: { ran: false, ok: false },
+  };
+}
+
+/**
+ * Run an existing Vitest/smoke-test script. A normal build only executes tests
+ * when the workspace defines them; the periodic proactive QA cycle makes their
+ * absence a blocking failure so the agent must add durable regression coverage.
+ */
+async function verifySmokeTests({
+  runner,
+  projectId,
+  run,
+  eventStore,
+  prisma,
+  metrics,
+  clock,
+  actionId,
+  groupId,
+  required = false,
+}) {
+  let pkg;
+  try {
+    const read = await runner.readFile(projectId, 'package.json');
+    pkg = JSON.parse(String(read?.content || '{}'));
+  } catch {
+    const errors = 'package.json no existe o no es JSON válido; no se pueden ejecutar smoke tests.';
+    return required
+      ? { ran: true, ok: false, kind: 'smoke', errors }
+      : { ran: false, ok: true };
+  }
+  const scripts = pkg?.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+  const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) };
+  let command = null;
+  if (scripts['test:smoke']) command = ['npm', 'run', 'test:smoke'];
+  else if (scripts.test) {
+    command = /\bvitest\b/i.test(String(scripts.test))
+      ? ['npm', 'run', 'test', '--', '--run']
+      : ['npm', 'run', 'test'];
+  } else if (deps.vitest) command = localCliCommand('vitest', 'run');
+
+  if (!command) {
+    const errors = 'El ciclo QA exige smoke tests, pero package.json no define test/test:smoke ni incluye Vitest.';
+    return required
+      ? { ran: true, ok: false, kind: 'smoke', errors }
+      : { ran: false, ok: true };
+  }
+
+  await eventStore.appendEvent(run.id, 'action_start', {
+    actionId,
+    kind: 'terminal',
+    command: command.join(' '),
+    groupId,
+  }, { prisma }).catch(() => {});
+  const t0 = clock().getTime();
+  try {
+    const out = await runner.exec(projectId, command, { timeoutMs: 120_000 });
+    const durationMs = Math.max(0, clock().getTime() - t0);
+    const output = String([out?.stdout, out?.stderr].filter(Boolean).join('\n')).slice(0, 4000);
+    const ok = out?.exitCode === 0;
+    await eventStore.appendEvent(run.id, 'action_end', {
+      actionId,
+      status: ok ? 'done' : 'error',
+      outputSummary: ok ? 'smoke tests pasan' : (output || `smoke tests exit ${out?.exitCode}`),
+      durationMs,
+    }, { prisma }).catch(() => {});
+    if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+    return ok
+      ? { ran: true, ok: true, kind: 'smoke' }
+      : { ran: true, ok: false, kind: 'smoke', errors: output || `smoke tests exit ${out?.exitCode}` };
+  } catch (err) {
+    const durationMs = Math.max(0, clock().getTime() - t0);
+    const errors = `smoke tests no disponibles: ${err.message}`;
+    await eventStore.appendEvent(run.id, 'action_end', {
+      actionId,
+      status: 'error',
+      outputSummary: errors,
+      durationMs,
+    }, { prisma }).catch(() => {});
+    if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+    return required
+      ? { ran: true, ok: false, kind: 'smoke', errors }
+      : { ran: false, ok: true, kind: 'smoke' };
+  }
 }
 
 /**
@@ -377,9 +763,31 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
  * the caller's existing repair-round loop feeds it back to the model. With the
  * flag unset/0 this is a no-op and behaviour is byte-identical to before.
  */
-async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
-  if (String(env.CODEX_VERIFY_DISABLED || '') === '1') return { ran: false, ok: true };
-  if (typeof runner?.exec !== 'function' || typeof runner?.readFile !== 'function') return { ran: false, ok: true };
+async function verifyWorkspace({
+  runner,
+  projectId,
+  run,
+  eventStore,
+  prisma,
+  metrics,
+  clock,
+  env = process.env,
+  actionId,
+  groupId,
+  strict = false,
+  requireSmoke = false,
+}) {
+  const gates = {
+    typeCheck: { ran: false, ok: !strict },
+    smoke: { ran: false, ok: !requireSmoke },
+    devServer: { ran: false, ok: !strict },
+    browser: { ran: false, ok: !strict },
+  };
+  if (!strict && String(env.CODEX_VERIFY_DISABLED || '') === '1') return { ran: false, ok: true, gates };
+  if (typeof runner?.exec !== 'function' || typeof runner?.readFile !== 'function') {
+    const errors = 'El runner no permite exec/readFile; el gate proactivo no puede verificar el workspace.';
+    return strict ? { ran: true, ok: false, kind: 'infra', errors, gates } : { ran: false, ok: true, gates };
+  }
 
   let tsconfig = '';
   try {
@@ -407,34 +815,74 @@ async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, met
       if (install.exitCode !== 0) {
         errors = `bun install exit ${install.exitCode}\n${String(install.stderr || install.stdout || '').slice(0, 4000)}`;
       } else {
-        const tsc = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120_000 });
+        const tsc = await runner.exec(
+          projectId,
+          localCliCommand('tsc', '--noEmit', '--pretty', 'false'),
+          { timeoutMs: 120_000 },
+        );
         if (tsc.exitCode === 0) ok = true;
         else errors = String([tsc.stdout, tsc.stderr].filter(Boolean).join('\n')).slice(0, 4000) || `tsc exit ${tsc.exitCode}`;
       }
     } catch (err) {
       // Runner/env failure (not a code failure) → skip verification honestly.
       await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
-      return { ran: false, ok: true };
+      const errors = `verificación no disponible: ${err.message}`;
+      return strict
+        ? { ran: true, ok: false, kind: 'infra', errors, gates }
+        : { ran: false, ok: true, gates };
     }
     const durationMs = Math.max(0, clock().getTime() - t0);
     await eventStore.appendEvent(run.id, 'action_end', { actionId, status: ok ? 'done' : 'error', outputSummary: ok ? 'compila sin errores de tipos' : errors, durationMs }, { prisma }).catch(() => {});
     if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-    if (!ok) return { ran: true, ok: false, kind: 'tsc', errors };
+    gates.typeCheck = { ran: true, ok };
+    if (!ok) return { ran: true, ok: false, kind: 'tsc', errors, gates };
     tscOk = true;
+  } else if (strict) {
+    const errors = 'El gate proactivo exige un tsconfig.json válido para ejecutar type_check.';
+    return { ran: true, ok: false, kind: 'tsc', errors, gates };
   }
+
+  const smoke = await verifySmokeTests({
+    runner,
+    projectId,
+    run,
+    eventStore,
+    prisma,
+    metrics,
+    clock,
+    actionId: `${actionId}-smoke`,
+    groupId,
+    required: requireSmoke,
+  });
+  gates.smoke = { ran: smoke.ran, ok: smoke.ok };
+  if (smoke.ran && !smoke.ok) return { ran: true, ok: false, kind: 'smoke', errors: smoke.errors, gates };
 
   // Optional runtime check (flag-gated OFF by default). Runs after a clean tsc,
   // or on its own for a project with no tsconfig to typecheck. Reuses the same
   // repair-round mechanism through the caller (kind:'runtime').
   if (tscOk) {
-    const rt = await verifyDevServer({ runner, projectId, run, eventStore, prisma, metrics, clock, env, actionId, groupId });
-    if (rt.ran && !rt.ok) return { ran: true, ok: false, kind: 'runtime', errors: rt.errors };
-    if (rt.ran) return { ran: true, ok: true, kind: 'runtime' };
+    const rt = await verifyDevServer({
+      runner,
+      projectId,
+      run,
+      eventStore,
+      prisma,
+      metrics,
+      clock,
+      env,
+      actionId: `${actionId}-runtime`,
+      groupId,
+      strict,
+    });
+    if (rt.devServer) gates.devServer = rt.devServer;
+    if (rt.browser) gates.browser = rt.browser;
+    if (rt.ran && !rt.ok) return { ran: true, ok: false, kind: rt.kind || 'runtime', errors: rt.errors, gates };
+    if (rt.ran) return { ran: true, ok: true, kind: rt.kind || 'runtime', gates };
   }
 
   // Nothing verified at all (no valid tsconfig + flag off) → deterministic no-op.
-  if (!tsValid) return { ran: false, ok: true };
-  return { ran: true, ok: true, kind: 'tsc' };
+  if (!tsValid) return { ran: false, ok: true, gates };
+  return { ran: true, ok: true, kind: 'tsc', gates };
 }
 
 /** Best-effort tracked-file listing for context. Never throws. */
@@ -462,17 +910,25 @@ async function safeFileTree(runner, projectId) {
 }
 
 /**
- * Project memory (CLAUDE.md pattern): `.sira/notes.md` persists decisions,
- * conventions and pending work across runs. Read best-effort and injected
- * into every run's system prompt; the agent is instructed to keep it fresh.
+ * Project memory (CLAUDE.md pattern): root SIRA.md is the durable instruction
+ * file and `.sira/notes.md` is the compact operational notebook. Both are
+ * loaded on every run so a new session inherits conventions immediately.
  */
 async function safeProjectNotes(runner, projectId) {
-  try {
-    const read = await runner.readFile(projectId, '.sira/notes.md');
-    const text = typeof read?.content === 'string' ? read.content.trim() : '';
-    return text ? text.slice(0, 2500) : '';
-  } catch { /* no notes yet — normal for new projects */ }
-  return '';
+  const read = async (path) => {
+    try {
+      const out = await runner.readFile(projectId, path);
+      return typeof out?.content === 'string' ? out.content.trim() : '';
+    } catch {
+      return '';
+    }
+  };
+  const [instructions, notes] = await Promise.all([read('SIRA.md'), read('.sira/notes.md')]);
+  if (!instructions) return notes.slice(0, 2400);
+  const sections = [];
+  if (instructions) sections.push(`## SIRA.md\n${instructions.slice(0, 5000)}`);
+  if (notes) sections.push(`## .sira/notes.md\n${notes.slice(0, 3000)}`);
+  return sections.join('\n\n').slice(0, 8000);
 }
 
 /** Load the approved plan from the plan run's plan_proposed event. */
@@ -507,10 +963,30 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // close. Created here when the caller didn't inject one.
   const metrics = deps.metrics || runMetrics.createAccumulator({ run, clock });
   const llmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
-  const runner = deps.runner || require('./runner-client').createRunnerClient();
+  const runner = deps.runner || createSandboxClient();
   const actionStore = deps.actionStore || actionStoreDefault;
   const webSearch = deps.webSearch || defaultWebSearch;
   const projectId = project?.id || run.projectId;
+  const runBranchesEnabled = productionFeatureEnabled(env, 'CODEX_RUN_BRANCHES');
+
+  if (runBranchesEnabled) {
+    const branch = await checkpointService.prepareRunBranch({
+      run,
+      project,
+      deps: { runner },
+    }).catch((error) => ({
+      ok: false,
+      code: 'run_branch_setup_failed',
+      detail: String(error?.message || error).slice(0, 1000),
+    }));
+    if (!branch?.ok) {
+      const error = `run branch setup failed (${branch?.code || 'unknown'}): ${String(branch?.detail || '').slice(0, 1000)}`;
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `No inicié cambios porque no pude aislar la rama de esta corrida: ${error}`,
+      }, { prisma }).catch(() => {});
+      return { status: 'error', error };
+    }
+  }
 
   const baseMaxSteps = readPosInt(env.CODEX_MAX_STEPS, DEFAULT_MAX_STEPS);
   let maxSteps = baseMaxSteps;
@@ -518,10 +994,59 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
   const maxSameFileWrites = readPosInt(env.CODEX_MAX_SAME_FILE_WRITES, DEFAULT_MAX_SAME_FILE_WRITES);
-  const registry = buildTools.toolRegistry();
+  // Parallel specialists are unsafe while they share one checkout: several
+  // built-in and custom agents can write/edit the same files. Keep them
+  // serialized until the sandbox provider assigns an independent worktree to
+  // every writer. The opt-in exists only for controlled development/tests.
+  const parallelSubagents = flagEnabled(env.CODEX_PARALLEL_WRITE_SUBAGENTS);
+  // General tool parallelism is default-on, but the scheduler is conservative:
+  // process-wide tools and any read/write dependency stay serialized.
+  const parallelTools = String(env.CODEX_PARALLEL_TOOL_CALLS ?? '1').trim() !== '0';
+  let registry = buildTools.toolRegistry();
+  const dynamicTools = new Map();
+  if (String(env.CODEX_MCP_DYNAMIC_TOOLS ?? '1').trim() !== '0') {
+    try {
+      const mcp = require('./mcp-tools');
+      const dynamic = await mcp.buildDynamicMcpTools({
+        runner,
+        project: projectId,
+        env,
+        signal,
+      });
+      for (const [name, tool] of dynamic.tools) {
+        dynamicTools.set(name, tool);
+        registry.push({ name, description: tool.description, parameters: tool.parameters });
+      }
+    } catch {
+      // MCP is an optional extension; the built-in registry remains available.
+    }
+  }
+  const activeProvider = (() => {
+    try {
+      const anthropic = require('./anthropic-turn').getAnthropicTurnConfig({ env, tier: run?.tier || null });
+      if (anthropic.enabled && anthropic.tierEligible) {
+        return { provider: 'anthropic', model: anthropic.model };
+      }
+      return require('./llm-provider').describeActiveProvider({ env });
+    } catch {
+      return { provider: null, model: run?.model || null };
+    }
+  })();
+  const modelCapabilities = (() => {
+    try {
+      return require('../agent-harness/model-capabilities').resolveModelCapabilities(
+        activeProvider.model || run?.model || '',
+        { provider: activeProvider.provider || '', env },
+      );
+    } catch {
+      return { supportsImages: false };
+    }
+  })();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
+  const proactiveMeta = progressLedger.taskMetaFromPrompt(sourcePrompt);
+  const strictProactiveGate = Boolean(proactiveMeta);
   // Skill-aware step budget: multi-module builds (enterprise apps, stores)
   // physically don't fit the standard budget — the cycle-14 CRM run finished
   // 'done' having only written the base types. When the prompt matches one of
@@ -534,15 +1059,67 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
+  const hookState = deps.projectHooks || await projectHooks.loadProjectHooks({ runner, projectId });
+  const resolvedToolPermissions = await loadResolvedToolPermissions({
+    runId: run.id,
+    eventStore,
+    prisma,
+  });
+  const resumeSnapshot = deps.resumeSnapshot || await loadLatestContextSnapshot({
+    runId: run.id,
+    eventStore,
+    prisma,
+  });
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes }) },
+    {
+      role: 'system',
+      content: buildSystemPrompt({
+        project,
+        plan,
+        fileTree,
+        sourcePrompt,
+        projectNotes,
+        parallelSubagents,
+        parallelTools,
+        openclawPromptBlock: deps.openclawPromptBlock || '',
+      }),
+    },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
   ];
+  let contextSummary = String(resumeSnapshot?.summary || '').slice(0, CONTEXT_SUMMARY_CAP);
+  if (contextSummary) {
+    messages.push({
+      role: 'user',
+      content: `[REANUDACIÓN · RESUMEN PERSISTIDO]\n${contextSummary}\nContinúa desde este estado y confirma el estado real con tools antes de editar.`,
+    });
+  }
+  if (Array.isArray(resumeSnapshot?.tailMessages)) {
+    messages.push(...resumeSnapshot.tailMessages
+      .filter((message) => message && ['user', 'assistant'].includes(message.role))
+      .slice(-COMPACT_KEEP_TAIL)
+      .map((message) => ({
+        role: message.role,
+        content: String(message.content || '').slice(0, CONTEXT_SNAPSHOT_MESSAGE_CAP),
+      })));
+  }
+  if (hookState?.error) {
+    messages.push({
+      role: 'user',
+      content: `[POLÍTICA] .sira/hooks.json no pudo cargarse y se ignoró de forma segura: ${String(hookState.error).slice(0, 500)}`,
+    });
+  }
+  if (resolvedToolPermissions.decisions?.length) {
+    const decisions = resolvedToolPermissions.decisions
+      .slice(-8)
+      .map((row) => `- ${row.toolName}: ${row.decision === 'allow' ? 'aprobada una vez' : 'denegada; busca una alternativa'}`)
+      .join('\n');
+    messages.push({ role: 'user', content: `[PERMISOS RESUELTOS]\n${decisions}` });
+  }
 
   let actionCounter = 0;
   let groupCounter = 0;
   let aborted = false;
-  let verifyRounds = 0;
+  let verifyRounds = Math.max(0, Number(resumeSnapshot?.state?.verifyRounds) || 0);
   // Anti-thrash state. A model can loop rewriting one file and burn the budget
   // without progress. Two detectors, because the prod smoke showed BOTH shapes:
   //  - consecutive: src/index.css written 5× in a row (`sameWriteRun`).
@@ -558,12 +1135,57 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // would close with the file never written. Count retries so a chronically
   // overrunning model still terminates.
   let truncationRetries = 0;
+  // Plan-aware budget extension ("auto-continue"): when the step budget runs
+  // out while the approved plan still has pending tasks, extend the budget a
+  // bounded number of times instead of closing a half-built app — the agent
+  // keeps working until the plan is done (or the extensions/timeout cap it).
+  // NaN-only parse: an explicit CODEX_PLAN_EXTENSIONS=0 disables the feature.
+  const _rawPlanExt = Number.parseInt(env.CODEX_PLAN_EXTENSIONS ?? '', 10);
+  const maxPlanExtensions = Number.isFinite(_rawPlanExt) && _rawPlanExt >= 0 ? _rawPlanExt : 2;
+  let planExtensionsUsed = Math.max(0, Number(resumeSnapshot?.state?.planExtensionsUsed) || 0);
+  let latestPlanTasks = Array.isArray(resumeSnapshot?.state?.planTasks) && resumeSnapshot.state.planTasks.length
+    ? resumeSnapshot.state.planTasks
+    : (Array.isArray(plan?.tasks) ? plan.tasks : null);
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
     if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 
     compactMessages(messages, { maxChars: contextMaxChars });
+    if (
+      String(env.CODEX_CONTEXT_SUMMARY ?? '1').trim() !== '0'
+      && messageChars(messages) > contextMaxChars
+    ) {
+      const nextSummary = await summariseContextWithLlm({
+        messages,
+        llmTurn,
+        signal,
+        env,
+        tier: run?.tier || null,
+        metrics,
+      });
+      if (nextSummary) {
+        const tail = boundedTail(messages);
+        contextSummary = nextSummary;
+        messages.splice(
+          2,
+          Math.max(0, messages.length - 2),
+          {
+            role: 'user',
+            content: `[COMPACTION · RESUMEN DE CONTEXTO]\n${contextSummary}\nUsa tools para reconfirmar cualquier estado mutable antes de editar.`,
+          },
+          ...tail,
+        );
+        await persistContextSnapshot({
+          run,
+          eventStore,
+          prisma,
+          summary: contextSummary,
+          messages,
+          state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+        });
+      }
+    }
 
     let turn;
     try {
@@ -621,18 +1243,38 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         const v = await verifyWorkspace({
           runner, projectId, run, eventStore, prisma, metrics, clock, env,
           actionId: `a${++actionCounter}`, groupId: `g${++groupCounter}`,
+          strict: strictProactiveGate,
+          requireSmoke: Boolean(proactiveMeta?.qaCycle),
         });
         if (v.ran && !v.ok) {
           verifyRounds += 1;
-          const repairPrompt = v.kind === 'runtime'
-            ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO arranca en el dev server. Errores de runtime/boot:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search; si falta un paquete usa install_dependencies; si es código, corrígelo con read_file + edit_file. Cuando termines deja de llamar herramientas.`
-            : `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (si falta un paquete usa install_dependencies; si es código usa read_file + edit_file) y cuando termines deja de llamar herramientas.`;
+          const repairPrompt = strictProactiveGate
+            ? `[GATE PROACTIVO · ${v.kind || 'quality'}] El run NO puede cerrarse hasta superar todos los gates. Delega primero en run_subagent con agent="debugger" y entrégale esta evidencia real:\n${v.errors}\nDespués aplica sus correcciones y vuelve a ejecutar type_check, dev_server_check y browser_check. En ciclo QA también deben pasar los smoke tests.`
+            : (v.kind === 'runtime' || v.kind === 'browser'
+              ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO funciona en el dev server/navegador. Errores:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search; si falta un paquete usa install_dependencies; si es código, corrígelo con read_file + edit_file. Cuando termines deja de llamar herramientas.`
+              : `[VERIFICACIÓN] El proyecto NO compila o sus pruebas fallan. Errores:\n${v.errors}\nCorrige estos errores (si falta un paquete usa install_dependencies; si es código usa read_file + edit_file) y cuando termines deja de llamar herramientas.`);
           messages.push({ role: 'user', content: repairPrompt });
           continue;
         }
       }
-      await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
-      return { status: 'done' };
+      const closed = await closeBuild({
+        run,
+        project,
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        clock,
+        env,
+        metrics,
+        sourcePrompt,
+        webSearch,
+        sessionService: deps.sessionService,
+        backgroundTaskService: deps.backgroundTaskService,
+      });
+      return closed.ok === false
+        ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
+        : { status: 'done' };
     }
     if (allCalls.length > calls.length) {
       // Honest budget: tell the model what was dropped instead of letting it
@@ -644,7 +1286,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const groupId = `g${++groupCounter}`;
 
     const executeCall = async (call) => {
-      const tool = buildTools.getTool(call.name);
+      const tool = buildTools.getTool(call.name) || dynamicTools.get(call.name) || null;
       const actionId = `a${++actionCounter}`;
 
       // update_plan is a plan-progress signal, not a workspace action: it emits a
@@ -654,6 +1296,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (tool && call.name === 'update_plan') {
         const result = await tool.execute(call.args, { env });
         if (!result.isError && Array.isArray(result.planTasks)) {
+          latestPlanTasks = result.planTasks;
           await eventStore.appendEvent(run.id, 'plan_updated', { tasks: result.planTasks }, { prisma }).catch(() => {});
         }
         return { message: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}`, blocking: null };
@@ -669,14 +1312,74 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         return { message: `[TOOL_RESULT ${call.name}] Error: herramienta desconocida.`, blocking: null };
       }
 
-      const command = tool.commandFor(call.args);
-      const path = tool.pathFor(call.args);
+      const preHook = projectHooks.applyPreHooks(hookState?.hooks, call.name, call.args);
+      const effectiveArgs = preHook.args;
+      const command = tool.commandFor(effectiveArgs);
+      const path = tool.pathFor(effectiveArgs);
+      if (!preHook.allowed) {
+        await eventStore.appendEvent(run.id, 'action_start', {
+          actionId,
+          kind: tool.kind,
+          command: command || undefined,
+          path: path || undefined,
+          groupId,
+        }, { prisma });
+        await eventStore.appendEvent(run.id, 'action_end', {
+          actionId,
+          status: 'error',
+          outputSummary: `hook preToolUse denegó ${call.name}: ${preHook.message}`,
+          durationMs: 0,
+        }, { prisma });
+        if (metrics?.recordAction) metrics.recordAction(tool.kind, 0);
+        return {
+          message: `[TOOL_RESULT ${call.name}] Acción denegada por .sira/hooks.json: ${preHook.message}`,
+          blocking: null,
+        };
+      }
+
+      if (projectHooks.requiresApproval(project, call.name, effectiveArgs)) {
+        const bindingHash = projectHooks.permissionBindingHash({
+          runId: run.id,
+          projectId,
+          toolName: call.name,
+          args: effectiveArgs,
+        });
+        if (resolvedToolPermissions.has(bindingHash)) {
+          // Approval is one-shot. A later invocation of the same sensitive
+          // tool asks again unless project policy is changed. Consume it
+          // durably before execution so a worker restart cannot reuse it.
+          const permissionId = resolvedToolPermissions.permissionIds.get(bindingHash);
+          await eventStore.appendEvent(run.id, 'tool_permission_consumed', {
+            permissionId,
+            toolName: call.name,
+            bindingHash,
+          }, { prisma });
+          resolvedToolPermissions.delete(bindingHash);
+          resolvedToolPermissions.permissionIds.delete(bindingHash);
+        } else {
+          return {
+            message: `[TOOL_RESULT ${call.name}] Pendiente de aprobación del usuario; la herramienta todavía NO se ejecutó.`,
+            blocking: null,
+            approval: {
+              permissionId: `${run.id}:${actionId}:${randomUUID()}`,
+              toolName: call.name,
+              bindingHash,
+              humanDescription: command || path || `Ejecutar ${call.name}`,
+              argsPreview: boundedArgsPreview(effectiveArgs),
+            },
+          };
+        }
+      }
+
       await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: tool.kind, command: command || undefined, path: path || undefined, groupId }, { prisma });
 
       const t0 = clock().getTime();
-      const result = await tool.execute(call.args, {
+      let result = await tool.execute(effectiveArgs, {
         runner,
         project: projectId,
+        projectRecord: project,
+        run,
+        userId: run?.userId || null,
         webSearch,
         env,
         signal,
@@ -685,6 +1388,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         // delegation runs on the SAME engine as the main loop (Claude for paid
         // tiers) instead of silently dropping to the free Cerebras path.
         tier: run?.tier || null,
+        modelCapabilities,
+        modelProvider: activeProvider.provider,
         onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
         // Live visibility for delegations: the SDK surfaces every specialist
         // tool call as a nested action in the same group. The event store's
@@ -703,6 +1408,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           };
         },
       });
+      result = projectHooks.applyPostHooks(hookState?.hooks, call.name, result);
       const durationMs = Math.max(0, clock().getTime() - t0);
       const status = result.isError ? 'error' : 'done';
 
@@ -759,28 +1465,75 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
 
       return {
-        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}${thrashNudge}`,
+        message: toolResultContent(call.name, result.observation, outputSummary, thrashNudge),
         blocking: blockingPattern ? { pattern: blockingPattern, detail: result.observation || outputSummary } : null,
       };
     };
 
-    // Claude Code-style parallel delegation: a turn made ONLY of run_subagent
-    // calls runs them concurrently (independent specialists; writes are
-    // per-file via the runner). Mixed turns stay sequential to preserve
-    // read-after-write ordering between tools.
-    const allDelegations = calls.length > 1 && calls.every((c) => c.name === 'run_subagent');
     const outcomes = [];
-    if (allDelegations) {
-      outcomes.push(...await Promise.all(calls.map((call) => executeCall(call))));
-    } else {
-      for (const call of calls) outcomes.push(await executeCall(call));
+    const batches = toolScheduler.scheduleToolCalls(calls, {
+      enabled: parallelTools,
+      parallelSubagents,
+    });
+    for (const batch of batches) {
+      const batchOutcomes = batch.length > 1
+        ? await Promise.all(batch.map((call) => executeCall(call)))
+        : [await executeCall(batch[0])];
+      outcomes.push(...batchOutcomes);
+      // A permission request pauses the run before later dependency batches.
+      if (batchOutcomes.some((outcome) => outcome?.approval)) break;
     }
 
     for (const o of outcomes) messages.push({ role: 'user', content: o.message });
+    const approval = outcomes.find((outcome) => outcome?.approval)?.approval;
+    if (approval) {
+      await eventStore.appendEvent(run.id, 'tool_permission_required', approval, { prisma });
+      await persistContextSnapshot({
+        run,
+        eventStore,
+        prisma,
+        summary: contextSummary,
+        messages,
+        state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+      });
+      return { status: 'waiting_approval', permission: approval };
+    }
     const blocked = outcomes.find((o) => o.blocking);
     if (blocked) {
       await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blocked.blocking.pattern, blocked.blocking.detail), { prisma }).catch(() => {});
       return { status: 'error', error: blocked.blocking.pattern.title };
+    }
+    await persistContextSnapshot({
+      run,
+      eventStore,
+      prisma,
+      summary: contextSummary,
+      messages,
+      state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+    });
+
+    // ── Plan-aware budget extension: this was the last budgeted step and the
+    // plan is still unfinished → extend (bounded) so the agent keeps working
+    // instead of closing a half-built app. `maxSteps` is re-read by the for
+    // condition, so bumping it here naturally continues the loop. The hard
+    // run timeout (abort signal) still caps total wall time.
+    if (step === maxSteps - 1 && !aborted && !signal?.aborted) {
+      const pending = pendingPlanTasks(latestPlanTasks);
+      if (pending.length > 0 && planExtensionsUsed < maxPlanExtensions) {
+        planExtensionsUsed += 1;
+        const extraSteps = Math.max(4, Math.ceil(baseMaxSteps / 2));
+        maxSteps += extraSteps;
+        await eventStore.appendEvent(
+          run.id,
+          'narrative_delta',
+          { text: `El plan aún tiene ${pending.length} tarea(s) pendiente(s); sigo trabajando (extensión ${planExtensionsUsed}/${maxPlanExtensions}).` },
+          { prisma },
+        ).catch(() => {});
+        messages.push({
+          role: 'user',
+          content: `[CONTINUACIÓN] Presupuesto de pasos extendido porque el plan sigue incompleto. Tareas pendientes: ${pending.slice(0, 8).join(' · ')}. Continúa con la siguiente tarea pendiente y mantén update_plan al día. Si en realidad ya está todo terminado, marca las tareas como completed con update_plan y deja de llamar herramientas.`,
+        });
+      }
     }
   }
 
@@ -789,11 +1542,33 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   await eventStore.appendEvent(
     run.id,
     'narrative_delta',
-    { text: aborted ? 'Me detuve por el límite de tiempo de la corrida.' : 'Alcancé el límite de pasos de esta corrida; cierro con lo construido hasta aquí.' },
+    {
+      text: aborted
+        ? 'Me detuve por el límite de tiempo de la corrida.'
+        : (pendingPlanTasks(latestPlanTasks).length
+          ? `Alcancé el límite de pasos con ${pendingPlanTasks(latestPlanTasks).length} tarea(s) del plan aún pendiente(s); cierro con lo construido hasta aquí. Escríbeme "continúa" para seguir donde quedé.`
+          : 'Alcancé el límite de pasos de esta corrida; cierro con lo construido hasta aquí.'),
+    },
     { prisma },
   ).catch(() => {});
-  await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
-  return { status: 'done' };
+  const closed = await closeBuild({
+    run,
+    project,
+    runner,
+    eventStore,
+    prisma,
+    llmTurn,
+    clock,
+    env,
+    metrics,
+    sourcePrompt,
+    webSearch,
+    sessionService: deps.sessionService,
+    backgroundTaskService: deps.backgroundTaskService,
+  });
+  return closed.ok === false
+    ? { status: 'error', error: closed.error || 'proactive quality gate failed' }
+    : { status: 'done' };
 }
 
 async function readRunnerFile(runner, projectId, path) {
@@ -873,47 +1648,415 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
   return { repaired: true };
 }
 
+function gateEvidence(verification) {
+  const labels = {
+    typeCheck: 'type_check',
+    smoke: 'smoke_tests',
+    devServer: 'dev_server_check',
+    browser: 'browser_check',
+  };
+  const parts = [];
+  for (const [key, gate] of Object.entries(verification?.gates || {})) {
+    if (!gate?.ran) {
+      parts.push(`${labels[key] || key}: ${gate?.ok ? 'no aplicable' : 'sin evidencia'}`);
+    } else {
+      parts.push(`${labels[key] || key}: ${gate.ok ? 'ok' : 'falló'}`);
+    }
+  }
+  return parts.join('; ') || 'sin evidencia de verificación';
+}
+
+async function workspaceDiffstat({ runner, projectId }) {
+  const diffstat = { additions: 0, deletions: 0, filesChanged: 0 };
+  if (typeof runner?.exec !== 'function') return diffstat;
+  try {
+    const [status, unstaged, staged] = await Promise.all([
+      runner.exec(projectId, ['git', 'status', '--porcelain']),
+      runner.exec(projectId, ['git', 'diff', '--shortstat', 'HEAD']),
+      runner.exec(projectId, ['git', 'diff', '--cached', '--shortstat', 'HEAD']),
+    ]);
+    const parsedUnstaged = checkpointService.parseShortstat(unstaged?.stdout || '');
+    const parsedStaged = checkpointService.parseShortstat(staged?.stdout || '');
+    diffstat.additions = parsedUnstaged.additions + parsedStaged.additions;
+    diffstat.deletions = parsedUnstaged.deletions + parsedStaged.deletions;
+    diffstat.filesChanged = String(status?.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean).length;
+  } catch { /* best-effort evidence */ }
+  return diffstat;
+}
+
+async function runDebuggerRepair({
+  run,
+  projectId,
+  runner,
+  eventStore,
+  prisma,
+  llmTurn,
+  env,
+  metrics,
+  webSearch,
+  verification,
+  round,
+  clock,
+}) {
+  const tool = buildTools.getTool('run_subagent');
+  if (!tool) return { isError: true, summary: 'debugger no disponible' };
+  const actionId = `quality-debug-${round}`;
+  const groupId = `quality-repair-${round}`;
+  await eventStore.appendEvent(run.id, 'action_start', {
+    actionId,
+    kind: 'agent',
+    command: `subagent debugger: reparar gate ${verification?.kind || 'quality'}`,
+    groupId,
+  }, { prisma }).catch(() => {});
+  const t0 = clock().getTime();
+  const result = await tool.execute({
+    agent: 'debugger',
+    task: [
+      'Repara el workspace hasta que pueda superar sus gates deterministas.',
+      `Gate que falló: ${verification?.kind || 'quality'}.`,
+      `Evidencia real:\n${String(verification?.errors || 'sin detalle').slice(0, 6000)}`,
+      'Inspecciona los archivos y aplica correcciones concretas. Ejecuta type_check y, cuando corresponda, smoke tests, dev_server_check y browser_check antes de terminar.',
+    ].join('\n\n'),
+    context: 'Este es un run PROACTIVO. No ocultes ni ignores errores y no elimines funcionalidad para hacer pasar el gate.',
+  }, {
+    runner,
+    project: projectId,
+    webSearch,
+    env,
+    llmTurn,
+    tier: run?.tier || null,
+    onUsage: (usage) => metrics?.recordLlmUsage?.(usage),
+  });
+  const durationMs = Math.max(0, clock().getTime() - t0);
+  await eventStore.appendEvent(run.id, 'action_end', {
+    actionId,
+    status: result?.isError ? 'error' : 'done',
+    outputSummary: buildTools.summarise(result?.summary || result?.observation || '', 1600),
+    durationMs,
+  }, { prisma }).catch(() => {});
+  if (metrics?.recordAction) metrics.recordAction('agent', durationMs);
+  return result;
+}
+
+function acceptanceEvidence(meta, verification) {
+  const evidence = gateEvidence(verification);
+  return (meta?.acceptanceCriteria || []).map((criterion) => ({
+    criterion,
+    passed: verification?.ok === true,
+    evidence: verification?.ok
+      ? `Gate técnico obligatorio superado: ${evidence}.`
+      : `Bloqueado por ${verification?.kind || 'quality'}: ${String(verification?.errors || evidence).slice(0, 420)}`,
+  }));
+}
+
+function recordGateMetrics(verification) {
+  for (const [gate, result] of Object.entries(verification?.gates || {})) {
+    if (!result?.ran && result?.ok) continue;
+    proactiveMetrics.recordQuality({ outcome: result?.ok ? 'passed' : 'failed', gate });
+  }
+}
+
 /**
  * Build close (feature 07 + 08): create the git checkpoint for the changes this
  * run produced (no checkpoint when the tree is clean), then finalize metrics +
  * run_summary (feature 08 extends this). Best-effort — a checkpoint/metrics
  * failure must not turn a successful build into an error.
  */
-async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics }) {
+async function closeBuild({
+  run,
+  project,
+  runner,
+  eventStore,
+  prisma,
+  llmTurn,
+  clock,
+  env,
+  metrics,
+  sourcePrompt,
+  webSearch,
+  sessionService,
+  backgroundTaskService,
+}) {
   await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
-  // Claude Code-style close: verify the workspace actually compiles and run a
-  // bounded self-heal pass BEFORE the checkpoint so the fixes land in it.
-  // Best-effort by contract (verify-loop never throws).
-  try {
-    const verifyLoop = require('./verify-loop');
-    await verifyLoop.autoVerifyAndHeal({ run, projectId: project?.id || run.projectId, runner, eventStore, prisma, llmTurn, env, metrics, clock });
-  } catch (err) {
-    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] auto-verify failed:', err?.message || err);
+  const resolvedSourcePrompt = sourcePrompt != null
+    ? sourcePrompt
+    : await resolveRunSourcePrompt({ run, prisma });
+  const proactiveMeta = progressLedger.taskMetaFromPrompt(resolvedSourcePrompt);
+  // Stop every trusted background task before verification. A task that cannot
+  // be authenticated/stopped blocks the close rather than racing the gate.
+  const verifyRequired = String(env?.CODEX_AUTO_VERIFY ?? '1') !== '0';
+  const projectId = project?.id || run.projectId;
+  let projectGateVerification = null;
+  if (verifyRequired) {
+    const tasks = backgroundTaskService || require('./background-tasks').backgroundTaskService;
+    let quiescence;
+    try {
+      quiescence = typeof tasks?.quiesce === 'function'
+        ? await tasks.quiesce({ runner, project: projectId })
+        : { ok: false, code: 'background_quiescence_unavailable' };
+    } catch (error) {
+      quiescence = { ok: false, code: 'background_quiescence_failed', error: String(error?.message || error) };
+    }
+    if (!quiescence?.ok) {
+      projectGateVerification = {
+        ran: true,
+        clean: false,
+        rounds: 0,
+        fixes: 0,
+        blockingGates: [quiescence?.code || 'background_tasks'],
+      };
+    } else {
+      try {
+        const verifyLoop = require('./verify-loop');
+        projectGateVerification = await verifyLoop.autoVerifyAndHeal({
+          run,
+          projectId,
+          runner,
+          eventStore,
+          prisma,
+          llmTurn,
+          env,
+          metrics,
+          clock,
+        });
+      } catch (err) {
+        projectGateVerification = {
+          ran: true,
+          clean: false,
+          rounds: 0,
+          fixes: 0,
+          blockingGates: ['verification_exception'],
+          diagnostics: [{ message: String(err?.message || err).slice(0, 1000) }],
+        };
+        if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] auto-verify failed:', err?.message || err);
+      }
+    }
   }
+
+  let verification = null;
+  if (proactiveMeta) {
+    const maxRepairRounds = readPosInt(env?.CODEX_PROACTIVE_REPAIR_ROUNDS, 2);
+    verification = await verifyWorkspace({
+      runner,
+      projectId,
+      run,
+      eventStore,
+      prisma,
+      metrics,
+      clock,
+      env,
+      actionId: 'quality-1',
+      groupId: 'quality-gate',
+      strict: true,
+      requireSmoke: proactiveMeta.qaCycle,
+    });
+    for (let round = 1; !verification.ok && round <= maxRepairRounds; round += 1) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `El gate ${verification.kind || 'de calidad'} falló. El subagente debugger inicia la reparación ${round}/${maxRepairRounds}.`,
+      }, { prisma }).catch(() => {});
+      await runDebuggerRepair({
+        run,
+        projectId,
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        env,
+        metrics,
+        webSearch,
+        verification,
+        round,
+        clock,
+      });
+      verification = await verifyWorkspace({
+        runner,
+        projectId,
+        run,
+        eventStore,
+        prisma,
+        metrics,
+        clock,
+        env,
+        actionId: `quality-${round + 1}`,
+        groupId: 'quality-gate',
+        strict: true,
+        requireSmoke: proactiveMeta.qaCycle,
+      });
+    }
+    recordGateMetrics(verification);
+  }
+
+  let diffstat = await workspaceDiffstat({ runner, projectId });
   let checkpoint = null;
-  try {
-    checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });
-  } catch (err) {
-    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
+  let branchFinalization = null;
+  let projectGatesPassed = !verifyRequired || projectGateVerification?.clean === true;
+  let verifiedTreeSha = null;
+  const closeRunBranchesEnabled = productionFeatureEnabled(env, 'CODEX_RUN_BRANCHES');
+  if (closeRunBranchesEnabled && projectGatesPassed && (!proactiveMeta || verification?.ok)) {
+    try {
+      verifiedTreeSha = await checkpointService.captureWorkspaceTree({ runner, projectId });
+    } catch (error) {
+      projectGatesPassed = false;
+      projectGateVerification = {
+        ...(projectGateVerification || {}),
+        ran: true,
+        clean: false,
+        blockingGates: ['git_tree_capture'],
+        diagnostics: [{ message: String(error?.message || error).slice(0, 1000) }],
+      };
+    }
+  }
+  if (projectGatesPassed && (!proactiveMeta || verification?.ok)) {
+    try {
+      const checkpointDeps = {
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        clock,
+        env,
+        sessionService,
+        expectedTreeSha: verifiedTreeSha,
+      };
+      if (closeRunBranchesEnabled) {
+        const repository = project?.brief?.kind === 'repo' ? project.brief.repository : null;
+        if (repository?.url) {
+          checkpoint = await checkpointService.createCheckpoint({
+            run,
+            project,
+            deps: checkpointDeps,
+          });
+          const pullRequest = await require('./self-hosting').publishSelfHostedPullRequest({
+            runner,
+            projectId,
+            runId: run.id,
+            repositoryUrl: repository.url,
+            sourceBranch: repository.sourceBranch || 'main',
+            title: `feat(codex): ${String(resolvedSourcePrompt || run.id).slice(0, 120)}`,
+            env,
+          });
+          branchFinalization = { ...pullRequest, checkpoint };
+        } else {
+          branchFinalization = await checkpointService.finalizeRunCheckpoint({
+            run,
+            project,
+            verification: {
+              ok: true,
+              status: 'passed',
+              treeSha: verifiedTreeSha,
+            },
+            deps: checkpointDeps,
+          });
+          checkpoint = branchFinalization?.checkpoint || null;
+        }
+      } else {
+        checkpoint = await checkpointService.createCheckpoint({
+          run,
+          project,
+          deps: checkpointDeps,
+        });
+      }
+    } catch (err) {
+      if (closeRunBranchesEnabled) {
+        branchFinalization = {
+          ok: false,
+          status: 'checkpoint_failed',
+          merge: { code: 'checkpoint_failed', detail: String(err?.message || err).slice(0, 1000) },
+        };
+      }
+      if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
+    }
   }
 
   // Metrics + run_summary (feature 08). Order: checkpoint → diffstat → metric →
   // run_summary, then the processor emits the terminal run_status. Best-effort —
   // a metrics failure must not turn a successful build into an error.
+  let metric = null;
   if (metrics && typeof metrics.finalize === 'function') {
     try {
-      let diffstat = { additions: 0, deletions: 0 };
-      if (checkpoint) {
-        const d = await checkpointService.getCheckpointDiff({ checkpointId: checkpoint.id, userId: run.userId, deps: { runner, prisma } });
-        if (d && !d.error) diffstat = { additions: d.additions, deletions: d.deletions };
-      }
       const userPlan = await resolveUserPlan(run.userId, prisma);
-      await metrics.finalize({ diffstat, userPlan, prisma, eventStore, env, clock });
+      metric = await metrics.finalize({ diffstat, userPlan, prisma, eventStore, env, clock });
     } catch (err) {
       if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] metrics finalize failed:', err?.message || err);
     }
   }
-  return { checkpoint };
+
+  if (proactiveMeta) {
+    const passed = verification?.ok === true && projectGatesPassed;
+    await progressLedger.appendLedgerEntry({
+      prisma,
+      project,
+      entry: {
+        department: proactiveMeta.department,
+        runId: run.id,
+        outcome: passed ? 'passed' : 'failed',
+        task: proactiveMeta.title || String(resolvedSourcePrompt || '').slice(0, 600),
+        checkpointSha: checkpoint?.commitSha || null,
+        diffstat,
+        costUsd: Number(metric?.costAppliedUsd ?? metric?.costUsd) || 0,
+        acceptance: acceptanceEvidence(proactiveMeta, verification),
+        learnings: passed
+          ? [`Verificación superada: ${gateEvidence(verification)}.`]
+          : projectGatesPassed
+            ? [`${verification?.kind || 'quality'}: ${String(verification?.errors || 'gate sin evidencia').slice(0, 480)}`]
+            : [`project gates: ${String(projectGateVerification?.blockingGates || 'tests/lint/typecheck').slice(0, 480)}`],
+        createdAt: clock().toISOString(),
+      },
+    }).catch((err) => {
+      if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] progress ledger append failed:', err?.message || err);
+    });
+    if (!passed) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `No cerré ni promoví este run: el gate obligatorio ${verification?.kind || 'de calidad'} sigue fallando después de la reparación.`,
+      }, { prisma }).catch(() => {});
+      return {
+        ok: false,
+        checkpoint: null,
+        verification,
+        projectGateVerification,
+        error: projectGatesPassed
+          ? `proactive quality gate failed (${verification?.kind || 'unknown'}): ${String(verification?.errors || 'sin evidencia').slice(0, 1200)}`
+          : `project quality gates failed: ${String(projectGateVerification?.blockingGates || 'unknown').slice(0, 1200)}`,
+      };
+    }
+  }
+  if (!projectGatesPassed) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `No cerré ni creé un checkpoint: fallaron los gates obligatorios ${String(projectGateVerification?.blockingGates || 'de calidad')}.`,
+    }, { prisma }).catch(() => {});
+    return {
+      ok: false,
+      checkpoint: null,
+      verification,
+      projectGateVerification,
+      error: `project quality gates failed: ${String(projectGateVerification?.blockingGates || 'unknown').slice(0, 1200)}`,
+    };
+  }
+  if (branchFinalization && branchFinalization.ok !== true) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `El checkpoint quedó en la rama del run, pero no se fusionó: ${branchFinalization?.merge?.code || branchFinalization?.status || 'merge_failed'}.`,
+    }, { prisma }).catch(() => {});
+    return {
+      ok: false,
+      checkpoint,
+      verification,
+      projectGateVerification,
+      branchFinalization,
+      error: `run branch merge failed: ${branchFinalization?.merge?.code || branchFinalization?.status || 'unknown'}`,
+    };
+  }
+  if (branchFinalization?.pullRequest?.url) {
+    await eventStore.appendEvent(run.id, 'narrative_delta', {
+      text: `Pull request creado desde el checkpoint verde: ${branchFinalization.pullRequest.url}`,
+    }, { prisma }).catch(() => {});
+  }
+  return {
+    ok: true,
+    checkpoint,
+    verification,
+    projectGateVerification,
+    branchFinalization,
+  };
 }
 
 /** Best-effort lookup of the user's plan for pricing (defaults to FREE). */
@@ -956,6 +2099,20 @@ module.exports = {
   packageLooksLikeNext,
   isAppsPrompt,
   compactMessages,
+  boundedArgsPreview,
+  messageChars,
+  boundedTail,
+  messageContentText,
+  toolResultContent,
+  summaryInput,
+  summariseContextWithLlm,
+  loadLatestContextSnapshot,
+  loadResolvedToolPermissions,
+  persistContextSnapshot,
   verifyWorkspace,
   verifyDevServer,
+  verifySmokeTests,
+  closeBuild,
+  gateEvidence,
+  acceptanceEvidence,
 };

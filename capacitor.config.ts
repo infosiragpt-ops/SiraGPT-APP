@@ -1,6 +1,6 @@
 import type { CapacitorConfig } from "@capacitor/cli"
 
-const serverUrl = process.env.CAPACITOR_SERVER_URL?.trim() || "https://siragpt.com"
+const serverUrl = process.env.CAPACITOR_SERVER_URL?.trim() || "https://siragpt.com/chat"
 const isCleartextDevelopmentServer = serverUrl.startsWith("http://")
 
 const config: CapacitorConfig = {

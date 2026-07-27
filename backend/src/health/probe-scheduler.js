@@ -34,6 +34,7 @@ const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_JITTER_RATIO = 0.1;
 const DEFAULT_BACKOFF_FACTOR = 2;
 const DEFAULT_BACKOFF_CAP_RATIO = 10; // max = baseInterval * cap
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 class ProbeScheduler {
   constructor({
@@ -72,7 +73,7 @@ class ProbeScheduler {
     this._onError = typeof onError === 'function' ? onError : null;
     this._onSample = typeof onSample === 'function' ? onSample : null;
 
-    this._defaultIntervalMs = defaultIntervalMs;
+    this._defaultIntervalMs = Math.min(defaultIntervalMs, MAX_TIMER_DELAY_MS);
     this._jitterRatio = jitterRatio;
     this._backoffFactor = backoffFactor;
     this._backoffCapRatio = backoffCapRatio;
@@ -102,7 +103,7 @@ class ProbeScheduler {
       throw new Error(`ProbeScheduler: probe "${probe.name}" already registered`);
     }
     const intervalMs = Number.isFinite(opts.intervalMs) && opts.intervalMs >= 1000
-      ? opts.intervalMs
+      ? Math.min(opts.intervalMs, MAX_TIMER_DELAY_MS)
       : this._defaultIntervalMs;
     const bypassCache = opts.bypassCache !== false;
 
@@ -222,9 +223,13 @@ class ProbeScheduler {
     }
     if (runImmediately) {
       // Run on a microtask so we don't recurse from add().
-      Promise.resolve().then(() => {
-        if (this._running) this._runSample(entry).catch(() => {});
-      });
+      Promise.resolve()
+        .then(() => {
+          if (!this._running) return null;
+          return this._runSample(entry);
+        })
+        .catch(() => {})
+        .finally(() => this._schedule(entry));
       return;
     }
     const delay = this._nextDelay(entry.currentIntervalMs);
@@ -243,7 +248,10 @@ class ProbeScheduler {
     const jitter = intervalMs * this._jitterRatio;
     // Symmetric jitter: [interval - jitter, interval + jitter].
     const offset = (this._random() * 2 - 1) * jitter;
-    const delay = Math.max(100, Math.round(intervalMs + offset));
+    const delay = Math.min(
+      MAX_TIMER_DELAY_MS,
+      Math.max(100, Math.round(intervalMs + offset)),
+    );
     return delay;
   }
 
@@ -284,8 +292,12 @@ class ProbeScheduler {
   }
 
   _applyBackoff(entry) {
-    const cap = entry.baseIntervalMs * this._backoffCapRatio;
-    const next = Math.min(cap, Math.round(entry.currentIntervalMs * this._backoffFactor));
+    const cap = Math.min(MAX_TIMER_DELAY_MS, entry.baseIntervalMs * this._backoffCapRatio);
+    const next = Math.min(
+      MAX_TIMER_DELAY_MS,
+      cap,
+      Math.round(entry.currentIntervalMs * this._backoffFactor),
+    );
     entry.currentIntervalMs = next;
   }
 }
@@ -293,4 +305,5 @@ class ProbeScheduler {
 module.exports = {
   ProbeScheduler,
   DEFAULT_INTERVAL_MS,
+  MAX_TIMER_DELAY_MS,
 };

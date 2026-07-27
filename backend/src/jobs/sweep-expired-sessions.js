@@ -38,6 +38,8 @@ function _bumpCounter(delta) {
  *   dryRun?: boolean,
  *   now?: Date,
  *   logger?: { info: Function, warn: Function, error: Function },
+ *   isAppshotsSession?: (session: object) => boolean,
+ *   isAppshotsToken?: (token: string) => boolean,
  * }} [opts]
  */
 async function run(opts = {}) {
@@ -46,7 +48,10 @@ async function run(opts = {}) {
   const dryRun = Boolean(opts.dryRun);
   const now = opts.now instanceof Date ? opts.now : new Date();
   const emailService = opts.emailService || _tryRequireEmailService();
-  const isAppshotsToken = opts.isAppshotsToken || _tryRequireIsAppshotsToken();
+  const isAppshotsSession = opts.isAppshotsSession
+    || (typeof opts.isAppshotsToken === 'function'
+      ? (row) => opts.isAppshotsToken(row?.token)
+      : _tryRequireIsAppshotsSession());
 
   logger.info?.(
     `[sweep-expired-sessions] starting cutoff=${now.toISOString()} dryRun=${dryRun}`,
@@ -75,13 +80,14 @@ async function run(opts = {}) {
   // account would just bounce.
   let appshotsNotices = 0;
   let appshotsCandidates = [];
-  if (isAppshotsToken && typeof prisma.session.findMany === 'function') {
+  if (isAppshotsSession && typeof prisma.session.findMany === 'function') {
     try {
       appshotsCandidates = await prisma.session.findMany({
         where: { expiresAt: { lte: now } },
         select: {
           id: true,
           token: true,
+          userAgent: true,
           expiresAt: true,
           user: { select: { id: true, email: true, name: true, deletedAt: true } },
         },
@@ -106,7 +112,7 @@ async function run(opts = {}) {
     const seen = new Set();
     for (const row of appshotsCandidates) {
       if (!row || !row.user || !row.user.email || row.user.deletedAt) continue;
-      if (!isAppshotsToken(row.token)) continue;
+      if (!isAppshotsSession(row)) continue;
       const key = `${row.user.id}:${row.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -145,10 +151,10 @@ function _tryRequireEmailService() {
   }
 }
 
-function _tryRequireIsAppshotsToken() {
+function _tryRequireIsAppshotsSession() {
   try {
     // eslint-disable-next-line global-require
-    return require('../utils/appshots-token').isAppshotsToken;
+    return require('../utils/appshots-token').isAppshotsSession;
   } catch (_) {
     return null;
   }

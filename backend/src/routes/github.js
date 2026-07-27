@@ -31,8 +31,17 @@ const gitService = require('../services/github/git.service');
 const workspaceFiles = require('../services/github/workspace-files.service');
 const workspaceRunner = require('../services/github/workspace-runner.service');
 const { buildUpstreamRequestHeaders, isForwardableResponseHeader } = require('../utils/proxy-headers');
+const {
+  isOAuthStateInfrastructureError,
+  sendOAuthStateUnavailable,
+} = require('../services/auth/oauth-state-http');
+const {
+  getOptionalOAuthProviderStatus,
+  requireOptionalOAuthProvider,
+} = require('../middleware/oauth-provider-availability');
 
 const router = express.Router();
+const requireGithubOAuth = requireOptionalOAuthProvider('github');
 
 // owner / repo path-segment validator — blocks traversal + injection in params.
 const NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;
@@ -78,13 +87,14 @@ async function touchWorkspace(repositoryId, userId, localPath, patch) {
 // GET /api/github/status
 router.get('/status', authenticateToken, async (req, res) => {
   try {
+    const providerStatus = getOptionalOAuthProviderStatus('github');
     const account = await accounts.findByUserId(req.user.id);
     if (!account) {
-      return res.json({ connected: false, configured: githubConfig.isConfigured() });
+      return res.json({ ...providerStatus, connected: false });
     }
     return res.json({
+      ...providerStatus,
       connected: true,
-      configured: githubConfig.isConfigured(),
       login: account.login,
       name: account.name,
       avatarUrl: account.avatarUrl,
@@ -98,12 +108,12 @@ router.get('/status', authenticateToken, async (req, res) => {
 });
 
 // GET /api/github/connect → consent URL
-router.get('/connect', authenticateToken, async (req, res) => {
+router.get('/connect', requireGithubOAuth, authenticateToken, async (req, res) => {
   try {
     if (!githubConfig.isConfigured()) {
       return res.status(503).json({ error: 'GitHub OAuth is not configured on the server' });
     }
-    const state = oauth.signState(req.user.id);
+    const state = await oauth.signState(req.user.id);
     const url = oauth.buildAuthorizeUrl(state);
     // Default: return JSON so the SPA controls navigation. ?redirect=1 → 302.
     if (String(req.query.redirect || '') === '1') {
@@ -112,12 +122,15 @@ router.get('/connect', authenticateToken, async (req, res) => {
     return res.json({ url });
   } catch (err) {
     console.error('[github] connect error:', err.message);
+    if (isOAuthStateInfrastructureError(err)) {
+      return sendOAuthStateUnavailable(res, { provider: 'github', error: err });
+    }
     return res.status(500).json({ error: 'Failed to start GitHub OAuth' });
   }
 });
 
 // GET /api/github/callback → finish OAuth, persist, redirect to frontend
-router.get('/callback', async (req, res) => {
+router.get('/callback', requireGithubOAuth, async (req, res) => {
   const { code, state, error: ghError } = req.query;
 
   if (ghError) {
@@ -127,7 +140,15 @@ router.get('/callback', async (req, res) => {
     return res.redirect(githubConfig.postCallbackRedirect('invalid'));
   }
 
-  const userId = oauth.verifyState(state);
+  let userId;
+  try {
+    userId = await oauth.verifyState(state);
+  } catch (error) {
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: 'github', error });
+    }
+    return res.redirect(githubConfig.postCallbackRedirect('expired'));
+  }
   if (!userId) {
     return res.redirect(githubConfig.postCallbackRedirect('expired'));
   }
