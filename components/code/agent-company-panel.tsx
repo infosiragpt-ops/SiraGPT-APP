@@ -116,6 +116,7 @@ import {
 import {
   codexApi,
   type CodexAccess,
+  type CodexCompanyContext,
   type CodexProactiveState,
   type CodexRun,
 } from "@/lib/codex/codex-api"
@@ -317,6 +318,7 @@ export function AgentCompanyPanel() {
   const [proactiveOn, setProactiveOn] = React.useState(false)
   const [proactiveBusy, setProactiveBusy] = React.useState(false)
   const [proactiveState, setProactiveState] = React.useState<CodexProactiveState>(EMPTY_PROACTIVE_STATE)
+  const [companyContext, setCompanyContext] = React.useState<CodexCompanyContext | null>(null)
   const [codexRuns, setCodexRuns] = React.useState<CodexRun[]>([])
   const [checkpointCount, setCheckpointCount] = React.useState(0)
   const [codexAccess, setCodexAccess] = React.useState<CodexAccess | null>(null)
@@ -346,6 +348,7 @@ export function AgentCompanyPanel() {
           setCodexRuns([])
           setCheckpointCount(0)
           setProactiveState(EMPTY_PROACTIVE_STATE)
+          setCompanyContext(null)
           return
         }
 
@@ -371,6 +374,7 @@ export function AgentCompanyPanel() {
           const nextState = normalizeProactiveState(proactiveResult.value.state)
           const enabled = Boolean(nextState.enabled)
           setProactiveState(nextState)
+          setCompanyContext(proactiveResult.value.company || null)
           setProactiveOn(enabled)
           setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
         }
@@ -998,6 +1002,7 @@ export function AgentCompanyPanel() {
             runs={codexRuns}
             checkpointCount={checkpointCount}
             proactiveState={proactiveState}
+            companyContext={companyContext}
             departmentCount={allDepartments.length}
             rootSessionId={snapshot.rootSessionId}
             onOpenTask={(sessionId) => {
@@ -1135,6 +1140,7 @@ export function AgentCompanyPanel() {
           runs={codexRuns}
           checkpointCount={checkpointCount}
           proactiveState={proactiveState}
+          companyContext={companyContext}
           departmentCount={allDepartments.length}
           rootSessionId={snapshot.rootSessionId}
           onOpenTask={(sessionId) => {
@@ -2360,6 +2366,7 @@ function CompanyDashboardSurface({
   runs,
   checkpointCount,
   proactiveState,
+  companyContext,
   departmentCount,
   rootSessionId,
   onOpenTask,
@@ -2370,6 +2377,7 @@ function CompanyDashboardSurface({
   runs: CodexRun[]
   checkpointCount: number
   proactiveState: CodexProactiveState
+  companyContext: CodexCompanyContext | null
   departmentCount: number
   rootSessionId: string | null
   onOpenTask: (sessionId: string) => void
@@ -2429,6 +2437,59 @@ function CompanyDashboardSurface({
           </div>
         ))}
       </div>
+
+      {companyContext ? (
+        <section className="mt-7 border-y border-zinc-200 py-6 dark:border-white/10" data-testid="company-operating-diagnosis">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase text-zinc-500">Diagnóstico empresarial</p>
+              <h2 className="mt-2 text-xl font-semibold">Contexto compartido por todos los departamentos</h2>
+            </div>
+            <div className="min-w-[180px] text-right">
+              <span className="text-3xl font-semibold tabular-nums">{companyContext.readiness.score}%</span>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                {companyContext.readiness.readyCount} de {companyContext.readiness.total} áreas listas
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase text-zinc-500">Misión</p>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+                {companyContext.profile.mission || "Pendiente de confirmar con evidencia del negocio."}
+              </p>
+            </div>
+            <div className="min-w-0 lg:border-l lg:border-zinc-200 lg:pl-5 dark:lg:border-white/10">
+              <p className="text-[11px] font-semibold uppercase text-zinc-500">Visión</p>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+                {companyContext.profile.vision || "Pendiente de confirmar con evidencia del negocio."}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-px overflow-hidden rounded-lg border border-zinc-200 bg-zinc-200 sm:grid-cols-2 xl:grid-cols-4 dark:border-white/10 dark:bg-white/10">
+            {companyContext.readiness.areas.map((area) => (
+              <div key={area.id} className="min-h-[112px] bg-white p-4 dark:bg-zinc-900">
+                <div className="flex items-center gap-2">
+                  {area.status === "ready" ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  ) : (
+                    <AlertTriangle className={cn(
+                      "h-4 w-4 shrink-0",
+                      area.status === "blocked" ? "text-red-500" : "text-amber-500",
+                    )} />
+                  )}
+                  <span className="truncate text-xs font-semibold">{area.label}</span>
+                </div>
+                <p className="mt-3 line-clamp-3 text-[11px] leading-relaxed text-zinc-500">
+                  {area.status === "ready" ? area.evidence : area.action}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="mt-7 border-y border-zinc-200 py-6 dark:border-white/10">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -2701,6 +2762,7 @@ function DashboardView({
   runs,
   checkpointCount,
   proactiveState,
+  companyContext,
   departmentCount,
   rootSessionId,
   onOpenTask,
@@ -2712,6 +2774,7 @@ function DashboardView({
   runs: CodexRun[]
   checkpointCount: number
   proactiveState: CodexProactiveState
+  companyContext: CodexCompanyContext | null
   departmentCount: number
   rootSessionId: string | null
   onOpenTask: (sessionId: string) => void
@@ -2732,6 +2795,7 @@ function DashboardView({
         runs={runs}
         checkpointCount={checkpointCount}
         proactiveState={proactiveState}
+        companyContext={companyContext}
         departmentCount={departmentCount}
         rootSessionId={rootSessionId}
         onOpenTask={onOpenTask}

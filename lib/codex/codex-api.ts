@@ -99,6 +99,61 @@ export interface CodexLedgerEntry {
   createdAt: string
 }
 export interface CodexProgressMemory { objectives: CodexObjective[]; ledger: CodexLedgerEntry[] }
+export interface CodexCompanyProfile {
+  version: number
+  companyName: string
+  stage: "new" | "existing" | "growing" | "unknown"
+  mission: string | null
+  vision: string | null
+  offer: string | null
+  targetCustomer: string | null
+  businessModel: string | null
+  industry: string | null
+  market: string | null
+  brandVoice: string | null
+  websiteUrl: string | null
+  salesProcess: string | null
+  autonomy: {
+    research: boolean
+    codeChanges: "review" | "auto" | "off"
+    socialPublishing: "review" | "auto" | "off"
+    socialReplies: "review" | "auto" | "off"
+    emailReplies: "review" | "auto" | "off"
+    leadOutreach: "review" | "auto" | "off"
+  }
+  updatedAt: string
+}
+export interface CodexCompanyReadinessArea {
+  id: string
+  label: string
+  status: "ready" | "needs_attention" | "blocked"
+  evidence: string
+  action: string
+}
+export interface CodexCompanyContext {
+  profile: CodexCompanyProfile
+  readiness: {
+    score: number
+    readyCount: number
+    total: number
+    areas: CodexCompanyReadinessArea[]
+    gaps: Array<Pick<CodexCompanyReadinessArea, "id" | "label" | "status" | "action">>
+    evidence: {
+      publishedUrl: string | null
+      workspaceReady: boolean
+      socialConnections: Array<{ platform: string; accountName: string | null }>
+      gmailConnected: boolean
+    }
+  }
+  safeguards: {
+    externalActionsRequireConnection: boolean
+    defaultExternalMode: "review"
+    socialPublishing: "review" | "auto" | "off"
+    socialReplies: "review" | "auto" | "off"
+    emailReplies: "review" | "auto" | "off"
+    leadOutreach: "review" | "auto" | "off"
+  }
+}
 export interface CodexProactiveState {
   enabled: boolean
   enabledAt: string | null
@@ -197,7 +252,7 @@ export const codexApi = {
   // Modo PROACTIVO (compañía de agentes autónoma). no-store: el estado cambia
   // desde el ticker del backend, un 304 cacheado dejaría el chip mintiendo.
   getProactive: (id: string) =>
-    req<{ state: CodexProactiveState; departments: Array<{ id: string; name: string; mission: string }>; memory: CodexProgressMemory }>(`/projects/${id}/proactive`, { cache: "no-store" }),
+    req<{ state: CodexProactiveState; departments: Array<{ id: string; name: string; mission: string }>; memory: CodexProgressMemory; company: CodexCompanyContext }>(`/projects/${id}/proactive`, { cache: "no-store" }),
   setProactive: (id: string, enabled: boolean) =>
     req<{ state: CodexProactiveState }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
 

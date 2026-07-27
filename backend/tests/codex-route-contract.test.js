@@ -96,6 +96,7 @@ const restorePublication = mockResolvedModule(
 );
 
 const codexRoutes = require('../src/routes/codex');
+const codexDb = require('../src/config/database');
 
 let runnerStatusQueue = null;
 let runnerStatusCalls = 0;
@@ -217,6 +218,64 @@ test('POST /projects/:id/proactive rejects autonomous execution without isolated
     .send({ enabled: true });
   assert.equal(res.status, 403);
   assert.equal(res.body.error, 'codex_forbidden');
+});
+
+test('company profile routes return grounded readiness and preserve the owned project brief', async () => {
+  const originals = {
+    projectFindFirst: codexDb.codexProject.findFirst,
+    projectFindUnique: codexDb.codexProject.findUnique,
+    projectUpdate: codexDb.codexProject.update,
+    socialFindMany: codexDb.socialConnection.findMany,
+    userFindUnique: codexDb.user.findUnique,
+  };
+  let project = {
+    id: 'p1',
+    userId: 'u-1',
+    name: 'SiraGPT.COM',
+    status: 'ready',
+    workspacePath: 'projects/p1',
+    brief: { proactive: { enabled: false } },
+  };
+  codexDb.codexProject.findFirst = async ({ where }) => (
+    where?.id === project.id && where?.userId === project.userId ? { ...project } : null
+  );
+  codexDb.codexProject.findUnique = async ({ where }) => (
+    where?.id === project.id ? { ...project } : null
+  );
+  codexDb.codexProject.update = async ({ data }) => {
+    project = { ...project, ...data };
+    return { ...project };
+  };
+  codexDb.socialConnection.findMany = async () => [{ platform: 'linkedin', accountName: '@siragpt' }];
+  codexDb.user.findUnique = async () => ({ gmailTokens: null });
+
+  try {
+    const initial = await request(buildApp()).get('/api/codex/projects/p1/company-profile');
+    assert.equal(initial.status, 200);
+    assert.equal(initial.body.company.readiness.evidence.socialConnections[0].platform, 'linkedin');
+    assert.equal(initial.body.company.readiness.evidence.gmailConnected, false);
+
+    const updated = await request(buildApp())
+      .patch('/api/codex/projects/p1/company-profile')
+      .send({
+        profile: {
+          stage: 'existing',
+          mission: 'Construir el mejor agente de código empresarial.',
+          vision: 'Operar empresas con ejecución verificable.',
+        },
+      });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.company.profile.stage, 'existing');
+    assert.equal(updated.body.company.profile.autonomy.emailReplies, 'review');
+    assert.equal(project.brief.proactive.enabled, false);
+    assert.match(project.brief.companyProfile.mission, /mejor agente de código/);
+  } finally {
+    codexDb.codexProject.findFirst = originals.projectFindFirst;
+    codexDb.codexProject.findUnique = originals.projectFindUnique;
+    codexDb.codexProject.update = originals.projectUpdate;
+    codexDb.socialConnection.findMany = originals.socialFindMany;
+    codexDb.user.findUnique = originals.userFindUnique;
+  }
 });
 
 test('flag off ⇒ every other route is 404 not_found', async () => {

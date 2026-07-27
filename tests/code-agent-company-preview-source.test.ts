@@ -27,3 +27,12 @@ test("company files and resources expose real workspace and social operations", 
   assert.match(socialApiSource, /request<\{ post: CompanySocialPost \}>\("\/queue"/)
   assert.match(socialApiSource, /encodeURIComponent\(postId\).*publish-now/)
 })
+
+test("company dashboard renders the evidence-grounded operating diagnosis", () => {
+  assert.match(companySource, /proactiveResult\.value\.company/)
+  assert.match(companySource, /data-testid="company-operating-diagnosis"/)
+  assert.match(companySource, /companyContext\.readiness\.score/)
+  assert.match(companySource, /companyContext\.profile\.mission/)
+  assert.match(companySource, /companyContext\.profile\.vision/)
+  assert.match(companySource, /area\.status === "ready" \? area\.evidence : area\.action/)
+})

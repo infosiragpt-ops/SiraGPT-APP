@@ -58,6 +58,59 @@ test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', asyn
   assert.equal(p.deptIndex, 1, 'round-robin advances');
 });
 
+test('CEO Office grounds planning in readiness and persists the shared company profile', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.socialConnection = { findMany: async () => [] };
+  prisma.user = { findUnique: async () => ({ gmailTokens: null }) };
+  const created = [];
+  let messages = [];
+  const result = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async (args) => {
+          created.push(args);
+          return { id: 'run-profile' };
+        },
+      },
+      chatComplete: async (args) => {
+        messages = args.messages;
+        return {
+          content: JSON.stringify({
+            title: 'Define negocio base',
+            goal: 'Documenta misión, visión, oferta y cliente objetivo con la evidencia disponible.',
+            acceptanceCriteria: ['El perfil operativo queda persistido'],
+            objectives: [{
+              id: 'business-foundation',
+              title: 'Definir la empresa',
+              metric: 'campos confirmados',
+              target: '4',
+              status: 'active',
+              priority: 1,
+            }],
+            companyProfile: {
+              stage: 'existing',
+              mission: 'Ayudar a empresas a ejecutar trabajo con agentes.',
+              vision: 'Ser el mejor agente de código empresarial.',
+              offer: 'Software operativo con agentes.',
+              targetCustomer: 'Empresas digitales.',
+            },
+          }),
+        };
+      },
+    },
+  });
+
+  assert.equal(result.action, 'proposed');
+  assert.equal(created.length, 1);
+  assert.match(messages[1].content, /Brechas verificadas/);
+  assert.match(messages[1].content, /No hay cuentas sociales OAuth conectadas/);
+  assert.equal(prisma.state.project.brief.companyProfile.stage, 'existing');
+  assert.equal(prisma.state.project.brief.companyProfile.autonomy.socialPublishing, 'review');
+  assert.equal(prisma.state.project.brief.objectives[0].id, 'business-foundation');
+});
+
 test('USD kill switch blocks proposals using persisted run costs', async () => {
   const prisma = fakePrisma({ project: PROJECT });
   prisma.codexRunMetric = {

@@ -30,6 +30,7 @@
 const PROACTIVE_PREFIX = '[PROACTIVO';
 const progressLedger = require('./progress-ledger');
 const proactiveMetrics = require('./proactive-metrics');
+const companyOperatingProfile = require('./company-operating-profile');
 
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
 const DEPARTMENTS = Object.freeze([
@@ -155,20 +156,24 @@ async function proposeTask({
   notes,
   ledger = [],
   objectives = [],
+  companyContext = null,
   qaCycle = false,
   chatComplete,
 }) {
+  const responseSchema = department.id === 'ceo-office'
+    ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
+    : '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"objectives":[]}';
   const messages = [
     {
       role: 'system',
       content: [
         'Eres el director del departamento indicado dentro de una compañía de agentes de software autónomos.',
         'Tu trabajo: proponer LA SIGUIENTE tarea más valiosa (una sola, concreta, completable por un agente de código en una sesión) para este proyecto.',
-        'Responde SOLO JSON: {"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}]}.',
+        `Responde SOLO JSON: ${responseSchema}.`,
         'La tarea debe ser INCREMENTAL sobre lo ya construido (no re-hacer lo existente), y del ámbito del departamento.',
         'Incluye entre 2 y 5 criterios de aceptación observables. No uses criterios vagos como "que se vea bien".',
         department.id === 'ceo-office'
-          ? 'Como CEO Office, re-prioriza objectives con un máximo de 5 OKR medibles. Conserva ids estables cuando un objetivo siga vigente.'
+          ? 'Como CEO Office, re-prioriza objectives con un máximo de 5 OKR medibles y actualiza companyProfile solo con hechos sostenidos por el contexto. Conserva ids estables cuando un objetivo siga vigente; usa null cuando un dato del negocio no esté confirmado.'
           : 'Para objectives devuelve [] y enlaza la tarea a los objectiveIds vigentes que corresponda.',
         qaCycle
           ? 'Esta es una auditoría acumulada: el constructor DEBE delegar primero en qa_reviewer, revisar el diff y añadir o mejorar smoke tests antes de corregir hallazgos.'
@@ -182,6 +187,7 @@ async function proposeTask({
         `Proyecto: ${project.name || project.id}`,
         project.brief && project.brief.goal ? `Objetivo del proyecto: ${String(project.brief.goal).slice(0, 500)}` : null,
         `Departamento: ${department.name} — ${department.mission}`,
+        companyContext ? `Contexto operativo compartido:\n${companyOperatingProfile.formatCompanyContext(companyContext)}` : null,
         fileTree ? `Archivos del workspace:\n${String(fileTree).slice(0, 1800)}` : 'Workspace aún vacío (proyecto nuevo).',
         notes ? `Notas del proyecto (.sira/notes.md):\n${String(notes).slice(0, 1200)}` : null,
         objectives.length
@@ -200,7 +206,7 @@ async function proposeTask({
       ].filter(Boolean).join('\n\n'),
     },
   ];
-  const out = await chatComplete({ messages, temperature: 0.5, maxTokens: 400 });
+  const out = await chatComplete({ messages, temperature: 0.5, maxTokens: department.id === 'ceo-office' ? 700 : 450 });
   const parsed = extractJson(out && out.content);
   if (!parsed || !parsed.goal || typeof parsed.goal !== 'string') return null;
   const title = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : 'Tarea proactiva';
@@ -220,6 +226,9 @@ async function proposeTask({
     objectives: department.id === 'ceo-office'
       ? progressLedger.normalizeObjectives(parsed.objectives)
       : [],
+    companyProfile: department.id === 'ceo-office' && parsed.companyProfile && typeof parsed.companyProfile === 'object'
+      ? parsed.companyProfile
+      : null,
   };
 }
 
@@ -321,6 +330,11 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     : DEPARTMENTS[state.deptIndex % DEPARTMENTS.length];
   const chatComplete = deps.chatComplete || ((a) => require('./llm-provider').chatComplete(a));
   const memory = progressLedger.readProgressContext(project);
+  const companyContext = await companyOperatingProfile.loadCompanyOperatingContext({
+    prisma,
+    project,
+    now: now(),
+  });
 
   // Marketing is an external-effect department, not another code generator.
   // It delegates to the real social-company pipeline and remains constrained
@@ -402,6 +416,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       notes,
       ledger: memory.ledger,
       objectives: memory.objectives,
+      companyContext,
       qaCycle,
       chatComplete,
     });
@@ -416,6 +431,14 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
 
   if (proposal.objectives.length) {
     await progressLedger.writeObjectives({ prisma, project, objectives: proposal.objectives, now: now() });
+  }
+  if (proposal.companyProfile) {
+    await companyOperatingProfile.writeCompanyProfile({
+      prisma,
+      project,
+      patch: proposal.companyProfile,
+      now: now(),
+    });
   }
   const prompt = progressLedger.formatProactivePrompt({
     department,
