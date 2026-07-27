@@ -401,9 +401,10 @@ function entryStatus(entry) {
   if (!entry) {
     return { running: false, ready: false, state: "stopped", framework: null, project: null, port: null, basePath: null, error: null, preflight: null, log: [] };
   }
+  const renderAdmitted = !entry.preflight || entry.preflight.render?.status === "passed";
   return {
     running: entry.state === "installing" || entry.state === "building" || entry.state === "starting" || entry.state === "ready",
-    ready: entry.state === "ready",
+    ready: entry.state === "ready" && renderAdmitted,
     state: entry.state,
     framework: entry.framework || null,
     project: entry.key === ROOT_KEY ? null : entry.key,
