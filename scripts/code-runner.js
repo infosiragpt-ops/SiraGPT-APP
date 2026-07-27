@@ -1034,9 +1034,9 @@ Bun.serve({
         entry = lastStartedKey != null ? devPool.get(lastStartedKey) : null;
       }
       const st = entryStatus(entry);
-      // Legacy contract: `ready` is a LIVE probe while the server is running
-      // (it can flip true during "starting", as soon as the port answers).
-      const ready = st.running ? await probeReady(st.port, st.basePath) : false;
+      // A live port confirms health only after install, build, and render have
+      // admitted the entry. Never let the probe bypass the preflight state.
+      const ready = st.ready ? await probeReady(st.port, st.basePath) : false;
       const { log, ...rest } = st;
       return Response.json({
         ...rest,
