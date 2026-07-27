@@ -254,6 +254,8 @@ test('company profile routes return grounded readiness and preserve the owned pr
     assert.equal(initial.status, 200);
     assert.equal(initial.body.company.readiness.evidence.socialConnections[0].platform, 'linkedin');
     assert.equal(initial.body.company.readiness.evidence.gmailConnected, false);
+    assert.equal(initial.body.company.portfolio.version, 1);
+    assert.equal(initial.body.company.portfolio.missions.length, 9);
 
     const updated = await request(buildApp())
       .patch('/api/codex/projects/p1/company-profile')

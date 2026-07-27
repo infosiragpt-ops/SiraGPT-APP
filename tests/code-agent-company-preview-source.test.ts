@@ -35,4 +35,8 @@ test("company dashboard renders the evidence-grounded operating diagnosis", () =
   assert.match(companySource, /companyContext\.profile\.mission/)
   assert.match(companySource, /companyContext\.profile\.vision/)
   assert.match(companySource, /area\.status === "ready" \? area\.evidence : area\.action/)
+  assert.match(companySource, /data-testid="company-mission-portfolio"/)
+  assert.match(companySource, /companyContext\.portfolio\.missions/)
+  assert.match(companySource, /mission\.departmentName/)
+  assert.match(companySource, /mission\.nextAction/)
 })

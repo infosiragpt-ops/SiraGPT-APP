@@ -180,6 +180,8 @@ const EMPTY_PROACTIVE_STATE: CodexProactiveState = {
   dailyBudgetUsd: 0,
   budgetBlocked: false,
   lastDepartment: null,
+  missionIndex: 0,
+  lastMissionId: null,
 }
 
 function normalizeProactiveState(
@@ -192,6 +194,7 @@ function normalizeProactiveState(
     deptIndex: Number(state.deptIndex) || 0,
     costTodayUsd: Number(state.costTodayUsd) || 0,
     dailyBudgetUsd: Number(state.dailyBudgetUsd) || 0,
+    missionIndex: Number(state.missionIndex) || 0,
   }
 }
 
@@ -2488,6 +2491,52 @@ function CompanyDashboardSurface({
               </div>
             ))}
           </div>
+
+          {companyContext.portfolio ? (
+            <div className="mt-6" data-testid="company-mission-portfolio">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase text-zinc-500">Misiones de CEO Office</p>
+                  <h3 className="mt-1 text-base font-semibold">Prioridades derivadas de evidencia real</h3>
+                </div>
+                <p className="text-[11px] text-zinc-500">
+                  {companyContext.portfolio.summary.readyToExecute} ejecutables ·{" "}
+                  {companyContext.portfolio.summary.blocked} bloqueadas ·{" "}
+                  {companyContext.portfolio.summary.reviewRequired} por revisar
+                </p>
+              </div>
+              <div className="mt-3 divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-white/10 dark:border-white/10">
+                {companyContext.portfolio.missions.slice(0, 8).map((mission) => (
+                  <div key={mission.id} className="grid gap-2 py-3 md:grid-cols-[36px_minmax(0,1fr)_180px] md:items-center">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 text-[11px] font-semibold tabular-nums dark:border-white/10">
+                      {mission.priority}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[13px] font-semibold">{mission.title}</span>
+                      <span className="mt-0.5 block line-clamp-2 text-[11px] leading-relaxed text-zinc-500">
+                        {mission.nextAction}
+                      </span>
+                    </span>
+                    <span className="flex items-center justify-between gap-3 text-[11px] md:justify-end">
+                      <span className="truncate text-zinc-500">{mission.departmentName}</span>
+                      <span className={cn(
+                        "h-2.5 w-2.5 shrink-0 rounded-full",
+                        mission.status === "completed"
+                          ? "bg-emerald-500"
+                          : mission.status === "ready_to_execute"
+                            ? "bg-sky-500"
+                            : mission.status === "review_required"
+                              ? "bg-amber-500"
+                              : mission.status === "paused"
+                                ? "bg-zinc-400"
+                                : "bg-red-500",
+                      )} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

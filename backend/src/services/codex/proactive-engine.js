@@ -31,6 +31,7 @@ const PROACTIVE_PREFIX = '[PROACTIVO';
 const progressLedger = require('./progress-ledger');
 const proactiveMetrics = require('./proactive-metrics');
 const companyOperatingProfile = require('./company-operating-profile');
+const companyMissionOrchestrator = require('./company-mission-orchestrator');
 
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
 const DEPARTMENTS = Object.freeze([
@@ -63,6 +64,8 @@ function readProactiveState(project) {
     dailyBudgetUsd: Math.max(0, Number(p.dailyBudgetUsd) || 0),
     budgetBlocked: p.budgetBlocked === true,
     lastDepartment: typeof p.lastDepartment === 'string' ? p.lastDepartment : null,
+    missionIndex: Number.isFinite(Number(p.missionIndex)) ? Number(p.missionIndex) : 0,
+    lastMissionId: typeof p.lastMissionId === 'string' ? p.lastMissionId : null,
   };
 }
 
@@ -157,6 +160,7 @@ async function proposeTask({
   ledger = [],
   objectives = [],
   companyContext = null,
+  mission = null,
   qaCycle = false,
   chatComplete,
 }) {
@@ -188,6 +192,7 @@ async function proposeTask({
         project.brief && project.brief.goal ? `Objetivo del proyecto: ${String(project.brief.goal).slice(0, 500)}` : null,
         `Departamento: ${department.name} — ${department.mission}`,
         companyContext ? `Contexto operativo compartido:\n${companyOperatingProfile.formatCompanyContext(companyContext)}` : null,
+        mission ? companyMissionOrchestrator.formatMissionContext(mission) : null,
         fileTree ? `Archivos del workspace:\n${String(fileTree).slice(0, 1800)}` : 'Workspace aún vacío (proyecto nuevo).',
         notes ? `Notas del proyecto (.sira/notes.md):\n${String(notes).slice(0, 1200)}` : null,
         objectives.length
@@ -318,23 +323,33 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
   }
   if (maxPerDay(env) === 0 || runsToday >= maxPerDay(env)) return { action: 'skipped_budget' };
 
-  // Phase 1 — pick the next department (round-robin) and propose a task.
+  // Phase 1 — CEO Office selects a grounded mission, then routes it to the
+  // responsible department. QA cycles remain independent quality gates.
   const qaEvery = qaEveryCycles(env);
   const qaCycle = qaEvery > 0 && (runsToday + 1) % qaEvery === 0;
-  const department = qaCycle
-    ? {
-      id: 'qa-reviewer',
-      name: 'QA Reviewer',
-      mission: 'Audita el diff acumulado, ejecuta pruebas y corrige regresiones antes de que el producto siga creciendo.',
-    }
-    : DEPARTMENTS[state.deptIndex % DEPARTMENTS.length];
-  const chatComplete = deps.chatComplete || ((a) => require('./llm-provider').chatComplete(a));
   const memory = progressLedger.readProgressContext(project);
   const companyContext = await companyOperatingProfile.loadCompanyOperatingContext({
     prisma,
     project,
     now: now(),
   });
+  const selectedMission = qaCycle
+    ? null
+    : companyMissionOrchestrator.selectMissionForCycle(
+      companyContext.portfolio,
+      state.missionIndex,
+    );
+  const missionDepartment = selectedMission
+    ? DEPARTMENTS.find((entry) => entry.id === selectedMission.departmentId)
+    : null;
+  const department = qaCycle
+    ? {
+      id: 'qa-reviewer',
+      name: 'QA Reviewer',
+      mission: 'Audita el diff acumulado, ejecuta pruebas y corrige regresiones antes de que el producto siga creciendo.',
+    }
+    : missionDepartment || DEPARTMENTS[state.deptIndex % DEPARTMENTS.length];
+  const chatComplete = deps.chatComplete || ((a) => require('./llm-provider').chatComplete(a));
 
   // Marketing is an external-effect department, not another code generator.
   // It delegates to the real social-company pipeline and remains constrained
@@ -383,6 +398,8 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
         dailyBudgetUsd: budgetUsd,
         budgetBlocked: false,
         lastDepartment: department.id,
+        missionIndex: state.missionIndex + 1,
+        lastMissionId: selectedMission?.id || null,
       },
     });
     return {
@@ -417,6 +434,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       ledger: memory.ledger,
       objectives: memory.objectives,
       companyContext,
+      mission: selectedMission,
       qaCycle,
       chatComplete,
     });
@@ -447,6 +465,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     acceptanceCriteria: proposal.acceptanceCriteria,
     objectiveIds: proposal.objectiveIds,
     qaCycle,
+    missionId: selectedMission?.id || null,
   });
   const run = await runService.createRun({
     userId: project.userId,
@@ -468,9 +487,17 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       dailyBudgetUsd: budgetUsd,
       budgetBlocked: false,
       lastDepartment: department.id,
+      missionIndex: qaCycle ? state.missionIndex : state.missionIndex + 1,
+      lastMissionId: selectedMission?.id || null,
     },
   });
-  return { action: 'proposed', runId: run && run.id, department: department.id, qaCycle };
+  return {
+    action: 'proposed',
+    runId: run && run.id,
+    department: department.id,
+    missionId: selectedMission?.id || null,
+    qaCycle,
+  };
 }
 
 async function runCycle(args) {

@@ -24,6 +24,19 @@ test('proactive prompt round-trips structured department and acceptance metadata
   });
 });
 
+test('proactive prompt preserves a mission id when the cycle is mission-driven', () => {
+  const prompt = ledger.formatProactivePrompt({
+    department: { id: 'ceo-office', name: 'CEO Office' },
+    title: 'Define la misión verificable',
+    goal: 'Alinea el trabajo autónomo con el propósito de la empresa.',
+    acceptanceCriteria: ['La misión queda documentada'],
+    objectiveIds: ['okr-company-purpose'],
+    missionId: 'company-purpose',
+  });
+
+  assert.equal(ledger.taskMetaFromPrompt(prompt).missionId, 'company-purpose');
+});
+
 test('appendLedgerEntry preserves other brief fields and replaces the same run id', async () => {
   const state = {
     project: {
