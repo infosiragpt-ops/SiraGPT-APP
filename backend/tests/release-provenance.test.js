@@ -138,6 +138,9 @@ test('production deploy proves the exact commit and restores rollback provenance
   assert.match(workflow, /verify_checkout "\$\{PREV_SHA\}"/);
   assert.match(workflow, /wait_version "\$\{TARGET_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
   assert.match(workflow, /wait_version "\$\{PREV_SHA\}" "\$\{PREV_APP_VERSION\}"/);
+  assert.match(workflow, /verify_backend_image_metadata siragpt-backend:latest/);
+  assert.match(workflow, /Backend image metadata mismatch:/);
+  assert.match(workflow, /\$\{COMPOSE\} up -d --no-deps --force-recreate backend frontend/);
   assert.match(workflow, /wait_frontend/);
   assert.match(workflow, /preserve_rollback_images/);
   assert.match(rollback[1], /restore_rollback_images/);

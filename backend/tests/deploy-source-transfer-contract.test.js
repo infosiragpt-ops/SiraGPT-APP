@@ -142,6 +142,8 @@ test('bundle cleanup is scoped while rollback, override, config validation, and 
   assert.match(ssh, /docker-compose\.production\.override\.yml --env-file \.env/);
   assert.doesNotMatch(ssh, /git clean|rsync[^\n]*--delete/);
   assert.match(ssh, /\$\{COMPOSE\} config -q/);
+  assert.match(ssh, /verify_backend_image_metadata siragpt-backend:latest/);
+  assert.match(ssh, /\$\{COMPOSE\} up -d --no-deps --force-recreate backend frontend/);
   assert.match(ssh, /wait_version "\$\{TARGET_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
 
   const finalCleanup = stepBlock('Cleanup transferred bundle');
