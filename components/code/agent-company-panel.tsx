@@ -176,7 +176,6 @@ const DEPARTMENT_ICONS: Record<string, React.ComponentType<{ className?: string 
   "agent-infrastructure": Cpu,
   "growth-engines": TrendingUp,
   "sales-operations": BriefcaseBusiness,
-  "customer-success": MessageSquareText,
   localization: Languages,
   integrations: PlugZap,
   trust: ShieldCheck,
