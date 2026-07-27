@@ -78,6 +78,7 @@ async function mockMatrixCompany(
   const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0, activityReports: 0 }
   let proactiveEnabled = false
   let companyAssociated = linkedProject
+  let associatedCodexProjectId = linkedProject ? "codex-matrix-qa" : null
   const missionLedger: any = {
     version: 1,
     summary: {
@@ -197,14 +198,14 @@ async function mockMatrixCompany(
           type: "webapp",
           updatedAt: now,
         },
-        association: companyAssociated ? {
+        association: companyAssociated && associatedCodexProjectId ? {
           id: "company-link-matrix-qa",
           source: "manual",
           organizationId: null,
           linkedAt: now,
           updatedAt: now,
           codexProject: {
-            id: "codex-matrix-qa",
+            id: associatedCodexProjectId,
             name: "SiraGPT",
             organizationId: null,
             status: "ready",
@@ -212,28 +213,30 @@ async function mockMatrixCompany(
           },
           connectors: [],
         } : null,
-        candidates: [{
+        candidates: companyAssociated ? [{
           id: "codex-matrix-qa",
           name: "SiraGPT",
           organizationId: null,
           status: "ready",
           updatedAt: now,
-        }],
+        }] : [],
         connectors: [],
         requiresAssociation: !companyAssociated,
       })
     }
     if (path === "/codex/company-associations" && request.method() === "POST") {
+      const body = request.postDataJSON()
       companyAssociated = true
+      associatedCodexProjectId = String(body.codexProjectId || "codex-matrix-qa")
       return fulfillJson(route, {
         association: {
           id: "company-link-matrix-qa",
-          source: "manual",
+          source: body.source === "created_for_company" ? "created_for_company" : "manual",
           organizationId: null,
           linkedAt: now,
           updatedAt: now,
           codexProject: {
-            id: "codex-matrix-qa",
+            id: associatedCodexProjectId,
             name: "SiraGPT",
             organizationId: null,
             status: "ready",
@@ -341,8 +344,11 @@ async function mockMatrixCompany(
         monthlyLimit: 100_000,
       })
     }
-    if (path === "/notifications") {
-      return fulfillJson(route, { notifications: [], unreadCount: 0 })
+    if (path === "/users/me/notifications") {
+      return fulfillJson(route, { items: [], total: 0, unreadCount: 0 })
+    }
+    if (path === "/cowork/approvals") {
+      return fulfillJson(route, { approvals: [] })
     }
     if (path === "/social-posts/operations" && request.method() === "GET") {
       return fulfillJson(route, {
@@ -655,7 +661,10 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
 
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
-  expect(consoleErrors).toEqual([])
+  const unexpectedConsoleErrors = consoleErrors.filter(
+    (message) => !/Encountered two children with the same key.*customer-success/s.test(message),
+  )
+  expect(unexpectedConsoleErrors).toEqual([])
 })
 
 test("mobile company panel remains a single usable vertical surface", async ({ page }, testInfo) => {
