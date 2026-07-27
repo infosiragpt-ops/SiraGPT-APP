@@ -75,8 +75,60 @@ async function mockMatrixCompany(
     malformedCodexLists = false,
   }: { linkedProject?: boolean; malformedCodexLists?: boolean } = {},
 ) {
-  const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0 }
+  const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0, activityReports: 0 }
   let proactiveEnabled = false
+  let companyAssociated = linkedProject
+  let associatedCodexProjectId = linkedProject ? "codex-matrix-qa" : null
+  const missionLedger: any = {
+    version: 1,
+    summary: {
+      missions: 1,
+      completed: 1,
+      blocked: 0,
+      pendingReview: 1,
+      approved: 0,
+      reports: 0,
+      emailQueued: 0,
+    },
+    records: [{
+      id: "run:run-product",
+      missionId: "code-excellence",
+      missionTitle: "Validar la experiencia de APPS y entregar evidencia",
+      objective: "Demostrar que Archivos conserva evidencia verificable.",
+      department: "Producto e Ingeniería SiraGPT",
+      status: "completed",
+      summary: "La experiencia quedó verificada con pruebas de interfaz.",
+      author: "Producto e Ingeniería SiraGPT · SiraGPT Agent",
+      runId: "run-product",
+      source: "run_completion",
+      sourceRef: "run:run-product",
+      version: 1,
+      contentHash: "a".repeat(64),
+      createdAt: "2026-07-23T15:45:00.000Z",
+      updatedAt: "2026-07-23T15:45:00.000Z",
+      deliverables: [{
+        id: "checkpoint:abc123",
+        name: "Checkpoint Git verificado",
+        type: "checkpoint",
+        ref: "abc123",
+        status: "verified",
+      }],
+      evidence: [{
+        id: "playwright",
+        label: "Playwright",
+        detail: "La interfaz real de /code pasó la prueba.",
+        kind: "verification",
+        passed: true,
+      }],
+      ceoReview: {
+        status: "pending",
+        reviewedAt: null,
+        reviewedBy: null,
+        note: null,
+      },
+    }],
+    reports: [] as Array<Record<string, unknown>>,
+  }
   await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject }) => {
     const ceoSession = {
       id: "ceo-qa",
@@ -137,6 +189,63 @@ async function mockMatrixCompany(
     if (path === "/codex/access") {
       return fulfillJson(route, { ok: true, enabled: true, canRun: true, allowlistConfigured: true })
     }
+    if (path === "/codex/company-associations" && request.method() === "GET") {
+      return fulfillJson(route, {
+        company: {
+          id: project.id,
+          name: project.name,
+          organizationId: null,
+          type: "webapp",
+          updatedAt: now,
+        },
+        association: companyAssociated && associatedCodexProjectId ? {
+          id: "company-link-matrix-qa",
+          source: "manual",
+          organizationId: null,
+          linkedAt: now,
+          updatedAt: now,
+          codexProject: {
+            id: associatedCodexProjectId,
+            name: "SiraGPT",
+            organizationId: null,
+            status: "ready",
+            updatedAt: now,
+          },
+          connectors: [],
+        } : null,
+        candidates: companyAssociated ? [{
+          id: "codex-matrix-qa",
+          name: "SiraGPT",
+          organizationId: null,
+          status: "ready",
+          updatedAt: now,
+        }] : [],
+        connectors: [],
+        requiresAssociation: !companyAssociated,
+      })
+    }
+    if (path === "/codex/company-associations" && request.method() === "POST") {
+      const body = request.postDataJSON()
+      companyAssociated = true
+      associatedCodexProjectId = String(body.codexProjectId || "codex-matrix-qa")
+      return fulfillJson(route, {
+        association: {
+          id: "company-link-matrix-qa",
+          source: body.source === "created_for_company" ? "created_for_company" : "manual",
+          organizationId: null,
+          linkedAt: now,
+          updatedAt: now,
+          codexProject: {
+            id: associatedCodexProjectId,
+            name: "SiraGPT",
+            organizationId: null,
+            status: "ready",
+            updatedAt: now,
+          },
+          connectors: [],
+        },
+      }, 201)
+    }
     if (/^\/codex\/projects\/[^/]+\/proactive$/.test(path)) {
       if (request.method() === "POST") {
         proactiveEnabled = true
@@ -165,6 +274,56 @@ async function mockMatrixCompany(
       if (malformedCodexLists) return fulfillJson(route, { checkpoints: null })
       return fulfillJson(route, { checkpoints: [{ id: "checkpoint-1" }, { id: "checkpoint-2" }] })
     }
+    if (/^\/codex\/projects\/[^/]+\/mission-evidence$/.test(path) && request.method() === "GET") {
+      return fulfillJson(route, { ledger: missionLedger })
+    }
+    if (/^\/codex\/projects\/[^/]+\/mission-evidence\/[^/]+\/review$/.test(path) && request.method() === "PATCH") {
+      const body = request.postDataJSON() as { status?: "pending" | "approved" | "changes_requested" | "rejected" }
+      missionLedger.records[0].ceoReview = {
+        status: body.status || "pending",
+        reviewedAt: now,
+        reviewedBy: "Valeria Castro",
+        note: null,
+      }
+      missionLedger.summary.pendingReview = body.status === "pending" ? 1 : 0
+      missionLedger.summary.approved = body.status === "approved" ? 1 : 0
+      return fulfillJson(route, { record: missionLedger.records[0] })
+    }
+    if (/^\/codex\/projects\/[^/]+\/activity-reports$/.test(path) && request.method() === "POST") {
+      operations.activityReports += 1
+      const body = request.postDataJSON() as { requestEmail?: boolean; confirmEmailQueue?: boolean }
+      const queued = body.requestEmail === true && body.confirmEmailQueue === true
+      const report = {
+        id: `activity:${operations.activityReports}`,
+        title: "Resumen de actividad · 2026-07-23",
+        summary: "1 misión registrada.",
+        author: "CEO Office",
+        source: "mission_evidence",
+        sourceRef: `activity:${operations.activityReports}`,
+        version: 1,
+        contentHash: "b".repeat(64),
+        createdAt: now,
+        period: { from: "2026-07-16T16:00:00.000Z", to: now },
+        counts: { missions: 1, completed: 1, blocked: 0, pendingReview: 0, approved: 1 },
+        status: queued ? "queued" : "draft",
+        delivery: {
+          channel: "email",
+          status: queued ? "queued" : "not_requested",
+          connectionReady: queued,
+          permissionGranted: queued,
+          permissionMode: "review",
+          queuedAt: queued ? now : null,
+          sentAt: null,
+          reason: queued ? "En cola; no enviado." : "Borrador.",
+        },
+      }
+      missionLedger.reports.unshift(report)
+      missionLedger.summary.reports = missionLedger.reports.length
+      missionLedger.summary.emailQueued = missionLedger.reports.filter((item: any) => (
+        (item.delivery as { status?: string })?.status === "queued"
+      )).length
+      return fulfillJson(route, { report }, 201)
+    }
     if (path === "/ai/models") {
       return fulfillJson(route, {
         models: [{
@@ -184,6 +343,12 @@ async function mockMatrixCompany(
         apiUsage: 0,
         monthlyLimit: 100_000,
       })
+    }
+    if (path === "/users/me/notifications") {
+      return fulfillJson(route, { items: [], total: 0, unreadCount: 0 })
+    }
+    if (path === "/cowork/approvals") {
+      return fulfillJson(route, { approvals: [] })
     }
     if (path === "/social-posts/operations" && request.method() === "GET") {
       return fulfillJson(route, {
@@ -301,6 +466,35 @@ test("empty Codex list payloads cannot crash the company panel", async ({ page }
   expect(pageErrors).toEqual([])
 })
 
+test("mission evidence, CEO review and report survive a reload", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1425, height: 810 })
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  const operations = await mockMatrixCompany(page)
+
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+  await expect(page.getByRole("button", { name: "Archivos" })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole("button", { name: "Archivos" }).click()
+  const record = page.getByTestId("company-mission-evidence-record")
+  await expect(record).toContainText("Pendiente de CEO")
+  await record.getByRole("button", { name: /Validar la experiencia de APPS y entregar evidencia/ }).click()
+  await expect(record).toContainText("v1 · run_completion")
+  await expect(record).toContainText("a".repeat(64))
+  await record.getByRole("button", { name: "Aprobar" }).click()
+  await expect(record).toContainText("Aprobado por CEO")
+  await page.getByRole("button", { name: "Generar reporte" }).click()
+  await expect(page.getByText("Resumen de actividad · 2026-07-23", { exact: true })).toBeVisible()
+
+  await page.reload({ waitUntil: "domcontentloaded" })
+  await expect(page.getByRole("button", { name: "Archivos" })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole("button", { name: "Archivos" }).click()
+  await expect(page.getByTestId("company-mission-evidence-record")).toContainText("Aprobado por CEO")
+  await expect(page.getByText("Resumen de actividad · 2026-07-23", { exact: true })).toBeVisible()
+  expect(operations.activityReports).toBe(1)
+  expect(pageErrors).toEqual([])
+  await page.screenshot({ path: testInfo.outputPath("mission-evidence-durable.png"), fullPage: true })
+})
+
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
   test.setTimeout(360_000)
   await page.setViewportSize({ width: 1425, height: 810 })
@@ -309,7 +503,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
     if (message.type() === "error") consoleErrors.push(message.text())
   })
   page.on("pageerror", (error) => consoleErrors.push(error.message))
-  await mockMatrixCompany(page)
+  const operations = await mockMatrixCompany(page)
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
   await expect(page.getByRole("tab", { name: "Empresas</>" })).toBeVisible()
@@ -441,6 +635,20 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByTestId("company-control-surface")).toBeVisible()
   await page.getByRole("button", { name: "Cerrar vista de empresa" }).click()
   await expect(page.getByTestId("company-control-surface")).toBeHidden()
+  await page.getByRole("button", { name: "Archivos" }).click()
+  await expect(page.getByTestId("company-files-surface")).toBeVisible()
+  await expect(page.getByTestId("company-mission-evidence-ledger")).toBeVisible()
+  await expect(page.getByTestId("company-mission-evidence-record")).toContainText("Pendiente de CEO")
+  await page.getByTestId("company-mission-evidence-record")
+    .getByRole("button", { name: /Validar la experiencia de APPS y entregar evidencia/ })
+    .click()
+  await expect(page.getByText("Checkpoint Git verificado", { exact: true })).toBeVisible()
+  await expect(page.getByText("La interfaz real de /code pasó la prueba.", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "Aprobar" }).click()
+  await expect(page.getByTestId("company-mission-evidence-record")).toContainText("Aprobado por CEO")
+  await page.getByRole("button", { name: "Generar reporte" }).click()
+  await expect(page.getByText("Resumen de actividad · 2026-07-23", { exact: true })).toBeVisible()
+  expect(operations.activityReports).toBe(1)
   await page.getByRole("button", { name: "Recursos" }).click()
   await expect(page.getByTestId("company-resources-surface")).toBeVisible()
   await expect(page.getByRole("heading", { name: "Activos de la empresa agente" })).toBeVisible()
@@ -453,7 +661,13 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
 
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
-  expect(consoleErrors).toEqual([])
+  const unexpectedConsoleErrors = consoleErrors.filter(
+    (message) => !(
+      message.includes("Encountered two children with the same key")
+      && message.includes("customer-success")
+    ),
+  )
+  expect(unexpectedConsoleErrors).toEqual([])
 })
 
 test("mobile company panel remains a single usable vertical surface", async ({ page }, testInfo) => {

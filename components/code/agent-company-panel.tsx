@@ -123,6 +123,9 @@ import {
   type CodexCompanyOperations,
   type CodexExternalAction,
   type CodexEnterpriseCommandCenter,
+  type CodexMissionEvidenceLedger,
+  type CodexMissionEvidenceRecord,
+  type CodexMissionReviewStatus,
   type CodexProjectActivity,
   type CodexProactiveState,
   type CodexRun,
@@ -657,6 +660,7 @@ export function AgentCompanyPanel() {
     [codeChatSessions, codexRuns, files],
   )
   const companyName = agentCompanyDisplayName(activeFolder?.name)
+  const activeCodexProjectId = getActiveCodexProject()
   const allDepartments = React.useMemo(
     () => [...AGENT_COMPANY_DEPARTMENTS, ...customDepartments],
     [customDepartments],
@@ -1501,6 +1505,7 @@ export function AgentCompanyPanel() {
           <FilesView
             surface={isMobile}
             companyName={companyName}
+            codexProjectId={activeCodexProjectId}
             files={files}
             sessions={codeChatSessions}
             departments={allDepartments}
@@ -1784,6 +1789,7 @@ export function AgentCompanyPanel() {
         <FilesView
           surface
           companyName={companyName}
+          codexProjectId={activeCodexProjectId}
           files={files}
           sessions={codeChatSessions}
           departments={allDepartments}
@@ -4351,14 +4357,31 @@ function downloadArtifact(artifact: CompanyArtifact) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
+function missionReviewLabel(status: CodexMissionReviewStatus): string {
+  if (status === "approved") return "Aprobado por CEO"
+  if (status === "changes_requested") return "Cambios solicitados"
+  if (status === "rejected") return "Rechazado por CEO"
+  return "Pendiente de CEO"
+}
+
+function reportDeliveryLabel(status: string): string {
+  if (status === "queued") return "En cola de correo"
+  if (status === "blocked_connection") return "Falta conexión de correo"
+  if (status === "blocked_policy") return "Correo desactivado"
+  if (status === "pending_permission") return "Falta permiso"
+  return "Borrador"
+}
+
 function FilesView({
   companyName,
+  codexProjectId,
   files,
   sessions,
   departments,
   surface = false,
 }: {
   companyName: string
+  codexProjectId: string | null
   files: CodeFiles
   sessions: CodeChatSession[]
   departments: readonly AgentDepartmentDefinition[]
@@ -4367,6 +4390,88 @@ function FilesView({
   const [query, setQuery] = React.useState("")
   const [filter, setFilter] = React.useState<"all" | "reports" | "files">("all")
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  const [missionLedger, setMissionLedger] = React.useState<CodexMissionEvidenceLedger | null>(null)
+  const [missionBusy, setMissionBusy] = React.useState<string | null>(null)
+  const [missionError, setMissionError] = React.useState<string | null>(null)
+  const [expandedRecordId, setExpandedRecordId] = React.useState<string | null>(null)
+
+  const refreshMissionLedger = React.useCallback(async () => {
+    if (!codexProjectId) {
+      setMissionLedger(null)
+      setMissionError(null)
+      return
+    }
+    try {
+      const ledger = await codexApi.getMissionEvidence(codexProjectId)
+      setMissionLedger(ledger)
+      setMissionError(null)
+    } catch (error) {
+      setMissionError(error instanceof Error ? error.message : "No se pudo cargar la evidencia.")
+    }
+  }, [codexProjectId])
+
+  React.useEffect(() => {
+    void refreshMissionLedger()
+  }, [refreshMissionLedger])
+
+  const reviewMission = React.useCallback(async (
+    record: CodexMissionEvidenceRecord,
+    status: CodexMissionReviewStatus,
+  ) => {
+    if (!codexProjectId || missionBusy) return
+    setMissionBusy(`review:${record.id}`)
+    try {
+      const updated = await codexApi.reviewMissionEvidence(codexProjectId, record.id, status)
+      setMissionLedger((current) => current ? {
+        ...current,
+        summary: {
+          ...current.summary,
+          pendingReview: current.records.filter((item) => (
+            item.id === updated.id ? updated : item
+          )).filter((item) => item.ceoReview.status === "pending").length,
+          approved: current.records.filter((item) => (
+            item.id === updated.id ? updated : item
+          )).filter((item) => item.ceoReview.status === "approved").length,
+        },
+        records: current.records.map((item) => item.id === updated.id ? updated : item),
+      } : current)
+      toast.success(
+        status === "approved"
+          ? "Entregable aprobado por CEO Office."
+          : status === "rejected"
+            ? "Entregable rechazado por CEO Office."
+            : "Cambios solicitados a la misión.",
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar la revisión.")
+    } finally {
+      setMissionBusy(null)
+    }
+  }, [codexProjectId, missionBusy])
+
+  const createReport = React.useCallback(async (queueEmail: boolean) => {
+    if (!codexProjectId || missionBusy) return
+    setMissionBusy(queueEmail ? "report:email" : "report:draft")
+    try {
+      const report = await codexApi.createActivityReport(codexProjectId, {
+        days: 7,
+        requestEmail: queueEmail,
+        confirmEmailQueue: queueEmail,
+      })
+      await refreshMissionLedger()
+      if (report.delivery.status === "queued") {
+        toast.success("Reporte preparado y puesto en cola. No se envió ningún correo.")
+      } else if (queueEmail) {
+        toast.info(report.delivery.reason || "El reporte quedó como borrador.")
+      } else {
+        toast.success("Resumen de actividad creado como borrador.")
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo generar el reporte.")
+    } finally {
+      setMissionBusy(null)
+    }
+  }, [codexProjectId, missionBusy, refreshMissionLedger])
 
   const artifacts = React.useMemo<CompanyArtifact[]>(() => {
     const workspaceFiles = Object.values(files).map((file: CodeFile) => {
@@ -4397,7 +4502,7 @@ function FilesView({
       return [{
         id: `report:${session.id}`,
         name: `${safeTitle}.md`,
-        path: `Reportes/${department?.name || "CEO Office"}/${safeTitle}.md`,
+        path: `Borradores locales/${department?.name || "CEO Office"}/${safeTitle}.md`,
         content: result.content,
         updatedAt: session.updatedAt,
         departmentId: department?.id || "ceo-office",
@@ -4448,12 +4553,12 @@ function FilesView({
           <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
           <h1 className="mt-2 text-[28px] font-semibold leading-tight">Archivos y reportes</h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Entregables reales del workspace y reportes persistentes de cada departamento.
+            Archivos visibles del workspace, borradores locales y evidencia persistente registrada por misión.
           </p>
         </div>
         <div className="flex gap-5 text-right text-xs text-zinc-500">
           <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{artifacts.length}</strong>archivos</span>
-          <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{reportCount}</strong>reportes</span>
+          <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{reportCount}</strong>borradores locales</span>
         </div>
       </div>
 
@@ -4489,6 +4594,215 @@ function FilesView({
           ))}
         </div>
       </div>
+
+      <section className="mt-7" data-testid="company-mission-evidence-ledger">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold">Evidencia de misiones</h2>
+            <p className="mt-1 text-xs leading-5 text-zinc-500">
+              Entregables verificables, autoría, fecha y revisión de CEO Office.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 rounded-md"
+              disabled={!codexProjectId || Boolean(missionBusy)}
+              onClick={() => void createReport(false)}
+            >
+              {missionBusy === "report:draft" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+              Generar reporte
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 rounded-md"
+              disabled={!codexProjectId || Boolean(missionBusy)}
+              onClick={() => void createReport(true)}
+              title="Solo prepara la cola; no envía correos desde esta vista."
+            >
+              {missionBusy === "report:email" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              Preparar correo
+            </Button>
+          </div>
+        </div>
+
+        {missionLedger ? (
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-y border-zinc-200 py-3 text-xs text-zinc-500 dark:border-white/10">
+            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.missions}</strong> misiones</span>
+            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.pendingReview}</strong> pendientes de CEO</span>
+            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.approved}</strong> aprobadas</span>
+            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.reports}</strong> resúmenes</span>
+          </div>
+        ) : null}
+
+        {missionError ? (
+          <div className="mt-4 flex items-center gap-2 border-l-2 border-amber-400 pl-3 text-xs text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            {missionError}
+          </div>
+        ) : null}
+
+        {!missionLedger && codexProjectId && !missionError ? (
+          <div className="mt-5 flex items-center gap-2 text-xs text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Cargando evidencia durable…
+          </div>
+        ) : null}
+
+        {missionLedger?.records.length ? (
+          <div className="mt-4 divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-white/10 dark:border-white/10">
+            {missionLedger.records.slice(0, 20).map((record) => {
+              const expanded = expandedRecordId === record.id
+              const reviewing = missionBusy === `review:${record.id}`
+              return (
+                <article key={record.id} data-testid="company-mission-evidence-record">
+                  <div className="flex flex-col gap-3 py-4 lg:flex-row lg:items-center">
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => setExpandedRecordId(expanded ? null : record.id)}
+                      aria-expanded={expanded}
+                    >
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-[13px] font-semibold">{record.missionTitle}</span>
+                        <span className={cn(
+                          "rounded px-2 py-0.5 text-[10px] font-medium",
+                          record.status === "completed"
+                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300"
+                            : "bg-amber-50 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300",
+                        )}>
+                          {record.status === "completed" ? "Completada" : "Bloqueada"}
+                        </span>
+                        <span className={cn(
+                          "rounded px-2 py-0.5 text-[10px] font-medium",
+                          record.ceoReview.status === "approved"
+                            ? "bg-sky-50 text-sky-700 dark:bg-sky-950/35 dark:text-sky-300"
+                            : record.ceoReview.status === "changes_requested" || record.ceoReview.status === "rejected"
+                              ? "bg-rose-50 text-rose-700 dark:bg-rose-950/35 dark:text-rose-300"
+                              : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+                        )}>
+                          {missionReviewLabel(record.ceoReview.status)}
+                        </span>
+                      </span>
+                      <span className="mt-1 block truncate text-[11px] text-zinc-500">
+                        {record.department} · {record.author} · {relativeActivity(Date.parse(record.createdAt))}
+                      </span>
+                      <span className="mt-1 block text-[11px] text-zinc-500">
+                        {record.deliverables.length} entregables · {record.evidence.length} evidencias
+                      </span>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 rounded-md px-2.5 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/30"
+                        disabled={Boolean(missionBusy)}
+                        onClick={() => void reviewMission(record, "rejected")}
+                        title="Rechazar esta versión"
+                      >
+                        <X className="mr-1.5 h-3.5 w-3.5" />
+                        Rechazar
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-md px-3 text-xs"
+                        disabled={Boolean(missionBusy)}
+                        onClick={() => void reviewMission(record, "changes_requested")}
+                      >
+                        {reviewing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                        Pedir cambios
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 rounded-md px-3 text-xs"
+                        disabled={Boolean(missionBusy)}
+                        onClick={() => void reviewMission(record, "approved")}
+                      >
+                        {reviewing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
+                        Aprobar
+                      </Button>
+                    </div>
+                  </div>
+                  {expanded ? (
+                    <div className="grid gap-5 border-t border-zinc-100 pb-5 pt-4 dark:border-white/5 lg:grid-cols-2">
+                      <div>
+                        <h3 className="text-[11px] font-semibold uppercase text-zinc-500">Entregables</h3>
+                        <div className="mt-2 divide-y divide-zinc-100 dark:divide-white/5">
+                          {record.deliverables.map((deliverable) => (
+                            <div key={deliverable.id} className="flex items-start gap-2 py-2 text-xs">
+                              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                              <span className="min-w-0">
+                                <span className="block font-medium">{deliverable.name}</span>
+                                {deliverable.ref ? <span className="mt-0.5 block break-all font-mono text-[10px] text-zinc-500">{deliverable.ref}</span> : null}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="text-[11px] font-semibold uppercase text-zinc-500">Evidencia</h3>
+                        <div className="mt-2 divide-y divide-zinc-100 dark:divide-white/5">
+                          {record.evidence.map((evidence) => (
+                            <div key={evidence.id} className="py-2 text-xs">
+                              <span className="flex items-center gap-2 font-medium">
+                                {evidence.passed === true ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : evidence.passed === false ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> : null}
+                                {evidence.label}
+                              </span>
+                              <p className="mt-1 break-words leading-5 text-zinc-500">{evidence.detail}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="lg:col-span-2">
+                        <p className="text-[11px] font-semibold uppercase text-zinc-500">Objetivo</p>
+                        <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{record.objective}</p>
+                        <p className="mt-4 text-[11px] font-semibold uppercase text-zinc-500">Resultado</p>
+                        <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{record.summary}</p>
+                        <p className="mt-3 break-all font-mono text-[10px] leading-4 text-zinc-500">
+                          v{record.version} · {record.source} · {record.contentHash || "hash pendiente"}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              )
+            })}
+          </div>
+        ) : missionLedger ? (
+          <div className="mt-4 border-y border-dashed border-zinc-300 py-8 text-center text-xs text-zinc-500 dark:border-zinc-700">
+            Las misiones cerradas aparecerán aquí con su evidencia verificable.
+          </div>
+        ) : null}
+
+        {missionLedger?.reports.length ? (
+          <div className="mt-6">
+            <h3 className="text-[11px] font-semibold uppercase text-zinc-500">Resúmenes de actividad</h3>
+            <div className="mt-2 divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-white/10 dark:border-white/10">
+              {missionLedger.reports.slice(0, 8).map((report) => (
+                <div key={report.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-medium">{report.title}</p>
+                    <p className="mt-1 text-[10px] text-zinc-500">
+                      {report.author} · v{report.version} · {report.counts.missions} misiones · {relativeActivity(Date.parse(report.createdAt))}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                    {reportDeliveryLabel(report.delivery.status)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       <div className={cn("mt-6 grid gap-7", selected && "xl:grid-cols-[minmax(0,1fr)_380px]")}>
         <div className="min-w-0 space-y-8">

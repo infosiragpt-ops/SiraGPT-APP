@@ -684,6 +684,76 @@ router.get('/projects/:id/activity', authenticateToken, async (req, res) => {
   }
 });
 
+function sendMissionEvidenceError(res, err) {
+  return res.status(Number(err?.status) || 500).json({
+    error: err?.code || 'codex_mission_evidence_failed',
+    message: String(err?.message || err || 'Mission evidence failed').slice(0, 2_000),
+  });
+}
+
+// ── Entregables y evidencia de misión ──────────────────────────────────────
+// Durable, tenant-scoped records live in additive mission, artifact, report
+// and CEO approval tables. Legacy brief entries are imported on read. Email
+// delivery is intentionally absent: reports can only become drafts or queued
+// work after connection + permission.
+router.get('/projects/:id/mission-evidence', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const ledger = await require('../services/codex/mission-evidence-ledger')
+      .syncMissionEvidence({ prisma: codexDb, project });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ledger });
+  } catch (err) {
+    return sendMissionEvidenceError(res, err);
+  }
+});
+
+router.patch('/projects/:id/mission-evidence/:recordId/review', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const record = await require('../services/codex/mission-evidence-ledger')
+      .reviewMissionRecord({
+        prisma: codexDb,
+        project,
+        recordId: String(req.params.recordId || '').slice(0, 220),
+        status: req.body?.status,
+        note: typeof req.body?.note === 'string' ? req.body.note.slice(0, 1_000) : null,
+        reviewer: String(req.user?.name || req.user?.email || 'CEO Office').slice(0, 120),
+      });
+    return res.json({ record });
+  } catch (err) {
+    return sendMissionEvidenceError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/activity-reports',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const report = await require('../services/codex/mission-evidence-ledger')
+        .createActivityReport({
+          prisma: codexDb,
+          project,
+          companyContext,
+          days: req.body?.days,
+          requestEmail: req.body?.requestEmail === true,
+          confirmEmailQueue: req.body?.confirmEmailQueue === true,
+        });
+      return res.status(201).json({ report });
+    } catch (err) {
+      return sendMissionEvidenceError(res, err);
+    }
+  },
+);
+
 function sendSwarmError(res, error) {
   const status = Number(error?.status) || (
     error?.code === 'P2002' ? 409 : 500
