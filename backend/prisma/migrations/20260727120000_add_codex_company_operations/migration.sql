@@ -92,21 +92,21 @@ ADD CONSTRAINT "codex_company_leads_projectId_fkey"
 FOREIGN KEY ("projectId") REFERENCES "codex_projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "codex_company_leads"
 ADD CONSTRAINT "codex_company_leads_userId_fkey"
-FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 ALTER TABLE "codex_company_inbox_items"
 ADD CONSTRAINT "codex_company_inbox_items_projectId_fkey"
 FOREIGN KEY ("projectId") REFERENCES "codex_projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "codex_company_inbox_items"
 ADD CONSTRAINT "codex_company_inbox_items_userId_fkey"
-FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 ALTER TABLE "codex_external_actions"
 ADD CONSTRAINT "codex_external_actions_projectId_fkey"
 FOREIGN KEY ("projectId") REFERENCES "codex_projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "codex_external_actions"
 ADD CONSTRAINT "codex_external_actions_userId_fkey"
-FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 CREATE TABLE "codex_proactive_leases" (
     "projectId" TEXT NOT NULL,
