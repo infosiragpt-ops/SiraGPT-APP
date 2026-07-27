@@ -114,6 +114,10 @@ services:
       CODE_RUNNER_RLIMIT_AS_BYTES: "${CODE_RUNNER_RLIMIT_AS_BYTES:-68719476736}"
       CODE_RUNNER_RLIMIT_FSIZE_BYTES: "${CODE_RUNNER_RLIMIT_FSIZE_BYTES:-536870912}"
       CODE_RUNNER_RLIMIT_CPU_SECONDS: "${CODE_RUNNER_RLIMIT_CPU_SECONDS:-1800}"
+      # A preview is not admitted until its declared production build passes.
+      # Projects without a build script keep their custom dev-server contract.
+      CODE_RUNNER_BUILD_PREFLIGHT: "${CODE_RUNNER_BUILD_PREFLIGHT:-1}"
+      CODE_RUNNER_BUILD_TIMEOUT_MS: "${CODE_RUNNER_BUILD_TIMEOUT_MS:-180000}"
       # Multi-project dev-server pool (audit B1): one dev server per project.
       # Traffic reaches these ports through the backend's same-origin preview
       # proxy over the internal docker network — nothing is published to the
