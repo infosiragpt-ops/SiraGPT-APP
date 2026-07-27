@@ -3328,6 +3328,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               projectId,
               planRun.id,
               tierForModelChoice(activeProvider, activeModelName),
+              { autoExecute: true },
             )
             completedBuildRunId = buildRun.id
             bindAssistantToRun(buildRun.id)
