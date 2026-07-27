@@ -478,6 +478,14 @@ test('POST /projects/:id/preview/start waits for runner readiness', async () => 
   assert.equal(runnerStatusCalls, 2);
 });
 
+test('GET /projects/:id/preview/status is never cached', async () => {
+  runnerStatusQueue = [{ running: false, ready: false, project: 'p1' }];
+  const res = await request(buildApp()).get('/api/codex/projects/p1/preview/status');
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.equal(res.body.ready, false);
+});
+
 test('tokenized preview proxy strips credentials and forces frame headers', async () => {
   const upstreamHits = [];
   const server = http.createServer((req, res) => {

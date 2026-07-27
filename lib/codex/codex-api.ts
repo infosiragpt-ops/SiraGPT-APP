@@ -438,7 +438,7 @@ export const codexApi = {
       `/projects/${id}/preview/start`,
       { method: "POST", timeoutMs: 110_000, signal },
     ),
-  previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
+  previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`, { cache: "no-store" }),
   stopPreview: (id: string) => req<{ ok: boolean }>(`/projects/${id}/preview/stop`, { method: "POST" }),
   exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
   listFiles: (id: string) => req<{ files: string[] }>(`/projects/${id}/files`).then((r) => r.files),
