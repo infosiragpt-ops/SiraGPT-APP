@@ -42,7 +42,12 @@ function normaliseList(raw) {
 }
 
 function parseHooks(text) {
-  if (!String(text || '').trim()) return { version: 1, preToolUse: [], postToolUse: [] };
+  if (!String(text || '').trim()) return {
+    version: 1,
+    preToolUse: [],
+    postToolUse: [],
+    stop: [],
+  };
   const parsed = JSON.parse(String(text));
   const root = asObject(parsed);
   if (root.version != null && Number(root.version) !== 1) throw new Error('unsupported hooks version');
@@ -50,6 +55,7 @@ function parseHooks(text) {
     version: 1,
     preToolUse: normaliseList(root.preToolUse),
     postToolUse: normaliseList(root.postToolUse),
+    stop: normaliseList(root.stop),
   };
 }
 
@@ -58,7 +64,7 @@ async function loadProjectHooks({ runner, projectId }) {
     const out = await runner.readFile(projectId, '.sira/hooks.json');
     return { hooks: parseHooks(out?.content), error: null };
   } catch (error) {
-    if (/not found|enoent|missing/i.test(String(error?.message || ''))) {
+    if (/not[ _-]?found|enoent|missing|no existe/i.test(String(error?.message || ''))) {
       return { hooks: parseHooks(''), error: null };
     }
     return { hooks: parseHooks(''), error: String(error?.message || error) };
@@ -109,6 +115,23 @@ function applyPostHooks(hooks, toolName, result) {
   return next;
 }
 
+function applyStopHooks(hooks, outcome = {}) {
+  let next = { ...asObject(outcome) };
+  const status = String(next.status || 'done');
+  for (const hook of hooks?.stop || []) {
+    if (!hookMatches(hook, status)) continue;
+    if (hook.action === 'deny') {
+      return {
+        allowed: false,
+        outcome: next,
+        message: hook.message || `stop denied for status ${status}`,
+      };
+    }
+    if (hook.action === 'transform') next = { ...next, ...hook.args };
+  }
+  return { allowed: true, outcome: next, message: '' };
+}
+
 function permissionMatchers(project) {
   const permissions = asObject(project?.brief).permissions;
   if (Array.isArray(permissions)) return permissions.map(cleanMatcher).filter(Boolean);
@@ -133,13 +156,23 @@ function mcpAllowMatchers(project) {
   return Array.isArray(values) ? values.map(cleanMatcher).filter(Boolean) : [];
 }
 
-function requiresApproval(project, toolName, args = {}) {
+function requiresApproval(project, toolName, args = {}, settings = null) {
   const mcpName = mcpToolName(toolName, args);
   if (mcpName) {
-    const explicitlyAllowed = mcpAllowMatchers(project).some((matcher) => globMatch(matcher, mcpName));
+    const settingsAllow = Array.isArray(settings?.tools?.mcpAllowWithoutApproval)
+      ? settings.tools.mcpAllowWithoutApproval
+      : [];
+    const explicitlyAllowed = [...mcpAllowMatchers(project), ...settingsAllow]
+      .some((matcher) => globMatch(matcher, mcpName));
     if (!explicitlyAllowed) return true;
   }
-  return permissionMatchers(project).some((matcher) => globMatch(matcher, toolName));
+  if (permissionMatchers(project).some((matcher) => globMatch(matcher, toolName))) return true;
+  if (settings) {
+    // Lazy require avoids a module cycle while project-settings reuses globMatch.
+    // eslint-disable-next-line global-require
+    if (require('./project-settings').requiresApproval(settings, toolName)) return true;
+  }
+  return false;
 }
 
 function canonicalJson(value, seen = new WeakSet()) {
@@ -183,6 +216,7 @@ module.exports = {
   globMatch,
   applyPreHooks,
   applyPostHooks,
+  applyStopHooks,
   permissionMatchers,
   mcpAllowMatchers,
   requiresApproval,

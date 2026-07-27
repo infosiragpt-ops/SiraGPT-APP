@@ -9,7 +9,7 @@
  * weakening read-after-write ordering.
  */
 
-const FILE_READ_TOOLS = new Set(['read_file']);
+const FILE_READ_TOOLS = new Set(['read_file', 'read_media']);
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file']);
 const GLOBAL_READ_TOOLS = new Set([
   'list_files',
@@ -21,6 +21,7 @@ const GLOBAL_READ_TOOLS = new Set([
   'use_skill',
   'inspect_database',
   'task_logs',
+  'subagent_status',
 ]);
 const EXCLUSIVE_TOOLS = new Set([
   'run_command',
@@ -31,6 +32,7 @@ const EXCLUSIVE_TOOLS = new Set([
   'task_stop',
   'resolve_conflict',
   'update_plan',
+  'subagent_stop',
 ]);
 
 function cleanPath(value) {

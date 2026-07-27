@@ -22,16 +22,18 @@ const DEFAULT_MODEL_STANDARD = 'claude-haiku-4-5-20251001';
 const DEFAULT_MAX_TOKENS = 16384;
 const CACHE_CONTROL_EPHEMERAL = Object.freeze({ type: 'ephemeral' });
 
-function getAnthropicTurnConfig({ env = process.env, tier = null } = {}) {
+function getAnthropicTurnConfig({ env = process.env, tier = null, modelOverride = null } = {}) {
   const apiKey = String(env.ANTHROPIC_API_KEY || '').trim();
   const disabled = String(env.CODEX_ANTHROPIC_DISABLED || '') === '1';
   const tiers = String(env.CODEX_ANTHROPIC_TIERS || 'standard,power')
     .split(',')
     .map((t) => t.trim().toLowerCase())
     .filter(Boolean);
-  const model = tier === 'power'
+  const configuredModel = tier === 'power'
     ? (env.CODEX_ANTHROPIC_MODEL_POWER || env.CODEX_ANTHROPIC_MODEL || DEFAULT_MODEL_POWER)
     : (env.CODEX_ANTHROPIC_MODEL_STANDARD || env.CODEX_ANTHROPIC_MODEL || DEFAULT_MODEL_STANDARD);
+  const requestedModel = String(modelOverride || '').trim();
+  const model = /^claude-[a-z0-9._-]+$/i.test(requestedModel) ? requestedModel : configuredModel;
   return {
     enabled: Boolean(apiKey) && !disabled,
     apiKey,
@@ -49,17 +51,27 @@ function getAnthropicTurnConfig({ env = process.env, tier = null } = {}) {
 function toAnthropicMessages(messages) {
   const systemParts = [];
   const turns = [];
+  const toAnthropicBlock = (block) => {
+    if (!block || typeof block !== 'object') return null;
+    if (block.type === 'text' && typeof block.text === 'string') return { ...block };
+    if (block.type === 'image' || block.type === 'document') return { ...block };
+    if (block.type !== 'image_url') return null;
+    const url = typeof block.image_url === 'string' ? block.image_url : block.image_url?.url;
+    const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/.exec(String(url || ''));
+    if (!match) return null;
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: match[1],
+        data: match[2].replace(/\s/g, ''),
+      },
+    };
+  };
   const asBlocks = (content) => {
     if (typeof content === 'string') return [{ type: 'text', text: content }];
     if (!Array.isArray(content)) return [];
-    return content.filter((block) => (
-      block
-      && typeof block === 'object'
-      && (
-        (block.type === 'text' && typeof block.text === 'string')
-        || block.type === 'image'
-      )
-    )).map((block) => ({ ...block }));
+    return content.map(toAnthropicBlock).filter(Boolean);
   };
   for (const m of Array.isArray(messages) ? messages : []) {
     const content = m?.content;
@@ -225,10 +237,14 @@ async function anthropicTurn({
   createClient = defaultCreateClient,
   fetchImpl = null,
   maxTokens = null,
+  onTextDelta = null,
+  onReasoningDelta = null,
+  model = null,
+  effort = null,
 } = {}) {
   const envMax = Number(env.CODEX_ANTHROPIC_MAX_TOKENS);
   const effectiveMaxTokens = maxTokens || (Number.isFinite(envMax) && envMax > 0 ? Math.floor(envMax) : DEFAULT_MAX_TOKENS);
-  const cfg = getAnthropicTurnConfig({ env, tier });
+  const cfg = getAnthropicTurnConfig({ env, tier, modelOverride: model });
   if (!cfg.enabled) throw new Error('codex anthropic-turn: ANTHROPIC_API_KEY no configurada');
   const client = createClient({ env, fetchImpl });
   if (!client?.messages?.create) throw new Error('codex anthropic-turn: cliente inválido');
@@ -240,6 +256,9 @@ async function anthropicTurn({
     max_tokens: effectiveMaxTokens,
     messages: useCache ? cacheStableTranscriptPrefix(turns) : turns,
   };
+  if (['low', 'medium', 'high'].includes(String(effort || '').toLowerCase())) {
+    req.output_config = { effort: String(effort).toLowerCase() };
+  }
   // Prompt caching: mark system, tools and the completed transcript prefix.
   // With up to 24 steps per run that stable context would otherwise be
   // re-processed as full input on every step.
@@ -259,7 +278,22 @@ async function anthropicTurn({
     req.tools = anthropicTools;
   }
 
-  const resp = await client.messages.create(req, signal ? { signal } : undefined);
+  let resp;
+  const shouldStream = typeof onTextDelta === 'function' || typeof onReasoningDelta === 'function';
+  if (shouldStream && typeof client.messages.stream === 'function') {
+    const stream = client.messages.stream(req, signal ? { signal } : undefined);
+    let pending = Promise.resolve();
+    const enqueue = (callback, value) => {
+      if (typeof callback !== 'function' || !value) return;
+      pending = pending.then(() => Promise.resolve(callback(value))).catch(() => {});
+    };
+    stream.on('text', (delta) => enqueue(onTextDelta, delta));
+    stream.on('thinking', (delta) => enqueue(onReasoningDelta, delta));
+    resp = await stream.finalMessage();
+    await pending;
+  } else {
+    resp = await client.messages.create(req, signal ? { signal } : undefined);
+  }
   return parseResponse(resp, cfg.model);
 }
 

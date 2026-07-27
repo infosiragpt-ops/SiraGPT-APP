@@ -197,7 +197,15 @@ async function createRun({
 }
 
 /** Cancel a run (cooperative). Emits the single terminal run_status cancelled. */
-async function cancelRun({ userId, runId, db = defaultPrisma, queue = runQueue, eventStore = eventStoreDefault }) {
+async function cancelRun({
+  userId,
+  runId,
+  db = defaultPrisma,
+  queue = runQueue,
+  eventStore = eventStoreDefault,
+  triggers = null,
+  env = process.env,
+}) {
   const prisma = requireDb(db);
   const run = await prisma.codexRun.findFirst({ where: { id: runId, userId } });
   if (!run) throw new RunServiceError('run_not_found', 'run not found', 404);
@@ -216,6 +224,27 @@ async function cancelRun({ userId, runId, db = defaultPrisma, queue = runQueue, 
   });
   if (flip && flip.count > 0) {
     await eventStore.appendEvent(runId, 'run_status', { status: 'cancelled' }, { prisma }).catch(() => {});
+    await require('./run-completion').publishRunCompletion({
+      run,
+      status: 'cancelled',
+      triggers,
+      env,
+    });
+    await require('./progress-ledger').appendLedgerEntryIfMissing({
+      prisma,
+      project: { id: run.projectId },
+      entry: {
+        department: 'interactive',
+        runId: run.id,
+        outcome: 'cancelled',
+        task: String(run.prompt || '').slice(0, 600),
+        diffstat: {},
+        costUsd: 0,
+        acceptance: [],
+        learnings: ['Corrida cancelada por el usuario antes de completar el objetivo.'],
+        createdAt: new Date().toISOString(),
+      },
+    }).catch(() => {});
   }
 
   const fresh = await prisma.codexRun.findUnique({ where: { id: runId } });

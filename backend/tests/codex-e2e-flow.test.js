@@ -32,7 +32,24 @@ function scriptedLlm() {
     }
     buildStep += 1;
     if (buildStep === 1) {
-      return { text: 'Creo la landing.', toolCalls: [{ name: 'write_file', args: { path: 'index.html', content: '<h1>Hola</h1>\n' } }], usage: { tokensIn: 100, tokensOut: 40, provider: 'Cerebras', model: 'm' } };
+      return {
+        text: 'Primero leo la pantalla antes de modificarla.',
+        toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }],
+        usage: { tokensIn: 100, tokensOut: 40, provider: 'Cerebras', model: 'm' },
+      };
+    }
+    if (buildStep === 2) {
+      return {
+        text: 'Creo la landing.',
+        toolCalls: [{
+          name: 'write_file',
+          args: {
+            path: 'src/App.tsx',
+            content: 'export default function App() {\\n  return <h1>Hola</h1>;\\n}\\n',
+          },
+        }],
+        usage: { tokensIn: 100, tokensOut: 40, provider: 'Cerebras', model: 'm' },
+      };
     }
     return { text: 'Listo, la landing quedó construida.', toolCalls: [] };
   };
@@ -94,7 +111,7 @@ test('full flow: create → plan → approve → build → checkpoint → summar
   assert.equal(buildOutcome.status, 'done');
 
   // The file was actually written in the workspace.
-  const written = await git.runner.readFile(project.id, 'index.html');
+  const written = await git.runner.readFile(project.id, 'src/App.tsx');
   assert.match(written.content, /Hola/);
 
   // 4) Build events: narrative + grouped action + checkpoint_created + run_summary + terminal done.
@@ -114,7 +131,7 @@ test('full flow: create → plan → approve → build → checkpoint → summar
   const metric = prisma.codexRunMetric.rows.find((m) => m.runId === buildRun.id);
   assert.ok(metric);
   assert.ok(metric.actionsCount >= 1);
-  assert.ok(metric.additions >= 1); // index.html added
+  assert.ok(metric.additions >= 1); // src/App.tsx updated
   assert.equal(metric.costSource, 'provider_exact'); // Cerebras → exact 0
   assert.equal(metric.costAppliedUsd, 0);
 
@@ -123,12 +140,12 @@ test('full flow: create → plan → approve → build → checkpoint → summar
   assert.ok(checkpoint && /^[0-9a-f]{7,40}$/.test(checkpoint.commitSha));
 
   // Make a dirty change, then roll back to the checkpoint → it's discarded.
-  await git.runner.writeFiles(project.id, [{ path: 'index.html', content: 'DIRTY\n' }]);
+  await git.runner.writeFiles(project.id, [{ path: 'src/App.tsx', content: 'DIRTY\n' }]);
   await git.runner.exec(project.id, ['git', 'add', '-A']);
   await git.runner.exec(project.id, ['git', '-c', 'user.name=x', '-c', 'user.email=x@y.z', 'commit', '-m', 'dirty']);
   const rb = await checkpointService.rollbackCheckpoint({ checkpointId: checkpoint.id, userId: USER, deps: { runner: git.runner, prisma } });
   assert.equal(rb.ok, true);
-  const restored = await git.runner.readFile(project.id, 'index.html');
+  const restored = await git.runner.readFile(project.id, 'src/App.tsx');
   assert.match(restored.content, /Hola/);
   assert.doesNotMatch(restored.content, /DIRTY/);
 });

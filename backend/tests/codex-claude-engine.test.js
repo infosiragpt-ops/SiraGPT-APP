@@ -573,7 +573,7 @@ test('build loop: tool calls por encima del budget se reportan al modelo', async
   const f = {
     llmTurn,
     runner: {
-      readFile: async () => { throw new Error('no'); },
+      readFile: async () => { throw new Error('file_not_found'); },
       writeFiles: async () => ({ ok: true }),
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     },
@@ -608,7 +608,7 @@ test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucl
   const f = {
     llmTurn,
     runner: {
-      readFile: async () => { throw new Error('no'); },
+      readFile: async () => { throw new Error('file_not_found'); },
       writeFiles: async () => ({ ok: true }),
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     },
@@ -644,7 +644,7 @@ test('build loop: reescrituras INTERCALADAS del mismo archivo también disparan 
   };
   const f = {
     llmTurn,
-    runner: { readFile: async () => { throw new Error('no'); }, writeFiles: async () => ({ ok: true }), exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    runner: { readFile: async () => { throw new Error('file_not_found'); }, writeFiles: async () => ({ ok: true }), exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
     fileTree: '', plan: null,
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },

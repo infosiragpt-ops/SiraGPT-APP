@@ -20,12 +20,20 @@ async function execOrThrow(runner, project, cmd, label) {
   return out;
 }
 
-async function gitCommitAll(runner, project, message) {
+function boundedCommitText(value, max = 4000) {
+  return String(value || '').replace(/\u0000/g, '').trim().slice(0, max);
+}
+
+async function gitCommitAll(runner, project, message, { body = '' } = {}) {
+  const title = boundedCommitText(message, 120) || 'chore(codex): checkpoint';
+  const commitArgs = ['git', ...GIT_IDENT, 'commit', '--allow-empty', '-m', title];
+  const commitBody = boundedCommitText(body);
+  if (commitBody) commitArgs.push('-m', commitBody);
   await execOrThrow(runner, project, ['git', 'add', '-A'], 'git add');
   await execOrThrow(
     runner,
     project,
-    ['git', ...GIT_IDENT, 'commit', '--allow-empty', '-m', message],
+    commitArgs,
     'git commit',
   );
   const head = await execOrThrow(runner, project, ['git', 'rev-parse', 'HEAD'], 'git rev-parse');
@@ -42,4 +50,10 @@ async function provisionWorkspace({ project, projectName, runner, fullStack = fa
   return { workspacePath: `projects/${project}`, commitSha };
 }
 
-module.exports = { provisionWorkspace, gitCommitAll, execOrThrow, GIT_IDENT };
+module.exports = {
+  provisionWorkspace,
+  gitCommitAll,
+  execOrThrow,
+  GIT_IDENT,
+  boundedCommitText,
+};

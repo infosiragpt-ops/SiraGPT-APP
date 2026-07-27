@@ -24,10 +24,25 @@ const SHARED_RULES = [
 ].join('\n');
 
 const SUBAGENTS = {
+  explorer: {
+    description: 'Explora el repositorio en modo solo lectura con un modelo barato: globs, grep, archivos, PDFs/imágenes, mapa del repo y documentación web.',
+    tools: ['list_files', 'glob', 'grep_search', 'read_file', 'read_media', 'repo_map', 'web_search', 'web_fetch', 'inspect_database'],
+    maxSteps: 6,
+    readOnly: true,
+    effort: 'low',
+    systemPrompt: [
+      'Eres el EXPLORER: un investigador de repositorios rápido, preciso y de SOLO LECTURA.',
+      'Localiza archivos y símbolos con glob/grep/repo_map, lee únicamente lo necesario y devuelve hallazgos con rutas concretas.',
+      'No escribes, no ejecutas comandos y no propones cambios basados en suposiciones.',
+      SHARED_RULES,
+    ].join('\n'),
+  },
   planner: {
     description: 'Convierte una petición ambigua en un plan de construcción concreto: archivos a crear, componentes, orden de trabajo y criterios de aceptación.',
     tools: ['list_files', 'read_file', 'web_search'],
     maxSteps: 6,
+    readOnly: true,
+    effort: 'medium',
     systemPrompt: [
       'Eres el PLANNER: un arquitecto de software senior.',
       'Tu única salida es un plan de construcción concreto y ordenado: módulos, archivos exactos a crear/editar, componentes con sus props, y criterios de aceptación verificables.',
@@ -39,6 +54,7 @@ const SUBAGENTS = {
     description: 'Construye interfaces React + TypeScript de calidad producción: componentes, estados, estilos y navegación.',
     tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'type_check'],
     maxSteps: 10,
+    effort: 'medium',
     systemPrompt: [
       'Eres el FRONTEND BUILDER: un ingeniero de UI senior especializado en React 18 + TypeScript + Vite.',
       'Escribes componentes .tsx completos, con diseño cuidado (jerarquía visual, espaciado, estados hover/focus, responsive) usando estilos inline o CSS en src/.',
@@ -50,6 +66,7 @@ const SUBAGENTS = {
     description: 'Diseña y escribe lógica de servidor, APIs y modelos de datos del proyecto.',
     tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'run_command', 'inspect_database', 'type_check'],
     maxSteps: 10,
+    effort: 'medium',
     systemPrompt: [
       'Eres el BACKEND ENGINEER: un ingeniero de servidor senior.',
       'Diseñas APIs limpias, validación de entrada, manejo de errores y persistencia. Si el proyecto es Vite puro, implementa la capa de datos como módulos TypeScript en src/lib/ (stores en memoria/localStorage) listos para migrar a una API real.',
@@ -61,6 +78,7 @@ const SUBAGENTS = {
     description: 'Modela la base de datos: entidades, relaciones, tipos y esquema Prisma o modelos TypeScript.',
     tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'inspect_database'],
     maxSteps: 8,
+    effort: 'medium',
     systemPrompt: [
       'Eres el DB ARCHITECT: un arquitecto de datos senior.',
       'Modelas entidades con sus campos, tipos, relaciones e índices. Usa inspect_database para ver el esquema actual antes de proponer cambios. Si no hay Prisma, define los modelos como tipos TypeScript en src/lib/types.ts con datos semilla realistas.',
@@ -69,8 +87,10 @@ const SUBAGENTS = {
   },
   qa_reviewer: {
     description: 'Revisa el proyecto: errores de compilación, dev server, bugs evidentes y calidad; reporta hallazgos concretos.',
-    tools: ['list_files', 'read_file', 'run_command', 'type_check', 'dev_server_check'],
+    tools: ['list_files', 'read_file', 'type_check', 'dev_server_check'],
     maxSteps: 8,
+    readOnly: true,
+    effort: 'high',
     systemPrompt: [
       'Eres el QA REVIEWER: un revisor de código adversarial.',
       'Verifica que el proyecto compila (type_check), que el dev server arranca sin errores (dev_server_check) y lee los archivos clave buscando bugs reales: imports rotos, props mal tipadas, estados que no se actualizan, textos placeholder olvidados.',
@@ -82,6 +102,8 @@ const SUBAGENTS = {
     description: 'Convierte una necesidad de negocio (CRM, ERP, inventario, facturación, RRHH, punto de venta…) en una especificación de software empresarial: módulos, entidades, roles y flujos.',
     tools: ['list_files', 'read_file', 'web_search'],
     maxSteps: 6,
+    readOnly: true,
+    effort: 'medium',
     systemPrompt: [
       'Eres el ENTERPRISE ANALYST: un consultor senior de software empresarial.',
       'Dado un pedido de negocio, produce una especificación ejecutable: (1) módulos del sistema con su propósito, (2) entidades con campos y relaciones, (3) roles de usuario y permisos, (4) flujos de trabajo clave paso a paso, (5) métricas/KPIs del dashboard.',
@@ -93,6 +115,7 @@ const SUBAGENTS = {
     description: 'Diagnostica y corrige errores REALES: lee la salida de tsc y los logs del dev server, encuentra la causa raíz con grep y aplica el fix mínimo.',
     tools: ['list_files', 'read_file', 'grep_search', 'run_command', 'type_check', 'dev_server_check', 'edit_file', 'write_file'],
     maxSteps: 10,
+    effort: 'high',
     systemPrompt: [
       'Eres el DEBUGGER: un ingeniero senior de diagnóstico.',
       'Método: (1) reproduce el error con type_check/dev_server_check, (2) localiza la causa raíz con grep_search y read_file — nunca adivines, (3) aplica el fix MÍNIMO que corrige la causa (no refactorices), (4) re-verifica con type_check.',
@@ -137,11 +160,22 @@ function validateCustomAgent(raw) {
     : ['list_files', 'read_file'];
   if (tools.length === 0) return { def: null, reason: `"${name}" no tiene herramientas válidas` };
   const maxSteps = Math.min(Math.max(Number.parseInt(raw.maxSteps, 10) || 8, 1), CUSTOM_MAX_STEPS_CAP);
+  const effort = ['low', 'medium', 'high'].includes(String(raw.effort || '').toLowerCase())
+    ? String(raw.effort).toLowerCase()
+    : 'medium';
+  const model = String(raw.model || '').trim().slice(0, 160) || null;
+  const readOnly = raw.readOnly === true;
+  const writeTools = new Set(['write_file', 'edit_file', 'run_command', 'install_dependencies', 'resolve_conflict']);
+  const effectiveTools = readOnly ? tools.filter((tool) => !writeTools.has(tool)) : tools;
+  if (!effectiveTools.length) return { def: null, reason: `"${name}" no tiene herramientas válidas para readOnly` };
   return {
     def: {
       description: String(raw.description || '').slice(0, 300) || `Agente custom del proyecto: ${name}`,
-      tools,
+      tools: effectiveTools,
       maxSteps,
+      effort,
+      model,
+      readOnly,
       custom: true,
       systemPrompt: [
         `Eres ${name.toUpperCase()}: un especialista definido por este proyecto.`,
@@ -187,6 +221,9 @@ function listSubagents() {
     description: def.description,
     tools: def.tools.slice(),
     maxSteps: def.maxSteps,
+    model: def.model || null,
+    effort: def.effort || 'medium',
+    readOnly: def.readOnly === true,
   }));
 }
 
@@ -218,7 +255,7 @@ async function freshFileTree(runner, project) {
  * the run timeline as it happens; `deps.customAgents` extends the registry
  * with workspace-defined specialists.
  */
-async function runSubagent({ name, task, context = '', deps = {} }) {
+async function runSubagent({ name, task, context = '', model = null, effort = null, deps = {} }) {
   const fail = (result) => ({ ok: false, agent: name, result, steps: 0, toolCallsCount: 0, actions: [], durationMs: 0, tokensIn: 0, tokensOut: 0 });
   const custom = deps.customAgents && typeof deps.customAgents === 'object' ? deps.customAgents : {};
   const def = getSubagent(name) || custom[name] || null;
@@ -236,6 +273,10 @@ async function runSubagent({ name, task, context = '', deps = {} }) {
   // silently dropping to the free Cerebras path — the cause of subagents
   // running on the weak model and emitting 0 valid tool calls.
   const tier = deps.tier || null;
+  const selectedModel = String(model || deps.model || def.model || '').trim().slice(0, 160) || null;
+  const selectedEffort = ['low', 'medium', 'high'].includes(String(effort || deps.effort || def.effort || '').toLowerCase())
+    ? String(effort || deps.effort || def.effort).toLowerCase()
+    : 'medium';
   const { runner, project, webSearch, signal } = deps;
 
   // Lazy require: build-tools' run_subagent requires this module at call time,
@@ -265,13 +306,23 @@ async function runSubagent({ name, task, context = '', deps = {} }) {
   const done = (ok, result, steps) => ({
     ok, agent: name, result, steps, toolCallsCount, actions,
     durationMs: Math.max(0, now() - t0), tokensIn, tokensOut,
+    model: selectedModel,
+    effort: selectedEffort,
   });
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) break;
     let turn;
     try {
-      turn = await llmTurn({ messages, tools: registry, signal, env, tier });
+      turn = await llmTurn({
+        messages,
+        tools: registry,
+        signal,
+        env,
+        tier,
+        model: selectedModel,
+        effort: selectedEffort,
+      });
     } catch (err) {
       return done(false, `El subagente falló: ${String(err?.message || err)}`, step);
     }
@@ -311,13 +362,32 @@ async function runSubagent({ name, task, context = '', deps = {} }) {
         })).catch(() => null);
       }
 
-      const result = await tool.execute(call.args, { runner, project, webSearch, env, llmTurn });
+      const result = await tool.execute(call.args, {
+        runner,
+        project,
+        webSearch,
+        env,
+        llmTurn,
+        signal,
+        tier,
+        projectSettings: deps.projectSettings,
+        modelCapabilities: deps.modelCapabilities,
+        modelProvider: deps.modelProvider,
+      });
       const summary = String(result.summary || '').slice(0, 300);
       actions.push({ tool: call.name, ok: !result.isError, summary });
       if (live && typeof live.end === 'function') {
         await Promise.resolve(live.end({ status: result.isError ? 'error' : 'done', outputSummary: summary })).catch(() => {});
       }
-      messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}` });
+      if (Array.isArray(result.observation)) {
+        const blocks = result.observation.map((block) => ({ ...block }));
+        const textIndex = blocks.findIndex((block) => block?.type === 'text');
+        if (textIndex >= 0) blocks[textIndex] = { ...blocks[textIndex], text: `[TOOL_RESULT ${call.name}] ${blocks[textIndex].text}` };
+        else blocks.unshift({ type: 'text', text: `[TOOL_RESULT ${call.name}] ${result.summary || ''}` });
+        messages.push({ role: 'user', content: blocks });
+      } else {
+        messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}` });
+      }
     }
   }
 

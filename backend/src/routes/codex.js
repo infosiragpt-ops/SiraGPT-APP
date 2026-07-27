@@ -14,6 +14,7 @@
  *   POST /api/codex/projects/:id/preview/stop    → dev server off     (auth)
  *   GET  /api/codex/projects/:id/files           → lista de archivos  (auth)
  *   GET  /api/codex/projects/:id/file?path=      → contenido archivo  (auth)
+ *   GET  /api/codex/projects/:id/budget          → gasto/corte diario  (auth)
  *
  * Montaje: en backend/index.js DESPUÉS del router legacy codex-runs (que ya
  * ocupa POST /api/codex/runs y GET /api/codex/runs/:id). Para no sombrear ese
@@ -346,6 +347,32 @@ router.get('/projects/:id', authenticateToken, async (req, res) => {
     return res.json({ project });
   } catch (err) {
     return res.status(500).json({ error: 'codex_get_failed', message: err.message });
+  }
+});
+
+router.get('/projects/:id/budget', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const runner = createSandboxClient();
+    const settingsState = await require('../services/codex/project-settings')
+      .loadProjectSettings({ runner, projectId: project.id, project });
+    if (settingsState.error) {
+      return res.status(422).json({
+        error: 'invalid_project_settings',
+        message: settingsState.error,
+      });
+    }
+    const budget = await require('../services/codex/project-budget').checkProjectBudget({
+      prisma: codexDb,
+      projectId: project.id,
+      settings: settingsState.settings,
+      env: process.env,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ budget });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_budget_failed', message: err.message });
   }
 });
 

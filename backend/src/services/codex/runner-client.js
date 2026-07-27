@@ -97,6 +97,10 @@ function createRunnerClient({
     writeFiles: (project, files) => call('POST', '/workspace/write', { project, files }),
     readFile: (project, path) =>
       call('GET', `/workspace/file?project=${encodeURIComponent(project)}&path=${encodeURIComponent(path)}`),
+    readBinaryFile: (project, path) =>
+      call('GET', `/workspace/file-binary?project=${encodeURIComponent(project)}&path=${encodeURIComponent(path)}`, null, {
+        callTimeoutMs: 45_000,
+      }),
     exec: (project, cmd, opts = {}) =>
       // The HTTP abort must outlive the command's own budget — otherwise a
       // 120s `bun install` gets chopped at the client's 30s default.
