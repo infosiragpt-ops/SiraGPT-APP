@@ -18,6 +18,7 @@ export type ProjectHostingProvider = "sira-cloud" | "github"
 
 export interface Project {
   id: string
+  organizationId?: string | null
   name: string
   description: string | null
   instructions: string | null
@@ -106,6 +107,7 @@ export interface ProjectChatSummary {
 
 export interface CreateProjectInput {
   name: string
+  organizationId?: string | null
   description?: string
   instructions?: string
   type?: ProjectType

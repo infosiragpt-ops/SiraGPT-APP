@@ -1157,10 +1157,37 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   }, [codexHealth.enabled, user?.id])
   const codexAvailable = codexHealth.enabled === true && codexCanRun
   // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
-  // In-memory cache only — the durable mapping lives in localStorage (see
-  // session/workspace links), so a reload reattaches to
-  // the SAME project instead of iterating on a fresh empty one.
+  // For Empresas, the durable authority is the backend association table.
+  // Browser storage remains available only for local-folder sessions.
   const codexProjectRef = React.useRef<Record<string, string>>({})
+  const [durableCompanyCodexProjectId, setDurableCompanyCodexProjectId] = React.useState<string | null>(null)
+  const [companyAssociationResolved, setCompanyAssociationResolved] = React.useState(false)
+  React.useEffect(() => {
+    const workspaceId = String(activeFolder?.id || "")
+    if (!workspaceId || workspaceId.startsWith("local:")) {
+      setDurableCompanyCodexProjectId(null)
+      setCompanyAssociationResolved(true)
+      return
+    }
+    let cancelled = false
+    setCompanyAssociationResolved(false)
+    codexApi.getCompanyAssociation(workspaceId.replace(/^project:/, ""))
+      .then((state) => {
+        if (!cancelled) {
+          setDurableCompanyCodexProjectId(state.association?.codexProject.id || null)
+          setCompanyAssociationResolved(true)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDurableCompanyCodexProjectId(null)
+          setCompanyAssociationResolved(true)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeFolder?.id])
   const detachCodexProjectForLocalFallback = React.useCallback(
     (sid: string) => {
       delete codexProjectRef.current[sid]
@@ -1178,12 +1205,22 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setActiveCodexProject(null)
       return
     }
-    const projectId =
-      linkedCodexProject({ sessionId, workspaceId: activeFolder?.id }) ??
-      codexProjectRef.current[sessionId]
+    const companyWorkspace = Boolean(activeFolder?.id && !activeFolder.id.startsWith("local:"))
+    const projectId = companyWorkspace
+      ? durableCompanyCodexProjectId
+      : (
+        linkedCodexProject({ sessionId, workspaceId: activeFolder?.id })
+        ?? codexProjectRef.current[sessionId]
+      )
     if (projectId && codexAvailable) codexProjectRef.current[sessionId] = projectId
-    setActiveCodexProject(codexAvailable ? projectId : null)
-  }, [activeFolder?.id, codexAvailable, sessionId])
+    setActiveCodexProject(codexAvailable && companyAssociationResolved ? projectId : null)
+  }, [
+    activeFolder?.id,
+    codexAvailable,
+    companyAssociationResolved,
+    durableCompanyCodexProjectId,
+    sessionId,
+  ])
 
   const abortRef = React.useRef<AbortController | null>(null)
   const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -3119,15 +3156,27 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         })
 
       try {
-        // 1) Ensure ONE Codex project per chat session. The in-memory ref is a
-        //    fast cache; localStorage is the durable record so a reload does
-        //    NOT mint a fresh empty project that iterate would then edit and
-        //    sync back over the local workspace. A persisted id is verified
-        //    against the backend (it may have been deleted or belong to another
-        //    account after a re-login) before being trusted.
-        let projectId: string | undefined =
-          opts?.resume?.projectId || codexProjectRef.current[sid]
-        if (!projectId) {
+        // 1) Ensure ONE Codex project. Empresas resolve through the durable
+        //    backend association; only local folders may reuse browser links.
+        const companyWorkspaceId = activeFolder?.id && !activeFolder.id.startsWith("local:")
+          ? activeFolder.id.replace(/^project:/, "")
+          : null
+        let projectId: string | undefined
+        let companyOrganizationId: string | null = null
+        if (companyWorkspaceId) {
+          const association = await codexApi.getCompanyAssociation(companyWorkspaceId)
+          companyOrganizationId = association.company.organizationId
+          projectId = association.association?.codexProject.id
+          if (!projectId && association.candidates.length) {
+            throw Object.assign(
+              new Error("Confirma el entorno de esta empresa antes de ejecutar código."),
+              { status: 409, code: "company_association_required" },
+            )
+          }
+        } else {
+          projectId = opts?.resume?.projectId || codexProjectRef.current[sid]
+        }
+        if (!projectId && !companyWorkspaceId) {
           const persisted = linkedCodexProject({
             sessionId: sid,
             workspaceId: activeFolder?.id,
@@ -3144,8 +3193,17 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
         if (!projectId) {
           const title = compactGeneratedTitle(text)
-          const project = await codexApi.createProject(title, text)
+          const project = await codexApi.createProject(title, text, companyOrganizationId)
           projectId = project.id
+          if (companyWorkspaceId) {
+            await codexApi.associateCompany(
+              companyWorkspaceId,
+              project.id,
+              [],
+              "created_for_company",
+            )
+            setDurableCompanyCodexProjectId(project.id)
+          }
         }
         codexProjectRef.current[sid] = projectId
         persistSessionCodexProject(sid, projectId)
@@ -3486,10 +3544,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   React.useEffect(() => {
     if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
-    const projectId = linkedCodexProject({
-      sessionId,
-      workspaceId: activeFolder?.id,
-    })
+    const companyWorkspace = Boolean(activeFolder?.id && !activeFolder.id.startsWith("local:"))
+    const projectId = companyWorkspace
+      ? durableCompanyCodexProjectId
+      : linkedCodexProject({
+        sessionId,
+        workspaceId: activeFolder?.id,
+      })
     if (!projectId) return
 
     let cancelled = false
@@ -3536,6 +3597,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     buildingApp,
     busy,
     codexAvailable,
+    durableCompanyCodexProjectId,
     runCodexEngine,
     sessionId,
     user?.id,

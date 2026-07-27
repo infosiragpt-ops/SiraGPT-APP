@@ -65,7 +65,42 @@ async function req<T>(path: string, init?: CodexRequestInit): Promise<T> {
 
 export interface CodexHealth { ok: boolean; enabled: boolean; previewOrigin?: string | null }
 export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
-export interface CodexProject { id: string; name: string; status: string; workspacePath: string | null; previewUrl: string | null; error: string | null }
+export interface CodexProject { id: string; name: string; status: string; organizationId?: string | null; workspacePath: string | null; previewUrl: string | null; error: string | null }
+export interface CodexCompanyConnectorAssignment {
+  id: string
+  provider: string
+  accountLabel: string | null
+  organizationId: string | null
+  scopes: string[]
+  status: string
+  lastHealthAt: string | null
+  lastError: string | null
+  updatedAt: string | null
+}
+export interface CodexCompanyAssociationProject {
+  id: string
+  name: string
+  organizationId: string | null
+  type?: string
+  status?: string
+  updatedAt: string | null
+}
+export interface CodexCompanyAssociation {
+  id: string
+  source: "manual" | "created_for_company"
+  organizationId: string | null
+  linkedAt: string
+  updatedAt: string
+  codexProject: CodexCompanyAssociationProject
+  connectors: CodexCompanyConnectorAssignment[]
+}
+export interface CodexCompanyAssociationState {
+  company: CodexCompanyAssociationProject
+  association: CodexCompanyAssociation | null
+  candidates: CodexCompanyAssociationProject[]
+  connectors: CodexCompanyConnectorAssignment[]
+  requiresAssociation: boolean
+}
 export interface CodexRun {
   id: string
   projectId: string
@@ -152,6 +187,12 @@ export interface CodexCompanyContext {
         conversationsReady: boolean
       }>
       gmailConnected: boolean
+      connectorAssignment?: {
+        enforced: boolean
+        companyProjectId: string | null
+        providers: string[]
+        accountIds: string[]
+      }
     }
   }
   safeguards: {
@@ -435,8 +476,42 @@ export const codexApi = {
   health: getPublicHealth,
   access: () => req<CodexAccess>("/access", { cache: "no-store" }),
 
+  getCompanyAssociation: (projectId: string) =>
+    req<CodexCompanyAssociationState>(
+      `/company-associations?projectId=${encodeURIComponent(projectId)}`,
+      { cache: "no-store" },
+    ),
+  listCompanyAssociationOrphans: () =>
+    req<{
+      companies: CodexCompanyAssociationProject[]
+      codexProjects: CodexCompanyAssociationProject[]
+      backfillApplied: false
+    }>("/company-associations/orphans", { cache: "no-store" }),
+  associateCompany: (
+    projectId: string,
+    codexProjectId: string,
+    connectorAccountIds: string[] = [],
+    source: "manual" | "created_for_company" = "manual",
+  ) =>
+    req<{ association: CodexCompanyAssociation }>("/company-associations", {
+      method: "POST",
+      body: JSON.stringify({ projectId, codexProjectId, connectorAccountIds, source }),
+    }).then((result) => result.association),
+  assignCompanyConnectors: (projectId: string, connectorAccountIds: string[]) =>
+    req<{ connectors: CodexCompanyConnectorAssignment[] }>(
+      `/company-associations/${encodeURIComponent(projectId)}/connectors`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ connectorAccountIds }),
+      },
+    ).then((result) => result.connectors),
+
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),
-  createProject: (name: string, brief?: unknown) => req<{ project: CodexProject }>("/projects", { method: "POST", body: JSON.stringify({ name, brief }) }).then((r) => r.project),
+  createProject: (name: string, brief?: unknown, organizationId?: string | null) =>
+    req<{ project: CodexProject }>("/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, brief, organizationId: organizationId || null }),
+    }).then((r) => r.project),
   createRepositoryProject: (name: string, repository: { url: string; sourceBranch?: string }, brief?: unknown) =>
     req<{ project: CodexProject }>("/projects", {
       method: "POST",

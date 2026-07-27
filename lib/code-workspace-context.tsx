@@ -644,7 +644,10 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
           setActiveFolder({ id: projectId, name: target.name })
         }
         setWorkspaceSource({ kind: "browser", name: target.name, linked: false })
-        setActiveCodexProject(readWorkspaceCodexProject(projectId))
+        // Company workspaces must be activated only after the backend confirms
+        // their durable Project ↔ CodexProject association. The legacy browser
+        // value remains a wizard hint, never an authority boundary.
+        setActiveCodexProject(null)
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
         }

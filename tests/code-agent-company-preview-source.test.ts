@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs"
 import test from "node:test"
 
 const companySource = readFileSync("components/code/agent-company-panel.tsx", "utf8")
+const codeChatSource = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
+const workspaceSource = readFileSync("lib/code-workspace-context.tsx", "utf8")
 const previewSource = readFileSync("components/code/preview-pane.tsx", "utf8")
 const socialApiSource = readFileSync("lib/company-social-api.ts", "utf8")
+const codexApiSource = readFileSync("lib/codex/codex-api.ts", "utf8")
 
 test("company navigation renders operational surfaces inside the preview slot", () => {
   assert.match(previewSource, /data-testid="agent-company-preview-slot"/)
@@ -39,4 +42,24 @@ test("company dashboard renders the evidence-grounded operating diagnosis", () =
   assert.match(companySource, /companyContext\.portfolio\.missions/)
   assert.match(companySource, /mission\.departmentName/)
   assert.match(companySource, /mission\.nextAction/)
+})
+
+test("company runtime identity is durable and legacy browser links are confirmation hints only", () => {
+  assert.match(codexApiSource, /getCompanyAssociation/)
+  assert.match(codexApiSource, /associateCompany/)
+  assert.match(codexApiSource, /assignCompanyConnectors/)
+  assert.match(companySource, /await codexApi\.getCompanyAssociation\(companyProjectId\)/)
+  assert.match(companySource, /await codexApi\.associateCompany\(/)
+  assert.match(companySource, /data-testid="company-association-wizard"/)
+  assert.match(companySource, /No se aplican asociaciones automáticas/)
+  assert.match(companySource, /connector\.scopes\?\.length \|\| 0/)
+  assert.match(companySource, /durableState\.company\.organizationId/)
+  assert.match(companySource, /legacyHint/)
+  assert.match(companySource, /setActiveCodexProject\(null\)/)
+  assert.match(workspaceSource, /durable Project ↔ CodexProject association/)
+  assert.match(codeChatSource, /durableCompanyCodexProjectId/)
+  assert.match(codeChatSource, /companyOrganizationId = association\.company\.organizationId/)
+  assert.match(codeChatSource, /createProject\(title, text, companyOrganizationId\)/)
+  assert.match(codeChatSource, /company_association_required/)
+  assert.match(codeChatSource, /codexApi\.associateCompany\(/)
 })
