@@ -662,7 +662,10 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
   const unexpectedConsoleErrors = consoleErrors.filter(
-    (message) => !/Encountered two children with the same key.*customer-success/s.test(message),
+    (message) => !(
+      message.includes("Encountered two children with the same key")
+      && message.includes("customer-success")
+    ),
   )
   expect(unexpectedConsoleErrors).toEqual([])
 })
