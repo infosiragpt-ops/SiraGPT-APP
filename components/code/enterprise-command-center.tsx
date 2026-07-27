@@ -2,24 +2,10 @@
 
 import * as React from "react"
 import {
-  Activity,
-  AlertTriangle,
-  Building2,
-  CheckCircle2,
   ChevronRight,
-  Circle,
-  Clock3,
-  Gauge,
-  ListChecks,
   Pause,
   Play,
-  Radio,
-  ShieldCheck,
   Square,
-  Target,
-  Telescope,
-  UsersRound,
-  XCircle,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -130,9 +116,9 @@ const timeFormatter = new Intl.DateTimeFormat("es-PE", {
 })
 
 const commandTabs = [
-  { id: "overview", label: "Operación", icon: Gauge },
-  { id: "departments", label: "Departamentos", icon: Building2 },
-  { id: "activity", label: "Actividad", icon: Activity },
+  { id: "overview", label: "Operación" },
+  { id: "departments", label: "Departamentos" },
+  { id: "activity", label: "Actividad" },
 ] as const
 
 const runStateLabels: Record<EnterpriseRunState, string> = {
@@ -203,9 +189,18 @@ function ReadinessIcon({
   status: EnterpriseReadinessState
   className?: string
 }) {
-  if (status === "ready") return <CheckCircle2 className={className} aria-hidden="true" />
-  if (status === "attention") return <AlertTriangle className={className} aria-hidden="true" />
-  return <XCircle className={className} aria-hidden="true" />
+  return (
+    <span
+      className={cn(
+        "rounded-full border-2",
+        status === "ready" && "border-emerald-500 bg-emerald-500/20",
+        status === "attention" && "border-amber-500 bg-amber-500/20",
+        status === "blocked" && "border-destructive bg-destructive/20",
+        className,
+      )}
+      aria-hidden="true"
+    />
+  )
 }
 
 function EventStatusIcon({
@@ -215,9 +210,18 @@ function EventStatusIcon({
   status: EnterpriseEventStatus
   className?: string
 }) {
-  if (status === "completed") return <CheckCircle2 className={className} aria-hidden="true" />
-  if (status === "blocked") return <XCircle className={className} aria-hidden="true" />
-  return <Radio className={cn(className, "animate-pulse motion-reduce:animate-none")} aria-hidden="true" />
+  return (
+    <span
+      className={cn(
+        "rounded-full border-2",
+        status === "completed" && "border-emerald-500 bg-emerald-500/20",
+        status === "blocked" && "border-destructive bg-destructive/20",
+        status === "running" && "animate-pulse border-sky-500 bg-sky-500/20 motion-reduce:animate-none",
+        className,
+      )}
+      aria-hidden="true"
+    />
+  )
 }
 
 function Metric({
@@ -365,7 +369,7 @@ function ExecutiveSummaryPanel({
                 <ul className="mt-2 space-y-1.5">
                   {group.values.slice(0, 3).map((value) => (
                     <li key={value} className="flex gap-2 text-xs leading-5 text-muted-foreground">
-                      <Circle className="mt-1.5 h-1.5 w-1.5 shrink-0 fill-current" aria-hidden="true" />
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
                       <span className="break-words">{value}</span>
                     </li>
                   ))}
@@ -399,7 +403,6 @@ function DepartmentList({
             {formatCount(departments.length)} unidades coordinadas
           </p>
         </div>
-        <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </div>
       {departments.length > 0 ? (
         <ul className="divide-y divide-border">
@@ -465,7 +468,6 @@ function DepartmentList({
         </ul>
       ) : (
         <div className="flex min-h-40 flex-col items-center justify-center px-5 py-8 text-center">
-          <Building2 className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
           <p className="mt-2 text-sm font-medium text-foreground">Sin departamentos configurados</p>
           <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
             El CEO Office mostrará aquí cada unidad cuando esté disponible.
@@ -505,7 +507,6 @@ function LiveTimeline({
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">Decisiones, ejecución y verificaciones</p>
         </div>
-        <Activity className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </div>
       {visibleEvents.length > 0 ? (
         <ol
@@ -566,7 +567,6 @@ function LiveTimeline({
         </ol>
       ) : (
         <div className="flex min-h-40 flex-col items-center justify-center px-5 py-8 text-center" aria-live="polite">
-          <Clock3 className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
           <p className="mt-2 text-sm font-medium text-foreground">Esperando actividad</p>
           <p className="mt-1 text-xs text-muted-foreground">Los pasos del enjambre aparecerán aquí en tiempo real.</p>
         </div>
@@ -626,7 +626,7 @@ export function EnterpriseCommandCenter({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase text-muted-foreground">
-                <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
                 CEO Office
               </span>
               <Badge
@@ -735,7 +735,6 @@ export function EnterpriseCommandCenter({
           aria-label="Vistas del centro de mando"
         >
           {commandTabs.map((tab, tabIndex) => {
-            const TabIcon = tab.icon
             const selected = activeTab === tab.id
             return (
               <button
@@ -758,7 +757,6 @@ export function EnterpriseCommandCenter({
                     : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
                 )}
               >
-                <TabIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
                 <span className="truncate">{tab.label}</span>
               </button>
             )
@@ -777,7 +775,7 @@ export function EnterpriseCommandCenter({
             <section aria-labelledby="enterprise-direction-title" className="grid min-w-0 md:grid-cols-2">
               <div className="min-w-0 px-4 py-4 sm:px-5 md:border-r md:border-border">
                 <div className="flex items-center gap-2">
-                  <Target className="h-4 w-4 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+                  <span className="h-4 w-1 rounded-full bg-sky-500" aria-hidden="true" />
                   <h3 id="enterprise-direction-title" className="text-sm font-semibold text-foreground">
                     Misión
                   </h3>
@@ -786,7 +784,7 @@ export function EnterpriseCommandCenter({
               </div>
               <div className="min-w-0 border-t border-border px-4 py-4 sm:px-5 md:border-t-0">
                 <div className="flex items-center gap-2">
-                  <Telescope className="h-4 w-4 text-violet-600 dark:text-violet-400" aria-hidden="true" />
+                  <span className="h-4 w-1 rounded-full bg-violet-500" aria-hidden="true" />
                   <h3 className="text-sm font-semibold text-foreground">Visión</h3>
                 </div>
                 <p className="mt-2 break-words text-sm leading-6 text-muted-foreground">{vision}</p>
@@ -823,11 +821,11 @@ export function EnterpriseCommandCenter({
 
       <footer className="flex flex-col gap-2 border-t border-border bg-muted/20 px-4 py-2.5 text-[11px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <span className="inline-flex items-center gap-1.5">
-          <UsersRound className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="h-1.5 w-1.5 rounded-full bg-sky-500" aria-hidden="true" />
           {formatCount(swarmSummary.logicalAgents)} agentes coordinados por CEO Office
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
           {formatCount(swarmSummary.completed)} tareas verificadas
         </span>
       </footer>
