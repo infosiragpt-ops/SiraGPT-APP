@@ -2707,6 +2707,7 @@ async function closeBuild({
     entry: {
       department: proactiveMeta?.department || 'interactive',
       runId: run.id,
+      ...(proactiveMeta?.missionId ? { missionId: proactiveMeta.missionId } : {}),
       outcome: finalOutcome,
       task: proactiveMeta?.title || String(resolvedSourcePrompt || '').slice(0, 600),
       checkpointSha: checkpoint?.commitSha || null,
@@ -2733,6 +2734,20 @@ async function closeBuild({
   });
   await eventStore.appendEvent(run.id, 'executive_summary', executiveSummary, { prisma }).catch((err) => {
     if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] executive summary append failed:', err?.message || err);
+  });
+  await require('./mission-evidence-ledger').recordMissionCompletion({
+    prisma,
+    project,
+    runId: run.id,
+    missionId: proactiveMeta?.missionId || null,
+    missionTitle: proactiveMeta?.title || conciseTaskTitle(resolvedSourcePrompt),
+    department: proactiveMeta?.department || 'interactive',
+    outcome: finalOutcome,
+    executiveSummary,
+    acceptance: proactiveMeta ? acceptanceEvidence(proactiveMeta, verification) : [],
+    now: clock(),
+  }).catch((err) => {
+    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] mission evidence append failed:', err?.message || err);
   });
 
   if (proactiveMeta) {

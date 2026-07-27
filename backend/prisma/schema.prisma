@@ -144,6 +144,10 @@ model User {
   codexCompanyLeads       CodexCompanyLead[]
   codexCompanyInboxItems  CodexCompanyInboxItem[]
   codexExternalActions    CodexExternalAction[]
+  codexMissions           CodexMission[]
+  codexMissionArtifacts   CodexMissionArtifact[]
+  codexActivityReports    CodexActivityReport[]
+  codexCeoApprovals       CodexCeoApproval[]
   codexSwarms             CodexSwarm[]
   deployments             Deployment[]
   generatedArtifacts      GeneratedArtifact[]
@@ -2640,6 +2644,10 @@ model CodexProject {
   companyLeads CodexCompanyLead[]
   companyInboxItems CodexCompanyInboxItem[]
   externalActions CodexExternalAction[]
+  missions CodexMission[]
+  missionArtifacts CodexMissionArtifact[]
+  activityReports CodexActivityReport[]
+  ceoApprovals CodexCeoApproval[]
   proactiveLease CodexProactiveLease?
 
   @@index([userId, updatedAt])
@@ -2732,6 +2740,128 @@ model CodexExternalAction {
   @@index([userId, projectId, status, createdAt])
   @@index([projectId, kind, createdAt])
   @@map("codex_external_actions")
+}
+
+// Durable objective -> execution -> evidence -> CEO review chain. These
+// records contain references and redacted summaries, never provider secrets.
+model CodexMission {
+  id          String    @id @default(cuid())
+  projectId   String
+  userId      String
+  missionKey  String
+  title       String
+  department  String
+  objective   String?   @db.Text
+  status      String    @default("in_progress") // in_progress | completed | blocked
+  source      String
+  sourceRef   String
+  version     Int       @default(1)
+  contentHash String
+  summary     String    @db.Text
+  author      String
+  startedAt   DateTime?
+  completedAt DateTime?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project   CodexProject           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artifacts CodexMissionArtifact[]
+  approvals CodexCeoApproval[]
+
+  @@unique([projectId, sourceRef])
+  @@index([userId, projectId, status, updatedAt])
+  @@index([projectId, missionKey, version])
+  @@index([contentHash])
+  @@map("codex_missions")
+}
+
+model CodexMissionArtifact {
+  id          String   @id @default(cuid())
+  missionId   String
+  projectId   String
+  userId      String
+  artifactKey String
+  name        String
+  type        String
+  status      String   @default("recorded") // recorded | verified
+  source      String
+  sourceRef   String?
+  version     Int      @default(1)
+  contentHash String
+  storageRef  String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  mission CodexMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([missionId, artifactKey, version])
+  @@index([userId, projectId, createdAt])
+  @@index([projectId, type, status])
+  @@index([contentHash])
+  @@map("codex_mission_artifacts")
+}
+
+model CodexActivityReport {
+  id          String   @id @default(cuid())
+  projectId   String
+  userId      String
+  reportKey   String
+  title       String
+  summary     String   @db.Text
+  status      String   @default("draft") // draft | queued
+  source      String
+  version     Int      @default(1)
+  contentHash String
+  periodFrom  DateTime
+  periodTo    DateTime
+  counts      Json
+  delivery    Json
+  author      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   CodexProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approvals CodexCeoApproval[]
+
+  @@unique([projectId, reportKey, version])
+  @@index([userId, projectId, status, createdAt])
+  @@index([contentHash])
+  @@map("codex_activity_reports")
+}
+
+// Append-only CEO decisions. The resourceHash binds every decision to the
+// exact mission/report version that was reviewed.
+model CodexCeoApproval {
+  id           String   @id @default(cuid())
+  projectId    String
+  userId       String
+  missionId    String?
+  reportId     String?
+  resourceType String
+  resourceId   String
+  decision     String // approved | changes_requested | rejected | pending
+  note         String?  @db.Text
+  reviewerName String
+  resourceHash String
+  source       String   @default("ceo_review")
+  createdAt    DateTime @default(now())
+
+  project CodexProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mission CodexMission?        @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  report  CodexActivityReport? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([userId, projectId, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+  @@index([missionId, createdAt])
+  @@index([reportId, createdAt])
+  @@map("codex_ceo_approvals")
 }
 
 model CodexProactiveLease {

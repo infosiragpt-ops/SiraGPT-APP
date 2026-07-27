@@ -64,6 +64,7 @@ test('appendLedgerEntry preserves other brief fields and replaces the same run i
     project: state.project,
     entry: {
       runId: 'r1',
+      missionId: 'code-excellence',
       department: 'CEO',
       outcome: 'passed',
       diffstat: { additions: 12, deletions: 3 },
@@ -73,6 +74,7 @@ test('appendLedgerEntry preserves other brief fields and replaces the same run i
   assert.equal(state.project.brief.goal, 'Construir producto');
   assert.equal(state.project.brief.ledger.length, 1);
   assert.equal(state.project.brief.ledger[0].outcome, 'passed');
+  assert.equal(state.project.brief.ledger[0].missionId, 'code-excellence');
   assert.deepEqual(state.project.brief.ledger[0].diffstat, {
     additions: 12,
     deletions: 3,

@@ -92,6 +92,7 @@ function normalizeLedgerEntry(value) {
   const source = asRecord(value);
   const runId = boundedText(source.runId, 180);
   if (!runId) return null;
+  const missionId = boundedText(source.missionId, 100) || null;
   const acceptance = Array.isArray(source.acceptance)
     ? source.acceptance.slice(0, MAX_ACCEPTANCE_CRITERIA).map((item) => ({
       criterion: boundedText(item?.criterion, 280),
@@ -102,6 +103,7 @@ function normalizeLedgerEntry(value) {
   return {
     department: boundedText(source.department, 100) || 'unknown',
     runId,
+    ...(missionId ? { missionId } : {}),
     outcome: ['passed', 'failed', 'cancelled', 'blocked'].includes(source.outcome)
       ? source.outcome
       : 'failed',

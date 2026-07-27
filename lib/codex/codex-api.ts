@@ -194,6 +194,88 @@ export interface CodexCompanyContext {
     }>
   }
 }
+export type CodexMissionReviewStatus = "pending" | "approved" | "changes_requested" | "rejected"
+export interface CodexMissionEvidenceRecord {
+  id: string
+  missionId: string
+  missionTitle: string
+  objective: string
+  department: string
+  status: "completed" | "blocked"
+  summary: string
+  author: string
+  runId: string | null
+  source: string
+  sourceRef: string
+  version: number
+  contentHash: string | null
+  createdAt: string
+  updatedAt: string
+  deliverables: Array<{
+    id: string
+    name: string
+    type: string
+    ref: string | null
+    status: "recorded" | "verified"
+  }>
+  evidence: Array<{
+    id: string
+    label: string
+    detail: string
+    kind: string
+    passed: boolean | null
+  }>
+  ceoReview: {
+    status: CodexMissionReviewStatus
+    reviewedAt: string | null
+    reviewedBy: string | null
+    note: string | null
+  }
+}
+export interface CodexActivityReport {
+  id: string
+  title: string
+  summary: string
+  author: string
+  source: string
+  sourceRef: string
+  version: number
+  contentHash: string | null
+  createdAt: string
+  period: { from: string; to: string }
+  counts: {
+    missions: number
+    completed: number
+    blocked: number
+    pendingReview: number
+    approved: number
+  }
+  status: "draft" | "queued"
+  delivery: {
+    channel: "email"
+    status: "not_requested" | "blocked_connection" | "blocked_policy" | "pending_permission" | "queued"
+    connectionReady: boolean
+    permissionGranted: boolean
+    permissionMode: "review" | "auto" | "off"
+    queuedAt: string | null
+    sentAt: null
+    reason: string | null
+  }
+}
+export interface CodexMissionEvidenceLedger {
+  version: number
+  summary: {
+    missions: number
+    completed: number
+    blocked: number
+    pendingReview: number
+    approved: number
+    reports: number
+    emailQueued: number
+  }
+  records: CodexMissionEvidenceRecord[]
+  reports: CodexActivityReport[]
+}
 export interface CodexProactiveState {
   enabled: boolean
   enabledAt: string | null
@@ -534,6 +616,43 @@ export const codexApi = {
   listProjectActivity: (id: string, limit = 80) =>
     req<{ activity?: unknown }>(`/projects/${id}/activity?limit=${Math.max(1, Math.min(200, limit))}`, { cache: "no-store" })
       .then((r) => arrayOrEmpty<CodexProjectActivity>(r?.activity)),
+  getMissionEvidence: (id: string) =>
+    req<{ ledger: CodexMissionEvidenceLedger }>(
+      `/projects/${id}/mission-evidence`,
+      { cache: "no-store" },
+    ).then((result) => result.ledger),
+  reviewMissionEvidence: (
+    id: string,
+    recordId: string,
+    status: CodexMissionReviewStatus,
+    note?: string | null,
+  ) =>
+    req<{ record: CodexMissionEvidenceRecord }>(
+      `/projects/${id}/mission-evidence/${encodeURIComponent(recordId)}/review`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status, note: note || null }),
+      },
+    ).then((result) => result.record),
+  createActivityReport: (
+    id: string,
+    options?: {
+      days?: number
+      requestEmail?: boolean
+      confirmEmailQueue?: boolean
+    },
+  ) =>
+    req<{ report: CodexActivityReport }>(
+      `/projects/${id}/activity-reports`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          days: options?.days || 7,
+          requestEmail: options?.requestEmail === true,
+          confirmEmailQueue: options?.confirmEmailQueue === true,
+        }),
+      },
+    ).then((result) => result.report),
   getCommandCenter: (id: string) =>
     req<{ commandCenter: CodexEnterpriseCommandCenter; company: CodexCompanyContext }>(
       `/projects/${id}/command-center`,

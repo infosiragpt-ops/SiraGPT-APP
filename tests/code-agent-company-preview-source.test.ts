@@ -20,7 +20,12 @@ test("company navigation renders operational surfaces inside the preview slot", 
 test("company files and resources expose real workspace and social operations", () => {
   assert.match(companySource, /testId="company-files-surface"/)
   assert.match(companySource, /Object\.values\(files\)/)
-  assert.match(companySource, /Reportes\/\$\{department\?\.name \|\| "CEO Office"\}/)
+  assert.match(companySource, /Borradores locales\/\$\{department\?\.name \|\| "CEO Office"\}/)
+  assert.match(companySource, /data-testid="company-mission-evidence-ledger"/)
+  assert.match(companySource, /codexApi\.getMissionEvidence/)
+  assert.match(companySource, /codexApi\.reviewMissionEvidence/)
+  assert.match(companySource, /codexApi\.createActivityReport/)
+  assert.match(companySource, /No se envió ningún correo/)
   assert.match(companySource, /testId="company-resources-surface"/)
   assert.match(companySource, /companySocialApi\.queueTextPost/)
   assert.match(companySource, /companySocialApi\.publishNow/)
