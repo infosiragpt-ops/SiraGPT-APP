@@ -355,15 +355,18 @@ router.get('/projects/:id', authenticateToken, async (req, res) => {
 // primer ciclo inmediato (fire-and-forget) para que el usuario vea acción ya.
 router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
   try {
-    const project = await loadOwnedProject(req, res);
+    const project = await loadOwnedProjectRecord(req, res);
     if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
     const memory = require('../services/codex/progress-ledger').readProgressContext(project);
+    const company = await require('../services/codex/company-operating-profile')
+      .loadCompanyOperatingContext({ prisma: codexDb, project });
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       state: proactive.readProactiveState(project),
       departments: proactive.DEPARTMENTS,
       memory,
+      company,
     });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
@@ -372,8 +375,6 @@ router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
 
 router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
   try {
-    const project = await loadOwnedProject(req, res);
-    if (!project) return undefined;
     const enabled = req.body && req.body.enabled === true;
     // Enabling starts autonomous code execution immediately. Keep the same
     // isolation/access gate as manual runs; disabling remains available to
@@ -384,6 +385,8 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
         message: 'Tu cuenta no puede ejecutar APPS en producción.',
       });
     }
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
     const prisma = require('../config/database');
     const out = await proactive.setProactive({ prisma, projectId: project.id, userId: req.user.id, enabled });
@@ -397,6 +400,52 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
     return res.json({ state: out.state, departments: proactive.DEPARTMENTS });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
+// ── Perfil operativo de empresa ─────────────────────────────────────────────
+// Intent belongs to the user/company; connection readiness is always derived
+// from real runtime evidence (workspace, publication, OAuth and Gmail).
+router.get('/projects/:id/company-profile', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const companyProfile = require('../services/codex/company-operating-profile');
+    const company = await companyProfile.loadCompanyOperatingContext({ prisma: codexDb, project });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ company });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_company_profile_failed', message: err.message });
+  }
+});
+
+router.patch('/projects/:id/company-profile', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const patch = req.body?.profile ?? req.body;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        message: 'profile must be an object',
+      });
+    }
+    const companyProfile = require('../services/codex/company-operating-profile');
+    await companyProfile.writeCompanyProfile({
+      prisma: codexDb,
+      project,
+      patch,
+    });
+    const fresh = await codexDb.codexProject.findFirst({
+      where: { id: project.id, userId: req.user.id },
+    });
+    const company = await companyProfile.loadCompanyOperatingContext({
+      prisma: codexDb,
+      project: fresh || project,
+    });
+    return res.json({ company });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_company_profile_failed', message: err.message });
   }
 });
 
@@ -457,6 +506,17 @@ router.post('/projects/:id/publication/rollback', authenticateToken, requireCode
 // Ownership gate compartido por las rutas de preview.
 async function loadOwnedProject(req, res) {
   const project = await projectService.getProject({ userId: req.user.id, id: req.params.id });
+  if (!project) {
+    res.status(404).json({ error: 'project_not_found' });
+    return null;
+  }
+  return project;
+}
+
+async function loadOwnedProjectRecord(req, res) {
+  const project = await codexDb.codexProject.findFirst({
+    where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+  }).catch(() => null);
   if (!project) {
     res.status(404).json({ error: 'project_not_found' });
     return null;
