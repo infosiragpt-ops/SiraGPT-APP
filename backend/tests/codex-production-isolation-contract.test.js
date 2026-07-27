@@ -31,6 +31,7 @@ test('runner control credential is wired to both sides and never inherited by ch
   assert.match(runner, /CODE_RUNNER_CONTROL_TOKEN/);
   assert.match(backend, /CODE_RUNNER_CONTROL_TOKEN/);
   assert.match(runnerSource, /controlTokenForEnv\(process\.env\)/);
+  assert.match(runnerSource, /VITE_HMR:\s*"false"/);
   assert.doesNotMatch(runnerSource, /env:\s*\{\s*\.\.\.process\.env/);
 });
 

@@ -103,6 +103,7 @@ test('full-stack starter runs on the pinned Node/npm preview runtime AND behind 
   const vite = by('vite.config.ts').content;
   assert.match(vite, /process\.env\.PORT/);
   assert.match(vite, /process\.env\.VITE_BASE/);
+  assert.match(vite, /process\.env\.VITE_HMR === 'false'/);
   assert.match(vite, /const apiBase =/);
   assert.match(vite, /\[apiBase\]/);
   assert.doesNotMatch(vite, /\^\.\*\/api\//);
