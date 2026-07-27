@@ -55,6 +55,7 @@ const {
   sanitizeProjectId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
+  previewConfigMigrationMode,
   commandRejectionReason,
   shouldIgnoreExportPath,
   parseDevPortPool,
@@ -428,6 +429,24 @@ async function readProjectJson(projectId, relPath) {
   }
 }
 
+function decodeSyncOutput(value) {
+  if (!value) return "";
+  return new TextDecoder().decode(value);
+}
+
+function runProjectGit(projectId, args) {
+  const result = spawnSandboxedSync(projectId, ["git", ...args], {
+    cwd: projectDirOf(projectId),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    ok: result.exitCode === 0,
+    stdout: decodeSyncOutput(result.stdout),
+    stderr: decodeSyncOutput(result.stderr),
+  };
+}
+
 async function migrateLegacyVitePreviewProxy(projectId, entry) {
   let current;
   try {
@@ -437,6 +456,19 @@ async function migrateLegacyVitePreviewProxy(projectId, entry) {
   }
   const migrated = migrateLegacyViteProxyConfig(current.content);
   if (!migrated.changed) return false;
+
+  const status = runProjectGit(projectId, ["status", "--porcelain", "--untracked-files=normal"]);
+  const head = runProjectGit(projectId, ["show", "HEAD:vite.config.ts"]);
+  const mode = previewConfigMigrationMode({
+    status: status.ok ? status.stdout : null,
+    headContent: head.ok ? head.stdout : null,
+    migratedContent: migrated.content,
+  });
+  if (mode === "skip") {
+    pushLog(entry, "[runner] skipped managed Vite migration because the workspace has user changes");
+    return false;
+  }
+
   await callFilesystemHelper(projectId, ["write"], {
     input: JSON.stringify({
       files: [{ path: "vite.config.ts", content: migrated.content }],
@@ -444,7 +476,36 @@ async function migrateLegacyVitePreviewProxy(projectId, entry) {
     }),
     outputCap: 20_000,
   });
-  pushLog(entry, "[runner] migrated legacy Vite preview proxy to the tokenized app base");
+
+  if (mode === "commit") {
+    const added = runProjectGit(projectId, ["add", "--", "vite.config.ts"]);
+    const committed = added.ok
+      ? runProjectGit(projectId, [
+        "-c", "user.name=SiraGPT Preview",
+        "-c", "user.email=preview@siragpt.local",
+        "commit", "-m", "chore(sira): migrate preview config", "--", "vite.config.ts",
+      ])
+      : { ok: false };
+    if (!committed.ok) {
+      await callFilesystemHelper(projectId, ["write"], {
+        input: JSON.stringify({
+          files: [{ path: "vite.config.ts", content: current.content }],
+          limits: { maxFiles: 1, maxFileBytes: 1_000_000, maxTotalBytes: 1_000_000 },
+        }),
+        outputCap: 20_000,
+      });
+      runProjectGit(projectId, ["reset", "--", "vite.config.ts"]);
+      pushLog(entry, "[runner] preview config migration rolled back because its commit failed");
+      return false;
+    }
+  }
+
+  pushLog(
+    entry,
+    mode === "restore"
+      ? "[runner] restored managed Vite config drift to HEAD"
+      : "[runner] committed managed Vite preview config migration",
+  );
   return true;
 }
 
@@ -646,10 +707,6 @@ async function runDev(entry, projectId) {
       // tokenized base + the derived API port travel via env instead. Plain
       // vite starters ignore both — harmless.
       VITE_BASE: entry.basePath || "/",
-      // The tokenized preview proxy is HTTP-only. SiraGPT already restarts and
-      // reloads the iframe when workspace files change, so prevent Vite from
-      // opening an unsupported HMR WebSocket and emitting runtime errors.
-      VITE_HMR: "false",
       API_PORT: String(port + 1000),
     },
   });

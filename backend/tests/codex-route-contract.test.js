@@ -3,8 +3,11 @@
 const { test, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const crypto = require('node:crypto');
+const { once } = require('node:events');
 const express = require('express');
 const request = require('supertest');
+const WebSocket = require('ws');
 
 const { mockResolvedModule } = require('./http-test-utils');
 
@@ -107,6 +110,7 @@ after(() => {
   delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
+  delete process.env.CODEX_PREVIEW_TOKEN_SECRET;
 });
 beforeEach(() => {
   authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
@@ -128,6 +132,58 @@ function buildApp() {
   app.use('/api/codex', codexRoutes);
   return app;
 }
+
+test('Codex router exposes the tokenized preview WebSocket attachment', () => {
+  assert.equal(typeof codexRoutes.attachPreviewWebSocketProxy, 'function');
+});
+
+test('tokenized preview WebSocket reaches only its runner project', async (t) => {
+  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-preview-websocket-test-secret';
+  const upstream = http.createServer();
+  const upstreamWss = new WebSocket.Server({ server: upstream });
+  upstreamWss.on('connection', (socket) => {
+    socket.send('vite-connected');
+    socket.on('message', (data) => socket.send(`vite:${String(data)}`));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  runnerMockPort = upstream.address().port;
+
+  const proxy = http.createServer(buildApp());
+  const binding = codexRoutes.attachPreviewWebSocketProxy(proxy);
+  await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+
+  const payload = Buffer.from(JSON.stringify({
+    projectId: 'p1',
+    userId: 'u-1',
+    exp: Date.now() + 60_000,
+  })).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', process.env.CODEX_PREVIEW_TOKEN_SECRET)
+    .update(payload)
+    .digest('base64url');
+  const token = `${payload}.${signature}`;
+  const client = new WebSocket(
+    `ws://127.0.0.1:${proxy.address().port}/api/codex/projects/p1/preview/${token}/app/`,
+    'vite-hmr',
+  );
+
+  t.after(async () => {
+    client.terminate();
+    binding.close();
+    for (const socket of upstreamWss.clients) socket.terminate();
+    await new Promise((resolve) => proxy.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  });
+
+  const connected = new Promise((resolve) => client.once('message', (data) => resolve(String(data))));
+  await once(client, 'open');
+  assert.equal(client.protocol, 'vite-hmr');
+  assert.equal(await connected, 'vite-connected');
+
+  const echoed = new Promise((resolve) => client.once('message', (data) => resolve(String(data))));
+  client.send('ping');
+  assert.equal(await echoed, 'vite:ping');
+});
 
 test('GET /health responds 200 with enabled=false when the flag is off', async () => {
   delete process.env.CODEX_AGENT_V2;

@@ -62,9 +62,9 @@ function resolveProjectRelPath(relPath) {
 
 /**
  * Upgrade the exact Vite config emitted by SiraGPT's full-stack starter.
- * Besides narrowing the legacy API regex, disable Vite HMR only when the
- * tokenized runner requests it: the preview proxy transports HTTP while the
- * platform's own workspace refresh restarts/reloads the iframe.
+ * Besides narrowing the legacy API regex, remove the short-lived HMR-disable
+ * line from managed configs now that the backend proxies authenticated Vite
+ * WebSocket upgrades to the owning project's runner port.
  *
  * Refuse partial/custom matches to avoid rewriting user configs.
  */
@@ -104,11 +104,18 @@ function migrateLegacyViteProxyConfig(content) {
     && upgraded.includes(managedProxyLine)
     && upgraded.includes(managedRewriteLine)
     && upgraded.includes(serverLine);
-  if (isManaged && !upgraded.includes(hmrLine)) {
-    upgraded = upgraded.replace(serverLine, `${serverLine}\n${hmrLine}`);
+  if (isManaged && upgraded.includes(hmrLine)) {
+    upgraded = upgraded.replace(`${hmrLine}\n`, '');
   }
 
   return { changed: upgraded !== source, content: upgraded };
+}
+
+function previewConfigMigrationMode({ status, headContent, migratedContent } = {}) {
+  if (typeof status !== 'string') return 'skip';
+  if (!status.trim()) return 'commit';
+  if (typeof headContent === 'string' && migratedContent === headContent) return 'restore';
+  return 'skip';
 }
 
 function isAllowedCommand(cmd) {
@@ -416,6 +423,7 @@ module.exports = {
   sanitizeProjectId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
+  previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
   ALLOWED_BINS,

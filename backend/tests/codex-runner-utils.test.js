@@ -20,6 +20,7 @@ const {
   sanitizeProjectId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
+  previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
   shouldIgnoreExportPath,
@@ -81,19 +82,43 @@ export default {
   assert.match(migrated.content, /\[apiBase\]/);
   assert.doesNotMatch(migrated.content, /\^\.\*\/api\//);
   assert.match(migrated.content, /p\.startsWith\(apiBase\)/);
-  assert.match(migrated.content, /hmr: process\.env\.VITE_HMR === 'false' \? false : undefined/);
+  assert.doesNotMatch(migrated.content, /VITE_HMR/);
   assert.equal(migrateLegacyViteProxyConfig(migrated.content).changed, false);
 
-  const managedWithoutHmr = migrated.content.replace(
-    "    hmr: process.env.VITE_HMR === 'false' ? false : undefined,\n",
-    '',
+  const managedWithDisabledHmr = migrated.content.replace(
+    '  server: {\n',
+    "  server: {\n    hmr: process.env.VITE_HMR === 'false' ? false : undefined,\n",
   );
-  const hmrMigrated = migrateLegacyViteProxyConfig(managedWithoutHmr);
+  const hmrMigrated = migrateLegacyViteProxyConfig(managedWithDisabledHmr);
   assert.equal(hmrMigrated.changed, true);
-  assert.match(hmrMigrated.content, /hmr: process\.env\.VITE_HMR === 'false' \? false : undefined/);
+  assert.doesNotMatch(hmrMigrated.content, /VITE_HMR/);
+  assert.equal(migrateLegacyViteProxyConfig(hmrMigrated.content).changed, false);
 
   const custom = legacy.replace("  base: process.env.VITE_BASE || '/',", "  base: '/custom/',");
   assert.deepEqual(migrateLegacyViteProxyConfig(custom), { changed: false, content: custom });
+});
+
+test('preview config migration commits clean repos, restores system drift, and skips user edits', () => {
+  assert.equal(previewConfigMigrationMode({
+    status: '',
+    headContent: 'old',
+    migratedContent: 'new',
+  }), 'commit');
+  assert.equal(previewConfigMigrationMode({
+    status: ' M vite.config.ts\n',
+    headContent: 'managed',
+    migratedContent: 'managed',
+  }), 'restore');
+  assert.equal(previewConfigMigrationMode({
+    status: ' M vite.config.ts\n',
+    headContent: 'old',
+    migratedContent: 'user-edited',
+  }), 'skip');
+  assert.equal(previewConfigMigrationMode({
+    status: null,
+    headContent: 'old',
+    migratedContent: 'new',
+  }), 'skip');
 });
 
 test('isAllowedCommand allows git/bun/bunx/node/npm and blocks the rest', () => {

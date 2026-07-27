@@ -47,6 +47,9 @@ const {
   STRIP_REQUEST_HEADERS,
   HOP_BY_HOP_HEADERS,
 } = require('../utils/proxy-headers');
+const {
+  attachWebSocketProxy,
+} = require('../services/codex/preview-websocket-proxy');
 
 const router = express.Router();
 let sessionRunner = null;
@@ -152,6 +155,56 @@ function previewProxyHostHeader(upstreamBase, env = process.env) {
   // loopback host Vite allows.
   if (/^(runner|code-runner)$/i.test(upstreamBase.hostname)) return `localhost:${port}`;
   return upstreamBase.host;
+}
+
+function previewUpgradeParts(request) {
+  try {
+    const url = new URL(String(request?.url || ''), 'http://preview.local');
+    const match = /^\/api\/codex\/projects\/([^/]+)\/preview\/([^/]+)\/app(?:\/.*)?$/.exec(url.pathname);
+    if (!match) return null;
+    return {
+      projectId: decodeURIComponent(match[1]),
+      token: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function previewUpgradeError(statusCode) {
+  const error = new Error('preview_websocket_rejected');
+  error.statusCode = statusCode;
+  return error;
+}
+
+async function previewWebSocketTarget(request, env = process.env) {
+  const parts = previewUpgradeParts(request);
+  if (!parts) throw previewUpgradeError(404);
+  const payload = verifyPreviewToken(parts.token, env);
+  if (!payload || payload.projectId !== parts.projectId) throw previewUpgradeError(403);
+
+  const projectPort = await resolvePreviewPort(parts.projectId, env);
+  let upstreamBase;
+  try {
+    upstreamBase = new URL(codexPreviewInternalUrl(env, projectPort));
+  } catch {
+    throw previewUpgradeError(503);
+  }
+  if (!['http:', 'https:'].includes(upstreamBase.protocol)) throw previewUpgradeError(503);
+
+  const target = new URL(String(request.url || '/'), upstreamBase);
+  target.protocol = upstreamBase.protocol === 'https:' ? 'wss:' : 'ws:';
+  return {
+    url: target.toString(),
+    host: previewProxyHostHeader(upstreamBase, env),
+  };
+}
+
+function attachPreviewWebSocketProxy(server, env = process.env) {
+  return attachWebSocketProxy(server, {
+    shouldHandle: (request) => Boolean(previewUpgradeParts(request)),
+    resolveTarget: (request) => previewWebSocketTarget(request, env),
+  });
 }
 
 function requireCodexAgentAccess(req, res, next) {
@@ -1048,5 +1101,7 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   }
   return undefined;
 });
+
+router.attachPreviewWebSocketProxy = attachPreviewWebSocketProxy;
 
 module.exports = router;
