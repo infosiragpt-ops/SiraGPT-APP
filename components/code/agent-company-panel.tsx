@@ -2043,8 +2043,22 @@ function ResourcesView({
     }
   }, [companyOpsBusy, refreshCompanyOps])
 
+  const triageSocialChannels = React.useCallback(async (projectId: string) => {
+    const result = await codexApi.triageCompanySocial(projectId)
+    if (result.action === "social_not_connected") {
+      throw new Error("Conecta Facebook, LinkedIn o X desde Canales de la empresa.")
+    }
+    if (result.action === "social_providers_unavailable") {
+      const reconnect = result.errors?.some((error) => error.code === "SOCIAL_SCOPE_REQUIRED")
+      throw new Error(reconnect
+        ? "Reconecta la cuenta social para autorizar lectura y respuesta de conversaciones."
+        : result.errors?.[0]?.message || "No se pudo consultar la red social.")
+    }
+    return result
+  }, [])
+
   const updateCompanyPolicy = React.useCallback(async (
-    field: "emailReplies" | "leadOutreach",
+    field: "emailReplies" | "socialReplies" | "leadOutreach",
     mode: "review" | "auto" | "off",
   ) => {
     const codexProjectId = getActiveCodexProject()
@@ -2351,12 +2365,17 @@ function ResourcesView({
               (projectId) => codexApi.triageCompanyInbox(projectId),
               "Bandeja revisada y acciones preparadas.",
             )}
+            onSocialTriage={() => runCompanyOperation(
+              "social",
+              triageSocialChannels,
+              "Conversaciones sociales revisadas.",
+            )}
             onResolve={resolveCompanyAction}
             onPolicy={updateCompanyPolicy}
-            onUpdateLead={(leadId, email) => runCompanyOperation(
+            onUpdateLead={(leadId, patch) => runCompanyOperation(
               `lead:${leadId}`,
-              (projectId) => codexApi.updateCompanyLead(projectId, leadId, { email }),
-              "Contacto actualizado.",
+              (projectId) => codexApi.updateCompanyLead(projectId, leadId, patch),
+              patch.status === "do_not_contact" ? "Lead marcado como no contactar." : "Contacto actualizado.",
             )}
             onOutreach={(leadId) => runCompanyOperation(
               `outreach:${leadId}`,
@@ -2662,12 +2681,17 @@ function ResourcesView({
             (projectId) => codexApi.triageCompanyInbox(projectId),
             "Bandeja revisada y acciones preparadas.",
           )}
+          onSocialTriage={() => runCompanyOperation(
+            "social",
+            triageSocialChannels,
+            "Conversaciones sociales revisadas.",
+          )}
           onResolve={resolveCompanyAction}
           onPolicy={updateCompanyPolicy}
-          onUpdateLead={(leadId, email) => runCompanyOperation(
+          onUpdateLead={(leadId, patch) => runCompanyOperation(
             `lead:${leadId}`,
-            (projectId) => codexApi.updateCompanyLead(projectId, leadId, { email }),
-            "Contacto actualizado.",
+            (projectId) => codexApi.updateCompanyLead(projectId, leadId, patch),
+            patch.status === "do_not_contact" ? "Lead marcado como no contactar." : "Contacto actualizado.",
           )}
           onOutreach={(leadId) => runCompanyOperation(
             `outreach:${leadId}`,
@@ -2905,6 +2929,7 @@ function CompanyOperationsPanel({
   compact = false,
   onResearch,
   onTriage,
+  onSocialTriage,
   onResolve,
   onPolicy,
   onUpdateLead,
@@ -2916,9 +2941,10 @@ function CompanyOperationsPanel({
   compact?: boolean
   onResearch: () => void | Promise<void>
   onTriage: () => void | Promise<void>
+  onSocialTriage: () => void | Promise<void>
   onResolve: (action: CodexExternalAction, decision: "approve" | "reject") => void | Promise<void>
-  onPolicy: (field: "emailReplies" | "leadOutreach", mode: "review" | "auto" | "off") => void | Promise<void>
-  onUpdateLead: (leadId: string, email: string) => void | Promise<void>
+  onPolicy: (field: "emailReplies" | "socialReplies" | "leadOutreach", mode: "review" | "auto" | "off") => void | Promise<void>
+  onUpdateLead: (leadId: string, patch: { email?: string; status?: string }) => void | Promise<void>
   onOutreach: (leadId: string) => void | Promise<void>
 }) {
   const [leadEmails, setLeadEmails] = React.useState<Record<string, string>>({})
@@ -2938,6 +2964,11 @@ function CompanyOperationsPanel({
       label: "Prospección comercial",
       value: context?.profile.autonomy.leadOutreach || "review",
     },
+    {
+      field: "socialReplies" as const,
+      label: "Respuestas en redes",
+      value: context?.profile.autonomy.socialReplies || "review",
+    },
   ]
 
   return (
@@ -2954,14 +2985,14 @@ function CompanyOperationsPanel({
           <div className="flex items-center gap-2">
             <BriefcaseBusiness className="h-4 w-4 text-muted-foreground" />
             <h2 className={compact ? "text-sm font-semibold" : "text-base font-semibold"}>
-              Clientes, correo y ventas
+              Clientes, canales y ventas
             </h2>
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {operations.counts.leads} leads · {operations.counts.pendingInbox} correos · {operations.counts.pendingActions} aprobaciones
+            {operations.counts.leads} leads · {operations.counts.pendingInbox} conversaciones · {operations.counts.pendingActions} aprobaciones
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             type="button"
             variant="outline"
@@ -2983,6 +3014,17 @@ function CompanyOperationsPanel({
           >
             {busy === "inbox" ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <MessageSquareText className="mr-2 h-3.5 w-3.5" />}
             Revisar correo
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-md"
+            onClick={() => void onSocialTriage()}
+            disabled={Boolean(busy)}
+          >
+            {busy === "social" ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Radio className="mr-2 h-3.5 w-3.5" />}
+            Revisar redes
           </Button>
         </div>
       </div>
@@ -3020,7 +3062,13 @@ function CompanyOperationsPanel({
             {pendingActions.slice(0, 6).map((action) => (
               <div key={action.id} className="py-3">
                 <p className="truncate text-[11px] font-semibold">
-                  {action.kind === "email_reply" ? "Responder correo" : action.kind === "lead_outreach" ? "Contactar lead" : "Acción externa"}
+                  {action.kind === "email_reply"
+                    ? "Responder correo"
+                    : action.kind === "lead_outreach"
+                      ? "Contactar lead"
+                      : action.kind === "social_reply"
+                        ? `Responder en ${action.payload.platform || "red social"}`
+                        : "Acción externa"}
                 </p>
                 <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">
                   {action.payload.subject || action.payload.body || action.error || "Sin vista previa"}
@@ -3028,7 +3076,9 @@ function CompanyOperationsPanel({
                 <div className="mt-2 space-y-1 text-[10px]">
                   <p>
                     <span className="font-semibold">Para:</span>{" "}
-                    <span className="break-all text-muted-foreground">{action.payload.to || "Destinatario del hilo"}</span>
+                    <span className="break-all text-muted-foreground">
+                      {action.payload.to || (action.kind === "social_reply" ? "Autor de la conversación" : "Destinatario del hilo")}
+                    </span>
                   </p>
                   <p>
                     <span className="font-semibold">Asunto:</span>{" "}
@@ -3136,12 +3186,27 @@ function CompanyOperationsPanel({
                       variant="outline"
                       size="sm"
                       className="h-8 rounded-md px-2 text-[11px]"
-                      onClick={() => void onUpdateLead(lead.id, leadEmails[lead.id] || "")}
+                      onClick={() => void onUpdateLead(lead.id, { email: leadEmails[lead.id] || "" })}
                       disabled={Boolean(busy) || !(leadEmails[lead.id] || "").includes("@")}
                     >
                       Guardar
                     </Button>
                   </div>
+                )}
+                {lead.status === "do_not_contact" ? (
+                  <p className="mt-2 text-[10px] font-semibold text-muted-foreground">No contactar</p>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2 h-8 rounded-md px-2 text-[10px] text-muted-foreground"
+                    onClick={() => void onUpdateLead(lead.id, { status: "do_not_contact" })}
+                    disabled={Boolean(busy)}
+                  >
+                    <X className="mr-1.5 h-3.5 w-3.5" />
+                    No contactar
+                  </Button>
                 )}
               </div>
             ))}
@@ -3163,7 +3228,7 @@ function CompanyOperationsPanel({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[11px] font-semibold">{item.subject || "Sin asunto"}</span>
                   <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
-                    {item.senderName || item.senderEmail || "Remitente"} · {item.category} · urgencia {item.urgency} · {item.status}
+                    {item.provider === "gmail" ? "Correo" : item.provider.toUpperCase()} · {item.senderName || item.senderEmail || "Remitente"} · {item.category} · urgencia {item.urgency} · {item.status}
                   </span>
                 </span>
               </div>

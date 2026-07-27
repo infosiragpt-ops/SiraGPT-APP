@@ -106,12 +106,12 @@ describe('openRunStream', () => {
     expect(calls2).toBeGreaterThan(1)
   })
 
-  it('stops (no reconnect storm) on a permanent client error like 404', async () => {
+  it('rejects done and stops (no reconnect storm) on a permanent client error like 404', async () => {
     let calls = 0
     let errored: unknown = null
     const fetchImpl = (async () => { calls += 1; return { ok: false, status: 404, body: null } as unknown as Response }) as unknown as typeof fetch
     const handle = openRunStream({ runId: 'gone', onEvent: () => {}, onError: (e) => { errored = e }, fetchImpl, token: 't' })
-    await handle.done
+    await expect(handle.done).rejects.toThrow('stream http 404')
     expect(calls).toBe(1) // did not reconnect against a dead URL
     expect(errored).toBeInstanceOf(Error)
   })

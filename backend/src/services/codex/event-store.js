@@ -34,6 +34,30 @@ function requireDb(db) {
   return db;
 }
 
+async function publishWithinDeadline(publish, runId, envelope, env) {
+  const timeoutMs = typeof pubsub.resolvePublishTimeoutMs === 'function'
+    ? pubsub.resolvePublishTimeoutMs(env)
+    : 200;
+  let timer;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => publish(runId, envelope)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const err = new Error(`event publish timed out after ${timeoutMs}ms`);
+          err.code = 'CODEX_EVENT_PUBLISH_TIMEOUT';
+          reject(err);
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch {
+    /* publish is best-effort; replay covers any loss */
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function maxSeq(prisma, runId) {
   const row = await prisma.codexEvent.aggregate({
     where: { runId },
@@ -109,11 +133,7 @@ async function appendEvent(runId, type, data, { prisma = defaultPrisma, publish,
 
   // Best-effort live fan-out (never blocks the durable path).
   const doPublish = publish || ((rid, env_) => pubsub.publishEvent(rid, env_, { env }));
-  try {
-    await doPublish(runId, envelope);
-  } catch {
-    /* publish is best-effort; replay covers any loss */
-  }
+  await publishWithinDeadline(doPublish, runId, envelope, env);
 
   const transcriptSink = transcriptSinks.get(runId);
   if (transcriptSink) {

@@ -145,7 +145,12 @@ export interface CodexCompanyContext {
     evidence: {
       publishedUrl: string | null
       workspaceReady: boolean
-      socialConnections: Array<{ platform: string; accountName: string | null }>
+      socialConnections: Array<{
+        platform: string
+        accountName: string | null
+        scopes: string[]
+        conversationsReady: boolean
+      }>
       gmailConnected: boolean
     }
   }
@@ -185,7 +190,7 @@ export interface CodexCompanyContext {
       externalEffect: boolean
       autoExecutable: boolean
       approval: string | null
-      executor: "agent-run" | "social-publish" | null
+      executor: "agent-run" | "social-publish" | "company-operation" | null
     }>
   }
 }
@@ -240,6 +245,7 @@ export interface CodexCompanyLead {
 }
 export interface CodexCompanyInboxItem {
   id: string
+  provider: string
   externalId: string
   senderEmail: string | null
   senderName: string | null
@@ -263,6 +269,11 @@ export interface CodexExternalAction {
     subject?: string
     to?: string
     sourceUrl?: string
+    platform?: string
+    interactionId?: string
+    connectionId?: string
+    authorId?: string
+    metadata?: Record<string, string | null>
   }
   error: string | null
   createdAt: string
@@ -484,6 +495,16 @@ export const codexApi = {
   triageCompanyInbox: (id: string, maxResults = 15) =>
     req<{ result: { action: string; items: CodexCompanyInboxItem[]; actions: CodexExternalAction[] } }>(
       `/projects/${id}/company-operations/triage-inbox`,
+      { method: "POST", body: JSON.stringify({ maxResults }) },
+    ).then((result) => result.result),
+  triageCompanySocial: (id: string, maxResults = 20) =>
+    req<{ result: {
+      action: string
+      items: CodexCompanyInboxItem[]
+      actions: CodexExternalAction[]
+      errors?: Array<{ platform: string; code: string; message: string }>
+    } }>(
+      `/projects/${id}/company-operations/triage-social`,
       { method: "POST", body: JSON.stringify({ maxResults }) },
     ).then((result) => result.result),
   updateCompanyLead: (

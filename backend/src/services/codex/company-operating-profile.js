@@ -131,9 +131,31 @@ function normalizeSocialConnections(value) {
     const platform = boundedText(row?.platform, 40).toLowerCase();
     if (!platform || seen.has(platform)) continue;
     seen.add(platform);
+    const scopes = Array.isArray(row?.scopes)
+      ? row.scopes
+        .map((scope) => boundedText(scope, 120).toLowerCase())
+        .filter(Boolean)
+      : boundedText(row?.scopes, 1000)
+        .split(/[\s,]+/)
+        .map((scope) => scope.toLowerCase())
+        .filter(Boolean);
+    const granted = new Set(scopes);
+    const conversationsReady = platform === 'facebook'
+      ? granted.has('pages_read_engagement') && granted.has('pages_manage_engagement')
+      : platform === 'linkedin'
+        ? (
+          granted.has('r_member_social') && granted.has('w_member_social')
+        ) || (
+          granted.has('r_organization_social') && granted.has('w_organization_social')
+        )
+        : platform === 'x'
+          ? granted.has('tweet.read') && granted.has('tweet.write') && granted.has('users.read')
+          : false;
     result.push({
       platform,
       accountName: nullableText(row?.accountName, 120),
+      scopes: [...new Set(scopes)].slice(0, 30),
+      conversationsReady,
     });
   }
   return result.slice(0, 20);
@@ -256,7 +278,7 @@ async function loadCompanyOperatingContext({
     prisma?.socialConnection?.findMany
       ? prisma.socialConnection.findMany({
         where: { userId: project.userId },
-        select: { platform: true, accountName: true },
+        select: { platform: true, accountName: true, scopes: true },
       }).catch(() => [])
       : [],
     prisma?.user?.findUnique

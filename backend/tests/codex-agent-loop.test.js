@@ -313,6 +313,69 @@ test('LLM transport error in build → run error', async () => {
   assert.match(res.error, /402/);
 });
 
+test('runtime daily budget stops after the LLM response and before its tool calls execute', async () => {
+  let llmCalls = 0;
+  let aggregateCalls = 0;
+  const prisma = {
+    codexRunMetric: {
+      aggregate: async () => {
+        aggregateCalls += 1;
+        return { _sum: { costAppliedUsd: 0.6 } };
+      },
+    },
+  };
+  const f = fakeDeps({
+    prisma,
+    env: {
+      NODE_ENV: 'production',
+      CODEX_AUTO_VERIFY: '0',
+      CODEX_AUTO_MEMORY: '0',
+      CODEX_CONTEXT_SUMMARY: '0',
+      CODEX_RUN_BRANCHES: '0',
+    },
+    llmTurn: async () => {
+      llmCalls += 1;
+      const first = llmCalls === 1;
+      return {
+        text: first ? 'Primero inspecciono.' : 'Ahora voy a escribir.',
+        usage: {
+          provider: 'openai',
+          model: 'gpt-test',
+          tokensIn: 100,
+          tokensOut: 50,
+          costUsd: first ? 0.2 : 0.25,
+        },
+        toolCalls: first
+          ? [{ name: 'read_file', args: { path: 'src/App.tsx' } }]
+          : [{ name: 'write_file', args: { path: 'src/App.tsx', content: '<App />' } }],
+      };
+    },
+  });
+
+  const res = await runAgentLoop({
+    run: { id: 'r-budget', userId: 'u-free', mode: 'build', prompt: 'crea una app' },
+    project: {
+      id: 'p1',
+      name: 'X',
+      brief: { settings: { budget: { dailyUsd: 1 } } },
+    },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'error');
+  assert.match(res.error, /daily budget exceeded during run/i);
+  assert.equal(llmCalls, 2);
+  assert.equal(aggregateCalls, 3, 'preflight + una revalidación después de cada respuesta');
+  assert.deepEqual(f.writes, [], 'la segunda respuesta, que cruza el límite acumulado, no puede escribir');
+  const runtimeStatuses = f.events.filter((event) => event.type === 'budget_status');
+  assert.equal(runtimeStatuses.at(-2).data.allowed, true);
+  assert.equal(runtimeStatuses.at(-2).data.inRunCostUsd, 0.2);
+  const runtimeStatus = runtimeStatuses.at(-1);
+  assert.equal(runtimeStatus.data.allowed, false);
+  assert.equal(runtimeStatus.data.inRunCostUsd, 0.45);
+  assert.equal(runtimeStatus.data.costTodayUsd, 1.05);
+});
+
 test('a blocking LLM error (402) emits action_required before the run errors', async () => {
   const f = fakeDeps({ llmTurn: async () => { throw new Error('OpenRouter 402 Insufficient credits'); } });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });

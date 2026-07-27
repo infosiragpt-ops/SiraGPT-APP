@@ -145,7 +145,12 @@ import {
   persistWorkspaceCodexProject,
   readSessionCodexSyncedRun,
 } from "@/lib/codex/codex-project-link"
-import { selectCodexContinuityRun } from "@/lib/codex/run-continuity"
+import {
+  codexContinuityStreamTerminalStatuses,
+  selectCodexContinuityAssistantTurn,
+  selectCodexContinuityRun,
+  upsertCodexContinuityTurn,
+} from "@/lib/codex/run-continuity"
 import { openRunStream } from "@/lib/codex/run-stream"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
 import {
@@ -209,6 +214,7 @@ type PendingCodeInput = {
 type CodexResumeTarget = {
   projectId: string
   runId: string
+  planRunId?: string | null
   mode: "plan" | "build"
   status: string
 }
@@ -981,6 +987,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     () => activeCodeChatSession?.turns ?? [],
     [activeCodeChatSession?.turns],
   )
+  const turnsRef = React.useRef(turns)
+  React.useEffect(() => {
+    turnsRef.current = turns
+  }, [turns])
   const agentPhase = activeCodeChatSession?.agent?.phase ?? "idle"
 
   const setTurns = React.useCallback(
@@ -2848,34 +2858,47 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       const resuming = !!opts?.resume
       const iterate = resuming || !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      const assistantId = `${id}-a`
-      setTurns((prev) => [
-        ...prev,
-        ...(opts?.omitUserTurn
-          ? []
-          : [{ id, role: "user", content: opts?.displayText ?? text } as CodeChatTurn]),
-        {
-          id: assistantId,
-          role: "assistant",
-          content: resuming
-            ? "⚙️ Retomando el trabajo del Agente Codex…"
-            : iterate
-              ? "⚙️ Agente Codex trabajando…"
-              : "⚙️ Agente Codex construyendo…",
-          streaming: true,
-          agentLabel: resuming
-            ? "Retomando ejecución"
-            : iterate
-              ? "Agente Codex trabajando"
-              : "Construyendo con Agente Codex",
-          agentPhases: buildCodeAgentPhases("plan", {
-            plan: {
-              status: "running",
-              detail: resuming ? "Reconectando con el backend" : iterate ? "Preparando turno" : "Preparando build",
-            },
-          }),
-        },
-      ])
+      const continuityTurn = opts?.resume
+        ? selectCodexContinuityAssistantTurn(
+            turnsRef.current,
+            opts.resume.runId,
+            opts.resume.planRunId,
+          )
+        : null
+      const assistantId = continuityTurn?.id || `${id}-a`
+      const assistantTurn: CodeChatTurn = {
+        id: assistantId,
+        role: "assistant",
+        content: resuming
+          ? "⚙️ Retomando el trabajo del Agente Codex…"
+          : iterate
+            ? "⚙️ Agente Codex trabajando…"
+            : "⚙️ Agente Codex construyendo…",
+        streaming: true,
+        codexRunId: opts?.resume?.runId,
+        agentLabel: resuming
+          ? "Retomando ejecución"
+          : iterate
+            ? "Agente Codex trabajando"
+            : "Construyendo con Agente Codex",
+        agentPhases: buildCodeAgentPhases("plan", {
+          plan: {
+            status: "running",
+            detail: resuming ? "Reconectando con el backend" : iterate ? "Preparando turno" : "Preparando build",
+          },
+        }),
+      }
+      setTurns((prev) => {
+        const next = [
+          ...prev,
+          ...(opts?.omitUserTurn
+            ? []
+            : [{ id, role: "user", content: opts?.displayText ?? text } as CodeChatTurn]),
+        ]
+        return resuming
+          ? upsertCodexContinuityTurn(next, assistantTurn, continuityTurn?.id)
+          : [...next, assistantTurn]
+      })
       setInput("")
       setBusy(true)
       const controller = new AbortController()
@@ -2889,6 +2912,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
         setTurns((prev) =>
           prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
+        )
+      const bindAssistantToRun = (runId: string) =>
+        setTurns((prev) =>
+          prev.map((turn) =>
+            turn.id === assistantId ? { ...turn, codexRunId: runId } : turn,
+          ),
         )
 
       const startedAt = Date.now()
@@ -2976,7 +3005,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // Stream a single Codex run to a terminal status, folding its events onto
       // the assistant turn. Returns the final fold state (status + collected
       // written/read paths + narrative). Reject only for a hard transport error.
-      const streamRun = (runId: string, fold: CodexEngineFoldState) =>
+      const streamRun = (
+        runId: string,
+        mode: "plan" | "build",
+        fold: CodexEngineFoldState,
+      ) =>
         new Promise<CodexEngineFoldState>((resolve, reject) => {
           let state = fold
           let lastPhase = state.phase
@@ -3036,7 +3069,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // A plan run PARKS at waiting_approval (approval spawns a new build
             // run) — this engine auto-approves, so that status must resolve the
             // stream instead of reconnecting forever (found in live E2E).
-            terminalStatuses: ["done", "error", "cancelled", "waiting_approval"],
+            terminalStatuses: codexContinuityStreamTerminalStatuses(mode),
           })
           // The stream resolves its `done` promise on a terminal run_status or
           // close(); if the user cancels the turn we abort it via the controller.
@@ -3202,7 +3235,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           const seed = initialCodexEngineFold()
           seed.status = opts.resume.status
           completedBuildRunId = opts.resume.runId
-          fold = await streamRun(opts.resume.runId, seed)
+          bindAssistantToRun(opts.resume.runId)
+          fold = await streamRun(opts.resume.runId, "build", seed)
         } else {
           const planRun = opts?.resume
             ? {
@@ -3223,7 +3257,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               )
           const seed = initialCodexEngineFold()
           if (opts?.resume) seed.status = planRun.status
-          fold = await streamRun(planRun.id, seed)
+          bindAssistantToRun(planRun.id)
+          fold = await streamRun(planRun.id, "plan", seed)
           if (cancelledTurn()) {
             finishStopped()
             return
@@ -3237,7 +3272,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               tierForModelChoice(activeProvider, activeModelName),
             )
             completedBuildRunId = buildRun.id
-            fold = await streamRun(buildRun.id, initialCodexEngineFold())
+            bindAssistantToRun(buildRun.id)
+            fold = await streamRun(
+              buildRun.id,
+              "build",
+              initialCodexEngineFold(),
+            )
           }
         }
         // Detener during the build stream: same shape — no files, no fallback.
@@ -3437,6 +3477,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // When this chat mounts again, reconnect to the newest active run or pull
   // the newest completed build that has not reached this browser workspace.
   const resumedCodexRunsRef = React.useRef<Set<string>>(new Set())
+  const continuitySessionRef = React.useRef(sessionId)
+  React.useEffect(() => {
+    if (continuitySessionRef.current === sessionId) return
+    continuitySessionRef.current = sessionId
+    resumedCodexRunsRef.current.clear()
+  }, [sessionId])
+
   React.useEffect(() => {
     if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
     const projectId = linkedCodexProject({
@@ -3447,7 +3494,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
     let cancelled = false
     let resumeKey: string | null = null
-    let targetRunId: string | null = null
     void (async () => {
       try {
         const runs = await codexApi.listRuns(projectId)
@@ -3458,7 +3504,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )
         if (!target || (target.mode !== "plan" && target.mode !== "build")) return
         resumeKey = `${projectId}:${target.id}`
-        targetRunId = target.id
         if (resumedCodexRunsRef.current.has(resumeKey)) return
         resumedCodexRunsRef.current.add(resumeKey)
         codexProjectRef.current[sessionId] = projectId
@@ -3471,6 +3516,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             resume: {
               projectId,
               runId: target.id,
+              planRunId: target.planRunId,
               mode: target.mode,
               status: target.status,
             },
@@ -3479,17 +3525,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       } catch {
         // A stale/deleted project is handled by the next explicit user turn,
         // which verifies the durable link before creating a replacement.
-      } finally {
-        // Session switches abort the browser stream but not the backend run.
-        // Permit a later remount to reconnect unless this exact build already
-        // reached the local workspace.
-        if (
-          resumeKey &&
-          targetRunId &&
-          readSessionCodexSyncedRun(sessionId) !== targetRunId
-        ) {
-          resumedCodexRunsRef.current.delete(resumeKey)
-        }
       }
     })()
 

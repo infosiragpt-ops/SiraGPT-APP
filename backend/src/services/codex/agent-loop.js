@@ -58,6 +58,10 @@ const COMPACT_TOOL_RESULT_CAP = 300;
 const CONTEXT_SUMMARY_INPUT_CAP = 48_000;
 const CONTEXT_SUMMARY_CAP = 12_000;
 const CONTEXT_SNAPSHOT_MESSAGE_CAP = 8_000;
+const COMPACT_MESSAGE_FLOOR = 256;
+const COMPACT_RECENT_MESSAGE_FLOOR = 512;
+const COMPACT_SUMMARY_FLOOR = 1_024;
+const COMPACT_SYSTEM_FLOOR = 2_048;
 const STREAM_PROTOCOL_GUARD_CHARS = 20;
 const REASONING_CONTEXT_CAP = 8_000;
 const LIVE_FILE_PATCH_CAP = 16_000;
@@ -110,6 +114,23 @@ function messageContentText(content) {
     })
     .filter(Boolean)
     .join('\n');
+}
+
+const recordedUsageByMetrics = new WeakMap();
+
+function recordLlmUsageOnce(metrics, usage) {
+  if (!metrics?.recordLlmUsage || !usage) return false;
+  if (usage && typeof usage === 'object') {
+    let seen = recordedUsageByMetrics.get(metrics);
+    if (!seen) {
+      seen = new WeakSet();
+      recordedUsageByMetrics.set(metrics, seen);
+    }
+    if (seen.has(usage)) return false;
+    seen.add(usage);
+  }
+  metrics.recordLlmUsage(usage);
+  return true;
 }
 
 function contextBudgetChars(modelCapabilities = {}, env = process.env) {
@@ -436,23 +457,76 @@ function buildSystemPrompt({
 /**
  * In-place transcript compaction (Claude Code-style "microcompact"): when the
  * transcript exceeds the char budget, old `[TOOL_RESULT]` bodies — the bulk of
- * the growth — are truncated. System prompt, the task prompt and the last
- * COMPACT_KEEP_TAIL messages stay verbatim. Returns how many were compacted.
+ * the growth — are truncated first. If the protected working set alone is too
+ * large, progressively bound old, recent, task and system messages. The hard
+ * fallback is deliberate: callers must never send more than `maxChars` after
+ * compaction, even when the last ten messages are individually huge.
  */
 function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}) {
-  const total = messages.reduce((n, m) => n + messageContentText(m?.content).length, 0);
-  if (total <= maxChars) return 0;
-  let compacted = 0;
+  if (!Array.isArray(messages) || messages.length === 0) return 0;
+  const limit = Math.max(0, Number.isFinite(Number(maxChars)) ? Math.floor(Number(maxChars)) : DEFAULT_CONTEXT_MAX_CHARS);
+  const total = messageChars(messages);
+  if (total <= limit) return 0;
+  const compacted = new Set();
   const lastKeep = Math.max(2, messages.length - COMPACT_KEEP_TAIL);
   for (let i = 2; i < lastKeep; i += 1) {
     const m = messages[i];
     const content = typeof m?.content === 'string' ? m.content : '';
     if (m?.role === 'user' && content.startsWith('[TOOL_RESULT') && content.length > COMPACT_TOOL_RESULT_CAP + 60) {
       messages[i] = { ...m, content: `${content.slice(0, COMPACT_TOOL_RESULT_CAP)}\n…[resultado antiguo recortado; vuelve a leer el archivo si lo necesitas]` };
-      compacted += 1;
+      compacted.add(i);
     }
   }
-  return compacted;
+
+  const truncateAt = (index, floor) => {
+    const message = messages[index];
+    const text = messageContentText(message?.content);
+    const excess = messageChars(messages) - limit;
+    if (excess <= 0 || text.length <= floor) return;
+    const target = Math.max(floor, text.length - excess);
+    if (target >= text.length) return;
+    if (target === 0) {
+      messages[index] = { ...message, content: '' };
+    } else {
+      const marker = '\n…[contexto recortado por límite]…\n';
+      const available = Math.max(0, target - marker.length);
+      const head = Math.ceil(available * 0.6);
+      const tail = Math.max(0, available - head);
+      messages[index] = {
+        ...message,
+        content: `${text.slice(0, head)}${marker}${tail ? text.slice(-tail) : ''}`.slice(0, target),
+      };
+    }
+    compacted.add(index);
+  };
+
+  const summaryIndex = messages.findIndex((message, index) => (
+    index >= 2 && messageContentText(message?.content).startsWith('[COMPACTION · RESUMEN DE CONTEXTO]')
+  ));
+  const recentStart = Math.max(2, messages.length - COMPACT_KEEP_TAIL);
+
+  // Old context is cheapest to recover through tools, so reduce it first.
+  for (let i = 2; i < recentStart && messageChars(messages) > limit; i += 1) {
+    truncateAt(i, i === summaryIndex ? COMPACT_SUMMARY_FLOOR : COMPACT_MESSAGE_FLOOR);
+  }
+  // Preserve more of the newest turns, but never let the tail violate the cap.
+  for (let i = recentStart; i < messages.length && messageChars(messages) > limit; i += 1) {
+    const floor = i === summaryIndex
+      ? COMPACT_SUMMARY_FLOOR
+      : (i >= messages.length - 2 ? COMPACT_RECENT_MESSAGE_FLOOR : COMPACT_MESSAGE_FLOOR);
+    truncateAt(i, floor);
+  }
+  if (messageChars(messages) > limit && messages[1]) truncateAt(1, COMPACT_RECENT_MESSAGE_FLOOR);
+  if (messageChars(messages) > limit && messages[0]) truncateAt(0, COMPACT_SYSTEM_FLOOR);
+
+  // Extremely small explicit limits or very large message counts can make the
+  // semantic floors impossible. Drop those floors oldest-first, then bound the
+  // remaining longest payload until the invariant is satisfied.
+  for (let i = 2; i < messages.length && messageChars(messages) > limit; i += 1) truncateAt(i, 0);
+  if (messageChars(messages) > limit && messages[1]) truncateAt(1, 0);
+  if (messageChars(messages) > limit && messages[0]) truncateAt(0, 0);
+
+  return compacted.size;
 }
 
 function messageChars(messages) {
@@ -515,9 +589,10 @@ async function summariseContextWithLlm({
       tier,
       effort: 'low',
     });
-    if (turn?.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(turn.usage);
+    recordLlmUsageOnce(metrics, turn?.usage);
     return String(turn?.text || '').trim().slice(0, CONTEXT_SUMMARY_CAP);
-  } catch {
+  } catch (error) {
+    if (/^CODEX_PROJECT_(?:DAILY_)?BUDGET_/.test(String(error?.code || ''))) throw error;
     return '';
   }
 }
@@ -1058,7 +1133,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   // The metrics accumulator (feature 08) is fed during the loop and finalized at
   // close. Created here when the caller didn't inject one.
   const metrics = deps.metrics || runMetrics.createAccumulator({ run, clock });
-  const llmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
+  const baseLlmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
   const runner = deps.runner || createSandboxClient();
   const actionStore = deps.actionStore || actionStoreDefault;
   const webSearch = deps.webSearch || defaultWebSearch;
@@ -1113,6 +1188,86 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     }, { prisma }).catch(() => {});
     return { status: 'error', error };
   }
+
+  const resolveCost = deps.costResolver || require('./cost-resolver').resolveCost;
+  let inRunCostOriginalUsd = 0;
+  let inRunCostUsd = 0;
+  let budgetTerminalError = null;
+
+  const budgetError = (status) => {
+    const error = new Error(status.reason === 'daily_budget_exceeded'
+      ? `project daily budget exceeded during run: $${Number(status.costTodayUsd || 0).toFixed(4)} of $${Number(status.dailyBudgetUsd || 0).toFixed(2)}`
+      : `project budget runtime check failed: ${status.error || status.reason}`);
+    error.code = status.reason === 'daily_budget_exceeded'
+      ? 'CODEX_PROJECT_DAILY_BUDGET_EXCEEDED'
+      : 'CODEX_PROJECT_BUDGET_CHECK_FAILED';
+    error.budget = status;
+    return error;
+  };
+
+  const llmTurn = async (args) => {
+    if (budgetTerminalError) throw budgetTerminalError;
+    const turn = await baseLlmTurn(args);
+    const usage = turn?.usage;
+    recordLlmUsageOnce(metrics, usage);
+
+    if (budget.dailyBudgetUsd != null && usage) {
+      let resolved;
+      try {
+        resolved = await resolveCost(usage, { env, fetchImpl: deps.fetchImpl });
+      } catch (error) {
+        const status = {
+          allowed: env?.NODE_ENV !== 'production',
+          reason: 'budget_cost_resolution_failed',
+          error: String(error?.message || error).slice(0, 500),
+          costTodayUsd: null,
+          persistedCostTodayUsd: null,
+          inRunCostUsd,
+          dailyBudgetUsd: budget.dailyBudgetUsd,
+          remainingUsd: null,
+        };
+        await eventStore.appendEvent(run.id, 'budget_status', status, { prisma }).catch(() => {});
+        if (!status.allowed) {
+          budgetTerminalError = budgetError(status);
+          throw budgetTerminalError;
+        }
+      }
+      if (resolved) {
+        inRunCostOriginalUsd += Math.max(0, Number(resolved.costUsd) || 0);
+        inRunCostUsd = inRunCostOriginalUsd;
+      }
+    }
+
+    if (budget.dailyBudgetUsd != null) {
+      const runtimeBudget = await projectBudget.checkProjectBudget({
+        prisma,
+        projectId,
+        settings: projectSettings,
+        env,
+        now: clock(),
+        inRunCostUsd,
+      });
+      await eventStore.appendEvent(run.id, 'budget_status', {
+        allowed: runtimeBudget.allowed,
+        reason: runtimeBudget.reason,
+        costTodayUsd: runtimeBudget.costTodayUsd,
+        persistedCostTodayUsd: runtimeBudget.persistedCostTodayUsd,
+        inRunCostUsd: runtimeBudget.inRunCostUsd,
+        dailyBudgetUsd: runtimeBudget.dailyBudgetUsd,
+        remainingUsd: runtimeBudget.remainingUsd,
+      }, { prisma }).catch(() => {});
+      if (!runtimeBudget.allowed) {
+        budgetTerminalError = budgetError(runtimeBudget);
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: runtimeBudget.reason === 'daily_budget_exceeded'
+            ? `Detuve la corrida al alcanzar el presupuesto diario de $${Number(runtimeBudget.dailyBudgetUsd || 0).toFixed(2)}. No ejecuté las herramientas propuestas en esa respuesta.`
+            : 'Detuve la corrida porque no pude volver a verificar de forma segura el presupuesto diario.',
+        }, { prisma }).catch(() => {});
+        throw budgetTerminalError;
+      }
+    }
+    return turn;
+  };
 
   if (runBranchesEnabled) {
     const branch = await checkpointService.prepareRunBranch({
@@ -1290,7 +1445,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         model: run?.model || null,
         projectSettings,
         onUsage: (usage) => {
-          if (usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(usage);
+          recordLlmUsageOnce(metrics, usage);
         },
         emitAgent: async ({ agent, task }) => {
           const actionId = `a${++actionCounter}`;
@@ -1340,6 +1495,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         },
       },
     });
+    if (budgetTerminalError) {
+      return { status: 'error', error: budgetTerminalError.message };
+    }
     if (swarm.text) {
       messages.push({ role: 'user', content: swarm.text });
       await eventStore.appendEvent(run.id, 'narrative_delta', {
@@ -1389,19 +1547,21 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       });
     }
 
-    compactMessages(messages, { maxChars: contextMaxChars });
-    if (
-      String(env.CODEX_CONTEXT_SUMMARY ?? '1').trim() !== '0'
-      && messageChars(messages) > contextMaxChars
-    ) {
-      const nextSummary = await summariseContextWithLlm({
-        messages,
-        llmTurn,
-        signal,
-        env,
-        tier: run?.tier || null,
-        metrics,
-      });
+    const contextExceeded = messageChars(messages) > contextMaxChars;
+    let nextSummary = '';
+    if (String(env.CODEX_CONTEXT_SUMMARY ?? '1').trim() !== '0' && contextExceeded) {
+      try {
+        nextSummary = await summariseContextWithLlm({
+          messages,
+          llmTurn,
+          signal,
+          env,
+          tier: run?.tier || null,
+          metrics,
+        });
+      } catch (error) {
+        return { status: 'error', error: String(error?.message || error) };
+      }
       if (nextSummary) {
         const tail = boundedTail(messages);
         contextSummary = nextSummary;
@@ -1414,15 +1574,18 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           },
           ...tail,
         );
-        await persistContextSnapshot({
-          run,
-          eventStore,
-          prisma,
-          summary: contextSummary,
-          messages,
-          state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
-        });
       }
+    }
+    compactMessages(messages, { maxChars: contextMaxChars });
+    if (nextSummary) {
+      await persistContextSnapshot({
+        run,
+        eventStore,
+        prisma,
+        summary: contextSummary,
+        messages,
+        state: { verifyRounds, planExtensionsUsed, planTasks: latestPlanTasks },
+      });
     }
 
     let turn;
@@ -1473,7 +1636,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
       return { status: 'error', error: msg };
     }
-    if (turn?.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(turn.usage);
+    recordLlmUsageOnce(metrics, turn?.usage);
 
     // Reasoning block (native or prompted).
     if (turn?.reasoning && (turn.reasoning.text || turn.reasoning.label)) {
@@ -1570,6 +1733,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         backgroundTaskService: deps.backgroundTaskService,
         backgroundWatchers,
       });
+      if (budgetTerminalError) {
+        return { status: 'error', error: budgetTerminalError.message };
+      }
       return terminalOutcomeAfterClose(closed, stopHook, 'proactive quality gate failed');
     }
     if (allCalls.length > calls.length) {
@@ -1738,7 +1904,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
             : `Subagente background ${task.agent} terminó con estado ${task.status} (${task.taskId})${task.error ? `: ${task.error}` : '.'}`;
           await eventStore.appendEvent(run.id, 'narrative_delta', { text }, { prisma }).catch(() => {});
         },
-        onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
+        onUsage: (u) => { recordLlmUsageOnce(metrics, u); },
         // Live visibility for delegations: the SDK surfaces every specialist
         // tool call as a nested action in the same group. The event store's
         // per-run seq gate makes concurrent appends safe.
@@ -1937,6 +2103,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     backgroundTaskService: deps.backgroundTaskService,
     backgroundWatchers,
   });
+  if (budgetTerminalError) {
+    return { status: 'error', error: budgetTerminalError.message };
+  }
   return terminalOutcomeAfterClose(closed, stopHook, 'proactive quality gate failed');
 }
 
@@ -2216,7 +2385,7 @@ async function runDebuggerRepair({
     env,
     llmTurn,
     tier: run?.tier || null,
-    onUsage: (usage) => metrics?.recordLlmUsage?.(usage),
+    onUsage: (usage) => recordLlmUsageOnce(metrics, usage),
   });
   const durationMs = Math.max(0, clock().getTime() - t0);
   await eventStore.appendEvent(run.id, 'action_end', {
@@ -2517,7 +2686,7 @@ async function closeBuild({
       verification: learningEvidence,
       env,
     });
-    if (learned.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(learned.usage);
+    recordLlmUsageOnce(metrics, learned.usage);
   }
 
   // Metrics + run_summary (feature 08). Order: checkpoint → auto-memory →

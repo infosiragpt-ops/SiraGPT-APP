@@ -47,7 +47,11 @@ test('readiness uses real workspace, publication, OAuth and Gmail evidence', asy
     prisma: {
       socialConnection: {
         findMany: async () => [
-          { platform: 'linkedin', accountName: '@siragpt' },
+          {
+            platform: 'linkedin',
+            accountName: '@siragpt',
+            scopes: ['r_member_social', 'w_member_social'],
+          },
           { platform: 'linkedin', accountName: '@duplicate' },
         ],
       },
@@ -60,6 +64,7 @@ test('readiness uses real workspace, publication, OAuth and Gmail evidence', asy
   assert.equal(context.readiness.score, 100);
   assert.equal(context.readiness.evidence.publishedUrl, 'https://app.apps.siragpt.com');
   assert.equal(context.readiness.evidence.socialConnections.length, 1);
+  assert.equal(context.readiness.evidence.socialConnections[0].conversationsReady, true);
   assert.equal(context.readiness.evidence.gmailConnected, true);
   assert.equal(context.readiness.gaps.length, 0);
 });

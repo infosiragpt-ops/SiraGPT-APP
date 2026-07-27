@@ -100,6 +100,8 @@ function deriveCompanyMissionPortfolio({
   const workspaceReady = evidence.workspaceReady === true;
   const socialConnected = Array.isArray(evidence.socialConnections)
     && evidence.socialConnections.length > 0;
+  const socialRepliesConnected = socialConnected
+    && evidence.socialConnections.some((connection) => connection?.conversationsReady !== false);
   const gmailConnected = evidence.gmailConnected === true;
   const codeMode = profile.autonomy?.codeChanges || 'auto';
   const researchEnabled = profile.autonomy?.research !== false;
@@ -228,19 +230,27 @@ function deriveCompanyMissionPortfolio({
     mission({
       id: 'social-replies',
       title: 'Responder conversaciones sociales',
-      departmentId: 'marketing',
+      departmentId: 'customer-success',
       priority: 7,
-      status: socialConnected ? 'integration_required' : 'blocked_connection',
+      status: externalStatus({
+        connected: socialRepliesConnected,
+        mode: safeguards.socialReplies || 'review',
+      }),
       executionMode: 'external',
       objective: 'Clasificar comentarios y preparar respuestas basadas en la marca, el hilo completo y la política del canal.',
       evidence: social?.evidence,
-      nextAction: socialConnected
-        ? 'Habilitar un despachador auditado de comentarios antes de responder; mientras tanto, preparar borradores sin publicarlos.'
-        : 'Conectar una cuenta OAuth desde Recursos antes de leer o responder comentarios.',
+      nextAction: socialRepliesConnected
+        ? safeguards.socialReplies === 'auto'
+          ? 'Clasificar conversaciones y responder solo cuando superen política, cuota, permisos e idempotencia.'
+          : 'Clasificar conversaciones y preparar respuestas trazables para revisión humana.'
+        : socialConnected
+          ? 'Reconectar la cuenta social para autorizar lectura y respuesta de conversaciones.'
+          : 'Conectar una cuenta OAuth desde Recursos antes de leer o responder comentarios.',
       sourceArea: 'social',
       externalEffect: true,
-      autoExecutable: false,
+      autoExecutable: socialRepliesConnected && safeguards.socialReplies === 'auto',
       approval: safeguards.socialReplies === 'review' ? 'social_replies' : null,
+      executor: socialRepliesConnected ? 'company-operation' : null,
     }),
     mission({
       id: 'email-operations',

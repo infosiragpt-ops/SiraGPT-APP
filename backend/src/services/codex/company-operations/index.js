@@ -1,6 +1,7 @@
 'use strict';
 
 const inbox = require('./inbox-triage');
+const social = require('./social-triage');
 const sales = require('./sales-pipeline');
 const actions = require('./external-actions');
 const policy = require('./external-action-policy');
@@ -52,5 +53,6 @@ module.exports = {
   ...policy,
   ...sales,
   ...inbox,
+  ...social,
   getOperationsSnapshot,
 };

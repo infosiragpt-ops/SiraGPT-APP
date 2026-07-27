@@ -4,6 +4,7 @@ const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const eventStore = require('../src/services/codex/event-store');
+const pubsub = require('../src/services/codex/redis-pubsub');
 const { appendEvent, listEvents, createSeqGate, _resetSeqCache } = eventStore;
 
 // In-memory fake of the Prisma codexEvent model with the real unique
@@ -93,6 +94,66 @@ test('Redis-down publish failure does not break the durable append', async () =>
   const ev = await appendEvent('r3', 'narrative_delta', { text: 'still saved' }, { prisma, publish });
   assert.equal(ev.seq, 1);
   assert.equal(prisma._rows.length, 1); // persisted despite publish throwing
+  assert.equal(prisma._rows[0].payload.text, 'still saved');
+});
+
+test('a publish promise that never settles cannot block appendEvent', async () => {
+  const prisma = makeFakePrisma();
+  const hungPublish = () => new Promise(() => {});
+  const append = appendEvent(
+    'r-hung',
+    'narrative_delta',
+    { text: 'durable before fan-out' },
+    {
+      prisma,
+      publish: hungPublish,
+      env: { CODEX_REDIS_PUBLISH_TIMEOUT_MS: '25' },
+    },
+  );
+
+  const ev = await Promise.race([
+    append,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('appendEvent remained blocked')), 250);
+      timer.unref?.();
+    }),
+  ]);
+
+  assert.equal(ev.seq, 1);
+  assert.equal(prisma._rows.length, 1);
+  assert.equal(prisma._rows[0].payload.text, 'durable before fan-out');
+});
+
+test('publisher connection refuses offline queuing and limits retries', () => {
+  const options = pubsub.publisherRedisOptions({
+    CODEX_REDIS_PUBLISH_TIMEOUT_MS: '75',
+  });
+
+  assert.equal(options.lazyConnect, true);
+  assert.equal(options.enableOfflineQueue, false);
+  assert.equal(options.maxRetriesPerRequest, 1);
+  assert.equal(options.connectTimeout, 75);
+  assert.equal(options.commandTimeout, 75);
+  assert.equal(options.retryStrategy(1), 50);
+  assert.equal(options.retryStrategy(2), null);
+});
+
+test('publishEvent times out fail-open and rate-limits warnings', async () => {
+  const warnings = [];
+  const connection = {
+    status: 'ready',
+    publish: () => new Promise(() => {}),
+  };
+  const options = {
+    connection,
+    env: { NODE_ENV: 'production', CODEX_REDIS_PUBLISH_TIMEOUT_MS: '25' },
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  };
+
+  assert.equal(await pubsub.publishEvent('r-timeout', { seq: 1 }, options), false);
+  assert.equal(await pubsub.publishEvent('r-timeout', { seq: 2 }, options), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /durable replay remains available/);
 });
 
 test('listEvents returns events after a seq in ascending order', async () => {

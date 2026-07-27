@@ -309,6 +309,8 @@ test('company operations routes scope every record to the owned user and project
     inboxCount: codexDb.codexCompanyInboxItem.count,
     actionFindMany: codexDb.codexExternalAction.findMany,
     actionCount: codexDb.codexExternalAction.count,
+    socialFindMany: codexDb.socialConnection.findMany,
+    userFindUnique: codexDb.user.findUnique,
   };
   const scopes = [];
   const project = { id: 'p1', userId: 'u-1', name: 'SiraGPT.COM', brief: {} };
@@ -347,6 +349,8 @@ test('company operations routes scope every record to the owned user and project
     scopes.push(['action-count', where]);
     return 0;
   };
+  codexDb.socialConnection.findMany = async () => [];
+  codexDb.user.findUnique = async () => ({ gmailTokens: null });
 
   try {
     const snapshot = await request(buildApp()).get('/api/codex/projects/p1/company-operations');
@@ -364,6 +368,12 @@ test('company operations routes scope every record to the owned user and project
     assert.equal(rejectedHeaderInjection.status, 400);
     assert.equal(rejectedHeaderInjection.body.error, 'validation_failed');
 
+    const socialTriage = await request(buildApp())
+      .post('/api/codex/projects/p1/company-operations/triage-social')
+      .send({ maxResults: 10 });
+    assert.equal(socialTriage.status, 200);
+    assert.equal(socialTriage.body.result.action, 'social_not_connected');
+
     for (const [, where] of scopes) {
       assert.equal(where.projectId, 'p1');
       assert.equal(where.userId, 'u-1');
@@ -378,6 +388,8 @@ test('company operations routes scope every record to the owned user and project
     codexDb.codexCompanyInboxItem.count = originals.inboxCount;
     codexDb.codexExternalAction.findMany = originals.actionFindMany;
     codexDb.codexExternalAction.count = originals.actionCount;
+    codexDb.socialConnection.findMany = originals.socialFindMany;
+    codexDb.user.findUnique = originals.userFindUnique;
   }
 });
 

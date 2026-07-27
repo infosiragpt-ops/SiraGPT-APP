@@ -126,9 +126,12 @@ async function executeExternalAction({
   project,
   actionId,
   gmailLoader = loadGmailClientForUser,
+  socialReplySender = null,
   now = () => new Date(),
   env = process.env,
   companyContext = null,
+  fetchImpl = globalThis.fetch,
+  vault = null,
 }) {
   const key = String(project.id);
   const claim = await withLocalLock(key, async () => {
@@ -147,7 +150,7 @@ async function executeExternalAction({
 
       const start = new Date(now());
       start.setUTCHours(0, 0, 0, 0);
-      const [freshProject, user, sentToday] = await Promise.all([
+      const [freshProject, user, socialConnection, sentToday] = await Promise.all([
         client.codexProject?.findFirst
           ? client.codexProject.findFirst({
             where: { id: project.id, userId: project.userId },
@@ -157,6 +160,15 @@ async function executeExternalAction({
           ? client.user.findUnique({
             where: { id: project.userId },
             select: { gmailTokens: true },
+          })
+          : null,
+        action.kind === 'social_reply' && client.socialConnection?.findFirst
+          ? client.socialConnection.findFirst({
+            where: {
+              id: action.payload?.connectionId,
+              userId: project.userId,
+              platform: action.payload?.platform,
+            },
           })
           : null,
         client.codexExternalAction.count({
@@ -171,22 +183,41 @@ async function executeExternalAction({
           },
         }),
       ]);
+      const existingEvidence = companyContext?.readiness?.evidence || {};
+      const socialConnections = socialConnection
+        ? [{
+          platform: socialConnection.platform,
+          accountName: socialConnection.accountName || null,
+        }]
+        : Array.isArray(existingEvidence.socialConnections)
+          ? existingEvidence.socialConnections
+          : [];
       const liveContext = freshProject
         ? {
           profile: companyOperatingProfile.readCompanyProfile(freshProject, { now: now() }),
           readiness: {
             evidence: {
+              ...existingEvidence,
               gmailConnected: user
                 ? Boolean(user.gmailTokens)
                 : Boolean(companyContext?.readiness?.evidence?.gmailConnected ?? true),
+              socialConnections,
             },
           },
         }
         : companyContext;
+      const connected = action.kind === 'social_reply'
+        ? Boolean(
+          socialConnection
+          || socialConnections.some((connection) => (
+            connection?.platform === action.payload?.platform
+          )),
+        )
+        : Boolean(liveContext?.readiness?.evidence?.gmailConnected);
       const decision = policy.decideExternalAction({
         companyContext: liveContext,
         kind: action.kind,
-        connected: Boolean(liveContext?.readiness?.evidence?.gmailConnected),
+        connected,
         sentToday,
         env,
       });
@@ -224,9 +255,9 @@ async function executeExternalAction({
   const action = claim.record;
 
   try {
-    const { client } = await gmailLoader({ prisma, userId: project.userId });
     let result;
     if (action.kind === 'email_reply') {
+      const { client } = await gmailLoader({ prisma, userId: project.userId });
       result = action.payload.providerDraftId
         ? await client.sendDraft({ draftId: action.payload.providerDraftId })
         : await client.replyToEmail({
@@ -246,6 +277,7 @@ async function executeExternalAction({
         },
       });
     } else if (action.kind === 'lead_outreach') {
+      const { client } = await gmailLoader({ prisma, userId: project.userId });
       result = action.payload.providerDraftId
         ? await client.sendDraft({ draftId: action.payload.providerDraftId })
         : await client.sendEmail({
@@ -262,6 +294,51 @@ async function executeExternalAction({
         data: {
           status: 'contacted',
           lastContactedAt: now(),
+        },
+      });
+    } else if (action.kind === 'social_reply') {
+      const connection = await prisma.socialConnection.findFirst({
+        where: {
+          id: action.payload?.connectionId,
+          userId: project.userId,
+          platform: action.payload?.platform,
+        },
+      });
+      if (!connection) {
+        const error = new Error('La conexión social requerida ya no está disponible.');
+        error.code = 'SOCIAL_CONNECTION_REQUIRED';
+        throw error;
+      }
+      const sender = socialReplySender
+        || require('../../social-company/conversations').sendSocialReply;
+      result = await sender({
+        connection,
+        interaction: {
+          id: action.payload?.interactionId,
+          threadId: action.payload?.threadId,
+          parentId: action.payload?.parentId,
+          authorId: action.payload?.authorId,
+          platform: action.payload?.platform,
+          metadata: action.payload?.metadata && typeof action.payload.metadata === 'object'
+            ? action.payload.metadata
+            : {},
+        },
+        text: action.payload?.body,
+        prisma,
+        env,
+        fetchImpl,
+        vault,
+      });
+      await prisma.codexCompanyInboxItem.updateMany({
+        where: {
+          projectId: project.id,
+          userId: project.userId,
+          provider: action.payload?.platform,
+          externalId: action.payload?.interactionId,
+        },
+        data: {
+          status: 'sent',
+          sentMessageId: result?.externalId || result?.messageId || null,
         },
       });
     } else {
@@ -346,10 +423,13 @@ async function rejectExternalAction({ prisma, project, actionId }) {
 
 async function decisionForAction({ prisma, project, companyContext, kind, env, now = new Date() }) {
   const sentToday = await completedToday({ prisma, projectId: project.id, kind, now });
+  const connected = kind === 'social_reply'
+    ? Boolean(companyContext?.readiness?.evidence?.socialConnections?.length)
+    : Boolean(companyContext?.readiness?.evidence?.gmailConnected);
   return policy.decideExternalAction({
     companyContext,
     kind,
-    connected: Boolean(companyContext?.readiness?.evidence?.gmailConnected),
+    connected,
     sentToday,
     env,
   });

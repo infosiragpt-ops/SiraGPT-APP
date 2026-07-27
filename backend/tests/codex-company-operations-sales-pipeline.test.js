@@ -9,8 +9,8 @@ test('lead research persists only candidates backed by returned source URLs', as
   const rows = [];
   const prisma = {
     codexCompanyLead: {
-      upsert: async ({ create }) => {
-        const row = { id: `lead-${rows.length + 1}`, ...create };
+      create: async ({ data }) => {
+        const row = { id: `lead-${rows.length + 1}`, ...data };
         rows.push(row);
         return row;
       },
@@ -62,6 +62,60 @@ test('lead research persists only candidates backed by returned source URLs', as
   assert.equal(rows[0].userId, 'user-a');
   assert.equal(rows[0].companyName, 'Empresa Alfa');
   assert.equal(rows[0].status, 'qualified');
+});
+
+test('re-research preserves protected commercial states and only upgrades discovered leads', async () => {
+  const protectedStatuses = ['review', 'contacted', 'replied', 'won', 'lost', 'do_not_contact'];
+  for (const initialStatus of protectedStatuses) {
+    const row = {
+      id: `lead-${initialStatus}`,
+      projectId: 'project-a',
+      userId: 'user-a',
+      fingerprint: 'fingerprint-a',
+      companyName: 'Empresa anterior',
+      status: initialStatus,
+    };
+    const prisma = {
+      codexCompanyLead: {
+        create: async () => {
+          const error = new Error('duplicate');
+          error.code = 'P2002';
+          throw error;
+        },
+        findUnique: async () => structuredClone(row),
+        update: async ({ data }) => {
+          Object.assign(row, data);
+          return structuredClone(row);
+        },
+        updateMany: async ({ where, data }) => {
+          if (row.id === where.id && row.status === where.status) {
+            Object.assign(row, data);
+            return { count: 1 };
+          }
+          return { count: 0 };
+        },
+      },
+    };
+    const persisted = await sales.persistResearchedLead({
+      prisma,
+      data: {
+        projectId: 'project-a',
+        userId: 'user-a',
+        fingerprint: 'fingerprint-a',
+        companyName: 'Empresa actualizada',
+        domain: 'empresa.example',
+        websiteUrl: 'https://empresa.example',
+        sourceTitle: 'Fuente verificada',
+        evidence: 'Evidencia más reciente.',
+        status: 'qualified',
+        score: 95,
+        tags: ['b2b'],
+        updatedAt: new Date('2026-07-27T18:00:00.000Z'),
+      },
+    });
+    assert.equal(persisted.status, initialStatus);
+    assert.equal(persisted.companyName, 'Empresa actualizada');
+  }
 });
 
 test('lead research refuses to run without offer and target customer', async () => {

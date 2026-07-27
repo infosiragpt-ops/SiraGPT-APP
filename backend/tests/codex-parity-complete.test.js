@@ -216,6 +216,29 @@ test('project daily budget aggregates metrics and fails closed in production', a
   assert.equal(configuredBudgetUsd({}, { NODE_ENV: 'production' }), 10);
 });
 
+test('project daily budget includes unpersisted cost from the active run', async () => {
+  const prisma = {
+    codexRunMetric: {
+      aggregate: async () => ({ _sum: { costOriginalUsd: 0.6, costAppliedUsd: 0 } }),
+    },
+  };
+  const status = await checkProjectBudget({
+    prisma,
+    projectId: 'p1',
+    settings: { budget: { dailyUsd: 1 } },
+    env: { NODE_ENV: 'production' },
+    now: new Date('2026-07-27T12:00:00Z'),
+    inRunCostUsd: 0.4,
+  });
+
+  assert.equal(status.allowed, false, 'alcanzar exactamente el límite impide otra llamada');
+  assert.equal(status.reason, 'daily_budget_exceeded');
+  assert.equal(status.persistedCostTodayUsd, 0.6);
+  assert.equal(status.inRunCostUsd, 0.4);
+  assert.equal(status.costTodayUsd, 1);
+  assert.equal(status.remainingUsd, 0);
+});
+
 test('workspace media detects images and provides PDF text plus native document blocks', async () => {
   const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1]);
   assert.equal(detectMediaType(png, 'x.bin'), 'image/png');

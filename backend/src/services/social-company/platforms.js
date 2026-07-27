@@ -50,7 +50,7 @@ function providerConfig(platformValue, env = process.env) {
       tokenUrl: `https://graph.facebook.com/${apiVersion}/oauth/access_token`,
       apiBase: `https://graph.facebook.com/${apiVersion}`,
       scopes: (envValue(env, 'SOCIAL_FACEBOOK_SCOPES')
-        || 'pages_show_list,pages_read_engagement,pages_manage_posts')
+        || 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement')
         .split(/[,\s]+/)
         .filter(Boolean),
     };
@@ -70,7 +70,7 @@ function providerConfig(platformValue, env = process.env) {
       tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
       apiBase: 'https://api.linkedin.com',
       apiVersion: envValue(env, 'SOCIAL_LINKEDIN_API_VERSION') || '202607',
-      scopes: (envValue(env, 'SOCIAL_LINKEDIN_SCOPES') || 'openid profile w_member_social')
+      scopes: (envValue(env, 'SOCIAL_LINKEDIN_SCOPES') || 'openid profile r_member_social w_member_social')
         .split(/\s+/)
         .filter(Boolean),
     };
