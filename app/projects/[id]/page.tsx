@@ -151,7 +151,7 @@ export default function ProjectDetailPage() {
   async function handleDeleteConfirmed() {
     if (!project) return
     await projectsService.remove(project.id)
-    toast.success("Proyecto movido a Papelera por 30 días.")
+    toast.success("Empresa movida a Papelera por 30 días.")
     router.push("/projects")
   }
 

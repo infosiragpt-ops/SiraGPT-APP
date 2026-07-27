@@ -1691,7 +1691,7 @@ export function AppSidebar() {
                                         </DropdownMenuSubTrigger>
                                         <DropdownMenuPortal>
                                           <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
-                                            {["Trabajo", "Proyecto", "Personal"].map((folder) => (
+                                            {["Trabajo", "Empresa", "Personal"].map((folder) => (
                                               <DropdownMenuItem
                                                 key={folder}
                                                 onSelect={() => moveChatToFolder(chat, folder)}

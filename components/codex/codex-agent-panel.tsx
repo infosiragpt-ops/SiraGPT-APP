@@ -167,13 +167,16 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   const approvePlan = useCallback(async (planRunId = activeRunId, tier?: string) => {
     if (!project || !planRunId) return
     try {
-      const build = await codexApi.approvePlan(project.id, planRunId, tier)
+      // APPS builds must keep running after the browser tab closes / for hours.
+      const build = await codexApi.approvePlan(project.id, planRunId, tier, {
+        autoExecute: surface === "apps",
+      })
       markApproved()
       setActiveRunId(build.id)
     } catch (e: any) {
       toast.error(e?.message || t("errors.approvePlan"))
     }
-  }, [activeRunId, markApproved, project, t])
+  }, [activeRunId, markApproved, project, surface, t])
 
   useEffect(() => {
     if (!pendingAutoBuild || !activeRunId) return
@@ -307,15 +310,24 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
 
   function buildAutonomousPrompt(fullPrompt: string): string {
     return [
-      "MODO APPS TIPO CODEX:",
+      "MODO APPS TIPO CODEX / CLAUDE CODE:",
       "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
-      "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
-      "- Primero genera un plan tecnico concreto; si la ejecucion continua, construye, prueba/itera y entrega el resultado en preview/codigo.",
+      "- Si falta contexto, propone internamente un brief completo con defaults razonables y continua.",
+      "- CORRIDA LARGA AUTONOMA: puedes trabajar durante horas. No te detengas por falta de chat abierto. Itera plan → build → verify → fix hasta un resultado usable.",
+      "- COMPILA TODAS LAS CAPAS del software en una sola mision, no un mock visual:",
+      "  1) producto/dominio (flujos, roles, entidades)",
+      "  2) datos (schema/modelos, seed realista, persistencia)",
+      "  3) backend/API (endpoints, validacion, errores)",
+      "  4) frontend (navegacion, pantallas, estados vacios/carga/error)",
+      "  5) integracion (auth light o gate simple si aplica, wiring API↔UI)",
+      "  6) calidad (typecheck, dev server, smoke de rutas criticas)",
+      "- Primero genera un plan tecnico concreto por capas; luego construye, prueba, itera y entrega preview + codigo.",
       "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
-      "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturacion, RRHH, POS, gestion de clientes/proveedores/proyectos): delega PRIMERO en enterprise_analyst y construye una app multi-modulo con navegacion lateral, dashboard con KPIs y datos de ejemplo realistas del dominio (nunca lorem ipsum).",
+      "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturacion, RRHH, POS, gestion de clientes/proveedores/empresas): delega PRIMERO en enterprise_analyst y construye una app multi-modulo con navegacion lateral, dashboard con KPIs y datos de ejemplo realistas del dominio (nunca lorem ipsum).",
       "- Para UI usa frontend_builder; para datos/API backend_engineer o db_architect; cierra con qa_reviewer o debugger si hay errores de tsc/dev server.",
       "- Puedes emitir VARIOS run_subagent en el mismo turno cuando las tareas no dependan entre si.",
-      "- Trabaja como Claude Code: lee el workspace, escribe archivos completos, verifica con type_check/dev_server_check y corrige hasta que el preview arranque.",
+      "- Trabaja como Claude Code / ChatGPT agentico: lee el workspace, escribe archivos completos (no stubs), verifica con type_check/dev_server_check y corrige hasta que el preview arranque de verdad.",
+      "- Si el alcance es grande, prioriza un MVP vertical completo end-to-end y luego expande modulos sin romper lo ya verde.",
       "",
       "SOLICITUD DEL USUARIO:",
       fullPrompt,
@@ -349,6 +361,8 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
         mode: "plan",
         prompt: buildAutonomousPrompt(fullPrompt),
         tier: payload.tier,
+        // APPS: durable multi-hour execution (plan auto-continues into build).
+        autoExecute: surface === "apps",
       })
       setActivePlanOnly(payload.planOnly)
       if (!payload.planOnly) setPendingAutoBuild({ planRunId: run.id, tier: payload.tier })
@@ -452,7 +466,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
               </div>
               <p className="text-sm leading-relaxed text-zinc-500">
                 {surface === "apps"
-                  ? "Escribe qué quieres (CRM, ERP, landing, dashboard…) y el agente planifica, delega en subagentes, escribe código, verifica y abre el preview. Sin intake ni preguntas innecesarias."
+                  ? "Escribe una instrucción simple (CRM, ERP, SaaS, dashboard…) y la IA compila todas las capas: dominio, datos, API, UI, integración y calidad. Los agentes pueden trabajar durante horas, iterar solos y dejar preview usable."
                   : project
                     ? t("panel.emptyDescribe")
                     : t("panel.emptySelect")}

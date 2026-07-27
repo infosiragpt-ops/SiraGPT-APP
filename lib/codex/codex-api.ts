@@ -796,8 +796,16 @@ export const codexApi = {
       { method: "POST", body: JSON.stringify({ toSeq, ...(checkpointId ? { checkpointId } : {}) }) },
     ).then((r) => r.session),
 
-  approvePlan: (projectId: string, planRunId: string, tier?: string) =>
-    req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify({ mode: "build", planRunId, tier }) }).then((r) => r.run),
+  approvePlan: (projectId: string, planRunId: string, tier?: string, opts?: { autoExecute?: boolean }) =>
+    req<{ run: CodexRun }>(`/projects/${projectId}/runs`, {
+      method: "POST",
+      body: JSON.stringify({
+        mode: "build",
+        planRunId,
+        tier,
+        ...(opts?.autoExecute ? { autoExecute: true } : {}),
+      }),
+    }).then((r) => r.run),
   rollbackCheckpoint: (checkpointId: string) => req<{ ok: boolean; commitSha: string; restarted: boolean }>(`/checkpoints/${checkpointId}/rollback`, { method: "POST" }),
   getCheckpointDiff: (checkpointId: string) => req<CodexCheckpointDiff>(`/checkpoints/${checkpointId}/diff`),
   listCheckpoints: (projectId: string) =>
