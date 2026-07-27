@@ -294,6 +294,55 @@ const googleServicesOauth2Client = new OAuth2Client(
   getGoogleServicesCallbackURL()
 );
 
+async function mirrorOAuthConnector({
+  userId,
+  provider,
+  sealed,
+  scopes,
+}) {
+  if (!prisma.connectorAccount?.upsert) return;
+  await prisma.connectorAccount.upsert({
+    where: {
+      userId_provider: {
+        userId: String(userId),
+        provider: String(provider),
+      },
+    },
+    create: {
+      userId: String(userId),
+      provider: String(provider),
+      accountLabel: 'Cuenta de Google',
+      authType: 'oauth2',
+      scopes,
+      tokenEncrypted: sealed,
+      status: 'connected',
+      lastHealthAt: new Date(),
+    },
+    update: {
+      accountLabel: 'Cuenta de Google',
+      authType: 'oauth2',
+      scopes,
+      tokenEncrypted: sealed,
+      status: 'connected',
+      lastHealthAt: new Date(),
+      lastError: null,
+    },
+  });
+}
+
+async function clearOAuthConnector(userId, provider) {
+  if (!prisma.connectorAccount?.updateMany) return;
+  await prisma.connectorAccount.updateMany({
+    where: { userId: String(userId), provider: String(provider) },
+    data: {
+      tokenEncrypted: null,
+      scopes: [],
+      status: 'disconnected',
+      lastHealthAt: new Date(),
+    },
+  });
+}
+
 // Provider descriptors → ProviderOAuthService instances. Adding a
 // third Google-style integration is "describe it here, wire 4 thin
 // routes" — no business logic in the route layer.
@@ -322,8 +371,19 @@ const gmailOAuth = new ProviderOAuthService({
     // app breaks if any is missing, so 'every' is the right policy.
     requiredScopes: GMAIL_SCOPES,
     scopeMatch: 'every',
-    persistTokens: (userId, sealed) => users.updateGmailTokens(userId, sealed),
-    clearTokens: (userId) => users.clearGmailTokens(userId),
+    persistTokens: async (userId, sealed) => {
+      await users.updateGmailTokens(userId, sealed);
+      await mirrorOAuthConnector({
+        userId,
+        provider: 'gmail',
+        sealed,
+        scopes: GMAIL_SCOPES,
+      });
+    },
+    clearTokens: async (userId) => {
+      await users.clearGmailTokens(userId);
+      await clearOAuthConnector(userId, 'gmail');
+    },
     readSealedTokens: async (userId) => {
       const row = await users.findById(userId, { select: { gmailTokens: true } });
       return row?.gmailTokens ?? null;
@@ -348,8 +408,19 @@ const googleServicesOAuth = new ProviderOAuthService({
       'https://www.googleapis.com/auth/drive',
     ],
     scopeMatch: 'some',
-    persistTokens: (userId, sealed) => users.updateGoogleServicesTokens(userId, sealed),
-    clearTokens: (userId) => users.clearGoogleServicesTokens(userId),
+    persistTokens: async (userId, sealed) => {
+      await users.updateGoogleServicesTokens(userId, sealed);
+      await mirrorOAuthConnector({
+        userId,
+        provider: 'google_drive',
+        sealed,
+        scopes: GOOGLE_SERVICES_SCOPES,
+      });
+    },
+    clearTokens: async (userId) => {
+      await users.clearGoogleServicesTokens(userId);
+      await clearOAuthConnector(userId, 'google_drive');
+    },
     readSealedTokens: async (userId) => {
       const row = await users.findById(userId, { select: { googleServicesTokens: true } });
       return row?.googleServicesTokens ?? null;

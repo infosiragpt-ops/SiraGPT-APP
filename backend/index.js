@@ -490,6 +490,8 @@ const deploymentsRoutes = require('./src/routes/deployments');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
+const { createCoworkPlatformRouter } = require('./src/routes/cowork-platform');
+const { createCoworkAiControlRouter } = require('./src/routes/cowork-ai-control');
 const memoryRoutes = require('./src/routes/memory');
 const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
@@ -503,6 +505,7 @@ const {
     shutdownWriteBehindCache,
 } = require('./src/middleware/auth');
 const scheduler = require('./src/services/scheduler/scheduler');
+const coworkScheduler = require('./src/services/cowork/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
@@ -1188,6 +1191,7 @@ app.use('/api/appshots', appshotsRoutes);
 // Read-only failover/key-pool/key-health diagnostics. Mounted BEFORE the
 // generic /api/ai router so /api/ai/failover/* takes precedence. GET-only.
 app.use('/api/ai/failover', aiFailoverHealthRoutes);
+app.use('/api/ai', createCoworkAiControlRouter());
 app.use('/api/ai', aiRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin/queues', adminQueuesRoutes);
@@ -1325,6 +1329,7 @@ try {
     /* telegram is optional */
 }
 app.use('/api/push', pushRoutes);
+app.use('/api/cowork', createCoworkPlatformRouter());
 app.use('/api/cowork', coworkRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
@@ -1649,6 +1654,7 @@ async function startServer() {
     const { classifyTaskError } = require('./src/services/agents/agent-task-runner');
     scheduler.setJobClassifier(classifyTaskError);
     scheduler.start();
+    coworkScheduler.startSchedulerWorker(prisma);
 
     try {
         const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
@@ -1810,6 +1816,7 @@ async function startServer() {
         try { internalHealthSystem.stopScheduler(); } catch { }
         try { defaultQueueHealthProbe.stop(); } catch { }
         try { scheduler.stop?.(); } catch { }
+        try { coworkScheduler.stopSchedulerWorker(); } catch { }
         try {
             const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');
             shutdownHermesRuntime();

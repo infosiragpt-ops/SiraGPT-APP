@@ -77,6 +77,20 @@ function buildHarnessTools(existingNames, opts = {}) {
     }
   }
 
+  // Cowork tools are mounted only when the authenticated turn has a concrete
+  // workspace. Their execute functions still verify prisma/user/workspace
+  // context, so a model can never manufacture a workspace id in arguments.
+  if (opts.workspaceId) {
+    try {
+      const { buildCoworkTools } = require('./tools/cowork-tools');
+      for (const def of buildCoworkTools()) {
+        if (!existingNames.has(def.name)) defs.push(def);
+      }
+    } catch (err) {
+      try { console.warn('[agent-harness] Cowork tools registration failed:', err && err.message); } catch (_) { /* noop */ }
+    }
+  }
+
   return defs;
 }
 
@@ -113,6 +127,8 @@ async function attachHarness(opts = {}) {
     provider = null,
     sandboxSessionId = null,
     fileIds = [],
+    workspaceId = null,
+    coworkRunId = null,
   } = opts;
 
   const registry = createToolRegistry();
@@ -135,7 +151,28 @@ async function attachHarness(opts = {}) {
   const harnessDefs = buildHarnessTools(existingNames, {
     sandboxSessionId,
     hasAttachments: Array.isArray(fileIds) && fileIds.filter(Boolean).length > 0,
+    workspaceId,
   });
+  if (workspaceId) {
+    const mountedNames = new Set([
+      ...existingNames,
+      ...harnessDefs.map((definition) => definition?.name).filter(Boolean),
+    ]);
+    const requiredCoworkTools = [
+      'ws_read',
+      'ws_write',
+      'ws_edit',
+      'ws_glob',
+      'ws_grep',
+      'update_checklist',
+    ];
+    const missing = requiredCoworkTools.filter((name) => !mountedNames.has(name));
+    if (missing.length) {
+      const error = new Error(`Cowork workspace tools failed to mount: ${missing.join(', ')}`);
+      error.code = 'cowork_tools_unavailable';
+      throw error;
+    }
+  }
   for (const def of harnessDefs) registry.register(def);
   const harnessTools = harnessDefs.map((def) => registry.toAgentTool(def.name));
 
@@ -173,7 +210,7 @@ async function attachHarness(opts = {}) {
     write,
     registry,
     permission: permissionManager,
-    ctxInfo: { chatId, userId },
+    ctxInfo: { chatId, userId, workspaceId, coworkRunId, prisma },
     provider,
     signal,
   });

@@ -39,6 +39,8 @@ import {
   Check,
   X,
   ShieldQuestion,
+  Circle,
+  AlertTriangle,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import { useTranslations } from "next-intl"
@@ -250,7 +252,7 @@ export default function AgentTrace({
   onPermissionAnswered,
 }: AgentTraceProps) {
   const t = useTranslations("agent")
-  const active = reasoningStreaming || run?.status === "running" || (!run && steps.some((s) => s.status === "planned" || s.status === "executing"))
+  const active = reasoningStreaming || ["queued", "running", "paused", "waiting_approval"].includes(run?.status || "") || (!run && steps.some((s) => s.status === "planned" || s.status === "executing"))
   // Expanded while the run is live; auto-collapses on agent_done. The user's
   // explicit toggle always wins afterwards (same pattern as ThinkingTrace).
   const [userToggled, setUserToggled] = useState<boolean | null>(null)
@@ -301,6 +303,11 @@ export default function AgentTrace({
         >
           {headerLabel}
         </span>
+        {run?.fallbackModel && (
+          <span className="shrink-0 rounded-full border border-border/70 bg-muted/40 px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            FlashGPT
+          </span>
+        )}
         {expanded ? (
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
         ) : (
@@ -322,6 +329,27 @@ export default function AgentTrace({
                 <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
                   {reasoning}
                 </ReactMarkdown>
+              </div>
+            )}
+            {Boolean(run?.checklist?.length) && (
+              <div className="mb-3 space-y-1.5 border-b border-border/50 pb-3">
+                <div className="text-[10.5px] font-semibold uppercase text-muted-foreground/70">Plan de trabajo</div>
+                {run!.checklist!.map((item, index) => (
+                  <div key={item.id || `${index}-${item.text}`} className="flex items-start gap-2 text-[12px]">
+                    {item.status === "completed" ? (
+                      <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                    ) : item.status === "blocked" ? (
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+                    ) : item.status === "in_progress" ? (
+                      <DotmCircular15 size={14} color={THINKING_GLYPH_COLOR} className="mt-0.5 shrink-0" />
+                    ) : (
+                      <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                    )}
+                    <span className={clsx(item.status === "completed" && "text-muted-foreground/70 line-through")}>
+                      {item.text}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
             {steps.map((step, i) => (

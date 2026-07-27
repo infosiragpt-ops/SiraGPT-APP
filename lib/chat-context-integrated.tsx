@@ -267,13 +267,25 @@ export interface AgentStepClient {
 }
 
 export interface AgentRunClient {
-  status: 'running' | 'completed' | 'interrupted'
+  status: 'queued' | 'running' | 'paused' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  id?: string
+  workspaceId?: string
+  currentStep?: number
+  maxSteps?: number
+  maxCostUsd?: number | string | null
+  checklist?: Array<{
+    id?: string
+    text: string
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked' | string
+    note?: string | null
+  }>
   toolCalls?: number
   errors?: number
   durationMs?: number
   tokensEstimate?: number
   costUsdEstimate?: number | null
   stoppedReason?: string | null
+  fallbackModel?: string | null
 }
 
 export interface AgentPermissionClient {
@@ -372,6 +384,8 @@ function createAgentTraceHandlers(opts: {
   const { setChat, messageId, isCancelled } = opts
   const steps = new Map<string, AgentStepClient>()
   let lastSeqByStep = new Map<string, number>()
+  let coworkChecklist: AgentRunClient['checklist'] = []
+  let coworkRun: Partial<AgentRunClient> = {}
 
   const patchMessage = (patch: Record<string, any>) => {
     setChat((prevChat: any) => {
@@ -404,7 +418,7 @@ function createAgentTraceHandlers(opts: {
             args: event.args,
             status: 'planned',
           })
-          patchMessage({ agentSteps: orderedSteps(), agentRun: { status: 'running' } })
+          patchMessage({ agentSteps: orderedSteps(), agentRun: { status: 'running', ...coworkRun, checklist: coworkChecklist } })
           break
         }
         case 'tool_executing': {
@@ -452,13 +466,74 @@ function createAgentTraceHandlers(opts: {
             agentPermission: null,
             agentSteps: orderedSteps(),
             agentRun: {
+              ...coworkRun,
               status: event.interrupted ? 'interrupted' : 'completed',
+              checklist: coworkChecklist,
               toolCalls: event.toolCalls,
               errors: event.errors,
               durationMs: event.durationMs,
               tokensEstimate: event.tokensEstimate,
               costUsdEstimate: event.costUsdEstimate ?? null,
               stoppedReason: event.stoppedReason ?? null,
+            },
+          })
+          break
+        }
+        case 'cowork_run_started': {
+          coworkChecklist = event.run.checklist || []
+          coworkRun = {
+            id: event.run.id,
+            workspaceId: event.run.workspaceId,
+            status: 'running',
+            maxSteps: event.run.maxSteps,
+            maxCostUsd: event.run.maxCostUsd,
+          }
+          patchMessage({
+            agentRun: {
+              ...coworkRun,
+              status: 'running',
+              checklist: coworkChecklist,
+            },
+          })
+          break
+        }
+        case 'cowork_checklist': {
+          coworkChecklist = event.checklist || []
+          patchMessage({
+            agentRun: {
+              ...coworkRun,
+              status: 'running',
+              checklist: coworkChecklist,
+            },
+          })
+          break
+        }
+        case 'cowork_model_fallback': {
+          coworkRun = {
+            ...coworkRun,
+            id: event.runId,
+            status: 'running',
+            fallbackModel: event.model,
+          }
+          patchMessage({ agentRun: { ...coworkRun, checklist: coworkChecklist } })
+          break
+        }
+        case 'cowork_run_finished': {
+          coworkRun = {
+            ...coworkRun,
+            id: event.run.id,
+            workspaceId: event.run.workspaceId,
+            status: event.run.status as AgentRunClient['status'],
+            currentStep: event.run.currentStep,
+            maxSteps: event.run.maxSteps,
+            tokensEstimate: event.run.tokensEstimate ?? undefined,
+            costUsdEstimate: event.run.costUsd == null ? null : Number(event.run.costUsd),
+            stoppedReason: event.run.lastEvent,
+          }
+          patchMessage({
+            agentRun: {
+              ...coworkRun,
+              checklist: coworkChecklist,
             },
           })
           break
@@ -774,7 +849,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       syncActiveStreamingState()
 
       if (options.notifyBackend && streamIdToStop) {
-        apiClient.stopAIStream(streamIdToStop)
+        apiClient.stopAIStream(streamIdToStop, chatId)
           .catch((error) => {
             console.error("Failed to stop deleted chat stream:", error)
           })
@@ -1051,7 +1126,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Send stop signal to backend (non-blocking)
     if (streamIdToStop) {
       devLog(`Sending stop signal to backend: ${streamIdToStop}`);
-      apiClient.stopAIStream(streamIdToStop)
+      apiClient.stopAIStream(streamIdToStop, targetChatId)
         .then(() => {
           devLog("Backend stop signal sent successfully");
         })

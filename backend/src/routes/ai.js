@@ -5753,6 +5753,9 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
+                  maxSteps: Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
+                    ? Math.min(160, Math.max(1, Math.round(Number(req.body.coworkBudget.maxSteps))))
+                    : undefined,
                   toolCallMode: __toolCallMode,
                   turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision
@@ -5775,6 +5778,9 @@ router.post(
                     prisma,
                     openai: agenticToolOpenAI,
                     collection: 'default',
+                    maxCostUsd: Number.isFinite(Number(req.body?.coworkBudget?.maxCostUsd))
+                      ? Math.max(0.01, Number(req.body.coworkBudget.maxCostUsd))
+                      : null,
                     fileIds: agenticFileIds,
                     // Lets media-intent treat edit phrasings ("mejora la
                     // calidad", "recorta la imagen") as img2img edits.
@@ -7227,11 +7233,13 @@ router.post(
   }
 );
 
-router.post('/stop-stream', authenticateToken, (req, res) => {
+router.post('/stop-stream', authenticateToken, async (req, res) => {
   const { streamId } = req.body;
   if (!streamId) {
     return res.status(400).json({ error: 'streamId is required' });
   }
+  const uid = req.user?.id || req.user?.userId;
+  const chatId = String(req.body?.chatId || '').trim();
 
   // Look up the controller under the caller's own namespaced key so a user
   // can only stop their OWN in-flight stream (no cross-tenant abort, and no
@@ -7240,21 +7248,54 @@ router.post('/stop-stream', authenticateToken, (req, res) => {
 
   if (controller) {
     console.log(`>>> Aborting stream with ID: ${streamId}`);
-    controller.abort(); // <-- YEH LINE STREAM KO FORAN ROK DEGI
-    streamControllers.delete(`${req.user.id}:${streamId}`); // Usko foran map se hata dein
-    return res.status(200).json({ message: 'Stop signal sent.', stopped: true });
-  } else {
-    // The client aborts its local fetch immediately before notifying the
-    // backend, so this endpoint can legitimately arrive after the stream
-    // already cleaned itself up. Treat stop as idempotent to avoid turning a
-    // normal user action into noisy 404 error telemetry.
-    console.info(`Stop request for an unknown or finished stream ID: ${streamId}`);
-    return res.status(200).json({
-      message: 'Stream not found or already finished.',
-      stopped: false,
-      alreadyFinished: true,
-    });
+    controller.abort();
+    streamControllers.delete(`${req.user.id}:${streamId}`);
   }
+
+  // A Cowork approval intentionally outlives the browser stream. Therefore an
+  // explicit Stop must also cancel the persisted run and settle any in-memory
+  // approval promise; merely aborting fetch is not sufficient.
+  const cancelledRunIds = [];
+  if (chatId && uid && prisma.coworkRun) {
+    try {
+      const coworkControl = require('../services/cowork/control-plane');
+      const permissionManager = require('../services/agent-harness/permission-manager');
+      const runs = await prisma.coworkRun.findMany({
+        where: {
+          userId: String(uid),
+          chatId,
+          status: { in: coworkControl.ACTIVE_STATUSES },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { id: true },
+      });
+      for (const run of runs) {
+        await coworkControl.transitionRun(prisma, {
+          runId: run.id,
+          userId: uid,
+          action: 'cancel',
+        });
+        permissionManager.cancelRun(run.id, 'run_cancelled_by_user');
+        cancelledRunIds.push(run.id);
+      }
+    } catch (error) {
+      console.warn('[cowork] stop-stream run cancellation failed:', error.message);
+    }
+  }
+
+  const stopped = Boolean(controller || cancelledRunIds.length);
+  if (!stopped) {
+    // The client aborts its local fetch immediately before notifying the
+    // backend, so this endpoint can legitimately arrive after cleanup.
+    console.info(`Stop request for an unknown or finished stream ID: ${streamId}`);
+  }
+  return res.status(200).json({
+    message: stopped ? 'Stop signal sent.' : 'Stream not found or already finished.',
+    stopped,
+    cancelledRunIds,
+    ...(!stopped ? { alreadyFinished: true } : {}),
+  });
 });
 
 // // ✅ Generate AI image response

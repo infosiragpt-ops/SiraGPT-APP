@@ -269,20 +269,25 @@ async function runAgent(opts) {
 
   if (!userId) throw new Error('agent-entry.runAgent: userId required');
   if (!prompt) throw new Error('agent-entry.runAgent: prompt required');
-  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
+  if (!opts.openai && !process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
   if (depth > MAX_SPAWN_DEPTH) {
     throw new Error(`agent-entry.runAgent: spawn depth ${depth} exceeds max ${MAX_SPAWN_DEPTH}`);
   }
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const provider = opts.provider
+    || require('../ai/provider-inference').inferProviderFromModelId(model);
+  const openai = opts.openai || new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const clearance = opts.clearance || 'authenticated';
   const ctx = {
+    ...(opts.toolContext && typeof opts.toolContext === 'object' ? opts.toolContext : {}),
     openai,
     userId,
     collection,
     source,
     depth,
     clearance,
+    provider,
+    signal,
     ...(Array.isArray(skillIds) ? { allowedSkillIds: skillIds } : {}),
     taskId: opts.taskId || null,
   };
@@ -294,35 +299,103 @@ async function runAgent(opts) {
 
   log.info({ userId: String(userId), thinking, depth, source }, 'agent_run_started');
 
-  const tools = buildAllTools(thinking, {
+  let tools = buildAllTools(thinking, {
     skillIds,
     clearance,
     toolset: opts.toolset || null,
   });
+  let harness = null;
+  const harnessRequired = Boolean(
+    opts.attachCoworkHarness
+    || opts.workspaceId
+    || opts.toolContext?.workspaceId,
+  );
+  if (harnessRequired) {
+    try {
+      const { attachHarness } = require('../agent-harness/run-agent-turn');
+      harness = await attachHarness({
+        tools,
+        write: async (event) => {
+          if (typeof opts.onEvent === 'function') await opts.onEvent(event);
+        },
+        chatId: opts.chatId || opts.toolContext?.chatId || null,
+        userId,
+        prisma: opts.prisma || opts.toolContext?.prisma || null,
+        signal,
+        provider,
+        workspaceId: opts.workspaceId || opts.toolContext?.workspaceId || null,
+        coworkRunId: opts.coworkRunId || opts.toolContext?.coworkRunId || null,
+        mcpEnabled: opts.mcpEnabled !== false,
+      });
+      if (harness?.tools) tools = harness.tools;
+    } catch (error) {
+      log.warn({ error: error.message }, 'headless_harness_attach_failed');
+      error.code = error.code || 'cowork_harness_unavailable';
+      throw error;
+    }
+  }
 
   try {
     if (signal?.aborted) {
       return { answer: '', stoppedReason: 'cancelled', steps: [], source };
     }
 
-    if (thinking === 'low') {
+    const controlledRun = thinking === 'low'
+      || Boolean(harness)
+      || typeof opts.onBeforeStep === 'function';
+    if (controlledRun) {
       const reactSpan = tracer.start('react.run', span.spanId);
+      let harnessFinished = false;
       try {
         const r = await reactAgent.run(openai, {
           query: prompt,
           tools,
           maxSteps,
+          maxRuntimeMs: opts.maxRuntimeMs,
           model,
           ctx,
-          signal,
-          onStep: opts.onStep || null,
+          extraSystem: opts.extraSystem || '',
+          onBeforeStep: opts.onBeforeStep || null,
+          onCheckpoint: opts.onCheckpoint || null,
+          resumeCheckpoint: opts.resumeCheckpoint || null,
+          onStepStart: async (step) => {
+            if (harness) harness.onStepStart(step);
+            if (typeof opts.onStepStart === 'function') await opts.onStepStart(step);
+          },
+          onStepDone: async (step) => {
+            if (harness) harness.onStepDone(step);
+            if (typeof opts.onStepDone === 'function') await opts.onStepDone(step);
+          },
+          onStep: typeof opts.onStep === 'function' ? opts.onStep : () => {},
         });
+        if (harness) {
+          harness.finish({
+            stoppedReason: r.stoppedReason,
+            interrupted: Boolean(signal?.aborted),
+            finalAnswer: r.finalAnswer,
+          });
+          harnessFinished = true;
+        }
         return {
           answer: r.finalAnswer || '',
           stoppedReason: r.stoppedReason,
           steps: r.steps,
           source,
         };
+      } catch (error) {
+        if (harness && !harnessFinished) {
+          try {
+            harness.finish({
+              stoppedReason: error?.code || 'run_failed',
+              interrupted: Boolean(signal?.aborted),
+              finalAnswer: '',
+            });
+            harnessFinished = true;
+          } catch (_) {
+            // Preserve the original agent failure.
+          }
+        }
+        throw error;
       } finally {
         tracer.end(reactSpan);
       }

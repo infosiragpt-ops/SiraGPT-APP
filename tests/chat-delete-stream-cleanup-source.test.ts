@@ -34,7 +34,11 @@ describe("chat deletion streaming cleanup source contract", () => {
     assert.match(cleanup, /streamBuffersRef\.current\.get\(chatId\)/, "cleanup must dispose queued rAF token flushes so no empty assistant placeholder leaks")
     assert.match(cleanup, /clearPending\(chatId\)/, "cleanup must prevent pending-message retry from resurrecting the deleted chat")
     assert.match(cleanup, /bg\.cancel\(chatId\)/, "cleanup must remove the deleted chat from background stream UI")
-    assert.match(cleanup, /apiClient\.stopAIStream\(streamIdToStop\)/, "cleanup must notify the backend stream controller when a stream id is known")
+    assert.match(
+      cleanup,
+      /apiClient\.stopAIStream\(streamIdToStop,\s*chatId\)/,
+      "cleanup must notify the backend with both stream and chat ids so the persisted Cowork run is cancelled",
+    )
   })
 
   it("deleteChat invokes cleanup before deletion and clears stale current-chat selection", () => {

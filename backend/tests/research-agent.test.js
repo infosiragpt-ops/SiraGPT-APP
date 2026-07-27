@@ -4,7 +4,30 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const agent = require('../src/services/research-agent');
-const { decideNextAction, synthesise, normaliseTitleKey, analysePage } = agent._internal;
+const {
+  decideNextAction,
+  synthesise,
+  normaliseTitleKey,
+  analysePage,
+  chromiumLaunchOptions,
+} = agent._internal;
+
+test('chromiumLaunchOptions uses the system browser configured by production', () => {
+  assert.deepEqual(
+    chromiumLaunchOptions({
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: '/usr/bin/chromium-browser',
+    }),
+    {
+      headless: true,
+      executablePath: '/usr/bin/chromium-browser',
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    },
+  );
+});
+
+test('chromiumLaunchOptions keeps Playwright defaults without an override', () => {
+  assert.deepEqual(chromiumLaunchOptions({}), { headless: true });
+});
 
 test('decideNextAction: finalises at the last step', () => {
   const r = decideNextAction({ findings: [{ confidence: 0.5 }], step: 5, maxSteps: 6, queriesTried: ['q'] });

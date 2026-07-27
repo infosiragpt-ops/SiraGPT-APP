@@ -193,6 +193,10 @@ const ComputerUseInterface = dynamic(
   () => import("./ComputerUseInterface"),
   { ssr: false, loading: () => null },
 )
+const CoworkPanel = dynamic(
+  () => import("@/components/chat/cowork-panel"),
+  { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" /> },
+)
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
@@ -5456,6 +5460,7 @@ function ChatInterfaceContent() {
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
+  const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
 
   // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -5578,6 +5583,7 @@ function ChatInterfaceContent() {
 
     // Reset other UI states
     setShowAudioPanel(false);
+    setCoworkPanelOpen(false);
     setDocumentPreviewUrl(null);
     setSourcesPanelData(null);
     setActiveSearchActivityId(null);
@@ -10328,6 +10334,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   };
 
   const rightPanelActive = Boolean(
+    coworkPanelOpen ||
     showAudioPanel ||
     searchActivityPanelOpen ||
     documentPreviewUrl ||
@@ -10338,6 +10345,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
+  const coworkMobileFullscreen = Boolean(coworkPanelOpen && isSidebarMobile);
   const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
@@ -10348,6 +10356,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!sourcesPanelData) return;
     if (
       showAudioPanel ||
+      coworkPanelOpen ||
       searchActivityPanelOpen ||
       documentPreviewUrl ||
       composerPreviewAttachment ||
@@ -10361,6 +10370,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   }, [
     sourcesPanelData,
     showAudioPanel,
+    coworkPanelOpen,
     searchActivityPanelOpen,
     documentPreviewUrl,
     composerPreviewAttachment,
@@ -10372,7 +10382,48 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   const mainPaneAudioPanelEnabled = false;
 
+  const openCoworkPanel = React.useCallback(() => {
+    setShowAudioPanel(false);
+    setActiveSearchActivityId(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
+    setSourcesPanelData(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    closeArtifactPanel();
+    setCoworkPanelOpen(true);
+  }, [closeArtifactPanel]);
+
+  React.useEffect(() => {
+    if (!coworkPanelOpen) return;
+    if (
+      showAudioPanel ||
+      searchActivityPanelOpen ||
+      documentPreviewUrl ||
+      composerPreviewAttachment ||
+      sidePreviewAttachment ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      activeArtifact
+    ) {
+      setCoworkPanelOpen(false);
+    }
+  }, [
+    coworkPanelOpen,
+    showAudioPanel,
+    searchActivityPanelOpen,
+    documentPreviewUrl,
+    composerPreviewAttachment,
+    sidePreviewAttachment,
+    isWordConnectorActive,
+    isExcelConnectorActive,
+    activeArtifact,
+  ]);
+
   const openGrokVoicePanel = React.useCallback(() => {
+    setCoworkPanelOpen(false);
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setComposerPreviewIndex(null);
@@ -11522,14 +11573,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             share width with it via the resizable divider; otherwise we
             take the full container. min-w-0 so children can shrink. */}
         <div
-          style={rightPanelActive
+          style={rightPanelActive && !coworkMobileFullscreen
             ? {
                 flex: '1 1 auto',
                 minWidth: SPLIT_LEFT_MIN_PX,
                 transition: isDraggingSplit ? undefined : 'flex-basis 300ms ease',
               }
             : undefined}
-          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${rightPanelActive ? '' : 'w-full'}`}
+          className={cn(
+            "relative h-full min-w-0 flex-col overflow-hidden",
+            coworkMobileFullscreen ? "hidden" : "flex",
+            !rightPanelActive && "w-full",
+          )}
         >
           {/* Header */}
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
@@ -11551,6 +11606,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     Claude-style. See renderComposerModelControls(). */}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
+                {currentChat?.id && (
+                  <Button
+                    variant={coworkPanelOpen ? "secondary" : "ghost"}
+                    size="icon"
+                    onClick={() => coworkPanelOpen ? setCoworkPanelOpen(false) : openCoworkPanel()}
+                    title={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
+                    aria-label={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
+                    aria-pressed={coworkPanelOpen}
+                    className="chat-header-icon-btn h-11 w-11 rounded-full"
+                  >
+                    <BriefcaseBusiness className="h-5 w-5" />
+                  </Button>
+                )}
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
                     active so the header fits the narrower pane. */}
@@ -12521,30 +12589,36 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             to reset to 50/50. Persisted in localStorage. */}
         {rightPanelActive && (
           <>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Redimensionar paneles"
-              onMouseDown={startSplitDrag}
-              onDoubleClick={resetSplitRatio}
-              className={cn(
-                'group relative flex w-[6px] cursor-col-resize select-none items-center justify-center shrink-0 transition-colors',
-                isDraggingSplit ? 'bg-border/60' : 'bg-transparent hover:bg-border/60',
-              )}
-            >
-              {/* Three dots centered — visual hint for the grab handle.
-                  pointer-events-none so the whole 6px strip stays the
-                  mouse-hit target. */}
-              <div className="pointer-events-none flex flex-col gap-[3px]">
-                <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
-                <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
-                <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+            {!coworkMobileFullscreen && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Redimensionar paneles"
+                onMouseDown={startSplitDrag}
+                onDoubleClick={resetSplitRatio}
+                className={cn(
+                  'group relative flex w-[6px] cursor-col-resize select-none items-center justify-center shrink-0 transition-colors',
+                  isDraggingSplit ? 'bg-border/60' : 'bg-transparent hover:bg-border/60',
+                )}
+              >
+                {/* Three dots centered — visual hint for the grab handle.
+                    pointer-events-none so the whole 6px strip stays the
+                    mouse-hit target. */}
+                <div className="pointer-events-none flex flex-col gap-[3px]">
+                  <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+                  <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+                  <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+                </div>
               </div>
-            </div>
+            )}
             <div
               style={{
-                width: showAudioPanel
+                width: coworkMobileFullscreen
+                  ? '100%'
+                  : showAudioPanel
                   ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
+                  : coworkPanelOpen
+                    ? 'clamp(320px, 42vw, 720px)'
                   : searchActivityPanelOpen
                     ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
                   : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,
@@ -12552,6 +12626,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               }}
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
+              {coworkPanelOpen && currentChat?.id && (
+                <CoworkPanel
+                  chatId={currentChat.id}
+                  onClose={() => setCoworkPanelOpen(false)}
+                />
+              )}
               {showAudioPanel && audioTab === 'stt' && (
                 <GrokVoicePanel
                   chatId={currentChat?.id || null}
@@ -12630,20 +12710,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 </div>
               )}
-              {!showAudioPanel && activeSearchActivity && (
+              {!coworkPanelOpen && !showAudioPanel && activeSearchActivity && (
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
                   onSave={saveSearchActivityToLibrary}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -12657,7 +12737,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -12674,7 +12754,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -12687,7 +12767,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -12696,10 +12776,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
               )}
-              {!showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
                 <SourcesPanel
                   sources={sourcesPanelData.sources}
                   activity={sourcesPanelData.activity}
