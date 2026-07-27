@@ -1625,6 +1625,11 @@ async function startServer() {
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
+    // Token-authenticated Vite HMR tunnel for cross-origin Codex previews.
+    // Caddy forwards the upgrade to this HTTP server; the route resolves the
+    // owning project's isolated runner port before bridging either direction.
+    codexV2Routes.attachPreviewWebSocketProxy(server);
+
     // Initialize realtime WebSocket scaffolding (presence, typing, cursor)
     // Lives on a separate path (`/ws/realtime`) so it can't collide with
     // the computer-use socket above.
