@@ -507,9 +507,9 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
 
   if (!qaCycle && department.id === 'customer-success') {
     const operations = deps.companyOperations || require('./company-operations');
-    let result;
+    let inboxResult;
     try {
-      result = await operations.triageInbox({
+      inboxResult = await operations.triageInbox({
         prisma,
         project,
         companyContext,
@@ -519,14 +519,49 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
         now,
       });
     } catch (error) {
-      result = {
+      inboxResult = {
         action: error?.code || 'inbox_unavailable',
         items: [],
         actions: [],
         error: String(error?.message || error).slice(0, 500),
       };
     }
-    const passed = ['inbox_clear', 'triaged_review', 'triaged_auto'].includes(result.action);
+    let socialResult = {
+      action: 'social_not_connected',
+      items: [],
+      actions: [],
+      errors: [],
+    };
+    if (typeof operations.triageSocialConversations === 'function') {
+      try {
+        socialResult = await operations.triageSocialConversations({
+          prisma,
+          project,
+          companyContext,
+          chatComplete,
+          env,
+          now,
+        });
+      } catch (error) {
+        socialResult = {
+          action: error?.code || 'social_inbox_unavailable',
+          items: [],
+          actions: [],
+          errors: [{ message: String(error?.message || error).slice(0, 500) }],
+        };
+      }
+    }
+    const inboxPassed = ['inbox_clear', 'triaged_review', 'triaged_auto'].includes(inboxResult.action);
+    const socialPassed = [
+      'social_not_connected',
+      'social_inbox_clear',
+      'social_triaged_review',
+      'social_triaged_auto',
+    ].includes(socialResult.action);
+    const passed = inboxPassed && socialPassed;
+    const inboxCount = inboxResult.items?.length || 0;
+    const socialCount = socialResult.items?.length || 0;
+    const actionCount = (inboxResult.actions?.length || 0) + (socialResult.actions?.length || 0);
     await finishOperationalCycle({
       prisma,
       project,
@@ -540,16 +575,20 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       runId: `inbox:${today}:${project.id}`,
       outcome: passed ? 'passed' : 'blocked',
       task: passed
-        ? `${result.items.length} correo(s) revisados; ${result.actions.length} acción(es) trazables.`
-        : `Bandeja no procesada: ${result.error || result.action}.`,
-      evidence: `inbox=${result.items.length}; actions=${result.actions.length}; policy=${result.policy?.mode || 'n/a'}.`,
-      learnings: [`Clientes y Soporte → inbox: ${result.action}.`],
+        ? `${inboxCount} correo(s) y ${socialCount} conversación(es) social(es) revisados; ${actionCount} acción(es) trazables.`
+        : `Canales no procesados: email=${inboxResult.error || inboxResult.action}; social=${socialResult.action}.`,
+      evidence: `inbox=${inboxCount}; social=${socialCount}; actions=${actionCount}; email_policy=${inboxResult.policy?.mode || 'n/a'}; social_policy=${socialResult.policy?.mode || 'n/a'}.`,
+      learnings: [
+        `Clientes y Soporte → inbox: ${inboxResult.action}.`,
+        `Clientes y Soporte → social: ${socialResult.action}.`,
+      ],
     });
     return {
-      action: `customer_success_${result.action}`,
+      action: `customer_success_${inboxResult.action}`,
       department: department.id,
-      inboxItems: result.items.length,
-      actions: result.actions.length,
+      inboxItems: inboxCount,
+      socialItems: socialCount,
+      actions: actionCount,
     };
   }
 

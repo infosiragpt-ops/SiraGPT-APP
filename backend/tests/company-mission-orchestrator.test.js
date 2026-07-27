@@ -74,9 +74,13 @@ test('external missions fail closed without a real connection', () => {
   });
 
   const social = portfolio.missions.find((item) => item.id === 'social-operations');
+  const replies = portfolio.missions.find((item) => item.id === 'social-replies');
   assert.equal(social.status, 'blocked_connection');
   assert.equal(social.autoExecutable, false);
   assert.match(social.nextAction, /Conectar una cuenta OAuth/);
+  assert.equal(replies.status, 'blocked_connection');
+  assert.equal(replies.autoExecutable, false);
+  assert.equal(replies.executor, null);
   assert.equal(
     portfolio.missions.find((item) => item.id === 'email-operations').status,
     'review_required',
@@ -101,8 +105,12 @@ test('connected social account prepares review drafts and auto mode can execute'
     }),
   });
   const review = reviewPortfolio.missions.find((item) => item.id === 'social-operations');
+  const reviewReplies = reviewPortfolio.missions.find((item) => item.id === 'social-replies');
   assert.equal(review.status, 'review_required');
   assert.equal(review.autoExecutable, false);
+  assert.equal(reviewReplies.status, 'review_required');
+  assert.equal(reviewReplies.departmentId, 'customer-success');
+  assert.equal(reviewReplies.executor, 'company-operation');
   assert.equal(selectMissionForCycle(reviewPortfolio, 5).id, 'social-operations');
 
   const autoPortfolio = deriveCompanyMissionPortfolio({
@@ -115,13 +123,41 @@ test('connected social account prepares review drafts and auto mode can execute'
           gmailConnected: true,
         },
       },
-      safeguards: { socialPublishing: 'auto' },
+      safeguards: { socialPublishing: 'auto', socialReplies: 'auto' },
     }),
   });
   const auto = autoPortfolio.missions.find((item) => item.id === 'social-operations');
+  const autoReplies = autoPortfolio.missions.find((item) => item.id === 'social-replies');
   assert.equal(auto.status, 'ready_to_execute');
   assert.equal(auto.autoExecutable, true);
   assert.equal(auto.executor, 'social-publish');
+  assert.equal(autoReplies.status, 'ready_to_execute');
+  assert.equal(autoReplies.autoExecutable, true);
+  assert.equal(autoReplies.executor, 'company-operation');
+});
+
+test('social replies remain blocked until the connected account grants conversation scopes', () => {
+  const portfolio = deriveCompanyMissionPortfolio({
+    project: { id: 'p1' },
+    context: context({
+      readiness: {
+        evidence: {
+          workspaceReady: true,
+          socialConnections: [{
+            platform: 'linkedin',
+            conversationsReady: false,
+          }],
+          gmailConnected: true,
+        },
+      },
+    }),
+  });
+  const publishing = portfolio.missions.find((item) => item.id === 'social-operations');
+  const replies = portfolio.missions.find((item) => item.id === 'social-replies');
+  assert.equal(publishing.status, 'review_required');
+  assert.equal(replies.status, 'blocked_connection');
+  assert.equal(replies.executor, null);
+  assert.match(replies.nextAction, /Reconectar/);
 });
 
 test('grounded sales and email missions route to real company operations', () => {

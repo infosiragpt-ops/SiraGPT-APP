@@ -37,9 +37,14 @@ async function costTodayUsd({ prisma, projectId, now = new Date() }) {
       createdAt: { gte: utcDayStart(now) },
       run: { projectId },
     },
-    _sum: { costAppliedUsd: true },
+    _sum: { costOriginalUsd: true, costAppliedUsd: true },
   });
-  return Math.max(0, Number(result?._sum?.costAppliedUsd) || 0);
+  const original = Number(result?._sum?.costOriginalUsd);
+  const applied = Number(result?._sum?.costAppliedUsd);
+  // A project budget is an operator kill-switch for provider spend, not the
+  // discounted amount shown to the customer. Fall back to the legacy applied
+  // field for rows/fakes created before costOriginalUsd was populated.
+  return Math.max(0, Number.isFinite(original) && original > 0 ? original : (applied || 0));
 }
 
 function record(outcome) {
@@ -52,26 +57,33 @@ async function checkProjectBudget({
   settings,
   env = process.env,
   now = new Date(),
+  inRunCostUsd = 0,
 }) {
   const dailyBudgetUsd = configuredBudgetUsd(settings, env);
+  const runningCost = Math.max(0, Number(inRunCostUsd) || 0);
   if (dailyBudgetUsd == null) {
     record('unlimited');
     return {
       allowed: true,
       reason: 'unlimited',
-      costTodayUsd: 0,
+      costTodayUsd: runningCost,
+      persistedCostTodayUsd: 0,
+      inRunCostUsd: runningCost,
       dailyBudgetUsd: null,
       remainingUsd: null,
     };
   }
   try {
-    const spent = await costTodayUsd({ prisma, projectId, now });
+    const persistedCost = await costTodayUsd({ prisma, projectId, now });
+    const spent = persistedCost + runningCost;
     const allowed = spent < dailyBudgetUsd;
     record(allowed ? 'allowed' : 'blocked');
     return {
       allowed,
       reason: allowed ? 'within_budget' : 'daily_budget_exceeded',
       costTodayUsd: spent,
+      persistedCostTodayUsd: persistedCost,
+      inRunCostUsd: runningCost,
       dailyBudgetUsd,
       remainingUsd: Math.max(0, dailyBudgetUsd - spent),
     };
@@ -82,6 +94,8 @@ async function checkProjectBudget({
       reason: 'budget_query_failed',
       error: String(error?.message || error).slice(0, 500),
       costTodayUsd: null,
+      persistedCostTodayUsd: null,
+      inRunCostUsd: runningCost,
       dailyBudgetUsd,
       remainingUsd: null,
     };

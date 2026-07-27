@@ -47,6 +47,57 @@ function leadFingerprint(projectId, url) {
   return createHash('sha256').update(`${projectId}:${url}`).digest('hex');
 }
 
+async function persistResearchedLead({ prisma, data }) {
+  const identity = {
+    projectId_fingerprint: {
+      projectId: data.projectId,
+      fingerprint: data.fingerprint,
+    },
+  };
+  try {
+    return await prisma.codexCompanyLead.create({ data });
+  } catch (error) {
+    if (error?.code !== 'P2002') throw error;
+  }
+
+  const existing = await prisma.codexCompanyLead.findUnique({ where: identity });
+  if (!existing) {
+    const error = new Error('lead disappeared after a uniqueness conflict');
+    error.code = 'CODEX_LEAD_CONFLICT';
+    throw error;
+  }
+
+  await prisma.codexCompanyLead.update({
+    where: { id: existing.id },
+    data: {
+      companyName: data.companyName,
+      domain: data.domain,
+      websiteUrl: data.websiteUrl,
+      sourceTitle: data.sourceTitle,
+      evidence: data.evidence,
+      score: data.score,
+      tags: data.tags,
+      updatedAt: data.updatedAt,
+    },
+  });
+
+  // Research may qualify a newly discovered lead, but it can never reopen a
+  // human-reviewed, contacted, won/lost, or do-not-contact record. The status
+  // predicate also protects against a concurrent user update.
+  if (data.status === 'qualified') {
+    await prisma.codexCompanyLead.updateMany({
+      where: {
+        id: existing.id,
+        projectId: data.projectId,
+        userId: data.userId,
+        status: 'discovered',
+      },
+      data: { status: 'qualified' },
+    });
+  }
+  return prisma.codexCompanyLead.findUnique({ where: { id: existing.id } });
+}
+
 function defaultSearch(query) {
   return require('../../agents/web-search').search(query, { maxResults: 10 });
 }
@@ -145,26 +196,7 @@ async function researchLeads({
         : [],
       updatedAt: now(),
     };
-    const row = await prisma.codexCompanyLead.upsert({
-      where: {
-        projectId_fingerprint: {
-          projectId: project.id,
-          fingerprint: data.fingerprint,
-        },
-      },
-      create: data,
-      update: {
-        companyName: data.companyName,
-        domain: data.domain,
-        websiteUrl: data.websiteUrl,
-        sourceTitle: data.sourceTitle,
-        evidence: data.evidence,
-        score: data.score,
-        tags: data.tags,
-        status: data.status,
-        updatedAt: data.updatedAt,
-      },
-    });
+    const row = await persistResearchedLead({ prisma, data });
     leads.push(row);
   }
   return {
@@ -326,6 +358,7 @@ module.exports = {
   canonicalUrl,
   extractJson,
   leadFingerprint,
+  persistResearchedLead,
   prepareLeadOutreach,
   researchLeads,
   safeSubject,

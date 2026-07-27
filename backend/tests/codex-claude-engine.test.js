@@ -20,7 +20,13 @@ const {
 } = require('../src/services/codex/anthropic-turn');
 const { defaultLlmTurn, resolveTurnEngine } = require('../src/services/codex/llm-turn');
 const buildTools = require('../src/services/codex/build-tools');
-const { runAgentLoop, compactMessages, verifyWorkspace, verifyDevServer } = require('../src/services/codex/agent-loop');
+const {
+  runAgentLoop,
+  compactMessages,
+  messageChars,
+  verifyWorkspace,
+  verifyDevServer,
+} = require('../src/services/codex/agent-loop');
 
 // ---------------------------------------------------------------------------
 // anthropic-turn config + message conversion
@@ -312,6 +318,26 @@ test('compactMessages: recorta TOOL_RESULT antiguos y respeta system/prompt/cola
 
   const small = [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }];
   assert.equal(compactMessages(small, { maxChars: 10_000 }), 0, 'bajo presupuesto no toca nada');
+});
+
+test('compactMessages: la cola patológica de diez mensajes queda bajo el presupuesto real', () => {
+  const limit = 12_000;
+  const messages = [
+    { role: 'system', content: `system ${'s'.repeat(9_000)}` },
+    { role: 'user', content: `task ${'t'.repeat(3_000)}` },
+    { role: 'user', content: `[COMPACTION · RESUMEN DE CONTEXTO]\n${'r'.repeat(12_000)}` },
+    ...Array.from({ length: 10 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user',
+      content: `tail-${index} ${String(index).repeat(8_000)}`,
+    })),
+  ];
+
+  const compacted = compactMessages(messages, { maxChars: limit });
+
+  assert.ok(compacted >= 10, 'la cola que causaba el overflow debe compactarse');
+  assert.ok(messageChars(messages) <= limit, `contexto=${messageChars(messages)} límite=${limit}`);
+  assert.match(messages.at(-1).content, /contexto recortado por límite/);
+  assert.equal(compactMessages(messages, { maxChars: limit }), 0, 'la segunda pasada ya cumple el invariant');
 });
 
 test('verifyWorkspace: tsconfig inválido o ausente → no-op determinista', async () => {

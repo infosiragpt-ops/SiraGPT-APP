@@ -23,6 +23,31 @@ test('accumulator counts actions, lines read and tokens honestly', () => {
   assert.deepEqual(s, { actionsCount: 2, itemsReadLines: 120, tokensIn: 110, tokensOut: 45 });
 });
 
+test('accumulator records the same provider usage object only once', async () => {
+  const acc = createAccumulator({ run: { id: 'r1' }, clock: () => new Date(0) });
+  const usage = { tokensIn: 100, tokensOut: 25, provider: 'openai', costUsd: 0.4 };
+  acc.recordLlmUsage(usage);
+  acc.recordLlmUsage(usage);
+
+  assert.deepEqual(acc.snapshot(), {
+    actionsCount: 0,
+    itemsReadLines: 0,
+    tokensIn: 100,
+    tokensOut: 25,
+  });
+  const metric = await acc.finalize({
+    userPlan: 'PRO',
+    costResolver: async (row) => ({
+      costUsd: row.costUsd,
+      costInputUsd: 0.3,
+      costOutputUsd: 0.1,
+      costSource: 'provider_exact',
+    }),
+    clock: () => new Date(0),
+  });
+  assert.equal(metric.costAppliedUsd, 0.4);
+});
+
 test('finalize computes timeWorkedMs from startedAt, folds diffstat, emits valid run_summary', async () => {
   const run = { id: 'r1', startedAt: new Date(1_000_000) };
   const acc = createAccumulator({ run, clock: () => new Date(1_000_000) });

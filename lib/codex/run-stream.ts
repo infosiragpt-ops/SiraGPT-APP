@@ -9,6 +9,10 @@ import { createAuthenticatedFetch } from '../authenticated-fetch'
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
 const TERMINAL = new Set(['done', 'error', 'cancelled'])
 
+class FatalRunStreamError extends Error {
+  override name = 'FatalRunStreamError'
+}
+
 /**
  * Is an HTTP status worth reconnecting for? Transient (network/5xx/429/503) →
  * yes, retry with backoff. Permanent client errors (404 run-not-found, 401/403
@@ -95,7 +99,11 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
   const terminalSet = opts.terminalStatuses ? new Set(opts.terminalStatuses) : TERMINAL
 
   const done = (async () => {
-    if (!fetchImpl) { onError?.(new Error('fetch unavailable')); return }
+    if (!fetchImpl) {
+      const error = new FatalRunStreamError('fetch unavailable')
+      onError?.(error)
+      throw error
+    }
     while (!closed) {
       controller = new AbortController()
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
@@ -114,8 +122,7 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
           // Permanent client error (404 not-found, 401/403 auth) — surface once
           // and stop, instead of an unbounded reconnect storm against a dead URL.
           if (!isRetryableStatus(res.status)) {
-            if (!closed) onError?.(new Error(`stream http ${res.status}`))
-            return
+            throw new FatalRunStreamError(`stream http ${res.status}`)
           }
           throw new Error(`stream http ${res.status}`)
         }
@@ -147,6 +154,7 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
       } catch (err) {
         if (closed) return
         onError?.(err)
+        if (err instanceof FatalRunStreamError) throw err
       } finally {
         // Release the lock so a reconnect can re-read; abort cancels the body.
         try { reader?.releaseLock() } catch { /* already released */ }

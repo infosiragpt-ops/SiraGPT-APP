@@ -294,6 +294,12 @@ test('Customer Success creates review-first inbox work and records it in the led
           actions: [{ id: 'action-1', status: 'pending_review' }],
           policy: { mode: 'review' },
         }),
+        triageSocialConversations: async () => ({
+          action: 'social_triaged_review',
+          items: [{ id: 'social-1' }],
+          actions: [{ id: 'action-2', status: 'pending_review' }],
+          policy: { mode: 'review' },
+        }),
       },
       chatComplete: async () => { throw new Error('operations stub owns the model'); },
     },
@@ -301,8 +307,10 @@ test('Customer Success creates review-first inbox work and records it in the led
   });
   assert.equal(result.action, 'customer_success_triaged_review');
   assert.equal(result.inboxItems, 1);
-  assert.equal(result.actions, 1);
-  assert.match(prisma.state.project.brief.ledger[0].acceptance[0].evidence, /policy=review/);
+  assert.equal(result.socialItems, 1);
+  assert.equal(result.actions, 2);
+  assert.match(prisma.state.project.brief.ledger[0].acceptance[0].evidence, /social=1/);
+  assert.match(prisma.state.project.brief.ledger[0].acceptance[0].evidence, /social_policy=review/);
 });
 
 test('custom departments participate in the persisted round-robin', async () => {

@@ -31,6 +31,8 @@ test('social OAuth platform config is fail-closed and exposes no secret', () => 
 test('social provider capabilities expose generated image support and X requests media.write', () => {
   const xConfig = providerConfig('x', BASE_ENV);
   assert.equal(xConfig.scopes.includes('media.write'), true);
+  assert.equal(providerConfig('facebook', BASE_ENV).scopes.includes('pages_manage_engagement'), true);
+  assert.equal(providerConfig('linkedin', BASE_ENV).scopes.includes('r_member_social'), true);
   for (const platform of ['facebook', 'linkedin', 'x']) {
     assert.equal(publicProviderStatus(platform, BASE_ENV).supports.generatedImage, true);
   }

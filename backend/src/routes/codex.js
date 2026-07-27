@@ -676,6 +676,30 @@ router.post(
   },
 );
 
+router.post(
+  '/projects/:id/company-operations/triage-social',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const result = await require('../services/codex/company-operations').triageSocialConversations({
+        prisma: codexDb,
+        project,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+        maxResults: req.body?.maxResults,
+      });
+      return res.json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
 router.patch('/projects/:id/company-operations/leads/:leadId', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProjectRecord(req, res);

@@ -12,8 +12,19 @@
  * get their own dedicated connection.
  */
 
-const IORedis = require('ioredis');
-const { attachRedisListeners, reconnectDelay } = require('../agents/redis-resilience');
+const {
+  attachRedisListeners,
+  createThrottledLogger,
+  markRedisFailure,
+  reconnectDelay,
+} = require('../agents/redis-resilience');
+
+const DEFAULT_PUBLISH_TIMEOUT_MS = 200;
+const MIN_PUBLISH_TIMEOUT_MS = 25;
+const MAX_PUBLISH_TIMEOUT_MS = 2_000;
+const PUBLISH_WARNING_WINDOW_MS = 60_000;
+
+let warnPublishFailure = createThrottledLogger(PUBLISH_WARNING_WINDOW_MS);
 
 function channelFor(runId) {
   return `codex:run:${runId}`;
@@ -27,14 +38,48 @@ function isConfigured(env = process.env) {
   return Boolean(redisUrl(env));
 }
 
-function newConnection(label, env = process.env) {
+function clampInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function resolvePublishTimeoutMs(env = process.env) {
+  return clampInteger(
+    env.CODEX_REDIS_PUBLISH_TIMEOUT_MS,
+    DEFAULT_PUBLISH_TIMEOUT_MS,
+    MIN_PUBLISH_TIMEOUT_MS,
+    MAX_PUBLISH_TIMEOUT_MS,
+  );
+}
+
+function publisherRedisOptions(env = process.env) {
+  const timeoutMs = resolvePublishTimeoutMs(env);
+  return {
+    lazyConnect: true,
+    maxRetriesPerRequest: 1,
+    enableReadyCheck: false,
+    enableOfflineQueue: false,
+    connectTimeout: timeoutMs,
+    commandTimeout: timeoutMs,
+    retryStrategy(attempt) {
+      return attempt <= 1 ? Math.min(50, timeoutMs) : null;
+    },
+  };
+}
+
+function newConnection(label, env = process.env, options = {}) {
   const url = redisUrl(env);
   if (!url) return null;
+  // Keep the optional Redis dependency off the durable DB-only path.
+  // eslint-disable-next-line global-require
+  const IORedis = require('ioredis');
   const conn = new IORedis(url, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     retryStrategy: reconnectDelay,
     enableOfflineQueue: true,
+    ...options,
   });
   attachRedisListeners(conn, { label });
   return conn;
@@ -43,25 +88,53 @@ function newConnection(label, env = process.env) {
 // Lazy shared publisher connection (a normal connection, not in subscribe mode).
 let publisher;
 function getPublisher(env = process.env) {
-  if (publisher) return publisher;
-  publisher = newConnection('codex-pubsub', env);
+  if (publisher && publisher.status !== 'end') return publisher;
+  publisher = newConnection('codex-pubsub', env, publisherRedisOptions(env));
   return publisher;
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`Redis publish timed out after ${timeoutMs}ms`);
+        err.code = 'CODEX_REDIS_PUBLISH_TIMEOUT';
+        reject(err);
+      }, timeoutMs);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
  * Publish one event envelope on the run's channel. Best-effort: never throws,
  * returns true only when the message was handed to Redis.
  */
-async function publishEvent(runId, envelope, { env = process.env } = {}) {
+async function publishEvent(
+  runId,
+  envelope,
+  { env = process.env, connection = null, logger = console } = {},
+) {
+  const timeoutMs = resolvePublishTimeoutMs(env);
   try {
-    const conn = getPublisher(env);
+    const conn = connection || getPublisher(env);
     if (!conn) return false;
-    await conn.publish(channelFor(runId), JSON.stringify(envelope));
+    await withTimeout((async () => {
+      if (conn.status === 'wait' && typeof conn.connect === 'function') {
+        await conn.connect();
+      }
+      await conn.publish(channelFor(runId), JSON.stringify(envelope));
+    })(), timeoutMs);
     return true;
   } catch (err) {
     // Redis blip — the DB append already happened, so this is non-fatal.
-    if (process.env.NODE_ENV !== 'test') {
-      console.warn('[codex-pubsub] publish failed:', err?.message || err);
+    markRedisFailure(err);
+    if (env.NODE_ENV !== 'test') {
+      warnPublishFailure(() => {
+        logger.warn('[codex-pubsub] publish failed; durable replay remains available:', err?.message || err);
+      });
     }
     return false;
   }
@@ -102,11 +175,14 @@ function _resetPublisher() {
     try { publisher.disconnect(); } catch { /* ignore */ }
   }
   publisher = undefined;
+  warnPublishFailure = createThrottledLogger(PUBLISH_WARNING_WINDOW_MS);
 }
 
 module.exports = {
   channelFor,
   isConfigured,
+  publisherRedisOptions,
+  resolvePublishTimeoutMs,
   getPublisher,
   publishEvent,
   createRunSubscriber,

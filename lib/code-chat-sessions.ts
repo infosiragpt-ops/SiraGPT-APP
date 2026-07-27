@@ -11,6 +11,8 @@ export type CodeChatTurn = {
   role: "user" | "assistant"
   content: string
   streaming?: boolean
+  /** Durable Codex run represented by this bubble, used for reload recovery. */
+  codexRunId?: string
   /** Live Codex-style execution phases for the /code agent turn. */
   agentPhases?: CodeAgentPhase[]
   agentLabel?: string
