@@ -62,6 +62,8 @@ const {
   parseDevPortPool,
   createDevPool,
   buildRunnerEnv,
+  buildPreflightEnabled,
+  previewDocumentReady,
   isControlRequestAuthorized,
   controlTokenForEnv,
   projectIdentity,
@@ -93,6 +95,7 @@ const CACHE_ROOT = process.env.RUNNER_CACHE_ROOT || "/runner-cache";
 const HOME_ROOT = process.env.RUNNER_HOME_ROOT || "/runner-home";
 const TMP_ROOT = process.env.RUNNER_TMP_ROOT || "/runner-tmp";
 const INSTALL_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_INSTALL_TIMEOUT_MS", 180_000, 1_000, 30 * 60_000);
+const BUILD_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_BUILD_TIMEOUT_MS", 180_000, 1_000, 30 * 60_000);
 const DEV_READY_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_DEV_READY_TIMEOUT_MS", 90_000, 5_000, 30 * 60_000);
 const EXEC_DEFAULT_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_EXEC_TIMEOUT_MS", 30_000, 1_000, 30 * 60_000);
 const EXEC_MAX_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_EXEC_TIMEOUT_MAX_MS", 120_000, 1_000, 60 * 60_000);
@@ -396,16 +399,19 @@ function pushLog(entry, line) {
 
 function entryStatus(entry) {
   if (!entry) {
-    return { running: false, ready: false, framework: null, project: null, port: null, basePath: null, error: null, log: [] };
+    return { running: false, ready: false, state: "stopped", framework: null, project: null, port: null, basePath: null, error: null, preflight: null, log: [] };
   }
+  const renderAdmitted = !entry.preflight || entry.preflight.render?.status === "passed";
   return {
-    running: entry.state === "installing" || entry.state === "starting" || entry.state === "ready",
-    ready: entry.state === "ready",
+    running: entry.state === "installing" || entry.state === "building" || entry.state === "starting" || entry.state === "ready",
+    ready: entry.state === "ready" && renderAdmitted,
+    state: entry.state,
     framework: entry.framework || null,
     project: entry.key === ROOT_KEY ? null : entry.key,
     port: entry.port,
     basePath: entry.basePath || null,
     error: entry.error || null,
+    preflight: entry.preflight || null,
     log: entry.log,
     startedAt: entry.startedAt,
   };
@@ -510,15 +516,19 @@ async function migrateLegacyVitePreviewProxy(projectId, entry) {
   return true;
 }
 
-/** Is the configured preview base returning a successful HTTP response? */
+/** Is the configured preview base returning a renderable HTTP response? */
 async function probeReady(port, basePath = null) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1500);
     const probePath = safeBasePath(basePath) || "/";
     const r = await fetch(`http://127.0.0.1:${port}${probePath}`, { signal: ctrl.signal });
+    const contentType = r.headers.get("content-type") || "";
+    const body = /text\/html|application\/xhtml\+xml/i.test(contentType)
+      ? (await r.text()).slice(0, 250_000)
+      : "";
     clearTimeout(t);
-    return r.ok;
+    return previewDocumentReady({ status: r.status, contentType, body });
   } catch {
     return false;
   }
@@ -602,6 +612,11 @@ async function startDev(projectId = null, basePath = null) {
   entry.error = null;
   entry.log = [];
   entry.framework = null;
+  entry.preflight = {
+    install: { status: "pending" },
+    build: { status: "pending" },
+    render: { status: "pending" },
+  };
   entry.basePath = normBase;
   entry.startedAt = Date.now();
   entry.lastUsedAt = Date.now();
@@ -659,14 +674,54 @@ async function runDev(entry, projectId) {
   if (installResult.timedOut) {
     entry.proc = null;
     entry.state = "error";
+    entry.preflight.install = { status: "failed", reason: "timeout" };
     entry.error = `bun install timed out after ${INSTALL_TIMEOUT_MS}ms`;
     return;
   }
   if (code !== 0) {
     entry.proc = null;
     entry.state = "error";
+    entry.preflight.install = { status: "failed", exitCode: code };
     entry.error = `bun install failed (exit ${code})`;
     return;
+  }
+  entry.proc = null;
+  entry.preflight.install = { status: "passed" };
+
+  const buildScript = String((pkg.scripts && pkg.scripts.build) || "").trim();
+  if (buildPreflightEnabled(process.env) && buildScript) {
+    pushLog(entry, "$ npm run build");
+    entry.state = "building";
+    const build = spawnSandboxed(projectId, ["npm", "run", "build"], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { NODE_ENV: "production", CI: "1" },
+    });
+    entry.proc = build;
+    pipe(entry, build.stdout, "[build]");
+    pipe(entry, build.stderr, "[build]");
+    const buildResult = await waitForExit(build, BUILD_TIMEOUT_MS);
+    if (stale()) return;
+    entry.proc = null;
+    if (buildResult.timedOut) {
+      entry.state = "error";
+      entry.preflight.build = { status: "failed", reason: "timeout" };
+      entry.error = `npm run build timed out after ${BUILD_TIMEOUT_MS}ms`;
+      return;
+    }
+    if (buildResult.exitCode !== 0) {
+      entry.state = "error";
+      entry.preflight.build = { status: "failed", exitCode: buildResult.exitCode };
+      entry.error = `npm run build failed (exit ${buildResult.exitCode})`;
+      return;
+    }
+    entry.preflight.build = { status: "passed" };
+  } else {
+    entry.preflight.build = {
+      status: "skipped",
+      reason: buildScript ? "disabled" : "no_build_script",
+    };
   }
 
   // Dev command per framework. Host 0.0.0.0 so it's reachable from the proxy.
@@ -722,12 +777,16 @@ async function runDev(entry, projectId) {
     await Bun.sleep(1500);
     if (stale()) return;
     if (await probeReady(port, entry.basePath)) {
+      entry.preflight.render = { status: "passed" };
+      // Publish ready only after every preflight field is terminal. Status
+      // readers must never observe ready=true with render still pending.
       entry.state = "ready";
       pushLog(entry, `[runner] dev server ready on ${port}`);
       return;
     }
     if (devProc.killed) {
       entry.state = "error";
+      entry.preflight.render = { status: "failed", reason: "process_exited" };
       entry.error = "dev server exited before becoming ready";
       return;
     }
@@ -735,6 +794,7 @@ async function runDev(entry, projectId) {
   // Kill the stalled tree so a late-ready zombie can't confuse the next /status.
   killEntryProc(entry);
   entry.state = "error";
+  entry.preflight.render = { status: "failed", reason: "timeout" };
   entry.error = `dev server didn't become ready in ${DEV_READY_TIMEOUT_MS}ms`;
 }
 
@@ -974,9 +1034,9 @@ Bun.serve({
         entry = lastStartedKey != null ? devPool.get(lastStartedKey) : null;
       }
       const st = entryStatus(entry);
-      // Legacy contract: `ready` is a LIVE probe while the server is running
-      // (it can flip true during "starting", as soon as the port answers).
-      const ready = st.running ? await probeReady(st.port, st.basePath) : false;
+      // A live port confirms health only after install, build, and render have
+      // admitted the entry. Never let the probe bypass the preflight state.
+      const ready = st.ready ? await probeReady(st.port, st.basePath) : false;
       const { log, ...rest } = st;
       return Response.json({
         ...rest,
