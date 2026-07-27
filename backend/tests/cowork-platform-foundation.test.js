@@ -11,10 +11,38 @@ const permissionManager = require('../src/services/agent-harness/permission-mana
 const connectorCatalog = require('../src/services/cowork/connector-catalog');
 const scheduler = require('../src/services/cowork/scheduler');
 const headlessRunner = require('../src/services/cowork/headless-runner');
+const coworkNotify = require('../src/services/cowork/notify');
 const reactAgent = require('../src/services/react-agent');
 const { buildCoworkTools } = require('../src/services/agent-harness/tools/cowork-tools');
 
 describe('Cowork workspace contracts', () => {
+  test('approval notifications carry the durable approval handle and task route', async () => {
+    let created = null;
+    const prisma = {
+      notification: {
+        create: async ({ data }) => {
+          created = data;
+          return { id: 'notification-1', ...data };
+        },
+      },
+      user: {
+        findUnique: async () => null,
+      },
+    };
+    await coworkNotify.notifyRunState(
+      prisma,
+      { id: 'run-1', userId: 'u1', workspaceId: 'w1', chatId: 'chat-1' },
+      'waiting_approval',
+      'Publish the approved release',
+      { approvalId: 'approval-1', tool: 'publish_social_post' },
+    );
+    assert.equal(created.type, 'cowork_waiting_approval');
+    assert.equal(created.metadata.approvalId, 'approval-1');
+    assert.equal(created.metadata.tool, 'publish_social_post');
+    assert.equal(created.metadata.runId, 'run-1');
+    assert.match(created.metadata.actionUrl, /\/chat\?id=chat-1$/);
+  });
+
   test('normalizes relative paths and rejects traversal or absolute paths', () => {
     assert.equal(workspaceStore.normalizeWorkspacePath('reports/weekly.md'), 'reports/weekly.md');
     assert.equal(workspaceStore.normalizeWorkspacePath('reports\\weekly.md'), 'reports/weekly.md');
