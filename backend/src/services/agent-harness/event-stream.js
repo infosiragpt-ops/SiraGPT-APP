@@ -255,6 +255,30 @@ function createAgentEventStream(opts = {}) {
     });
   }
 
+  function auditCall(call, { isError, status, durationMs }) {
+    if (!ctxInfo?.prisma?.agentAuditLog || !ctxInfo?.userId || !call?.name) return;
+    try {
+      const { appendAudit } = require('../cowork/control-plane');
+      Promise.resolve(appendAudit(ctxInfo.prisma, {
+        userId: ctxInfo.userId,
+        workspaceId: ctxInfo.workspaceId || null,
+        runId: ctxInfo.coworkRunId || null,
+        action: isError ? 'agent.tool.failed' : 'agent.tool.completed',
+        targetType: 'agent_tool',
+        targetId: call.name,
+        resultSummary: isError ? 'Tool execution failed' : 'Tool execution completed',
+        metadata: {
+          status: status || (isError ? 'error' : 'completed'),
+          durationMs,
+          permissionTier: call.permissionTier || 'auto',
+          source: call.source || null,
+        },
+      })).catch(() => {});
+    } catch (_) {
+      // Audit is best effort and must never alter tool execution.
+    }
+  }
+
   function finishCall(call, { result, isError, status }) {
     if (!call || call.state === 'done') return;
     call.state = 'done';
@@ -280,6 +304,7 @@ function createAgentEventStream(opts = {}) {
       durationMs,
       ...(status && status !== 'completed' && status !== 'error' ? { status } : {}),
     });
+    auditCall(call, { isError: Boolean(isError), status, durationMs });
   }
 
   /**
@@ -384,6 +409,9 @@ function createAgentEventStream(opts = {}) {
               humanDescription: call.humanDescription,
               args: previewOf(call.args, 1_500),
               signal,
+              prisma: ctxInfo.prisma || null,
+              runId: ctxInfo.coworkRunId || null,
+              workspaceId: ctxInfo.workspaceId || null,
               onRequest: (req) => emit('permission_request', {
                 blockIndex: call.blockIndex,
                 id: call.id,

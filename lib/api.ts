@@ -417,6 +417,42 @@ export type AgentDoneEvent = {
   stoppedReason?: string | null
   interrupted?: boolean
 }
+export type CoworkRunStartedEvent = {
+  type: 'cowork_run_started'
+  run: {
+    id: string
+    workspaceId: string
+    status: string
+    maxSteps: number
+    maxCostUsd?: number | string | null
+    checklist?: Array<{ id?: string; text: string; status: string; note?: string | null }>
+  }
+}
+export type CoworkChecklistEvent = {
+  type: 'cowork_checklist'
+  runId: string
+  checklist: Array<{ id?: string; text: string; status: string; note?: string | null }>
+}
+export type CoworkRunFinishedEvent = {
+  type: 'cowork_run_finished'
+  run: {
+    id: string
+    workspaceId: string
+    status: string
+    currentStep: number
+    maxSteps: number
+    costUsd?: number | string | null
+    tokensEstimate?: number | null
+    lastEvent?: string | null
+  }
+}
+export type CoworkModelFallbackEvent = {
+  type: 'cowork_model_fallback'
+  runId: string
+  model: string
+  provider: string
+  reason: 'cost_budget_guard' | string
+}
 export type AgentStreamEvent =
   | AgentToolCallStartEvent
   | AgentToolExecutingEvent
@@ -424,6 +460,10 @@ export type AgentStreamEvent =
   | AgentPermissionRequestEvent
   | AgentPermissionResolvedEvent
   | AgentDoneEvent
+  | CoworkRunStartedEvent
+  | CoworkChecklistEvent
+  | CoworkModelFallbackEvent
+  | CoworkRunFinishedEvent
 
 /** Registered external MCP server (headers never leave the backend). */
 export type McpServerInfo = {
@@ -444,6 +484,10 @@ const AGENT_STREAM_EVENT_TYPES = new Set([
   'permission_request',
   'permission_resolved',
   'agent_done',
+  'cowork_run_started',
+  'cowork_checklist',
+  'cowork_model_fallback',
+  'cowork_run_finished',
 ])
 
 type AIStreamOptions = {
@@ -1398,10 +1442,10 @@ class ApiClient {
   //   });
   // }
 
-  async stopAIStream(streamId: string) {
+  async stopAIStream(streamId: string, chatId?: string | null) {
     return this.request('/ai/stop-stream', {
       method: 'POST',
-      body: JSON.stringify({ streamId }),
+      body: JSON.stringify({ streamId, ...(chatId ? { chatId } : {}) }),
     });
   }
 

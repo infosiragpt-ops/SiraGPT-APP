@@ -181,6 +181,18 @@ model User {
   // Agent harness — external MCP servers registered by this user.
   mcpServers McpServer[]
 
+  // Cowork control plane — versioned workspaces, steerable runs, durable
+  // approvals, scheduled work, connector vaults and append-only audit.
+  coworkWorkspaces    CoworkWorkspace[]
+  coworkRuns          CoworkRun[]
+  coworkSteeringNotes CoworkSteeringNote[]
+  agentApprovals      AgentApproval[]
+  scheduledAgentTasks ScheduledAgentTask[]
+  connectorAccounts   ConnectorAccount[]
+  coworkMemories      CoworkMemory[]
+  agentAuditLogs      AgentAuditLog[]
+  coworkCostDaily     CoworkCostDaily[]
+
   // F1 — declarative RBAC. `userRoles` joins to `user_roles` and
   // ultimately to `roles` + `permissions`. The legacy `isSuperAdmin`
   // flag stays as a shadow until F5 sunset.
@@ -493,6 +505,11 @@ model Chat {
   projectId String?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
+  // Cowork workspace mounted by this chat. Optional and additive: legacy
+  // chats continue to work without a workspace.
+  coworkWorkspaceId String?          @map("cowork_workspace_id")
+  coworkWorkspace   CoworkWorkspace? @relation(fields: [coworkWorkspaceId], references: [id], onDelete: SetNull)
+
   // Organization sharing (cycle 27). When non-null, members of the
   // organization with at least VIEWER role can see this chat. The
   // chat owner remains `userId`; sharing does not transfer ownership.
@@ -508,10 +525,13 @@ model Chat {
   goalRuns           GoalRun[]
   generatedArtifacts GeneratedArtifact[]
   runs               ChatRun[]
+  coworkRuns         CoworkRun[]
+  agentApprovals     AgentApproval[]
 
   @@index([userId, updatedAt])
   @@index([customGptId])
   @@index([projectId])
+  @@index([coworkWorkspaceId])
   @@index([organizationId, sharedAt])
   @@index([userId, isPinned, pinnedAt])
   @@map("chats")
@@ -683,6 +703,268 @@ model ChatRun {
   @@index([cancelledAt])
   @@index([status, updatedAt])
   @@map("chat_runs")
+}
+
+// ────────────────────────────────────────────────────────────
+// Cowork — workspace-first, steerable and auditable agent work.
+// Content bytes are immutable and content-addressed in object storage;
+// Postgres stores the file tree and version graph.
+// ────────────────────────────────────────────────────────────
+model CoworkWorkspace {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chats          Chat[]
+  files          CoworkFile[]
+  runs           CoworkRun[]
+  scheduledTasks ScheduledAgentTask[]
+  memories       CoworkMemory[]
+  auditLogs      AgentAuditLog[]
+
+  @@index([userId, updatedAt])
+  @@map("cowork_workspaces")
+}
+
+model CoworkFile {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  path           String
+  contentHash    String   @map("content_hash")
+  storageRef     String   @map("storage_ref") @db.Text
+  artifactId     String?  @map("artifact_id")
+  size           Int
+  mime           String
+  updatedBy      String   @default("user") @map("updated_by") // user | agent
+  currentVersion Int      @default(1) @map("current_version")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspace CoworkWorkspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions  CoworkFileVersion[]
+
+  @@unique([workspaceId, path])
+  @@index([workspaceId, updatedAt])
+  @@index([contentHash])
+  @@map("cowork_files")
+}
+
+model CoworkFileVersion {
+  id          String   @id @default(cuid())
+  fileId      String
+  version     Int
+  contentHash String   @map("content_hash")
+  storageRef  String   @map("storage_ref") @db.Text
+  artifactId  String?  @map("artifact_id")
+  size        Int
+  mime        String
+  authorRunId String?  @map("author_run_id")
+  createdAt   DateTime @default(now())
+
+  file      CoworkFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  authorRun CoworkRun? @relation(fields: [authorRunId], references: [id], onDelete: SetNull)
+
+  @@unique([fileId, version])
+  @@index([authorRunId])
+  @@index([contentHash])
+  @@map("cowork_file_versions")
+}
+
+model CoworkRun {
+  id             String    @id @default(cuid())
+  userId         String
+  chatId         String?
+  workspaceId    String?
+  parentRunId    String?
+  status         String    @default("queued") // queued | running | paused | waiting_approval | completed | failed | cancelled
+  kind           String    @default("chat")
+  prompt         String    @db.Text
+  checklist      Json?
+  maxSteps       Int       @default(12)
+  maxCostUsd     Float?
+  costUsd        Float     @default(0)
+  tokensEstimate Int       @default(0)
+  currentStep    Int       @default(0)
+  lastEvent      String?   @db.Text
+  checkpoint     Json?
+  controlVersion Int       @default(0)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat          Chat?                @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  workspace     CoworkWorkspace?     @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  parentRun     CoworkRun?           @relation("CoworkRunChildren", fields: [parentRunId], references: [id], onDelete: SetNull)
+  childRuns     CoworkRun[]          @relation("CoworkRunChildren")
+  steeringNotes CoworkSteeringNote[]
+  approvals     AgentApproval[]
+  fileVersions  CoworkFileVersion[]
+  auditLogs     AgentAuditLog[]
+
+  @@index([userId, status, updatedAt])
+  @@index([chatId, status])
+  @@index([workspaceId, updatedAt])
+  @@index([parentRunId])
+  @@map("cowork_runs")
+}
+
+model CoworkSteeringNote {
+  id         String    @id @default(cuid())
+  runId      String
+  userId     String
+  note       String    @db.Text
+  status     String    @default("queued") // queued | consumed
+  createdAt  DateTime  @default(now())
+  consumedAt DateTime?
+
+  run  CoworkRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status, createdAt])
+  @@index([userId, createdAt])
+  @@map("cowork_steering_notes")
+}
+
+model AgentApproval {
+  id               String    @id @default(cuid())
+  userId           String
+  chatId           String?
+  runId            String?
+  tool             String
+  args             Json?
+  humanDescription String?   @db.Text
+  status           String    @default("pending") // pending | approved | denied | expired
+  decision         String?
+  expiresAt        DateTime
+  resolvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat Chat?      @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  run  CoworkRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, expiresAt])
+  @@index([chatId, status])
+  @@index([runId, status])
+  @@map("agent_approvals")
+}
+
+model ScheduledAgentTask {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String?
+  prompt      String    @db.Text
+  cronExpr    String    @map("cron_expr")
+  tz          String    @default("UTC")
+  enabled     Boolean   @default(true)
+  lastRunAt   DateTime?
+  lastStatus  String?
+  nextRunAt   DateTime
+  deliver     String    @default("chat") // chat | email | telegram
+  createdFrom String    @default("ui")
+  maxSteps    Int       @default(12)
+  maxCostUsd  Float?
+  lockedBy    String?
+  lockedUntil DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace CoworkWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([enabled, nextRunAt])
+  @@index([userId, createdAt])
+  @@index([lockedUntil])
+  @@map("scheduled_agent_tasks")
+}
+
+model ConnectorAccount {
+  id             String    @id @default(cuid())
+  userId         String
+  provider       String
+  accountLabel   String?
+  authType       String    @default("oauth2")
+  scopes         Json?
+  tokenEncrypted String?   @db.Text
+  configEncrypted String?  @db.Text
+  status         String    @default("disconnected") // disconnected | connected | broken
+  lastHealthAt   DateTime?
+  lastError      String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId, status])
+  @@map("connector_accounts")
+}
+
+model CoworkMemory {
+  id           String   @id @default(cuid())
+  userId       String
+  workspaceId  String
+  fact         String   @db.Text
+  sourceChatId String?
+  createdAt    DateTime @default(now())
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace CoworkWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@map("cowork_memories")
+}
+
+model AgentAuditLog {
+  id            String   @id @default(cuid())
+  userId        String
+  workspaceId   String?
+  runId         String?
+  action        String
+  targetType    String?
+  targetId      String?
+  inputSummary  String?  @db.Text
+  resultSummary String?  @db.Text
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace CoworkWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  run       CoworkRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([runId, createdAt])
+  @@index([action, createdAt])
+  @@map("agent_audit_logs")
+}
+
+model CoworkCostDaily {
+  id             String   @id @default(cuid())
+  userId         String
+  scopeKey       String
+  workspaceId    String?
+  chatId         String?
+  day            DateTime @db.Date
+  costUsd        Float    @default(0)
+  tokensEstimate Int      @default(0)
+  runCount       Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeKey, day])
+  @@index([userId, day])
+  @@index([workspaceId, day])
+  @@index([chatId, day])
+  @@map("cowork_cost_daily")
 }
 
 // Saved searches — see migration 20260519050000_add_saved_search.

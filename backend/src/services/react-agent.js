@@ -30,8 +30,39 @@
  *     prompt, and the failure semantics.
  */
 
+const { calculateCost } = require('./observability/llm-cost');
+
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
+
+function responseUsage(resp, { model, provider } = {}) {
+  const raw = resp?.usage || {};
+  const inputTokens = Math.max(0, Math.round(Number(
+    raw.prompt_tokens ?? raw.input_tokens ?? raw.inputTokens ?? 0,
+  ) || 0));
+  const outputTokens = Math.max(0, Math.round(Number(
+    raw.completion_tokens ?? raw.output_tokens ?? raw.outputTokens ?? 0,
+  ) || 0));
+  const reportedTotal = Math.max(0, Math.round(Number(
+    raw.total_tokens ?? raw.totalTokens ?? 0,
+  ) || 0));
+  const tokensEstimate = reportedTotal || inputTokens + outputTokens;
+  const cost = calculateCost({
+    model,
+    provider,
+    inputTokens,
+    outputTokens,
+  });
+  return {
+    inputTokens,
+    outputTokens,
+    tokensEstimate,
+    costUsd: Math.max(0, Number(cost.cost_usd) || 0),
+    model: model || null,
+    provider: provider || cost.provider || null,
+    source: cost.source,
+  };
+}
 
 // ── Trace compaction ────────────────────────────────────────────────────
 // The running `messages` array grows by one assistant message + one tool
@@ -772,6 +803,8 @@ function sanitizeFinalAnswerDiagnostics(answer) {
  * @param {string} opts.query
  * @param {Array<Tool>} opts.tools
  * @param {number} [opts.maxSteps=8]
+ * @param {function} [opts.onBeforeStep] async control hook for pause,
+ *                    steering, cancellation and external budgets.
  * @param {function} [opts.onStep]
  * @param {object}   [opts.ctx]            passed as 2nd arg to every tool.execute
  * @param {string}   [opts.model="gpt-4o"] model to drive the loop
@@ -790,6 +823,7 @@ async function run(openai, opts) {
     tools,
     maxSteps = DEFAULT_MAX_STEPS,
     maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS,
+    onBeforeStep = null,
     onStepStart = () => {},
     onStepDone = () => {},
     onStep = () => {},
@@ -818,6 +852,10 @@ async function run(openai, opts) {
 
   if (!query) throw new Error('react-agent: query is required');
   if (!Array.isArray(tools)) throw new Error('react-agent: tools must be an array');
+
+  let activeOpenai = openai;
+  let activeModel = model;
+  let activeProvider = ctx?.provider || null;
 
   // `finalize` is always present. Even if a caller forgets to include
   // it in their toolset, the agent still has a way to terminate
@@ -1031,6 +1069,41 @@ async function run(openai, opts) {
 
   for (let step = resumeStepOffset; step < maxSteps; step++) {
     const stepStartedAt = Date.now();
+    if (typeof onBeforeStep === 'function') {
+      let control = null;
+      try {
+        control = await onBeforeStep({
+          step,
+          stepsCompleted: steps.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+      } catch (controlError) {
+        stoppedReason = `control_plane_error:${controlError?.code || controlError?.message || 'unknown'}`;
+        break;
+      }
+      if (control?.stop) {
+        stoppedReason = control.reason || 'stopped_by_control_plane';
+        break;
+      }
+      if (control?.clientOverride && control?.modelOverride) {
+        activeOpenai = control.clientOverride;
+        activeModel = String(control.modelOverride);
+        activeProvider = control.providerOverride || activeProvider;
+      }
+      const steeringNotes = Array.isArray(control?.steeringNotes)
+        ? control.steeringNotes.map((note) => String(note || '').trim()).filter(Boolean)
+        : [];
+      if (steeringNotes.length) {
+        messages.push({
+          role: 'user',
+          content: [
+            '[STEERING UPDATE FROM THE USER]',
+            'Apply these instructions to the remaining work without discarding completed progress:',
+            ...steeringNotes.map((note) => `- ${note}`),
+          ].join('\n'),
+        });
+      }
+    }
     if (ctx?.signal?.aborted) {
       stoppedReason = 'aborted';
       break;
@@ -1147,14 +1220,14 @@ async function run(openai, opts) {
         const forceToolName = (toolChoice && typeof toolChoice === 'object' && toolChoice.function)
           ? toolChoice.function.name
           : null;
-        resp = await openai.chat.completions.create({
-          model,
+        resp = await activeOpenai.chat.completions.create({
+          model: activeModel,
           messages: promptedTC.toPromptedTranscript(messages, { forceToolName }),
           temperature: 0.3,
         }, { signal: stepCtl.signal });
       } else {
-        resp = await openai.chat.completions.create({
-          model,
+        resp = await activeOpenai.chat.completions.create({
+          model: activeModel,
           messages,
           tools: toolsSchema,
           tool_choice: toolChoice,
@@ -1178,6 +1251,10 @@ async function run(openai, opts) {
     const choice = resp.choices?.[0];
     const msg = choice?.message;
     if (!msg) { stoppedReason = 'no_message'; break; }
+    const usage = responseUsage(resp, {
+      model: activeModel,
+      provider: activeProvider,
+    });
 
     // Normalise NATIVE tool-call formats → OpenAI `tool_calls`. Models like
     // Moonshot Kimi K2.6 (via OpenRouter) emit tool calls as tokens inside
@@ -1189,7 +1266,7 @@ async function run(openai, opts) {
       msg.content = parsed.cleanedContent;
       if (parsed.toolCalls.length > 0) {
         msg.tool_calls = parsed.toolCalls;
-        try { console.log(`[react-agent] parsed ${parsed.toolCalls.length} native tool call(s) from content (model=${model})`); } catch (_) { /* noop */ }
+        try { console.log(`[react-agent] parsed ${parsed.toolCalls.length} native tool call(s) from content (model=${activeModel})`); } catch (_) { /* noop */ }
       }
     }
 
@@ -1206,7 +1283,7 @@ async function run(openai, opts) {
           ...c,
           id: `call_p${step}_${i}_${c.function.name}`.slice(0, 60),
         }));
-        try { console.log(`[react-agent] parsed ${msg.tool_calls.length} prompted tool call(s) from content (model=${model})`); } catch (_) { /* noop */ }
+        try { console.log(`[react-agent] parsed ${msg.tool_calls.length} prompted tool call(s) from content (model=${activeModel})`); } catch (_) { /* noop */ }
       }
     }
 
@@ -1222,7 +1299,7 @@ async function run(openai, opts) {
       // contract (must use finalize). When a finalizeGuard is active,
       // do not let plain text bypass deterministic tool-use gates;
       // feed a repair instruction back into the loop instead.
-      const plainStepRecord = { step, thought, actions: [] };
+      const plainStepRecord = { step, thought, actions: [], usage };
       if (typeof finalizeGuard === 'function') {
         let guard;
         try {
@@ -1240,7 +1317,7 @@ async function run(openai, opts) {
         if (!guard?.ok) {
           steps.push(plainStepRecord);
           onStep(plainStepRecord);
-          onStepDone(plainStepRecord);
+          await onStepDone(plainStepRecord);
           // Count plain-text rejections against the same circuit breaker as the
           // finalize-tool path. A weak prompted model that keeps ignoring the
           // tool_call protocol and answering in prose would otherwise spin to
@@ -1279,12 +1356,12 @@ async function run(openai, opts) {
       stoppedReason = 'plain_text_finalize';
       steps.push(plainStepRecord);
       onStep(plainStepRecord);
-      onStepDone(plainStepRecord);
+      await onStepDone(plainStepRecord);
       break;
     }
 
-    const stepRecord = { step, thought, actions: [] };
-    onStepStart({
+    const stepRecord = { step, thought, actions: [], usage };
+    await onStepStart({
       step,
       thought,
       actions: toolCalls.map(call => ({
@@ -1550,14 +1627,14 @@ async function run(openai, opts) {
 
     steps.push(stepRecord);
     onStep(stepRecord);
-    onStepDone(stepRecord);
+    await onStepDone(stepRecord);
 
     // Durable checkpoint at the step boundary (trace ends on a complete
     // round here). Skipped once finalized — the final answer persists via
     // the caller's normal completion path and the checkpoint would only
     // invite a spurious re-run. The callback must never break the loop.
     if (typeof onCheckpoint === 'function' && !finalized) {
-      try { onCheckpoint(buildCheckpoint(step + 1)); } catch (cpErr) {
+      try { await onCheckpoint(buildCheckpoint(step + 1)); } catch (cpErr) {
         try { console.warn('[react-agent] onCheckpoint failed (continuing):', cpErr && cpErr.message); } catch { /* noop */ }
       }
     }

@@ -808,6 +808,77 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     });
     const mediaIntent = mediaIntents[0] || null;
 
+    // Cowork control plane. A persisted chat gets one workspace and each
+    // agentic turn gets a durable run before tools are assembled. Fail-open
+    // during staged rollouts: a missing pre-migration model must not make the
+    // legacy chat unavailable.
+    let __coworkRun = null;
+    let __coworkMemoryBlock = '';
+    let __coworkHarnessEnabled = true;
+    try {
+      __coworkHarnessEnabled = require('./agent-harness/run-agent-turn').harnessEnabled();
+    } catch (_) {
+      __coworkHarnessEnabled = false;
+    }
+    if (
+      !toolsOverride
+      && __coworkHarnessEnabled
+      && toolContext?.prisma?.coworkWorkspace
+      && toolContext?.prisma?.coworkRun
+      && toolContext?.userId
+      && toolContext?.chatId
+      && toolContext?.coworkDisabled !== true
+    ) {
+      try {
+        const coworkControl = require('./cowork/control-plane');
+        __coworkRun = await coworkControl.createRun(toolContext.prisma, {
+          userId: toolContext.userId,
+          chatId: toolContext.chatId,
+          prompt: userQuery,
+          kind: 'chat',
+          maxSteps,
+          maxCostUsd: toolContext.maxCostUsd ?? null,
+          status: 'running',
+        });
+        toolContext.workspaceId = __coworkRun.workspaceId;
+        toolContext.coworkWorkspaceId = __coworkRun.workspaceId;
+        toolContext.coworkRunId = __coworkRun.id;
+        const coworkMemories = await toolContext.prisma.coworkMemory.findMany({
+          where: {
+            userId: String(toolContext.userId),
+            workspaceId: __coworkRun.workspaceId,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          select: { fact: true },
+        });
+        if (coworkMemories.length) {
+          toolContext.memoryFacts = [
+            ...(Array.isArray(toolContext.memoryFacts) ? toolContext.memoryFacts : []),
+            ...coworkMemories.map((memory) => memory.fact),
+          ];
+          __coworkMemoryBlock = [
+            '=== MEMORIA DEL WORKSPACE COWORK ===',
+            ...coworkMemories.map((memory) => `- ${String(memory.fact).slice(0, 1000)}`),
+            '=== FIN MEMORIA DEL WORKSPACE ===',
+          ].join('\n');
+        }
+        await writeSse(res, {
+          type: 'cowork_run_started',
+          run: {
+            id: __coworkRun.id,
+            workspaceId: __coworkRun.workspaceId,
+            status: __coworkRun.status,
+            maxSteps: __coworkRun.maxSteps,
+            maxCostUsd: __coworkRun.maxCostUsd,
+            checklist: __coworkRun.checklist || [],
+          },
+        });
+      } catch (coworkError) {
+        try { console.warn('[cowork] run bootstrap failed (legacy chat continues):', coworkError.message); } catch (_) { /* noop */ }
+      }
+    }
+
     // ─── Agent harness (Phase 1) ──────────────────────────────────────────
     // Merge the harness-native tools (web_fetch / run_javascript /
     // create_artifact) plus the user's external MCP tools into the turn, and
@@ -837,9 +908,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           mcpEnabled: toolCallMode === 'native',
           // Attachment IDs (ownership-verified upstream) — gates document_edit.
           fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
+          workspaceId: toolContext.workspaceId || null,
+          coworkRunId: toolContext.coworkRunId || null,
         });
         if (__harness) tools = applyCustomGptCapabilityGates(__harness.tools, customGptCapabilities);
       } catch (harnessErr) {
+        if (__coworkRun) {
+          await require('./cowork/control-plane').finishRun(toolContext.prisma, {
+            runId: __coworkRun.id,
+            userId: toolContext.userId,
+            status: 'failed',
+            lastEvent: `Cowork tool harness unavailable: ${harnessErr?.message || 'unknown error'}`,
+          }).catch(() => {});
+          throw harnessErr;
+        }
         console.warn('[agent-harness] attach failed — continuing without harness:', harnessErr && harnessErr.message);
       }
     }
@@ -982,6 +1064,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
       maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
     }
+    if (__coworkRun?.maxSteps) {
+      maxStepsOverride = Math.min(maxStepsOverride, __coworkRun.maxSteps);
+    }
 
     // U3 observe/enforce: attach policy summary + non-fatal shadow diffs before
     // the first sentinel so telemetry is visible from the first UI frame.
@@ -1065,6 +1150,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
+      __coworkRun
+        ? [
+          'Este chat tiene un workspace Cowork versionado. El trabajo debe ocurrir en archivos, no quedarse solo en una burbuja de chat.',
+          'Usa ws_glob/ws_grep/ws_read para inspeccionar y ws_write/ws_edit para entregar o modificar archivos. Lee antes de editar; nunca ignores un conflicto de version.',
+          'Usa workspace_memory para recordar o consultar decisiones estables de este proyecto; no mezcles esa memoria con otros workspaces ni guardes secretos.',
+          'Usa update_checklist para tareas de dos o mas pasos. Puedes usar spawn_task para trabajo independiente y schedule_task solo cuando el usuario pida recurrencia.',
+          `Workspace id: ${__coworkRun.workspaceId}. Run id: ${__coworkRun.id}.`,
+        ].join('\n')
+        : '',
+      __coworkMemoryBlock,
       buildThreadWorkContext(history, userQuery),
       'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
       'Estándar de calidad (nivel experto): en tareas difíciles piensa antes de actuar (descompón el problema, explicita supuestos y casos límite, verifica cada paso); responde con la conclusión primero; distingue lo que SABES de lo que INFIERES de lo que NO SABES y NUNCA inventes datos, cifras, citas, fuentes ni APIs; cuando dudes, verifica con una herramienta en vez de adivinar; admite y corrige tus errores directamente, sin adular.',
@@ -1120,6 +1215,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           prompt: a.prompt || null,
         });
         writeSse(res, { replace: true, content: serializeSentinel(state) });
+        if (toolContext.workspaceId && toolContext.prisma && toolContext.userId && a.id) {
+          const workspaceStore = require('./cowork/workspace-store');
+          Promise.resolve(workspaceStore.importAgentArtifact(toolContext.prisma, {
+            workspaceId: toolContext.workspaceId,
+            userId: toolContext.userId,
+            artifactId: a.id,
+            targetPath: `deliverables/${a.filename || 'artifact.bin'}`,
+            authorRunId: toolContext.coworkRunId || null,
+          })).then((file) => {
+            writeSse(res, {
+              type: 'cowork_file_changed',
+              workspaceId: toolContext.workspaceId,
+              file: {
+                id: file.id,
+                path: file.path,
+                version: file.currentVersion,
+                mime: file.mime,
+                size: file.size,
+                artifactId: a.id,
+              },
+            });
+          }).catch((error) => {
+            try { console.warn('[cowork] artifact import failed:', error.message); } catch (_) { /* noop */ }
+          });
+        }
       } catch (_) { /* never let UI plumbing crash a tool */ }
     }
 
@@ -1185,6 +1305,75 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* capability registry unavailable → omit the param */ }
 
     let stepCounter = 0;
+    let __coworkFallbackApplied = false;
+    let __coworkFallbackClient = null;
+
+    async function beforeCoworkStep({ step }) {
+      const coworkControl = require('./cowork/control-plane');
+      const control = await coworkControl.beforeStep(toolContext.prisma, {
+        runId: __coworkRun.id,
+        userId: toolContext.userId,
+        step,
+        signal,
+        onEvent,
+      });
+      if (control?.stop || __coworkFallbackApplied) return control;
+
+      const run = control?.run;
+      const maxCost = Number(run?.maxCostUsd);
+      const spent = Number(run?.costUsd) || 0;
+      const completedSteps = Math.max(0, Number(run?.currentStep) || 0);
+      const averageStepCost = completedSteps > 0 ? spent / completedSteps : 0;
+      const nearBudget = Number.isFinite(maxCost) && maxCost > 0 && spent > 0 && (
+        spent >= maxCost * 0.75
+        || spent + averageStepCost * 1.25 >= maxCost
+      );
+      if (!nearBudget) return control;
+
+      const {
+        createInstrumentedCerebrasClient,
+        getCerebrasConfig,
+      } = require('./ai/cerebras-client');
+      const fallback = getCerebrasConfig();
+      const alreadyFree = String(provider || '').toLowerCase() === 'cerebras'
+        || String(model || '').toLowerCase() === String(fallback.model || '').toLowerCase();
+      if (alreadyFree || !fallback.enabled) return control;
+
+      __coworkFallbackClient = __coworkFallbackClient || createInstrumentedCerebrasClient();
+      if (!__coworkFallbackClient) return control;
+      __coworkFallbackApplied = true;
+
+      const event = `Budget guard switched the remaining work to FlashGPT (${fallback.model})`;
+      await toolContext.prisma.coworkRun.update({
+        where: { id: __coworkRun.id },
+        data: { lastEvent: event, controlVersion: { increment: 1 } },
+      });
+      await coworkControl.appendAudit(toolContext.prisma, {
+        userId: toolContext.userId,
+        workspaceId: __coworkRun.workspaceId,
+        runId: __coworkRun.id,
+        action: 'cowork.run.model_fallback',
+        targetType: 'model',
+        targetId: fallback.model,
+        inputSummary: String(model),
+        resultSummary: event,
+        metadata: { spent, maxCost, provider: fallback.provider },
+      });
+      await writeSse(res, {
+        type: 'cowork_model_fallback',
+        runId: __coworkRun.id,
+        model: fallback.model,
+        provider: fallback.provider,
+        reason: 'cost_budget_guard',
+      });
+      return {
+        ...control,
+        clientOverride: __coworkFallbackClient,
+        modelOverride: fallback.model,
+        providerOverride: fallback.provider,
+      };
+    }
+
     let result;
     try {
       result = await reactAgent.run(openai, {
@@ -1201,6 +1390,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ctx: {
           ...toolContext,
           signal,
+          provider,
           onEvent,
           toolGate,
           toolAuthCtx: {
@@ -1209,6 +1399,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           },
         },
         finalizeGuard: composedFinalizeGuard,
+        onBeforeStep: __coworkRun ? beforeCoworkStep : null,
+        onCheckpoint: __coworkRun
+          ? (checkpoint) => require('./cowork/control-plane').saveCheckpoint(toolContext.prisma, {
+            runId: __coworkRun.id,
+            userId: toolContext.userId,
+            checkpoint,
+          })
+          : null,
         onCompact: ({ step, removedMessages, chars }) => {
           try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
         },
@@ -1297,9 +1495,30 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           }
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
+        if (__coworkRun) {
+          await require('./cowork/control-plane').recordStep(toolContext.prisma, {
+            runId: __coworkRun.id,
+            userId: toolContext.userId,
+            step: stepCounter,
+            tokensEstimate: stepRec?.usage?.tokensEstimate || 0,
+            costUsd: stepRec?.usage?.costUsd || 0,
+            event: actions.length
+              ? `Completed: ${actions.map((action) => action?.tool).filter(Boolean).join(', ')}`
+              : `Completed reasoning step ${stepCounter}`,
+          }).catch(() => {});
+        }
         },
       });
     } catch (agentRunError) {
+      if (__coworkRun) {
+        const interrupted = signal?.aborted || /cancel|abort/i.test(String(agentRunError?.code || agentRunError?.message || ''));
+        await require('./cowork/control-plane').finishRun(toolContext.prisma, {
+          runId: __coworkRun.id,
+          userId: toolContext.userId,
+          status: interrupted ? 'cancelled' : 'failed',
+          lastEvent: String(agentRunError?.message || agentRunError).slice(0, 4000),
+        }).catch(() => {});
+      }
       if (pluginLifecycle && agentRunError?.code !== 'ABORT_ERR') {
         try { await pluginLifecycle.error(agentRunError, { phase: 'run' }); } catch (_) { /* plugin telemetry must not mask the run error */ }
       }
@@ -1385,6 +1604,35 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         });
       } catch (finishErr) {
         console.warn('[agent-harness] finish failed:', finishErr && finishErr.message);
+      }
+    }
+    if (__coworkRun) {
+      const stoppedReason = String(result?.stoppedReason || 'finalized');
+      const status = signal?.aborted || /cancelled_by_user|aborted|cost_budget_exhausted/.test(stoppedReason)
+        ? 'cancelled'
+        : (/control_plane_error|run_failed/.test(stoppedReason) ? 'failed' : 'completed');
+      const completedRun = await require('./cowork/control-plane').finishRun(toolContext.prisma, {
+        runId: __coworkRun.id,
+        userId: toolContext.userId,
+        status,
+        lastEvent: stoppedReason,
+        costUsd: agentRun?.costUsdEstimate ?? null,
+        tokensEstimate: agentRun?.tokensEstimate ?? null,
+      }).catch(() => null);
+      if (completedRun) {
+        writeSse(res, {
+          type: 'cowork_run_finished',
+          run: {
+            id: completedRun.id,
+            workspaceId: completedRun.workspaceId,
+            status: completedRun.status,
+            currentStep: completedRun.currentStep,
+            maxSteps: completedRun.maxSteps,
+            costUsd: completedRun.costUsd,
+            tokensEstimate: completedRun.tokensEstimate,
+            lastEvent: completedRun.lastEvent,
+          },
+        });
       }
     }
 
