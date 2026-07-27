@@ -35,6 +35,7 @@ function publicProject(row) {
     id: row.id,
     name: row.name,
     status: row.status,
+    organizationId: row.organizationId || null,
     workspacePath: row.workspacePath,
     previewUrl: row.previewUrl,
     error: row.error,
@@ -138,6 +139,7 @@ async function createProject({
   name,
   brief = null,
   repository = null,
+  organizationId = null,
   runner,
   db = defaultPrisma,
   env = process.env,
@@ -171,7 +173,13 @@ async function createProject({
     })
     : (repoRequest ? { kind: 'repo', repository: { url: null, sourceBranch: null } } : brief);
   const row = await prisma.codexProject.create({
-    data: { userId, name, brief: persistedBrief, status: 'provisioning' },
+    data: {
+      userId,
+      organizationId: organizationId || null,
+      name,
+      brief: persistedBrief,
+      status: 'provisioning',
+    },
   });
   try {
     if (repositoryError) throw repositoryError;

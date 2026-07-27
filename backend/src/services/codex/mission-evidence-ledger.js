@@ -18,7 +18,8 @@ const DELIVERY_STATUSES = new Set([
   'queued',
 ]);
 
-const SECRET_PATTERN = /((?:api[_-]?key|authorization|bearer|password|passwd|secret|token|cookie|private[_-]?key))\s*[:=]\s*[^\s,;]+/gi;
+const SECRET_ASSIGNMENT_PATTERN = /\b((?:api[_-]?key|authorization|password|passwd|secret|token|cookie|private[_-]?key))\b\s*[:=]\s*(?:(?:bearer|basic)\s+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
+const AUTH_CREDENTIAL_PATTERN = /\b(bearer|basic)\s+[^\s,;]+/gi;
 
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -45,7 +46,11 @@ function contentHash(value) {
 
 function boundedText(value, max = 600) {
   return typeof value === 'string'
-    ? value.replace(SECRET_PATTERN, '$1=[REDACTED]').trim().slice(0, max)
+    ? value
+      .replace(SECRET_ASSIGNMENT_PATTERN, '$1=[REDACTED]')
+      .replace(AUTH_CREDENTIAL_PATTERN, '$1 [REDACTED]')
+      .trim()
+      .slice(0, max)
     : '';
 }
 

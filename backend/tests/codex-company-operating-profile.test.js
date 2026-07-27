@@ -69,6 +69,138 @@ test('readiness uses real workspace, publication, OAuth and Gmail evidence', asy
   assert.equal(context.readiness.gaps.length, 0);
 });
 
+test('durable company links do not inherit unassigned user connectors', async () => {
+  const context = await company.loadCompanyOperatingContext({
+    project: {
+      id: 'codex-1',
+      userId: 'u1',
+      name: 'SiraGPT.COM',
+      status: 'ready',
+      workspacePath: 'projects/codex-1',
+      brief: {
+        publication: { url: 'https://app.apps.siragpt.com' },
+        companyProfile: {
+          mission: 'Misión',
+          vision: 'Visión',
+          offer: 'Oferta',
+          targetCustomer: 'Cliente',
+          salesProcess: 'Proceso',
+        },
+      },
+    },
+    now: NOW,
+    prisma: {
+      companyCodexProjectLink: {
+        findUnique: async () => ({ projectId: 'company-1' }),
+      },
+      projectConnectorAssignment: {
+        findMany: async () => [],
+      },
+      socialConnection: {
+        findMany: async () => [{
+          platform: 'linkedin',
+          accountName: '@siragpt',
+          scopes: ['r_member_social', 'w_member_social'],
+        }],
+      },
+      user: {
+        findUnique: async () => ({ gmailTokens: 'encrypted-envelope' }),
+      },
+    },
+  });
+
+  assert.equal(context.readiness.evidence.connectorAssignment.enforced, true);
+  assert.deepEqual(context.readiness.evidence.connectorAssignment.providers, []);
+  assert.equal(context.readiness.evidence.socialConnections.length, 0);
+  assert.equal(context.readiness.evidence.gmailConnected, false);
+  assert.equal(context.readiness.areas.find((row) => row.id === 'social').status, 'needs_attention');
+  assert.equal(context.readiness.areas.find((row) => row.id === 'email').status, 'needs_attention');
+});
+
+test('durable company links count only explicitly assigned connected providers', async () => {
+  const context = await company.loadCompanyOperatingContext({
+    project: {
+      id: 'codex-1',
+      userId: 'u1',
+      name: 'SiraGPT.COM',
+      status: 'ready',
+      workspacePath: 'projects/codex-1',
+      brief: {
+        publication: { url: 'https://app.apps.siragpt.com' },
+        companyProfile: {
+          mission: 'Misión',
+          vision: 'Visión',
+          offer: 'Oferta',
+          targetCustomer: 'Cliente',
+          salesProcess: 'Proceso',
+        },
+      },
+    },
+    now: NOW,
+    prisma: {
+      companyCodexProjectLink: {
+        findUnique: async () => ({ projectId: 'company-1' }),
+      },
+      projectConnectorAssignment: {
+        findMany: async () => [
+          {
+            connectorAccount: {
+              id: 'connector-gmail',
+              provider: 'gmail',
+              status: 'connected',
+            },
+          },
+          {
+            connectorAccount: {
+              id: 'connector-linkedin',
+              provider: 'linkedin',
+              status: 'connected',
+            },
+          },
+          {
+            connectorAccount: {
+              id: 'connector-slack',
+              provider: 'slack',
+              status: 'disconnected',
+            },
+          },
+        ],
+      },
+      socialConnection: {
+        findMany: async () => [
+          {
+            platform: 'linkedin',
+            accountName: '@siragpt',
+            scopes: ['r_member_social', 'w_member_social'],
+          },
+          {
+            platform: 'x',
+            accountName: '@not-assigned',
+            scopes: ['tweet.read', 'tweet.write'],
+          },
+        ],
+      },
+      user: {
+        findUnique: async () => ({ gmailTokens: 'encrypted-envelope' }),
+      },
+    },
+  });
+
+  assert.deepEqual(
+    context.readiness.evidence.connectorAssignment.providers,
+    ['gmail', 'linkedin'],
+  );
+  assert.deepEqual(
+    context.readiness.evidence.connectorAssignment.accountIds,
+    ['connector-gmail', 'connector-linkedin'],
+  );
+  assert.equal(context.readiness.evidence.socialConnections.length, 1);
+  assert.equal(context.readiness.evidence.socialConnections[0].platform, 'linkedin');
+  assert.equal(context.readiness.evidence.gmailConnected, true);
+  assert.equal(context.readiness.areas.find((row) => row.id === 'social').status, 'ready');
+  assert.equal(context.readiness.areas.find((row) => row.id === 'email').status, 'ready');
+});
+
 test('missing integrations remain visible even when the business profile is complete', async () => {
   const context = await company.loadCompanyOperatingContext({
     project: {

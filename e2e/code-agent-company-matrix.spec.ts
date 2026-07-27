@@ -77,6 +77,7 @@ async function mockMatrixCompany(
 ) {
   const operations = { projectCreates: 0, proactiveToggles: 0, socialPolicyUpdates: 0, activityReports: 0 }
   let proactiveEnabled = false
+  let companyAssociated = linkedProject
   const missionLedger: any = {
     version: 1,
     summary: {
@@ -186,6 +187,61 @@ async function mockMatrixCompany(
     }
     if (path === "/codex/access") {
       return fulfillJson(route, { ok: true, enabled: true, canRun: true, allowlistConfigured: true })
+    }
+    if (path === "/codex/company-associations" && request.method() === "GET") {
+      return fulfillJson(route, {
+        company: {
+          id: project.id,
+          name: project.name,
+          organizationId: null,
+          type: "webapp",
+          updatedAt: now,
+        },
+        association: companyAssociated ? {
+          id: "company-link-matrix-qa",
+          source: "manual",
+          organizationId: null,
+          linkedAt: now,
+          updatedAt: now,
+          codexProject: {
+            id: "codex-matrix-qa",
+            name: "SiraGPT",
+            organizationId: null,
+            status: "ready",
+            updatedAt: now,
+          },
+          connectors: [],
+        } : null,
+        candidates: [{
+          id: "codex-matrix-qa",
+          name: "SiraGPT",
+          organizationId: null,
+          status: "ready",
+          updatedAt: now,
+        }],
+        connectors: [],
+        requiresAssociation: !companyAssociated,
+      })
+    }
+    if (path === "/codex/company-associations" && request.method() === "POST") {
+      companyAssociated = true
+      return fulfillJson(route, {
+        association: {
+          id: "company-link-matrix-qa",
+          source: "manual",
+          organizationId: null,
+          linkedAt: now,
+          updatedAt: now,
+          codexProject: {
+            id: "codex-matrix-qa",
+            name: "SiraGPT",
+            organizationId: null,
+            status: "ready",
+            updatedAt: now,
+          },
+          connectors: [],
+        },
+      }, 201)
     }
     if (/^\/codex\/projects\/[^/]+\/proactive$/.test(path)) {
       if (request.method() === "POST") {

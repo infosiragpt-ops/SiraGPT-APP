@@ -212,7 +212,10 @@ test('run completion stores bounded evidence and preserves an existing CEO revie
     executiveSummary: {
       result: 'Misión documentada.',
       impact: '1 archivo actualizado.',
-      evidence: ['token=super-secret pasó la prueba'],
+      evidence: [
+        'token=super-secret pasó la prueba',
+        'Authorization: Bearer sk-live-private no debe persistirse',
+      ],
       checkpointSha: 'def456',
       diffstat: { filesChanged: 1, additions: 5, deletions: 0 },
     },
@@ -228,6 +231,8 @@ test('run completion stores bounded evidence and preserves an existing CEO revie
   assert.equal(stored.ceoReview.status, 'changes_requested');
   assert.equal(stored.ceoReview.reviewedBy, 'Luis');
   assert.match(stored.evidence[0].detail, /token=\[REDACTED\]/);
+  assert.match(stored.evidence[1].detail, /Authorization=\[REDACTED\]/);
+  assert.doesNotMatch(stored.evidence[1].detail, /sk-live-private/);
   assert.equal(state.project.brief.missionEvidence.records.length, 1);
 });
 

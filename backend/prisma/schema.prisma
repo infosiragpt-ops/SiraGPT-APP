@@ -118,58 +118,58 @@ model User {
   webauthnCredentials Json?
 
   // Relations
-  chats                   Chat[]
-  chatRuns                ChatRun[]
-  payments                Payment[]
-  invoices                Invoice[]
-  apiUsages               ApiUsage[]
-  sessions                Session[]
-  files                   File[]
-  documentCollections     DocumentCollection[]
-  collectionDocuments     CollectionDocument[]
-  documentCollectionChunks DocumentCollectionChunk[]
-  createdGpts             CustomGpt[]
-  projects                Project[]
-  designs                 DesignProject[]
-  scheduledPosts          ScheduledPost[]
-  socialConnections       SocialConnection[]
-  searchBrainSettings     SearchBrainSettings?
-  usageAlerts             UsageAlert[]
-  notifications           Notification[]
-  subscriptionEvents      SubscriptionEvent[]
-  agentTasks              AgentTask[]
-  goalRuns                GoalRun[]
-  codexProjects           CodexProject[]
-  codexRuns               CodexRun[]
-  codexCompanyLeads       CodexCompanyLead[]
-  codexCompanyInboxItems  CodexCompanyInboxItem[]
-  codexExternalActions    CodexExternalAction[]
-  codexMissions           CodexMission[]
-  codexMissionArtifacts   CodexMissionArtifact[]
-  codexActivityReports    CodexActivityReport[]
-  codexCeoApprovals       CodexCeoApproval[]
-  codexSwarms             CodexSwarm[]
-  deployments             Deployment[]
-  generatedArtifacts      GeneratedArtifact[]
-  documentAnalyses        DocumentAnalysis[]
-  pushSubscriptions       PushSubscription[]
-  savedSearches           SavedSearch[]
-  bookmarks               Bookmark[]
-  researchCollections     ResearchCollection[]
-  researchReferences      ResearchReference[]
+  chats                      Chat[]
+  chatRuns                   ChatRun[]
+  payments                   Payment[]
+  invoices                   Invoice[]
+  apiUsages                  ApiUsage[]
+  sessions                   Session[]
+  files                      File[]
+  documentCollections        DocumentCollection[]
+  collectionDocuments        CollectionDocument[]
+  documentCollectionChunks   DocumentCollectionChunk[]
+  createdGpts                CustomGpt[]
+  projects                   Project[]
+  designs                    DesignProject[]
+  scheduledPosts             ScheduledPost[]
+  socialConnections          SocialConnection[]
+  searchBrainSettings        SearchBrainSettings?
+  usageAlerts                UsageAlert[]
+  notifications              Notification[]
+  subscriptionEvents         SubscriptionEvent[]
+  agentTasks                 AgentTask[]
+  goalRuns                   GoalRun[]
+  codexProjects              CodexProject[]
+  codexRuns                  CodexRun[]
+  codexCompanyLeads          CodexCompanyLead[]
+  codexCompanyInboxItems     CodexCompanyInboxItem[]
+  codexExternalActions       CodexExternalAction[]
+  codexMissions              CodexMission[]
+  codexMissionArtifacts      CodexMissionArtifact[]
+  codexActivityReports       CodexActivityReport[]
+  codexCeoApprovals          CodexCeoApproval[]
+  codexSwarms                CodexSwarm[]
+  deployments                Deployment[]
+  generatedArtifacts         GeneratedArtifact[]
+  documentAnalyses           DocumentAnalysis[]
+  pushSubscriptions          PushSubscription[]
+  savedSearches              SavedSearch[]
+  bookmarks                  Bookmark[]
+  researchCollections        ResearchCollection[]
+  researchReferences         ResearchReference[]
   researchReferenceConflicts ResearchReferenceConflict[]
   researchCollectionShares   ResearchCollectionShare[]   @relation("ResearchCollectionSharedBy")
   researchCollectionComments ResearchCollectionComment[] @relation("ResearchCollectionCommentAuthor")
   researchTemplates          ResearchTemplate[]          @relation("ResearchTemplateCreator")
-  webhookEndpoints        WebhookEndpoint[]
-  slackIntegrations       SlackIntegration[]
-  policyAcceptances       PolicyAcceptance[]
-  apiKeys                 ApiKey[]
-  emailVerificationTokens EmailVerificationToken[]
-  passwordResetTokens     PasswordResetToken[]
-  phoneVerifications      PhoneVerification[]
-  twoFAChallenges         TwoFAChallenge[]
-  partialSessions         PartialSession[]
+  webhookEndpoints           WebhookEndpoint[]
+  slackIntegrations          SlackIntegration[]
+  policyAcceptances          PolicyAcceptance[]
+  apiKeys                    ApiKey[]
+  emailVerificationTokens    EmailVerificationToken[]
+  passwordResetTokens        PasswordResetToken[]
+  phoneVerifications         PhoneVerification[]
+  twoFAChallenges            TwoFAChallenge[]
+  partialSessions            PartialSession[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -893,24 +893,28 @@ model ScheduledAgentTask {
 }
 
 model ConnectorAccount {
-  id             String    @id @default(cuid())
-  userId         String
-  provider       String
-  accountLabel   String?
-  authType       String    @default("oauth2")
-  scopes         Json?
-  tokenEncrypted String?   @db.Text
-  configEncrypted String?  @db.Text
-  status         String    @default("disconnected") // disconnected | connected | broken
-  lastHealthAt   DateTime?
-  lastError      String?   @db.Text
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  userId          String
+  organizationId  String?
+  provider        String
+  accountLabel    String?
+  authType        String    @default("oauth2")
+  scopes          Json?
+  tokenEncrypted  String?   @db.Text
+  configEncrypted String?   @db.Text
+  status          String    @default("disconnected") // disconnected | connected | broken
+  lastHealthAt    DateTime?
+  lastError       String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization       Organization?                @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  companyAssignments ProjectConnectorAssignment[]
 
   @@unique([userId, provider])
   @@index([userId, status])
+  @@index([organizationId, status])
   @@map("connector_accounts")
 }
 
@@ -1040,8 +1044,8 @@ model ResearchCollection {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  user  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items ResearchCollectionItem[]
+  user     User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items    ResearchCollectionItem[]
   shares   ResearchCollectionShare[]
   comments ResearchCollectionComment[]
 
@@ -1437,13 +1441,13 @@ model File {
   processingStageAt DateTime?
 
   // Relations
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documentAnalysis DocumentAnalysis?
-  documentChunks   DocumentChunk[]
+  user                User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentAnalysis    DocumentAnalysis?
+  documentChunks      DocumentChunk[]
   collectionDocuments CollectionDocument[]
   collectionChunks    DocumentCollectionChunk[]
-  documentTables   DocumentTable[]
-  documentNodes    DocumentNode[]
+  documentTables      DocumentTable[]
+  documentNodes       DocumentNode[]
 
   customGptId String?
   customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id], onDelete: SetNull)
@@ -1563,17 +1567,17 @@ model CollectionDocument {
 }
 
 model DocumentCollectionChunk {
-  id           String                 @id @default(cuid())
-  collectionId String                 @map("collection_id")
-  documentId   String                 @map("document_id")
-  ownerId      String                 @map("owner_id")
-  content      String                 @db.Text
+  id           String   @id @default(cuid())
+  collectionId String   @map("collection_id")
+  documentId   String   @map("document_id")
+  ownerId      String   @map("owner_id")
+  content      String   @db.Text
   page         Int?
   offset       Int?
-  tokenCount   Int                    @default(0) @map("token_count")
-  contentHash  String                 @map("content_hash")
+  tokenCount   Int      @default(0) @map("token_count")
+  contentHash  String   @map("content_hash")
   metadata     Json?
-  createdAt    DateTime               @default(now()) @map("created_at")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   collection DocumentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
   document   File               @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -2017,7 +2021,7 @@ model CustomGpt {
   // Per-GPT tool capability toggles: { webBrowsing, dataAnalysis,
   // imageGeneration, codeInterpreter, documents, skillsEnabled }.
   // null = legacy GPT (no gating).
-  capabilities         Json?
+  capabilities Json?
 
   // Publishing
   visibility GptVisibility @default(PRIVATE)
@@ -2050,9 +2054,11 @@ model CustomGpt {
 // the project via Chat.projectId, files via File.projectId, and the
 // ai.js route reads both and injects them into the system prompt.
 model Project {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String        @id @default(cuid())
+  userId         String
+  organizationId String?
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   name         String
   description  String? @db.Text
@@ -2079,17 +2085,19 @@ model Project {
   shareId String? @unique
 
   // Relations — file bucket + chats created inside this project.
-  files     File[]            @relation("ProjectFiles")
-  chats     Chat[]
-  memories  ProjectMemory[]
-  documents ProjectDocument[]
+  files                File[]                       @relation("ProjectFiles")
+  chats                Chat[]
+  memories             ProjectMemory[]
+  documents            ProjectDocument[]
+  codexLink            CompanyCodexProjectLink?
+  connectorAssignments ProjectConnectorAssignment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Soft-delete tombstone. The Project list view should filter on
   // `deletedAt: null` via the prisma-soft-delete helper.
-  deletedAt DateTime?
+  deletedAt   DateTime?
   // Retention deadline shown in the Empresas trash. Projects are code
   // workspaces, so deletion is reversible for 30 days instead of being
   // hard-deleted from the main UI.
@@ -2098,6 +2106,7 @@ model Project {
   @@index([userId, updatedAt])
   @@index([userId, deletedAt])
   @@index([userId, deleteAfter])
+  @@index([organizationId, updatedAt])
   @@map("projects")
 }
 
@@ -2287,8 +2296,8 @@ model SocialConnection {
   platform     String // facebook | instagram | youtube | tiktok | linkedin | x
   accountId    String? // platform-side user id / page id
   accountName  String? // handle displayed to the user ("@tu_marca")
-  accessToken  String? @db.Text // encrypted TokenVault envelope
-  refreshToken String? @db.Text // legacy only; new refresh tokens live in the envelope
+  accessToken  String?   @db.Text // encrypted TokenVault envelope
+  refreshToken String?   @db.Text // legacy only; new refresh tokens live in the envelope
   expiresAt    DateTime?
 
   // Profile snapshot the LLM grounds post generation on:
@@ -2551,18 +2560,23 @@ model Organization {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  owner             User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  memberships       OrgMembership[]
-  invitations       OrgInvitation[]
-  chats             Chat[]
-  webhookEndpoints  WebhookEndpoint[]
-  slackIntegrations SlackIntegration[]
-  apiKeys           ApiKey[]
-  announcements     OrgAnnouncement[]
-  pendingTransfers  OrgPendingTransfer[]
-  researchCollectionShares   ResearchCollectionShare[]
-  researchCollectionComments ResearchCollectionComment[]
-  researchTemplates          ResearchTemplate[]
+  owner                       User                         @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships                 OrgMembership[]
+  invitations                 OrgInvitation[]
+  chats                       Chat[]
+  webhookEndpoints            WebhookEndpoint[]
+  slackIntegrations           SlackIntegration[]
+  apiKeys                     ApiKey[]
+  announcements               OrgAnnouncement[]
+  pendingTransfers            OrgPendingTransfer[]
+  researchCollectionShares    ResearchCollectionShare[]
+  researchCollectionComments  ResearchCollectionComment[]
+  researchTemplates           ResearchTemplate[]
+  projects                    Project[]
+  codexProjects               CodexProject[]
+  connectorAccounts           ConnectorAccount[]
+  companyCodexLinks           CompanyCodexProjectLink[]
+  projectConnectorAssignments ProjectConnectorAssignment[]
 
   @@index([ownerId])
   @@index([slug])
@@ -2620,45 +2634,96 @@ model OrgInvitation {
 // timeline append-only (codex_events) reproducible tras recarga.
 
 model CodexProject {
-  id            String   @id @default(cuid())
-  userId        String
-  name          String
-  status        String   @default("provisioning") // provisioning | ready | error
-  workspacePath String? // relativo al volumen del runner: projects/<id>
-  previewUrl    String?
-  brief         Json?
-  error         String?  @db.Text
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  name           String
+  status         String    @default("provisioning") // provisioning | ready | error
+  workspacePath  String? // relativo al volumen del runner: projects/<id>
+  previewUrl     String?
+  brief          Json?
+  error          String?   @db.Text
   // Lifecycle tombstone used by the future database/workspace reconciler.
   // These columns are inert until CODEX_PROJECT_DATABASES is enabled.
-  deletedAt     DateTime?
-  deleteAfter   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  deletedAt      DateTime?
+  deleteAfter    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  runs        CodexRun[]
-  swarms      CodexSwarm[]
-  checkpoints CodexCheckpoint[]
-  sessionStates CodexSessionState[]
-  database    CodexProjectDatabase?
-  companyLeads CodexCompanyLead[]
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?            @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  runs              CodexRun[]
+  swarms            CodexSwarm[]
+  checkpoints       CodexCheckpoint[]
+  sessionStates     CodexSessionState[]
+  database          CodexProjectDatabase?
+  companyLeads      CodexCompanyLead[]
   companyInboxItems CodexCompanyInboxItem[]
-  externalActions CodexExternalAction[]
-  missions CodexMission[]
-  missionArtifacts CodexMissionArtifact[]
-  activityReports CodexActivityReport[]
-  ceoApprovals CodexCeoApproval[]
-  proactiveLease CodexProactiveLease?
+  externalActions   CodexExternalAction[]
+  missions          CodexMission[]
+  missionArtifacts  CodexMissionArtifact[]
+  activityReports   CodexActivityReport[]
+  ceoApprovals      CodexCeoApproval[]
+  proactiveLease    CodexProactiveLease?
+  companyLink       CompanyCodexProjectLink?
 
   @@index([userId, updatedAt])
   @@index([userId, deleteAfter])
+  @@index([organizationId, updatedAt])
   @@map("codex_projects")
+}
+
+// Explicit, durable Company (Project) ↔ CodexProject association. Legacy
+// browser-only links are intentionally not backfilled: an owner must confirm
+// each orphan through the association wizard before agents can act on it.
+model CompanyCodexProjectLink {
+  id             String   @id @default(cuid())
+  projectId      String   @unique
+  codexProjectId String   @unique
+  organizationId String?
+  linkedByUserId String
+  source         String   @default("manual") // manual | created_for_company
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  codexProject CodexProject  @relation(fields: [codexProjectId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, updatedAt])
+  @@index([linkedByUserId, updatedAt])
+  @@map("company_codex_project_links")
+}
+
+// A connector remains encrypted in connector_accounts. This table only grants
+// a specific Company permission to use that account; it never duplicates
+// tokens or provider configuration.
+model ProjectConnectorAssignment {
+  id                 String   @id @default(cuid())
+  projectId          String
+  connectorAccountId String
+  organizationId     String?
+  assignedByUserId   String
+  status             String   @default("active") // active | revoked
+  capabilities       Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  connectorAccount ConnectorAccount @relation(fields: [connectorAccountId], references: [id], onDelete: Cascade)
+  organization     Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, connectorAccountId])
+  @@index([organizationId, projectId, status])
+  @@index([connectorAccountId, status])
+  @@index([assignedByUserId, updatedAt])
+  @@map("project_connector_assignments")
 }
 
 // Tenant-isolated operating records for CEO Office. These tables store
 // evidence and approval state, never OAuth credentials or provider secrets.
 model CodexCompanyLead {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   projectId       String
   userId          String
   fingerprint     String
@@ -2669,13 +2734,13 @@ model CodexCompanyLead {
   email           String?
   sourceUrl       String
   sourceTitle     String?
-  evidence        String?  @db.Text
-  status          String   @default("discovered") // discovered | qualified | review | contacted | replied | won | lost | do_not_contact
-  score           Int      @default(0)
+  evidence        String?   @db.Text
+  status          String    @default("discovered") // discovered | qualified | review | contacted | replied | won | lost | do_not_contact
+  score           Int       @default(0)
   tags            Json?
   lastContactedAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2887,7 +2952,7 @@ model CodexSwarm {
   name                 String
   strategy             String    @default("dag") // dag | map_reduce
   status               String    @default("queued") // queued | running | paused | cancelling | completed | completed_with_errors | failed | cancelled
-  taskLimit             Int       @default(1000)
+  taskLimit            Int       @default(1000)
   maxConcurrency       Int       @default(16)
   maxConcurrentWriters Int       @default(4)
   metadata             Json?
@@ -3211,7 +3276,7 @@ model Deployment {
   remotePath            String?
   url                   String?
   error                 String?
-  logTail               String? @db.Text
+  logTail               String?   @db.Text
   startedAt             DateTime?
   finishedAt            DateTime?
 
@@ -3249,8 +3314,8 @@ model Deployment {
   deletedAt DateTime?
 
   user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  connectedRepository ConnectedRepository?  @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
-  hostingTarget       HostingTarget?        @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
+  connectedRepository ConnectedRepository? @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+  hostingTarget       HostingTarget?       @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
   versions            DeploymentVersion[]
   domains             DeploymentDomain[]
   logs                DeploymentLog[]
@@ -3568,20 +3633,20 @@ model AgentCheckpoint {
 }
 
 model UserMemory {
-  id              String   @id @default(cuid())
-  userId          String   @map("user_id")
-  content         String   @db.Text
+  id              String                       @id @default(cuid())
+  userId          String                       @map("user_id")
+  content         String                       @db.Text
   category        String?
-  importanceScore Float    @default(0) @map("importance_score")
-  confidence      Float    @default(0.8) @map("confidence")
-  lastAccessedAt  DateTime @default(now()) @map("last_accessed_at")
-  accessCount     Int      @default(0) @map("access_count")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  importanceScore Float                        @default(0) @map("importance_score")
+  confidence      Float                        @default(0.8) @map("confidence")
+  lastAccessedAt  DateTime                     @default(now()) @map("last_accessed_at")
+  accessCount     Int                          @default(0) @map("access_count")
+  createdAt       DateTime                     @default(now()) @map("created_at")
+  updatedAt       DateTime                     @updatedAt @map("updated_at")
   // Cross-chat recall (cross-chat-retrieval.js): pgvector embedding written
   // by raw SQL with ON CONFLICT (user_id, content_hash). Declared here so a
   // future `prisma db push` doesn't drop the columns the service depends on.
-  contentHash     String?  @map("content_hash")
+  contentHash     String?                      @map("content_hash")
   source          String?
   embedding       Unsupported("vector(1536)")?
 
@@ -3792,7 +3857,7 @@ model AccountingInvoice {
 model AccountingInvoiceLine {
   id          String  @id @default(cuid())
   invoiceId   String
-  productId    String?
+  productId   String?
   code        String?
   description String
   quantity    Decimal @default(1) @db.Decimal(18, 4)
@@ -3815,17 +3880,17 @@ model AccountingInvoiceLine {
 // never modified, so "restaurar versión anterior" is just re-serving an older
 // artifact. Additive table; no backfill needed for existing rows.
 model FileVersion {
-  id             String   @id @default(cuid())
-  fileId         String   // the ORIGINAL uploaded File this version derives from
-  userId         String   // denormalised for cheap ownership checks
-  version        Int      // 1..N, monotonic per fileId
-  artifactId     String?  // agent artifact holding the edited bytes
-  filename       String
-  summary        String?  @db.Text // human-readable "qué cambió"
-  editPlan       Json?    // the structured operations that produced it
-  validationPassed Boolean @default(true)
-  createdByChatId String?
-  createdAt      DateTime @default(now())
+  id               String   @id @default(cuid())
+  fileId           String // the ORIGINAL uploaded File this version derives from
+  userId           String // denormalised for cheap ownership checks
+  version          Int // 1..N, monotonic per fileId
+  artifactId       String? // agent artifact holding the edited bytes
+  filename         String
+  summary          String?  @db.Text // human-readable "qué cambió"
+  editPlan         Json? // the structured operations that produced it
+  validationPassed Boolean  @default(true)
+  createdByChatId  String?
+  createdAt        DateTime @default(now())
 
   @@unique([fileId, version])
   @@index([fileId])

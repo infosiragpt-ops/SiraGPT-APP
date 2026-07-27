@@ -12,6 +12,7 @@
  * command injection surface. prisma/runner/llmTurn are injectable for tests.
  */
 
+const { randomBytes } = require('node:crypto');
 const { gitCommitAll } = require('./workspace');
 const {
   currentBranch,
@@ -26,11 +27,216 @@ const defaultPrisma = (() => {
 })();
 
 const SHA_RE = /^[0-9a-f]{7,40}$/;
+const RECOVERY_REF_RE = /^refs\/sira\/recovery\/[a-z0-9][a-z0-9._-]{7,119}$/;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'; // git hash-object of the empty tree
 const DIFF_CAP = 500_000;
 
 function isValidSha(sha) {
   return typeof sha === 'string' && SHA_RE.test(sha);
+}
+
+function isValidRecoveryRef(ref) {
+  return typeof ref === 'string' && RECOVERY_REF_RE.test(ref);
+}
+
+function recoveryRefId() {
+  return `${Date.now().toString(36)}-${randomBytes(8).toString('hex')}`;
+}
+
+function changedPathsFromPorcelain(raw) {
+  return String(raw || '')
+    .split('\0')
+    .filter(Boolean)
+    .map((entry) => entry.slice(3))
+    .filter(Boolean)
+    .slice(0, 200);
+}
+
+async function gitStatus(runner, projectId) {
+  const out = await runner.exec(projectId, ['git', 'status', '--porcelain=v1', '-z']);
+  if (out?.exitCode !== 0) {
+    const error = new Error(`git_status_failed: ${String(out?.stderr || out?.stdout || '').slice(0, 500)}`);
+    error.code = 'git_status_failed';
+    throw error;
+  }
+  const files = changedPathsFromPorcelain(out.stdout);
+  return { clean: files.length === 0, files };
+}
+
+async function gitRefSha(runner, projectId, ref) {
+  const out = await runner.exec(projectId, ['git', 'rev-parse', '--verify', ref]);
+  const sha = String(out?.stdout || '').trim();
+  return out?.exitCode === 0 && isValidSha(sha) ? sha : null;
+}
+
+/**
+ * Move tracked, staged and untracked user work under a durable private Git ref
+ * before any hard reset. The stash stack itself is left unchanged.
+ */
+async function preserveWorkspaceChanges({
+  runner,
+  projectId,
+  idFactory = recoveryRefId,
+} = {}) {
+  const state = await gitStatus(runner, projectId);
+  if (state.clean) return { preserved: false, files: [] };
+
+  const base = await runner.exec(projectId, ['git', 'rev-parse', 'HEAD']);
+  const baseSha = String(base?.stdout || '').trim();
+  if (base?.exitCode !== 0 || !isValidSha(baseSha)) {
+    const error = new Error('recovery_base_unavailable');
+    error.code = 'recovery_base_unavailable';
+    throw error;
+  }
+
+  const recoveryRef = `refs/sira/recovery/${String(idFactory()).toLowerCase()}`;
+  if (!isValidRecoveryRef(recoveryRef)) {
+    const error = new Error('invalid_recovery_ref');
+    error.code = 'invalid_recovery_ref';
+    throw error;
+  }
+
+  const previousStashSha = await gitRefSha(runner, projectId, 'refs/stash');
+  const stash = await runner.exec(projectId, [
+    'git',
+    'stash',
+    'push',
+    '--include-untracked',
+    '--message',
+    `sira-recovery:${recoveryRef.slice('refs/sira/recovery/'.length)}`,
+  ]);
+  if (stash?.exitCode !== 0) {
+    const error = new Error(`git_stash_failed: ${String(stash?.stderr || stash?.stdout || '').slice(0, 500)}`);
+    error.code = 'git_stash_failed';
+    throw error;
+  }
+
+  const stashSha = await gitRefSha(runner, projectId, 'refs/stash');
+  if (!stashSha || stashSha === previousStashSha) {
+    // Never fall back to stash@{0}: it may be an unrelated user stash if the
+    // working tree changed between status and stash.
+    const error = new Error('git_stash_not_created');
+    error.code = 'git_stash_not_created';
+    throw error;
+  }
+
+  const pinned = await runner.exec(projectId, ['git', 'update-ref', recoveryRef, stashSha]);
+  if (pinned?.exitCode !== 0) {
+    await runner.exec(projectId, ['git', 'stash', 'apply', '--index', stashSha]).catch(() => null);
+    const error = new Error(`git_recovery_ref_failed: ${String(pinned?.stderr || pinned?.stdout || '').slice(0, 500)}`);
+    error.code = 'git_recovery_ref_failed';
+    throw error;
+  }
+
+  // The custom ref now owns the recovery commit. Drop only the stack entry we
+  // just created so pre-existing user stashes retain their order.
+  await runner.exec(projectId, ['git', 'stash', 'drop', 'stash@{0}']).catch(() => null);
+  const clean = await gitStatus(runner, projectId);
+  if (!clean.clean) {
+    const error = new Error('workspace_not_clean_after_preserve');
+    error.code = 'workspace_not_clean_after_preserve';
+    throw error;
+  }
+  return {
+    preserved: true,
+    recoveryRef,
+    baseSha,
+    files: state.files,
+  };
+}
+
+async function devState(runner, projectId) {
+  try {
+    const status = await runner.devStatus(projectId);
+    return {
+      running: Boolean(status && (status.running || status.ready) && (status.project === projectId || status.project == null)),
+      basePath: status?.basePath || null,
+    };
+  } catch {
+    return { running: false, basePath: null };
+  }
+}
+
+async function restartDev(runner, projectId, state) {
+  if (!state?.running) return false;
+  try {
+    await runner.startDev(projectId, { basePath: state.basePath });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Restore the exact HEAD, index, tracked edits and untracked files captured by
+ * preserveWorkspaceChanges. Refuse a dirty destination instead of merging two
+ * unrelated states. On apply failure, restore the clean pre-recovery HEAD.
+ */
+async function recoverWorkspaceChanges({
+  runner,
+  projectId,
+  recoveryRef,
+} = {}) {
+  if (!isValidRecoveryRef(recoveryRef)) {
+    return { ok: false, error: 'invalid_recovery_ref', status: 400 };
+  }
+  const state = await gitStatus(runner, projectId);
+  if (!state.clean) {
+    return { ok: false, error: 'working_tree_dirty', status: 409, files: state.files };
+  }
+
+  const recovery = await runner.exec(projectId, ['git', 'rev-parse', '--verify', `${recoveryRef}^{commit}`]);
+  const recoverySha = String(recovery?.stdout || '').trim();
+  if (recovery?.exitCode !== 0 || !isValidSha(recoverySha)) {
+    return { ok: false, error: 'recovery_not_found', status: 404 };
+  }
+  const base = await runner.exec(projectId, ['git', 'rev-parse', `${recoveryRef}^1`]);
+  const baseSha = String(base?.stdout || '').trim();
+  if (base?.exitCode !== 0 || !isValidSha(baseSha)) {
+    return { ok: false, error: 'recovery_base_unavailable', status: 409 };
+  }
+  const current = await runner.exec(projectId, ['git', 'rev-parse', 'HEAD']);
+  const currentSha = String(current?.stdout || '').trim();
+  if (current?.exitCode !== 0 || !isValidSha(currentSha)) {
+    return { ok: false, error: 'current_sha_unavailable', status: 409 };
+  }
+
+  const preview = await devState(runner, projectId);
+  if (preview.running) await runner.stopDev(projectId).catch(() => null);
+
+  const reset = await runner.exec(projectId, ['git', 'reset', '--hard', baseSha]);
+  if (reset?.exitCode !== 0) {
+    const restarted = await restartDev(runner, projectId, preview);
+    return { ok: false, error: 'reset_failed', status: 500, restarted };
+  }
+  const applied = await runner.exec(projectId, ['git', 'stash', 'apply', '--index', recoveryRef]);
+  if (applied?.exitCode !== 0) {
+    // The destination was clean before we began. Remove only partial files
+    // created by this failed apply, then return to its exact original HEAD.
+    await runner.exec(projectId, ['git', 'reset', '--hard', currentSha]).catch(() => null);
+    await runner.exec(projectId, ['git', 'clean', '-fd']).catch(() => null);
+    const restarted = await restartDev(runner, projectId, preview);
+    return {
+      ok: false,
+      error: 'recovery_apply_failed',
+      status: 409,
+      detail: String(applied?.stderr || applied?.stdout || '').slice(0, 500),
+      recoveryRef,
+      restarted,
+    };
+  }
+
+  const restoredState = await gitStatus(runner, projectId);
+  const deleted = await runner.exec(projectId, ['git', 'update-ref', '-d', recoveryRef]);
+  const restarted = await restartDev(runner, projectId, preview);
+  return {
+    ok: true,
+    recoveryRef,
+    baseSha,
+    files: restoredState.files,
+    restarted,
+    recoveryRefRetained: deleted?.exitCode !== 0,
+  };
 }
 
 function projectBaseBranch(project, explicit = null) {
@@ -312,42 +518,93 @@ async function rollbackCheckpoint({
   if (!isValidSha(cp.commitSha)) return { error: 'invalid_sha', status: 400 };
   const projectId = cp.projectId;
 
-  let wasRunning = false;
-  let devBasePath = null;
-  try {
-    // Multi-project runner: ask for THIS project's dev server (legacy runners
-    // without ?project support answer with the last-started server; the
-    // project check below keeps that path correct too).
-    const st = await runner.devStatus(projectId);
-    wasRunning = Boolean(st && (st.running || st.ready) && (st.project === projectId || st.project == null));
-    devBasePath = st && st.basePath ? st.basePath : null;
-  } catch { /* runner status best-effort */ }
-  if (wasRunning) { try { await runner.stopDev(projectId); } catch { /* ignore */ } }
-
   const previous = await runner.exec(projectId, ['git', 'rev-parse', 'HEAD']).catch(() => null);
   const previousSha = isValidSha(String(previous?.stdout || '').trim())
     ? String(previous.stdout).trim()
     : null;
-  const reset = await runner.exec(projectId, ['git', 'reset', '--hard', cp.commitSha]);
-  if (reset?.exitCode !== 0) {
-    return { error: 'reset_failed', status: 500, detail: String(reset?.stderr || '').slice(0, 400) };
+  let preservation;
+  try {
+    preservation = await preserveWorkspaceChanges({ runner, projectId });
+  } catch (error) {
+    return {
+      error: 'workspace_preservation_failed',
+      status: 409,
+      detail: String(error?.code || error?.message || error).slice(0, 400),
+    };
   }
 
-  let restarted = false;
-  if (wasRunning) {
-    // Preserve the tokenized preview base path across the restart, otherwise
-    // vite re-serves at / and the same-origin proxy iframe 404s.
-    try { await runner.startDev(projectId, { basePath: devBasePath }); restarted = true; } catch { /* ignore */ }
+  const preview = await devState(runner, projectId);
+  if (preview.running) { try { await runner.stopDev(projectId); } catch { /* ignore */ } }
+  const reset = await runner.exec(projectId, ['git', 'reset', '--hard', cp.commitSha]);
+  if (reset?.exitCode !== 0) {
+    let recoveryRestored = !preservation.preserved;
+    if (preservation.preserved) {
+      const recovered = await recoverWorkspaceChanges({
+        runner,
+        projectId,
+        recoveryRef: preservation.recoveryRef,
+      }).catch(() => null);
+      recoveryRestored = recovered?.ok === true;
+    }
+    const restarted = await restartDev(runner, projectId, preview);
+    return {
+      error: 'reset_failed',
+      status: 500,
+      detail: String(reset?.stderr || '').slice(0, 400),
+      recoveryRestored,
+      restarted,
+    };
   }
-  return { ok: true, commitSha: cp.commitSha, previousSha, restarted };
+
+  // Preserve the tokenized preview base path across the restart, otherwise
+  // vite re-serves at / and the same-origin proxy iframe 404s.
+  const restarted = await restartDev(runner, projectId, preview);
+  return {
+    ok: true,
+    commitSha: cp.commitSha,
+    previousSha,
+    restarted,
+    recovery: preservation.preserved
+      ? {
+        ref: preservation.recoveryRef,
+        files: preservation.files,
+      }
+      : null,
+  };
 }
 
 async function restoreWorkspaceSha({ projectId, commitSha, deps = {} }) {
   if (!isValidSha(commitSha)) return { ok: false, error: 'invalid_sha' };
+  let preservation;
+  try {
+    preservation = await preserveWorkspaceChanges({ runner: deps.runner, projectId });
+  } catch (error) {
+    return {
+      ok: false,
+      error: 'workspace_preservation_failed',
+      detail: String(error?.code || error?.message || error).slice(0, 400),
+    };
+  }
   const reset = await deps.runner.exec(projectId, ['git', 'reset', '--hard', commitSha]);
-  return reset?.exitCode === 0
-    ? { ok: true, commitSha }
-    : { ok: false, error: 'reset_failed' };
+  if (reset?.exitCode === 0) {
+    return {
+      ok: true,
+      commitSha,
+      recovery: preservation.preserved
+        ? { ref: preservation.recoveryRef, files: preservation.files }
+        : null,
+    };
+  }
+  let recoveryRestored = !preservation.preserved;
+  if (preservation.preserved) {
+    const recovered = await recoverWorkspaceChanges({
+      runner: deps.runner,
+      projectId,
+      recoveryRef: preservation.recoveryRef,
+    }).catch(() => null);
+    recoveryRestored = recovered?.ok === true;
+  }
+  return { ok: false, error: 'reset_failed', recoveryRestored };
 }
 
 /** Unified diff of a checkpoint vs its parent (or the empty tree for the first commit). */
@@ -391,6 +648,8 @@ module.exports = {
   checkpointCommitBody,
   rollbackCheckpoint,
   restoreWorkspaceSha,
+  preserveWorkspaceChanges,
+  recoverWorkspaceChanges,
   getCheckpointDiff,
   listCheckpoints,
   generateCheckpointTitle,
@@ -398,6 +657,7 @@ module.exports = {
   finalizeRunCheckpoint,
   parseShortstat,
   isValidSha,
+  isValidRecoveryRef,
   projectBaseBranch,
   captureWorkspaceTree,
   commitTreeSha,

@@ -117,6 +117,7 @@ import {
 import {
   codexApi,
   type CodexAccess,
+  type CodexCompanyAssociationState,
   type CodexCompanyCapacity,
   type CodexCompanyContext,
   type CodexCompanyOperations,
@@ -130,8 +131,6 @@ import {
   type CodexRun,
 } from "@/lib/codex/codex-api"
 import {
-  clearSessionCodexProject,
-  clearWorkspaceCodexProject,
   linkedCodexProject,
   persistWorkspaceCodexProject,
   readWorkspaceCodexProject,
@@ -468,12 +467,24 @@ export function AgentCompanyPanel() {
   const [proactiveState, setProactiveState] = React.useState<CodexProactiveState>(EMPTY_PROACTIVE_STATE)
   const [companyContext, setCompanyContext] = React.useState<CodexCompanyContext | null>(null)
   const [commandCenter, setCommandCenter] = React.useState<CodexEnterpriseCommandCenter | null>(null)
+  const [associationState, setAssociationState] = React.useState<CodexCompanyAssociationState | null>(null)
+  const [associationLoading, setAssociationLoading] = React.useState(false)
+  const [associationWizardOpen, setAssociationWizardOpen] = React.useState(false)
+  const [associationBusy, setAssociationBusy] = React.useState(false)
+  const [associationCandidateId, setAssociationCandidateId] = React.useState("")
+  const [associationConnectorIds, setAssociationConnectorIds] = React.useState<string[]>([])
   const [codexRuns, setCodexRuns] = React.useState<CodexRun[]>([])
   const [projectActivity, setProjectActivity] = React.useState<CodexProjectActivity[]>([])
   const [checkpointCount, setCheckpointCount] = React.useState(0)
   const [codexAccess, setCodexAccess] = React.useState<CodexAccess | null>(null)
   const companyRuntimePromisesRef = React.useRef<Map<string, Promise<string>>>(new Map())
   const proactiveMutationVersionRef = React.useRef(0)
+  const companyProjectId = React.useMemo(() => {
+    const value = String(activeFolder?.id || "").trim()
+    if (!value || value.startsWith("local:")) return null
+    return value.replace(/^project:/, "")
+  }, [activeFolder?.id])
+  const associatedCodexProjectId = associationState?.association?.codexProject.id || null
 
   React.useEffect(() => {
     let alive = true
@@ -569,6 +580,75 @@ export function AgentCompanyPanel() {
       window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
     }
   }, [activeFolder?.id])
+
+  const refreshCompanyAssociation = React.useCallback(async () => {
+    if (!companyProjectId) {
+      setAssociationState(null)
+      setAssociationCandidateId("")
+      setAssociationConnectorIds([])
+      return null
+    }
+    setAssociationLoading(true)
+    try {
+      const state = await codexApi.getCompanyAssociation(companyProjectId)
+      setAssociationState(state)
+      if (state.association) {
+        const codexProjectId = state.association.codexProject.id
+        setAssociationCandidateId(codexProjectId)
+        setAssociationConnectorIds(state.association.connectors.map((connector) => connector.id))
+        persistWorkspaceCodexProject(activeFolder?.id, codexProjectId)
+        setActiveCodexProject(codexProjectId)
+      } else {
+        const legacyHint = readWorkspaceCodexProject(activeFolder?.id)
+        const confirmedCandidate = state.candidates.find((candidate) => candidate.id === legacyHint)
+        setAssociationCandidateId(confirmedCandidate?.id || state.candidates[0]?.id || "")
+        setAssociationConnectorIds([])
+        setActiveCodexProject(null)
+      }
+      return state
+    } catch {
+      setAssociationState(null)
+      setActiveCodexProject(null)
+      return null
+    } finally {
+      setAssociationLoading(false)
+    }
+  }, [activeFolder?.id, companyProjectId])
+
+  React.useEffect(() => {
+    void refreshCompanyAssociation()
+  }, [refreshCompanyAssociation])
+
+  const confirmCompanyAssociation = React.useCallback(async () => {
+    if (!companyProjectId || !associationCandidateId || associationBusy) return
+    setAssociationBusy(true)
+    try {
+      await codexApi.associateCompany(
+        companyProjectId,
+        associationCandidateId,
+        associationConnectorIds,
+        "manual",
+      )
+      await refreshCompanyAssociation()
+      setAssociationWizardOpen(false)
+      toast.success("Entorno y conectores asociados de forma persistente.")
+    } catch (error) {
+      const status = (error as { status?: number })?.status
+      toast.error(
+        status === 409
+          ? "Ese entorno ya está asociado a otra empresa."
+          : "No se pudo guardar la asociación empresarial.",
+      )
+    } finally {
+      setAssociationBusy(false)
+    }
+  }, [
+    associationBusy,
+    associationCandidateId,
+    associationConnectorIds,
+    companyProjectId,
+    refreshCompanyAssociation,
+  ])
 
   React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
   React.useEffect(() => subscribeAgentCompanyPreviewSlot(setPreviewSlot), [])
@@ -706,25 +786,36 @@ export function AgentCompanyPanel() {
           )
         }
 
-        const linkedProjectId = linkedCodexProject({
-          workspaceId,
-          sessionId: workspaceId === activeFolder?.id ? activeCodeChatSessionId : null,
-        })
-        if (linkedProjectId) {
-          try {
-            const linkedProject = await codexApi.getProject(linkedProjectId)
-            if (linkedProject.status === "ready") {
-              persistWorkspaceCodexProject(workspaceId, linkedProject.id)
-              setActiveCodexProject(linkedProject.id)
-              return linkedProject.id
-            }
-          } catch {
-            // The linked project was removed or belongs to another session.
+        const durableCompanyId = workspaceId.replace(/^project:/, "")
+        if (workspaceId.startsWith("local:")) {
+          throw new Error("Los workspaces locales no pueden administrar una empresa persistente.")
+        }
+        const durableState = workspaceId === activeFolder?.id && associationState
+          ? associationState
+          : await codexApi.getCompanyAssociation(durableCompanyId)
+        if (durableState.association) {
+          const linkedProject = await codexApi.getProject(durableState.association.codexProject.id)
+          if (linkedProject.status === "ready") {
+            persistWorkspaceCodexProject(workspaceId, linkedProject.id)
+            setActiveCodexProject(linkedProject.id)
+            return linkedProject.id
           }
+        }
+        if (durableState.candidates.length) {
           if (workspaceId === activeFolder?.id) {
-            clearSessionCodexProject(activeCodeChatSessionId)
+            setAssociationState(durableState)
+            const legacyHint = linkedCodexProject({
+              workspaceId,
+              sessionId: activeCodeChatSessionId,
+            })
+            const candidate = durableState.candidates.find((row) => row.id === legacyHint)
+            setAssociationCandidateId(candidate?.id || durableState.candidates[0].id)
+            setAssociationWizardOpen(true)
           }
-          clearWorkspaceCodexProject(workspaceId)
+          throw Object.assign(
+            new Error("Confirma qué entorno pertenece a esta empresa antes de ejecutar agentes."),
+            { status: 409, code: "company_association_required" },
+          )
         }
 
         const project = await codexApi.createProject(
@@ -734,11 +825,19 @@ export function AgentCompanyPanel() {
             "CEO Office coordina los departamentos para construir y mantener software real.",
             "Conserva archivos, ejecuta verificaciones y entrega evidencia antes de publicar.",
           ].join(" "),
+          durableState.company.organizationId,
         )
         if (project.status !== "ready") {
           throw new Error(project.error || "El runtime de la empresa no quedó listo.")
         }
 
+        await codexApi.associateCompany(
+          durableCompanyId,
+          project.id,
+          [],
+          "created_for_company",
+        )
+        if (workspaceId === activeFolder?.id) await refreshCompanyAssociation()
         persistWorkspaceCodexProject(workspaceId, project.id)
         setActiveCodexProject(project.id)
         return project.id
@@ -749,7 +848,14 @@ export function AgentCompanyPanel() {
       companyRuntimePromisesRef.current.set(workspaceId, task)
       return task
     },
-    [activeCodeChatSessionId, activeFolder?.id, codexAccess, companyName],
+    [
+      activeCodeChatSessionId,
+      activeFolder?.id,
+      associationState,
+      codexAccess,
+      companyName,
+      refreshCompanyAssociation,
+    ],
   )
 
   const openCeoOffice = React.useCallback(() => {
@@ -837,9 +943,7 @@ export function AgentCompanyPanel() {
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn
-    let codexProjectId =
-      readWorkspaceCodexProject(activeFolder?.id) ||
-      getActiveCodexProject()
+    let codexProjectId = associatedCodexProjectId
 
     const openCompanyLoop = () => {
       const rootSessionId = ensureDepartmentSessions()
@@ -906,6 +1010,7 @@ export function AgentCompanyPanel() {
     }
   }, [
     activeFolder?.id,
+    associatedCodexProjectId,
     codexAccess?.canRun,
     companyName,
     chatLivesInWorkspaceColumn,
@@ -926,9 +1031,7 @@ export function AgentCompanyPanel() {
     setProactiveBusy(true)
     try {
       const projectId =
-        readWorkspaceCodexProject(activeFolder?.id)
-        || getActiveCodexProject()
-        || await ensureCompanyRuntime()
+        associatedCodexProjectId || await ensureCompanyRuntime()
       ensureDepartmentSessions()
 
       if (commandCenter?.swarm?.status === "paused") {
@@ -966,6 +1069,7 @@ export function AgentCompanyPanel() {
   }, [
     activeFolder?.id,
     allDepartments.length,
+    associatedCodexProjectId,
     codeChatSessions,
     commandCenter?.swarm?.id,
     commandCenter?.swarm?.status,
@@ -978,9 +1082,7 @@ export function AgentCompanyPanel() {
   ])
 
   const pauseEnterpriseExecution = React.useCallback(async () => {
-    const projectId =
-      readWorkspaceCodexProject(activeFolder?.id)
-      || getActiveCodexProject()
+    const projectId = associatedCodexProjectId
     const swarmId = commandCenter?.swarm?.id
     if (!projectId || !swarmId) {
       toast.info("No hay un enjambre activo para pausar.")
@@ -996,12 +1098,10 @@ export function AgentCompanyPanel() {
     } finally {
       setProactiveBusy(false)
     }
-  }, [activeFolder?.id, commandCenter?.swarm?.id, refreshCommandCenter])
+  }, [associatedCodexProjectId, commandCenter?.swarm?.id, refreshCommandCenter])
 
   const cancelCompanyExecution = React.useCallback(async () => {
-    const codexProjectId =
-      readWorkspaceCodexProject(activeFolder?.id) ||
-      getActiveCodexProject()
+    const codexProjectId = associatedCodexProjectId
     const activeRun = [...codexRuns]
       .filter((run) => codeRunIsActive(run))
       .sort((a, b) => runActivityAt(b) - runActivityAt(a))[0]
@@ -1039,6 +1139,7 @@ export function AgentCompanyPanel() {
     }
   }, [
     activeFolder?.id,
+    associatedCodexProjectId,
     codexRuns,
     commandCenter?.swarm?.id,
     proactiveOn,
@@ -1118,9 +1219,7 @@ export function AgentCompanyPanel() {
     setCreatingDepartment(true)
     try {
       const codexProjectId =
-        readWorkspaceCodexProject(activeFolder?.id) ||
-        getActiveCodexProject() ||
-        await ensureCompanyRuntime()
+        associatedCodexProjectId || await ensureCompanyRuntime()
       const result = await codexApi.upsertDepartment(codexProjectId, {
         id,
         name,
@@ -1151,6 +1250,7 @@ export function AgentCompanyPanel() {
   }, [
     activeFolder?.id,
     allDepartments,
+    associatedCodexProjectId,
     creatingDepartment,
     ensureCompanyRuntime,
     newDepartmentAgents,
@@ -1158,6 +1258,9 @@ export function AgentCompanyPanel() {
   ])
 
   const currentProjectId = activeFolder?.id?.replace(/^project:/, "") || null
+  const associationOptions = associationState?.association
+    ? [associationState.association.codexProject]
+    : associationState?.candidates || []
   const panel = (
     <div
       className={cn(
@@ -1285,6 +1388,31 @@ export function AgentCompanyPanel() {
               </div>
             </PopoverContent>
           </Popover>
+
+          {view === "home" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "relative h-10 w-10 shrink-0 rounded-full",
+                associationState?.association
+                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300"
+                  : "bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300",
+              )}
+              onClick={() => setAssociationWizardOpen(true)}
+              disabled={!companyProjectId || associationLoading}
+              aria-label={associationState?.association ? "Administrar entorno asociado" : "Asociar entorno de empresa"}
+              title={associationState?.association ? "Entorno persistente asociado" : "Asociar entorno de empresa"}
+              data-testid="company-association-open"
+            >
+              {associationLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+              <span className={cn(
+                "absolute right-1 top-1 h-2 w-2 rounded-full ring-2 ring-background",
+                associationState?.association ? "bg-emerald-500" : "bg-amber-500",
+              )} />
+            </Button>
+          ) : null}
 
           {view === "home" ? (
             <Button
@@ -1425,6 +1553,111 @@ export function AgentCompanyPanel() {
             <Button type="button" onClick={() => void createCompany()} disabled={!newCompanyName.trim() || creatingCompany}>
               {creatingCompany ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Crear empresa
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={associationWizardOpen} onOpenChange={setAssociationWizardOpen}>
+        <DialogContent className="sm:max-w-[560px]" data-testid="company-association-wizard">
+          <DialogHeader>
+            <DialogTitle>Asociar entorno de empresa</DialogTitle>
+            <DialogDescription>
+              Confirma qué proyecto de código y qué conexiones pertenecen a {companyName}. No se aplican asociaciones automáticas.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[58vh] space-y-6 overflow-y-auto py-2">
+            <section>
+              <div className="flex items-center justify-between gap-3">
+                <Label>Proyecto de código</Label>
+                <span className="text-[11px] text-muted-foreground">
+                  {associationState?.association ? "Persistente" : "Requiere confirmación"}
+                </span>
+              </div>
+              <div className="mt-2 space-y-2">
+                {associationOptions.length ? associationOptions.map((candidate) => (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-md border px-3 py-3 text-left",
+                      associationCandidateId === candidate.id
+                        ? "border-foreground bg-muted/50"
+                        : "border-border hover:bg-muted/35",
+                    )}
+                    onClick={() => setAssociationCandidateId(candidate.id)}
+                  >
+                    <span className={cn(
+                      "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                      associationCandidateId === candidate.id ? "border-foreground" : "border-muted-foreground/50",
+                    )}>
+                      {associationCandidateId === candidate.id ? <span className="h-2 w-2 rounded-full bg-foreground" /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{candidate.name}</span>
+                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                        {candidate.status || "Sin estado"} · {candidate.organizationId ? "Organización" : "Personal"}
+                      </span>
+                    </span>
+                  </button>
+                )) : (
+                  <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                    No hay proyectos de código huérfanos. Al iniciar la operación se creará uno nuevo y quedará asociado explícitamente.
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <div className="flex items-center justify-between gap-3">
+                <Label>Conectores autorizados para esta empresa</Label>
+                <span className="text-[11px] text-muted-foreground">{associationConnectorIds.length} seleccionados</span>
+              </div>
+              <div className="mt-2 divide-y rounded-md border">
+                {associationState?.connectors.length ? associationState.connectors.map((connector) => {
+                  const checked = associationConnectorIds.includes(connector.id)
+                  return (
+                    <label key={connector.id} className="flex cursor-pointer items-center gap-3 px-3 py-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-border accent-foreground"
+                        checked={checked}
+                        onChange={() => {
+                          setAssociationConnectorIds((current) => checked
+                            ? current.filter((id) => id !== connector.id)
+                            : [...current, connector.id])
+                        }}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{connector.accountLabel || connector.provider}</span>
+                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                              {connector.provider} · {connector.scopes?.length || 0} permisos confirmados
+                        </span>
+                      </span>
+                      <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">Conectado</span>
+                    </label>
+                  )
+                }) : (
+                  <p className="p-4 text-sm text-muted-foreground">
+                    No hay conectores conectados disponibles para esta empresa.
+                  </p>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setAssociationWizardOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void confirmCompanyAssociation()}
+              disabled={!associationCandidateId || associationBusy}
+            >
+              {associationBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+              Guardar asociación
             </Button>
           </DialogFooter>
         </DialogContent>

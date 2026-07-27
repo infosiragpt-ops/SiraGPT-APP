@@ -274,7 +274,35 @@ async function loadCompanyOperatingContext({
   now = new Date(),
 } = {}) {
   const profile = readCompanyProfile(project, { now });
-  const [connections, user] = await Promise.all([
+  const assignmentStorageAvailable = Boolean(
+    prisma?.companyCodexProjectLink?.findUnique
+    && prisma?.projectConnectorAssignment?.findMany,
+  );
+  const link = assignmentStorageAvailable
+    ? await prisma.companyCodexProjectLink.findUnique({
+      where: { codexProjectId: project.id },
+      select: { projectId: true },
+    }).catch(() => null)
+    : null;
+  const assignedConnectorRows = link
+    ? await prisma.projectConnectorAssignment.findMany({
+      where: { projectId: link.projectId, status: 'active' },
+      select: {
+        connectorAccount: {
+          select: {
+            id: true,
+            provider: true,
+            status: true,
+          },
+        },
+      },
+    }).catch(() => [])
+    : [];
+  const assignedConnectors = assignedConnectorRows
+    .map((row) => row?.connectorAccount)
+    .filter((account) => account?.status === 'connected');
+  const assignedProviders = new Set(assignedConnectors.map((account) => account.provider));
+  const [allConnections, user] = await Promise.all([
     prisma?.socialConnection?.findMany
       ? prisma.socialConnection.findMany({
         where: { userId: project.userId },
@@ -288,12 +316,24 @@ async function loadCompanyOperatingContext({
       }).catch(() => null)
       : null,
   ]);
+  const connections = assignmentStorageAvailable
+    ? allConnections.filter((connection) => assignedProviders.has(connection.platform))
+    : allConnections;
+  const gmailConnected = Boolean(user?.gmailTokens) && (
+    !assignmentStorageAvailable || assignedProviders.has('gmail')
+  );
   const readiness = deriveCompanyReadiness({
     project,
     profile,
     socialConnections: connections,
-    gmailConnected: Boolean(user?.gmailTokens),
+    gmailConnected,
   });
+  readiness.evidence.connectorAssignment = {
+    enforced: assignmentStorageAvailable,
+    companyProjectId: link?.projectId || null,
+    providers: [...assignedProviders].sort(),
+    accountIds: assignedConnectors.map((account) => account.id).sort(),
+  };
   const context = {
     profile,
     readiness,
