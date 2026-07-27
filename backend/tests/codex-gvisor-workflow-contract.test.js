@@ -211,6 +211,11 @@ test('gVisor smoke exercises the authenticated lifecycle and the real full-stack
   assert.match(runner, /probeReady\(port, basePath = null\)/);
   assert.match(runner, /previewDocumentReady\(\{ status: r\.status, contentType, body \}\)/);
   assert.match(runner, /npm", "run", "build"/);
+  assert.ok(
+    runner.indexOf('entry.preflight.render = { status: "passed" };')
+      < runner.indexOf('entry.state = "ready";'),
+    'ready must only become observable after render preflight passes',
+  );
   assert.match(smoke, /preflight\?\.build\?\.status,\s*'passed'/);
   assert.match(smoke, /secondRunMarker/);
   assert.match(smoke, /secondRunContinued:\s*true/);

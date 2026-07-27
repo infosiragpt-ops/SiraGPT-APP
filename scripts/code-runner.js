@@ -776,13 +776,16 @@ async function runDev(entry, projectId) {
     await Bun.sleep(1500);
     if (stale()) return;
     if (await probeReady(port, entry.basePath)) {
-      entry.state = "ready";
       entry.preflight.render = { status: "passed" };
+      // Publish ready only after every preflight field is terminal. Status
+      // readers must never observe ready=true with render still pending.
+      entry.state = "ready";
       pushLog(entry, `[runner] dev server ready on ${port}`);
       return;
     }
     if (devProc.killed) {
       entry.state = "error";
+      entry.preflight.render = { status: "failed", reason: "process_exited" };
       entry.error = "dev server exited before becoming ready";
       return;
     }
