@@ -61,10 +61,12 @@ function resolveProjectRelPath(relPath) {
 }
 
 /**
- * Upgrade the exact Vite proxy emitted by the legacy SiraGPT full-stack
- * starter. Its broad regex also matched the tokenized preview base itself
- * (`/api/codex/.../app/`), so Vite proxied index.html to Express and returned
- * 404 forever. Refuse partial/custom matches to avoid rewriting user configs.
+ * Upgrade the exact Vite config emitted by SiraGPT's full-stack starter.
+ * Besides narrowing the legacy API regex, disable Vite HMR only when the
+ * tokenized runner requests it: the preview proxy transports HTTP while the
+ * platform's own workspace refresh restarts/reloads the iframe.
+ *
+ * Refuse partial/custom matches to avoid rewriting user configs.
  */
 function migrateLegacyViteProxyConfig(content) {
   const source = String(content || '');
@@ -72,26 +74,40 @@ function migrateLegacyViteProxyConfig(content) {
   const baseLine = "  base: process.env.VITE_BASE || '/',";
   const proxyLine = "      '^.*/api/': {";
   const rewriteLine = "        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),";
-  if (
-    !source.includes(portLine)
-    || !source.includes(baseLine)
-    || !source.includes(proxyLine)
-    || !source.includes(rewriteLine)
-  ) {
-    return { changed: false, content: source };
+  const managedBaseLine = "const base = process.env.VITE_BASE || '/'";
+  const managedApiBaseLine = 'const apiBase = `${base}api`';
+  const managedProxyLine = '      [apiBase]: {';
+  const managedRewriteLine = "        rewrite: (p) => p.startsWith(apiBase) ? `/api${p.slice(apiBase.length)}` : p,";
+  const serverLine = '  server: {';
+  const hmrLine = "    hmr: process.env.VITE_HMR === 'false' ? false : undefined,";
+
+  let upgraded = source;
+  const isLegacy = source.includes(portLine)
+    && source.includes(baseLine)
+    && source.includes(proxyLine)
+    && source.includes(rewriteLine);
+  if (isLegacy) {
+    upgraded = upgraded
+      .replace(
+        portLine,
+        `${portLine}\n${managedBaseLine}\n${managedApiBaseLine}`,
+      )
+      .replace(baseLine, '  base,')
+      .replace(proxyLine, managedProxyLine)
+      .replace(rewriteLine, managedRewriteLine);
   }
 
-  const upgraded = source
-    .replace(
-      portLine,
-      `${portLine}\nconst base = process.env.VITE_BASE || '/'\nconst apiBase = \`\${base}api\``,
-    )
-    .replace(baseLine, '  base,')
-    .replace(proxyLine, '      [apiBase]: {')
-    .replace(
-      rewriteLine,
-      "        rewrite: (p) => p.startsWith(apiBase) ? `/api${p.slice(apiBase.length)}` : p,",
-    );
+  const isManaged = upgraded.includes(portLine)
+    && upgraded.includes(managedBaseLine)
+    && upgraded.includes(managedApiBaseLine)
+    && upgraded.includes('  base,')
+    && upgraded.includes(managedProxyLine)
+    && upgraded.includes(managedRewriteLine)
+    && upgraded.includes(serverLine);
+  if (isManaged && !upgraded.includes(hmrLine)) {
+    upgraded = upgraded.replace(serverLine, `${serverLine}\n${hmrLine}`);
+  }
+
   return { changed: upgraded !== source, content: upgraded };
 }
 

@@ -81,7 +81,16 @@ export default {
   assert.match(migrated.content, /\[apiBase\]/);
   assert.doesNotMatch(migrated.content, /\^\.\*\/api\//);
   assert.match(migrated.content, /p\.startsWith\(apiBase\)/);
+  assert.match(migrated.content, /hmr: process\.env\.VITE_HMR === 'false' \? false : undefined/);
   assert.equal(migrateLegacyViteProxyConfig(migrated.content).changed, false);
+
+  const managedWithoutHmr = migrated.content.replace(
+    "    hmr: process.env.VITE_HMR === 'false' ? false : undefined,\n",
+    '',
+  );
+  const hmrMigrated = migrateLegacyViteProxyConfig(managedWithoutHmr);
+  assert.equal(hmrMigrated.changed, true);
+  assert.match(hmrMigrated.content, /hmr: process\.env\.VITE_HMR === 'false' \? false : undefined/);
 
   const custom = legacy.replace("  base: process.env.VITE_BASE || '/',", "  base: '/custom/',");
   assert.deepEqual(migrateLegacyViteProxyConfig(custom), { changed: false, content: custom });

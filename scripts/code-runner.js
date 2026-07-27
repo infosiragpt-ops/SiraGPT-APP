@@ -646,6 +646,10 @@ async function runDev(entry, projectId) {
       // tokenized base + the derived API port travel via env instead. Plain
       // vite starters ignore both — harmless.
       VITE_BASE: entry.basePath || "/",
+      // The tokenized preview proxy is HTTP-only. SiraGPT already restarts and
+      // reloads the iframe when workspace files change, so prevent Vite from
+      // opening an unsupported HMR WebSocket and emitting runtime errors.
+      VITE_HMR: "false",
       API_PORT: String(port + 1000),
     },
   });

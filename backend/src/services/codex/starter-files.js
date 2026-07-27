@@ -554,6 +554,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   base,
   server: {
+    hmr: process.env.VITE_HMR === 'false' ? false : undefined,
     host: true,
     allowedHosts: true,
     port,
