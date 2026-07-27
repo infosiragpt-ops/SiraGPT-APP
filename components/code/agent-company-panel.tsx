@@ -116,7 +116,10 @@ import {
 import {
   codexApi,
   type CodexAccess,
+  type CodexCompanyCapacity,
   type CodexCompanyContext,
+  type CodexCompanyOperations,
+  type CodexExternalAction,
   type CodexProactiveState,
   type CodexRun,
 } from "@/lib/codex/codex-api"
@@ -166,6 +169,10 @@ const DEPARTMENT_ICONS: Record<string, React.ComponentType<{ className?: string 
   "engineering-01": Code2,
   marketing: Megaphone,
   "engineering-02": Workflow,
+  "market-intelligence": Search,
+  sales: BriefcaseBusiness,
+  "customer-success": MessageSquareText,
+  "website-distribution": ExternalLink,
 }
 
 const EMPTY_PROACTIVE_STATE: CodexProactiveState = {
@@ -214,6 +221,10 @@ function readCustomDepartments(workspaceId: string | null | undefined): CustomDe
         name: String(row.name).slice(0, 70),
         description: typeof row.description === "string" ? row.description.slice(0, 140) : "Departamento personalizado.",
         keywords: Array.isArray(row.keywords) ? row.keywords.filter((value: unknown) => typeof value === "string") : [],
+        mission: typeof row.mission === "string" ? row.mission.slice(0, 800) : undefined,
+        kind: ["coordination", "engineering", "research", "external"].includes(row.kind) ? row.kind : "research",
+        desiredAgents: Math.max(1, Math.min(1000, Number(row.desiredAgents) || 4)),
+        enabled: row.enabled !== false,
         custom: true as const,
       }))
   } catch {
@@ -317,7 +328,10 @@ export function AgentCompanyPanel() {
   const [creatingCompany, setCreatingCompany] = React.useState(false)
   const [newDepartmentOpen, setNewDepartmentOpen] = React.useState(false)
   const [newDepartmentName, setNewDepartmentName] = React.useState("")
+  const [newDepartmentAgents, setNewDepartmentAgents] = React.useState(32)
+  const [creatingDepartment, setCreatingDepartment] = React.useState(false)
   const [customDepartments, setCustomDepartments] = React.useState<CustomDepartment[]>([])
+  const [companyCapacity, setCompanyCapacity] = React.useState<CodexCompanyCapacity | null>(null)
   const [proactiveOn, setProactiveOn] = React.useState(false)
   const [proactiveBusy, setProactiveBusy] = React.useState(false)
   const [proactiveState, setProactiveState] = React.useState<CodexProactiveState>(EMPTY_PROACTIVE_STATE)
@@ -352,6 +366,7 @@ export function AgentCompanyPanel() {
           setCheckpointCount(0)
           setProactiveState(EMPTY_PROACTIVE_STATE)
           setCompanyContext(null)
+          setCompanyCapacity(null)
           return
         }
 
@@ -378,6 +393,12 @@ export function AgentCompanyPanel() {
           const enabled = Boolean(nextState.enabled)
           setProactiveState(nextState)
           setCompanyContext(proactiveResult.value.company || null)
+          setCompanyCapacity(proactiveResult.value.capacity || null)
+          const custom = proactiveResult.value.departments
+            .filter((department) => department.custom)
+            .map((department) => ({ ...department, custom: true as const }))
+          setCustomDepartments(custom)
+          writeCustomDepartments(activeFolder?.id, custom)
           setProactiveOn(enabled)
           setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
         }
@@ -712,6 +733,14 @@ export function AgentCompanyPanel() {
       const enabled = Boolean(r.state?.enabled)
       proactiveMutationVersionRef.current += 1
       setProactiveState(normalizeProactiveState(r.state))
+      setCompanyCapacity(r.capacity || null)
+      if (Array.isArray(r.departments)) {
+        const custom = r.departments
+          .filter((department) => department.custom)
+          .map((department) => ({ ...department, custom: true as const }))
+        setCustomDepartments(custom)
+        writeCustomDepartments(activeFolder?.id, custom)
+      }
       setProactiveOn(enabled)
       setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
       if (enabled) openCompanyLoop()
@@ -803,31 +832,55 @@ export function AgentCompanyPanel() {
     }
   }, [creatingCompany, ensureCompanyRuntime, newCompanyName, switchCodexWorkspace])
 
-  const createDepartment = React.useCallback(() => {
+  const createDepartment = React.useCallback(async () => {
     const name = newDepartmentName.trim()
-    if (!name) return
+    if (!name || creatingDepartment) return
     const id = `custom-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42) || Date.now()}`
     if (allDepartments.some((department) => department.id === id || department.name.toLowerCase() === name.toLowerCase())) {
       toast.error("Ese departamento ya existe.")
       return
     }
-    const next = [
-      ...customDepartments,
-      {
+    setCreatingDepartment(true)
+    try {
+      const codexProjectId =
+        readWorkspaceCodexProject(activeFolder?.id) ||
+        getActiveCodexProject() ||
+        await ensureCompanyRuntime()
+      const result = await codexApi.upsertDepartment(codexProjectId, {
         id,
         name,
+        mission: `Cumple la misión de ${name} y propone trabajo incremental alineado con CEO Office.`,
         description: "Departamento personalizado.",
         keywords: name.toLocaleLowerCase("es").split(/\s+/).filter(Boolean),
-        custom: true as const,
-      },
-    ]
-    setCustomDepartments(next)
-    writeCustomDepartments(activeFolder?.id, next)
-    setNewDepartmentName("")
-    setNewDepartmentOpen(false)
-    setSelectedDepartmentId(id)
-    toast.success("Departamento añadido.")
-  }, [activeFolder?.id, allDepartments, customDepartments, newDepartmentName])
+        kind: "research",
+        desiredAgents: newDepartmentAgents,
+        custom: true,
+        enabled: true,
+      })
+      const next = result.departments
+        .filter((department) => department.custom)
+        .map((department) => ({ ...department, custom: true as const }))
+      setCustomDepartments(next)
+      setCompanyCapacity(result.capacity)
+      writeCustomDepartments(activeFolder?.id, next)
+      setNewDepartmentName("")
+      setNewDepartmentAgents(32)
+      setNewDepartmentOpen(false)
+      setSelectedDepartmentId(id)
+      toast.success("Departamento operativo añadido.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo persistir el departamento.")
+    } finally {
+      setCreatingDepartment(false)
+    }
+  }, [
+    activeFolder?.id,
+    allDepartments,
+    creatingDepartment,
+    ensureCompanyRuntime,
+    newDepartmentAgents,
+    newDepartmentName,
+  ])
 
   const currentProjectId = activeFolder?.id?.replace(/^project:/, "") || null
   const panel = (
@@ -980,6 +1033,13 @@ export function AgentCompanyPanel() {
             officeOpen={officeOpen}
             snapshot={snapshot}
             departmentRows={departmentRows}
+            logicalAgentCapacity={
+              companyCapacity?.logicalAgents ??
+              allDepartments.reduce(
+                (sum, department) => sum + Math.max(1, department.desiredAgents || 1),
+                0,
+              )
+            }
             onOpenOffice={() => setOfficeOpen(true)}
             activePreviewView={previewView}
             onOpenDashboard={() => openCompanySurface("dashboard")}
@@ -1102,16 +1162,39 @@ export function AgentCompanyPanel() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault()
-                  createDepartment()
+                  void createDepartment()
                 }
               }}
             />
+            <Label htmlFor="agent-department-capacity">Capacidad de agentes</Label>
+            <Input
+              id="agent-department-capacity"
+              type="number"
+              min={1}
+              max={1000}
+              step={1}
+              value={newDepartmentAgents}
+              onChange={(event) => {
+                const value = Number.parseInt(event.target.value, 10)
+                setNewDepartmentAgents(
+                  Number.isFinite(value) ? Math.max(1, Math.min(1000, value)) : 1,
+                )
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Capacidad lógica en cola; las escrituras al workspace se serializan.
+            </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setNewDepartmentOpen(false)}>
               Cancelar
             </Button>
-            <Button type="button" onClick={createDepartment} disabled={!newDepartmentName.trim()}>
+            <Button
+              type="button"
+              onClick={() => void createDepartment()}
+              disabled={!newDepartmentName.trim() || creatingDepartment}
+            >
+              {creatingDepartment ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Añadir departamento
             </Button>
           </DialogFooter>
@@ -1269,6 +1352,7 @@ function CompanyHome({
   officeOpen,
   snapshot,
   departmentRows,
+  logicalAgentCapacity,
   activePreviewView,
   onOpenOffice,
   onOpenDashboard,
@@ -1297,6 +1381,7 @@ function CompanyHome({
     latest: CodeChatSession | null
     latestRun: CodexRun | null
   }>
+  logicalAgentCapacity: number
   activePreviewView: CompanyPreviewView | null
   onOpenOffice: () => void
   onOpenDashboard: () => void
@@ -1369,7 +1454,12 @@ function CompanyHome({
         </nav>
 
         <div className={cn("flex items-center justify-between px-2", hideFooter ? "mt-3" : "mt-4")}>
-          <h2 className="text-xs font-semibold text-muted-foreground">Departamentos</h2>
+          <div className="min-w-0">
+            <h2 className="text-xs font-semibold text-muted-foreground">Departamentos</h2>
+            <p className="truncate text-[10px] text-muted-foreground/75">
+              {logicalAgentCapacity.toLocaleString("es-PE")} agentes lógicos disponibles
+            </p>
+          </div>
           <Button
             type="button"
             variant="ghost"
@@ -1580,16 +1670,30 @@ function ResourcesView({
   const [delivery, setDelivery] = React.useState<"now" | "scheduled">("now")
   const [scheduledAt, setScheduledAt] = React.useState("")
   const [postBusy, setPostBusy] = React.useState(false)
+  const [companyOps, setCompanyOps] = React.useState<CodexCompanyOperations | null>(null)
+  const [companyOpsContext, setCompanyOpsContext] = React.useState<CodexCompanyContext | null>(null)
+  const [companyOpsBusy, setCompanyOpsBusy] = React.useState<string | null>(null)
+  const [activeCodexProjectId, setActiveCodexProjectIdState] = React.useState<string | null>(
+    () => getActiveCodexProject(),
+  )
 
   const load = React.useCallback(async () => {
     setLoading(true)
-    try {
-      const [result, queuedPosts] = await Promise.all([
+    const codexProjectId = activeCodexProjectId || getActiveCodexProject()
+    const [socialResult, postsResult, opsResult, contextResult] = await Promise.allSettled([
         companySocialApi.operations(),
-        companySocialApi.listPosts().catch(() => []),
+        companySocialApi.listPosts(),
+        codexProjectId
+          ? codexApi.getCompanyOperations(codexProjectId)
+          : Promise.resolve(null),
+        codexProjectId
+          ? codexApi.getCompanyProfile(codexProjectId)
+          : Promise.resolve(null),
       ])
+
+    if (socialResult.status === "fulfilled") {
+      const result = socialResult.value
       setOperations(result)
-      setPosts(queuedPosts)
       setDraft({ ...result.policy, workspaceId })
       setSelectedPlatforms((current) => {
         const connected = result.providers
@@ -1598,16 +1702,97 @@ function ResourcesView({
         const retained = current.filter((platform) => connected.includes(platform))
         return retained.length ? retained : connected
       })
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudieron cargar los recursos.")
-    } finally {
-      setLoading(false)
+    } else {
+      toast.error("No se pudieron cargar las conexiones sociales.")
     }
-  }, [workspaceId])
+    if (postsResult.status === "fulfilled") setPosts(postsResult.value)
+    if (opsResult.status === "fulfilled") setCompanyOps(opsResult.value)
+    else toast.error("No se pudieron cargar las operaciones de empresa.")
+    if (contextResult.status === "fulfilled") setCompanyOpsContext(contextResult.value)
+    setLoading(false)
+  }, [activeCodexProjectId, workspaceId])
+
+  const refreshCompanyOps = React.useCallback(async () => {
+    const codexProjectId = activeCodexProjectId || getActiveCodexProject()
+    if (!codexProjectId) return
+    const [snapshot, context] = await Promise.all([
+      codexApi.getCompanyOperations(codexProjectId),
+      codexApi.getCompanyProfile(codexProjectId),
+    ])
+    setCompanyOps(snapshot)
+    setCompanyOpsContext(context)
+  }, [activeCodexProjectId])
+
+  const runCompanyOperation = React.useCallback(async (
+    key: string,
+    operation: (projectId: string) => Promise<unknown>,
+    success: string,
+  ) => {
+    const codexProjectId = getActiveCodexProject()
+    if (!codexProjectId || companyOpsBusy) return
+    setCompanyOpsBusy(key)
+    try {
+      await operation(codexProjectId)
+      await refreshCompanyOps()
+      toast.success(success)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
+    } finally {
+      setCompanyOpsBusy(null)
+    }
+  }, [companyOpsBusy, refreshCompanyOps])
+
+  const updateCompanyPolicy = React.useCallback(async (
+    field: "emailReplies" | "leadOutreach",
+    mode: "review" | "auto" | "off",
+  ) => {
+    const codexProjectId = getActiveCodexProject()
+    if (!codexProjectId || companyOpsBusy) return
+    if (
+      mode === "auto"
+      && !window.confirm("El modo automático puede enviar acciones externas sin revisión individual. ¿Deseas activarlo?")
+    ) {
+      return
+    }
+    setCompanyOpsBusy(`policy:${field}`)
+    try {
+      const context = await codexApi.updateCompanyProfile(codexProjectId, {
+        autonomy: { [field]: mode },
+      }, { confirmAuto: mode === "auto" })
+      setCompanyOpsContext(context)
+      toast.success("Política operativa actualizada.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar la política.")
+    } finally {
+      setCompanyOpsBusy(null)
+    }
+  }, [companyOpsBusy])
+
+  const resolveCompanyAction = React.useCallback(async (
+    action: CodexExternalAction,
+    decision: "approve" | "reject",
+  ) => {
+    await runCompanyOperation(
+      `action:${action.id}`,
+      (projectId) => decision === "approve"
+        ? codexApi.approveCompanyAction(projectId, action.id)
+        : codexApi.rejectCompanyAction(projectId, action.id),
+      decision === "approve" ? "Acción aprobada y ejecutada." : "Acción rechazada.",
+    )
+  }, [runCompanyOperation])
 
   React.useEffect(() => {
     void load()
   }, [load])
+
+  React.useEffect(() => {
+    const onProject = (event: Event) => {
+      const projectId = (event as CustomEvent<{ projectId?: string | null }>).detail?.projectId || null
+      setActiveCodexProjectIdState(projectId)
+    }
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onProject)
+    return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onProject)
+  }, [])
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1822,6 +2007,36 @@ function ResourcesView({
             </div>
           ))}
         </div>
+
+        {companyOps ? (
+          <CompanyOperationsPanel
+            operations={companyOps}
+            context={companyOpsContext}
+            busy={companyOpsBusy}
+            onResearch={() => runCompanyOperation(
+              "research",
+              (projectId) => codexApi.researchCompanyLeads(projectId),
+              "Investigación comercial actualizada.",
+            )}
+            onTriage={() => runCompanyOperation(
+              "inbox",
+              (projectId) => codexApi.triageCompanyInbox(projectId),
+              "Bandeja revisada y acciones preparadas.",
+            )}
+            onResolve={resolveCompanyAction}
+            onPolicy={updateCompanyPolicy}
+            onUpdateLead={(leadId, email) => runCompanyOperation(
+              `lead:${leadId}`,
+              (projectId) => codexApi.updateCompanyLead(projectId, leadId, { email }),
+              "Contacto actualizado.",
+            )}
+            onOutreach={(leadId) => runCompanyOperation(
+              `outreach:${leadId}`,
+              (projectId) => codexApi.prepareLeadOutreach(projectId, leadId),
+              "Correo comercial preparado según la política.",
+            )}
+          />
+        ) : null}
 
         <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
           <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
@@ -2059,6 +2274,37 @@ function ResourcesView({
 
   return (
     <ViewBody>
+      {companyOps ? (
+        <CompanyOperationsPanel
+          compact
+          operations={companyOps}
+          context={companyOpsContext}
+          busy={companyOpsBusy}
+          onResearch={() => runCompanyOperation(
+            "research",
+            (projectId) => codexApi.researchCompanyLeads(projectId),
+            "Investigación comercial actualizada.",
+          )}
+          onTriage={() => runCompanyOperation(
+            "inbox",
+            (projectId) => codexApi.triageCompanyInbox(projectId),
+            "Bandeja revisada y acciones preparadas.",
+          )}
+          onResolve={resolveCompanyAction}
+          onPolicy={updateCompanyPolicy}
+          onUpdateLead={(leadId, email) => runCompanyOperation(
+            `lead:${leadId}`,
+            (projectId) => codexApi.updateCompanyLead(projectId, leadId, { email }),
+            "Contacto actualizado.",
+          )}
+          onOutreach={(leadId) => runCompanyOperation(
+            `outreach:${leadId}`,
+            (projectId) => codexApi.prepareLeadOutreach(projectId, leadId),
+            "Correo comercial preparado según la política.",
+          )}
+        />
+      ) : null}
+
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -2277,6 +2523,286 @@ function ResourcesView({
         Coordinar desde CEO Office
       </Button>
     </ViewBody>
+  )
+}
+
+function CompanyOperationsPanel({
+  operations,
+  context,
+  busy,
+  compact = false,
+  onResearch,
+  onTriage,
+  onResolve,
+  onPolicy,
+  onUpdateLead,
+  onOutreach,
+}: {
+  operations: CodexCompanyOperations
+  context: CodexCompanyContext | null
+  busy: string | null
+  compact?: boolean
+  onResearch: () => void | Promise<void>
+  onTriage: () => void | Promise<void>
+  onResolve: (action: CodexExternalAction, decision: "approve" | "reject") => void | Promise<void>
+  onPolicy: (field: "emailReplies" | "leadOutreach", mode: "review" | "auto" | "off") => void | Promise<void>
+  onUpdateLead: (leadId: string, email: string) => void | Promise<void>
+  onOutreach: (leadId: string) => void | Promise<void>
+}) {
+  const [leadEmails, setLeadEmails] = React.useState<Record<string, string>>({})
+  const pendingActions = operations.actions.filter((action) =>
+    ["pending_review", "approved", "error"].includes(action.status),
+  )
+  const modes = ["review", "auto", "off"] as const
+  const modeLabel = { review: "Revisión", auto: "Auto", off: "Pausado" } as const
+  const policyRows = [
+    {
+      field: "emailReplies" as const,
+      label: "Respuestas por correo",
+      value: context?.profile.autonomy.emailReplies || "review",
+    },
+    {
+      field: "leadOutreach" as const,
+      label: "Prospección comercial",
+      value: context?.profile.autonomy.leadOutreach || "review",
+    },
+  ]
+
+  return (
+    <section
+      className={cn(
+        compact
+          ? "mb-6 border-y border-border/55 py-4"
+          : "mt-8 border-y border-zinc-200 py-6 dark:border-white/10",
+      )}
+      data-testid="company-operations-panel"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <BriefcaseBusiness className="h-4 w-4 text-muted-foreground" />
+            <h2 className={compact ? "text-sm font-semibold" : "text-base font-semibold"}>
+              Clientes, correo y ventas
+            </h2>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {operations.counts.leads} leads · {operations.counts.pendingInbox} correos · {operations.counts.pendingActions} aprobaciones
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-md"
+            onClick={() => void onResearch()}
+            disabled={Boolean(busy)}
+          >
+            {busy === "research" ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-2 h-3.5 w-3.5" />}
+            Buscar clientes
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-md"
+            onClick={() => void onTriage()}
+            disabled={Boolean(busy)}
+          >
+            {busy === "inbox" ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <MessageSquareText className="mr-2 h-3.5 w-3.5" />}
+            Revisar correo
+          </Button>
+        </div>
+      </div>
+
+      <div className={cn("mt-5 grid gap-6", !compact && "lg:grid-cols-[minmax(0,.8fr)_minmax(0,1.2fr)]")}>
+        <div>
+          <h3 className="text-xs font-semibold">Políticas de salida</h3>
+          <div className="mt-2 divide-y divide-border/45 border-y border-border/45">
+            {policyRows.map((row) => (
+              <div key={row.field} className="py-3">
+                <span className="text-[11px] font-medium">{row.label}</span>
+                <div className="mt-2 grid grid-cols-3 gap-1 rounded-md bg-muted/55 p-1">
+                  {modes.map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={cn(
+                        "h-8 rounded text-[10px] font-semibold",
+                        row.value === mode ? "bg-background shadow-sm" : "text-muted-foreground",
+                      )}
+                      onClick={() => void onPolicy(row.field, mode)}
+                      disabled={Boolean(busy)}
+                      aria-pressed={row.value === mode}
+                    >
+                      {modeLabel[mode]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <h3 className="mt-5 text-xs font-semibold">Acciones pendientes</h3>
+          <div className="mt-2 divide-y divide-border/45 border-y border-border/45">
+            {pendingActions.slice(0, 6).map((action) => (
+              <div key={action.id} className="py-3">
+                <p className="truncate text-[11px] font-semibold">
+                  {action.kind === "email_reply" ? "Responder correo" : action.kind === "lead_outreach" ? "Contactar lead" : "Acción externa"}
+                </p>
+                <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">
+                  {action.payload.subject || action.payload.body || action.error || "Sin vista previa"}
+                </p>
+                <div className="mt-2 space-y-1 text-[10px]">
+                  <p>
+                    <span className="font-semibold">Para:</span>{" "}
+                    <span className="break-all text-muted-foreground">{action.payload.to || "Destinatario del hilo"}</span>
+                  </p>
+                  <p>
+                    <span className="font-semibold">Asunto:</span>{" "}
+                    <span className="text-muted-foreground">{action.payload.subject || "Respuesta al hilo original"}</span>
+                  </p>
+                  <details className="border-y border-border/45 py-2">
+                    <summary className="cursor-pointer font-semibold">Revisar mensaje completo</summary>
+                    <p className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words leading-relaxed text-muted-foreground">
+                      {action.payload.body || action.error || "Sin contenido disponible."}
+                    </p>
+                  </details>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 rounded-md text-[11px]"
+                    onClick={() => {
+                      if (window.confirm("Esta acción enviará el mensaje mostrado. ¿Deseas aprobar y enviar?")) {
+                        void onResolve(action, "approve")
+                      }
+                    }}
+                    disabled={Boolean(busy)}
+                  >
+                    {busy === `action:${action.id}` ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
+                    Aprobar y enviar
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 rounded-md text-[11px]"
+                    onClick={() => void onResolve(action, "reject")}
+                    disabled={Boolean(busy)}
+                  >
+                    Rechazar
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {pendingActions.length === 0 ? (
+              <p className="py-5 text-center text-[11px] text-muted-foreground">Sin acciones pendientes.</p>
+            ) : null}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-xs font-semibold">Pipeline comercial</h3>
+          <div className="mt-2 divide-y divide-border/45 border-y border-border/45">
+            {operations.leads.slice(0, 8).map((lead) => (
+              <div key={lead.id} className="py-3">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold tabular-nums">
+                    {lead.score}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11px] font-semibold">{lead.companyName}</span>
+                    <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
+                      {lead.status} · {lead.domain || lead.sourceTitle || "fuente pública"}
+                    </span>
+                    {lead.evidence ? (
+                      <span className="mt-1 line-clamp-2 block text-[10px] leading-relaxed text-muted-foreground">
+                        {lead.evidence}
+                      </span>
+                    ) : null}
+                  </span>
+                  <a
+                    href={lead.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={`Abrir fuente de ${lead.companyName}`}
+                    title="Abrir fuente"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+                {lead.email ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 h-8 rounded-md text-[11px]"
+                    onClick={() => void onOutreach(lead.id)}
+                    disabled={Boolean(busy) || lead.status === "do_not_contact"}
+                  >
+                    {busy === `outreach:${lead.id}` ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+                    Preparar correo
+                  </Button>
+                ) : (
+                  <div className="mt-2 flex gap-2">
+                    <Input
+                      type="email"
+                      value={leadEmails[lead.id] || ""}
+                      onChange={(event) => setLeadEmails((current) => ({
+                        ...current,
+                        [lead.id]: event.target.value,
+                      }))}
+                      placeholder="Correo verificado"
+                      aria-label={`Correo verificado de ${lead.companyName}`}
+                      className="h-8 min-w-0 flex-1 rounded-md text-[11px]"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 rounded-md px-2 text-[11px]"
+                      onClick={() => void onUpdateLead(lead.id, leadEmails[lead.id] || "")}
+                      disabled={Boolean(busy) || !(leadEmails[lead.id] || "").includes("@")}
+                    >
+                      Guardar
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+            {operations.leads.length === 0 ? (
+              <p className="py-5 text-center text-[11px] text-muted-foreground">
+                Aún no hay leads respaldados por fuentes.
+              </p>
+            ) : null}
+          </div>
+
+          <h3 className="mt-5 text-xs font-semibold">Bandeja priorizada</h3>
+          <div className="mt-2 divide-y divide-border/45 border-y border-border/45">
+            {operations.inboxItems.slice(0, 6).map((item) => (
+              <div key={item.id} className="flex items-start gap-3 py-3">
+                <span className={cn(
+                  "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
+                  item.urgency === "critical" || item.urgency === "high" ? "bg-amber-500" : "bg-zinc-300",
+                )} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[11px] font-semibold">{item.subject || "Sin asunto"}</span>
+                  <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
+                    {item.senderName || item.senderEmail || "Remitente"} · {item.category} · urgencia {item.urgency} · {item.status}
+                  </span>
+                </span>
+              </div>
+            ))}
+            {operations.inboxItems.length === 0 ? (
+              <p className="py-5 text-center text-[11px] text-muted-foreground">Bandeja aún no revisada.</p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </section>
   )
 }
 

@@ -85,6 +85,45 @@ describe('timelineReducer', () => {
     expect((s.items[3] as any).blockedCapabilities).toEqual(['gen'])
   })
 
+  it('renders durable file patches and the executive close-out in sequence', () => {
+    const s = apply([
+      ev('file_patch', { path: 'src/App.tsx', patch: '@@ -1 +1 @@', truncated: false }),
+      ev('executive_summary', {
+        status: 'passed',
+        department: 'CEO Office',
+        title: 'Mejorar producto',
+        result: 'Trabajo completado.',
+        impact: '1 archivo cambiado.',
+        risks: [],
+        nextActions: ['Continuar.'],
+        evidence: ['type_check: ok'],
+        audioText: 'Trabajo completado.',
+        diffstat: { filesChanged: 1, additions: 2, deletions: 1 },
+      }),
+    ])
+    expect(s.items.map((item) => item.kind)).toEqual(['file_patch', 'executive_summary'])
+    expect((s.items[0] as any).path).toBe('src/App.tsx')
+    expect((s.items[1] as any).summary.audioText).toBe('Trabajo completado.')
+  })
+
+  it('keeps only the latest bounded patch per file', () => {
+    const events: CodexEventEnvelope[] = [
+      { seq: 100, type: 'file_patch', data: { path: 'src/App.tsx', patch: 'old' } },
+      { seq: 101, type: 'file_patch', data: { path: 'src/App.tsx', patch: 'latest' } },
+      ...Array.from({ length: 14 }, (_value, index) => ({
+        seq: 102 + index,
+        type: 'file_patch',
+        data: { path: `src/file-${index}.ts`, patch: `patch-${index}` },
+      })),
+    ]
+    const s = reduceEvents(events)
+    const patches = s.items.filter((item) => item.kind === 'file_patch') as Array<any>
+    expect(patches).toHaveLength(12)
+    expect(patches.some((item) => item.patch === 'old')).toBe(false)
+    expect(patches.some((item) => item.path === 'src/App.tsx')).toBe(false)
+    expect(patches.at(-1)?.path).toBe('src/file-13.ts')
+  })
+
   it('heartbeat is ignored (wire-only)', () => {
     const s = apply([ev('heartbeat', {}), ev('narrative_delta', { text: 'x' })])
     expect(s.items).toHaveLength(1)
@@ -100,7 +139,7 @@ describe('timelineReducer', () => {
   })
 
   it('covers all catalog event types without throwing', () => {
-    const types = ['run_status', 'plan_proposed', 'plan_updated', 'reasoning_start', 'reasoning_delta', 'reasoning_end', 'action_start', 'action_end', 'narrative_delta', 'checkpoint_created', 'run_summary', 'action_required', 'heartbeat']
+    const types = ['run_status', 'plan_proposed', 'plan_updated', 'reasoning_start', 'reasoning_delta', 'reasoning_end', 'action_start', 'action_end', 'narrative_delta', 'file_patch', 'checkpoint_created', 'run_summary', 'executive_summary', 'action_required', 'heartbeat']
     let s = initialTimelineState()
     for (const t of types) s = timelineReducer(s, { type: t, seq: seq++, data: { status: 'done', blockId: 'b', actionId: 'a', groupId: 'g', kind: 'terminal', status_: 'done', architecture: 'x', pages: [], components: [], tasks: [], metrics: {}, patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: [], commitSha: 'abc1234', checkpointId: 'c', text: 'x' } })
     expect(s).toBeTruthy()

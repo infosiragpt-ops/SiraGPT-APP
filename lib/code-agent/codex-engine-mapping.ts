@@ -36,8 +36,12 @@ export interface CodexEngineFoldState {
    * Claude Code-style live action feed: every action_start appends a running
    * entry; its action_end flips it to ok/error. Keyed by actionId (fallback:
    * kind+label) so replay/reconnect can't duplicate entries.
-   */
+  */
   liveActions: CodexLiveAction[]
+  /** Latest bounded git patches emitted after successful writes. */
+  codeChanges: CodexCodeChange[]
+  /** Structured close-out produced by the backend after quality gates. */
+  executiveSummary: CodexExecutiveSummary | null
 }
 
 export interface CodexLiveAction {
@@ -46,6 +50,25 @@ export interface CodexLiveAction {
   /** Human line: the file path, the command, or the action title. */
   label: string
   status: "running" | "ok" | "error"
+}
+
+export interface CodexCodeChange {
+  path: string
+  patch: string
+  truncated: boolean
+}
+
+export interface CodexExecutiveSummary {
+  status: "passed" | "failed"
+  department: string
+  title: string
+  result: string
+  impact: string
+  risks: string[]
+  nextActions: string[]
+  evidence: string[]
+  audioText: string
+  checkpointSha?: string | null
 }
 
 export function initialCodexEngineFold(): CodexEngineFoldState {
@@ -60,6 +83,8 @@ export function initialCodexEngineFold(): CodexEngineFoldState {
     seen: new Set<number>(),
     reasoning: {},
     liveActions: [],
+    codeChanges: [],
+    executiveSummary: null,
   }
 }
 
@@ -105,6 +130,7 @@ export function foldCodexEvent(
     seen: new Set(state.seen),
     reasoning: { ...state.reasoning },
     liveActions: state.liveActions.slice(),
+    codeChanges: state.codeChanges.slice(),
   }
 
   switch (event.type) {
@@ -169,6 +195,26 @@ export function foldCodexEvent(
 
     case "run_summary": {
       s.summaryMetrics = (data.metrics as Record<string, unknown>) || {}
+      s.phase = "verify"
+      break
+    }
+
+    case "file_patch": {
+      const change = {
+        path: String(data.path || ""),
+        patch: String(data.patch || ""),
+        truncated: data.truncated === true,
+      }
+      const existing = s.codeChanges.findIndex((item) => item.path === change.path)
+      if (existing >= 0) s.codeChanges.splice(existing, 1)
+      s.codeChanges.push(change)
+      if (s.codeChanges.length > 8) s.codeChanges.splice(0, s.codeChanges.length - 8)
+      s.phase = "apply"
+      break
+    }
+
+    case "executive_summary": {
+      s.executiveSummary = data as CodexExecutiveSummary
       s.phase = "verify"
       break
     }
@@ -275,4 +321,29 @@ export function codexLiveActionsMarkdown(state: CodexEngineFoldState, max = 8): 
   })
   const hidden = state.liveActions.length - recent.length
   return `\n\n${hidden > 0 ? `_+${hidden} acciones previas_\n` : ""}${lines.join("\n")}`
+}
+
+export function codexLivePatchMarkdown(state: CodexEngineFoldState, cap = 6000): string {
+  if (isCodexTerminalStatus(state.status) || state.codeChanges.length === 0) return ""
+  const latest = state.codeChanges[state.codeChanges.length - 1]
+  const patch = latest.patch.slice(0, Math.max(500, cap))
+  return `\n\n**Cambios en vivo · \`${latest.path}\`**\n\n\`\`\`diff\n${patch}\n\`\`\``
+}
+
+export function codexExecutiveSummaryMarkdown(state: CodexEngineFoldState): string {
+  const summary = state.executiveSummary
+  if (!summary) return ""
+  const sections = [
+    "## Resumen ejecutivo",
+    `**${summary.title}**`,
+    summary.result,
+    `**Impacto:** ${summary.impact}`,
+  ]
+  if (summary.risks?.length) {
+    sections.push(`**Riesgos:**\n${summary.risks.map((item) => `- ${item}`).join("\n")}`)
+  }
+  if (summary.nextActions?.length) {
+    sections.push(`**Siguiente:**\n${summary.nextActions.map((item) => `- ${item}`).join("\n")}`)
+  }
+  return `\n\n${sections.join("\n\n")}`
 }

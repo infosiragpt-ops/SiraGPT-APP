@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const ledger = require('../src/services/codex/progress-ledger');
+const companyProfile = require('../src/services/codex/company-operating-profile');
 
 test('proactive prompt round-trips structured department and acceptance metadata', () => {
   const prompt = ledger.formatProactivePrompt({
@@ -13,6 +14,7 @@ test('proactive prompt round-trips structured department and acceptance metadata
     acceptanceCriteria: ['#root contiene datos', 'No hay errores 404'],
     objectiveIds: ['okr-preview'],
     qaCycle: true,
+    swarm: [{ agent: 'qa_reviewer', task: 'Revisa el diff acumulado' }],
   });
   assert.deepEqual(ledger.taskMetaFromPrompt(prompt), {
     department: 'Producto',
@@ -21,6 +23,7 @@ test('proactive prompt round-trips structured department and acceptance metadata
     acceptanceCriteria: ['#root contiene datos', 'No hay errores 404'],
     objectiveIds: ['okr-preview'],
     qaCycle: true,
+    swarm: [{ agent: 'qa_reviewer', task: 'Revisa el diff acumulado' }],
   });
 });
 
@@ -99,4 +102,46 @@ test('CEO objective merge keeps stable ids and applies the new priority', () => 
   assert.equal(merged[0].priority, 1);
   assert.equal(merged[0].target, '50%');
   assert.equal(merged[0].updatedAt, '2026-07-26T12:00:00.000Z');
+});
+
+test('concurrent brief mutations preserve both company profile and ledger', async () => {
+  const state = {
+    project: {
+      id: 'p-concurrent',
+      userId: 'u-concurrent',
+      name: 'SiraGPT',
+      brief: { goal: 'Operar la empresa' },
+    },
+  };
+  const prisma = {
+    codexProject: {
+      findUnique: async () => structuredClone(state.project),
+      findFirst: async () => structuredClone(state.project),
+      update: async ({ data }) => {
+        await new Promise((resolve) => setImmediate(resolve));
+        state.project = { ...state.project, ...structuredClone(data) };
+        return structuredClone(state.project);
+      },
+    },
+  };
+  await Promise.all([
+    companyProfile.writeCompanyProfile({
+      prisma,
+      project: state.project,
+      patch: { mission: 'Construir software empresarial autónomo.' },
+    }),
+    ledger.appendLedgerEntry({
+      prisma,
+      project: state.project,
+      entry: {
+        runId: 'run-concurrent',
+        department: 'CEO Office',
+        outcome: 'passed',
+        learnings: ['El objetivo quedó verificado.'],
+      },
+    }),
+  ]);
+  assert.equal(state.project.brief.goal, 'Operar la empresa');
+  assert.equal(state.project.brief.companyProfile.mission, 'Construir software empresarial autónomo.');
+  assert.equal(state.project.brief.ledger[0].runId, 'run-concurrent');
 });

@@ -138,6 +138,8 @@ async function createRun({
   autoExecute = false,
   db = defaultPrisma,
   queue = runQueue,
+  eventStore = eventStoreDefault,
+  clock = () => new Date(),
 }) {
   const prisma = requireDb(db);
   if (!MODES.includes(mode)) throw new RunServiceError('invalid_mode', 'mode must be plan or build', 400);
@@ -189,6 +191,24 @@ async function createRun({
       // Leave the row `queued`; boot-recovery re-enqueues stuck rows. Surface a
       // soft signal but don't fail the create — the run exists and is recoverable.
       if (process.env.NODE_ENV !== 'test') console.warn('[codex run-service] enqueue failed:', err?.message || err);
+    }
+  }
+
+  // A plan is consumed once its build continuation exists. Keeping the plan
+  // in waiting_approval made proactive ticks rediscover it forever and return
+  // the same idempotent build instead of progressing to the next objective.
+  if (mode === 'build' && planRunId) {
+    const consumed = await prisma.codexRun.updateMany({
+      where: { id: planRunId, projectId, userId, mode: 'plan', status: 'waiting_approval' },
+      data: { status: 'done', finishedAt: clock() },
+    });
+    if (consumed?.count > 0) {
+      await eventStore.appendEvent(
+        planRunId,
+        'run_status',
+        { status: 'done', continuationRunId: row.id },
+        { prisma },
+      ).catch(() => {});
     }
   }
 

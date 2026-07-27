@@ -141,6 +141,9 @@ model User {
   goalRuns                GoalRun[]
   codexProjects           CodexProject[]
   codexRuns               CodexRun[]
+  codexCompanyLeads       CodexCompanyLead[]
+  codexCompanyInboxItems  CodexCompanyInboxItem[]
+  codexExternalActions    CodexExternalAction[]
   deployments             Deployment[]
   generatedArtifacts      GeneratedArtifact[]
   documentAnalyses        DocumentAnalysis[]
@@ -2632,10 +2635,114 @@ model CodexProject {
   checkpoints CodexCheckpoint[]
   sessionStates CodexSessionState[]
   database    CodexProjectDatabase?
+  companyLeads CodexCompanyLead[]
+  companyInboxItems CodexCompanyInboxItem[]
+  externalActions CodexExternalAction[]
+  proactiveLease CodexProactiveLease?
 
   @@index([userId, updatedAt])
   @@index([userId, deleteAfter])
   @@map("codex_projects")
+}
+
+// Tenant-isolated operating records for CEO Office. These tables store
+// evidence and approval state, never OAuth credentials or provider secrets.
+model CodexCompanyLead {
+  id              String   @id @default(cuid())
+  projectId       String
+  userId          String
+  fingerprint     String
+  companyName     String
+  contactName     String?
+  domain          String?
+  websiteUrl      String?
+  email           String?
+  sourceUrl       String
+  sourceTitle     String?
+  evidence        String?  @db.Text
+  status          String   @default("discovered") // discovered | qualified | review | contacted | replied | won | lost | do_not_contact
+  score           Int      @default(0)
+  tags            Json?
+  lastContactedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, fingerprint])
+  @@index([userId, projectId, status, updatedAt])
+  @@index([projectId, score])
+  @@map("codex_company_leads")
+}
+
+model CodexCompanyInboxItem {
+  id              String    @id @default(cuid())
+  projectId       String
+  userId          String
+  provider        String    @default("gmail")
+  externalId      String
+  threadId        String?
+  senderEmail     String?
+  senderName      String?
+  subject         String?
+  snippet         String?   @db.Text
+  receivedAt      DateTime?
+  category        String    @default("other") // lead | support | billing | operations | other
+  urgency         String    @default("normal") // low | normal | high | critical
+  status          String    @default("pending_review") // pending_review | drafted | approved | sent | dismissed | error
+  draftBody       String?   @db.Text
+  modelConfidence Float     @default(0)
+  providerDraftId String?
+  sentMessageId   String?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, provider, externalId])
+  @@index([userId, projectId, status, updatedAt])
+  @@index([projectId, category, urgency])
+  @@map("codex_company_inbox_items")
+}
+
+model CodexExternalAction {
+  id             String    @id @default(cuid())
+  projectId      String
+  userId         String
+  kind           String // email_reply | lead_outreach | social_reply
+  targetRef      String
+  idempotencyKey String    @unique
+  status         String    @default("pending_review") // pending_review | approved | executing | completed | rejected | error
+  payload        Json
+  result         Json?
+  approvedAt     DateTime?
+  executedAt     DateTime?
+  error          String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, projectId, status, createdAt])
+  @@index([projectId, kind, createdAt])
+  @@map("codex_external_actions")
+}
+
+model CodexProactiveLease {
+  projectId String   @id
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("codex_proactive_leases")
 }
 
 // Control-plane persistence for Codex transcripts and resumable loop

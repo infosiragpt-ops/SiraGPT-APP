@@ -26,6 +26,20 @@ export interface ActionItem {
   linesRead?: number
 }
 
+export interface ExecutiveSummary {
+  status: 'passed' | 'failed'
+  department: string
+  title: string
+  result: string
+  impact: string
+  risks: string[]
+  nextActions: string[]
+  evidence: string[]
+  audioText: string
+  checkpointSha?: string | null
+  diffstat: { filesChanged?: number; additions?: number; deletions?: number }
+}
+
 export type TimelineItem =
   | { kind: 'narrative'; id: string; text: string }
   | { kind: 'reasoning'; id: string; label: string; text: string; durationMs?: number; done: boolean }
@@ -33,6 +47,8 @@ export type TimelineItem =
   | { kind: 'plan'; id: string; architecture: string; pages: any[]; components: any[]; tasks: any[]; approved: boolean }
   | { kind: 'checkpoint'; id: string; checkpointId: string; commitSha: string; title: string; createdAt?: string }
   | { kind: 'summary'; id: string; metrics: any }
+  | { kind: 'file_patch'; id: string; path: string; patch: string; truncated: boolean }
+  | { kind: 'executive_summary'; id: string; summary: ExecutiveSummary }
   | { kind: 'action_required'; id: string; patternId: string; title: string; rawError: string; blockedCapabilities: string[]; remediationUrl?: string }
   | { kind: 'tool_permission'; id: string; permissionId: string; toolName: string; humanDescription: string; argsPreview?: Record<string, unknown>; decision?: 'allow' | 'deny' }
 
@@ -192,6 +208,30 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
 
     case 'run_summary':
       items = [...items, { kind: 'summary', id: synthId('sum', seq), metrics: data.metrics || {} }]
+      break
+
+    case 'file_patch':
+      items = items.filter((item) => item.kind !== 'file_patch' || item.path !== (data.path || ''))
+      items = [...items, {
+        kind: 'file_patch',
+        id: synthId('patch', seq),
+        path: data.path || '',
+        patch: data.patch || '',
+        truncated: data.truncated === true,
+      }]
+      {
+        const patchIndexes = items
+          .map((item, index) => item.kind === 'file_patch' ? index : -1)
+          .filter((index) => index >= 0)
+        if (patchIndexes.length > 12) {
+          const remove = new Set(patchIndexes.slice(0, patchIndexes.length - 12))
+          items = items.filter((_item, index) => !remove.has(index))
+        }
+      }
+      break
+
+    case 'executive_summary':
+      items = [...items, { kind: 'executive_summary', id: synthId('exec', seq), summary: data }]
       break
 
     case 'action_required':

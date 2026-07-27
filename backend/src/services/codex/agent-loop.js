@@ -25,11 +25,14 @@ const checkpointService = require('./checkpoint-service');
 const runMetrics = require('./run-metrics');
 const progressLedger = require('./progress-ledger');
 const proactiveMetrics = require('./proactive-metrics');
+const proactiveSwarm = require('./proactive-swarm');
 const toolScheduler = require('./tool-scheduler');
 const projectHooks = require('./project-hooks');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
 const { createSandboxClient } = require('./sandbox-provider');
 const { localCliCommand } = require('./local-cli');
+const { scanBuffer } = require('../security/secret-scanner');
+const { redactString } = require('../../utils/secret-redactor');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -57,6 +60,14 @@ const CONTEXT_SUMMARY_CAP = 12_000;
 const CONTEXT_SNAPSHOT_MESSAGE_CAP = 8_000;
 const STREAM_PROTOCOL_GUARD_CHARS = 20;
 const REASONING_CONTEXT_CAP = 8_000;
+const LIVE_FILE_PATCH_CAP = 16_000;
+const BLOCKED_LIVE_PATCH_PATHS = [
+  /(^|\/)\.env(?:\.|$)/i,
+  /(^|\/)(?:credentials|secrets?|tokens?)(?:\/|\.|$)/i,
+  /(^|\/)(?:id_rsa|id_ed25519|authorized_keys|known_hosts)(?:\.|$)/i,
+  /(^|\/)\.(?:npmrc|pypirc|netrc)$/i,
+  /\.(?:pem|key|p12|pfx|jks|keystore)$/i,
+];
 
 function readPosInt(raw, fallback) {
   const n = Number.parseInt(raw, 10);
@@ -1259,6 +1270,83 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
   let actionCounter = 0;
   let groupCounter = 0;
+  if (proactiveMeta?.swarm?.length) {
+    const swarmGroupId = `g${++groupCounter}`;
+    const swarm = await proactiveSwarm.runProactiveSwarm({
+      meta: proactiveMeta,
+      task: sourcePrompt,
+      context: [
+        progressContext,
+        projectNotes ? `Notas del proyecto:\n${projectNotes}` : '',
+      ].filter(Boolean).join('\n\n').slice(0, 12_000),
+      deps: {
+        runner,
+        project: projectId,
+        webSearch,
+        llmTurn,
+        env,
+        signal,
+        tier: run?.tier || null,
+        model: run?.model || null,
+        projectSettings,
+        onUsage: (usage) => {
+          if (usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(usage);
+        },
+        emitAgent: async ({ agent, task }) => {
+          const actionId = `a${++actionCounter}`;
+          await eventStore.appendEvent(run.id, 'action_start', {
+            actionId,
+            kind: 'agent',
+            command: `${agent}: ${String(task || '').slice(0, 220)}`,
+            groupId: swarmGroupId,
+          }, { prisma }).catch(() => {});
+          const startedAt = clock().getTime();
+          return {
+            end: async ({ status = 'done', outputSummary = '' } = {}) => {
+              const durationMs = Math.max(0, clock().getTime() - startedAt);
+              await eventStore.appendEvent(run.id, 'action_end', {
+                actionId,
+                status: status === 'error' ? 'error' : 'done',
+                outputSummary,
+                durationMs,
+              }, { prisma }).catch(() => {});
+              if (metrics?.recordAction) metrics.recordAction('agent', durationMs);
+            },
+          };
+        },
+        emitAction: async ({ kind, command, path } = {}) => {
+          const actionId = `a${++actionCounter}`;
+          const actionKind = kind || 'terminal';
+          await eventStore.appendEvent(run.id, 'action_start', {
+            actionId,
+            kind: actionKind,
+            command: command || undefined,
+            path: path || undefined,
+            groupId: swarmGroupId,
+          }, { prisma }).catch(() => {});
+          const startedAt = clock().getTime();
+          return {
+            end: async ({ status = 'done', outputSummary = '' } = {}) => {
+              const durationMs = Math.max(0, clock().getTime() - startedAt);
+              await eventStore.appendEvent(run.id, 'action_end', {
+                actionId,
+                status: status === 'error' ? 'error' : 'done',
+                outputSummary,
+                durationMs,
+              }, { prisma }).catch(() => {});
+              if (metrics?.recordAction) metrics.recordAction(actionKind, durationMs);
+            },
+          };
+        },
+      },
+    });
+    if (swarm.text) {
+      messages.push({ role: 'user', content: swarm.text });
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `Especialistas completados: ${swarm.completed}/${swarm.requested}. El agente principal ya incorporó sus informes.`,
+      }, { prisma }).catch(() => {});
+    }
+  }
   let aborted = false;
   let verifyRounds = Math.max(0, Number(resumeSnapshot?.state?.verifyRounds) || 0);
   // Anti-thrash state. A model can loop rewriting one file and burn the budget
@@ -1691,6 +1779,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (Number.isFinite(result.linesRead)) endData.linesRead = result.linesRead;
       await eventStore.appendEvent(run.id, 'action_end', endData, { prisma });
 
+      if (!result.isError && tool.kind === 'file_write' && path) {
+        const livePatch = await workspaceFilePatch({
+          runner,
+          projectId: project?.id || run.projectId,
+          path,
+        });
+        if (livePatch) {
+          await eventStore.appendEvent(run.id, 'file_patch', livePatch, { prisma }).catch(() => {});
+        }
+      }
+
       try {
         await actionStore.recordAction({ runId: run.id, kind: tool.kind, command, path, status, outputSummary, durationMs, linesRead: result.linesRead, groupId, prisma });
       } catch { /* persistence best-effort; the event timeline is the source of truth */ }
@@ -1952,6 +2051,128 @@ async function workspaceDiffstat({ runner, projectId }) {
     diffstat.filesChanged = String(status?.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean).length;
   } catch { /* best-effort evidence */ }
   return diffstat;
+}
+
+async function workspaceFilePatch({ runner, projectId, path, maxChars = LIVE_FILE_PATCH_CAP }) {
+  const normalized = require('./file-state').normalizeWorkspacePath(path);
+  if (
+    !normalized
+    || BLOCKED_LIVE_PATCH_PATHS.some((pattern) => pattern.test(normalized))
+    || typeof runner?.exec !== 'function'
+  ) return null;
+  let patch = '';
+  try {
+    const diff = await runner.exec(
+      projectId,
+      ['git', 'diff', '--no-ext-diff', '--unified=3', '--', normalized],
+      { timeoutMs: 15_000 },
+    );
+    patch = String(diff?.stdout || '');
+    if (!patch) {
+      const untracked = await runner.exec(
+        projectId,
+        ['git', 'ls-files', '--others', '--exclude-standard', '--', normalized],
+        { timeoutMs: 15_000 },
+      );
+      const isUntracked = String(untracked?.stdout || '')
+        .split('\n')
+        .map((value) => value.trim())
+        .includes(normalized);
+      if (isUntracked && typeof runner?.readFile === 'function') {
+        const file = await runner.readFile(projectId, normalized);
+        const content = String(file?.content ?? '');
+        const lines = content.split('\n');
+        patch = [
+          `diff --git a/${normalized} b/${normalized}`,
+          'new file mode 100644',
+          '--- /dev/null',
+          `+++ b/${normalized}`,
+          `@@ -0,0 +1,${lines.length} @@`,
+          lines.map((line) => `+${line}`).join('\n'),
+        ].join('\n');
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (!patch) return null;
+  patch = redactString(patch);
+  if (!scanBuffer(patch, { maxFindings: 1 }).ok) return null;
+  const cap = Math.max(1000, Number(maxChars) || LIVE_FILE_PATCH_CAP);
+  const truncated = patch.length > cap;
+  return {
+    path: normalized,
+    patch: truncated ? `${patch.slice(0, cap)}\n…[diff recortado]` : patch,
+    truncated,
+  };
+}
+
+function conciseTaskTitle(value) {
+  const text = String(value || '')
+    .replace(/\[SIRA_PROACTIVE_TASK\][\s\S]*?\[\/SIRA_PROACTIVE_TASK\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (text || 'Trabajo del agente').slice(0, 180);
+}
+
+function buildExecutiveSummary({
+  outcome,
+  proactiveMeta,
+  sourcePrompt,
+  checkpoint,
+  diffstat,
+  projectGateVerification,
+  verification,
+  branchFinalization,
+  checkpointError,
+}) {
+  const passed = outcome === 'passed';
+  const stats = {
+    filesChanged: Number(diffstat?.filesChanged) || 0,
+    additions: Number(diffstat?.additions) || 0,
+    deletions: Number(diffstat?.deletions) || 0,
+  };
+  const department = String(proactiveMeta?.department || 'interactive');
+  const title = conciseTaskTitle(proactiveMeta?.title || sourcePrompt);
+  const result = passed
+    ? 'Trabajo completado y cerrado con los controles de calidad disponibles.'
+    : 'El trabajo no se promovió porque uno o más controles obligatorios fallaron.';
+  const impact = `${stats.filesChanged} archivo(s) cambiado(s), ${stats.additions} adición(es) y ${stats.deletions} eliminación(es).`;
+  const evidence = [];
+  if (projectGateVerification) evidence.push(`Gates del proyecto: ${gateEvidence(projectGateVerification)}`);
+  if (verification) evidence.push(`Verificación proactiva: ${gateEvidence(verification)}`);
+  if (checkpoint?.commitSha) evidence.push(`Checkpoint Git: ${checkpoint.commitSha}`);
+  if (branchFinalization?.pullRequest?.url) evidence.push(`Pull request: ${branchFinalization.pullRequest.url}`);
+  if (!evidence.length) evidence.push('Ejecución registrada en el timeline durable del proyecto.');
+  const risks = [];
+  if (!passed) {
+    const blocked = [
+      ...(projectGateVerification?.blockingGates || []),
+      ...(verification?.blockingGates || []),
+    ].filter(Boolean);
+    risks.push(blocked.length ? `Gates pendientes: ${blocked.join(', ')}.` : 'Quedó una validación obligatoria sin resolver.');
+    if (checkpointError) risks.push(`Checkpoint pendiente: ${String(checkpointError).slice(0, 240)}`);
+    if (branchFinalization && branchFinalization.ok !== true) {
+      risks.push(`Integración Git pendiente: ${branchFinalization?.merge?.code || branchFinalization?.status || 'merge_failed'}.`);
+    }
+  }
+  const nextActions = passed
+    ? ['CEO Office puede continuar con el siguiente objetivo priorizado usando este resultado y el ledger.']
+    : ['El debugger debe corregir la evidencia fallida y volver a ejecutar los gates antes de promover cambios.'];
+  const riskAudio = risks.length ? ` Riesgo pendiente: ${risks[0]}` : '';
+  return {
+    status: passed ? 'passed' : 'failed',
+    department,
+    title,
+    result,
+    impact,
+    risks,
+    nextActions,
+    evidence,
+    audioText: `${result} ${impact}${riskAudio}`.slice(0, 1800),
+    checkpointSha: checkpoint?.commitSha || null,
+    diffstat: stats,
+  };
 }
 
 async function runDebuggerRepair({
@@ -2330,6 +2551,21 @@ async function closeBuild({
     if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] progress ledger append failed:', err?.message || err);
   });
 
+  const executiveSummary = buildExecutiveSummary({
+    outcome: finalOutcome,
+    proactiveMeta,
+    sourcePrompt: resolvedSourcePrompt,
+    checkpoint,
+    diffstat,
+    projectGateVerification,
+    verification,
+    branchFinalization,
+    checkpointError,
+  });
+  await eventStore.appendEvent(run.id, 'executive_summary', executiveSummary, { prisma }).catch((err) => {
+    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] executive summary append failed:', err?.message || err);
+  });
+
   if (proactiveMeta) {
     if (!proactivePassed || !projectGatesPassed) {
       await eventStore.appendEvent(run.id, 'narrative_delta', {
@@ -2435,6 +2671,8 @@ module.exports = {
   ensureAppsVitePreviewable,
   appsFallbackFiles,
   packageLooksLikeNext,
+  workspaceFilePatch,
+  buildExecutiveSummary,
   isAppsPrompt,
   compactMessages,
   boundedArgsPreview,

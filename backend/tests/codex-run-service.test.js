@@ -133,9 +133,27 @@ test('createRun (build) requires a valid approvable planRunId', async () => {
 
 test('createRun (build) succeeds with an approvable plan run', async () => {
   const db = makeDb({ projects: [PROJECT], runs: [{ id: 'plan-ok', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' }] });
-  const run = await createRun({ userId: 'u1', projectId: 'p1', mode: 'build', planRunId: 'plan-ok', db, queue: fakeQueue() });
+  const events = [];
+  const finishedAt = new Date('2026-07-27T12:00:00.000Z');
+  const run = await createRun({
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'build',
+    planRunId: 'plan-ok',
+    db,
+    queue: fakeQueue(),
+    eventStore: fakeEventStore(events),
+    clock: () => finishedAt,
+  });
   assert.equal(run.mode, 'build');
   assert.equal(run.planRunId, 'plan-ok');
+  assert.equal(db._runs.find((row) => row.id === 'plan-ok').status, 'done');
+  assert.equal(db._runs.find((row) => row.id === 'plan-ok').finishedAt, finishedAt);
+  assert.deepEqual(events, [{
+    runId: 'plan-ok',
+    type: 'run_status',
+    data: { status: 'done', continuationRunId: run.id },
+  }]);
 });
 
 test('build approval is idempotent for the same plan run', async () => {
@@ -154,10 +172,35 @@ test('build approval is idempotent for the same plan run', async () => {
     planRunId: 'plan-ok',
     db,
     queue: fakeQueue(calls),
+    eventStore: fakeEventStore(),
   });
   assert.equal(run.id, 'build-existing');
   assert.equal(calls.length, 0, 'an existing continuation must not be enqueued twice');
   assert.equal(db._runs.filter((row) => row.mode === 'build').length, 1);
+  assert.equal(db._runs.find((row) => row.id === 'plan-ok').status, 'done');
+});
+
+test('repeating a build approval does not emit another plan terminal event', async () => {
+  const calls = [];
+  const events = [];
+  const db = makeDb({
+    projects: [PROJECT],
+    runs: [
+      { id: 'plan-ok', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'done' },
+      { id: 'build-existing', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued', planRunId: 'plan-ok' },
+    ],
+  });
+  const run = await createRun({
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'build',
+    planRunId: 'plan-ok',
+    db,
+    queue: fakeQueue(calls),
+    eventStore: fakeEventStore(events),
+  });
+  assert.equal(run.id, 'build-existing');
+  assert.equal(events.length, 0);
 });
 
 test('createRun 409s when a run is already active for the project', async () => {

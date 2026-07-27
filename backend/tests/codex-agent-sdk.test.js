@@ -31,11 +31,23 @@ function scriptedLlm(steps) {
   return fn;
 }
 
-test('registry lists the eight specialists with tools and budgets', () => {
+test('registry lists coding and company specialists with tools and budgets', () => {
   const agents = sdk.listSubagents();
   assert.deepEqual(
     agents.map((a) => a.name).sort(),
-    ['backend_engineer', 'db_architect', 'debugger', 'enterprise_analyst', 'explorer', 'frontend_builder', 'planner', 'qa_reviewer'],
+    [
+      'backend_engineer',
+      'customer_success',
+      'db_architect',
+      'debugger',
+      'enterprise_analyst',
+      'explorer',
+      'frontend_builder',
+      'market_researcher',
+      'planner',
+      'qa_reviewer',
+      'sales_strategist',
+    ],
   );
   for (const a of agents) {
     assert.ok(a.description.length > 20);

@@ -227,6 +227,8 @@ test('company profile routes return grounded readiness and preserve the owned pr
     projectUpdate: codexDb.codexProject.update,
     socialFindMany: codexDb.socialConnection.findMany,
     userFindUnique: codexDb.user.findUnique,
+    transaction: codexDb.$transaction,
+    queryRawUnsafe: codexDb.$queryRawUnsafe,
   };
   let project = {
     id: 'p1',
@@ -248,6 +250,8 @@ test('company profile routes return grounded readiness and preserve the owned pr
   };
   codexDb.socialConnection.findMany = async () => [{ platform: 'linkedin', accountName: '@siragpt' }];
   codexDb.user.findUnique = async () => ({ gmailTokens: null });
+  codexDb.$transaction = async (operation) => operation(codexDb);
+  codexDb.$queryRawUnsafe = async () => [{ locked: 1 }];
 
   try {
     const initial = await request(buildApp()).get('/api/codex/projects/p1/company-profile');
@@ -271,12 +275,109 @@ test('company profile routes return grounded readiness and preserve the owned pr
     assert.equal(updated.body.company.profile.autonomy.emailReplies, 'review');
     assert.equal(project.brief.proactive.enabled, false);
     assert.match(project.brief.companyProfile.mission, /mejor agente de código/);
+
+    const blockedAuto = await request(buildApp())
+      .patch('/api/codex/projects/p1/company-profile')
+      .send({ profile: { autonomy: { leadOutreach: 'auto' } } });
+    assert.equal(blockedAuto.status, 409);
+    assert.equal(blockedAuto.body.error, 'company_auto_confirmation_required');
+
+    const confirmedAuto = await request(buildApp())
+      .patch('/api/codex/projects/p1/company-profile')
+      .send({ profile: { autonomy: { leadOutreach: 'auto' } }, confirmAuto: true });
+    assert.equal(confirmedAuto.status, 200);
+    assert.equal(confirmedAuto.body.company.profile.autonomy.leadOutreach, 'auto');
   } finally {
     codexDb.codexProject.findFirst = originals.projectFindFirst;
     codexDb.codexProject.findUnique = originals.projectFindUnique;
     codexDb.codexProject.update = originals.projectUpdate;
     codexDb.socialConnection.findMany = originals.socialFindMany;
     codexDb.user.findUnique = originals.userFindUnique;
+    codexDb.$transaction = originals.transaction;
+    codexDb.$queryRawUnsafe = originals.queryRawUnsafe;
+  }
+});
+
+test('company operations routes scope every record to the owned user and project', async () => {
+  const originals = {
+    projectFindFirst: codexDb.codexProject.findFirst,
+    leadFindMany: codexDb.codexCompanyLead.findMany,
+    leadCount: codexDb.codexCompanyLead.count,
+    leadUpdateMany: codexDb.codexCompanyLead.updateMany,
+    leadFindFirst: codexDb.codexCompanyLead.findFirst,
+    inboxFindMany: codexDb.codexCompanyInboxItem.findMany,
+    inboxCount: codexDb.codexCompanyInboxItem.count,
+    actionFindMany: codexDb.codexExternalAction.findMany,
+    actionCount: codexDb.codexExternalAction.count,
+  };
+  const scopes = [];
+  const project = { id: 'p1', userId: 'u-1', name: 'SiraGPT.COM', brief: {} };
+  codexDb.codexProject.findFirst = async ({ where }) => (
+    where?.id === project.id && where?.userId === project.userId ? project : null
+  );
+  codexDb.codexCompanyLead.findMany = async ({ where }) => {
+    scopes.push(['lead-list', where]);
+    return [{ id: 'lead-1', projectId: 'p1', userId: 'u-1', companyName: 'Alfa' }];
+  };
+  codexDb.codexCompanyLead.count = async ({ where }) => {
+    scopes.push(['lead-count', where]);
+    return 1;
+  };
+  codexDb.codexCompanyLead.updateMany = async ({ where, data }) => {
+    scopes.push(['lead-update', where, data]);
+    return { count: 1 };
+  };
+  codexDb.codexCompanyLead.findFirst = async ({ where }) => {
+    scopes.push(['lead-read', where]);
+    return { id: 'lead-1', projectId: 'p1', userId: 'u-1', email: 'ventas@alfa.example' };
+  };
+  codexDb.codexCompanyInboxItem.findMany = async ({ where }) => {
+    scopes.push(['inbox-list', where]);
+    return [];
+  };
+  codexDb.codexCompanyInboxItem.count = async ({ where }) => {
+    scopes.push(['inbox-count', where]);
+    return 0;
+  };
+  codexDb.codexExternalAction.findMany = async ({ where }) => {
+    scopes.push(['action-list', where]);
+    return [];
+  };
+  codexDb.codexExternalAction.count = async ({ where }) => {
+    scopes.push(['action-count', where]);
+    return 0;
+  };
+
+  try {
+    const snapshot = await request(buildApp()).get('/api/codex/projects/p1/company-operations');
+    assert.equal(snapshot.status, 200);
+    assert.equal(snapshot.body.operations.counts.leads, 1);
+
+    const updated = await request(buildApp())
+      .patch('/api/codex/projects/p1/company-operations/leads/lead-1')
+      .send({ email: 'ventas@alfa.example' });
+    assert.equal(updated.status, 200);
+
+    const rejectedHeaderInjection = await request(buildApp())
+      .patch('/api/codex/projects/p1/company-operations/leads/lead-1')
+      .send({ email: 'ventas@alfa.example\r\nBcc: victim@example.com' });
+    assert.equal(rejectedHeaderInjection.status, 400);
+    assert.equal(rejectedHeaderInjection.body.error, 'validation_failed');
+
+    for (const [, where] of scopes) {
+      assert.equal(where.projectId, 'p1');
+      assert.equal(where.userId, 'u-1');
+    }
+  } finally {
+    codexDb.codexProject.findFirst = originals.projectFindFirst;
+    codexDb.codexCompanyLead.findMany = originals.leadFindMany;
+    codexDb.codexCompanyLead.count = originals.leadCount;
+    codexDb.codexCompanyLead.updateMany = originals.leadUpdateMany;
+    codexDb.codexCompanyLead.findFirst = originals.leadFindFirst;
+    codexDb.codexCompanyInboxItem.findMany = originals.inboxFindMany;
+    codexDb.codexCompanyInboxItem.count = originals.inboxCount;
+    codexDb.codexExternalAction.findMany = originals.actionFindMany;
+    codexDb.codexExternalAction.count = originals.actionCount;
   }
 });
 

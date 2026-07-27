@@ -79,7 +79,11 @@ test('external missions fail closed without a real connection', () => {
   assert.match(social.nextAction, /Conectar una cuenta OAuth/);
   assert.equal(
     portfolio.missions.find((item) => item.id === 'email-operations').status,
-    'integration_required',
+    'review_required',
+  );
+  assert.equal(
+    portfolio.missions.find((item) => item.id === 'email-operations').executor,
+    'company-operation',
   );
 });
 
@@ -118,6 +122,37 @@ test('connected social account prepares review drafts and auto mode can execute'
   assert.equal(auto.status, 'ready_to_execute');
   assert.equal(auto.autoExecutable, true);
   assert.equal(auto.executor, 'social-publish');
+});
+
+test('grounded sales and email missions route to real company operations', () => {
+  const portfolio = deriveCompanyMissionPortfolio({
+    project: { id: 'p1' },
+    context: context({
+      profile: {
+        offer: 'Agentes de software',
+        targetCustomer: 'Empresas B2B',
+      },
+      readiness: {
+        areas: [
+          { id: 'purpose', status: 'ready', evidence: 'Misión definida.' },
+          { id: 'customer', status: 'ready', evidence: 'Oferta y cliente definidos.' },
+          { id: 'software', status: 'ready', evidence: 'Workspace listo.' },
+          { id: 'website', status: 'ready', evidence: 'Sitio publicado.' },
+          { id: 'social', status: 'needs_attention', evidence: 'Sin OAuth.' },
+          { id: 'email', status: 'ready', evidence: 'Gmail conectado.' },
+          { id: 'sales', status: 'ready', evidence: 'Proceso comercial definido.' },
+        ],
+      },
+    }),
+  });
+
+  const email = portfolio.missions.find((item) => item.id === 'email-operations');
+  const sales = portfolio.missions.find((item) => item.id === 'sales-operations');
+  assert.equal(email.departmentId, 'customer-success');
+  assert.equal(email.executor, 'company-operation');
+  assert.equal(sales.departmentId, 'sales');
+  assert.equal(sales.executor, 'company-operation');
+  assert.match(sales.nextAction, /fuentes públicas/);
 });
 
 test('mission selector is bounded and mission context preserves effect policy', () => {

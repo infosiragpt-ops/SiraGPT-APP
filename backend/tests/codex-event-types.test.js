@@ -23,9 +23,23 @@ const VALID = {
   action_start: { actionId: 'a1', kind: 'terminal', command: 'git status', groupId: 'g1' },
   action_end: { actionId: 'a1', status: 'done', outputSummary: 'clean', durationMs: 120, linesRead: 0 },
   narrative_delta: { text: 'Estoy creando el layout.' },
+  file_patch: { path: 'src/App.tsx', patch: '@@ -1 +1 @@\n-old\n+new', truncated: false },
   budget_status: { allowed: true, reason: 'within_budget', costTodayUsd: 1.2, dailyBudgetUsd: 10, remainingUsd: 8.8 },
   checkpoint_created: { checkpointId: 'c1', commitSha: 'abc1234', title: 'feat: layout', createdAt: '2026-06-13' },
   run_summary: { metrics: { timeWorkedMs: 1000, actionsCount: 3, costSource: 'estimated' } },
+  executive_summary: {
+    status: 'passed',
+    department: 'CEO Office',
+    title: 'Mejorar el producto',
+    result: 'Trabajo completado y verificado.',
+    impact: '2 archivos cambiados, 10 adiciones y 1 eliminación.',
+    risks: [],
+    nextActions: ['Continuar con el siguiente objetivo priorizado.'],
+    evidence: ['type_check: ok', 'checkpoint: abc1234'],
+    audioText: 'Trabajo completado y verificado. Se cambiaron dos archivos.',
+    checkpointSha: 'abc1234',
+    diffstat: { filesChanged: 2, additions: 10, deletions: 1 },
+  },
   action_required: { patternId: 'openrouter_402', title: 'Sin créditos', rawError: '402', blockedCapabilities: ['gen'], remediationUrl: 'https://x' },
   context_snapshot: { summary: 'El proyecto compila.', tailMessages: [{ role: 'user', content: 'continúa' }], state: { step: 3 } },
   tool_permission_required: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64), humanDescription: 'Ejecutar npm test', argsPreview: { command: 'npm test' } },
@@ -87,6 +101,14 @@ test('reasoning_end requires a numeric durationMs', () => {
 test('action_required requires patternId/title/rawError/blockedCapabilities', () => {
   assert.equal(isValidEvent('action_required', { patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: [] }), true);
   assert.equal(isValidEvent('action_required', { patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: 'no' }), false);
+});
+
+test('file_patch and executive_summary reject incomplete evidence', () => {
+  assert.equal(isValidEvent('file_patch', { path: 'src/App.tsx', patch: '' }), true);
+  assert.equal(isValidEvent('file_patch', { path: '', patch: 'x' }), false);
+  assert.equal(isValidEvent('executive_summary', VALID.executive_summary), true);
+  assert.equal(isValidEvent('executive_summary', { ...VALID.executive_summary, status: 'done' }), false);
+  assert.equal(isValidEvent('executive_summary', { ...VALID.executive_summary, audioText: '' }), false);
 });
 
 test('heartbeat is wire-only and not persistable; others are persistable', () => {

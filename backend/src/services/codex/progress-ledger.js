@@ -1,5 +1,7 @@
 'use strict';
 
+const { mutateProjectBrief } = require('./project-brief-store');
+
 /**
  * Structured, bounded memory for the autonomous company. It lives inside the
  * existing CodexProject.brief JSON column so rollout needs no schema migration.
@@ -8,6 +10,7 @@
 const MAX_LEDGER_ENTRIES = 120;
 const MAX_OBJECTIVES = 12;
 const MAX_ACCEPTANCE_CRITERIA = 8;
+const MAX_SWARM_SPECIALISTS = 12;
 const PROACTIVE_META_MARKER = '[SIRA_PROACTIVE_META]';
 
 function asRecord(value) {
@@ -32,6 +35,24 @@ function normalizeAcceptanceCriteria(input) {
   if (!Array.isArray(input)) return [];
   return [...new Set(input.map((value) => boundedText(value, 280)).filter(Boolean))]
     .slice(0, MAX_ACCEPTANCE_CRITERIA);
+}
+
+function normalizeSwarm(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  return input
+    .map((value) => {
+      const source = asRecord(value);
+      const agent = boundedText(source.agent || source.name, 40).toLowerCase();
+      const task = boundedText(source.task || source.goal, 600);
+      if (!/^[a-z][a-z0-9_-]{1,39}$/.test(agent) || !task) return null;
+      const key = `${agent}:${task.toLowerCase()}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return { agent, task };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_SWARM_SPECIALISTS);
 }
 
 function normalizeObjective(value, index = 0) {
@@ -260,6 +281,7 @@ function taskMetaFromPrompt(prompt) {
         : [],
       qaCycle: parsed.qaCycle === true,
       ...(missionId ? { missionId } : {}),
+      swarm: normalizeSwarm(parsed.swarm),
     };
   } catch {
     return null;
@@ -274,6 +296,7 @@ function formatProactivePrompt({
   objectiveIds,
   qaCycle = false,
   missionId = null,
+  swarm = [],
 }) {
   const criteria = normalizeAcceptanceCriteria(acceptanceCriteria);
   const normalizedMissionId = boundedText(missionId, 100) || null;
@@ -285,6 +308,7 @@ function formatProactivePrompt({
     objectiveIds: Array.isArray(objectiveIds) ? objectiveIds.slice(0, MAX_OBJECTIVES) : [],
     qaCycle: Boolean(qaCycle),
     ...(normalizedMissionId ? { missionId: normalizedMissionId } : {}),
+    swarm: normalizeSwarm(swarm),
   };
   const lines = [
     `[PROACTIVO · ${department.name}] ${boundedText(title, 180)}: ${boundedText(goal, 1800)}`,
@@ -307,33 +331,53 @@ async function loadFreshProject(prisma, projectId, fallback = null) {
 
 async function appendLedgerEntry({ prisma, project, entry }) {
   if (!prisma?.codexProject?.update || !project?.id) return null;
-  const fresh = await loadFreshProject(prisma, project.id, project);
-  const brief = asRecord(fresh?.brief);
-  const ledger = normalizeLedger([...(brief.ledger || []), entry]);
-  await prisma.codexProject.update({
-    where: { id: project.id },
-    data: { brief: { ...brief, ledger } },
+  let appended = null;
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief) => {
+      const ledger = normalizeLedger([...(brief.ledger || []), entry]);
+      appended = ledger.at(-1) || null;
+      return { ...brief, ledger };
+    },
   });
-  return ledger.at(-1) || null;
+  return appended;
 }
 
 async function appendLedgerEntryIfMissing({ prisma, project, entry }) {
   if (!prisma?.codexProject?.update || !project?.id) return null;
-  const fresh = await loadFreshProject(prisma, project.id, project);
-  const existing = normalizeLedger(asRecord(fresh?.brief).ledger)
-    .find((item) => item.runId === entry?.runId);
-  if (existing) return existing;
-  return appendLedgerEntry({ prisma, project: fresh || project, entry });
+  let stored = null;
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief) => {
+      const current = normalizeLedger(brief.ledger);
+      const existing = current.find((item) => item.runId === entry?.runId);
+      if (existing) {
+        stored = existing;
+        return brief;
+      }
+      const ledger = normalizeLedger([...current, entry]);
+      stored = ledger.at(-1) || null;
+      return { ...brief, ledger };
+    },
+  });
+  return stored;
 }
 
 async function writeObjectives({ prisma, project, objectives, now = new Date() }) {
   if (!prisma?.codexProject?.update || !project?.id) return [];
-  const fresh = await loadFreshProject(prisma, project.id, project);
-  const brief = asRecord(fresh?.brief);
-  const merged = mergeObjectives(brief.objectives, objectives, now);
-  await prisma.codexProject.update({
-    where: { id: project.id },
-    data: { brief: { ...brief, objectives: merged } },
+  let merged = [];
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief) => {
+      merged = mergeObjectives(brief.objectives, objectives, now);
+      return { ...brief, objectives: merged };
+    },
   });
   return merged;
 }
@@ -342,6 +386,7 @@ module.exports = {
   MAX_LEDGER_ENTRIES,
   MAX_OBJECTIVES,
   MAX_ACCEPTANCE_CRITERIA,
+  MAX_SWARM_SPECIALISTS,
   PROACTIVE_META_MARKER,
   appendLedgerEntry,
   appendLedgerEntryIfMissing,
@@ -350,6 +395,7 @@ module.exports = {
   mergeObjectives,
   normalizeAcceptanceCriteria,
   normalizeLedger,
+  normalizeSwarm,
   normalizeObjectives,
   readProgressContext,
   formatProgressContext,

@@ -43,6 +43,24 @@ function FallbackCard({ item, t }: { item: TimelineItem; t: Translate }) {
     const m = item.metrics || {}
     return <div className="my-2 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-zinc-300">{t("summary.workedFor", { duration: t("summary.actions", { count: m.actionsCount ?? 0 }) })} · +{m.additions ?? 0} −{m.deletions ?? 0}</div>
   }
+  if (item.kind === "file_patch") {
+    return (
+      <details className="my-2 border-l-2 border-emerald-500/40 pl-3 text-xs">
+        <summary className="cursor-pointer font-medium text-zinc-300">Cambio en {item.path}</summary>
+        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-400">{item.patch}</pre>
+      </details>
+    )
+  }
+  if (item.kind === "executive_summary") {
+    const summary = item.summary
+    return (
+      <div className="my-2 border-l-2 border-emerald-500/50 pl-3 text-sm">
+        <div className="font-semibold text-zinc-100">Resumen ejecutivo</div>
+        <div className="mt-1 text-zinc-300">{summary.result}</div>
+        <div className="mt-1 text-xs text-zinc-400">{summary.impact}</div>
+      </div>
+    )
+  }
   if (item.kind === "action_required") {
     return (
       <div className="my-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">

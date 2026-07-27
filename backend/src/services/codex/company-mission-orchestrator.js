@@ -18,6 +18,8 @@ const DEPARTMENT_NAMES = Object.freeze({
   integrations: 'Ecosistema de Integraciones y Conectores',
   'product-engineering': 'Producto e Ingeniería SiraGPT',
   marketing: 'Marketing',
+  sales: 'Ventas',
+  'customer-success': 'Clientes y Soporte',
 });
 
 function asRecord(value) {
@@ -111,7 +113,6 @@ function deriveCompanyMissionPortfolio({
   const sales = areas.get('sales');
   const purposeReady = purpose?.status === 'ready';
   const customerReady = customer?.status === 'ready';
-  const salesReady = sales?.status === 'ready';
 
   const missions = [
     mission({
@@ -244,43 +245,43 @@ function deriveCompanyMissionPortfolio({
     mission({
       id: 'email-operations',
       title: 'Atender el correo del negocio',
-      departmentId: 'integrations',
+      departmentId: 'customer-success',
       priority: 8,
-      status: gmailConnected ? 'integration_required' : 'blocked_connection',
+      status: externalStatus({
+        connected: gmailConnected,
+        mode: safeguards.emailReplies || 'review',
+      }),
       executionMode: 'external',
       objective: 'Clasificar correo pendiente, preparar respuestas contextuales y conservar trazabilidad.',
       evidence: email?.evidence,
       nextAction: gmailConnected
-        ? 'Habilitar un despachador auditado; hasta entonces, preparar respuestas para revisión sin enviarlas.'
+        ? safeguards.emailReplies === 'auto'
+          ? 'Clasificar pendientes y enviar solo respuestas que superen la política, la cuota y los controles de idempotencia.'
+          : 'Clasificar pendientes y preparar borradores trazables para revisión humana.'
         : 'Conectar Gmail desde Recursos antes de leer o responder mensajes.',
       sourceArea: 'email',
       externalEffect: true,
-      autoExecutable: false,
+      autoExecutable: gmailConnected && safeguards.emailReplies === 'auto',
       approval: safeguards.emailReplies === 'review' ? 'email_replies' : null,
+      executor: gmailConnected ? 'company-operation' : null,
     }),
     mission({
       id: 'sales-operations',
       title: 'Construir el sistema comercial',
-      departmentId: 'growth-engines',
+      departmentId: customerReady ? 'sales' : 'growth-engines',
       priority: 9,
-      status: salesReady
-        ? (gmailConnected || socialConnected ? 'integration_required' : 'blocked_connection')
-        : researchEnabled ? 'ready_to_execute' : 'paused',
-      executionMode: salesReady ? 'external' : 'research',
+      status: researchEnabled ? 'ready_to_execute' : 'paused',
+      executionMode: 'research',
       objective: 'Definir prospección, calificación, seguimiento y cierre con evidencia, consentimiento y métricas.',
       evidence: sales?.evidence,
-      nextAction: salesReady
-        ? gmailConnected || socialConnected
-          ? 'Habilitar un despachador comercial auditado; hasta entonces, preparar oportunidades y mensajes sin enviarlos.'
-          : 'Conectar un canal autorizado antes de contactar oportunidades.'
-        : 'Investigar el mercado y documentar primero un proceso comercial verificable.',
+      nextAction: customerReady
+        ? 'Investigar clientes potenciales con fuentes públicas, guardar oportunidades y preparar contacto bajo revisión.'
+        : 'Investigar el mercado y documentar primero un cliente, una oferta y un proceso comercial verificables.',
       sourceArea: 'sales',
-      externalEffect: salesReady,
-      autoExecutable: salesReady
-        ? false
-        : researchEnabled,
-      approval: salesReady && safeguards.leadOutreach === 'review' ? 'lead_outreach' : null,
-      executor: salesReady ? null : 'agent-run',
+      externalEffect: false,
+      autoExecutable: researchEnabled,
+      approval: null,
+      executor: customerReady ? 'company-operation' : 'agent-run',
     }),
   ].slice(0, MAX_MISSIONS);
 
@@ -316,6 +317,8 @@ function selectableMissions(portfolio) {
   return (Array.isArray(portfolio?.missions) ? portfolio.missions : [])
     .filter((item) => (
       (item.executor === 'agent-run' && item.status === 'ready_to_execute')
+      || (item.executor === 'company-operation'
+        && ['ready_to_execute', 'review_required'].includes(item.status))
       || (item.executor === 'social-publish'
         && ['ready_to_execute', 'review_required'].includes(item.status))
     ))
