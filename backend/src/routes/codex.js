@@ -1075,6 +1075,10 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
 });
 
 router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  // Runner state is volatile. A cached 304 can make the browser reuse a
+  // pre-deploy "ready" payload after the sidecar has restarted, leaving the
+  // iframe pointed at a dead tokenized preview.
+  res.set('Cache-Control', 'no-store');
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
