@@ -153,6 +153,37 @@ export interface CodexCompanyContext {
     emailReplies: "review" | "auto" | "off"
     leadOutreach: "review" | "auto" | "off"
   }
+  portfolio?: {
+    version: number
+    generatedAt: string
+    companyName: string
+    summary: {
+      total: number
+      readyToExecute: number
+      reviewRequired: number
+      blocked: number
+      completed: number
+      paused: number
+      highestPriorityMissionId: string | null
+    }
+    missions: Array<{
+      id: string
+      title: string
+      departmentId: string
+      departmentName: string
+      priority: number
+      status: "ready_to_execute" | "review_required" | "blocked" | "blocked_connection" | "integration_required" | "completed" | "paused"
+      executionMode: "code" | "research" | "external"
+      objective: string
+      evidence: string
+      nextAction: string
+      sourceArea: string | null
+      externalEffect: boolean
+      autoExecutable: boolean
+      approval: string | null
+      executor: "agent-run" | "social-publish" | null
+    }>
+  }
 }
 export interface CodexProactiveState {
   enabled: boolean
@@ -166,6 +197,8 @@ export interface CodexProactiveState {
   dailyBudgetUsd: number
   budgetBlocked: boolean
   lastDepartment: string | null
+  missionIndex: number
+  lastMissionId: string | null
 }
 export interface CodexPublicationRelease {
   id: string

@@ -268,7 +268,7 @@ async function loadCompanyOperatingContext({
     socialConnections: connections,
     gmailConnected: Boolean(user?.gmailTokens),
   });
-  return {
+  const context = {
     profile,
     readiness,
     safeguards: {
@@ -280,6 +280,9 @@ async function loadCompanyOperatingContext({
       leadOutreach: profile.autonomy.leadOutreach,
     },
   };
+  context.portfolio = require('./company-mission-orchestrator')
+    .deriveCompanyMissionPortfolio({ project, context, now });
+  return context;
 }
 
 function formatCompanyContext(context) {
@@ -288,6 +291,11 @@ function formatCompanyContext(context) {
   const readiness = asRecord(source.readiness);
   const gaps = Array.isArray(readiness.gaps) ? readiness.gaps : [];
   const areas = Array.isArray(readiness.areas) ? readiness.areas : [];
+  const portfolio = asRecord(source.portfolio);
+  const missions = Array.isArray(portfolio.missions) ? portfolio.missions : [];
+  const priorities = missions
+    .filter((item) => ['ready_to_execute', 'review_required'].includes(item?.status))
+    .slice(0, 5);
   return [
     `Empresa: ${boundedText(profile.companyName, 120) || 'sin nombre confirmado'}`,
     `Etapa: ${normalizeStage(profile.stage)}`,
@@ -303,6 +311,11 @@ function formatCompanyContext(context) {
         return `- ${boundedText(gap.label, 100)}: ${evidence || 'sin evidencia confirmada'} Próximo paso: ${boundedText(gap.action, 500)}`;
       }).join('\n')}`
       : 'Brechas verificadas: ninguna pendiente.',
+    priorities.length
+      ? `Misiones CEO prioritarias:\n${priorities.map((item) => (
+        `- [P${Number(item.priority) || '-'}] ${boundedText(item.title, 180)} → ${boundedText(item.departmentName, 160)} (${boundedText(item.status, 80)})`
+      )).join('\n')}`
+      : 'Misiones CEO prioritarias: ninguna lista para ejecución.',
     'Regla: no conviertas una hipótesis en hecho; las conexiones y publicaciones solo son reales cuando aparecen en la evidencia de preparación.',
   ].join('\n');
 }

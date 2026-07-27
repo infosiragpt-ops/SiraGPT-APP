@@ -159,9 +159,25 @@ test('every Kth proposal is a QA cycle and does not advance the department curso
 test('Marketing department delegates to social-company instead of creating a code run', async () => {
   const project = {
     ...PROJECT,
-    brief: { proactive: { enabled: true, deptIndex: 7 } },
+    status: 'ready',
+    workspacePath: 'projects/p1',
+    brief: {
+      proactive: { enabled: true, deptIndex: 7, missionIndex: 3 },
+      companyProfile: {
+        mission: 'Operar empresas con agentes.',
+        vision: 'Ser el mejor agente de código empresarial.',
+        offer: 'Software operativo con agentes.',
+        targetCustomer: 'Empresas digitales.',
+        salesProcess: 'Descubrimiento, calificación, propuesta y cierre.',
+        websiteUrl: 'https://siragpt.com',
+      },
+    },
   };
   const prisma = fakePrisma({ project });
+  prisma.socialConnection = {
+    findMany: async () => [{ platform: 'linkedin', accountName: '@siragpt' }],
+  };
+  prisma.user = { findUnique: async () => ({ gmailTokens: null }) };
   let calls = 0;
   const result = await engine.runCycle({
     project,

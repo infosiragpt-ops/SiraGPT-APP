@@ -249,6 +249,7 @@ function taskMetaFromPrompt(prompt) {
   const raw = text.slice(markerIndex + PROACTIVE_META_MARKER.length).trim().split('\n')[0];
   try {
     const parsed = JSON.parse(raw);
+    const missionId = boundedText(parsed.missionId, 100) || null;
     return {
       department: boundedText(parsed.department, 100) || 'unknown',
       departmentId: boundedText(parsed.departmentId, 100) || null,
@@ -258,14 +259,24 @@ function taskMetaFromPrompt(prompt) {
         ? parsed.objectiveIds.map((id) => boundedText(id, 80)).filter(Boolean).slice(0, MAX_OBJECTIVES)
         : [],
       qaCycle: parsed.qaCycle === true,
+      ...(missionId ? { missionId } : {}),
     };
   } catch {
     return null;
   }
 }
 
-function formatProactivePrompt({ department, title, goal, acceptanceCriteria, objectiveIds, qaCycle = false }) {
+function formatProactivePrompt({
+  department,
+  title,
+  goal,
+  acceptanceCriteria,
+  objectiveIds,
+  qaCycle = false,
+  missionId = null,
+}) {
   const criteria = normalizeAcceptanceCriteria(acceptanceCriteria);
+  const normalizedMissionId = boundedText(missionId, 100) || null;
   const meta = {
     department: department.name,
     departmentId: department.id,
@@ -273,6 +284,7 @@ function formatProactivePrompt({ department, title, goal, acceptanceCriteria, ob
     acceptanceCriteria: criteria,
     objectiveIds: Array.isArray(objectiveIds) ? objectiveIds.slice(0, MAX_OBJECTIVES) : [],
     qaCycle: Boolean(qaCycle),
+    ...(normalizedMissionId ? { missionId: normalizedMissionId } : {}),
   };
   const lines = [
     `[PROACTIVO · ${department.name}] ${boundedText(title, 180)}: ${boundedText(goal, 1800)}`,
