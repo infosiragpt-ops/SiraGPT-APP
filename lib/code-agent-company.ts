@@ -61,6 +61,18 @@ export const AGENT_COMPANY_DEPARTMENTS: readonly AgentDepartmentDefinition[] = [
     keywords: ["growth", "crecimiento", "distribución", "distribucion", "ventas", "monetización", "monetizacion"],
   },
   {
+    id: "sales-operations",
+    name: "Ventas y Revenue Operations",
+    description: "Prospección, calificación, pipeline, seguimiento y cierre con evidencia.",
+    keywords: ["ventas", "sales", "lead", "cliente", "crm", "pipeline", "prospección", "prospeccion", "cierre"],
+  },
+  {
+    id: "customer-success",
+    name: "Customer Success",
+    description: "Correo, soporte, comentarios, adopción, retención y voz del cliente.",
+    keywords: ["soporte", "support", "correo", "email", "comentario", "cliente", "retención", "retencion", "customer success"],
+  },
+  {
     id: "localization",
     name: "Localización e IA Transcultural",
     description: "Idiomas, regiones, accesibilidad cultural y adaptación de mercado.",

@@ -144,6 +144,7 @@ model User {
   codexCompanyLeads       CodexCompanyLead[]
   codexCompanyInboxItems  CodexCompanyInboxItem[]
   codexExternalActions    CodexExternalAction[]
+  codexSwarms             CodexSwarm[]
   deployments             Deployment[]
   generatedArtifacts      GeneratedArtifact[]
   documentAnalyses        DocumentAnalysis[]
@@ -2632,6 +2633,7 @@ model CodexProject {
 
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   runs        CodexRun[]
+  swarms      CodexSwarm[]
   checkpoints CodexCheckpoint[]
   sessionStates CodexSessionState[]
   database    CodexProjectDatabase?
@@ -2743,6 +2745,87 @@ model CodexProactiveLease {
 
   @@index([expiresAt])
   @@map("codex_proactive_leases")
+}
+
+// Durable control plane for large coding swarms. A swarm may contain up to
+// 1,000 logical tasks while maxConcurrency and maxConcurrentWriters keep the
+// effective execution fan-out bounded.
+model CodexSwarm {
+  id                   String    @id @default(cuid())
+  userId               String
+  projectId            String
+  name                 String
+  strategy             String    @default("dag") // dag | map_reduce
+  status               String    @default("queued") // queued | running | paused | cancelling | completed | completed_with_errors | failed | cancelled
+  taskLimit             Int       @default(1000)
+  maxConcurrency       Int       @default(16)
+  maxConcurrentWriters Int       @default(4)
+  metadata             Json?
+  cancellationReason   String?   @db.Text
+  cancelRequestedAt    DateTime?
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  totalTaskCount       Int       @default(0)
+  queuedTaskCount      Int       @default(0)
+  blockedTaskCount     Int       @default(0)
+  runningTaskCount     Int       @default(0)
+  succeededTaskCount   Int       @default(0)
+  failedTaskCount      Int       @default(0)
+  cancelledTaskCount   Int       @default(0)
+  progressPercent      Float     @default(0)
+  version              Int       @default(0)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project CodexProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   CodexSwarmTask[]
+
+  @@index([userId, status, updatedAt])
+  @@index([projectId, createdAt])
+  @@index([status, updatedAt])
+  @@map("codex_swarms")
+}
+
+// A task stores dependency keys directly so the entire DAG remains durable
+// without introducing an unbounded join graph. claimId makes worker retries
+// idempotent; leaseToken prevents stale workers from committing results.
+model CodexSwarmTask {
+  id              String    @id @default(cuid())
+  swarmId         String
+  key             String
+  ordinal         Int
+  title           String
+  role            String // writer | read-only | reviewer | integrator
+  stage           String    @default("work") // work | map | reduce | integrate
+  status          String    @default("queued") // queued | blocked | running | succeeded | failed | cancelled
+  priority        Int       @default(0)
+  dependsOn       String[]  @default([])
+  input           Json?
+  result          Json?
+  error           String?   @db.Text
+  maxAttempts     Int       @default(3)
+  attemptCount    Int       @default(0)
+  claimId         String?   @unique
+  leaseOwner      String?
+  leaseToken      String?   @unique
+  leaseExpiresAt  DateTime?
+  claimedAt       DateTime?
+  lastHeartbeatAt DateTime?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  version         Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  swarm CodexSwarm @relation(fields: [swarmId], references: [id], onDelete: Cascade)
+
+  @@unique([swarmId, key])
+  @@unique([swarmId, ordinal])
+  @@index([swarmId, status, priority, ordinal])
+  @@index([swarmId, role, status])
+  @@index([status, leaseExpiresAt])
+  @@map("codex_swarm_tasks")
 }
 
 // Control-plane persistence for Codex transcripts and resumable loop

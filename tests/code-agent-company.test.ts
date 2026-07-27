@@ -79,10 +79,14 @@ describe("code agent company", () => {
       turns: [{ id: "u1", role: "user", content: "Audita seguridad del sandbox" }],
     })
     const product = session({ id: "product", title: "Ajustar componente" })
+    const sales = session({ id: "sales", title: "Calificar leads y actualizar CRM" })
+    const customerSuccess = session({ id: "support", title: "Responder correo pendiente del cliente" })
 
     assert.equal(departmentIdForSession(root, "root"), "ceo-office")
     assert.equal(departmentIdForSession(security, "root"), "trust")
     assert.equal(departmentIdForSession(product, "root"), "product-engineering")
+    assert.equal(departmentIdForSession(sales, "root"), "sales-operations")
+    assert.equal(departmentIdForSession(customerSuccess, "root"), "customer-success")
   })
 
   it("maps persisted Codex workers to departments and reports their real state", () => {

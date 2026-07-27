@@ -520,6 +520,11 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 // configured implementer adapter is unknown.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
 const { startProactiveScheduler, closeProactiveScheduler } = require('./src/services/codex/proactive-queue');
+const {
+    startSwarmWorker,
+    recoverSwarmJobs,
+    closeSwarmRuntime,
+} = require('./src/services/codex/swarm-runner');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
@@ -1561,6 +1566,10 @@ async function startServer() {
     } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
+    startSwarmWorker();
+    recoverSwarmJobs()
+      .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
+      .catch((err) => logger.warn({ err: err.message }, 'codex_swarm_recovery_failed'));
     startDocumentCollectionWorker();
     // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
     // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
@@ -1775,6 +1784,7 @@ async function startServer() {
             closeGoalQueue(),
             closeCodexWorker(),
             closeCodexQueue(),
+            closeSwarmRuntime(),
             closeProactiveScheduler(),
             closeDocumentCollectionWorker(),
             closeDocumentCollectionQueue(),

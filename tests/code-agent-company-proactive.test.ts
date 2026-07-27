@@ -16,6 +16,8 @@ describe("code agent company proactive", () => {
     assert.ok(ids.includes("ceo-office"))
     assert.ok(ids.includes("product-engineering"))
     assert.ok(ids.includes("growth-engines"))
+    assert.ok(ids.includes("sales-operations"))
+    assert.ok(ids.includes("customer-success"))
     assert.equal(departmentBootstrapTitle(PROACTIVE_CORE_DEPARTMENTS[0]), "CEO Office")
   })
 

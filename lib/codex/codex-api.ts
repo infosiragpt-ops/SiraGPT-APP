@@ -314,6 +314,94 @@ export interface CodexSessionSnapshot {
   metadata: unknown
   updatedAt: string
 }
+export interface CodexProjectActivity {
+  id: string
+  runId: string
+  seq: number
+  type: string
+  department: string
+  createdAt: string
+  tone: "active" | "success" | "info" | "attention" | "error"
+  title: string
+  detail: string
+}
+export type CodexSwarmStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "cancelling"
+  | "completed"
+  | "completed_with_errors"
+  | "failed"
+  | "cancelled"
+export interface CodexSwarmSummary {
+  id: string
+  name: string
+  status: CodexSwarmStatus
+  progressPercent: number
+  maxConcurrency: number
+  totalTaskCount: number
+  updatedAt: string
+}
+export interface CodexEnterpriseCommandCenter {
+  readiness: {
+    status: "ready" | "attention" | "blocked"
+    score: number
+    runState: "idle" | "running" | "paused" | "completed" | "failed"
+    checks: Array<{
+      id: string
+      label: string
+      status: "ready" | "attention" | "blocked"
+      detail?: string
+    }>
+    lastCheckedAt?: string
+  }
+  mission: string
+  vision: string
+  swarmSummary: {
+    logicalAgents: number
+    active: number
+    queued: number
+    completed: number
+    failed: number
+    maxParallel: number
+  }
+  departments: Array<{
+    id: string
+    workstreamId?: string
+    name: string
+    objective: string
+    status: "active" | "queued" | "paused" | "blocked" | "completed"
+    logicalAgents: number
+    activeAgents: number
+    queuedTasks: number
+    completedTasks: number
+    progress: number
+    currentWork?: string | null
+    owner?: string
+    lastUpdatedAt?: string
+  }>
+  liveEvents: Array<{
+    id: string
+    timestamp: string
+    title: string
+    kind: "planning" | "delegation" | "research" | "coding" | "verification" | "delivery" | "warning" | "error"
+    status: "running" | "completed" | "blocked"
+    detail?: string
+    departmentId?: string
+    departmentName?: string
+  }>
+  executiveSummary: {
+    title: string
+    summary: string
+    updatedAt?: string
+    highlights?: string[]
+    risks?: string[]
+    nextActions?: string[]
+  }
+  swarm: CodexSwarmSummary | null
+  governance: Record<string, unknown>
+}
 
 async function getPublicHealth(): Promise<CodexHealth> {
   const res = await fetch(`${BASE}/health`, {
@@ -422,6 +510,43 @@ export const codexApi = {
       `/projects/${id}/company-operations/actions/${actionId}/reject`,
       { method: "POST" },
     ).then((result) => result.result),
+  listProjectActivity: (id: string, limit = 80) =>
+    req<{ activity?: unknown }>(`/projects/${id}/activity?limit=${Math.max(1, Math.min(200, limit))}`, { cache: "no-store" })
+      .then((r) => arrayOrEmpty<CodexProjectActivity>(r?.activity)),
+  getCommandCenter: (id: string) =>
+    req<{ commandCenter: CodexEnterpriseCommandCenter; company: CodexCompanyContext }>(
+      `/projects/${id}/command-center`,
+      { cache: "no-store" },
+    ),
+  startSwarm: (
+    id: string,
+    body: {
+      objective: string
+      logicalAgents?: number
+      maxConcurrency?: number
+      model?: string
+      tier?: string
+    },
+  ) =>
+    req<{ swarm: CodexSwarmSummary; commandCenter: CodexEnterpriseCommandCenter }>(
+      `/projects/${id}/swarms`,
+      { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000 },
+    ),
+  pauseSwarm: (projectId: string, swarmId: string) =>
+    req<{ swarm: CodexSwarmSummary }>(
+      `/projects/${projectId}/swarms/${swarmId}/pause`,
+      { method: "POST" },
+    ),
+  resumeSwarm: (projectId: string, swarmId: string) =>
+    req<{ swarm: CodexSwarmSummary }>(
+      `/projects/${projectId}/swarms/${swarmId}/resume`,
+      { method: "POST" },
+    ),
+  cancelSwarm: (projectId: string, swarmId: string, reason = "cancelled_by_user") =>
+    req<{ swarm: CodexSwarmSummary }>(
+      `/projects/${projectId}/swarms/${swarmId}/cancel`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+    ),
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string; autoExecute?: boolean }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),

@@ -106,6 +106,7 @@ import type { CodeChatSession } from "@/lib/code-chat-sessions"
 import type { CodeFile, CodeFiles } from "@/lib/code-workspace-utils"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { codexIdForProject, listCodexProjects, upsertCodexProject } from "@/lib/codex-projects"
+import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_NEW_CODE_CHAT_EVENT,
@@ -120,6 +121,8 @@ import {
   type CodexCompanyContext,
   type CodexCompanyOperations,
   type CodexExternalAction,
+  type CodexEnterpriseCommandCenter,
+  type CodexProjectActivity,
   type CodexProactiveState,
   type CodexRun,
 } from "@/lib/codex/codex-api"
@@ -136,6 +139,16 @@ import { cn } from "@/lib/utils"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { AgentOfficeScene } from "./agent-office/agent-office-scene"
+import {
+  EnterpriseCommandCenter,
+  type EnterpriseDepartment,
+  type EnterpriseEventKind,
+  type EnterpriseEventStatus,
+  type EnterpriseLiveEvent,
+  type EnterpriseReadiness,
+  type EnterpriseRunState,
+  type EnterpriseSwarmSummary,
+} from "./enterprise-command-center"
 
 type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "files" | "resources" | "task"
 type CompanyPreviewView = Exclude<CompanyView, "home" | "chat" | "department">
@@ -162,6 +175,7 @@ const DEPARTMENT_ICONS: Record<string, React.ComponentType<{ className?: string 
   "ceo-office": Radio,
   "agent-infrastructure": Cpu,
   "growth-engines": TrendingUp,
+  "sales-operations": BriefcaseBusiness,
   localization: Languages,
   integrations: PlugZap,
   trust: ShieldCheck,
@@ -279,6 +293,120 @@ function runTitle(run: AgentCompanyRunLike): string {
   return (separator > 0 ? summary.slice(0, separator) : summary).slice(0, 64)
 }
 
+function enterpriseRunState(
+  runs: readonly CodexRun[],
+  proactiveState: CodexProactiveState,
+): EnterpriseRunState {
+  if (runs.some((run) => String(run.status).toLowerCase() === "running" || String(run.status).toLowerCase() === "queued")) {
+    return "running"
+  }
+  if (runs.some((run) => String(run.status).toLowerCase() === "error")) return "failed"
+  if (!proactiveState.enabled && runs.some((run) => String(run.status).toLowerCase() === "waiting_approval")) {
+    return "paused"
+  }
+  if (runs.some((run) => String(run.status).toLowerCase() === "done")) return "completed"
+  return proactiveState.enabled ? "running" : "idle"
+}
+
+function enterpriseReadiness(
+  context: CodexCompanyContext | null,
+  runs: readonly CodexRun[],
+  proactiveState: CodexProactiveState,
+): EnterpriseReadiness {
+  const areas = context?.readiness.areas || []
+  const hasBlocked = areas.some((area) => area.status === "blocked")
+  return {
+    status: hasBlocked ? "blocked" : context?.readiness.score === 100 ? "ready" : "attention",
+    score: context?.readiness.score || 0,
+    runState: enterpriseRunState(runs, proactiveState),
+    checks: areas.map((area) => ({
+      id: area.id,
+      label: area.label,
+      status: area.status === "ready" ? "ready" : area.status === "blocked" ? "blocked" : "attention",
+      detail: area.status === "ready" ? area.evidence : area.action,
+    })),
+    lastCheckedAt: new Date().toISOString(),
+  }
+}
+
+function enterpriseSwarmSummary(runs: readonly CodexRun[]): EnterpriseSwarmSummary {
+  const statuses = runs.map((run) => String(run.status).toLowerCase())
+  const active = statuses.filter((status) => status === "running").length
+  return {
+    logicalAgents: runs.length,
+    active,
+    queued: statuses.filter((status) => status === "queued" || status === "waiting_approval").length,
+    completed: statuses.filter((status) => status === "done").length,
+    failed: statuses.filter((status) => status === "error").length,
+    maxParallel: Math.max(8, active),
+  }
+}
+
+function enterpriseDepartments(
+  departments: readonly AgentDepartmentDefinition[],
+  runs: readonly CodexRun[],
+): EnterpriseDepartment[] {
+  return departments.map((department) => {
+    const assigned = runs
+      .filter((run) => departmentIdForRun(run, departments) === department.id)
+      .sort((a, b) => runActivityAt(b) - runActivityAt(a))
+    const active = assigned.filter((run) => codeRunIsActive(run))
+    const completed = assigned.filter((run) => String(run.status).toLowerCase() === "done")
+    const blocked = assigned.some((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase()))
+    const progress = assigned.length ? Math.round((completed.length / assigned.length) * 100) : 0
+    return {
+      id: department.id,
+      name: department.name,
+      objective: department.description,
+      status: active.length > 0
+        ? "active"
+        : blocked
+          ? "blocked"
+          : assigned.length > 0 && completed.length === assigned.length
+            ? "completed"
+            : "queued",
+      logicalAgents: assigned.length,
+      activeAgents: active.length,
+      queuedTasks: assigned.filter((run) => String(run.status).toLowerCase() === "queued").length,
+      completedTasks: completed.length,
+      progress,
+      currentWork: assigned[0] ? runSummary(assigned[0]) : undefined,
+      owner: department.id === "ceo-office" ? "CEO Office" : department.name,
+      lastUpdatedAt: assigned[0]?.createdAt ? String(assigned[0].createdAt) : undefined,
+    }
+  })
+}
+
+function enterpriseEventKind(event: CodexProjectActivity): EnterpriseEventKind {
+  if (event.type.startsWith("plan_")) return "planning"
+  if (event.type === "reasoning_start" || event.type === "reasoning_end") return "research"
+  if (event.type === "checkpoint_created" || event.type === "run_summary") return "delivery"
+  if (event.type === "budget_status" || event.type.includes("permission")) return "warning"
+  if (event.type === "action_start" || event.type === "action_end") {
+    return /código|archivo|code/i.test(`${event.title} ${event.detail}`) ? "coding" : "verification"
+  }
+  if (event.tone === "error") return "error"
+  return "delegation"
+}
+
+function enterpriseEventStatus(event: CodexProjectActivity): EnterpriseEventStatus {
+  if (event.tone === "error" || event.tone === "attention") return "blocked"
+  if (event.tone === "active") return "running"
+  return "completed"
+}
+
+function enterpriseLiveEvents(activity: readonly CodexProjectActivity[]): EnterpriseLiveEvent[] {
+  return activity.map((event) => ({
+    id: event.id,
+    timestamp: event.createdAt,
+    title: event.title,
+    kind: enterpriseEventKind(event),
+    status: enterpriseEventStatus(event),
+    detail: event.detail,
+    departmentName: event.department,
+  }))
+}
+
 function DepartmentGlyph({ departmentId, className }: { departmentId: string; className?: string }) {
   const Icon = DEPARTMENT_ICONS[departmentId] || Network
   return <Icon className={className} />
@@ -336,7 +464,9 @@ export function AgentCompanyPanel() {
   const [proactiveBusy, setProactiveBusy] = React.useState(false)
   const [proactiveState, setProactiveState] = React.useState<CodexProactiveState>(EMPTY_PROACTIVE_STATE)
   const [companyContext, setCompanyContext] = React.useState<CodexCompanyContext | null>(null)
+  const [commandCenter, setCommandCenter] = React.useState<CodexEnterpriseCommandCenter | null>(null)
   const [codexRuns, setCodexRuns] = React.useState<CodexRun[]>([])
+  const [projectActivity, setProjectActivity] = React.useState<CodexProjectActivity[]>([])
   const [checkpointCount, setCheckpointCount] = React.useState(0)
   const [codexAccess, setCodexAccess] = React.useState<CodexAccess | null>(null)
   const companyRuntimePromisesRef = React.useRef<Map<string, Promise<string>>>(new Map())
@@ -363,18 +493,22 @@ export function AgentCompanyPanel() {
           if (!alive) return
           setCodexAccess(access)
           setCodexRuns([])
+          setProjectActivity([])
           setCheckpointCount(0)
           setProactiveState(EMPTY_PROACTIVE_STATE)
           setCompanyContext(null)
           setCompanyCapacity(null)
+          setCommandCenter(null)
           return
         }
 
-        const [accessResult, proactiveResult, runsResult, checkpointsResult] = await Promise.allSettled([
+        const [accessResult, proactiveResult, runsResult, checkpointsResult, activityResult, commandCenterResult] = await Promise.allSettled([
           codexApi.access(),
           codexApi.getProactive(codexProjectId),
           codexApi.listRuns(codexProjectId),
           codexApi.listCheckpoints(codexProjectId),
+          codexApi.listProjectActivity(codexProjectId, 80),
+          codexApi.getCommandCenter(codexProjectId),
         ])
         if (!alive) return
         if (accessResult.status === "fulfilled") setCodexAccess(accessResult.value)
@@ -384,6 +518,13 @@ export function AgentCompanyPanel() {
         if (checkpointsResult.status === "fulfilled") {
           const checkpoints = Array.isArray(checkpointsResult.value) ? checkpointsResult.value : []
           setCheckpointCount(checkpoints.length)
+        }
+        if (activityResult.status === "fulfilled") {
+          setProjectActivity(Array.isArray(activityResult.value) ? activityResult.value : [])
+        }
+        if (commandCenterResult.status === "fulfilled") {
+          setCommandCenter(commandCenterResult.value.commandCenter)
+          setCompanyContext(commandCenterResult.value.company)
         }
         if (
           proactiveResult.status === "fulfilled" &&
@@ -411,7 +552,7 @@ export function AgentCompanyPanel() {
       }
     }
     void load()
-    const timer = window.setInterval(() => void load(), 15_000)
+    const timer = window.setInterval(() => void load(), 5_000)
     const onVisibility = () => {
       if (document.visibilityState === "visible") void load()
     }
@@ -770,6 +911,136 @@ export function AgentCompanyPanel() {
     setActiveCodeChatSession,
   ])
 
+  const refreshCommandCenter = React.useCallback(async (projectId: string) => {
+    const state = await codexApi.getCommandCenter(projectId)
+    setCommandCenter(state.commandCenter)
+    setCompanyContext(state.company)
+    return state.commandCenter
+  }, [])
+
+  const startEnterpriseExecution = React.useCallback(async () => {
+    setProactiveBusy(true)
+    try {
+      const projectId =
+        readWorkspaceCodexProject(activeFolder?.id)
+        || getActiveCodexProject()
+        || await ensureCompanyRuntime()
+      ensureDepartmentSessions()
+
+      if (commandCenter?.swarm?.status === "paused") {
+        await codexApi.resumeSwarm(projectId, commandCenter.swarm.id)
+        await refreshCommandCenter(projectId)
+        toast.success("Ejecución empresarial reanudada desde el último estado persistido.")
+        return
+      }
+
+      const rootObjective = companyObjective(codeChatSessions, snapshot.rootSessionId)
+      const businessContext = [
+        companyContext?.profile?.mission ? `Misión: ${companyContext.profile.mission}` : "",
+        companyContext?.profile?.vision ? `Visión: ${companyContext.profile.vision}` : "",
+      ].filter(Boolean).join(" ")
+      const logicalAgents = Math.min(1_000, Math.max(128, allDepartments.length * 64))
+      const result = await codexApi.startSwarm(projectId, {
+        objective: `${rootObjective} ${businessContext}`.trim(),
+        logicalAgents,
+        maxConcurrency: 16,
+      })
+      setCommandCenter(result.commandCenter)
+      setProactiveOn(false)
+      setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
+      toast.success(`${logicalAgents} agentes lógicos coordinados; 16 pueden investigar en paralelo y una sola corrida integra el código.`)
+    } catch (error) {
+      const status = (error as { status?: number })?.status
+      toast.error(
+        status === 409
+          ? "Ya existe una ejecución activa. Detén o termina esa tarea antes de iniciar otra."
+          : "No se pudo iniciar el centro de mando empresarial.",
+      )
+    } finally {
+      setProactiveBusy(false)
+    }
+  }, [
+    activeFolder?.id,
+    allDepartments.length,
+    codeChatSessions,
+    commandCenter?.swarm?.id,
+    commandCenter?.swarm?.status,
+    companyContext?.profile?.mission,
+    companyContext?.profile?.vision,
+    ensureCompanyRuntime,
+    ensureDepartmentSessions,
+    refreshCommandCenter,
+    snapshot.rootSessionId,
+  ])
+
+  const pauseEnterpriseExecution = React.useCallback(async () => {
+    const projectId =
+      readWorkspaceCodexProject(activeFolder?.id)
+      || getActiveCodexProject()
+    const swarmId = commandCenter?.swarm?.id
+    if (!projectId || !swarmId) {
+      toast.info("No hay un enjambre activo para pausar.")
+      return
+    }
+    setProactiveBusy(true)
+    try {
+      await codexApi.pauseSwarm(projectId, swarmId)
+      await refreshCommandCenter(projectId)
+      toast.success("Ejecución pausada. No se asignarán tareas nuevas hasta reanudar.")
+    } catch {
+      toast.error("No se pudo pausar la ejecución empresarial.")
+    } finally {
+      setProactiveBusy(false)
+    }
+  }, [activeFolder?.id, commandCenter?.swarm?.id, refreshCommandCenter])
+
+  const cancelCompanyExecution = React.useCallback(async () => {
+    const codexProjectId =
+      readWorkspaceCodexProject(activeFolder?.id) ||
+      getActiveCodexProject()
+    const activeRun = [...codexRuns]
+      .filter((run) => codeRunIsActive(run))
+      .sort((a, b) => runActivityAt(b) - runActivityAt(a))[0]
+    if (!codexProjectId && !activeRun) {
+      toast.info("No hay una ejecución activa.")
+      return
+    }
+
+    setProactiveBusy(true)
+    proactiveMutationVersionRef.current += 1
+    try {
+      if (codexProjectId && commandCenter?.swarm?.id) {
+        await codexApi.cancelSwarm(
+          codexProjectId,
+          commandCenter.swarm.id,
+          "cancelled_by_user",
+        )
+        await refreshCommandCenter(codexProjectId)
+      }
+      if (codexProjectId && proactiveOn) {
+        const result = await codexApi.setProactive(codexProjectId, false)
+        setProactiveState(normalizeProactiveState(result.state))
+        setProactiveOn(false)
+        setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
+      }
+      if (activeRun) {
+        const cancelled = await codexApi.cancelRun(activeRun.id)
+        setCodexRuns((current) => current.map((run) => run.id === cancelled.id ? cancelled : run))
+      }
+      toast.success("Ejecución cancelada y operación proactiva pausada.")
+    } catch {
+      toast.error("No se pudo cancelar toda la ejecución. Revisa el estado operativo antes de reintentar.")
+    } finally {
+      setProactiveBusy(false)
+    }
+  }, [
+    activeFolder?.id,
+    codexRuns,
+    commandCenter?.swarm?.id,
+    proactiveOn,
+    refreshCommandCenter,
+  ])
+
   const selectCompany = React.useCallback(
     async (option: CompanyOption) => {
       setCompanyMenuOpen(false)
@@ -1066,8 +1337,16 @@ export function AgentCompanyPanel() {
             checkpointCount={checkpointCount}
             proactiveState={proactiveState}
             companyContext={companyContext}
+            commandCenter={commandCenter}
+            activity={projectActivity}
+            departments={allDepartments}
             departmentCount={allDepartments.length}
             rootSessionId={snapshot.rootSessionId}
+            onStart={() => void startEnterpriseExecution()}
+            onPause={() => void pauseEnterpriseExecution()}
+            onCancel={() => void cancelCompanyExecution()}
+            onOpenDepartment={openDepartmentChat}
+            onOpenCeo={openCeoOffice}
             onOpenTask={(sessionId) => {
               setSelectedTaskId(sessionId)
               setView("task")
@@ -1227,8 +1506,22 @@ export function AgentCompanyPanel() {
           checkpointCount={checkpointCount}
           proactiveState={proactiveState}
           companyContext={companyContext}
+          commandCenter={commandCenter}
+          activity={projectActivity}
+          departments={allDepartments}
           departmentCount={allDepartments.length}
           rootSessionId={snapshot.rootSessionId}
+          onStart={() => void startEnterpriseExecution()}
+          onPause={() => void pauseEnterpriseExecution()}
+          onCancel={() => void cancelCompanyExecution()}
+          onOpenDepartment={(departmentId) => {
+            setPreviewView(null)
+            openDepartmentChat(departmentId)
+          }}
+          onOpenCeo={() => {
+            setPreviewView(null)
+            openCeoOffice()
+          }}
           onOpenTask={(sessionId) => {
             setSelectedTaskId(sessionId)
             setPreviewView("task")
@@ -1660,11 +1953,13 @@ function ResourcesView({
   surface?: boolean
 }) {
   const [operations, setOperations] = React.useState<CompanySocialOperations | null>(null)
+  const [businessConnectors, setBusinessConnectors] = React.useState<CoworkConnector[]>([])
   const [posts, setPosts] = React.useState<CompanySocialPost[]>([])
   const [draft, setDraft] = React.useState<CompanySocialPolicy | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
   const [providerBusy, setProviderBusy] = React.useState<CompanySocialPlatform | null>(null)
+  const [connectorBusy, setConnectorBusy] = React.useState<string | null>(null)
   const [caption, setCaption] = React.useState("")
   const [selectedPlatforms, setSelectedPlatforms] = React.useState<CompanySocialPlatform[]>([])
   const [delivery, setDelivery] = React.useState<"now" | "scheduled">("now")
@@ -1680,16 +1975,17 @@ function ResourcesView({
   const load = React.useCallback(async () => {
     setLoading(true)
     const codexProjectId = activeCodexProjectId || getActiveCodexProject()
-    const [socialResult, postsResult, opsResult, contextResult] = await Promise.allSettled([
-        companySocialApi.operations(),
-        companySocialApi.listPosts(),
-        codexProjectId
-          ? codexApi.getCompanyOperations(codexProjectId)
-          : Promise.resolve(null),
-        codexProjectId
-          ? codexApi.getCompanyProfile(codexProjectId)
-          : Promise.resolve(null),
-      ])
+    const [socialResult, postsResult, opsResult, contextResult, connectorResult] = await Promise.allSettled([
+      companySocialApi.operations(),
+      companySocialApi.listPosts(),
+      codexProjectId
+        ? codexApi.getCompanyOperations(codexProjectId)
+        : Promise.resolve(null),
+      codexProjectId
+        ? codexApi.getCompanyProfile(codexProjectId)
+        : Promise.resolve(null),
+      coworkApi.listConnectors(),
+    ])
 
     if (socialResult.status === "fulfilled") {
       const result = socialResult.value
@@ -1709,6 +2005,11 @@ function ResourcesView({
     if (opsResult.status === "fulfilled") setCompanyOps(opsResult.value)
     else toast.error("No se pudieron cargar las operaciones de empresa.")
     if (contextResult.status === "fulfilled") setCompanyOpsContext(contextResult.value)
+    if (connectorResult.status === "fulfilled") {
+      setBusinessConnectors(connectorResult.value.connectors || [])
+    } else {
+      setBusinessConnectors([])
+    }
     setLoading(false)
   }, [activeCodexProjectId, workspaceId])
 
@@ -1883,6 +2184,31 @@ function ResourcesView({
     }
   }, [load])
 
+  const connectBusinessConnector = React.useCallback(async (connector: CoworkConnector) => {
+    setConnectorBusy(connector.id)
+    try {
+      await coworkApi.beginConnectorConnection(connector.connectUrl)
+      window.setTimeout(() => void load(), 1_500)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo iniciar la conexión.")
+    } finally {
+      setConnectorBusy(null)
+    }
+  }, [load])
+
+  const disconnectBusinessConnector = React.useCallback(async (connector: CoworkConnector) => {
+    setConnectorBusy(connector.id)
+    try {
+      await coworkApi.disconnectConnector(connector.id)
+      await load()
+      toast.success(`${connector.name} fue desconectado.`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo desconectar la integración.")
+    } finally {
+      setConnectorBusy(null)
+    }
+  }, [load])
+
   const toggleComposerPlatform = React.useCallback((platform: CompanySocialPlatform) => {
     setSelectedPlatforms((current) => current.includes(platform)
       ? current.filter((entry) => entry !== platform)
@@ -1952,7 +2278,9 @@ function ResourcesView({
     )
   }
 
-  const connectedCount = operations.providers.filter((provider) => provider.connection?.connected).length
+  const connectedSocialCount = operations.providers.filter((provider) => provider.connection?.connected).length
+  const connectedBusinessCount = businessConnectors.filter((connector) => connector.account?.status === "connected").length
+  const connectedCount = connectedSocialCount + connectedBusinessCount
   const autonomous = draft.enabled && draft.mode === "auto"
 
   if (surface) {
@@ -2181,6 +2509,50 @@ function ResourcesView({
                       </Button>
                     ) : (
                       <Button type="button" variant="outline" size="sm" className="h-9 rounded-md text-xs" onClick={() => void connect(provider.platform)} disabled={!provider.configured || busy}>
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+              {businessConnectors.map((connector) => {
+                const connected = connector.account?.status === "connected"
+                const busy = connectorBusy === connector.id
+                const detail = connected
+                  ? connector.account?.accountLabel || "Cuenta conectada"
+                  : `${connector.capabilities.length} capacidades · escritura con confirmación`
+                return (
+                  <div key={connector.id} className="flex min-h-[76px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                      {connector.id === "gmail" ? <MessageSquareText className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <strong className="truncate text-[13px]">{connector.name}</strong>
+                        <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-amber-400")} />
+                      </span>
+                      <span className="mt-1 block truncate text-[10px] text-zinc-500">{detail}</span>
+                    </span>
+                    {connected ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 rounded-md text-xs"
+                        onClick={() => void disconnectBusinessConnector(connector)}
+                        disabled={busy}
+                      >
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Desconectar"}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9 rounded-md text-xs"
+                        onClick={() => void connectBusinessConnector(connector)}
+                        disabled={busy}
+                      >
                         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
                       </Button>
                     )}
@@ -2896,8 +3268,16 @@ function CompanyDashboardSurface({
   checkpointCount,
   proactiveState,
   companyContext,
+  commandCenter,
+  activity,
+  departments,
   departmentCount,
   rootSessionId,
+  onStart,
+  onPause,
+  onCancel,
+  onOpenDepartment,
+  onOpenCeo,
   onOpenTask,
 }: {
   companyName: string
@@ -2907,8 +3287,16 @@ function CompanyDashboardSurface({
   checkpointCount: number
   proactiveState: CodexProactiveState
   companyContext: CodexCompanyContext | null
+  commandCenter: CodexEnterpriseCommandCenter | null
+  activity: CodexProjectActivity[]
+  departments: readonly AgentDepartmentDefinition[]
   departmentCount: number
   rootSessionId: string | null
+  onStart: () => void
+  onPause: () => void
+  onCancel: () => void
+  onOpenDepartment: (departmentId: string) => void
+  onOpenCeo: () => void
   onOpenTask: (sessionId: string) => void
 }) {
   const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
@@ -2919,12 +3307,31 @@ function CompanyDashboardSurface({
   })
   const progress = orderedRuns.length ? Math.round((completed / orderedRuns.length) * 100) : 0
   const objective = companyObjective(sessions, rootSessionId)
-  const metrics = [
-    { label: "Agentes activos", value: snapshot.activeAgents, detail: `${departmentCount} departamentos`, icon: UsersRound },
-    { label: "Ejecuciones", value: orderedRuns.length, detail: `${completed} completadas`, icon: Activity },
-    { label: "Evidencias", value: checkpointCount, detail: "checkpoints verificables", icon: CheckCircle2 },
-    { label: "Atención", value: attention.length, detail: attention.length ? "requieren revisión" : "sin bloqueos activos", icon: AlertTriangle },
-  ]
+  const commandReadiness: EnterpriseReadiness = commandCenter?.readiness
+    ?? enterpriseReadiness(companyContext, runs, proactiveState)
+  const commandSwarm: EnterpriseSwarmSummary = commandCenter?.swarmSummary
+    ?? enterpriseSwarmSummary(runs)
+  const commandDepartments: EnterpriseDepartment[] = commandCenter
+    ? commandCenter.departments.map((department) => ({
+        ...department,
+        currentWork: department.currentWork || undefined,
+      }))
+    : enterpriseDepartments(departments, runs)
+  const commandEvents: EnterpriseLiveEvent[] = commandCenter?.liveEvents
+    ?? enterpriseLiveEvents(activity)
+  const commandExecutiveSummary = commandCenter?.executiveSummary ?? {
+    title: "Informe del CEO Office",
+    summary: objective,
+    updatedAt: new Date().toISOString(),
+    highlights: [
+      `${completed} ejecuciones completadas`,
+      `${checkpointCount} evidencias verificables`,
+    ],
+    risks: attention.length ? [`${attention.length} ejecuciones requieren atención`] : [],
+    nextActions: ["Definir el siguiente resultado medible desde CEO Office"],
+  }
+  const operationActive = commandReadiness.runState === "running"
+  const operationPaused = commandReadiness.runState === "paused"
 
   return (
     <SurfacePage testId="company-dashboard-surface">
@@ -2938,36 +3345,37 @@ function CompanyDashboardSurface({
         </div>
         <span className={cn(
           "inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-semibold",
-          proactiveState.enabled
+          operationActive
             ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
             : "border-zinc-200 bg-white text-zinc-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
         )}>
-          <span className={cn("h-2 w-2 rounded-full", proactiveState.enabled ? "bg-emerald-500" : "bg-zinc-400")} />
-          {proactiveState.enabled ? "Operación activa" : "Operación en pausa"}
+          <span className={cn("h-2 w-2 rounded-full", operationActive ? "bg-emerald-500" : operationPaused ? "bg-amber-500" : "bg-zinc-400")} />
+          {operationActive ? "Operación activa" : operationPaused ? "Operación en pausa" : "Lista para ejecutar"}
         </span>
       </div>
 
-      <div className="mt-7 grid overflow-hidden rounded-lg border border-zinc-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-white/10 dark:bg-zinc-900">
-        {metrics.map(({ label, value, detail, icon: Icon }, index) => (
-          <div
-            key={label}
-            className={cn(
-              "min-h-[132px] p-5",
-              index > 0 && "border-t border-zinc-200 sm:border-t-0 sm:border-l dark:border-white/10",
-              index === 2 && "sm:border-l-0 xl:border-l",
-            )}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-zinc-500">{label}</span>
-              <Icon className="h-4 w-4 text-zinc-400" />
-            </div>
-            <div className="mt-5 text-3xl font-semibold tabular-nums">{value}</div>
-            <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
-          </div>
-        ))}
-      </div>
+      <EnterpriseCommandCenter
+        className="mt-7"
+        readiness={commandReadiness}
+        mission={commandCenter?.mission || companyContext?.profile.mission || "Pendiente de confirmar con evidencia del negocio."}
+        vision={commandCenter?.vision || companyContext?.profile.vision || "Pendiente de confirmar con evidencia del negocio."}
+        swarmSummary={commandSwarm}
+        departments={commandDepartments}
+        liveEvents={commandEvents}
+        executiveSummary={commandExecutiveSummary}
+        onStart={onStart}
+        onPause={onPause}
+        onCancel={onCancel}
+        onOpen={(target) => {
+          if (target.type === "department") {
+            onOpenDepartment(target.id)
+            return
+          }
+          onOpenCeo()
+        }}
+      />
 
-      {companyContext ? (
+      {!commandCenter && companyContext ? (
         <section className="mt-7 border-y border-zinc-200 py-6 dark:border-white/10" data-testid="company-operating-diagnosis">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -3338,8 +3746,16 @@ function DashboardView({
   checkpointCount,
   proactiveState,
   companyContext,
+  commandCenter,
+  activity,
+  departments,
   departmentCount,
   rootSessionId,
+  onStart,
+  onPause,
+  onCancel,
+  onOpenDepartment,
+  onOpenCeo,
   onOpenTask,
   surface = false,
 }: {
@@ -3350,8 +3766,16 @@ function DashboardView({
   checkpointCount: number
   proactiveState: CodexProactiveState
   companyContext: CodexCompanyContext | null
+  commandCenter: CodexEnterpriseCommandCenter | null
+  activity: CodexProjectActivity[]
+  departments: readonly AgentDepartmentDefinition[]
   departmentCount: number
   rootSessionId: string | null
+  onStart: () => void
+  onPause: () => void
+  onCancel: () => void
+  onOpenDepartment: (departmentId: string) => void
+  onOpenCeo: () => void
   onOpenTask: (sessionId: string) => void
   surface?: boolean
 }) {
@@ -3371,8 +3795,16 @@ function DashboardView({
         checkpointCount={checkpointCount}
         proactiveState={proactiveState}
         companyContext={companyContext}
+        commandCenter={commandCenter}
+        activity={activity}
+        departments={departments}
         departmentCount={departmentCount}
         rootSessionId={rootSessionId}
+        onStart={onStart}
+        onPause={onPause}
+        onCancel={onCancel}
+        onOpenDepartment={onOpenDepartment}
+        onOpenCeo={onOpenCeo}
         onOpenTask={onOpenTask}
       />
     )
