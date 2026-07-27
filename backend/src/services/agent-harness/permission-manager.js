@@ -268,6 +268,10 @@ async function requestPermission(opts = {}) {
             run,
             'waiting_approval',
             String(humanDescription || `Approval required for ${toolName}`),
+            {
+              approvalId: permissionId,
+              tool: String(toolName),
+            },
           )).catch(() => {});
         }
       } catch (_) { /* notifications are best effort */ }

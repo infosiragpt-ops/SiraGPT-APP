@@ -102,7 +102,7 @@ async function notify(prisma, {
   return { notification: row, channels: results };
 }
 
-async function notifyRunState(prisma, run, status, detail = null) {
+async function notifyRunState(prisma, run, status, detail = null, extraMetadata = null) {
   if (!run?.userId) return null;
   const copy = {
     completed: {
@@ -127,6 +127,7 @@ async function notifyRunState(prisma, run, status, detail = null) {
     type: `cowork_${status}`,
     ...copy,
     metadata: {
+      ...(extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {}),
       runId: run.id,
       workspaceId: run.workspaceId,
       chatId: run.chatId,

@@ -11,7 +11,9 @@ import {
   ExternalLink,
   Info,
   Loader2,
+  ShieldCheck,
   UserPlus,
+  XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -20,6 +22,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { apiClient, type UserNotification } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { coworkApi } from "@/lib/cowork-api"
 import { cn } from "@/lib/utils"
 
 const POLL_INTERVAL_MS = 90_000
@@ -51,6 +54,12 @@ function notificationIcon(type: string) {
       return <Info className="h-4 w-4 text-blue-600" />
     case "subscription_expiring":
       return <Clock className="h-4 w-4 text-amber-500" />
+    case "cowork_waiting_approval":
+      return <ShieldCheck className="h-4 w-4 text-amber-600" />
+    case "cowork_completed":
+      return <CheckCircle className="h-4 w-4 text-emerald-600" />
+    case "cowork_failed":
+      return <AlertTriangle className="h-4 w-4 text-red-600" />
     default:
       return <Bell className="h-4 w-4 text-muted-foreground" />
   }
@@ -77,14 +86,22 @@ export default function NotificationCenter() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
+  const [pendingApprovalIds, setPendingApprovalIds] = useState<Set<string>>(new Set())
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null)
 
   const fetchNotifications = useCallback(async (showLoading = false) => {
     if (!user) return
     try {
       if (showLoading) setLoading(true)
-      const data = await apiClient.getNotifications(30)
+      const [data, approvalsResult] = await Promise.all([
+        apiClient.getNotifications(30),
+        coworkApi.listApprovals().catch(() => null),
+      ])
       setNotifications(Array.isArray(data.items) ? data.items : [])
       setUnreadCount(Number(data.unreadCount) || 0)
+      if (approvalsResult) {
+        setPendingApprovalIds(new Set(approvalsResult.approvals.map((approval) => approval.id)))
+      }
     } catch (error) {
       console.error("Error fetching notifications:", error)
     } finally {
@@ -139,6 +156,38 @@ export default function NotificationCenter() {
       toast.error("No se pudieron actualizar las notificaciones.")
     }
   }, [])
+
+  const decideCoworkApproval = useCallback(async (
+    notification: UserNotification,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ) => {
+    setResolvingApprovalId(approvalId)
+    try {
+      await coworkApi.decideApproval(approvalId, decision)
+      setPendingApprovalIds((current) => {
+        const next = new Set(current)
+        next.delete(approvalId)
+        return next
+      })
+      if (!notification.read) await markAsRead(notification.id)
+      toast.success(decision === "allow" ? "Aprobación concedida. La tarea continuará." : "Acción rechazada.")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ""
+      if (/already|expired|not found|resuelt|vencid/i.test(message)) {
+        setPendingApprovalIds((current) => {
+          const next = new Set(current)
+          next.delete(approvalId)
+          return next
+        })
+        toast.info("Esta aprobación ya no está pendiente.")
+      } else {
+        toast.error("No se pudo resolver la aprobación.")
+      }
+    } finally {
+      setResolvingApprovalId(null)
+    }
+  }, [markAsRead])
 
   const unreadLabel = useMemo(() => {
     if (unreadCount <= 0) return "Sin notificaciones nuevas"
@@ -210,9 +259,14 @@ export default function NotificationCenter() {
           ) : (
             <div className="divide-y divide-border/60">
               {notifications.map((notification) => {
-                const href = notification.type === "org_invitation" ? actionHref(notification) : ""
+                const href = actionHref(notification)
                 const projectName = typeof notification.metadata?.projectName === "string"
                   ? notification.metadata.projectName
+                  : ""
+                const approvalId = notification.type === "cowork_waiting_approval"
+                  && typeof notification.metadata?.approvalId === "string"
+                  && pendingApprovalIds.has(notification.metadata.approvalId)
+                  ? notification.metadata.approvalId
                   : ""
 
                 return (
@@ -255,7 +309,40 @@ export default function NotificationCenter() {
                             </span>
                           )}
                         </div>
-                        {href && (
+                        {approvalId && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-8 gap-1.5 rounded-lg px-3 text-xs font-semibold"
+                              disabled={resolvingApprovalId === approvalId}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void decideCoworkApproval(notification, approvalId, "allow")
+                              }}
+                            >
+                              {resolvingApprovalId === approvalId
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <ShieldCheck className="h-3.5 w-3.5" />}
+                              Aprobar
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 gap-1.5 rounded-lg px-3 text-xs font-semibold"
+                              disabled={resolvingApprovalId === approvalId}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void decideCoworkApproval(notification, approvalId, "deny")
+                              }}
+                            >
+                              <XCircle className="h-3.5 w-3.5" />
+                              Rechazar
+                            </Button>
+                          </div>
+                        )}
+                        {href && notification.type === "org_invitation" && (
                           <Button
                             type="button"
                             size="sm"
@@ -268,6 +355,22 @@ export default function NotificationCenter() {
                           >
                             <UserPlus className="h-3.5 w-3.5" />
                             Aceptar invitación
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {href && notification.type !== "org_invitation" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="mt-2 h-8 gap-1.5 rounded-lg px-2 text-xs font-semibold"
+                            onClick={async (event) => {
+                              event.stopPropagation()
+                              if (!notification.read) await markAsRead(notification.id)
+                              window.location.assign(href)
+                            }}
+                          >
+                            Abrir tarea
                             <ExternalLink className="h-3.5 w-3.5" />
                           </Button>
                         )}
