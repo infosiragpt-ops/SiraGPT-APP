@@ -358,6 +358,23 @@ jobs:
               echo "[deploy-workflow] Release metadata commit=${GIT_COMMIT} version=${SIRAGPT_VERSION}"
             }
 
+            read_image_env() {
+              local image="$1" key="$2"
+              docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${image}" \
+                | awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }'
+            }
+
+            verify_backend_image_metadata() {
+              local image="${1:-siragpt-backend:latest}" commit version
+              commit="$(read_image_env "${image}" GIT_COMMIT)"
+              version="$(read_image_env "${image}" SIRAGPT_VERSION)"
+              if [[ "${commit}" != "${TARGET_SHA}" || "${version}" != "${SIRAGPT_VERSION}" ]]; then
+                echo "[deploy-workflow] Backend image metadata mismatch: expected commit=${TARGET_SHA} version=${SIRAGPT_VERSION}; actual commit=${commit:-missing} version=${version:-missing}"
+                return 1
+              fi
+              echo "[deploy-workflow] Backend image metadata verified: commit=${commit} version=${version}"
+            }
+
             resolve_previous_release() {
               local checkout_sha payload candidate_commit candidate_version
               checkout_sha="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')" || return 1
@@ -571,6 +588,7 @@ jobs:
             ${COMPOSE} build runner
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
+            verify_backend_image_metadata siragpt-backend:latest
             if [[ "${ALLOW_MIGRATION_BASELINE}" == "1" ]]; then
               echo "[deploy-workflow] U0 reviewed migration-history baseline (sync residual schema, then mark applied)"
               # 1) prisma db push WITHOUT --accept-data-loss aligns residual
@@ -614,7 +632,7 @@ jobs:
             ${COMPOSE} up -d --no-deps --force-recreate runner
             wait_runner
             echo "[deploy-workflow] Runner health check passed"
-            ${COMPOSE} up -d --no-deps backend frontend
+            ${COMPOSE} up -d --no-deps --force-recreate backend frontend
             wait_ready
             echo "[deploy-workflow] Deploy health check passed: ${READY_URL}"
             wait_frontend
