@@ -385,13 +385,16 @@ router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
     const project = await loadOwnedProjectRecord(req, res);
     if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
+    const companyDepartments = require('../services/codex/company-departments');
     const memory = require('../services/codex/progress-ledger').readProgressContext(project);
     const company = await require('../services/codex/company-operating-profile')
       .loadCompanyOperatingContext({ prisma: codexDb, project });
+    const departments = companyDepartments.readDepartments(project);
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       state: proactive.readProactiveState(project),
-      departments: proactive.DEPARTMENTS,
+      departments,
+      capacity: companyDepartments.capacitySummary(departments),
       memory,
       company,
     });
@@ -415,6 +418,7 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
     const project = await loadOwnedProjectRecord(req, res);
     if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
+    const companyDepartments = require('../services/codex/company-departments');
     const prisma = require('../config/database');
     const out = await proactive.setProactive({ prisma, projectId: project.id, userId: req.user.id, enabled });
     if (!out) return res.status(404).json({ error: 'project_not_found' });
@@ -424,9 +428,45 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
         .then((fresh) => (fresh ? proactive.runCycle({ project: fresh, deps: { prisma } }) : null))
         .catch((err) => console.warn('[codex proactive] first cycle failed:', err?.message || err));
     }
-    return res.json({ state: out.state, departments: proactive.DEPARTMENTS });
+    const fresh = await prisma.codexProject.findFirst({ where: { id: project.id, userId: req.user.id } });
+    const departments = companyDepartments.readDepartments(fresh || project);
+    return res.json({
+      state: out.state,
+      departments,
+      capacity: companyDepartments.capacitySummary(departments),
+    });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
+  }
+});
+
+router.put('/projects/:id/departments', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const department = req.body?.department ?? req.body;
+    if (!department || typeof department !== 'object' || Array.isArray(department)) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        message: 'department must be an object',
+      });
+    }
+    const service = require('../services/codex/company-departments');
+    const departments = await service.upsertDepartment({
+      prisma: codexDb,
+      project,
+      department,
+    });
+    return res.json({
+      departments,
+      capacity: service.capacitySummary(departments),
+    });
+  } catch (err) {
+    const status = err?.message === 'department_name_required' ? 400 : 500;
+    return res.status(status).json({
+      error: status === 400 ? 'validation_failed' : 'codex_departments_failed',
+      message: err.message,
+    });
   }
 });
 
@@ -457,6 +497,15 @@ router.patch('/projects/:id/company-profile', authenticateToken, async (req, res
         message: 'profile must be an object',
       });
     }
+    const requestsAuto = patch.autonomy
+      && typeof patch.autonomy === 'object'
+      && Object.values(patch.autonomy).some((value) => value === 'auto');
+    if (requestsAuto && req.body?.confirmAuto !== true) {
+      return res.status(409).json({
+        error: 'company_auto_confirmation_required',
+        message: 'Explicit confirmation is required before enabling automatic external actions.',
+      });
+    }
     const companyProfile = require('../services/codex/company-operating-profile');
     await companyProfile.writeCompanyProfile({
       prisma: codexDb,
@@ -473,6 +522,176 @@ router.patch('/projects/:id/company-profile', authenticateToken, async (req, res
     return res.json({ company });
   } catch (err) {
     return res.status(500).json({ error: 'codex_company_profile_failed', message: err.message });
+  }
+});
+
+function sendCompanyOperationsError(res, err) {
+  return res.status(Number(err?.status) || 500).json({
+    error: err?.code || 'codex_company_operations_failed',
+    message: String(err?.message || err || 'Company operations failed').slice(0, 2000),
+  });
+}
+
+router.get('/projects/:id/company-operations', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const snapshot = await require('../services/codex/company-operations').getOperationsSnapshot({
+      prisma: codexDb,
+      project,
+      take: req.query?.take,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ operations: snapshot });
+  } catch (err) {
+    return sendCompanyOperationsError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/company-operations/research-leads',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyProfile = require('../services/codex/company-operating-profile');
+      const companyContext = await companyProfile.loadCompanyOperatingContext({
+        prisma: codexDb,
+        project,
+      });
+      const result = await require('../services/codex/company-operations').researchLeads({
+        prisma: codexDb,
+        project,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+      });
+      return res.json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/company-operations/triage-inbox',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const result = await require('../services/codex/company-operations').triageInbox({
+        prisma: codexDb,
+        project,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+        maxResults: req.body?.maxResults,
+      });
+      return res.json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.patch('/projects/:id/company-operations/leads/:leadId', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const allowedStatuses = new Set([
+      'discovered', 'qualified', 'review', 'contacted', 'replied', 'won', 'lost', 'do_not_contact',
+    ]);
+    const data = {};
+    if (typeof req.body?.email === 'string') {
+      const email = req.body.email.trim().toLowerCase().slice(0, 320);
+      if (email && (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) || /[\r\n]/.test(email))) {
+        return res.status(400).json({
+          error: 'validation_failed',
+          message: 'A valid email address is required.',
+        });
+      }
+      data.email = email || null;
+    }
+    if (typeof req.body?.contactName === 'string') data.contactName = req.body.contactName.trim().slice(0, 180) || null;
+    if (allowedStatuses.has(req.body?.status)) data.status = req.body.status;
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'validation_failed', message: 'No valid lead fields supplied.' });
+    }
+    const updated = await codexDb.codexCompanyLead.updateMany({
+      where: { id: req.params.leadId, projectId: project.id, userId: project.userId },
+      data,
+    });
+    if (!updated?.count) return res.status(404).json({ error: 'lead_not_found' });
+    const lead = await codexDb.codexCompanyLead.findFirst({
+      where: { id: req.params.leadId, projectId: project.id, userId: project.userId },
+    });
+    return res.json({ lead });
+  } catch (err) {
+    return sendCompanyOperationsError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/company-operations/leads/:leadId/outreach',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const result = await require('../services/codex/company-operations').prepareLeadOutreach({
+        prisma: codexDb,
+        project,
+        leadId: req.params.leadId,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+      });
+      const status = result.action === 'lead_not_found' ? 404 : result.action === 'lead_email_required' ? 409 : 200;
+      return res.status(status).json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/company-operations/actions/:actionId/approve',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const result = await require('../services/codex/company-operations').approveExternalAction({
+        prisma: codexDb,
+        project,
+        actionId: req.params.actionId,
+      });
+      return res.status(result.action === 'not_found' ? 404 : 200).json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post('/projects/:id/company-operations/actions/:actionId/reject', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const result = await require('../services/codex/company-operations').rejectExternalAction({
+      prisma: codexDb,
+      project,
+      actionId: req.params.actionId,
+    });
+    return res.json({ result });
+  } catch (err) {
+    return sendCompanyOperationsError(res, err);
   }
 });
 

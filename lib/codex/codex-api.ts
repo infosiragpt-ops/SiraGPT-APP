@@ -123,6 +123,10 @@ export interface CodexCompanyProfile {
   }
   updatedAt: string
 }
+export type CodexCompanyProfilePatch =
+  Omit<Partial<CodexCompanyProfile>, "autonomy"> & {
+    autonomy?: Partial<CodexCompanyProfile["autonomy"]>
+  }
 export interface CodexCompanyReadinessArea {
   id: string
   label: string
@@ -199,6 +203,80 @@ export interface CodexProactiveState {
   lastDepartment: string | null
   missionIndex: number
   lastMissionId: string | null
+}
+export interface CodexCompanyDepartment {
+  id: string
+  name: string
+  mission: string
+  description: string
+  keywords: string[]
+  kind: "coordination" | "engineering" | "research" | "external"
+  desiredAgents: number
+  custom: boolean
+  enabled: boolean
+}
+export interface CodexCompanyCapacity {
+  departments: number
+  logicalAgents: number
+  writerConcurrency: number
+  strategy: "parallel_readers_serialized_writer"
+}
+export interface CodexCompanyLead {
+  id: string
+  companyName: string
+  contactName: string | null
+  domain: string | null
+  websiteUrl: string | null
+  email: string | null
+  sourceUrl: string
+  sourceTitle: string | null
+  evidence: string | null
+  status: string
+  score: number
+  tags: string[] | null
+  lastContactedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+export interface CodexCompanyInboxItem {
+  id: string
+  externalId: string
+  senderEmail: string | null
+  senderName: string | null
+  subject: string | null
+  snippet: string | null
+  category: string
+  urgency: string
+  status: string
+  draftBody: string | null
+  providerDraftId: string | null
+  createdAt: string
+  updatedAt: string
+}
+export interface CodexExternalAction {
+  id: string
+  kind: "email_reply" | "lead_outreach" | "social_reply"
+  targetRef: string
+  status: string
+  payload: {
+    body?: string
+    subject?: string
+    to?: string
+    sourceUrl?: string
+  }
+  error: string | null
+  createdAt: string
+  updatedAt: string
+}
+export interface CodexCompanyOperations {
+  counts: {
+    leads: number
+    pendingInbox: number
+    pendingActions: number
+  }
+  leads: CodexCompanyLead[]
+  inboxItems: CodexCompanyInboxItem[]
+  actions: CodexExternalAction[]
 }
 export interface CodexPublicationRelease {
   id: string
@@ -285,9 +363,65 @@ export const codexApi = {
   // Modo PROACTIVO (compañía de agentes autónoma). no-store: el estado cambia
   // desde el ticker del backend, un 304 cacheado dejaría el chip mintiendo.
   getProactive: (id: string) =>
-    req<{ state: CodexProactiveState; departments: Array<{ id: string; name: string; mission: string }>; memory: CodexProgressMemory; company: CodexCompanyContext }>(`/projects/${id}/proactive`, { cache: "no-store" }),
+    req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity; memory: CodexProgressMemory; company: CodexCompanyContext }>(`/projects/${id}/proactive`, { cache: "no-store" }),
   setProactive: (id: string, enabled: boolean) =>
-    req<{ state: CodexProactiveState }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
+    req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  upsertDepartment: (id: string, department: Partial<CodexCompanyDepartment> & { name: string }) =>
+    req<{ departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity }>(
+      `/projects/${id}/departments`,
+      { method: "PUT", body: JSON.stringify({ department }) },
+    ),
+  getCompanyProfile: (id: string) =>
+    req<{ company: CodexCompanyContext }>(`/projects/${id}/company-profile`, { cache: "no-store" })
+      .then((result) => result.company),
+  updateCompanyProfile: (
+    id: string,
+    profile: CodexCompanyProfilePatch,
+    options?: { confirmAuto?: boolean },
+  ) =>
+    req<{ company: CodexCompanyContext }>(`/projects/${id}/company-profile`, {
+      method: "PATCH",
+      body: JSON.stringify({ profile, confirmAuto: options?.confirmAuto === true }),
+    }).then((result) => result.company),
+  getCompanyOperations: (id: string) =>
+    req<{ operations: CodexCompanyOperations }>(
+      `/projects/${id}/company-operations`,
+      { cache: "no-store" },
+    ).then((result) => result.operations),
+  researchCompanyLeads: (id: string) =>
+    req<{ result: { action: string; leads?: CodexCompanyLead[]; sourceCount?: number } }>(
+      `/projects/${id}/company-operations/research-leads`,
+      { method: "POST" },
+    ).then((result) => result.result),
+  triageCompanyInbox: (id: string, maxResults = 15) =>
+    req<{ result: { action: string; items: CodexCompanyInboxItem[]; actions: CodexExternalAction[] } }>(
+      `/projects/${id}/company-operations/triage-inbox`,
+      { method: "POST", body: JSON.stringify({ maxResults }) },
+    ).then((result) => result.result),
+  updateCompanyLead: (
+    id: string,
+    leadId: string,
+    patch: { email?: string | null; contactName?: string | null; status?: string },
+  ) =>
+    req<{ lead: CodexCompanyLead }>(`/projects/${id}/company-operations/leads/${leadId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }).then((result) => result.lead),
+  prepareLeadOutreach: (id: string, leadId: string) =>
+    req<{ result: { action: string; record: CodexExternalAction | null } }>(
+      `/projects/${id}/company-operations/leads/${leadId}/outreach`,
+      { method: "POST" },
+    ).then((result) => result.result),
+  approveCompanyAction: (id: string, actionId: string) =>
+    req<{ result: { action: string; record: CodexExternalAction | null } }>(
+      `/projects/${id}/company-operations/actions/${actionId}/approve`,
+      { method: "POST" },
+    ).then((result) => result.result),
+  rejectCompanyAction: (id: string, actionId: string) =>
+    req<{ result: { action: string } }>(
+      `/projects/${id}/company-operations/actions/${actionId}/reject`,
+      { method: "POST" },
+    ).then((result) => result.result),
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string; autoExecute?: boolean }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),

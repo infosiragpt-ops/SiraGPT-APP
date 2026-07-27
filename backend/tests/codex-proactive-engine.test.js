@@ -58,6 +58,43 @@ test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', asyn
   assert.equal(p.deptIndex, 1, 'round-robin advances');
 });
 
+test('concurrent schedulers acquire one proactive lease per project', async () => {
+  const project = {
+    ...PROJECT,
+    id: 'lease-project',
+    brief: { proactive: { enabled: true } },
+  };
+  const prisma = fakePrisma({ project });
+  let enteredResolve;
+  const entered = new Promise((resolve) => { enteredResolve = resolve; });
+  let completeResolve;
+  const complete = new Promise((resolve) => { completeResolve = resolve; });
+  const first = engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => ({ id: 'leased-run' }) },
+      chatComplete: async () => {
+        enteredResolve();
+        await complete;
+        return { content: '{"title":"Tarea única","goal":"Ejecuta una sola propuesta."}' };
+      },
+    },
+  });
+  await entered;
+  const second = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not run'); } },
+      chatComplete: async () => { throw new Error('must not call'); },
+    },
+  });
+  assert.equal(second.action, 'skipped_cycle_leased');
+  completeResolve();
+  assert.equal((await first).action, 'proposed');
+});
+
 test('CEO Office grounds planning in readiness and persists the shared company profile', async () => {
   const prisma = fakePrisma({ project: PROJECT });
   prisma.socialConnection = { findMany: async () => [] };
@@ -157,12 +194,13 @@ test('every Kth proposal is a QA cycle and does not advance the department curso
 });
 
 test('Marketing department delegates to social-company instead of creating a code run', async () => {
+  const marketingIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'marketing');
   const project = {
     ...PROJECT,
     status: 'ready',
     workspacePath: 'projects/p1',
     brief: {
-      proactive: { enabled: true, deptIndex: 7, missionIndex: 3 },
+      proactive: { enabled: true, deptIndex: marketingIndex, missionIndex: 3 },
       companyProfile: {
         mission: 'Operar empresas con agentes.',
         vision: 'Ser el mejor agente de código empresarial.',
@@ -196,8 +234,114 @@ test('Marketing department delegates to social-company instead of creating a cod
   });
   assert.equal(calls, 1);
   assert.equal(result.action, 'marketing_drafted_review');
-  assert.equal(engine.readProactiveState(prisma.state.project).deptIndex, 0);
+  assert.equal(
+    engine.readProactiveState(prisma.state.project).deptIndex,
+    (marketingIndex + 1) % engine.DEPARTMENTS.length,
+  );
   assert.equal(prisma.state.project.brief.ledger[0].runId, 'social:post-1');
+});
+
+test('Sales department performs evidence-backed lead research instead of creating code', async () => {
+  const salesIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'sales');
+  const project = {
+    ...PROJECT,
+    brief: {
+      proactive: { enabled: true, deptIndex: salesIndex },
+      companyProfile: {
+        offer: 'Agentes de software',
+        targetCustomer: 'Empresas B2B',
+      },
+    },
+  };
+  const prisma = fakePrisma({ project });
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create code'); } },
+      companyOperations: {
+        researchLeads: async () => ({
+          action: 'leads_saved',
+          leads: [{ id: 'lead-1' }, { id: 'lead-2' }],
+          sourceCount: 9,
+        }),
+      },
+      chatComplete: async () => { throw new Error('operations stub owns the model'); },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(result.action, 'sales_leads_saved');
+  assert.equal(result.leads, 2);
+  assert.equal(prisma.state.project.brief.ledger[0].outcome, 'passed');
+});
+
+test('Customer Success creates review-first inbox work and records it in the ledger', async () => {
+  const departmentIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'customer-success');
+  const project = {
+    ...PROJECT,
+    brief: { proactive: { enabled: true, deptIndex: departmentIndex } },
+  };
+  const prisma = fakePrisma({ project });
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create code'); } },
+      companyOperations: {
+        triageInbox: async () => ({
+          action: 'triaged_review',
+          items: [{ id: 'inbox-1' }],
+          actions: [{ id: 'action-1', status: 'pending_review' }],
+          policy: { mode: 'review' },
+        }),
+      },
+      chatComplete: async () => { throw new Error('operations stub owns the model'); },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(result.action, 'customer_success_triaged_review');
+  assert.equal(result.inboxItems, 1);
+  assert.equal(result.actions, 1);
+  assert.match(prisma.state.project.brief.ledger[0].acceptance[0].evidence, /policy=review/);
+});
+
+test('custom departments participate in the persisted round-robin', async () => {
+  const project = {
+    ...PROJECT,
+    brief: {
+      proactive: {
+        enabled: true,
+        deptIndex: engine.DEPARTMENTS.length,
+      },
+      companyDepartments: [{
+        id: 'custom-partnerships',
+        name: 'Alianzas',
+        mission: 'Identifica alianzas verificables para distribución.',
+        desiredAgents: 40,
+      }],
+    },
+  };
+  const prisma = fakePrisma({ project });
+  const created = [];
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async (args) => {
+          created.push(args);
+          return { id: 'partnership-plan' };
+        },
+      },
+      chatComplete: async () => ({
+        content: '{"title":"Mapea alianzas","goal":"Documenta cinco aliados con evidencia publica."}',
+      }),
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(result.department, 'custom-partnerships');
+  assert.match(created[0].prompt, /^\[PROACTIVO · Alianzas\]/);
+  assert.equal(engine.readProactiveState(prisma.state.project).deptIndex, 0);
 });
 
 test('cycle phase 2: auto-approves ONLY its own waiting plan (creates the build)', async () => {

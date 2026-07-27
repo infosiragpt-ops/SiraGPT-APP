@@ -149,8 +149,10 @@ import { selectCodexContinuityRun } from "@/lib/codex/run-continuity"
 import { openRunStream } from "@/lib/codex/run-stream"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
 import {
+  codexExecutiveSummaryMarkdown,
   codexLiveActionsMarkdown,
   codexLiveContent,
+  codexLivePatchMarkdown,
   foldCodexEvent,
   initialCodexEngineFold,
   type CodexEngineFoldState,
@@ -2899,9 +2901,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           read?: Array<{ path: string; content: string }>
           label?: string
           phases?: CodeAgentPhase[]
+          voiceText?: string
         },
       ) => {
-        if (meta?.written && meta.written.length > 0) markVoiced(assistantId)
+        if ((meta?.written && meta.written.length > 0) || meta?.voiceText) markVoiced(assistantId)
         setTurns((prev) =>
           prev.map((t) => {
             if (t.id !== assistantId) return t
@@ -2953,15 +2956,18 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 ...base,
                 actions,
                 metrics,
-                voice: buildSpokenSummary({
-                  kind: iterate ? "patch" : "engine",
-                  filesChanged: metrics.filesChanged,
-                  durationMs: metrics.timeWorkedMs,
-                  entities: spokenEntities,
-                  pending: spokenPending,
-                }),
+                voice:
+                  meta?.voiceText ||
+                  buildSpokenSummary({
+                    kind: iterate ? "patch" : "engine",
+                    filesChanged: metrics.filesChanged,
+                    durationMs: metrics.timeWorkedMs,
+                    entities: spokenEntities,
+                    pending: spokenPending,
+                  }),
               }
             }
+            if (meta?.voiceText) return { ...base, voice: meta.voiceText }
             return base
           }),
         )
@@ -2977,7 +2983,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           const applyRender = () => {
             // Narrative + the Claude Code-style live action feed (⏺ Escribiendo
             // `src/App.tsx`… → ✓) so the user watches the agent work in vivo.
-            const live = `${codexLiveContent(state)}${codexLiveActionsMarkdown(state)}`.trim()
+            const live = `${codexLiveContent(state)}${codexLiveActionsMarkdown(state)}${codexLivePatchMarkdown(state)}`.trim()
             const phaseDetail =
               state.status === "waiting_approval"
                 ? "Plan propuesto"
@@ -3017,7 +3023,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               const nextState = foldCodexEvent(state, ev)
               if (nextState !== state) {
                 state = nextState
-                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start" || ev.type === "action_end") {
+                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start" || ev.type === "action_end" || ev.type === "file_patch" || ev.type === "executive_summary") {
                   lastPhase = state.phase
                   applyRender()
                 }
@@ -3240,7 +3246,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           return
         }
 
-        const narrative = codexLiveContent(fold)
+        const narrative = `${codexLiveContent(fold)}${codexExecutiveSummaryMarkdown(fold)}`.trim()
+        const executiveVoice = fold.executiveSummary?.audioText
         const succeeded = fold.status === "done"
         const markBuildSynchronized = () => {
           if (completedBuildRunId) {
@@ -3300,7 +3307,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               narrative
                 ? `${narrative}\n\n_(Agente Codex: ${tally} →)_`
                 : `✅ Agente Codex — ${tally} →`,
-              { written },
+              { written, voiceText: executiveVoice },
             )
             if (pullFailed.length > 0) toast.warning(`Agente Codex — ${tally}`)
             else toast.success(`Agente Codex — ${written.length} archivo(s) →`)
@@ -3310,13 +3317,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // render the narrative if any, else fall through to the fallback.
           if (narrative && iterate) {
             markBuildSynchronized()
-            finish(narrative)
+            finish(narrative, { voiceText: executiveVoice })
             return
           }
           // A successful run with no pullable files has still been inspected.
           // Do not replay it after every reload; a fresh user turn can iterate
           // on the same durable project normally.
           markBuildSynchronized()
+        }
+
+        if (fold.executiveSummary?.status === "failed") {
+          finish(
+            narrative || "_La verificación detectó errores y no aplicó cambios como resultado exitoso._",
+            {
+              label: "Requiere corrección",
+              voiceText: executiveVoice,
+            },
+          )
+          return
         }
 
         // 5) FALLBACK: the run failed / produced nothing usable → deterministic
@@ -3342,7 +3360,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           toast.success("App generada (builder determinista) →")
           return
         }
-        finish(narrative || "_(el agente no devolvió cambios)_")
+        finish(narrative || "_(el agente no devolvió cambios)_", { voiceText: executiveVoice })
       } catch (err: any) {
         const aborted =
           cancelledTurn() ||

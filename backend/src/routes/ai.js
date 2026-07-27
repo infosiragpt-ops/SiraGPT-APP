@@ -9413,7 +9413,8 @@ But first, you need to connect your Gmail account securely using the button belo
 
       // Decrypt Gmail tokens
       const { decrypt, encrypt } = require('../utils/encryption');
-      const gmailService = require('../services/gmail');
+      const gmailModule = require('../services/gmail');
+      const gmailService = gmailModule.createGmailService();
 
       let decryptedTokens;
       try {

@@ -32,18 +32,13 @@ const progressLedger = require('./progress-ledger');
 const proactiveMetrics = require('./proactive-metrics');
 const companyOperatingProfile = require('./company-operating-profile');
 const companyMissionOrchestrator = require('./company-mission-orchestrator');
+const companyDepartments = require('./company-departments');
+const proactiveLease = require('./proactive-lease');
+const { mutateProjectBrief } = require('./project-brief-store');
 
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
-const DEPARTMENTS = Object.freeze([
-  { id: 'ceo-office', name: 'CEO Office', mission: 'Define prioridades, conserva decisiones y coordina el trabajo del resto de departamentos. Propone la mejora de mayor impacto para el producto AHORA.' },
-  { id: 'agent-infrastructure', name: 'Infraestructura de Agentes', mission: 'Orquestación, runners, aislamiento y continuidad operativa. Propone mejoras de robustez, rendimiento o developer-experience del propio proyecto.' },
-  { id: 'growth-engines', name: 'Motores de Crecimiento y Distribución', mission: 'Adquisición, distribución, monetización y crecimiento medible. Propone features orientadas a conseguir y retener usuarios.' },
-  { id: 'localization', name: 'Localización e IA Transcultural', mission: 'Idiomas, regiones, accesibilidad cultural y adaptación de mercado. Propone internacionalización y accesibilidad.' },
-  { id: 'integrations', name: 'Ecosistema de Integraciones y Conectores', mission: 'APIs, canales, conectores, herramientas y automatizaciones. Propone integraciones que multipliquen el valor del producto.' },
-  { id: 'trust', name: 'Confianza, Privacidad y Cumplimiento', mission: 'Seguridad, privacidad, cumplimiento y manejo responsable de datos. Propone endurecimiento y transparencia.' },
-  { id: 'product-engineering', name: 'Producto e Ingeniería SiraGPT', mission: 'Arquitectura, experiencia de producto y entrega verificable. Propone y construye mejoras incrementales con pruebas.' },
-  { id: 'marketing', name: 'Marketing', mission: 'Posicionamiento, contenido y campañas medibles. Prepara activos y distribución; las publicaciones externas solo se ejecutan mediante cuentas conectadas y la política explícita de Recursos.' },
-]);
+const DEPARTMENTS = companyDepartments.BUILT_IN_DEPARTMENTS;
+const DIRECT_OPERATION_DEPARTMENTS = new Set(['sales', 'customer-success', 'marketing']);
 
 function dayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
@@ -70,19 +65,16 @@ function readProactiveState(project) {
 }
 
 async function writeProactiveState({ prisma, project, patch }) {
-  // A run can append to brief.ledger while the scheduler is still holding an
-  // older project snapshot. Reload before merging so a state tick never erases
-  // newly-written long-term memory or objectives.
-  const fresh = prisma?.codexProject?.findUnique
-    ? await prisma.codexProject.findUnique({ where: { id: project.id } }).catch(() => null)
-    : null;
-  const source = fresh || project;
-  const brief = source && typeof source.brief === 'object' && source.brief !== null ? source.brief : {};
-  const current = readProactiveState(source);
-  const next = { ...current, ...patch };
-  await prisma.codexProject.update({
-    where: { id: project.id },
-    data: { brief: { ...brief, proactive: next } },
+  let next = null;
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief, fresh) => {
+      const current = readProactiveState({ ...fresh, brief });
+      next = { ...current, ...patch };
+      return { ...brief, proactive: next };
+    },
   });
   return next;
 }
@@ -150,6 +142,57 @@ function autoMarketingTask(result = {}) {
   return `Sin efecto externo: ${result.action || 'política no disponible'}.`;
 }
 
+async function finishOperationalCycle({
+  prisma,
+  project,
+  state,
+  today,
+  now,
+  spentUsd,
+  budgetUsd,
+  departments,
+  department,
+  runId,
+  outcome,
+  task,
+  evidence,
+  learnings,
+}) {
+  await progressLedger.appendLedgerEntry({
+    prisma,
+    project,
+    entry: {
+      department: department.name,
+      runId,
+      outcome,
+      task,
+      diffstat: { additions: 0, deletions: 0, filesChanged: 0 },
+      acceptance: [{
+        criterion: 'La operación queda respaldada por registros reales y respeta la política de autonomía.',
+        passed: outcome === 'passed',
+        evidence,
+      }],
+      learnings,
+      createdAt: now().toISOString(),
+    },
+  });
+  await writeProactiveState({
+    prisma,
+    project,
+    patch: {
+      dayKey: today,
+      runsToday: (state.dayKey === today ? state.runsToday : 0) + 1,
+      deptIndex: (state.deptIndex + 1) % departments.length,
+      lastCycleAt: now().toISOString(),
+      lastError: outcome === 'passed' ? null : task,
+      costTodayUsd: spentUsd,
+      dailyBudgetUsd: budgetUsd,
+      budgetBlocked: false,
+      lastDepartment: department.id,
+    },
+  });
+}
+
 /** LLM proposal: the department's next most valuable task for this project. */
 async function proposeTask({
   project,
@@ -165,8 +208,8 @@ async function proposeTask({
   chatComplete,
 }) {
   const responseSchema = department.id === 'ceo-office'
-    ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
-    : '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"objectives":[]}';
+    ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
+    : '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[]}';
   const messages = [
     {
       role: 'system',
@@ -176,6 +219,7 @@ async function proposeTask({
         `Responde SOLO JSON: ${responseSchema}.`,
         'La tarea debe ser INCREMENTAL sobre lo ya construido (no re-hacer lo existente), y del ámbito del departamento.',
         'Incluye entre 2 y 5 criterios de aceptación observables. No uses criterios vagos como "que se vea bien".',
+        'Para swarm elige de 2 a 6 especialistas de solo lectura con tareas distintas que puedan ejecutarse en paralelo antes de escribir. Usa market_researcher/sales_strategist/customer_success solo cuando el objetivo empresarial lo requiera.',
         department.id === 'ceo-office'
           ? 'Como CEO Office, re-prioriza objectives con un máximo de 5 OKR medibles y actualiza companyProfile solo con hechos sostenidos por el contexto. Conserva ids estables cuando un objetivo siga vigente; usa null cuando un dato del negocio no esté confirmado.'
           : 'Para objectives devuelve [] y enlaza la tarea a los objectiveIds vigentes que corresponda.',
@@ -234,6 +278,7 @@ async function proposeTask({
     companyProfile: department.id === 'ceo-office' && parsed.companyProfile && typeof parsed.companyProfile === 'object'
       ? parsed.companyProfile
       : null,
+    swarm: progressLedger.normalizeSwarm(parsed.swarm),
   };
 }
 
@@ -324,7 +369,11 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
   if (maxPerDay(env) === 0 || runsToday >= maxPerDay(env)) return { action: 'skipped_budget' };
 
   // Phase 1 — CEO Office selects a grounded mission, then routes it to the
-  // responsible department. QA cycles remain independent quality gates.
+  // responsible department. Persisted/custom departments remain the fallback,
+  // and QA cycles remain independent quality gates.
+  const departments = companyDepartments.readDepartments(project)
+    .filter((department) => department.enabled !== false);
+  if (!departments.length) return { action: 'skipped_no_department' };
   const qaEvery = qaEveryCycles(env);
   const qaCycle = qaEvery > 0 && (runsToday + 1) % qaEvery === 0;
   const memory = progressLedger.readProgressContext(project);
@@ -333,14 +382,20 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     project,
     now: now(),
   });
-  const selectedMission = qaCycle
+  const prioritizedMission = qaCycle
     ? null
     : companyMissionOrchestrator.selectMissionForCycle(
       companyContext.portfolio,
       state.missionIndex,
     );
+  const roundRobinDepartment = departments[state.deptIndex % departments.length];
+  const directDepartmentTurn = !qaCycle && (
+    roundRobinDepartment.custom === true
+    || DIRECT_OPERATION_DEPARTMENTS.has(roundRobinDepartment.id)
+  );
+  const selectedMission = directDepartmentTurn ? null : prioritizedMission;
   const missionDepartment = selectedMission
-    ? DEPARTMENTS.find((entry) => entry.id === selectedMission.departmentId)
+    ? departments.find((entry) => entry.id === selectedMission.departmentId)
     : null;
   const department = qaCycle
     ? {
@@ -348,7 +403,9 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       name: 'QA Reviewer',
       mission: 'Audita el diff acumulado, ejecuta pruebas y corrige regresiones antes de que el producto siga creciendo.',
     }
-    : missionDepartment || DEPARTMENTS[state.deptIndex % DEPARTMENTS.length];
+    : directDepartmentTurn
+      ? roundRobinDepartment
+      : missionDepartment || roundRobinDepartment;
   const chatComplete = deps.chatComplete || ((a) => require('./llm-provider').chatComplete(a));
 
   // Marketing is an external-effect department, not another code generator.
@@ -391,7 +448,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       patch: {
         dayKey: today,
         runsToday: runsToday + 1,
-        deptIndex: (state.deptIndex + 1) % DEPARTMENTS.length,
+        deptIndex: (state.deptIndex + 1) % departments.length,
         lastCycleAt: now().toISOString(),
         lastError: outcome === 'passed' ? null : `Marketing no ejecutó efecto externo: ${result.action}.`,
         costTodayUsd: spentUsd,
@@ -407,6 +464,90 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       department: department.id,
       postId: result.postId || null,
       policyOutcome: result.action,
+    };
+  }
+
+  if (!qaCycle && department.id === 'sales') {
+    const operations = deps.companyOperations || require('./company-operations');
+    const result = await operations.researchLeads({
+      prisma,
+      project,
+      companyContext,
+      chatComplete,
+      webSearch: deps.webSearch,
+      now,
+    });
+    const passed = ['leads_saved', 'no_qualified_results', 'no_results'].includes(result.action);
+    await finishOperationalCycle({
+      prisma,
+      project,
+      state,
+      today,
+      now,
+      spentUsd,
+      budgetUsd,
+      departments,
+      department,
+      runId: `sales:${today}:${project.id}`,
+      outcome: passed ? 'passed' : 'blocked',
+      task: result.action === 'leads_saved'
+        ? `${result.leads.length} prospecto(s) investigados y guardados con fuente pública.`
+        : `Investigación comercial: ${result.action}.`,
+      evidence: `${result.sourceCount || 0} fuente(s), ${result.leads?.length || 0} lead(s) persistidos.`,
+      learnings: [`Ventas → pipeline: ${result.action}.`],
+    });
+    return {
+      action: `sales_${result.action}`,
+      department: department.id,
+      leads: result.leads?.length || 0,
+    };
+  }
+
+  if (!qaCycle && department.id === 'customer-success') {
+    const operations = deps.companyOperations || require('./company-operations');
+    let result;
+    try {
+      result = await operations.triageInbox({
+        prisma,
+        project,
+        companyContext,
+        chatComplete,
+        gmailLoader: deps.gmailLoader,
+        env,
+        now,
+      });
+    } catch (error) {
+      result = {
+        action: error?.code || 'inbox_unavailable',
+        items: [],
+        actions: [],
+        error: String(error?.message || error).slice(0, 500),
+      };
+    }
+    const passed = ['inbox_clear', 'triaged_review', 'triaged_auto'].includes(result.action);
+    await finishOperationalCycle({
+      prisma,
+      project,
+      state,
+      today,
+      now,
+      spentUsd,
+      budgetUsd,
+      departments,
+      department,
+      runId: `inbox:${today}:${project.id}`,
+      outcome: passed ? 'passed' : 'blocked',
+      task: passed
+        ? `${result.items.length} correo(s) revisados; ${result.actions.length} acción(es) trazables.`
+        : `Bandeja no procesada: ${result.error || result.action}.`,
+      evidence: `inbox=${result.items.length}; actions=${result.actions.length}; policy=${result.policy?.mode || 'n/a'}.`,
+      learnings: [`Clientes y Soporte → inbox: ${result.action}.`],
+    });
+    return {
+      action: `customer_success_${result.action}`,
+      department: department.id,
+      inboxItems: result.items.length,
+      actions: result.actions.length,
     };
   }
 
@@ -466,6 +607,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     objectiveIds: proposal.objectiveIds,
     qaCycle,
     missionId: selectedMission?.id || null,
+    swarm: proposal.swarm,
   });
   const run = await runService.createRun({
     userId: project.userId,
@@ -480,7 +622,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     patch: {
       dayKey: today,
       runsToday: runsToday + 1,
-      deptIndex: qaCycle ? state.deptIndex : (state.deptIndex + 1) % DEPARTMENTS.length,
+      deptIndex: qaCycle ? state.deptIndex : (state.deptIndex + 1) % departments.length,
       lastCycleAt: now().toISOString(),
       lastError: null,
       costTodayUsd: spentUsd,
@@ -503,10 +645,26 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
 async function runCycle(args) {
   const startedAt = Date.now();
   let result;
+  let lease = null;
   try {
+    const currentTime = args?.now ? args.now() : new Date();
+    lease = await proactiveLease.acquireProactiveLease({
+      prisma: args?.deps?.prisma,
+      projectId: args?.project?.id,
+      now: currentTime,
+      env: args?.env,
+    });
+    if (!lease) {
+      result = { action: 'skipped_cycle_leased' };
+      return result;
+    }
     result = await runCycleInternal(args);
     return result;
   } finally {
+    await proactiveLease.releaseProactiveLease({
+      prisma: args?.deps?.prisma,
+      lease,
+    }).catch(() => {});
     proactiveMetrics.recordCycle({
       action: result?.action || 'error',
       department: result?.department || progressLedger.taskMetaFromPrompt(args?.project?.prompt)?.departmentId || 'none',

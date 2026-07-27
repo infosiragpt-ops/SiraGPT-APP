@@ -6,6 +6,11 @@ export type AgentDepartmentDefinition = {
   name: string
   description: string
   keywords: readonly string[]
+  mission?: string
+  kind?: "coordination" | "engineering" | "research" | "external"
+  desiredAgents?: number
+  custom?: boolean
+  enabled?: boolean
 }
 
 export type AgentCompanySessionStatus = {
@@ -75,7 +80,7 @@ export const AGENT_COMPANY_DEPARTMENTS: readonly AgentDepartmentDefinition[] = [
   },
   {
     id: "product-engineering",
-    name: "Producto e Ingeniería SiraGPT",
+    name: "Producto e Ingeniería",
     description: "Arquitectura, experiencia de producto y entrega verificable.",
     keywords: ["producto", "frontend", "backend", "diseño", "diseno", "código", "codigo", "build", "preview"],
   },
@@ -96,6 +101,30 @@ export const AGENT_COMPANY_DEPARTMENTS: readonly AgentDepartmentDefinition[] = [
     name: "INGENIEROS 02",
     description: "Validación técnica, QA, depuración e integración final.",
     keywords: ["ingenieros 02", "ingeniería 02", "ingenieria 02", "qa", "test", "debug", "equipo 2"],
+  },
+  {
+    id: "market-intelligence",
+    name: "Inteligencia de Mercado",
+    description: "Investigación real de mercado, competencia y oportunidades.",
+    keywords: ["mercado", "competencia", "investigación", "investigacion", "tendencias", "oportunidades"],
+  },
+  {
+    id: "sales",
+    name: "Ventas",
+    description: "Prospección, calificación, seguimiento y cierre.",
+    keywords: ["ventas", "clientes", "leads", "prospectos", "crm", "cierre"],
+  },
+  {
+    id: "customer-success",
+    name: "Clientes y Soporte",
+    description: "Correo, soporte, éxito del cliente y respuestas.",
+    keywords: ["cliente", "soporte", "correo", "gmail", "respuesta", "comentario"],
+  },
+  {
+    id: "website-distribution",
+    name: "Web y Distribución",
+    description: "Sitio, landing, publicación, SEO y conversión.",
+    keywords: ["web", "sitio", "landing", "publicación", "publicacion", "seo", "conversión", "conversion"],
   },
 ] as const
 

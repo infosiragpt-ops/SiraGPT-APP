@@ -11,6 +11,7 @@
 const PROFILE_VERSION = 1;
 const MAX_GAPS = 12;
 const EXTERNAL_ACTION_MODES = Object.freeze(['review', 'auto', 'off']);
+const { mutateProjectBrief } = require('./project-brief-store');
 
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -103,18 +104,21 @@ async function writeCompanyProfile({
   now = new Date(),
 }) {
   if (!prisma?.codexProject?.update || !project?.id) return null;
-  const fresh = prisma.codexProject.findUnique
-    ? await prisma.codexProject.findUnique({ where: { id: project.id } }).catch(() => null)
-    : null;
-  const sourceProject = fresh || project;
-  const brief = asBriefRecord(sourceProject.brief);
-  const profile = mergeCompanyProfile(brief.companyProfile, patch, {
-    companyName: sourceProject.name,
-    now,
-  });
-  await prisma.codexProject.update({
-    where: { id: project.id },
-    data: { brief: { ...brief, companyProfile: profile } },
+  let profile = null;
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief, sourceProject) => {
+      const source = Object.keys(brief).length
+        ? asBriefRecord(brief)
+        : asBriefRecord(sourceProject.brief);
+      profile = mergeCompanyProfile(source.companyProfile, patch, {
+        companyName: sourceProject.name,
+        now,
+      });
+      return { ...source, companyProfile: profile };
+    },
   });
   return profile;
 }

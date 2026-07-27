@@ -1,6 +1,6 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
-const gmailService = require('../services/gmail');
+const { loadGmailClientForUser } = require('../services/gmail-user-client');
 const prisma = require('../config/database');
 
 const router = express.Router();
@@ -14,56 +14,9 @@ function clampMaxResults(raw, def = 10, max = 100) {
   return Math.max(1, Math.min(max, n || def));
 }
 
-// Helper function to get user's Gmail tokens
-async function getUserGmailTokens(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { gmailTokens: true }
-  });
-
-  if (!user?.gmailTokens) {
-    throw new Error('Gmail not connected. Please connect Gmail in settings.');
-  }
-
-  const { decrypt } = require('../utils/encryption');
-  let tokens;
-  
-  try {
-    tokens = JSON.parse(decrypt(user.gmailTokens));
-  } catch (error) {
-    throw new Error('Invalid Gmail tokens. Please reconnect Gmail.');
-  }
-  
-  // Check if tokens are expired and need refresh (Google tokens expire in ~1 hour)
-  const isExpired = tokens.expiresAt && tokens.expiresAt < Date.now();
-  
-  if (isExpired) {
-    console.log('Gmail tokens expired for user', userId, 'attempting refresh...');
-    try {
-      const gmailService = require('../services/gmail');
-      const refreshedTokens = await gmailService.refreshTokens(tokens);
-      
-      if (refreshedTokens) {
-        console.log('Token refresh successful for user', userId);
-        // Update user with new tokens
-        const { encrypt } = require('../utils/encryption');
-        await prisma.user.update({
-          where: { id: userId },
-          data: { 
-            gmailTokens: encrypt(JSON.stringify(refreshedTokens))
-          }
-        });
-        return refreshedTokens;
-      } else {
-        throw new Error('Token refresh failed');
-      }
-    } catch (refreshError) {
-      console.error('Token refresh failed for user', userId, ':', refreshError);
-      throw new Error('Gmail tokens expired. Please reconnect Gmail.');
-    }
-  }
-  
-  return tokens;
+async function getUserGmailClient(userId) {
+  const loaded = await loadGmailClientForUser({ prisma, userId });
+  return loaded.client;
 }
 
 // Check Gmail connection status
@@ -115,9 +68,7 @@ router.post('/send', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: to, subject, body' });
     }
 
-    // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const result = await gmailService.sendEmail({ to, subject, body });
 
@@ -138,9 +89,7 @@ router.get('/emails', authenticateToken, async (req, res) => {
   try {
     const { query = '', limit = 10 } = req.query;
 
-    // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const emails = await gmailService.getEmails({
       query,
@@ -163,9 +112,7 @@ router.delete('/email/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
 
-    // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const result = await gmailService.deleteEmail({ messageId });
 
@@ -189,9 +136,7 @@ router.post('/reply', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: threadId, messageId, body' });
     }
 
-    // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const result = await gmailService.replyToEmail({ threadId, messageId, body });
 
@@ -216,9 +161,7 @@ router.get('/search', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Search query is required' });
     }
 
-    // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const emails = await gmailService.searchEmails({
       query: q,
@@ -244,8 +187,7 @@ router.patch('/email/:messageId/mark', authenticateToken, async (req, res) => {
     const { read = true } = req.body;
 
     // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const result = await gmailService.markEmail({ messageId, read });
 
@@ -266,8 +208,7 @@ router.patch('/email/:messageId/star', authenticateToken, async (req, res) => {
     const { messageId } = req.params;
     const { starred = true } = req.body;
 
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const result = await gmailService.starEmail({ messageId, starred });
 
@@ -288,8 +229,7 @@ router.patch('/email/:messageId/archive', authenticateToken, async (req, res) =>
     const { messageId } = req.params;
     const { archive = true } = req.body;
 
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const result = await gmailService.archiveEmail({ messageId, archive });
 
@@ -309,9 +249,7 @@ router.get('/thread/:threadId', authenticateToken, async (req, res) => {
   try {
     const { threadId } = req.params;
 
-    // Get user's Gmail tokens
-    const tokens = await getUserGmailTokens(req.user.id);
-    gmailService.setCredentials(tokens);
+    const gmailService = await getUserGmailClient(req.user.id);
 
     const thread = await gmailService.getThread({ threadId });
 
@@ -327,3 +265,4 @@ router.get('/thread/:threadId', authenticateToken, async (req, res) => {
 
 module.exports = router;
 module.exports.clampMaxResults = clampMaxResults;
+module.exports.getUserGmailClient = getUserGmailClient;
