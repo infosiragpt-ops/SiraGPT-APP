@@ -29,6 +29,7 @@ const {
 const { getPresenceTracker } = require('./presence');
 const { getTypingIndicator } = require('./typing-indicator');
 const { CursorThrottler } = require('./cursor-sharing');
+const { attachWebSocketPath } = require('../../utils/websocket-upgrade-router');
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const WS_PATH = '/ws/realtime';
@@ -139,7 +140,8 @@ function initRealtimeServer(server, opts = {}) {
   const path = opts.path || WS_PATH;
   const logger = opts.logger || { info() {}, warn() {}, error() {} };
 
-  const wss = new WebSocket.Server({ server, path });
+  const wss = new WebSocket.Server({ noServer: true });
+  const detachUpgrade = attachWebSocketPath(server, wss, path);
   const userIndex = new Map();
   const chatIndex = new Map();
   const orgIndex = new Map();
@@ -379,6 +381,7 @@ function initRealtimeServer(server, opts = {}) {
     revalidateAuthenticatedSockets,
     _onTypingStop: onTypingStop,
     _unsubscribeRevocations: unsubscribeRevocations,
+    detachUpgrade,
   };
   return _state;
 }
@@ -418,6 +421,7 @@ function closeRealtimeServer() {
   try { state.typing.off('stop', state._onTypingStop); } catch {}
   try { state.cursor.dispose(); } catch {}
   try { state._unsubscribeRevocations?.(); } catch {}
+  try { state.detachUpgrade?.(); } catch {}
 
   let resolveClose;
   let rejectClose;
