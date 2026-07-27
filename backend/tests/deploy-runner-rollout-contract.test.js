@@ -34,7 +34,10 @@ test('runner rollout is healthy before the backend is replaced', () => {
   const buildRunner = position('${COMPOSE} build runner');
   const recreateRunner = positionAfter('${COMPOSE} up -d --no-deps --force-recreate runner', buildRunner);
   const waitRunner = WORKFLOW.indexOf('            wait_runner\n', recreateRunner);
-  const startBackend = WORKFLOW.indexOf('${COMPOSE} up -d --no-deps backend frontend', recreateRunner);
+  const startBackend = WORKFLOW.indexOf(
+    '${COMPOSE} up -d --no-deps --force-recreate backend frontend',
+    recreateRunner,
+  );
 
   assert.ok(recreateRunner > buildRunner, 'runner must be built before it is recreated');
   assert.ok(waitRunner > recreateRunner, 'runner health must be awaited after recreation');
