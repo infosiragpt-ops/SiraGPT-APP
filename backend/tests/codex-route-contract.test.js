@@ -97,6 +97,7 @@ const restorePublication = mockResolvedModule(
 
 const codexRoutes = require('../src/routes/codex');
 const codexDb = require('../src/config/database');
+const companyAssociationService = require('../src/services/codex/company-association-service');
 
 let runnerStatusQueue = null;
 let runnerStatusCalls = 0;
@@ -211,6 +212,83 @@ test('GET /access reports flag and user execution access', async () => {
   assert.equal(res.body.canRun, true);
 });
 
+test('company association routes persist explicit owner choices and never infer a backfill', async () => {
+  const originals = {
+    associationForCompany: companyAssociationService.associationForCompany,
+    associateCompany: companyAssociationService.associateCompany,
+    assignCompanyConnectors: companyAssociationService.assignCompanyConnectors,
+    listOrphans: companyAssociationService.listOrphans,
+  };
+  const calls = [];
+  companyAssociationService.associationForCompany = async (_db, args) => {
+    calls.push(['get', args]);
+    return {
+      company: { id: args.projectId, name: 'Empresa A', organizationId: null },
+      association: null,
+      candidates: [{ id: 'codex-a', name: 'Runtime A', organizationId: null, status: 'ready' }],
+      connectors: [],
+      requiresAssociation: true,
+    };
+  };
+  companyAssociationService.associateCompany = async (_db, args) => {
+    calls.push(['associate', args]);
+    return {
+      association: {
+        id: 'link-a',
+        source: args.source,
+        organizationId: null,
+        codexProject: { id: args.codexProjectId, name: 'Runtime A', status: 'ready' },
+        connectors: [],
+      },
+    };
+  };
+  companyAssociationService.assignCompanyConnectors = async (_db, args) => {
+    calls.push(['connectors', args]);
+    return { connectors: [] };
+  };
+  companyAssociationService.listOrphans = async (_db, args) => {
+    calls.push(['orphans', args]);
+    return { companies: [], codexProjects: [], backfillApplied: false };
+  };
+
+  try {
+    const state = await request(buildApp())
+      .get('/api/codex/company-associations')
+      .query({ projectId: 'company-a' });
+    assert.equal(state.status, 200);
+    assert.equal(state.body.requiresAssociation, true);
+    assert.equal(state.headers['cache-control'], 'no-store');
+
+    const linked = await request(buildApp())
+      .post('/api/codex/company-associations')
+      .send({
+        projectId: 'company-a',
+        codexProjectId: 'codex-a',
+        connectorAccountIds: [],
+        source: 'manual',
+      });
+    assert.equal(linked.status, 201);
+    assert.equal(linked.body.association.id, 'link-a');
+
+    const connectors = await request(buildApp())
+      .put('/api/codex/company-associations/company-a/connectors')
+      .send({ connectorAccountIds: [] });
+    assert.equal(connectors.status, 200);
+
+    const orphans = await request(buildApp())
+      .get('/api/codex/company-associations/orphans');
+    assert.equal(orphans.status, 200);
+    assert.equal(orphans.body.backfillApplied, false);
+
+    for (const [, args] of calls) assert.equal(args.userId, 'u-1');
+  } finally {
+    companyAssociationService.associationForCompany = originals.associationForCompany;
+    companyAssociationService.associateCompany = originals.associateCompany;
+    companyAssociationService.assignCompanyConnectors = originals.assignCompanyConnectors;
+    companyAssociationService.listOrphans = originals.listOrphans;
+  }
+});
+
 test('POST /projects/:id/proactive rejects autonomous execution without isolated access', async () => {
   authUser = { id: 'u-1', isAdmin: false, isSuperAdmin: false };
   const res = await request(buildApp())
@@ -227,6 +305,8 @@ test('company profile routes return grounded readiness and preserve the owned pr
     projectUpdate: codexDb.codexProject.update,
     socialFindMany: codexDb.socialConnection.findMany,
     userFindUnique: codexDb.user.findUnique,
+    companyLinkFindUnique: codexDb.companyCodexProjectLink.findUnique,
+    connectorAssignmentFindMany: codexDb.projectConnectorAssignment.findMany,
     transaction: codexDb.$transaction,
     queryRawUnsafe: codexDb.$queryRawUnsafe,
   };
@@ -250,6 +330,14 @@ test('company profile routes return grounded readiness and preserve the owned pr
   };
   codexDb.socialConnection.findMany = async () => [{ platform: 'linkedin', accountName: '@siragpt' }];
   codexDb.user.findUnique = async () => ({ gmailTokens: null });
+  codexDb.companyCodexProjectLink.findUnique = async () => ({ projectId: 'company-1' });
+  codexDb.projectConnectorAssignment.findMany = async () => [{
+    connectorAccount: {
+      id: 'connector-linkedin',
+      provider: 'linkedin',
+      status: 'connected',
+    },
+  }];
   codexDb.$transaction = async (operation) => operation(codexDb);
   codexDb.$queryRawUnsafe = async () => [{ locked: 1 }];
 
@@ -293,6 +381,8 @@ test('company profile routes return grounded readiness and preserve the owned pr
     codexDb.codexProject.update = originals.projectUpdate;
     codexDb.socialConnection.findMany = originals.socialFindMany;
     codexDb.user.findUnique = originals.userFindUnique;
+    codexDb.companyCodexProjectLink.findUnique = originals.companyLinkFindUnique;
+    codexDb.projectConnectorAssignment.findMany = originals.connectorAssignmentFindMany;
     codexDb.$transaction = originals.transaction;
     codexDb.$queryRawUnsafe = originals.queryRawUnsafe;
   }
@@ -311,6 +401,8 @@ test('company operations routes scope every record to the owned user and project
     actionCount: codexDb.codexExternalAction.count,
     socialFindMany: codexDb.socialConnection.findMany,
     userFindUnique: codexDb.user.findUnique,
+    companyLinkFindUnique: codexDb.companyCodexProjectLink.findUnique,
+    connectorAssignmentFindMany: codexDb.projectConnectorAssignment.findMany,
   };
   const scopes = [];
   const project = { id: 'p1', userId: 'u-1', name: 'SiraGPT.COM', brief: {} };
@@ -351,6 +443,8 @@ test('company operations routes scope every record to the owned user and project
   };
   codexDb.socialConnection.findMany = async () => [];
   codexDb.user.findUnique = async () => ({ gmailTokens: null });
+  codexDb.companyCodexProjectLink.findUnique = async () => ({ projectId: 'company-1' });
+  codexDb.projectConnectorAssignment.findMany = async () => [];
 
   try {
     const snapshot = await request(buildApp()).get('/api/codex/projects/p1/company-operations');
@@ -390,6 +484,8 @@ test('company operations routes scope every record to the owned user and project
     codexDb.codexExternalAction.count = originals.actionCount;
     codexDb.socialConnection.findMany = originals.socialFindMany;
     codexDb.user.findUnique = originals.userFindUnique;
+    codexDb.companyCodexProjectLink.findUnique = originals.companyLinkFindUnique;
+    codexDb.projectConnectorAssignment.findMany = originals.connectorAssignmentFindMany;
   }
 });
 

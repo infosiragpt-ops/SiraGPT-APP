@@ -26,7 +26,7 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
-const { body, validationResult } = require('express-validator');
+const { body, query, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const { canUseCodexAgent, publicAccess } = require('../services/codex/access-control');
@@ -44,6 +44,7 @@ const {
 } = require('../services/codex/session-service');
 const codexDb = require('../config/database');
 const publicationService = require('../services/codex/publication-service');
+const companyAssociationService = require('../services/codex/company-association-service');
 const {
   STRIP_REQUEST_HEADERS,
   HOP_BY_HOP_HEADERS,
@@ -55,6 +56,20 @@ const {
 const router = express.Router();
 let sessionRunner = null;
 let sessionService = null;
+
+function sendCompanyAssociationError(res, error) {
+  if (error instanceof companyAssociationService.CompanyAssociationError) {
+    return res.status(error.status).json({
+      error: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    });
+  }
+  return res.status(500).json({
+    error: 'company_association_failed',
+    message: 'Company association request failed.',
+  });
+}
 
 function codexSessionRuntime() {
   sessionRunner = sessionRunner || createSandboxClient();
@@ -310,17 +325,118 @@ router.get('/agents', authenticateToken, (_req, res) => {
   }
 });
 
+// Existing localStorage mappings are never trusted or backfilled. The
+// association wizard reads these endpoints and the owner confirms each link.
+router.get(
+  '/company-associations',
+  authenticateToken,
+  [query('projectId').isString().trim().isLength({ min: 1, max: 160 })],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const state = await companyAssociationService.associationForCompany(codexDb, {
+        userId: req.user.id,
+        projectId: req.query.projectId,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(state);
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.get('/company-associations/orphans', authenticateToken, async (req, res) => {
+  try {
+    const orphans = await companyAssociationService.listOrphans(codexDb, {
+      userId: req.user.id,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(orphans);
+  } catch (error) {
+    return sendCompanyAssociationError(res, error);
+  }
+});
+
+router.post(
+  '/company-associations',
+  authenticateToken,
+  [
+    body('projectId').isString().trim().isLength({ min: 1, max: 160 }),
+    body('codexProjectId').isString().trim().isLength({ min: 1, max: 160 }),
+    body('connectorAccountIds').optional().isArray({ max: 100 }),
+    body('connectorAccountIds.*').optional().isString().trim().isLength({ min: 1, max: 160 }),
+    body('source').optional().isIn(['manual', 'created_for_company']),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const result = await companyAssociationService.associateCompany(codexDb, {
+        userId: req.user.id,
+        projectId: req.body.projectId,
+        codexProjectId: req.body.codexProjectId,
+        connectorAccountIds: req.body.connectorAccountIds,
+        source: req.body.source,
+      });
+      return res.status(201).json(result);
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.put(
+  '/company-associations/:projectId/connectors',
+  authenticateToken,
+  [
+    body('connectorAccountIds').isArray({ max: 100 }),
+    body('connectorAccountIds.*').optional().isString().trim().isLength({ min: 1, max: 160 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      return res.json(await companyAssociationService.assignCompanyConnectors(codexDb, {
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        connectorAccountIds: req.body.connectorAccountIds,
+      }));
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
 router.post(
   '/projects',
   authenticateToken,
   requireCodexAgentAccess,
-  [body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 })],
+  [
+    body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 }),
+    body('organizationId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 160 }),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     try {
+      const organizationId = req.body.organizationId || null;
+      if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
+        userId: req.user.id,
+        organizationId,
+      }))) {
+        return res.status(404).json({ error: 'organization_not_found' });
+      }
       const project = await projectService.createProject({
         userId: req.user.id,
+        organizationId,
         name: req.body.name.trim(),
         brief: req.body.brief ?? null,
         repository: req.body.repository ?? null,
