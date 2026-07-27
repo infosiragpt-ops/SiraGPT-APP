@@ -548,6 +548,84 @@ router.get('/projects/:id/company-operations', authenticateToken, async (req, re
   }
 });
 
+// ── Actividad agregada de todos los departamentos ──────────────────────────
+// The per-run SSE stream remains the source of truth for a live coding turn.
+// This safe projection lets CEO Office render one project-wide timeline
+// without exposing prompts, snapshots, credentials or raw command output.
+router.get('/projects/:id/activity', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const activity = await require('../services/codex/project-activity').listProjectActivity({
+      prisma: codexDb,
+      projectId: project.id,
+      limit: req.query.limit,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ activity });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_activity_failed', message: err.message });
+  }
+});
+
+function sendSwarmError(res, error) {
+  const status = Number(error?.status) || (
+    error?.code === 'P2002' ? 409 : 500
+  );
+  return res.status(status).json({
+    error: error?.code === 'P2002'
+      ? 'codex_swarm_in_progress'
+      : (error?.code || 'codex_swarm_failed'),
+    message: String(error?.message || 'Enterprise swarm failed.').slice(0, 2_000),
+    ...(error?.details ? { details: error.details } : {}),
+  });
+}
+
+function boundedSwarmInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed)
+    ? Math.max(min, Math.min(max, parsed))
+    : fallback;
+}
+
+async function loadOwnedSwarm(req, res) {
+  const swarm = await codexDb.codexSwarm.findFirst({
+    where: {
+      id: req.params.swarmId,
+      projectId: req.params.id,
+      userId: req.user.id,
+    },
+  });
+  if (!swarm) {
+    res.status(404).json({ error: 'codex_swarm_not_found' });
+    return null;
+  }
+  return swarm;
+}
+
+async function commandCenterForProject(project) {
+  return require('../services/codex/enterprise-command-center-service')
+    .loadEnterpriseCommandCenter({
+      prisma: codexDb,
+      project,
+    });
+}
+
+router.get('/projects/:id/command-center', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const state = await commandCenterForProject(project);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      commandCenter: state.commandCenter,
+      company: state.company,
+    });
+  } catch (error) {
+    return sendSwarmError(res, error);
+  }
+});
+
 router.post(
   '/projects/:id/company-operations/research-leads',
   authenticateToken,
@@ -661,6 +739,101 @@ router.post(
 );
 
 router.post(
+  '/projects/:id/swarms',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      if (await runService.hasActiveRun({ projectId: project.id, db: codexDb })) {
+        return res.status(409).json({
+          error: 'run_in_progress',
+          message: 'Termina o detén la ejecución activa antes de iniciar el enjambre empresarial.',
+        });
+      }
+
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const initial = await commandCenterForProject(project);
+      const objective = String(
+        body.objective
+        || initial.company?.profile?.mission
+        || project.name,
+      ).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 4_000);
+      if (!objective) {
+        return res.status(400).json({
+          error: 'enterprise_swarm_objective_required',
+          message: 'Define un objetivo verificable para CEO Office.',
+        });
+      }
+      const logicalAgents = boundedSwarmInteger(body.logicalAgents, 128, 8, 1_000);
+      const maxConcurrency = boundedSwarmInteger(body.maxConcurrency, 16, 1, 32);
+      const tasks = require('../services/codex/enterprise-swarm-plan')
+        .buildEnterpriseSwarmTasks({
+          plan: initial.plan,
+          objective,
+          logicalTasks: logicalAgents,
+        });
+      const {
+        CodexSwarmOrchestrator,
+      } = require('../services/codex/swarm-orchestrator');
+      const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
+
+      // Stop the legacy ticker before installing the durable plan. This avoids
+      // a race for the project's single writer while preserving its settings.
+      await require('../services/codex/proactive-engine').setProactive({
+        prisma: codexDb,
+        projectId: project.id,
+        userId: req.user.id,
+        enabled: false,
+      });
+
+      const swarm = await orchestrator.createSwarm({
+        userId: req.user.id,
+        projectId: project.id,
+        name: `CEO Office · ${initial.company?.profile?.companyName || project.name}`.slice(0, 300),
+        strategy: 'map_reduce',
+        tasks,
+        taskLimit: tasks.length,
+        maxConcurrency,
+        maxConcurrentWriters: 1,
+        metadata: {
+          objective,
+          planId: initial.plan.planId,
+          executiveSummary: initial.plan.executiveSummary,
+          companyName: initial.company?.profile?.companyName || project.name,
+          model: body.model ? String(body.model).slice(0, 120) : null,
+          tier: body.tier ? String(body.tier).slice(0, 80) : null,
+          safety: {
+            parallelAgentsReadOnly: true,
+            serializedWorkspaceWrites: true,
+            externalActionsRequireEvidence: true,
+          },
+        },
+      });
+      try {
+        await require('../services/codex/swarm-runner').enqueueSwarm({
+          swarmId: swarm.id,
+        });
+      } catch (queueError) {
+        await orchestrator.cancelSwarm({
+          swarmId: swarm.id,
+          reason: 'swarm_queue_unavailable',
+        }).catch(() => {});
+        throw queueError;
+      }
+      const state = await commandCenterForProject(project);
+      return res.status(202).json({
+        swarm: state.commandCenter.swarm,
+        commandCenter: state.commandCenter,
+      });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
+
+router.post(
   '/projects/:id/company-operations/actions/:actionId/approve',
   authenticateToken,
   requireCodexAgentAccess,
@@ -680,6 +853,24 @@ router.post(
   },
 );
 
+router.post(
+  '/projects/:id/swarms/:swarmId/pause',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const swarm = await loadOwnedSwarm(req, res);
+      if (!swarm) return undefined;
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const result = await new CodexSwarmOrchestrator({ prisma: codexDb })
+        .pauseSwarm({ swarmId: swarm.id });
+      return res.json({ swarm: result.swarm, progress: result.progress });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
+
 router.post('/projects/:id/company-operations/actions/:actionId/reject', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProjectRecord(req, res);
@@ -694,6 +885,76 @@ router.post('/projects/:id/company-operations/actions/:actionId/reject', authent
     return sendCompanyOperationsError(res, err);
   }
 });
+
+router.post(
+  '/projects/:id/swarms/:swarmId/resume',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const swarm = await loadOwnedSwarm(req, res);
+      if (!swarm) return undefined;
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const result = await new CodexSwarmOrchestrator({ prisma: codexDb })
+        .resumeSwarm({ swarmId: swarm.id });
+      await require('../services/codex/swarm-runner').enqueueSwarm({
+        swarmId: swarm.id,
+      });
+      return res.json({ swarm: result.swarm, progress: result.progress });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/swarms/:swarmId/cancel',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const swarm = await loadOwnedSwarm(req, res);
+      if (!swarm) return undefined;
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
+      const result = await orchestrator.cancelSwarm({
+        swarmId: swarm.id,
+        reason: String(req.body?.reason || 'cancelled_by_user').slice(0, 2_000),
+      });
+
+      const integrators = await codexDb.codexSwarmTask.findMany({
+        where: { swarmId: swarm.id, role: 'integrator' },
+        select: { result: true },
+      });
+      const planRunIds = integrators
+        .map((task) => task.result?.planRunId)
+        .filter(Boolean);
+      const linkedRuns = planRunIds.length
+        ? await codexDb.codexRun.findMany({
+          where: {
+            userId: req.user.id,
+            OR: [
+              { id: { in: planRunIds } },
+              { planRunId: { in: planRunIds } },
+            ],
+            status: { in: runService.ACTIVE_STATUSES },
+          },
+          select: { id: true },
+        })
+        : [];
+      await Promise.allSettled(linkedRuns.map((run) => (
+        runService.cancelRun({
+          userId: req.user.id,
+          runId: run.id,
+          db: codexDb,
+        })
+      )));
+      return res.json({ swarm: result.swarm, progress: result.progress });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
 
 function sendPublicationError(res, err) {
   const status = Number(err?.status) || 500;

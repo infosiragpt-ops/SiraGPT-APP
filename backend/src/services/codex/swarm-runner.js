@@ -1,0 +1,551 @@
+'use strict';
+
+const { Queue, Worker } = require('bullmq');
+const { randomUUID } = require('node:crypto');
+
+const prismaDefault = require('../../config/database');
+const { createSandboxClient } = require('./sandbox-provider');
+const {
+  createRedisConnection,
+  getRuntimeOptions,
+} = require('./run-queue');
+const { isCodexV2Enabled } = require('./flags');
+const runServiceDefault = require('./run-service');
+const {
+  CodexSwarmError,
+  CodexSwarmOrchestrator,
+  MAX_LEASE_MS,
+  SWARM_STATUSES,
+  TERMINAL_SWARM_STATUSES,
+  TASK_ROLES,
+  TASK_STATUSES,
+} = require('./swarm-orchestrator');
+
+const QUEUE_NAME = process.env.CODEX_SWARM_QUEUE_NAME || 'codex-swarms';
+const DEFAULT_RUNTIME_CONCURRENCY = 8;
+const MAX_RUNTIME_CONCURRENCY = 32;
+const DEFAULT_POLL_MS = 1_000;
+const DEFAULT_INTEGRATION_TIMEOUT_MS = 45 * 60_000;
+
+let queue = null;
+let queueConnection = null;
+let worker = null;
+let workerConnection = null;
+
+function integer(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getSwarmQueue() {
+  if (queue) return queue;
+  queueConnection = createRedisConnection({ label: 'codex-swarms-queue' });
+  queue = new Queue(QUEUE_NAME, {
+    ...getRuntimeOptions(),
+    connection: queueConnection,
+    defaultJobOptions: {
+      attempts: 2,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: { age: 24 * 60 * 60, count: 500 },
+      removeOnFail: { age: 7 * 24 * 60 * 60, count: 1_000 },
+    },
+  });
+  queue.on('error', (error) => {
+    console.error('[codex-swarms] queue error:', error?.message || error);
+  });
+  return queue;
+}
+
+async function enqueueSwarm({ swarmId }) {
+  if (!swarmId) throw new Error('swarmId is required');
+  const swarmQueue = getSwarmQueue();
+  const jobId = String(swarmId);
+  const existing = await swarmQueue.getJob(jobId);
+  if (existing) {
+    const state = await existing.getState().catch(() => 'unknown');
+    if (!['completed', 'failed'].includes(state)) return existing;
+    await existing.remove().catch(() => {});
+  }
+  return swarmQueue.add('codex-swarm', { swarmId }, { jobId });
+}
+
+async function recoverSwarmJobs({
+  prisma = prismaDefault,
+  env = process.env,
+} = {}) {
+  if (!isCodexV2Enabled(env) || !env.REDIS_URL || !prisma?.codexSwarm?.findMany) {
+    return { recovered: 0 };
+  }
+  const swarms = await prisma.codexSwarm.findMany({
+    where: {
+      status: {
+        in: [SWARM_STATUSES.QUEUED, SWARM_STATUSES.RUNNING],
+      },
+      cancelRequestedAt: null,
+    },
+    select: { id: true },
+    orderBy: { updatedAt: 'asc' },
+    take: 100,
+  });
+  const results = await Promise.allSettled(swarms.map((swarm) => (
+    enqueueSwarm({ swarmId: swarm.id })
+  )));
+  return {
+    recovered: results.filter((result) => result.status === 'fulfilled').length,
+    failed: results.filter((result) => result.status === 'rejected').length,
+  };
+}
+
+async function defaultWebSearch(query) {
+  try {
+    const { search } = require('../agents/web-search');
+    return search(query, { maxResults: 5 });
+  } catch {
+    return { results: [] };
+  }
+}
+
+function safeResult(outcome) {
+  return {
+    ok: outcome?.ok === true,
+    agent: String(outcome?.agent || '').slice(0, 80),
+    summary: String(outcome?.result || '').slice(0, 12_000),
+    steps: Math.max(0, Number(outcome?.steps) || 0),
+    toolCallsCount: Math.max(0, Number(outcome?.toolCallsCount) || 0),
+    durationMs: Math.max(0, Number(outcome?.durationMs) || 0),
+    tokensIn: Math.max(0, Number(outcome?.tokensIn) || 0),
+    tokensOut: Math.max(0, Number(outcome?.tokensOut) || 0),
+  };
+}
+
+function dependencyContext(tasks, task, maxChars = 24_000) {
+  const dependencies = new Set(Array.isArray(task?.dependsOn) ? task.dependsOn : []);
+  const reports = tasks
+    .filter((candidate) => dependencies.has(candidate.key))
+    .map((candidate) => {
+      const result = candidate.result && typeof candidate.result === 'object'
+        ? candidate.result
+        : {};
+      return [
+        `### ${candidate.title}`,
+        `Estado: ${candidate.status}`,
+        String(result.summary || result.error || candidate.error || 'Sin informe.'),
+      ].join('\n');
+    });
+  return reports.join('\n\n').slice(0, maxChars);
+}
+
+function subagentForTask(task) {
+  const requested = String(task?.input?.agent || '').trim();
+  if (task.role === TASK_ROLES.REVIEWER) return requested || 'qa_reviewer';
+  return requested || 'explorer';
+}
+
+async function runReadOnlyTask({
+  task,
+  swarm,
+  project,
+  tasks,
+  runner,
+  sdk,
+  env,
+  webSearch,
+}) {
+  const agent = subagentForTask(task);
+  const definition = sdk.getSubagent(agent);
+  if (!definition?.readOnly) {
+    throw new Error(`swarm_read_only_agent_required:${agent}`);
+  }
+  const instruction = String(task?.input?.instruction || task.title || '').slice(0, 8_000);
+  const context = [
+    `Empresa/proyecto: ${project.name}`,
+    `Objetivo del enjambre: ${String(swarm?.metadata?.objective || '').slice(0, 4_000)}`,
+    dependencyContext(tasks, task),
+  ].filter(Boolean).join('\n\n');
+  const outcome = await sdk.runSubagent({
+    name: agent,
+    task: instruction,
+    context,
+    model: task?.input?.model || null,
+    effort: task.role === TASK_ROLES.REVIEWER ? 'high' : null,
+    deps: {
+      runner,
+      project: project.id,
+      env,
+      tier: swarm?.metadata?.tier || null,
+      webSearch,
+    },
+  });
+  return safeResult(outcome);
+}
+
+async function waitForAutonomousRun({
+  prisma,
+  planRunId,
+  swarmId = null,
+  userId = null,
+  runService = runServiceDefault,
+  env,
+  clock = Date.now,
+  delay = sleep,
+}) {
+  const timeoutMs = integer(
+    env.CODEX_SWARM_INTEGRATION_TIMEOUT_MS,
+    DEFAULT_INTEGRATION_TIMEOUT_MS,
+    60_000,
+    4 * 60 * 60_000,
+  );
+  const pollMs = integer(env.CODEX_SWARM_POLL_MS, DEFAULT_POLL_MS, 250, 10_000);
+  const deadline = clock() + timeoutMs;
+  let last = null;
+  let latestPlan = null;
+  let latestBuild = null;
+  while (clock() < deadline) {
+    const [plan, build, swarm] = await Promise.all([
+      prisma.codexRun.findUnique({ where: { id: planRunId } }),
+      prisma.codexRun.findFirst({
+        where: { planRunId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      swarmId
+        ? prisma.codexSwarm.findUnique({
+          where: { id: swarmId },
+          select: { status: true, cancelRequestedAt: true },
+        })
+        : null,
+    ]);
+    latestPlan = plan;
+    latestBuild = build;
+    last = build || plan;
+    if (!last) throw new Error('swarm_integration_run_missing');
+    if (swarm?.cancelRequestedAt || swarm?.status === SWARM_STATUSES.CANCELLED) {
+      const activeRuns = [build, plan].filter((run) => (
+        run && ['queued', 'running', 'waiting_approval'].includes(run.status)
+      ));
+      await Promise.allSettled(activeRuns.map((run) => (
+        runService.cancelRun({ userId, runId: run.id, db: prisma })
+      )));
+      return {
+        ok: false,
+        status: 'cancelled',
+        planRunId,
+        buildRunId: build?.id || null,
+        error: 'swarm_cancelled',
+      };
+    }
+    if (['done', 'error', 'cancelled'].includes(last.status)) {
+      return {
+        ok: last.status === 'done',
+        status: last.status,
+        planRunId,
+        buildRunId: build?.id || null,
+        error: last.error || null,
+      };
+    }
+    await delay(pollMs);
+  }
+  const activeRuns = [latestBuild, latestPlan].filter((run) => (
+    run && ['queued', 'running', 'waiting_approval'].includes(run.status)
+  ));
+  await Promise.allSettled(activeRuns.map((run) => (
+    runService.cancelRun({ userId, runId: run.id, db: prisma })
+  )));
+  return {
+    ok: false,
+    status: 'timeout',
+    planRunId,
+    buildRunId: last?.planRunId ? last.id : null,
+    error: 'swarm_integration_timeout',
+  };
+}
+
+function startLeaseHeartbeat({
+  orchestrator,
+  swarmId,
+  taskId,
+  workerId,
+  leaseToken,
+  leaseMs = MAX_LEASE_MS,
+  intervalMs = Math.max(5_000, Math.floor(leaseMs / 3)),
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
+}) {
+  let stopped = false;
+  let renewing = false;
+  let error = null;
+  const renew = async () => {
+    if (stopped || renewing || error) return;
+    renewing = true;
+    try {
+      await orchestrator.renewTaskLease({
+        swarmId,
+        taskId,
+        workerId,
+        leaseToken,
+        leaseMs,
+      });
+    } catch (renewError) {
+      error = renewError;
+    } finally {
+      renewing = false;
+    }
+  };
+  const timer = setIntervalFn(() => {
+    void renew();
+  }, intervalMs);
+  timer?.unref?.();
+  return {
+    get error() {
+      return error;
+    },
+    async stop() {
+      stopped = true;
+      clearIntervalFn(timer);
+      while (renewing) await sleep(10);
+      return error;
+    },
+  };
+}
+
+async function createIntegratorRun({
+  task,
+  swarm,
+  project,
+  tasks,
+  prisma,
+  runService,
+  env,
+}) {
+  const evidence = dependencyContext(tasks, task);
+  const objective = String(task?.input?.objective || swarm?.metadata?.objective || task.title).slice(0, 4_000);
+  const prompt = [
+    '[SWARM · CEO Office]',
+    'Eres el integrador único de un enjambre de agentes. Implementa el objetivo en el workspace real.',
+    `Objetivo: ${objective}`,
+    '',
+    'Informes reducidos y verificados:',
+    evidence || 'No se recibieron informes; inspecciona el workspace antes de actuar.',
+    '',
+    'Contrato: lee antes de editar, no permitas escrituras concurrentes, aplica cambios incrementales, ejecuta type-check/pruebas/preview, corrige fallos y entrega un checkpoint con resumen ejecutivo breve.',
+    'No ejecutes publicaciones, correos, ventas ni otros efectos externos desde esta corrida.',
+  ].join('\n');
+  const planRun = await runService.createRun({
+    userId: project.userId,
+    projectId: project.id,
+    mode: 'plan',
+    prompt,
+    model: swarm?.metadata?.model || null,
+    tier: swarm?.metadata?.tier || null,
+    autoExecute: true,
+    db: prisma,
+  });
+  await prisma.codexSwarmTask.update({
+    where: { id: task.id },
+    data: {
+      result: {
+        ok: false,
+        status: 'running',
+        planRunId: planRun.id,
+      },
+    },
+  });
+  return waitForAutonomousRun({
+    prisma,
+    planRunId: planRun.id,
+    swarmId: swarm.id,
+    userId: project.userId,
+    runService,
+    env,
+  });
+}
+
+async function processClaimedTask({
+  claimed,
+  swarm,
+  project,
+  orchestrator,
+  prisma,
+  runner,
+  sdk,
+  runService,
+  env,
+  webSearch,
+}) {
+  const progress = await orchestrator.getProgress(swarm.id);
+  const task = claimed.task;
+  const heartbeat = startLeaseHeartbeat({
+    orchestrator,
+    swarmId: swarm.id,
+    taskId: task.id,
+    workerId: claimed.workerId,
+    leaseToken: task.leaseToken,
+  });
+  let result;
+  try {
+    if (task.role === TASK_ROLES.INTEGRATOR) {
+      result = await createIntegratorRun({
+        task,
+        swarm: progress.swarm,
+        project,
+        tasks: progress.tasks,
+        prisma,
+        runService,
+        env,
+      });
+    } else {
+      result = await runReadOnlyTask({
+        task,
+        swarm: progress.swarm,
+        project,
+        tasks: progress.tasks,
+        runner,
+        sdk,
+        env,
+        webSearch,
+      });
+    }
+  } finally {
+    await heartbeat.stop();
+  }
+  if (heartbeat.error) throw heartbeat.error;
+  const ok = result?.ok === true;
+  await orchestrator.finishTask({
+    swarmId: swarm.id,
+    taskId: task.id,
+    workerId: claimed.workerId,
+    leaseToken: task.leaseToken,
+    status: ok ? TASK_STATUSES.SUCCEEDED : TASK_STATUSES.FAILED,
+    result,
+    error: ok ? null : String(result?.error || result?.summary || 'swarm_task_failed').slice(0, 20_000),
+  });
+}
+
+async function processSwarmJob({
+  swarmId,
+  env = process.env,
+  prisma = prismaDefault,
+  orchestrator = new CodexSwarmOrchestrator({ prisma }),
+  runner = createSandboxClient(),
+  sdk = require('./agent-sdk'),
+  runService = runServiceDefault,
+  webSearch = defaultWebSearch,
+} = {}) {
+  const swarm = await prisma.codexSwarm.findUnique({
+    where: { id: swarmId },
+    include: { project: true },
+  });
+  if (!swarm) throw new CodexSwarmError('codex_swarm_not_found', 'Codex swarm not found.', 404);
+  if (TERMINAL_SWARM_STATUSES.has(swarm.status)) return orchestrator.getProgress(swarm.id);
+
+  const runtimeConcurrency = Math.min(
+    swarm.maxConcurrency,
+    integer(env.CODEX_SWARM_RUNNER_CONCURRENCY, DEFAULT_RUNTIME_CONCURRENCY, 1, MAX_RUNTIME_CONCURRENCY),
+  );
+  const pollMs = integer(env.CODEX_SWARM_POLL_MS, DEFAULT_POLL_MS, 250, 10_000);
+
+  const runWorker = async (index) => {
+    const workerId = `swarm:${swarm.id}:${index}`;
+    while (true) {
+      const claim = await orchestrator.claimNextTask({
+        swarmId: swarm.id,
+        workerId,
+        claimId: `${workerId}:${randomUUID()}`,
+        leaseMs: MAX_LEASE_MS,
+      });
+      if (!claim.task) {
+        const progress = await orchestrator.getProgress(swarm.id);
+        if (TERMINAL_SWARM_STATUSES.has(progress.swarm.status)) return;
+        await sleep(pollMs);
+        continue;
+      }
+      claim.workerId = workerId;
+      try {
+        await processClaimedTask({
+          claimed: claim,
+          swarm,
+          project: swarm.project,
+          orchestrator,
+          prisma,
+          runner,
+          sdk,
+          runService,
+          env,
+          webSearch,
+        });
+      } catch (error) {
+        await orchestrator.finishTask({
+          swarmId: swarm.id,
+          taskId: claim.task.id,
+          workerId,
+          leaseToken: claim.task.leaseToken,
+          status: TASK_STATUSES.FAILED,
+          error: String(error?.message || error).slice(0, 20_000),
+        }).catch(() => {});
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: runtimeConcurrency }, (_, index) => runWorker(index + 1)));
+  return orchestrator.getProgress(swarm.id);
+}
+
+function startSwarmWorker({ env = process.env, processor = processSwarmJob } = {}) {
+  if (worker) return worker;
+  if (!isCodexV2Enabled(env) || !env.REDIS_URL) return null;
+  workerConnection = createRedisConnection({ label: 'codex-swarms-worker' });
+  worker = new Worker(
+    QUEUE_NAME,
+    (job) => processor({ swarmId: job.data?.swarmId, env }),
+    {
+      ...getRuntimeOptions(),
+      connection: workerConnection,
+      concurrency: integer(env.CODEX_SWARM_JOB_CONCURRENCY, 1, 1, 4),
+      lockDuration: integer(env.CODEX_SWARM_JOB_LOCK_MS, 2 * 60 * 60_000, 60_000, 4 * 60 * 60_000),
+    },
+  );
+  worker.on('failed', (job, error) => {
+    console.error(`[codex-swarms] job ${job?.id || '(unknown)'} failed:`, error?.message || error);
+  });
+  worker.on('error', (error) => {
+    console.error('[codex-swarms] worker error:', error?.message || error);
+  });
+  return worker;
+}
+
+async function closeSwarmRuntime() {
+  const closing = [];
+  if (worker) closing.push(worker.close());
+  if (queue) closing.push(queue.close());
+  if (workerConnection) closing.push(workerConnection.quit().catch(() => workerConnection.disconnect()));
+  if (queueConnection) closing.push(queueConnection.quit().catch(() => queueConnection.disconnect()));
+  worker = null;
+  queue = null;
+  workerConnection = null;
+  queueConnection = null;
+  await Promise.allSettled(closing);
+}
+
+module.exports = {
+  DEFAULT_INTEGRATION_TIMEOUT_MS,
+  DEFAULT_RUNTIME_CONCURRENCY,
+  MAX_RUNTIME_CONCURRENCY,
+  QUEUE_NAME,
+  closeSwarmRuntime,
+  createIntegratorRun,
+  dependencyContext,
+  enqueueSwarm,
+  getSwarmQueue,
+  processClaimedTask,
+  processSwarmJob,
+  recoverSwarmJobs,
+  runReadOnlyTask,
+  safeResult,
+  startLeaseHeartbeat,
+  startSwarmWorker,
+  subagentForTask,
+  waitForAutonomousRun,
+};

@@ -51,6 +51,7 @@ import { apiClient } from "@/lib/api"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { useVoiceControls } from './voice-controls';
 import { getNaturalSpeechEngine, isSpeechSupported } from '@/lib/speech/natural-speech-engine';
+import { buildSpokenResponseSummary } from '@/lib/voice/spoken-response-summary';
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
@@ -1239,11 +1240,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             }
         }
 
-        const textToSpeak = message.content
-            .replace(/```[\s\S]*?```/g, 'Code block')
-            .replace(/`[^`]*`/g, 'Code')
-            .replace(/([_*#`~]|\\[*#`~])/g, '')
-            .replace(/\[(.*?)\]\(.*?\)/g, '$1');
+        const textToSpeak = buildSpokenResponseSummary(String(message.content || ""));
 
         try {
             setIsLoadingAudio(true);

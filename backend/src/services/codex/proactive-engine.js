@@ -226,6 +226,8 @@ async function proposeTask({
         qaCycle
           ? 'Esta es una auditoría acumulada: el constructor DEBE delegar primero en qa_reviewer, revisar el diff y añadir o mejorar smoke tests antes de corregir hallazgos.'
           : null,
+        'Para tareas amplias diseña unidades lógicas independientes y delega análisis de solo lectura en paralelo con run_subagent. Las escrituras se integran de forma serial por archivo y terminan en una sola verificación global.',
+        'La respuesta final de CEO Office debe ser ejecutiva: resultado, evidencia, riesgos y siguiente paso; el detalle queda en el timeline, los archivos y las pruebas.',
         'Nunca incluyas secretos. No publiques en redes ni actives gasto desde una tarea de código; prepara el trabajo y usa los controles explícitos de Recursos para efectos externos.',
       ].filter(Boolean).join(' '),
     },
