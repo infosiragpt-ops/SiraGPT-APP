@@ -139,6 +139,7 @@ function screenshotContentBlock(dataUrl, provider = 'anthropic') {
  */
 async function checkApp({
   url,
+  expectedText = null,
   settleMs = DEFAULT_SETTLE_MS,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   env = process.env,
@@ -200,9 +201,10 @@ async function checkApp({
     await page.goto(url, { waitUntil: 'networkidle2', timeout: timeoutMs });
     await new Promise((r) => { setTimeout(r, settleMs); });
 
-    const snapshot = await page.evaluate(() => {
+    const snapshot = await page.evaluate((expected) => {
       const root = document.querySelector('#root');
       const overlay = document.querySelector('vite-error-overlay');
+      const rootText = root ? (root.innerText || '').trim() : '';
       let overlayText = null;
       if (overlay && overlay.shadowRoot) {
         const msg = overlay.shadowRoot.querySelector('.message, .message-body, pre');
@@ -210,12 +212,14 @@ async function checkApp({
       }
       return {
         title: document.title || '',
-        rootChars: root ? (root.innerText || '').trim().length : -1,
+        rootChars: root ? rootText.length : -1,
+        expectedTextFound: expected ? rootText.includes(expected) : true,
         overlay: overlayText ? String(overlayText).slice(0, 500) : null,
       };
-    });
+    }, expectedText ? String(expectedText).slice(0, 500) : null);
 
     const rendered = snapshot.rootChars > 0;
+    const expectedTextFound = expectedText ? snapshot.expectedTextFound === true : true;
     let screenshot = null;
     if (captureScreenshot && !screenshotUnavailable) {
       try {
@@ -229,8 +233,9 @@ async function checkApp({
       }
     }
     return {
-      ok: rendered && !snapshot.overlay && errors.length === 0,
+      ok: rendered && expectedTextFound && !snapshot.overlay && errors.length === 0,
       rendered,
+      expectedTextFound,
       rootChars: Math.max(snapshot.rootChars, 0),
       rootMissing: snapshot.rootChars === -1,
       overlay: snapshot.overlay,
@@ -255,6 +260,7 @@ function formatReport(result, url) {
   if (result.rootMissing) lines.push('- ✗ No existe #root en el HTML — revisa index.html.');
   else if (!result.rendered) lines.push('- ✗ La página carga pero #root está VACÍO — típico de una excepción en el arranque de React.');
   else lines.push(`- ✓ Render OK (#root con ${result.rootChars} caracteres visibles${result.title ? `, título "${result.title}"` : ''}).`);
+  if (result.expectedTextFound === false) lines.push('- ✗ El render no contiene el marcador esperado; el preview está sirviendo una versión anterior.');
   if (result.overlay) lines.push(`- ✗ Overlay de error de Vite:\n${result.overlay}`);
   if (result.errors.length) {
     lines.push('- Errores capturados:');

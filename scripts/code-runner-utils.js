@@ -30,6 +30,7 @@ const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVAT
 // but only via these binaries (extended deliberately, per phase).
 const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'npm', 'ls', 'cat', 'wc']);
 const INTERACTIVE_SCAFFOLD_RE = /^(?:create-next-app|create-vite|create-react-app|create-remix)(?:@.*)?$/i;
+const PREVIEW_ERROR_RE = /(?:<vite-error-overlay\b|<nextjs-portal\b|__NEXT_ERROR|failed to compile|internal server error|pre-transform error|error when starting dev server)/i;
 
 function commandRejectionReason(cmd) {
   if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((c) => typeof c === 'string')) return 'invalid_command';
@@ -120,6 +121,26 @@ function previewConfigMigrationMode({ status, headContent, migratedContent } = {
 
 function isAllowedCommand(cmd) {
   return commandRejectionReason(cmd) === null;
+}
+
+function buildPreflightEnabled(env = {}) {
+  const configured = String(env.CODE_RUNNER_BUILD_PREFLIGHT ?? '').trim();
+  if (configured) return configured !== '0';
+  return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+/**
+ * An open TCP port is not a usable preview. For HTML responses, reject blank
+ * documents and known Vite/Next error overlays before reporting readiness.
+ * Non-HTML custom dev servers remain compatible as long as they return 2xx.
+ */
+function previewDocumentReady({ status, contentType = '', body = '' } = {}) {
+  const code = Number(status);
+  if (!Number.isInteger(code) || code < 200 || code >= 300) return false;
+  if (!/text\/html|application\/xhtml\+xml/i.test(String(contentType))) return true;
+  const html = String(body || '').trim();
+  if (!html || PREVIEW_ERROR_RE.test(html)) return false;
+  return /<(?:html|body|main|div|script)\b/i.test(html);
 }
 
 function isSensitiveEnvKey(key) {
@@ -426,6 +447,8 @@ module.exports = {
   previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
+  buildPreflightEnabled,
+  previewDocumentReady,
   ALLOWED_BINS,
   IGNORED_EXPORT_DIRS,
   shouldIgnoreExportPath,

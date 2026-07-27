@@ -45,6 +45,19 @@ test('runner rollout is healthy before the backend is replaced', () => {
   assert.match(WORKFLOW, /health="\$\(docker inspect[\s\S]*\.State\.Health[\s\S]*health\}" == "healthy"/);
 });
 
+test('the rollout fails closed on the real /code build, browser, and second-run canary', () => {
+  const buildRunner = position('${COMPOSE} build runner');
+  const recreateBackend = positionAfter('${COMPOSE} up -d --no-deps --force-recreate backend frontend', buildRunner);
+  const ready = positionAfter('            wait_ready\n', recreateBackend);
+  const version = positionAfter('            wait_version "${TARGET_SHA}" "${SIRAGPT_VERSION}"', ready);
+  const canary = positionAfter('            run_code_runtime_canary\n', version);
+  const cleanup = positionAfter('            cleanup_old_rollback_images', canary);
+
+  assert.match(WORKFLOW, /node scripts\/code-runtime-canary\.js/);
+  assert.ok(canary > version, 'runtime canary must run only after the exact release is healthy and versioned');
+  assert.ok(cleanup > canary, 'rollback images must remain available until the runtime canary passes');
+});
+
 test('rollback restores and verifies the runner before restoring the API', () => {
   const rollbackStart = position('            rollback() {');
   const rollbackEnd = position('            echo "[deploy-workflow] Remote disk before deploy"');

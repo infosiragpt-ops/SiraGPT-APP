@@ -14,14 +14,16 @@ const restoreAuth = mockResolvedModule(require.resolve('../src/middleware/auth')
 const calls = [];
 const restoreCp = mockResolvedModule(require.resolve('../src/services/codex/checkpoint-service'), {
   rollbackCheckpoint: async (a) => { calls.push(['rollback', a]); return a.checkpointId === 'cp-1' ? { ok: true, commitSha: 'abc1234', restarted: false } : { error: 'not_found', status: 404 }; },
+  recoverWorkspaceChanges: async (a) => { calls.push(['recover', a]); return a.recoveryRef.endsWith('/valid-ref') ? { ok: true, recoveryRef: a.recoveryRef } : { ok: false, error: 'recovery_not_found', status: 404 }; },
+  isValidRecoveryRef: (ref) => /^refs\/sira\/recovery\/[a-z0-9-]+$/.test(ref),
   getCheckpointDiff: async (a) => { calls.push(['diff', a]); return a.checkpointId === 'cp-1' ? { ok: true, diff: 'diff…', additions: 3, deletions: 1, filesChanged: 1 } : { error: 'not_found', status: 404 }; },
   listCheckpoints: async (a) => { calls.push(['list', a]); return a.projectId === 'p1' ? [{ id: 'cp-1', shortSha: 'abc1234', title: 'feat: x', createdAt: new Date(), additions: 3, deletions: 1 }] : null; },
 });
 
 // Inert stubs for the route's other imports.
-mockResolvedModule(require.resolve('../src/services/codex/project-service'), { createProject: async () => ({}), listProjects: async () => [], getProject: async () => null });
+mockResolvedModule(require.resolve('../src/services/codex/project-service'), { createProject: async () => ({}), listProjects: async () => [], getProject: async ({ id }) => (id === 'p1' ? { id: 'p1' } : null) });
 mockResolvedModule(require.resolve('../src/services/codex/runner-client'), { createRunnerClient: () => ({}), runnerDevUrl: () => 'http://localhost:5173', RunnerError: class extends Error {} });
-mockResolvedModule(require.resolve('../src/services/codex/run-service'), { RunServiceError: class extends Error {}, createRun: async () => ({}), cancelRun: async () => ({}), getRun: async () => null, listRuns: async () => [] });
+mockResolvedModule(require.resolve('../src/services/codex/run-service'), { ACTIVE_STATUSES: ['queued', 'running', 'waiting_approval'], RunServiceError: class extends Error {}, createRun: async () => ({}), cancelRun: async () => ({}), getRun: async () => null, listRuns: async () => [] });
 mockResolvedModule(require.resolve('../src/services/codex/event-store'), { createSeqGate: () => ({ shouldEmit: () => true }), listEvents: async () => [] });
 mockResolvedModule(require.resolve('../src/services/codex/run-access'), { findOwnedRun: async () => null, isTerminalStatus: () => true });
 mockResolvedModule(require.resolve('../src/services/codex/redis-pubsub'), { createRunSubscriber: async () => null, publishEvent: async () => false });
@@ -50,6 +52,20 @@ test('rollback of a foreign/missing checkpoint maps to 404', async () => {
   const res = await request(app()).post('/api/codex/checkpoints/nope/rollback');
   assert.equal(res.status, 404);
   assert.equal(res.body.error, 'not_found');
+});
+
+test('POST /projects/:id/workspace/recover validates and scopes a recovery ref', async () => {
+  const invalid = await request(app())
+    .post('/api/codex/projects/p1/workspace/recover')
+    .send({ recoveryRef: 'refs/heads/main' });
+  assert.equal(invalid.status, 400);
+
+  const restored = await request(app())
+    .post('/api/codex/projects/p1/workspace/recover')
+    .send({ recoveryRef: 'refs/sira/recovery/valid-ref' });
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.ok, true);
+  assert.equal(calls.find((c) => c[0] === 'recover')[1].projectId, 'p1');
 });
 
 test('GET /checkpoints/:id/diff returns unified diff + shortstat', async () => {

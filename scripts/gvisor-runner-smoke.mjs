@@ -297,7 +297,10 @@ const fullStackStarted = await response('/run', {
   body: { project: fullStackProject, basePath: fullStackBase },
 });
 assert.equal(fullStackStarted.ok, true);
-await waitForProjectReady(fullStackProject);
+const firstFullStackStatus = await waitForProjectReady(fullStackProject);
+assert.equal(firstFullStackStatus.preflight?.install?.status, 'passed');
+assert.equal(firstFullStackStatus.preflight?.build?.status, 'passed');
+assert.equal(firstFullStackStatus.preflight?.render?.status, 'passed');
 
 const htmlResponse = await previewFetch(fullStackStarted.port, fullStackBase);
 assert.equal(htmlResponse.status, 200);
@@ -346,16 +349,48 @@ await waitForProjectProcessesStopped(fullStackUid);
 const stoppedStatus = await response(`/status?project=${fullStackProject}`);
 assert.equal(stoppedStatus.running, false);
 
+const secondRunMarker = `gVisor second run ${Date.now()}`;
+const currentApp = await response(`/workspace/file?project=${fullStackProject}&path=src/App.tsx`);
+assert.match(currentApp.content, /<h1/);
+const secondApp = currentApp.content.replace(
+  /(<h1[^>]*>)([^<]+)(<\/h1>)/,
+  `$1${secondRunMarker}$3`,
+);
+assert.notEqual(secondApp, currentApp.content, 'second run must update the rendered app');
+await response('/workspace/write', {
+  method: 'POST',
+  body: {
+    project: fullStackProject,
+    files: [{ path: 'src/App.tsx', content: secondApp }],
+  },
+});
+const secondBuild = await response('/workspace/exec', {
+  method: 'POST',
+  body: {
+    project: fullStackProject,
+    cmd: ['npm', 'run', 'build'],
+    timeoutMs: 120_000,
+  },
+});
+assert.equal(secondBuild.exitCode, 0, secondBuild.stderr || secondBuild.stdout);
+
 const restarted = await response('/run', {
   method: 'POST',
   body: { project: fullStackProject, basePath: fullStackBase },
 });
 assert.equal(restarted.ok, true);
-await waitForProjectReady(fullStackProject);
+const secondFullStackStatus = await waitForProjectReady(fullStackProject);
+assert.equal(secondFullStackStatus.preflight?.build?.status, 'passed');
 assert.deepEqual(
   await waitForPreviewJson(restarted.port, `${fullStackBase}api/health`),
   { ok: true },
 );
+const secondRunSource = await previewFetch(
+  restarted.port,
+  `${fullStackBase}src/App.tsx`,
+);
+assert.equal(secondRunSource.status, 200);
+assert.match(await secondRunSource.text(), new RegExp(secondRunMarker));
 
 items = await previewJson(restarted.port, `${fullStackBase}api/items`);
 assert.ok(
@@ -401,7 +436,9 @@ console.log(JSON.stringify({
     basePath: fullStackBase,
     dependencies: ['express', 'react', 'vite', 'concurrently'],
     health: true,
+    buildPreflight: true,
     frontendCompiled: true,
+    secondRunContinued: true,
     sqliteCrudAndRestart: true,
     processTreeStopped: true,
     projectUid: fullStackUid,

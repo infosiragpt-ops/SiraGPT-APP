@@ -272,6 +272,11 @@ jobs:
               return 1
             }
 
+            run_code_runtime_canary() {
+              echo "[deploy-workflow] Running /code build + Chromium + second-run canary"
+              ${COMPOSE} exec -T backend node scripts/code-runtime-canary.js </dev/null
+            }
+
             dump_backend_diagnostics() {
               echo "[deploy-workflow] Backend container state"
               ${COMPOSE} ps backend || true
@@ -639,6 +644,8 @@ jobs:
             echo "[deploy-workflow] Deploy frontend check passed: ${FRONTEND_URL}"
             wait_version "${TARGET_SHA}" "${SIRAGPT_VERSION}"
             echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA} version=${SIRAGPT_VERSION}"
+            run_code_runtime_canary
+            echo "[deploy-workflow] /code runtime canary passed (build, render, second run)"
             cleanup_old_rollback_images
             SIRAGPT_DEPLOY
 

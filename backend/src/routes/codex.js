@@ -1469,6 +1469,7 @@ router.post(
       const { runner, service } = codexSessionRuntime();
       const checkpointId = req.body?.checkpointId == null ? null : String(req.body.checkpointId).trim();
       let previousSha = null;
+      let checkpointRecoveryRef = null;
       const session = await service.rewindSession({
         projectId: req.params.projectId,
         sessionId: req.params.runId,
@@ -1484,19 +1485,27 @@ router.post(
               deps: { runner },
             });
             previousSha = restored?.previousSha || null;
+            checkpointRecoveryRef = restored?.recovery?.ref || null;
             return restored?.error ? { ok: false, ...restored } : { ok: true, ...restored };
           }
           : null,
         undoCheckpointRestore: checkpointId
-          ? async () => (
-            previousSha
+          ? async () => {
+            if (checkpointRecoveryRef) {
+              return checkpointService.recoverWorkspaceChanges({
+                projectId: req.params.projectId,
+                recoveryRef: checkpointRecoveryRef,
+                runner,
+              });
+            }
+            return previousSha
               ? checkpointService.restoreWorkspaceSha({
                 projectId: req.params.projectId,
                 commitSha: previousSha,
                 deps: { runner },
               })
-              : { ok: false, error: 'previous_sha_unavailable' }
-          )
+              : { ok: false, error: 'previous_sha_unavailable' };
+          }
           : null,
       });
       return res.json({ session });
@@ -1552,6 +1561,37 @@ router.post('/checkpoints/:id/rollback', authenticateToken, async (req, res) => 
       deps: { runner: createSandboxClient() },
     });
     if (out.error) return res.status(out.status || 400).json({ error: out.error, detail: out.detail });
+    return res.json(out);
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.post('/projects/:id/workspace/recover', authenticateToken, async (req, res) => {
+  const recoveryRef = String(req.body?.recoveryRef || '').trim();
+  if (!checkpointService.isValidRecoveryRef(recoveryRef)) {
+    return res.status(400).json({ error: 'invalid_recovery_ref' });
+  }
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const runs = await runService.listRuns({ userId: req.user.id, projectId: project.id });
+    if (runs.some((run) => runService.ACTIVE_STATUSES?.includes?.(run.status))) {
+      return res.status(409).json({ error: 'workspace_recovery_run_active' });
+    }
+    const out = await checkpointService.recoverWorkspaceChanges({
+      projectId: project.id,
+      recoveryRef,
+      runner: createSandboxClient(),
+    });
+    if (!out.ok) {
+      return res.status(out.status || 400).json({
+        error: out.error,
+        detail: out.detail,
+        files: out.files,
+        recoveryRef: out.recoveryRef,
+      });
+    }
     return res.json(out);
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });

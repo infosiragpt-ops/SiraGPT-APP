@@ -209,8 +209,19 @@ test('gVisor smoke exercises the authenticated lifecycle and the real full-stack
   assert.match(runner, /node_modules\/next\/dist\/bin\/next/);
   assert.doesNotMatch(runner, /cmd = \["bun", "run", "dev"\]/);
   assert.match(runner, /probeReady\(port, basePath = null\)/);
-  assert.match(runner, /return r\.ok/);
-  assert.doesNotMatch(runner, /return r\.status > 0/);
+  assert.match(runner, /previewDocumentReady\(\{ status: r\.status, contentType, body \}\)/);
+  assert.match(runner, /npm", "run", "build"/);
+  assert.match(runner, /ready:\s*entry\.state === "ready" && renderAdmitted/);
+  assert.match(runner, /const ready = st\.ready \? await probeReady\(st\.port, st\.basePath\) : false/);
+  assert.doesNotMatch(runner, /const ready = st\.running \? await probeReady/);
+  assert.ok(
+    runner.indexOf('entry.preflight.render = { status: "passed" };')
+      < runner.indexOf('entry.state = "ready";'),
+    'ready must only become observable after render preflight passes',
+  );
+  assert.match(smoke, /preflight\?\.build\?\.status,\s*'passed'/);
+  assert.match(smoke, /secondRunMarker/);
+  assert.match(smoke, /secondRunContinued:\s*true/);
 });
 
 test('AgentAdapter, SandboxProvider, isolation, and gVisor contracts run in canonical CI shards', () => {
