@@ -36,6 +36,9 @@ import {
   Network,
   PackageOpen,
   PauseCircle,
+  Pencil,
+  Pin,
+  PinOff,
   PlugZap,
   Plus,
   Radio,
@@ -46,6 +49,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Trash2,
   TrendingUp,
   UsersRound,
   Workflow,
@@ -53,6 +57,16 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
@@ -68,6 +82,12 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
@@ -165,6 +185,27 @@ type CompanyOption = {
 type CustomDepartment = AgentDepartmentDefinition & { custom: true }
 
 const CUSTOM_DEPARTMENTS_KEY = "code-workspace:agent-company-departments:v1"
+const PINNED_DEPARTMENTS_KEY = "code-workspace:agent-company-pinned-departments:v1"
+const HIDDEN_DEPARTMENTS_KEY = "code-workspace:agent-company-hidden-departments:v1"
+const DEPARTMENT_OVERRIDES_KEY = "code-workspace:agent-company-department-overrides:v1"
+
+/** IDs managed by backend/src/services/codex/company-departments.js */
+const SERVER_BUILTIN_DEPARTMENT_IDS = new Set([
+  "ceo-office",
+  "agent-infrastructure",
+  "product-engineering",
+  "engineering-01",
+  "engineering-02",
+  "market-intelligence",
+  "sales",
+  "customer-success",
+  "growth-engines",
+  "marketing",
+  "website-distribution",
+  "integrations",
+  "localization",
+  "trust",
+])
 
 const STATUS_STYLES = {
   idle: "bg-zinc-300 dark:bg-zinc-600",
@@ -253,6 +294,115 @@ function writeCustomDepartments(workspaceId: string | null | undefined, rows: Cu
     window.localStorage.setItem(customDepartmentStorageKey(workspaceId), JSON.stringify(rows))
   } catch {
     /* storage disabled */
+  }
+}
+
+function pinnedDepartmentStorageKey(workspaceId: string | null | undefined): string {
+  return `${PINNED_DEPARTMENTS_KEY}:${workspaceId || "__default__"}`
+}
+
+function hiddenDepartmentStorageKey(workspaceId: string | null | undefined): string {
+  return `${HIDDEN_DEPARTMENTS_KEY}:${workspaceId || "__default__"}`
+}
+
+function departmentOverrideStorageKey(workspaceId: string | null | undefined): string {
+  return `${DEPARTMENT_OVERRIDES_KEY}:${workspaceId || "__default__"}`
+}
+
+function readStringIdList(key: string): string[] {
+  if (typeof window === "undefined") return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || "[]")
+    if (!Array.isArray(parsed)) return []
+    return [...new Set(parsed.map((value) => String(value || "").trim()).filter(Boolean))]
+  } catch {
+    return []
+  }
+}
+
+function writeStringIdList(key: string, values: string[]) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify([...new Set(values.filter(Boolean))]))
+  } catch {
+    /* storage disabled */
+  }
+}
+
+function readPinnedDepartments(workspaceId: string | null | undefined): string[] {
+  return readStringIdList(pinnedDepartmentStorageKey(workspaceId))
+}
+
+function writePinnedDepartments(workspaceId: string | null | undefined, values: string[]) {
+  writeStringIdList(pinnedDepartmentStorageKey(workspaceId), values)
+}
+
+function readHiddenDepartments(workspaceId: string | null | undefined): string[] {
+  return readStringIdList(hiddenDepartmentStorageKey(workspaceId)).filter((id) => id !== "ceo-office")
+}
+
+function writeHiddenDepartments(workspaceId: string | null | undefined, values: string[]) {
+  writeStringIdList(
+    hiddenDepartmentStorageKey(workspaceId),
+    values.filter((id) => id !== "ceo-office"),
+  )
+}
+
+type DepartmentOverride = {
+  name?: string
+  description?: string
+  mission?: string
+  desiredAgents?: number
+}
+
+function readDepartmentOverrides(
+  workspaceId: string | null | undefined,
+): Record<string, DepartmentOverride> {
+  if (typeof window === "undefined") return {}
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(departmentOverrideStorageKey(workspaceId)) || "{}")
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+    const out: Record<string, DepartmentOverride> = {}
+    for (const [id, raw] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!id || !raw || typeof raw !== "object" || Array.isArray(raw)) continue
+      const row = raw as Record<string, unknown>
+      const patch: DepartmentOverride = {}
+      if (typeof row.name === "string" && row.name.trim()) patch.name = row.name.trim().slice(0, 70)
+      if (typeof row.description === "string") patch.description = row.description.trim().slice(0, 140)
+      if (typeof row.mission === "string") patch.mission = row.mission.trim().slice(0, 800)
+      if (row.desiredAgents != null) {
+        const agents = Number(row.desiredAgents)
+        if (Number.isFinite(agents)) patch.desiredAgents = Math.max(1, Math.min(1000, Math.round(agents)))
+      }
+      if (Object.keys(patch).length > 0) out[id] = patch
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeDepartmentOverrides(
+  workspaceId: string | null | undefined,
+  value: Record<string, DepartmentOverride>,
+) {
+  try {
+    window.localStorage.setItem(departmentOverrideStorageKey(workspaceId), JSON.stringify(value))
+  } catch {
+    /* storage disabled */
+  }
+}
+
+function applyDepartmentOverride(
+  department: AgentDepartmentDefinition,
+  override?: DepartmentOverride,
+): AgentDepartmentDefinition {
+  if (!override) return department
+  return {
+    ...department,
+    name: override.name?.trim() || department.name,
+    description: override.description?.trim() || department.description,
+    mission: override.mission?.trim() || department.mission,
+    desiredAgents: override.desiredAgents ?? department.desiredAgents,
   }
 }
 
@@ -461,6 +611,18 @@ export function AgentCompanyPanel() {
   const [newDepartmentAgents, setNewDepartmentAgents] = React.useState(32)
   const [creatingDepartment, setCreatingDepartment] = React.useState(false)
   const [customDepartments, setCustomDepartments] = React.useState<CustomDepartment[]>([])
+  const [pinnedDepartmentIds, setPinnedDepartmentIds] = React.useState<string[]>([])
+  const [hiddenDepartmentIds, setHiddenDepartmentIds] = React.useState<string[]>([])
+  const [departmentOverrides, setDepartmentOverrides] = React.useState<Record<string, DepartmentOverride>>({})
+  const [editDepartmentOpen, setEditDepartmentOpen] = React.useState(false)
+  const [editingDepartmentId, setEditingDepartmentId] = React.useState<string | null>(null)
+  const [editDepartmentName, setEditDepartmentName] = React.useState("")
+  const [editDepartmentDescription, setEditDepartmentDescription] = React.useState("")
+  const [editDepartmentMission, setEditDepartmentMission] = React.useState("")
+  const [editDepartmentAgents, setEditDepartmentAgents] = React.useState(8)
+  const [savingDepartment, setSavingDepartment] = React.useState(false)
+  const [deleteDepartmentTarget, setDeleteDepartmentTarget] = React.useState<AgentDepartmentDefinition | null>(null)
+  const [deletingDepartment, setDeletingDepartment] = React.useState(false)
   const [companyCapacity, setCompanyCapacity] = React.useState<CodexCompanyCapacity | null>(null)
   const [proactiveOn, setProactiveOn] = React.useState(false)
   const [proactiveBusy, setProactiveBusy] = React.useState(false)
@@ -661,17 +823,37 @@ export function AgentCompanyPanel() {
   )
   const companyName = agentCompanyDisplayName(activeFolder?.name)
   const activeCodexProjectId = getActiveCodexProject()
-  const allDepartments = React.useMemo(
-    () => [...AGENT_COMPANY_DEPARTMENTS, ...customDepartments],
-    [customDepartments],
-  )
+  const allDepartments = React.useMemo(() => {
+    const hidden = new Set(hiddenDepartmentIds)
+    const base = [...AGENT_COMPANY_DEPARTMENTS, ...customDepartments]
+      .filter((department, index, rows) => rows.findIndex((row) => row.id === department.id) === index)
+      .filter((department) => department.id === "ceo-office" || !hidden.has(department.id))
+      .map((department) => applyDepartmentOverride(department, departmentOverrides[department.id]))
+
+    const pinnedRank = new Map(pinnedDepartmentIds.map((id, index) => [id, index]))
+    return [...base].sort((a, b) => {
+      const aPinned = pinnedRank.has(a.id)
+      const bPinned = pinnedRank.has(b.id)
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+      if (aPinned && bPinned) return (pinnedRank.get(a.id) || 0) - (pinnedRank.get(b.id) || 0)
+      if (a.id === "ceo-office") return -1
+      if (b.id === "ceo-office") return 1
+      return a.name.localeCompare(b.name, "es")
+    })
+  }, [customDepartments, departmentOverrides, hiddenDepartmentIds, pinnedDepartmentIds])
 
   React.useEffect(() => {
     setCustomDepartments(readCustomDepartments(activeFolder?.id))
+    setPinnedDepartmentIds(readPinnedDepartments(activeFolder?.id))
+    setHiddenDepartmentIds(readHiddenDepartments(activeFolder?.id))
+    setDepartmentOverrides(readDepartmentOverrides(activeFolder?.id))
     setView("home")
     setPreviewView(null)
     setSelectedTaskId(null)
     setOfficeOpen(false)
+    setEditDepartmentOpen(false)
+    setEditingDepartmentId(null)
+    setDeleteDepartmentTarget(null)
   }, [activeFolder?.id])
 
   React.useEffect(() => {
@@ -1257,6 +1439,216 @@ export function AgentCompanyPanel() {
     newDepartmentName,
   ])
 
+  const applyDepartmentPayload = React.useCallback((departments: Array<AgentDepartmentDefinition & { custom?: boolean }>) => {
+    const custom = departments
+      .filter((department) => department.custom)
+      .map((department) => ({ ...department, custom: true as const }))
+    setCustomDepartments(custom)
+    writeCustomDepartments(activeFolder?.id, custom)
+
+    const nextOverrides: Record<string, DepartmentOverride> = { ...departmentOverrides }
+    const builtInIds = new Set(AGENT_COMPANY_DEPARTMENTS.map((department) => department.id))
+    for (const department of departments) {
+      if (!builtInIds.has(department.id)) continue
+      const base = AGENT_COMPANY_DEPARTMENTS.find((row) => row.id === department.id)
+      if (!base) continue
+      const patch: DepartmentOverride = {}
+      if (department.name && department.name !== base.name) patch.name = department.name
+      if (department.description && department.description !== base.description) {
+        patch.description = department.description
+      }
+      if (department.mission && department.mission !== base.mission) patch.mission = department.mission
+      if (
+        department.desiredAgents != null &&
+        department.desiredAgents !== (base.desiredAgents ?? undefined)
+      ) {
+        patch.desiredAgents = department.desiredAgents
+      }
+      if (Object.keys(patch).length > 0) nextOverrides[department.id] = patch
+      else delete nextOverrides[department.id]
+    }
+    setDepartmentOverrides(nextOverrides)
+    writeDepartmentOverrides(activeFolder?.id, nextOverrides)
+
+    const presentIds = new Set(departments.map((department) => department.id))
+    const nextHidden = AGENT_COMPANY_DEPARTMENTS
+      .map((department) => department.id)
+      .filter((id) => id !== "ceo-office" && !presentIds.has(id))
+    // Keep any local-only hidden ids that are not part of the server catalog.
+    const mergedHidden = [
+      ...nextHidden,
+      ...hiddenDepartmentIds.filter((id) => !builtInIds.has(id) && !presentIds.has(id)),
+    ]
+    setHiddenDepartmentIds(mergedHidden)
+    writeHiddenDepartments(activeFolder?.id, mergedHidden)
+  }, [activeFolder?.id, departmentOverrides, hiddenDepartmentIds])
+
+  const toggleDepartmentPin = React.useCallback((departmentId: string) => {
+    setPinnedDepartmentIds((current) => {
+      const exists = current.includes(departmentId)
+      const next = exists
+        ? current.filter((id) => id !== departmentId)
+        : [departmentId, ...current.filter((id) => id !== departmentId)]
+      writePinnedDepartments(activeFolder?.id, next)
+      toast.success(exists ? "Departamento desfijado." : "Departamento fijado.")
+      return next
+    })
+  }, [activeFolder?.id])
+
+  const openEditDepartment = React.useCallback((department: AgentDepartmentDefinition) => {
+    setEditingDepartmentId(department.id)
+    setEditDepartmentName(department.name)
+    setEditDepartmentDescription(department.description || "")
+    setEditDepartmentMission(department.mission || department.description || "")
+    setEditDepartmentAgents(Math.max(1, Math.min(1000, Number(department.desiredAgents) || 8)))
+    setEditDepartmentOpen(true)
+  }, [])
+
+  const saveEditedDepartment = React.useCallback(async () => {
+    const departmentId = editingDepartmentId
+    const name = editDepartmentName.trim()
+    if (!departmentId || !name || savingDepartment) return
+    const current = allDepartments.find((department) => department.id === departmentId)
+    if (!current) return
+    if (
+      allDepartments.some(
+        (department) =>
+          department.id !== departmentId &&
+          department.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      toast.error("Ya existe un departamento con ese nombre.")
+      return
+    }
+
+    const description = editDepartmentDescription.trim() || current.description || "Departamento operativo."
+    const mission = editDepartmentMission.trim() || description
+    const desiredAgents = Math.max(1, Math.min(1000, editDepartmentAgents || 1))
+    const isCustom = Boolean(current.custom) || departmentId.startsWith("custom-")
+    const serverManaged = isCustom || SERVER_BUILTIN_DEPARTMENT_IDS.has(departmentId)
+
+    setSavingDepartment(true)
+    try {
+      const codexProjectId = associatedCodexProjectId || getActiveCodexProject()
+      if (codexProjectId && serverManaged) {
+        const result = await codexApi.upsertDepartment(codexProjectId, {
+          id: departmentId,
+          name,
+          description,
+          mission,
+          desiredAgents,
+          keywords: current.keywords ? [...current.keywords] : name.toLocaleLowerCase("es").split(/\s+/).filter(Boolean),
+          kind: current.kind || "research",
+          custom: isCustom,
+          enabled: true,
+        })
+        setCompanyCapacity(result.capacity)
+        applyDepartmentPayload(result.departments)
+      } else if (isCustom) {
+        const next = customDepartments.map((department) =>
+          department.id === departmentId
+            ? {
+                ...department,
+                name,
+                description,
+                mission,
+                desiredAgents,
+                keywords: name.toLocaleLowerCase("es").split(/\s+/).filter(Boolean),
+              }
+            : department,
+        )
+        setCustomDepartments(next)
+        writeCustomDepartments(activeFolder?.id, next)
+      } else {
+        const nextOverrides = {
+          ...departmentOverrides,
+          [departmentId]: {
+            name,
+            description,
+            mission,
+            desiredAgents,
+          },
+        }
+        setDepartmentOverrides(nextOverrides)
+        writeDepartmentOverrides(activeFolder?.id, nextOverrides)
+      }
+
+      setEditDepartmentOpen(false)
+      setEditingDepartmentId(null)
+      toast.success("Departamento actualizado.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo editar el departamento.")
+    } finally {
+      setSavingDepartment(false)
+    }
+  }, [
+    activeFolder?.id,
+    allDepartments,
+    applyDepartmentPayload,
+    associatedCodexProjectId,
+    customDepartments,
+    departmentOverrides,
+    editDepartmentAgents,
+    editDepartmentDescription,
+    editDepartmentMission,
+    editDepartmentName,
+    editingDepartmentId,
+    savingDepartment,
+  ])
+
+  const confirmDeleteDepartment = React.useCallback(async () => {
+    const target = deleteDepartmentTarget
+    if (!target || deletingDepartment) return
+    if (target.id === "ceo-office") {
+      toast.error("CEO Office no se puede eliminar.")
+      setDeleteDepartmentTarget(null)
+      return
+    }
+
+    setDeletingDepartment(true)
+    try {
+      const codexProjectId = associatedCodexProjectId || getActiveCodexProject()
+      const isCustom = Boolean(target.custom) || target.id.startsWith("custom-")
+      const serverManaged = isCustom || SERVER_BUILTIN_DEPARTMENT_IDS.has(target.id)
+
+      if (codexProjectId && serverManaged) {
+        const result = await codexApi.deleteDepartment(codexProjectId, target.id)
+        setCompanyCapacity(result.capacity)
+        applyDepartmentPayload(result.departments)
+      } else if (isCustom) {
+        const next = customDepartments.filter((department) => department.id !== target.id)
+        setCustomDepartments(next)
+        writeCustomDepartments(activeFolder?.id, next)
+      } else {
+        const nextHidden = [...new Set([...hiddenDepartmentIds, target.id])]
+        setHiddenDepartmentIds(nextHidden)
+        writeHiddenDepartments(activeFolder?.id, nextHidden)
+      }
+
+      setPinnedDepartmentIds((current) => {
+        const next = current.filter((id) => id !== target.id)
+        writePinnedDepartments(activeFolder?.id, next)
+        return next
+      })
+      if (selectedDepartmentId === target.id) setSelectedDepartmentId("ceo-office")
+      setDeleteDepartmentTarget(null)
+      toast.success("Departamento eliminado.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el departamento.")
+    } finally {
+      setDeletingDepartment(false)
+    }
+  }, [
+    activeFolder?.id,
+    applyDepartmentPayload,
+    associatedCodexProjectId,
+    customDepartments,
+    deleteDepartmentTarget,
+    deletingDepartment,
+    hiddenDepartmentIds,
+    selectedDepartmentId,
+  ])
+
   const currentProjectId = activeFolder?.id?.replace(/^project:/, "") || null
   const associationOptions = associationState?.association
     ? [associationState.association.codexProject]
@@ -1451,6 +1843,10 @@ export function AgentCompanyPanel() {
             onOpenResources={() => openCompanySurface("resources")}
             onOpenDepartment={openDepartmentChat}
             onAddDepartment={() => setNewDepartmentOpen(true)}
+            pinnedDepartmentIds={pinnedDepartmentIds}
+            onToggleDepartmentPin={toggleDepartmentPin}
+            onEditDepartment={openEditDepartment}
+            onDeleteDepartment={(department) => setDeleteDepartmentTarget(department)}
             user={user}
             hideFooter={dockedInAppsRail}
             proactiveOn={proactiveOn}
@@ -1718,6 +2114,122 @@ export function AgentCompanyPanel() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={editDepartmentOpen}
+        onOpenChange={(open) => {
+          setEditDepartmentOpen(open)
+          if (!open) setEditingDepartmentId(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Editar departamento</DialogTitle>
+            <DialogDescription>
+              Actualiza el nombre, la misión y la capacidad lógica de esta unidad.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="edit-department-name">Nombre</Label>
+              <Input
+                id="edit-department-name"
+                value={editDepartmentName}
+                onChange={(event) => setEditDepartmentName(event.target.value)}
+                placeholder="Nombre del departamento"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-department-description">Descripción corta</Label>
+              <Input
+                id="edit-department-description"
+                value={editDepartmentDescription}
+                onChange={(event) => setEditDepartmentDescription(event.target.value)}
+                placeholder="Resumen visible en la lista"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-department-mission">Misión</Label>
+              <Textarea
+                id="edit-department-mission"
+                value={editDepartmentMission}
+                onChange={(event) => setEditDepartmentMission(event.target.value)}
+                placeholder="Qué debe lograr este departamento"
+                className="min-h-[96px] resize-y"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-department-capacity">Capacidad de agentes</Label>
+              <Input
+                id="edit-department-capacity"
+                type="number"
+                min={1}
+                max={1000}
+                step={1}
+                value={editDepartmentAgents}
+                onChange={(event) => {
+                  const value = Number.parseInt(event.target.value, 10)
+                  setEditDepartmentAgents(
+                    Number.isFinite(value) ? Math.max(1, Math.min(1000, value)) : 1,
+                  )
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEditDepartmentOpen(false)
+                setEditingDepartmentId(null)
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void saveEditedDepartment()}
+              disabled={!editDepartmentName.trim() || savingDepartment}
+            >
+              {savingDepartment ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              Guardar cambios
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(deleteDepartmentTarget)}
+        onOpenChange={(open) => {
+          if (!open && !deletingDepartment) setDeleteDepartmentTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Eliminar departamento</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteDepartmentTarget
+                ? `Se eliminará “${deleteDepartmentTarget.name}” de esta empresa. CEO Office no se puede borrar; el resto de unidades se ocultan o quitan de forma permanente.`
+                : "Esta acción no se puede deshacer."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingDepartment}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deletingDepartment}
+              className="bg-rose-600 text-white hover:bg-rose-700 focus:ring-rose-600"
+              onClick={(event) => {
+                event.preventDefault()
+                void confirmDeleteDepartment()
+              }}
+            >
+              {deletingDepartment ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AgentOfficeOverlay
         open={officeOpen}
         companyName={companyName}
@@ -1893,6 +2405,10 @@ function CompanyHome({
   onOpenResources,
   onOpenDepartment,
   onAddDepartment,
+  pinnedDepartmentIds,
+  onToggleDepartmentPin,
+  onEditDepartment,
+  onDeleteDepartment,
   user,
   hideFooter = false,
   proactiveOn,
@@ -1922,6 +2438,10 @@ function CompanyHome({
   onOpenResources: () => void
   onOpenDepartment: (departmentId: string) => void
   onAddDepartment: () => void
+  pinnedDepartmentIds: string[]
+  onToggleDepartmentPin: (departmentId: string) => void
+  onEditDepartment: (department: AgentDepartmentDefinition) => void
+  onDeleteDepartment: (department: AgentDepartmentDefinition) => void
   user: ReturnType<typeof useAuth>["user"]
   hideFooter?: boolean
   proactiveOn: boolean
@@ -1930,6 +2450,7 @@ function CompanyHome({
   canRun: boolean | null
   onToggleProactive: () => void
 }) {
+  const pinnedSet = React.useMemo(() => new Set(pinnedDepartmentIds), [pinnedDepartmentIds])
   return (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
@@ -2008,70 +2529,125 @@ function CompanyHome({
           </Button>
         </div>
 
-        <div className="mt-1 space-y-0.5">
-          {departmentRows.map(({ department, activeCount, latest, latestRun }) => {
-            const status = latestRun
-              ? codeRunStatus(latestRun)
-              : latest
-                ? codeSessionStatus(latest)
-                : { label: "Disponible", tone: "idle" as const }
-            return (
-              <button
-                key={department.id}
-                type="button"
-                className={cn(
-                  "group flex min-h-[58px] w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  hideFooter && "min-h-[46px] gap-2 rounded-md px-2 py-1.5",
-                  department.id === "ceo-office" && "bg-muted/50",
-                )}
-                onClick={() => onOpenDepartment(department.id)}
-                data-testid={`agent-company-department-${department.id}`}
-              >
-                <span
+        <TooltipProvider delayDuration={250}>
+          <div className="mt-1 space-y-0.5">
+            {departmentRows.map(({ department, activeCount, latest, latestRun }) => {
+              const status = latestRun
+                ? codeRunStatus(latestRun)
+                : latest
+                  ? codeSessionStatus(latest)
+                  : { label: "Disponible", tone: "idle" as const }
+              const isPinned = pinnedSet.has(department.id)
+              const canDelete = department.id !== "ceo-office"
+              return (
+                <div
+                  key={department.id}
                   className={cn(
-                    "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/55 bg-muted/40 text-muted-foreground",
-                    hideFooter && "h-8 w-8",
+                    "group/dept relative flex min-h-[58px] w-full items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
+                    hideFooter && "min-h-[46px] gap-1.5 rounded-md px-1.5 py-1.5",
+                    department.id === "ceo-office" && "bg-muted/50",
+                    isPinned && "bg-sky-50/70 ring-1 ring-sky-500/10 dark:bg-sky-950/20",
                   )}
+                  data-testid={`agent-company-department-${department.id}`}
                 >
-                  <DepartmentGlyph departmentId={department.id} className={hideFooter ? "h-3.5 w-3.5" : "h-4 w-4"} />
-                  <span
+                  <button
+                    type="button"
                     className={cn(
-                      "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background",
-                      hideFooter && "h-2 w-2",
-                      STATUS_STYLES[status.tone],
+                      "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      hideFooter && "gap-2",
                     )}
-                  />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2">
-                    <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
-                      {department.name}
+                    onClick={() => onOpenDepartment(department.id)}
+                    aria-label={`Abrir ${department.name}`}
+                  >
+                    <span
+                      className={cn(
+                        "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/55 bg-muted/40 text-muted-foreground",
+                        hideFooter && "h-8 w-8",
+                      )}
+                    >
+                      <DepartmentGlyph departmentId={department.id} className={hideFooter ? "h-3.5 w-3.5" : "h-4 w-4"} />
+                      <span
+                        className={cn(
+                          "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background",
+                          hideFooter && "h-2 w-2",
+                          STATUS_STYLES[status.tone],
+                        )}
+                      />
                     </span>
-                    {activeCount > 0 ? (
-                      <span className={cn(
-                        "shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
-                        hideFooter && "text-[9px]",
-                      )}>
-                        {activeCount}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
+                          {department.name}
+                        </span>
+                        {isPinned ? (
+                          <Pin
+                            className={cn(
+                              "h-3 w-3 shrink-0 fill-sky-500/20 text-sky-600 dark:text-sky-300",
+                              hideFooter && "h-2.5 w-2.5",
+                            )}
+                            aria-label="Fijado"
+                          />
+                        ) : null}
+                        {activeCount > 0 ? (
+                          <span className={cn(
+                            "shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+                            hideFooter && "text-[9px]",
+                          )}>
+                            {activeCount}
+                          </span>
+                        ) : null}
                       </span>
-                    ) : null}
-                  </span>
-                  <span className={cn(
-                    "mt-0.5 block truncate text-[11px] text-muted-foreground",
-                    hideFooter && "text-[9px] leading-3",
-                  )}>
-                    {latestRun
-                      ? runSummary(latestRun)
-                      : latest?.turns.some((turn) => turn.content.trim())
-                        ? latestSessionLine(latest)
-                        : department.description}
-                  </span>
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-transform group-hover:translate-x-0.5" />
-              </button>
-            )
-          })}
-        </div>
+                      <span className={cn(
+                        "mt-0.5 block truncate text-[11px] text-muted-foreground",
+                        hideFooter && "text-[9px] leading-3",
+                      )}>
+                        {latestRun
+                          ? runSummary(latestRun)
+                          : latest?.turns.some((turn) => turn.content.trim())
+                            ? latestSessionLine(latest)
+                            : department.description}
+                      </span>
+                    </span>
+                  </button>
+
+                  <div
+                    className={cn(
+                      "flex shrink-0 items-center gap-0.5 rounded-md border border-transparent bg-background/80 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-all sm:opacity-0 sm:group-hover/dept:opacity-100 sm:group-focus-within/dept:opacity-100",
+                      isPinned && "sm:opacity-100",
+                    )}
+                  >
+                    <DepartmentActionButton
+                      label={isPinned ? "Desfijar" : "Fijar"}
+                      active={isPinned}
+                      onClick={() => onToggleDepartmentPin(department.id)}
+                      testId={`agent-company-department-pin-${department.id}`}
+                    >
+                      {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                    </DepartmentActionButton>
+                    <DepartmentActionButton
+                      label="Editar"
+                      onClick={() => onEditDepartment(department)}
+                      testId={`agent-company-department-edit-${department.id}`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </DepartmentActionButton>
+                    <DepartmentActionButton
+                      label={canDelete ? "Eliminar" : "CEO Office no se elimina"}
+                      destructive={canDelete}
+                      disabled={!canDelete}
+                      onClick={() => onDeleteDepartment(department)}
+                      testId={`agent-company-department-delete-${department.id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </DepartmentActionButton>
+                  </div>
+
+                  <ChevronRight className="hidden h-4 w-4 shrink-0 text-muted-foreground/45 transition-transform group-hover/dept:translate-x-0.5 sm:block sm:group-hover/dept:hidden" />
+                </div>
+              )
+            })}
+          </div>
+        </TooltipProvider>
       </div>
 
       <footer
@@ -2128,6 +2704,52 @@ function CompanyHome({
         </button>
       </footer>
     </>
+  )
+}
+
+function DepartmentActionButton({
+  label,
+  onClick,
+  children,
+  active = false,
+  destructive = false,
+  disabled = false,
+  testId,
+}: {
+  label: string
+  onClick: () => void
+  children: React.ReactNode
+  active?: boolean
+  destructive?: boolean
+  disabled?: boolean
+  testId?: string
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          data-testid={testId}
+          disabled={disabled}
+          aria-label={label}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!disabled) onClick()
+          }}
+          className={cn(
+            "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+            active && "bg-sky-500/10 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300",
+            destructive && !disabled && "hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-300",
+          )}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

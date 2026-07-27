@@ -77,3 +77,62 @@ test('upsert replaces the same custom department without duplicating it', async 
   assert.equal(custom.length, 1);
   assert.equal(custom[0].desiredAgents, 48);
 });
+
+test('built-in departments can be renamed via overrides and deleted by hiding', async () => {
+  const project = { id: 'p1', brief: { goal: 'operate company' } };
+  const prisma = fakePrisma(project);
+  const renamed = await departments.upsertDepartment({
+    prisma,
+    project,
+    department: {
+      id: 'sales',
+      name: 'Ventas Enterprise',
+      description: 'Pipeline B2B',
+      desiredAgents: 40,
+    },
+  });
+  const sales = renamed.find((item) => item.id === 'sales');
+  assert.ok(sales);
+  assert.equal(sales.custom, false);
+  assert.equal(sales.name, 'Ventas Enterprise');
+  assert.equal(sales.desiredAgents, 40);
+  assert.equal(prisma.state.project.brief.goal, 'operate company');
+
+  const afterDelete = await departments.deleteDepartment({
+    prisma,
+    project: prisma.state.project,
+    departmentId: 'sales',
+  });
+  assert.equal(afterDelete.some((item) => item.id === 'sales'), false);
+  assert.deepEqual(prisma.state.project.brief.companyDepartmentHidden, ['sales']);
+});
+
+test('custom departments can be deleted and ceo-office is protected', async () => {
+  const project = {
+    id: 'p1',
+    brief: {
+      companyDepartments: [{
+        id: 'custom-ops',
+        name: 'Ops',
+        desiredAgents: 8,
+      }],
+    },
+  };
+  const prisma = fakePrisma(project);
+  const remaining = await departments.deleteDepartment({
+    prisma,
+    project,
+    departmentId: 'custom-ops',
+  });
+  assert.equal(remaining.some((item) => item.id === 'custom-ops'), false);
+  assert.equal(prisma.state.project.brief.companyDepartments.length, 0);
+
+  await assert.rejects(
+    () => departments.deleteDepartment({
+      prisma,
+      project: prisma.state.project,
+      departmentId: 'ceo-office',
+    }),
+    /cannot_delete_ceo_office/,
+  );
+});

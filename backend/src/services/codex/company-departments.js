@@ -8,6 +8,10 @@
  * units created by the user. `desiredAgents` is logical capacity: research and
  * review work may fan out, while workspace writers remain serialized until the
  * sandbox provider supplies one isolated worktree per writer.
+ *
+ * Built-in edits/hides live in brief.companyDepartmentOverrides and
+ * brief.companyDepartmentHidden so core units can be customized without
+ * duplicating them as custom departments.
  */
 
 const MAX_CUSTOM_DEPARTMENTS = 40;
@@ -207,12 +211,67 @@ function normalizeCustomDepartments(value) {
   return rows;
 }
 
+function normalizeOverrides(value) {
+  const source = asRecord(value);
+  const out = {};
+  for (const [rawId, raw] of Object.entries(source)) {
+    const key = slug(rawId);
+    if (!key) continue;
+    const row = asRecord(raw);
+    const patch = {};
+    if (typeof row.name === 'string' && row.name.trim()) patch.name = boundedText(row.name, 90);
+    if (typeof row.mission === 'string') patch.mission = boundedText(row.mission, 800);
+    if (typeof row.description === 'string') patch.description = boundedText(row.description, 240);
+    if (Array.isArray(row.keywords)) {
+      patch.keywords = [...new Set(
+        row.keywords.map((item) => boundedText(item, 60).toLowerCase()).filter(Boolean),
+      )].slice(0, 20);
+    }
+    if (['coordination', 'engineering', 'research', 'external'].includes(row.kind)) {
+      patch.kind = row.kind;
+    }
+    if (row.desiredAgents != null) patch.desiredAgents = boundedAgents(row.desiredAgents, 4);
+    if (Object.keys(patch).length > 0) out[key] = patch;
+  }
+  return out;
+}
+
+function normalizeHidden(value) {
+  if (!Array.isArray(value)) return [];
+  const builtInIds = new Set(BUILT_IN_DEPARTMENTS.map((item) => item.id));
+  return [...new Set(
+    value
+      .map((item) => slug(item))
+      .filter((id) => id && id !== 'ceo-office' && builtInIds.has(id)),
+  )];
+}
+
+function applyOverride(base, override) {
+  const patch = asRecord(override);
+  if (!Object.keys(patch).length) return base;
+  return {
+    ...base,
+    ...patch,
+    id: base.id,
+    custom: Boolean(base.custom),
+    enabled: base.enabled !== false,
+  };
+}
+
 function readDepartments(project) {
   const brief = asRecord(project?.brief);
   const custom = normalizeCustomDepartments(brief.companyDepartments);
+  const overrides = normalizeOverrides(brief.companyDepartmentOverrides);
+  const hidden = new Set(normalizeHidden(brief.companyDepartmentHidden));
+  const builtIns = BUILT_IN_DEPARTMENTS
+    .filter((item) => !hidden.has(item.id))
+    .map((item) => applyOverride(
+      { ...item, custom: false, enabled: true },
+      overrides[item.id],
+    ));
   return [
-    ...BUILT_IN_DEPARTMENTS.map((item) => ({ ...item, custom: false, enabled: true })),
-    ...custom,
+    ...builtIns,
+    ...custom.map((item) => applyOverride(item, overrides[item.id])),
   ];
 }
 
@@ -245,12 +304,69 @@ async function writeDepartments({ prisma, project, departments }) {
   return readDepartments({ ...source, brief: nextBrief });
 }
 
+async function mutateDepartmentMeta({ prisma, project, mutate }) {
+  if (!prisma?.codexProject?.update || !project?.id) return readDepartments(project);
+  let source = project;
+  let nextBrief = asRecord(project.brief);
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief, fresh) => {
+      source = fresh;
+      nextBrief = mutate({ ...brief });
+      return nextBrief;
+    },
+  });
+  return readDepartments({ ...source, brief: nextBrief });
+}
+
 async function upsertDepartment({ prisma, project, department }) {
   const fresh = prisma?.codexProject?.findUnique
     ? await prisma.codexProject.findUnique({ where: { id: project.id } }).catch(() => null)
     : null;
   const source = fresh || project;
-  const current = readDepartments(source).filter((item) => item.custom);
+  const builtInIds = new Set(BUILT_IN_DEPARTMENTS.map((item) => item.id));
+  const payload = asRecord(department);
+  const requestedId = slug(payload.id || payload.name || '');
+  const isBuiltInUpdate = Boolean(requestedId && builtInIds.has(requestedId) && payload.custom !== true);
+
+  if (isBuiltInUpdate) {
+    const base = BUILT_IN_DEPARTMENTS.find((item) => item.id === requestedId);
+    const name = boundedText(payload.name, 90) || base?.name || '';
+    if (!name) throw new Error('department_name_required');
+    return mutateDepartmentMeta({
+      prisma,
+      project: source,
+      mutate: (brief) => {
+        const overrides = normalizeOverrides(brief.companyDepartmentOverrides);
+        const hidden = normalizeHidden(brief.companyDepartmentHidden).filter((id) => id !== requestedId);
+        const previous = asRecord(overrides[requestedId]);
+        overrides[requestedId] = {
+          ...previous,
+          name,
+          mission: boundedText(payload.mission, 800) || previous.mission || base.mission,
+          description: boundedText(payload.description, 240) || previous.description || base.description,
+          kind: ['coordination', 'engineering', 'research', 'external'].includes(payload.kind)
+            ? payload.kind
+            : (previous.kind || base.kind),
+          desiredAgents: payload.desiredAgents != null
+            ? boundedAgents(payload.desiredAgents, base.desiredAgents)
+            : (previous.desiredAgents || base.desiredAgents),
+          keywords: Array.isArray(payload.keywords)
+            ? [...new Set(payload.keywords.map((item) => boundedText(item, 60).toLowerCase()).filter(Boolean))].slice(0, 20)
+            : (previous.keywords || base.keywords),
+        };
+        return {
+          ...brief,
+          companyDepartmentOverrides: overrides,
+          companyDepartmentHidden: hidden,
+        };
+      },
+    });
+  }
+
+  const current = normalizeCustomDepartments(asRecord(source.brief).companyDepartments);
   const normalized = normalizeDepartment(department, { custom: true, index: current.length });
   if (!normalized) throw new Error('department_name_required');
   const next = [
@@ -260,12 +376,47 @@ async function upsertDepartment({ prisma, project, department }) {
   return writeDepartments({ prisma, project: source, departments: next });
 }
 
+async function deleteDepartment({ prisma, project, departmentId }) {
+  const fresh = prisma?.codexProject?.findUnique
+    ? await prisma.codexProject.findUnique({ where: { id: project.id } }).catch(() => null)
+    : null;
+  const source = fresh || project;
+  const id = slug(departmentId);
+  if (!id) throw new Error('department_not_found');
+  if (id === 'ceo-office') throw new Error('cannot_delete_ceo_office');
+
+  const builtInIds = new Set(BUILT_IN_DEPARTMENTS.map((item) => item.id));
+  if (builtInIds.has(id)) {
+    return mutateDepartmentMeta({
+      prisma,
+      project: source,
+      mutate: (brief) => {
+        const hidden = new Set(normalizeHidden(brief.companyDepartmentHidden));
+        hidden.add(id);
+        const overrides = normalizeOverrides(brief.companyDepartmentOverrides);
+        delete overrides[id];
+        return {
+          ...brief,
+          companyDepartmentHidden: [...hidden],
+          companyDepartmentOverrides: overrides,
+        };
+      },
+    });
+  }
+
+  const current = normalizeCustomDepartments(asRecord(source.brief).companyDepartments);
+  if (!current.some((item) => item.id === id)) throw new Error('department_not_found');
+  const next = current.filter((item) => item.id !== id);
+  return writeDepartments({ prisma, project: source, departments: next });
+}
+
 module.exports = {
   BUILT_IN_DEPARTMENTS,
   MAX_AGENTS_PER_DEPARTMENT,
   MAX_CUSTOM_DEPARTMENTS,
   boundedAgents,
   capacitySummary,
+  deleteDepartment,
   normalizeCustomDepartments,
   normalizeDepartment,
   readDepartments,

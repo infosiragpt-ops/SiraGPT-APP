@@ -627,6 +627,11 @@ export const codexApi = {
       `/projects/${id}/departments`,
       { method: "PUT", body: JSON.stringify({ department }) },
     ),
+  deleteDepartment: (id: string, departmentId: string) =>
+    req<{ departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity }>(
+      `/projects/${id}/departments/${encodeURIComponent(departmentId)}`,
+      { method: "DELETE" },
+    ),
   getCompanyProfile: (id: string) =>
     req<{ company: CodexCompanyContext }>(`/projects/${id}/company-profile`, { cache: "no-store" })
       .then((result) => result.company),

@@ -586,6 +586,33 @@ router.put('/projects/:id/departments', authenticateToken, async (req, res) => {
   }
 });
 
+router.delete('/projects/:id/departments/:departmentId', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const service = require('../services/codex/company-departments');
+    const departments = await service.deleteDepartment({
+      prisma: codexDb,
+      project,
+      departmentId: req.params.departmentId,
+    });
+    return res.json({
+      departments,
+      capacity: service.capacitySummary(departments),
+    });
+  } catch (err) {
+    const known = {
+      department_not_found: 404,
+      cannot_delete_ceo_office: 400,
+    };
+    const status = known[err?.message] || 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_departments_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
 // ── Perfil operativo de empresa ─────────────────────────────────────────────
 // Intent belongs to the user/company; connection readiness is always derived
 // from real runtime evidence (workspace, publication, OAuth and Gmail).
