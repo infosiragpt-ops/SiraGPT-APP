@@ -119,6 +119,7 @@ import {
   isBareBuildCommand,
   isConversationalMessage,
   isQuickGreeting,
+  needsWebTools,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
   promptFromContext,
@@ -799,9 +800,10 @@ const CONVERSATION_SYSTEM_PROMPT = [
   "[MODO CONVERSACIÓN]",
   "Eres el agente de apps de SiraGPT dentro del workspace /code. El usuario NO pidió construir ni cambiar código: te está hablando (una pregunta, una duda o un comentario).",
   "Responde útil, cercano y BREVE (2-6 frases), en el idioma del usuario.",
+  "Si el usuario comparte una URL o pide buscar, abrir, leer o verificar información pública, basa la respuesta en el contexto web verificado que agrega el servidor. Nunca digas que no puedes navegar si ese contexto contiene la página; explica exactamente qué página se pudo leer o qué bloqueo real se encontró.",
   "Si pregunta qué sabes hacer: creas apps, landings y juegos desde una descripción; editas el proyecto actual; instalas dependencias npm cuando el proyecto lo necesita; lo ejecutas en vivo en el preview; lo corriges y lo publicas.",
   "PROHIBIDO generar código, bloques de archivos, o afirmar que hiciste cambios — en este turno solo conversas.",
-  "Cierra invitando a pedir la construcción o el cambio cuando quiera.",
+  "Si hizo una pregunta concreta, respóndela directamente; solo invita a construir o cambiar algo cuando sea pertinente.",
 ].join("\n")
 
 const CODE_AGENT_PHASE_BLUEPRINT = [
@@ -1722,6 +1724,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // thinking label while the reply streams. CodeAgentProgress renders null
       // when agentPhases is absent, so the rail simply never appears.
       const conversational = !!override?.conversational
+      const webGroundedConversation = conversational && needsWebTools(text)
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
@@ -1762,8 +1765,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
         .join("\n\n")
       const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      const scopedConvoBlock = webGroundedConversation ? "" : convoBlock
       const proactiveState = getProactiveCompanyState()
-      if (proactiveState.enabled && text.trim() && !proactiveState.objective) {
+      if (proactiveState.enabled && !webGroundedConversation && text.trim() && !proactiveState.objective) {
         // First real CEO instruction becomes the company objective.
         const looksLikeKickoff = /modo PROACTIVO|matrix\.build|0-person company/i.test(text)
         if (!looksLikeKickoff) setProactiveCompanyObjective(text)
@@ -1774,11 +1778,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             objective: getProactiveCompanyState().objective,
           })
         : null
+      const scopedProactiveBlock = webGroundedConversation ? null : proactiveBlock
       const finalPrompt = override?.systemPrompt
-        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}${proactiveBlock ? `\n\n${proactiveBlock}` : ""}\n\n${convoBlock}Usuario: ${text}`
+        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}${scopedProactiveBlock ? `\n\n${scopedProactiveBlock}` : ""}\n\n${scopedConvoBlock}Usuario: ${text}`
         : includeContext
-          ? `${buildSystemContext(files, activePath, activeFolder, composerMode, proactiveBlock)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
-          : `${proactiveBlock ? `${proactiveBlock}\n\n` : ""}${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          ? `${buildSystemContext(files, activePath, activeFolder, composerMode, scopedProactiveBlock)}\n\n${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
+          : `${scopedProactiveBlock ? `${scopedProactiveBlock}\n\n` : ""}${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
 
       if (!conversational) {
         patchAssistant({
@@ -1805,7 +1810,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       try {
         if (conversational) {
-          patchAssistant({ agentLabel: "Respondiendo" })
+          patchAssistant({ agentLabel: webGroundedConversation ? "Consultando la web" : "Respondiendo" })
         } else {
           patchAssistant({
             agentLabel: "Generando respuesta con el agente de código",
@@ -1820,12 +1825,15 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             model: activeModelName,
             prompt: finalPrompt,
             streamId: id,
-            files: override?.files && override.files.length > 0 ? override.files : undefined,
-            // The code chat generates code blocks (e.g. a full index.html);
-            // it must use a plain LLM stream, never the web_search/artifact
-            // agentic loop (which times out and returns the empty fallback
-            // for build-an-app prompts).
+            files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
+            // /code stays on the reliable plain stream. For an explicit public
+            // web turn the backend performs a deterministic, read-only fetch /
+            // search first and injects the result as untrusted evidence. We do
+            // NOT enable the general agent toolset here: a malicious page must
+            // never gain access to code, shell, files or private connectors.
             disableAgentic: true,
+            enableWebGrounding: webGroundedConversation,
+            webGroundingQuery: webGroundedConversation ? text : undefined,
           },
           (chunk) => {
             assistantText += chunk
@@ -2025,7 +2033,29 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }
           },
           controller.signal,
-          { onUsage: (u) => { usage = u } },
+          {
+            // The backend may replace already-streamed text after its final
+            // safety scrub. Keep both the UI turn and the local accumulator in
+            // sync; appending the replacement would duplicate the answer and
+            // could reintroduce text the scrub intentionally removed.
+            onReplace: (content) => {
+              assistantText = content
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === assistantId
+                    ? {
+                        ...t,
+                        content,
+                        ...(t.planMs == null && content.includes("\n")
+                          ? { planMs: Date.now() - startedAt }
+                          : {}),
+                      }
+                    : t,
+                ),
+              )
+            },
+            onUsage: (u) => { usage = u },
+          },
         )
       } catch (err: any) {
         const aborted =
@@ -3681,7 +3711,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // app because "quiero" counts as a build verb). Applies ALWAYS — a stalled
       // intake used to swallow "¿puedes ayudarme?" into a build; slot answers
       // ("una cafetería") are not conversational, so the FSM still gets them.
-      if (isConversationalMessage(text)) {
+      if (isConversationalMessage(text) || (needsWebTools(text) && !isBuildRequest(text))) {
         if (activeModelName) {
           await sendPrompt(text, {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
