@@ -204,7 +204,7 @@ export function buildProactiveKickoffPrompt(companyName: string): string {
     "6) Empieza YA: scaffold/producto, ops, contenido o distribución según el objetivo; deja evidencia verificable (código, checks, preview, métricas).",
     "7) Respuesta CEO breve: resultado, evidencia, riesgos y siguiente ciclo autónomo. El detalle vive en actividad/tareas.",
     "8) No pidas micro-aprobaciones para pasos baratos. Escala solo lo irreversible (borrar datos, gastar dinero, publicar dominio).",
-    "9) Correo/CRM/redes solo con cuentas conectadas y política de Recursos. Nunca inventes envíos ni ventas sin evidencia remota.",
+    "9) Para correo, CRM, Facebook, LinkedIn o X usa exclusivamente cuentas conectadas y la política guardada en Recursos. Nunca inventes envíos ni ventas sin evidencia remota.",
     "",
     "Primera entrega ahora: plan de empresa multi-departamento + primer avance real en el workspace.",
   ].join("\n")
@@ -223,7 +223,7 @@ export function buildProactiveCompanySystemBlock(opts: {
     .join("\n")
 
   return [
-    "## Modo empresa de agentes PROACTIVO (matrix.build + OpenClaw patterns)",
+    "## Modo empresa de agentes PROACTIVO (matrix.build-style + OpenClaw patterns)",
     `Empresa: ${companyName}`,
     objective ? `Objetivo activo: ${objective}` : "Objetivo: el usuario lo define en CEO Office; si no hay uno, propón y ejecuta el más valioso con el contexto del workspace.",
     "",
@@ -239,7 +239,8 @@ export function buildProactiveCompanySystemBlock(opts: {
     "- Cada departamento tiene chat revisable (encargo, progreso, evidencia, bloqueo). CEO Office guarda el resumen ejecutivo y handoffs.",
     "- Cada ciclo deja prueba: código, preview, checks, o decisión documentada. Sin teatro.",
     "- Prefiere construir y verificar antes que pedir permiso.",
-    "- Publicaciones externas solo con política de Recursos (OAuth, revisión/auto, límites).",
+    "- Las publicaciones externas solo se ejecutan mediante la política de Recursos: cuentas OAuth conectadas, pausa global, modo revisión/automático y límite diario.",
+    "- En modo Revisión, prepara el contenido pero no lo publiques. En modo Automático, respeta el objetivo y la selección de canales.",
     "- Respuesta CEO ejecutiva y breve; el detalle vive en streaming/actividad/workspace.",
   ].join("\n")
 }
