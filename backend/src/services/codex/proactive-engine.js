@@ -18,12 +18,15 @@
  *     costTodayUsd, dailyBudgetUsd, budgetBlocked }
  *
  * Safety rails:
- *   - Per-project daily proposal cap (CODEX_PROACTIVE_MAX_PER_DAY, default 6)
- *     and USD kill switch (CODEX_PROACTIVE_DAILY_BUDGET_USD, default 2).
- *   - Single-active-run gate: a busy project is skipped, never queued up.
+ *   - Per-project daily proposal cap (CODEX_PROACTIVE_MAX_PER_DAY, default 48)
+ *     and USD kill switch (CODEX_PROACTIVE_DAILY_BUDGET_USD, default 25).
+ *   - Single-active-run gate for code builds; operational depts still rotate.
  *   - Departments rotate round-robin so one mandate can't monopolize.
+ *   - On enable: every department is activated (enabled=true) for permanent fleet work.
+ *   - Proactive plan/build runs always set autoExecute for multi-hour continuity
+ *     (OpenClaw-style durable autonomous work).
  *   - Ticker default-on ONLY in production; explicit CODEX_PROACTIVE_ENABLED
- *     overrides both ways ('1' forces on, '0' forces off).
+ *     overrides both ways ('1' forces on, '0' forces off). Default tick 2 min.
  *   - All external effects (prisma, run-service, LLM, runner) are injectable.
  */
 
@@ -82,24 +85,59 @@ async function writeProactiveState({ prisma, project, patch }) {
 async function setProactive({ prisma, projectId, userId, enabled, now = () => new Date() }) {
   const project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
   if (!project) return null;
+  // Permanent fleet: when PROACTIVO turns on, unhide every built-in department
+  // and re-enable custom units so the whole company participates in the loop.
+  if (enabled) {
+    try {
+      await require('./project-brief-store').mutateProjectBrief({
+        prisma,
+        projectId: project.id,
+        userId: project.userId,
+        mutate: (brief) => {
+          const custom = Array.isArray(brief.companyDepartments)
+            ? brief.companyDepartments.map((row) => (
+              row && typeof row === 'object' ? { ...row, enabled: true } : row
+            ))
+            : brief.companyDepartments;
+          return {
+            ...brief,
+            companyDepartmentHidden: [],
+            companyDepartments: custom,
+          };
+        },
+      });
+    } catch (err) {
+      console.warn('[codex proactive] enable-all-departments failed:', err?.message || err);
+    }
+  }
   const state = await writeProactiveState({
     prisma,
     project,
     patch: enabled
-      ? { enabled: true, enabledAt: now().toISOString(), lastError: null }
-      : { enabled: false },
+      ? {
+        enabled: true,
+        enabledAt: now().toISOString(),
+        lastError: null,
+        budgetBlocked: false,
+        // OpenClaw-style continuous heartbeat metadata
+        fleetMode: 'all-departments',
+        continuity: 'permanent-until-paused',
+      }
+      : { enabled: false, fleetMode: null, continuity: null },
   });
   return { projectId, state };
 }
 
 function maxPerDay(env = process.env) {
   const n = Number.parseInt(env.CODEX_PROACTIVE_MAX_PER_DAY ?? '', 10);
-  return Number.isFinite(n) && n >= 0 ? n : 6;
+  // Continuous professional company mode: many department cycles per day.
+  return Number.isFinite(n) && n >= 0 ? n : 48;
 }
 
 function dailyBudgetUsd(env = process.env) {
   const value = Number(env.CODEX_PROACTIVE_DAILY_BUDGET_USD);
-  return Number.isFinite(value) && value >= 0 ? value : 2;
+  // Higher default so PROACTIVO can keep the fleet working without an early kill switch.
+  return Number.isFinite(value) && value >= 0 ? value : 25;
 }
 
 function qaEveryCycles(env = process.env) {
@@ -336,6 +374,8 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       mode: 'build',
       prompt: active.prompt,
       planRunId: active.id,
+      // Durable multi-hour continuation even if the browser tab closes.
+      autoExecute: true,
       db: prisma,
     });
     await writeProactiveState({
@@ -655,6 +695,8 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     projectId: project.id,
     mode: 'plan',
     prompt,
+    // OpenClaw-style durable autonomy: plan auto-continues into build.
+    autoExecute: true,
     db: prisma,
   });
   await writeProactiveState({
@@ -745,7 +787,8 @@ function tickerEnabled(env = process.env) {
 function startProactiveTicker({ env = process.env, deps = {} } = {}) {
   if (!tickerEnabled(env) || _timer) return false;
   const raw = Number.parseInt(env.CODEX_PROACTIVE_INTERVAL_MS ?? '', 10);
-  const intervalMs = Number.isFinite(raw) && raw >= 60_000 ? raw : 5 * 60_000;
+  // Heartbeat-style cadence (OpenClaw): default every 2 minutes for continuous company work.
+  const intervalMs = Number.isFinite(raw) && raw >= 60_000 ? raw : 2 * 60_000;
   _timer = setInterval(() => {
     tickAll({ deps, env })
       .then(() => require('./proactive-digest').sendDailyDigest({ prisma: deps.prisma, env }))

@@ -377,7 +377,7 @@ test('cycle never touches a HUMAN waiting plan and skips busy projects', async (
 });
 
 test('daily budget cap + explicit 0 disables proposals (falsy-0 respected)', async () => {
-  const capped = { ...PROJECT, brief: { proactive: { enabled: true, dayKey: new Date().toISOString().slice(0, 10), runsToday: 6 } } };
+  const capped = { ...PROJECT, brief: { proactive: { enabled: true, dayKey: new Date().toISOString().slice(0, 10), runsToday: 48 } } };
   const prisma = fakePrisma({ project: capped });
   const res = await engine.runCycle({ project: capped, deps: { prisma, runService: {}, chatComplete: async () => ({ content: '{}' }) } });
   assert.equal(res.action, 'skipped_budget');
