@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertTriangle, ArchiveRestore, CalendarDays, CheckCircle2, ImagePlus, Linkedin, Palette, Send } from "lucide-react"
+import { AlertTriangle, CalendarDays, CheckCircle2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -28,9 +28,9 @@ import {
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 const NETWORKS = [
-  { id: "facebook", label: "Facebook", icon: Send },
-  { id: "linkedin", label: "LinkedIn", icon: Linkedin },
-  { id: "x", label: "X", icon: Send },
+  { id: "facebook", label: "Facebook" },
+  { id: "linkedin", label: "LinkedIn" },
+  { id: "x", label: "X" },
 ]
 
 type ScheduledPost = {
@@ -303,7 +303,7 @@ export default function PostPage() {
             disabled={legacyBusy || legacySummary.assignable === 0}
             onClick={() => void assignLegacyPosts()}
           >
-            {legacyBusy ? <ThinkingIndicator size="sm" /> : <ArchiveRestore className="h-4 w-4" />}
+            {legacyBusy ? <ThinkingIndicator size="sm" /> : <CheckCircle2 className="h-4 w-4" />}
             Asignar compatibles
           </Button>
         </div>
@@ -317,7 +317,7 @@ export default function PostPage() {
               <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={6} placeholder="Idea del post, negocio, oferta, tono y objetivo..." />
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="space-y-1 text-sm font-medium">
-                  <span className="inline-flex items-center gap-1.5"><Palette className="h-4 w-4" /> Paleta de colores</span>
+                  <span>Paleta de colores</span>
                   <Input value={paletteName} onChange={(e) => setPaletteName(e.target.value)} placeholder="Ej. lujo negro y dorado" />
                 </label>
                 <label className="space-y-1 text-sm font-medium">
@@ -331,7 +331,7 @@ export default function PostPage() {
               </div>
 
               <label className="block rounded-xl border border-dashed p-4 text-sm">
-                <span className="mb-2 flex items-center gap-2 font-medium"><ImagePlus className="h-4 w-4" /> Subir imágenes de referencia</span>
+                <span className="mb-2 block font-medium">Subir imágenes de referencia</span>
                 <Input type="file" accept="image/*" multiple onChange={(e) => handleImages(e.target.files)} />
                 {referenceImages.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{referenceImages.length} imagen(es) cargada(s)</p>}
               </label>
@@ -340,12 +340,11 @@ export default function PostPage() {
                 <div className="text-sm font-medium">Redes sociales</div>
                 <div className="flex flex-wrap gap-2">
                   {NETWORKS.filter((network) => allowedPlatforms.has(network.id)).map((network) => {
-                    const Icon = network.icon
                     const active = platforms.includes(network.id)
                     const connected = connectedPlatforms.has(network.id)
                     return (
                       <button key={network.id} type="button" onClick={() => togglePlatform(network.id)} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${active ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted"}`}>
-                        <Icon className="h-4 w-4" /> {network.label}
+                        {network.label}
                         {connected && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />}
                       </button>
                     )
@@ -409,7 +408,7 @@ export default function PostPage() {
                       {network.label}
                       {connected && <Badge variant="secondary">Conectado</Badge>}
                     </span>
-                    <Send className="h-3.5 w-3.5" />
+                    <span aria-hidden>→</span>
                   </a>
                 </Button>
               )

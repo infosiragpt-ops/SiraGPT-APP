@@ -2,19 +2,11 @@
 
 import * as React from "react"
 import {
-  ChevronRight,
   CheckCircle2,
-  Link2,
   Loader2,
-  Mail,
   PackageOpen,
   Pin,
-  Plus,
   RefreshCw,
-  Search,
-  Sparkles,
-  UsersRound,
-  Wallet,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -40,7 +32,7 @@ import {
 } from "@/lib/codex/codex-api"
 import { cn } from "@/lib/utils"
 
-type ResourceKind = "social" | "connector" | "catalog"
+type ResourceKind = "social" | "connector"
 
 export type CompanyResourceItem = {
   key: string
@@ -50,10 +42,8 @@ export type CompanyResourceItem = {
   description: string
   category: "social" | "productivity" | "development" | "business" | "email"
   domain: string
-  authType: string
-  status: "active" | "attention" | "available" | "browser" | "coming_soon"
+  status: "active" | "attention" | "available"
   statusLabel: string
-  toolsHint?: string
   connected: boolean
   availableToCompany?: boolean
   assignable: boolean
@@ -68,140 +58,30 @@ export type CompanyResourceItem = {
 const RESOURCE_ASSIGNMENTS_KEY = "code-workspace:resource-dept-assignments:v1"
 const RESOURCE_PINS_KEY = "code-workspace:resource-agent-pins:v1"
 
-const CATALOG: Array<{
-  id: string
-  name: string
-  description: string
+const RESOURCE_META: Record<string, {
   category: CompanyResourceItem["category"]
   domain: string
-  authType: string
   localIcon?: string
-  socialPlatform?: CompanySocialPlatform
-  connectorId?: string
-}> = [
-  {
-    id: "reddit",
-    name: "Reddit",
-    description: "Comunidades, threads y señales de mercado.",
-    category: "social",
-    domain: "reddit.com",
-    authType: "OAuth",
-  },
-  {
-    id: "youtube",
-    name: "YouTube",
-    description: "Canal, analytics y publicación de video.",
-    category: "social",
-    domain: "youtube.com",
-    authType: "OAuth2",
-  },
-  {
-    id: "gmail",
-    name: "Gmail",
-    description: "Correo operativo de la empresa.",
+}> = {
+  gmail: {
     category: "email",
     domain: "gmail.com",
-    authType: "OAuth2",
     localIcon: "/icons/gmail.svg",
-    connectorId: "gmail",
   },
-  {
-    id: "x",
-    name: "Twitter / X",
-    description: "Publicación y respuesta en tiempo real.",
-    category: "social",
-    domain: "x.com",
-    authType: "OAuth2",
-    socialPlatform: "x",
-  },
-  {
-    id: "xiaohongshu",
-    name: "Xiaohongshu",
-    description: "Cuenta de navegador disponible para el agente.",
-    category: "social",
-    domain: "xiaohongshu.com",
-    authType: "Navegador",
-  },
-  {
-    id: "hacker-news",
-    name: "Hacker News",
-    description: "Noticias tech y señales de producto.",
-    category: "social",
-    domain: "news.ycombinator.com",
-    authType: "Sin autenticación",
-  },
-  {
-    id: "linkedin",
-    name: "LinkedIn",
-    description: "Red profesional y outreach B2B.",
-    category: "social",
-    domain: "linkedin.com",
-    authType: "OAuth",
-    socialPlatform: "linkedin",
-  },
-  {
-    id: "facebook",
-    name: "Facebook",
-    description: "Páginas, anuncios y comunidad.",
-    category: "social",
-    domain: "facebook.com",
-    authType: "OAuth",
-    socialPlatform: "facebook",
-  },
-  {
-    id: "instagram",
-    name: "Instagram",
-    description: "Contenido visual y engagement.",
-    category: "social",
-    domain: "instagram.com",
-    authType: "OAuth",
-  },
-  {
-    id: "tiktok",
-    name: "TikTok",
-    description: "Short-form video y distribución.",
-    category: "social",
-    domain: "tiktok.com",
-    authType: "OAuth",
-  },
-  {
-    id: "google_drive",
-    name: "Google Drive",
-    description: "Archivos y carpetas de la empresa.",
+  google_drive: {
     category: "productivity",
     domain: "drive.google.com",
-    authType: "OAuth2",
     localIcon: "/icons/google-drive.png",
-    connectorId: "google_drive",
   },
-  {
-    id: "google-calendar",
-    name: "Google Calendar",
-    description: "Agenda y coordinación operativa.",
-    category: "productivity",
-    domain: "calendar.google.com",
-    authType: "OAuth2",
-    localIcon: "/icons/google-calendar.png",
-  },
-  {
-    id: "notion",
-    name: "Notion",
-    description: "Base de conocimiento y wikis.",
+  notion: {
     category: "productivity",
     domain: "notion.so",
-    authType: "OAuth",
-    connectorId: "notion",
   },
-  {
-    id: "slack",
-    name: "Slack",
-    description: "Comunicación interna del equipo.",
+  slack: {
     category: "productivity",
     domain: "slack.com",
-    authType: "OAuth",
-    connectorId: "slack",
   },
-]
+}
 
 function storageKey(
   base: string,
@@ -445,17 +325,15 @@ function buildResourceItems(
   availableConnectorAccountIds: ReadonlySet<string>,
 ): CompanyResourceItem[] {
   const byKey = new Map<string, CompanyResourceItem>()
-  const renderedSocialPlatforms = new Set<CompanySocialPlatform>()
 
   for (const provider of operations.providers) {
-    const catalog = CATALOG.find((row) => row.socialPlatform === provider.platform)
+    const meta = RESOURCE_META[provider.platform]
     const connected = Boolean(provider.connection?.connected)
     const grantKey = companySocialResourceKey(provider)
     const key = companySocialResourceIdentityKey(
       provider.platform,
       provider.connection,
     ) || `catalog:social-${provider.platform}`
-    renderedSocialPlatforms.add(provider.platform)
     byKey.set(key, {
       key,
       kind: "social",
@@ -467,25 +345,21 @@ function buildResourceItems(
           ? "Disponible para conectar con OAuth"
           : "Credenciales del servidor pendientes",
       category: "social",
-      domain: catalog?.domain || `${provider.platform}.com`,
-      authType: "OAuth2",
+      domain: meta?.domain || `${provider.platform}.com`,
       status: connected ? "active" : provider.configured ? "available" : "attention",
       statusLabel: connected ? "Activo" : provider.configured ? "Añadir" : "Configurar",
-      toolsHint: connected
-        ? `${provider.scopes?.length || 0} permiso${provider.scopes?.length === 1 ? "" : "s"} · OAuth2`
-        : undefined,
       connected,
       assignable: Boolean(grantKey),
       pinnedToAgent: pinnedKeys.has(key),
       canConnect: provider.configured || connected,
-      localIcon: catalog?.localIcon,
+      localIcon: meta?.localIcon,
       platform: provider.platform,
       provider,
     })
   }
 
   for (const connector of connectors) {
-    const catalog = CATALOG.find((row) => row.connectorId === connector.id)
+    const meta = RESOURCE_META[connector.id]
     const key = `connector:${connector.id}`
     const durableAccount = Boolean(
       connector.account?.id
@@ -498,7 +372,7 @@ function buildResourceItems(
       && availableConnectorAccountIds.has(connector.account.id),
     )
     const category: CompanyResourceItem["category"] =
-      catalog?.category
+      meta?.category
       || (connector.category === "communication" ? "email" : connector.category === "files" ? "productivity" : "business")
     byKey.set(key, {
       key,
@@ -509,62 +383,20 @@ function buildResourceItems(
         ? connector.account?.accountLabel || "Cuenta conectada"
         : `${connector.capabilities.length || 0} capacidades · ${connector.authType || "OAuth"}`,
       category,
-      domain: catalog?.domain || `${connector.id.replace(/_/g, "")}.com`,
-      authType: connector.authType || "OAuth",
+      domain: meta?.domain || `${connector.id.replace(/_/g, "")}.com`,
       status: connected
         ? availableToCompany ? "active" : "available"
         : availableToCompany ? "attention" : "available",
       statusLabel: connected
         ? availableToCompany ? "Activo" : "Habilitar"
         : durableAccount ? "Reconectar" : "Conectar",
-      toolsHint: connected
-        ? `${connector.account?.scopes?.length || connector.capabilities.length || 0} capacidad${(connector.account?.scopes?.length || connector.capabilities.length) === 1 ? "" : "es"} · ${connector.authType || "OAuth"}`
-        : undefined,
       connected,
       availableToCompany,
       assignable: connected,
       pinnedToAgent: pinnedKeys.has(key),
       canConnect: true,
-      localIcon: catalog?.localIcon,
+      localIcon: meta?.localIcon,
       connector,
-    })
-  }
-
-  for (const entry of CATALOG) {
-    const connectorKey = entry.connectorId ? `connector:${entry.connectorId}` : null
-    if (
-      (entry.socialPlatform && renderedSocialPlatforms.has(entry.socialPlatform))
-      || (connectorKey && byKey.has(connectorKey))
-    ) continue
-    const key = `catalog:${entry.id}`
-    byKey.set(key, {
-      key,
-      kind: "catalog",
-      id: entry.id,
-      name: entry.name,
-      description: entry.description,
-      category: entry.category,
-      domain: entry.domain,
-      authType: entry.authType,
-      status: entry.authType.toLowerCase().includes("navegador")
-        || entry.authType.toLowerCase().includes("sin autentic")
-        ? "browser"
-        : "coming_soon",
-      statusLabel: entry.authType.toLowerCase().includes("navegador")
-        || entry.authType.toLowerCase().includes("sin autentic")
-        ? "Abrir"
-        : "Próximamente",
-      connected: false,
-      assignable: entry.authType.toLowerCase().includes("navegador")
-        || entry.authType.toLowerCase().includes("sin autentic"),
-      pinnedToAgent: pinnedKeys.has(key),
-      canConnect: Boolean(
-        entry.socialPlatform
-        || entry.authType.toLowerCase().includes("navegador")
-        || entry.authType.toLowerCase().includes("sin autentic"),
-      ),
-      localIcon: entry.localIcon,
-      platform: entry.socialPlatform,
     })
   }
 
@@ -622,7 +454,6 @@ export function CompanyResourcesSurface({
   onConnectConnector,
   onAssignConnectorToCompany,
   onResourceStateChange,
-  onOpenCeo,
 }: {
   companyName: string
   workspaceId: string | null
@@ -641,7 +472,6 @@ export function CompanyResourcesSurface({
   onConnectConnector: (connector: CoworkConnector) => void
   onAssignConnectorToCompany?: (connector: CoworkConnector) => Promise<boolean>
   onResourceStateChange?: (state: CodexCompanyResourceState) => void
-  onOpenCeo: () => void
 }) {
   const [query, setQuery] = React.useState("")
   const [category, setCategory] = React.useState<"all" | CompanyResourceItem["category"]>("all")
@@ -809,24 +639,20 @@ export function CompanyResourcesSurface({
   const connectedItems = assignedItems.filter((item) => (
     isResourceActiveForCompany(item, true)
   ))
-  const emailConnected = connectedItems.filter((item) => item.category === "email" || item.id === "gmail")
-  const appsConnected = connectedItems.filter((item) => item.category !== "email" && item.id !== "gmail")
   const pinnedCount = items.filter((item) => item.pinnedToAgent).length
 
-  const filtered = items.filter((item) => {
-    if (category !== "all" && item.category !== category) return false
-    const q = query.trim().toLowerCase()
-    if (!q) return true
-    return `${item.name} ${item.description} ${item.authType}`.toLowerCase().includes(q)
-  })
-
-  const workspaceItems = filtered.filter((item) => Boolean(assignments[item.key]) || item.pinnedToAgent)
-  const catalogItems = filtered.filter((item) => !assignments[item.key] && !item.pinnedToAgent)
-
-  const departmentById = React.useMemo(() => {
-    const map = new Map(departments.map((department) => [department.id, department]))
-    return map
-  }, [departments])
+  const filteredItems = items.filter((item) => (
+    (category === "all" || item.category === category)
+    && (!query.trim() || `${item.name} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()))
+  ))
+  const workspaceItems = filteredItems.filter((item) => Boolean(assignments[item.key]) || item.pinnedToAgent)
+  const catalogItems = filteredItems.filter((item) => !assignments[item.key] && !item.pinnedToAgent)
+  const categoryCounts = React.useMemo(() => (
+    items.reduce<Record<string, number>>((counts, item) => ({
+      ...counts,
+      [item.category]: (counts[item.category] || 0) + 1,
+    }), {})
+  ), [items])
 
   const commitResourceState = React.useCallback(async (
     update: (current: CodexCompanyResourceState) => CodexCompanyResourceState,
@@ -1050,9 +876,6 @@ export function CompanyResourcesSurface({
       onConnectSocial(item.platform)
       return
     }
-    if (item.status === "browser") {
-      window.open(`https://${item.domain}`, "_blank", "noopener,noreferrer")
-    }
   }, [
     assignResource,
     assignments,
@@ -1061,26 +884,6 @@ export function CompanyResourcesSurface({
     onConnectConnector,
     onConnectSocial,
   ])
-
-  const categoryCounts = React.useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const item of items) {
-      counts[item.category] = (counts[item.category] || 0) + 1
-    }
-    return counts
-  }, [items])
-  const gmailResource = items.find((item) => item.id === "gmail") || null
-  const gmailAssigned = Boolean(gmailResource && assignments[gmailResource.key])
-  const gmailActive = Boolean(
-    gmailResource
-    && isResourceActiveForCompany(gmailResource, gmailAssigned),
-  )
-  const gmailNeedsCompanyAvailability = Boolean(
-    gmailResource?.kind === "connector"
-    && gmailAssigned
-    && gmailResource.connected
-    && !gmailResource.availableToCompany,
-  )
 
   return (
     <div className="mx-auto w-full max-w-[1100px] px-4 pb-10 pt-6 sm:px-6 lg:px-8" data-testid="company-resources-surface">
@@ -1148,188 +951,7 @@ export function CompanyResourcesSurface({
           </Button>
         </div>
 
-        <div className="mt-5 grid gap-2 rounded-2xl border border-zinc-200/80 bg-white/90 p-2 shadow-[0_10px_40px_-28px_rgba(15,23,42,0.45)] dark:border-white/10 dark:bg-zinc-950/80 sm:grid-cols-2 xl:grid-cols-5">
-          {[
-            {
-              label: "Correo",
-              value: emailConnected.length > 0 ? `${emailConnected.length} conectado${emailConnected.length === 1 ? "" : "s"}` : "Sin conectar",
-              icon: Mail,
-              tone: emailConnected.length > 0 ? "ok" : "muted",
-            },
-            {
-              label: "Apps e integraciones",
-              value: `${appsConnected.length} activa${appsConnected.length === 1 ? "" : "s"}`,
-              icon: PackageOpen,
-              tone: appsConnected.length > 0 ? "ok" : "muted",
-            },
-            {
-              label: "Billetera",
-              value: "No configurada",
-              icon: Wallet,
-              tone: "muted",
-            },
-            {
-              label: "Ingresos",
-              value: "Sin datos",
-              icon: Sparkles,
-              tone: "muted",
-            },
-            {
-              label: "Personajes",
-              value: "Ninguno",
-              icon: UsersRound,
-              tone: "muted",
-            },
-          ].map(({ label, value, icon: Icon, tone }) => (
-            <div
-              key={label}
-              className="flex min-h-[64px] items-center gap-3 rounded-xl px-3 py-2"
-            >
-              <span className={cn(
-                "flex h-9 w-9 items-center justify-center rounded-full",
-                tone === "ok" ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400",
-              )}>
-                <Icon className="h-4 w-4" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-[11px] font-medium text-zinc-500">{label}</span>
-                <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{value}</span>
-              </span>
-            </div>
-          ))}
-        </div>
       </header>
-
-      <section className="mb-4 overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-[0_12px_40px_-30px_rgba(15,23,42,0.35)] dark:border-white/10 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-4 dark:border-white/5">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-50 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-              <UsersRound className="h-4 w-4" />
-            </span>
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Personajes de la empresa</h2>
-              <p className="text-xs text-zinc-500">Perfiles visuales reutilizables para contenido</p>
-            </div>
-          </div>
-          <Button type="button" variant="outline" className="h-9 rounded-full px-3 text-xs" onClick={onOpenCeo}>
-            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            Configurar con CEO Office
-          </Button>
-        </div>
-        <div className="flex min-h-[72px] items-center gap-3 px-4 py-4 text-sm text-zinc-500">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-50 dark:bg-zinc-900">
-            <UsersRound className="h-4 w-4" />
-          </span>
-          <div>
-            <p className="font-medium text-zinc-700 dark:text-zinc-200">Aún no hay personajes</p>
-            <p className="text-xs text-zinc-500">Los perfiles guardados aparecerán aquí cuando estén configurados.</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="mb-4 overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-[0_12px_40px_-30px_rgba(15,23,42,0.35)] dark:border-white/10 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-4 dark:border-white/5">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-50 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-              <Mail className="h-4 w-4" />
-            </span>
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Correo</h2>
-              <p className="text-xs text-zinc-500">
-                {Math.max(emailConnected.length, 0)} dirección{emailConnected.length === 1 ? "" : "es"} de email
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 rounded-full px-3 text-xs"
-              onClick={() => {
-                if (gmailResource) handlePrimary(gmailResource)
-              }}
-              disabled={
-                !resourcesHydrated
-                || resourceActionBusy
-                || !gmailResource
-                || gmailActive
-                || (!gmailResource.connected && !gmailResource.canConnect)
-                || connectorBusy === gmailResource.connector?.id
-              }
-            >
-              {connectorBusy === gmailResource?.connector?.id ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : gmailActive ? (
-                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-emerald-600" />
-              ) : (
-                <Link2 className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {gmailActive
-                ? "Email activo en esta empresa"
-                : gmailNeedsCompanyAvailability
-                  ? "Habilitar en empresa"
-                : gmailAssigned
-                  ? "Reconectar email"
-                : gmailResource?.connected
-                  ? "Añadir email a esta empresa"
-                  : "Conectar mi email"}
-              <BrandLogo name="Gmail" domain="gmail.com" localIcon="/icons/gmail.svg" size={18} className="ml-2 rounded-md" />
-            </Button>
-            <Button type="button" variant="outline" className="h-9 rounded-full px-3 text-xs" onClick={onOpenCeo}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Crear email de Matrix
-            </Button>
-          </div>
-        </div>
-        {(emailConnected.length ? emailConnected : items.filter((item) => item.id === "gmail")).slice(0, 3).map((item) => {
-          const deptId = assignments[item.key] || null
-          const dept = deptId ? departmentById.get(deptId) : null
-          const busy = item.platform
-            ? providerBusy === item.platform
-            : item.connector
-              ? connectorBusy === item.connector.id
-              : false
-          const activeForCompany = isResourceActiveForCompany(
-            item,
-            Boolean(assignments[item.key]),
-          )
-          const needsCompanyAvailability = Boolean(
-            assignments[item.key]
-            && item.kind === "connector"
-            && item.connected
-            && !item.availableToCompany,
-          )
-          return (
-            <div key={item.key} className="flex min-h-[64px] items-center gap-3 border-b border-zinc-100 px-4 py-3 last:border-b-0 dark:border-white/5">
-              <BrandLogo name={item.name} domain={item.domain} localIcon={item.localIcon} size={34} />
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{item.name}</span>
-                  {dept ? (
-                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
-                      Gestiona: {dept.name}
-                    </span>
-                  ) : null}
-                </div>
-                <p className="mt-0.5 truncate text-xs text-zinc-500">{item.description}</p>
-              </div>
-              <span className="text-xs font-medium text-zinc-500">
-                {busy
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : activeForCompany
-                    ? "Activo en la empresa"
-                    : needsCompanyAvailability
-                      ? "Habilitar en empresa"
-                    : assignments[item.key]
-                      ? "Requiere reconexión"
-                    : item.connected
-                      ? "Cuenta disponible"
-                      : "Sin conectar"}
-              </span>
-            </div>
-          )
-        })}
-      </section>
 
       <section className="overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-[0_12px_40px_-30px_rgba(15,23,42,0.35)] dark:border-white/10 dark:bg-zinc-950">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-4 dark:border-white/5">
@@ -1346,13 +968,12 @@ export function CompanyResourcesSurface({
             </div>
           </div>
           <div className="relative w-full max-w-[320px]">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Buscar apps e integraciones"
               aria-label="Buscar apps e integraciones"
-              className="h-10 rounded-full border-zinc-200 bg-zinc-50/80 pl-9 text-sm dark:border-white/10 dark:bg-zinc-900"
+              placeholder="Buscar apps e integraciones"
+              className="h-10 rounded-full bg-zinc-50 text-sm dark:bg-zinc-900"
             />
           </div>
         </div>
@@ -1398,30 +1019,24 @@ export function CompanyResourcesSurface({
               ["all", "Todas"],
               ["social", "Redes sociales"],
               ["productivity", "Productividad"],
-              ["development", "Desarrollo y datos"],
-              ["business", "Negocios y utilidades"],
-            ] as const).map(([id, label]) => {
-              const count = id === "all"
-                ? items.length
-                : (categoryCounts[id] || 0)
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setCategory(id)}
-                  aria-pressed={category === id}
-                  className={cn(
-                    "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
-                    category === id
-                      ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
-                      : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
-                  )}
-                >
-                  {label}
-                  <span className="tabular-nums opacity-70">{count}</span>
-                </button>
-              )
-            })}
+              ["business", "Negocios"],
+              ["email", "Correo"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setCategory(id)}
+                aria-pressed={category === id}
+                className={cn(
+                  "h-8 rounded-full border px-3 text-xs font-medium",
+                  category === id
+                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
+                    : "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
+                )}
+              >
+                {label} <span className="opacity-60">{id === "all" ? items.length : categoryCounts[id] || 0}</span>
+              </button>
+            ))}
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -1475,9 +1090,6 @@ function ResourceCard({
   onRemove: () => void
   onAssign: (departmentId: string) => void
 }) {
-  const department = departmentId
-    ? departments.find((entry) => entry.id === departmentId) || null
-    : null
   const activeForCompany = isResourceActiveForCompany(item, assignedToCompany)
   const needsCompanyAvailability = Boolean(
     assignedToCompany
@@ -1495,32 +1107,13 @@ function ResourceCard({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
                 <h3 className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">{item.name}</h3>
-                {item.connected ? (
-                  <span className="text-[10px] font-semibold text-zinc-400">✦</span>
-                ) : (
-                  <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800">
-                    {item.authType}
-                  </span>
-                )}
               </div>
               <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-500">
-                {item.connected && item.toolsHint
-                  ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className={cn(
-                        "h-1.5 w-1.5 rounded-full",
-                        item.status === "attention" || needsCompanyAvailability
-                          ? "bg-amber-500"
-                          : "bg-emerald-500",
-                      )} />
-                      {needsCompanyAvailability
-                        ? "Habilitar para esta empresa"
-                        : item.status === "attention"
-                          ? "Requiere atención"
-                          : item.toolsHint}
-                    </span>
-                  )
-                  : item.description}
+                {needsCompanyAvailability
+                  ? "Habilitar para esta empresa"
+                  : item.status === "attention"
+                    ? "Requiere atención"
+                    : item.description}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
@@ -1539,7 +1132,7 @@ function ResourceCard({
               <button
                 type="button"
                 onClick={onTogglePin}
-                disabled={busy || (!item.assignable && item.status !== "browser")}
+                disabled={busy || !item.assignable}
                 className={cn(
                   "inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-200",
                   item.pinnedToAgent && "text-sky-600",
@@ -1556,13 +1149,13 @@ function ResourceCard({
 
       <div className="mt-3 flex items-center justify-between gap-2">
         <label className="min-w-0 flex-1">
-          <span className="sr-only">Departamento gestor</span>
+          <span className="mb-1 block text-[10px] font-medium text-zinc-400">Gestiona:</span>
           <select
             value={departmentId || ""}
             onChange={(event) => {
               if (event.target.value) onAssign(event.target.value)
             }}
-            disabled={busy || (!item.assignable && item.status !== "browser")}
+            disabled={busy || !item.assignable}
             className="h-8 w-full max-w-[180px] truncate rounded-full border border-zinc-200 bg-white px-2.5 text-[11px] font-medium text-zinc-600 outline-none focus:ring-2 focus:ring-zinc-900/10 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300"
           >
             <option value="" disabled>
@@ -1585,7 +1178,6 @@ function ResourceCard({
             || (
               !item.connected
               && !item.canConnect
-              && item.status !== "browser"
             )
           }
           className={cn(
@@ -1612,21 +1204,11 @@ function ResourceCard({
                 : item.statusLabel}
               {activeForCompany
                 ? <CheckCircle2 className="h-3.5 w-3.5 opacity-70" />
-                : <ChevronRight className="h-3.5 w-3.5 opacity-60" />}
+                : <span aria-hidden className="opacity-60">→</span>}
             </>
           )}
         </button>
       </div>
-
-      {department ? (
-        <p className="mt-2 text-[10px] text-zinc-400">
-          {activeForCompany || item.status === "browser"
-            ? `${department.name} gestiona este recurso para la empresa.`
-            : needsCompanyAvailability
-              ? `${department.name} podrá gestionarlo cuando lo habilites para esta empresa.`
-            : `${department.name} lo gestionará cuando esté conectado.`}
-        </p>
-      ) : null}
     </article>
   )
 }

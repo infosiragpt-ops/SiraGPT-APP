@@ -3899,7 +3899,6 @@ function ResourcesView({
           onConnectConnector={(connector) => void connectBusinessConnector(connector)}
           onAssignConnectorToCompany={assignBusinessConnectorToCompany}
           onResourceStateChange={setCompanyResourceState}
-          onOpenCeo={onOpenCeo}
         />
         {companyOps ? (
           <div className="mx-auto w-full max-w-[1100px] px-4 pb-10 sm:px-6 lg:px-8">
