@@ -40,6 +40,7 @@ const departmentPools = require('./department-pools');
 const companyResources = require('./company-resources');
 const businessAnalyzer = require('./business-analyzer');
 const proactiveLease = require('./proactive-lease');
+const projectBudget = require('./project-budget');
 const { mutateProjectBrief } = require('./project-brief-store');
 
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
@@ -144,9 +145,11 @@ function maxPerDay(env = process.env) {
 }
 
 function dailyBudgetUsd(env = process.env) {
-  const value = Number(env.CODEX_PROACTIVE_DAILY_BUDGET_USD);
-  // Higher default so PROACTIVO can keep the fleet working without an early kill switch.
-  return Number.isFinite(value) && value >= 0 ? value : 25;
+  return projectBudget.configuredCompanyBudgetUsd(null, env);
+}
+
+function projectDailyBudgetUsd(project, env = process.env) {
+  return projectBudget.configuredCompanyBudgetUsd(project, env);
 }
 
 function qaEveryCycles(env = process.env) {
@@ -155,21 +158,29 @@ function qaEveryCycles(env = process.env) {
 }
 
 async function costTodayUsd({ prisma, projectId, now = new Date() }) {
-  if (!prisma?.codexRunMetric?.aggregate) return 0;
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  try {
-    const result = await prisma.codexRunMetric.aggregate({
-      where: {
-        createdAt: { gte: start },
-        run: { projectId },
-      },
-      _sum: { costAppliedUsd: true },
-    });
-    return Math.max(0, Number(result?._sum?.costAppliedUsd) || 0);
-  } catch {
-    return 0;
+  return projectBudget.costTodayUsd({ prisma, projectId, now });
+}
+
+async function checkDailyBudget({
+  prisma,
+  project,
+  env = process.env,
+  now = new Date(),
+  budgetService = projectBudget,
+}) {
+  return budgetService.checkCompanyDailyBudget({
+    prisma,
+    project,
+    env,
+    now,
+  });
+}
+
+function budgetBlockedMessage(status) {
+  if (status.reason === 'daily_budget_exceeded') {
+    return `Presupuesto proactivo diario alcanzado: $${Number(status.costTodayUsd || 0).toFixed(4)} de $${Number(status.dailyBudgetUsd || 0).toFixed(2)}.`;
   }
+  return `No se pudo verificar de forma segura el presupuesto proactivo diario: ${status.error || status.reason}.`;
 }
 
 function extractJson(text) {
@@ -356,9 +367,16 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
 
   const today = dayKey(now());
   const runsToday = state.dayKey === today ? state.runsToday : 0;
-  const budgetUsd = dailyBudgetUsd(env);
-  const spentUsd = await costTodayUsd({ prisma, projectId: project.id, now: now() });
-  const budgetBlocked = budgetUsd === 0 || spentUsd >= budgetUsd;
+  const budget = await checkDailyBudget({
+    prisma,
+    project,
+    env,
+    now: now(),
+    budgetService: deps.projectBudget || projectBudget,
+  });
+  const budgetUsd = budget.dailyBudgetUsd;
+  const spentUsd = budget.costTodayUsd;
+  const budgetBlocked = !budget.allowed;
   proactiveMetrics.setBudgetBlocked(budgetBlocked);
 
   // Newest active run decides the phase.
@@ -406,7 +424,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       };
     }
     if (budgetBlocked) {
-      const message = `Presupuesto proactivo diario alcanzado: $${spentUsd.toFixed(4)} de $${budgetUsd.toFixed(2)}.`;
+      const message = budgetBlockedMessage(budget);
       await writeProactiveState({
         prisma,
         project,
@@ -419,7 +437,12 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
           lastError: message,
         },
       });
-      return { action: 'skipped_cost_budget', costTodayUsd: spentUsd, dailyBudgetUsd: budgetUsd };
+      return {
+        action: 'skipped_cost_budget',
+        reason: budget.reason,
+        costTodayUsd: spentUsd,
+        dailyBudgetUsd: budgetUsd,
+      };
     }
     // Phase 2 — auto-approve OUR OWN plan by creating its build run.
     const run = await runService.createRun({
@@ -447,7 +470,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
   }
 
   if (budgetBlocked) {
-    const message = `Presupuesto proactivo diario alcanzado: $${spentUsd.toFixed(4)} de $${budgetUsd.toFixed(2)}.`;
+    const message = budgetBlockedMessage(budget);
     await writeProactiveState({
       prisma,
       project,
@@ -460,7 +483,12 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
         lastError: message,
       },
     });
-    return { action: 'skipped_cost_budget', costTodayUsd: spentUsd, dailyBudgetUsd: budgetUsd };
+    return {
+      action: 'skipped_cost_budget',
+      reason: budget.reason,
+      costTodayUsd: spentUsd,
+      dailyBudgetUsd: budgetUsd,
+    };
   }
   if (maxPerDay(env) === 0 || runsToday >= maxPerDay(env)) return { action: 'skipped_budget' };
 
@@ -961,6 +989,8 @@ module.exports = {
   extractJson,
   maxPerDay,
   dailyBudgetUsd,
+  projectDailyBudgetUsd,
   costTodayUsd,
+  checkDailyBudget,
   qaEveryCycles,
 };

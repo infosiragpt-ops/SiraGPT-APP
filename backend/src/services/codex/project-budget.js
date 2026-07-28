@@ -26,6 +26,15 @@ function configuredBudgetUsd(settings, env = process.env) {
   return env?.NODE_ENV === 'production' ? 10 : null;
 }
 
+function configuredCompanyBudgetUsd(project, env = process.env) {
+  const projectValue = project?.brief?.proactive?.dailyBudgetUsd;
+  if (projectValue != null && Number.isFinite(Number(projectValue))) {
+    return Math.max(0, Number(projectValue));
+  }
+  const envValue = Number(env?.CODEX_PROACTIVE_DAILY_BUDGET_USD);
+  return Number.isFinite(envValue) && envValue >= 0 ? envValue : 25;
+}
+
 async function costTodayUsd({ prisma, projectId, now = new Date() }) {
   if (!prisma?.codexRunMetric?.aggregate) {
     const error = new Error('codex run metric aggregation unavailable');
@@ -90,7 +99,10 @@ async function checkProjectBudget({
   } catch (error) {
     record('error');
     return {
-      allowed: env?.NODE_ENV !== 'production',
+      // A spend limit is a safety control, not telemetry. If its durable
+      // counter cannot be read, every caller (manual, proactive or pooled)
+      // must stop regardless of environment.
+      allowed: false,
       reason: 'budget_query_failed',
       error: String(error?.message || error).slice(0, 500),
       costTodayUsd: null,
@@ -102,10 +114,30 @@ async function checkProjectBudget({
   }
 }
 
+async function checkCompanyDailyBudget({
+  prisma,
+  project,
+  env = process.env,
+  now = new Date(),
+  inRunCostUsd = 0,
+}) {
+  const dailyBudgetUsd = configuredCompanyBudgetUsd(project, env);
+  return checkProjectBudget({
+    prisma,
+    projectId: project.id,
+    settings: { budget: { dailyUsd: dailyBudgetUsd } },
+    env,
+    now,
+    inRunCostUsd,
+  });
+}
+
 module.exports = {
   CHECKS,
   utcDayStart,
   configuredBudgetUsd,
+  configuredCompanyBudgetUsd,
   costTodayUsd,
   checkProjectBudget,
+  checkCompanyDailyBudget,
 };

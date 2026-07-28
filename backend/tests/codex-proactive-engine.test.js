@@ -34,6 +34,9 @@ function fakePrisma({ project, activeRun = null, recentRuns = [] } = {}) {
       findFirst: async () => activeRun,
       findMany: async () => recentRuns,
     },
+    codexRunMetric: {
+      aggregate: async () => ({ _sum: { costOriginalUsd: 0, costAppliedUsd: 0 } }),
+    },
   };
 }
 
@@ -238,6 +241,53 @@ test('USD kill switch blocks proposals using persisted run costs', async () => {
   assert.equal(res.action, 'skipped_cost_budget');
   assert.equal(res.costTodayUsd, 2.75);
   assert.equal(engine.readProactiveState(prisma.state.project).budgetBlocked, true);
+});
+
+test('USD kill switch uses the company project dailyBudgetUsd before the environment default', async () => {
+  const project = {
+    ...PROJECT,
+    brief: { proactive: { enabled: true, dailyBudgetUsd: 1 } },
+  };
+  const prisma = fakePrisma({ project });
+  prisma.codexRunMetric.aggregate = async () => ({
+    _sum: { costOriginalUsd: 1, costAppliedUsd: 0.5 },
+  });
+
+  const res = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => { throw new Error('must not propose'); },
+    },
+    env: { CODEX_PROACTIVE_DAILY_BUDGET_USD: '99' },
+  });
+
+  assert.equal(res.action, 'skipped_cost_budget');
+  assert.equal(res.reason, 'daily_budget_exceeded');
+  assert.equal(res.dailyBudgetUsd, 1);
+  assert.equal(res.costTodayUsd, 1, 'kill switch uses provider spend before discounts');
+});
+
+test('USD kill switch fails closed when the daily cost store cannot be read', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexRunMetric.aggregate = async () => { throw new Error('database unavailable'); };
+
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => { throw new Error('must not propose'); },
+    },
+    env: { NODE_ENV: 'test', CODEX_PROACTIVE_DAILY_BUDGET_USD: '25' },
+  });
+
+  assert.equal(res.action, 'skipped_cost_budget');
+  assert.equal(res.reason, 'budget_query_failed');
+  assert.equal(res.costTodayUsd, null);
+  assert.equal(engine.readProactiveState(prisma.state.project).budgetBlocked, true);
+  assert.match(engine.readProactiveState(prisma.state.project).lastError, /no se pudo verificar/i);
 });
 
 test('every Kth proposal is a QA cycle and does not advance the department cursor', async () => {
