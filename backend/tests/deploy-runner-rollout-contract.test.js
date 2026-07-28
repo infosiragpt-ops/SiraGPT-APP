@@ -9,6 +9,14 @@ const WORKFLOW = fs.readFileSync(
   path.resolve(__dirname, '..', '..', '.github', 'workflows', 'deploy.yml'),
   'utf8',
 );
+const COMPOSE = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', 'docker-compose.prod.yml'),
+  'utf8',
+);
+const GVISOR_WORKFLOW = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', '.github', 'workflows', 'gvisor-runner-compat.yml'),
+  'utf8',
+);
 
 function position(fragment) {
   const index = WORKFLOW.indexOf(fragment);
@@ -28,6 +36,31 @@ test('production deploy preserves and restores the exact runner image', () => {
   assert.match(WORKFLOW, /docker image inspect "\$\{ROLLBACK_RUNNER_IMAGE\}"/);
   assert.match(WORKFLOW, /docker tag "\$\{ROLLBACK_RUNNER_IMAGE\}" siragpt-runner:latest/);
   assert.match(WORKFLOW, /siragpt-runner:rollback-\*/);
+});
+
+test('runner mounts every control-plane module required by code-runner.js', () => {
+  assert.match(COMPOSE, /\.\/scripts\/code-runner\.js:\/scripts\/code-runner\.js:ro/);
+  assert.match(COMPOSE, /\.\/scripts\/code-runner-utils\.js:\/scripts\/code-runner-utils\.js:ro/);
+  assert.match(COMPOSE, /\.\/scripts\/code-runner-worktrees\.js:\/scripts\/code-runner-worktrees\.js:ro/);
+  assert.match(GVISOR_WORKFLOW, /code-runner-worktrees\.js",dst=\/scripts\/code-runner-worktrees\.js,readonly/);
+});
+
+test('production keeps run concurrency and fleet QA disabled by default', () => {
+  const concurrencyDefaults = COMPOSE.match(
+    /CODEX_RUN_CONCURRENCY_ENABLED:[^\n]*\$\{CODEX_RUN_CONCURRENCY_ENABLED:-0\}/g,
+  );
+
+  assert.equal(
+    concurrencyDefaults?.length,
+    2,
+    'both runner and backend must fail closed unless concurrency is explicitly enabled',
+  );
+  assert.match(
+    COMPOSE,
+    /CODEX_RUN_OS_ISOLATION_ATTESTED:[^\n]*\$\{CODEX_RUN_OS_ISOLATION_ATTESTED:-0\}/,
+  );
+  assert.match(COMPOSE, /CODEX_MAX_CONCURRENT_RUNS:[^\n]*\$\{CODEX_MAX_CONCURRENT_RUNS:-1\}/);
+  assert.match(COMPOSE, /CODEX_FLEET_QA_ENABLED:[^\n]*\$\{CODEX_FLEET_QA_ENABLED:-0\}/);
 });
 
 test('runner rollout is healthy before the backend is replaced', () => {

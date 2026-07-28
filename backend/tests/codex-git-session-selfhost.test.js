@@ -298,6 +298,51 @@ test('OT-7: configured production-main is used as the run base and merge target'
   assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'production feature\n');
 });
 
+test('OT-7: post-merge export and cleanup failures are warnings, not duplicate-run failures', async () => {
+  const run = { id: 'cleanup-warning-1', projectId: 'project-1', prompt: 'cambio verificado' };
+  const project = { id: run.projectId };
+  const calls = [];
+  const runner = {
+    runScope: { project: run.projectId, run: run.id },
+    baseRunner: {
+      async exportWorkspace() {
+        throw new Error('export unavailable');
+      },
+    },
+    async exec(_projectId, command) {
+      if (command.join(' ') === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: `run/${run.id}\n`, stderr: '' };
+      }
+      if (command.join(' ') === 'git status --porcelain') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected command: ${command.join(' ')}`);
+    },
+    async integrateRunWorkspace(projectId, runId, options) {
+      calls.push({ projectId, runId, options });
+      return { ok: true, status: 'merged', commitSha: 'a'.repeat(40) };
+    },
+    async cleanupRunWorkspace() {
+      throw new Error('cleanup unavailable');
+    },
+  };
+
+  const result = await checkpointService.finalizeRunCheckpoint({
+    run,
+    project,
+    verification: { ok: true, status: 'passed' },
+    deps: { runner, prisma: {} },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'merged');
+  assert.equal(result.cleanupWarning, true);
+  assert.equal(result.exportResult.ok, false);
+  assert.equal(result.cleanup.ok, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].runId, run.id);
+});
+
 test('OT-7: workspace mutation after verification never reaches the base branch', async (t) => {
   const fixture = gitFixture(t, 'codex-tree-race-');
   const run = { id: 'tree-race-1', projectId: fixture.projectId, prompt: 'cambio verificado' };

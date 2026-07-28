@@ -376,6 +376,71 @@ test('runtime daily budget stops after the LLM response and before its tool call
   assert.equal(runtimeStatus.data.costTodayUsd, 1.05);
 });
 
+test('a pooled run stops at its own reservation before executing proposed tools', async () => {
+  const metricQueries = [];
+  const prisma = {
+    codexRunMetric: {
+      findMany: async (query) => {
+        metricQueries.push(query);
+        return [];
+      },
+    },
+    codexDepartmentPool: {
+      findUnique: async () => ({
+        id: 'pool-trust',
+        projectId: 'p1',
+        enabled: true,
+        dailyBudgetUsd: 5,
+      }),
+    },
+    codexSwarmTask: {
+      findUnique: async () => ({
+        id: 'task-qa',
+        input: {
+          departmentPoolId: 'pool-trust',
+          poolBudgetReservationUsd: 0.5,
+        },
+      }),
+      findMany: async () => [],
+    },
+  };
+  const f = fakeDeps({
+    prisma,
+    llmTurn: async () => ({
+      text: 'Voy a escribir.',
+      usage: {
+        provider: 'openai',
+        model: 'gpt-test',
+        tokensIn: 100,
+        tokensOut: 50,
+        costUsd: 0.6,
+      },
+      toolCalls: [{ name: 'write_file', args: { path: 'src/App.tsx', content: '<App />' } }],
+    }),
+  });
+  const res = await runAgentLoop({
+    run: {
+      id: 'r-pooled',
+      userId: 'u1',
+      mode: 'build',
+      prompt: 'revisa la aplicación',
+      departmentPoolId: 'pool-trust',
+      swarmTaskId: 'task-qa',
+    },
+    project: { id: 'p1', name: 'X' },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'error');
+  assert.match(res.error, /department pool budget runtime check failed/i);
+  assert.deepEqual(f.writes, []);
+  assert.ok(metricQueries.every((query) => query.where.run.departmentPoolId === 'pool-trust'));
+  const poolStatuses = f.events.filter((event) => (
+    event.type === 'budget_status' && event.data.scope === 'department_pool'
+  ));
+  assert.equal(poolStatuses.at(-1).data.reason, 'department_pool_run_reservation_exceeded');
+});
+
 test('a blocking LLM error (402) emits action_required before the run errors', async () => {
   const f = fakeDeps({ llmTurn: async () => { throw new Error('OpenRouter 402 Insufficient credits'); } });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });

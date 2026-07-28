@@ -3286,21 +3286,24 @@ model AppKvEntry {
 }
 
 model CodexRun {
-  id         String    @id @default(cuid())
-  projectId  String
-  userId     String
-  mode       String // plan | build
-  status     String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
-  jobId      String?   @unique
-  prompt     String?   @db.Text // user's context/instructions for this run
-  model      String?
-  tier       String?
-  planRunId  String?
-  error      String?   @db.Text
-  createdAt  DateTime  @default(now())
-  startedAt  DateTime?
-  finishedAt DateTime?
-  updatedAt  DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  projectId        String
+  userId           String
+  mode             String // plan | build
+  status           String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
+  jobId            String?   @unique
+  prompt           String?   @db.Text // user's context/instructions for this run
+  model            String?
+  tier             String?
+  planRunId        String?
+  idempotencyKey   String?   @unique
+  departmentPoolId String?
+  swarmTaskId      String?
+  error            String?   @db.Text
+  createdAt        DateTime  @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  updatedAt        DateTime  @updatedAt
 
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   project     CodexProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -3311,6 +3314,8 @@ model CodexRun {
 
   @@index([projectId, createdAt])
   @@index([userId, status, updatedAt])
+  @@index([departmentPoolId, createdAt])
+  @@index([swarmTaskId, createdAt])
   @@map("codex_runs")
 }
 

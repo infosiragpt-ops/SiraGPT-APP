@@ -69,7 +69,13 @@ function readProactiveState(project) {
     lastCycleAt: p.lastCycleAt || null,
     lastError: p.lastError || null,
     costTodayUsd: Math.max(0, Number(p.costTodayUsd) || 0),
-    dailyBudgetUsd: Math.max(0, Number(p.dailyBudgetUsd) || 0),
+    dailyBudgetUsd: p.dailyBudgetUsd == null || !Number.isFinite(Number(p.dailyBudgetUsd))
+      ? null
+      : Math.max(0, Number(p.dailyBudgetUsd)),
+    configuredDailyBudgetUsd: p.configuredDailyBudgetUsd == null
+      || !Number.isFinite(Number(p.configuredDailyBudgetUsd))
+      ? null
+      : Math.max(0, Number(p.configuredDailyBudgetUsd)),
     budgetBlocked: p.budgetBlocked === true,
     lastDepartment: typeof p.lastDepartment === 'string' ? p.lastDepartment : null,
     missionIndex: Number.isFinite(Number(p.missionIndex)) ? Number(p.missionIndex) : 0,

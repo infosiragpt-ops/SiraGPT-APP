@@ -402,6 +402,8 @@ async function createWriterRun({
     model: swarm?.metadata?.model || null,
     tier: swarm?.metadata?.tier || null,
     autoExecute: true,
+    departmentPoolId: task?.input?.departmentPoolId || null,
+    swarmTaskId: task.id,
     db: prisma,
     env,
   });
