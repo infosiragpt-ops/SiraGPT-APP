@@ -60,14 +60,23 @@ function hashInt32(str) {
  * other projects are unaffected. Test doubles (no $transaction/$queryRawUnsafe)
  * fall back to the plain count→create.
  */
-async function insertRunGuarded(prisma, { projectId, activeWhere, data, existingWhere = null }) {
+async function insertRunGuarded(
+  prisma,
+  { projectId, activeWhere, data, existingWhere = null, activeCap = 1 },
+) {
   const enforce = async (client) => {
     if (existingWhere) {
       const existing = await client.codexRun.findFirst({ where: existingWhere });
       if (existing) return { row: existing, created: false };
     }
     const active = await client.codexRun.count({ where: activeWhere });
-    if (active > 0) throw new RunServiceError('run_in_progress', 'a run is already active for this project', 409);
+    if (active >= activeCap) {
+      throw new RunServiceError(
+        'run_in_progress',
+        `the project already has ${active} active run(s); concurrency cap is ${activeCap}`,
+        409,
+      );
+    }
     return { row: await client.codexRun.create({ data }), created: true };
   };
   const canLock = typeof prisma.$transaction === 'function' && typeof prisma.$queryRawUnsafe === 'function';
@@ -80,6 +89,26 @@ async function insertRunGuarded(prisma, { projectId, activeWhere, data, existing
     );
     return enforce(tx);
   });
+}
+
+function featureEnabled(env, key) {
+  const value = env?.[key];
+  if (value != null && String(value).trim() !== '') {
+    return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+  }
+  return env?.NODE_ENV === 'production';
+}
+
+function configuredRunCap(project, env = process.env) {
+  if (
+    !featureEnabled(env, 'CODEX_RUN_BRANCHES')
+    || !featureEnabled(env, 'CODEX_RUN_WORKTREES')
+  ) {
+    return 1;
+  }
+  const raw = project?.brief?.maxConcurrentRuns ?? env?.CODEX_MAX_CONCURRENT_RUNS ?? 1;
+  const parsed = Math.trunc(Number(raw));
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 64) : 1;
 }
 
 /** Public projection — never leaks userId/jobId. */
@@ -125,7 +154,7 @@ function publicMetric(m) {
  *  - mode ∈ {plan, build}
  *  - project owned by userId (else 404)
  *  - build requires a valid planRunId (plan run of this project, approvable)
- *  - at most one active run per project (else 409 run_in_progress)
+ *  - active runs stay below the isolated-worktree concurrency cap
  */
 async function createRun({
   userId,
@@ -140,6 +169,7 @@ async function createRun({
   queue = runQueue,
   eventStore = eventStoreDefault,
   clock = () => new Date(),
+  env = process.env,
 }) {
   const prisma = requireDb(db);
   if (!MODES.includes(mode)) throw new RunServiceError('invalid_mode', 'mode must be plan or build', 400);
@@ -177,6 +207,7 @@ async function createRun({
     projectId,
     activeWhere,
     existingWhere,
+    activeCap: configuredRunCap(project, env),
     data: { projectId, userId, mode, status: 'queued', prompt: storedPrompt, model, tier, planRunId },
   });
   const { row, created } = inserted;
@@ -389,4 +420,6 @@ module.exports = {
   MODES,
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,
+  configuredRunCap,
+  featureEnabled,
 };

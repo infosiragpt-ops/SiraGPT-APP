@@ -130,6 +130,7 @@ model User {
   documentCollectionChunks   DocumentCollectionChunk[]
   createdGpts                CustomGpt[]
   projects                   Project[]
+  companies                  Company[]
   designs                    DesignProject[]
   scheduledPosts             ScheduledPost[]
   socialConnections          SocialConnection[]
@@ -197,6 +198,7 @@ model User {
   agentApprovals      AgentApproval[]
   scheduledAgentTasks ScheduledAgentTask[]
   connectorAccounts   ConnectorAccount[]
+  businessChannels    BusinessChannel[]
   coworkMemories      CoworkMemory[]
   agentAuditLogs      AgentAuditLog[]
   coworkCostDaily     CoworkCostDaily[]
@@ -911,6 +913,7 @@ model ConnectorAccount {
   user               User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization       Organization?                @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   companyAssignments ProjectConnectorAssignment[]
+  businessChannels   BusinessChannel[]
 
   @@unique([userId, provider])
   @@index([userId, status])
@@ -2091,6 +2094,7 @@ model Project {
   documents            ProjectDocument[]
   codexLink            CompanyCodexProjectLink?
   connectorAssignments ProjectConnectorAssignment[]
+  company              Company?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2108,6 +2112,111 @@ model Project {
   @@index([userId, deleteAfter])
   @@index([organizationId, updatedAt])
   @@map("projects")
+}
+
+// Durable business identity shared by every department and channel. Project
+// remains the user-facing workspace; Company supplies business semantics and
+// an explicit root for channel policy.
+model Company {
+  id        String  @id @default(cuid())
+  userId    String
+  projectId String  @unique
+  name      String
+  mission   String? @db.Text
+  vision    String? @db.Text
+  industry  String?
+  urls      Json?
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channels        BusinessChannel[]
+  inboxMessages   InboxMessage[]
+  channelPairings BusinessChannelPairing[]
+
+  @@index([userId, updatedAt])
+  @@map("companies")
+}
+
+model BusinessChannel {
+  id                   String    @id @default(cuid())
+  companyId            String
+  userId               String
+  connectorAccountId   String?
+  kind                 String
+  label                String?
+  credentialsEncrypted String?   @db.Text
+  dmPolicy             String    @default("pairing") // pairing | allowlist | open | closed
+  allowFrom            String[]  @default([])
+  outboundMode         String    @default("review") // review | auto | off
+  status               String    @default("active") // active | paused | broken
+  metadata             Json?
+  lastInboundAt        DateTime?
+  lastOutboundAt       DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectorAccount ConnectorAccount?        @relation(fields: [connectorAccountId], references: [id], onDelete: SetNull)
+  messages         InboxMessage[]
+  pairings         BusinessChannelPairing[]
+
+  @@index([companyId, status, updatedAt])
+  @@index([userId, kind, status])
+  @@index([connectorAccountId])
+  @@map("business_channels")
+}
+
+model InboxMessage {
+  id           String   @id @default(cuid())
+  companyId    String
+  channelId    String
+  externalId   String
+  threadId     String?
+  from         String
+  body         String   @db.Text
+  direction    String   @default("inbound") // inbound | outbound
+  status       String   @default("received") // received | routed | drafted | waiting_approval | sent | failed | dismissed
+  departmentId String?
+  intent       String?
+  confidence   Float?
+  metadata     Json?
+  receivedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel BusinessChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, externalId])
+  @@index([companyId, status, receivedAt])
+  @@index([channelId, threadId, receivedAt])
+  @@index([departmentId, status])
+  @@map("inbox_messages")
+}
+
+model BusinessChannelPairing {
+  id         String    @id @default(cuid())
+  companyId  String
+  channelId  String
+  senderRef  String
+  codeHash   String
+  status     String    @default("pending") // pending | approved | expired | revoked
+  expiresAt  DateTime
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel BusinessChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, senderRef])
+  @@index([companyId, status, expiresAt])
+  @@map("business_channel_pairings")
 }
 
 // Project memory — durable facts the assistant should remember across
@@ -2654,6 +2763,7 @@ model CodexProject {
   organization      Organization?            @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   runs              CodexRun[]
   swarms            CodexSwarm[]
+  departmentPools   CodexDepartmentPool[]
   checkpoints       CodexCheckpoint[]
   sessionStates     CodexSessionState[]
   database          CodexProjectDatabase?
@@ -2671,6 +2781,26 @@ model CodexProject {
   @@index([userId, deleteAfter])
   @@index([organizationId, updatedAt])
   @@map("codex_projects")
+}
+
+// Physical execution capacity for one company department. `size` is kept
+// separate from the department's logical-agent target so a large planning
+// fleet cannot accidentally become an unbounded process fleet.
+model CodexDepartmentPool {
+  id             String   @id @default(cuid())
+  projectId      String
+  departmentId   String
+  size           Int      @default(1)
+  dailyBudgetUsd Float?
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, departmentId])
+  @@index([projectId, enabled])
+  @@map("codex_department_pools")
 }
 
 // Explicit, durable Company (Project) ↔ CodexProject association. Legacy

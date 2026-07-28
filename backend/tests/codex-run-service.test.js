@@ -211,6 +211,49 @@ test('createRun 409s when a run is already active for the project', async () => 
   );
 });
 
+test('worktree concurrency cap admits three runs and rejects the fourth', async () => {
+  const project = { ...PROJECT, brief: { maxConcurrentRuns: 3 } };
+  const db = makeDb({ projects: [project] });
+  const env = {
+    NODE_ENV: 'production',
+    CODEX_RUN_BRANCHES: '1',
+    CODEX_RUN_WORKTREES: '1',
+  };
+  const first = await createRun({
+    userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue(), env,
+  });
+  const second = await createRun({
+    userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue(), env,
+  });
+  const third = await createRun({
+    userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue(), env,
+  });
+  assert.deepEqual([first.status, second.status, third.status], ['queued', 'queued', 'queued']);
+  await assert.rejects(
+    () => createRun({
+      userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue(), env,
+    }),
+    (error) => error.code === 'run_in_progress'
+      && error.status === 409
+      && /cap is 3/.test(error.message),
+  );
+});
+
+test('configured concurrency is clamped to one unless branches and worktrees are enabled', () => {
+  const project = { ...PROJECT, brief: { maxConcurrentRuns: 9 } };
+  assert.equal(runService.configuredRunCap(project, { NODE_ENV: 'test' }), 1);
+  assert.equal(runService.configuredRunCap(project, {
+    NODE_ENV: 'production',
+    CODEX_RUN_BRANCHES: '1',
+    CODEX_RUN_WORKTREES: '0',
+  }), 1);
+  assert.equal(runService.configuredRunCap(project, {
+    NODE_ENV: 'test',
+    CODEX_RUN_BRANCHES: '1',
+    CODEX_RUN_WORKTREES: '1',
+  }), 9);
+});
+
 // Postgres-shaped fake: adds the $transaction + $queryRawUnsafe surface so
 // createRun takes the advisory-lock-guarded path (the single-active count→create
 // is otherwise a TOCTOU race under concurrency).

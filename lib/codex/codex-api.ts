@@ -169,6 +169,39 @@ export interface CodexCompanyReadinessArea {
   evidence: string
   action: string
 }
+export interface CodexBusinessAudit {
+  version: number
+  generatedAt: string
+  projectId: string | null
+  companyName: string
+  status: "healthy" | "gaps_detected"
+  score: number
+  networkUsed: boolean
+  websiteUrl: string | null
+  signals: Array<{
+    id: "software" | "landing" | "social" | "seo" | string
+    label: string
+    status: "ready" | "observed" | "needs_attention" | "blocked"
+    evidence: string
+    sources: string[]
+  }>
+  gaps: Array<{
+    id: string
+    priority: "P0" | "P1" | "P2"
+    score: number
+    departmentId: string
+    title: string
+    action: string
+    evidence: string | null
+  }>
+  sources: Array<{
+    kind: string
+    title: string | null
+    url: string
+    snippet: string | null
+    provider: string | null
+  }>
+}
 export interface CodexCompanyContext {
   profile: CodexCompanyProfile
   readiness: {
@@ -195,6 +228,7 @@ export interface CodexCompanyContext {
       }
     }
   }
+  businessAudit: CodexBusinessAudit | null
   safeguards: {
     externalActionsRequireConnection: boolean
     defaultExternalMode: "review"
@@ -343,11 +377,24 @@ export interface CodexCompanyDepartment {
   custom: boolean
   enabled: boolean
 }
+export interface CodexDepartmentPool {
+  id: string
+  projectId: string
+  departmentId: string
+  size: number
+  dailyBudgetUsd: number | null
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
 export interface CodexCompanyCapacity {
   departments: number
   logicalAgents: number
+  departmentPools: number
+  physicalAgents: number
   writerConcurrency: number
-  strategy: "parallel_readers_serialized_writer"
+  dailyBudgetUsd: number
+  strategy: "isolated_worktrees_serialized_merge"
 }
 export interface CodexCompanyResourceState {
   assignments: Record<string, string>
@@ -634,18 +681,32 @@ export const codexApi = {
   // Modo PROACTIVO (compañía de agentes autónoma). no-store: el estado cambia
   // desde el ticker del backend, un 304 cacheado dejaría el chip mintiendo.
   getProactive: (id: string) =>
-    req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity; memory: CodexProgressMemory; company: CodexCompanyContext }>(`/projects/${id}/proactive`, { cache: "no-store" }),
+    req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity; memory: CodexProgressMemory; company: CodexCompanyContext }>(`/projects/${id}/proactive`, { cache: "no-store" }),
   setProactive: (id: string, enabled: boolean) =>
-    req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
-  upsertDepartment: (id: string, department: Partial<CodexCompanyDepartment> & { name: string }) =>
-    req<{ departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity }>(
+    req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  upsertDepartment: (id: string, department: Partial<CodexCompanyDepartment> & { name: string; poolSize?: number; dailyBudgetUsd?: number | null }) =>
+    req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(
       `/projects/${id}/departments`,
       { method: "PUT", body: JSON.stringify({ department }) },
     ),
   deleteDepartment: (id: string, departmentId: string) =>
-    req<{ departments: CodexCompanyDepartment[]; capacity: CodexCompanyCapacity }>(
+    req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(
       `/projects/${id}/departments/${encodeURIComponent(departmentId)}`,
       { method: "DELETE" },
+    ),
+  getDepartmentPools: (id: string) =>
+    req<{ departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(
+      `/projects/${id}/department-pools`,
+      { cache: "no-store" },
+    ),
+  updateDepartmentPool: (
+    id: string,
+    departmentId: string,
+    pool: { size: number; dailyBudgetUsd?: number | null; enabled?: boolean },
+  ) =>
+    req<{ departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(
+      `/projects/${id}/department-pools/${encodeURIComponent(departmentId)}`,
+      { method: "PUT", body: JSON.stringify(pool) },
     ),
   getCompanyResources: (id: string) =>
     req<{ resources: CodexCompanyResourceState }>(
@@ -675,6 +736,11 @@ export const codexApi = {
       method: "PATCH",
       body: JSON.stringify({ profile, confirmAuto: options?.confirmAuto === true }),
     }).then((result) => result.company),
+  runBusinessAudit: (id: string) =>
+    req<{ audit: CodexBusinessAudit; company: CodexCompanyContext }>(
+      `/projects/${id}/business-audit`,
+      { method: "POST", timeoutMs: 90_000 },
+    ),
   getCompanyOperations: (id: string) =>
     req<{ operations: CodexCompanyOperations }>(
       `/projects/${id}/company-operations`,
@@ -806,6 +872,18 @@ export const codexApi = {
       .then((r) => arrayOrEmpty<CodexRun>(r?.runs)),
   getRun: (projectId: string, runId: string) => req<{ run: CodexRun }>(`/projects/${projectId}/runs/${runId}`).then((r) => r.run),
   cancelRun: (runId: string) => req<{ run: CodexRun }>(`/runs/${runId}/cancel`, { method: "POST" }).then((r) => r.run),
+  generateRunSummaryAudio: (runId: string) =>
+    req<{
+      audio: {
+        audioUrl: string
+        mime: "audio/mpeg"
+        sizeBytes: number
+        characters: number
+        voiceId: string | null
+        modelId: string | null
+      }
+      cached: boolean
+    }>(`/runs/${runId}/summary-audio`, { method: "POST", timeoutMs: 130_000 }),
   resolveToolPermission: (runId: string, permissionId: string, decision: "allow" | "deny") =>
     req<{ run: CodexRun }>(`/runs/${runId}/tool-permission`, {
       method: "POST",

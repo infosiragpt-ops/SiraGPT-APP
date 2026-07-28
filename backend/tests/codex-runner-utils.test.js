@@ -18,6 +18,7 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
   previewConfigMigrationMode,
@@ -49,6 +50,13 @@ test('sanitizeProjectId accepts cuid-like ids and rejects everything else', () =
   assert.equal(sanitizeProjectId(''), null);
   assert.equal(sanitizeProjectId(null), null);
   assert.equal(sanitizeProjectId('x'.repeat(65)), null);
+});
+
+test('sanitizeRunId accepts durable run ids and rejects path-like values', () => {
+  assert.equal(sanitizeRunId('run_01-HHZZ'), 'run_01-HHZZ');
+  assert.equal(sanitizeRunId('../../main'), null);
+  assert.equal(sanitizeRunId('run/branch'), null);
+  assert.equal(sanitizeRunId('x'.repeat(97)), null);
 });
 
 test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () => {

@@ -6,6 +6,7 @@
  */
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 
 // Only boring, non-secret process settings may cross the control-plane ->
 // generated-code boundary. Project-specific HOME/cache/tmp and runtime values
@@ -47,6 +48,11 @@ function commandRejectionReason(cmd) {
 function sanitizeProjectId(raw) {
   const id = String(raw || '').trim();
   return PROJECT_ID_RE.test(id) ? id : null;
+}
+
+function sanitizeRunId(raw) {
+  const id = String(raw || '').trim();
+  return RUN_ID_RE.test(id) ? id : null;
 }
 
 function resolveProjectRelPath(relPath) {
@@ -442,6 +448,7 @@ function createDevPool({ ports, now = () => Date.now() } = {}) {
 
 module.exports = {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
   previewConfigMigrationMode,

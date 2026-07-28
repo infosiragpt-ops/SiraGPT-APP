@@ -457,7 +457,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
         {activeRunId ? (
-          <CodexRunTimeline state={state} cardRenderer={renderCard} />
+          <CodexRunTimeline state={state} cardRenderer={renderCard} runId={activeRunId} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-5 overflow-y-auto px-6 py-8">
             <div className="max-w-lg text-center">

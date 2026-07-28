@@ -3130,7 +3130,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               const nextState = foldCodexEvent(state, ev)
               if (nextState !== state) {
                 state = nextState
-                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start" || ev.type === "action_end" || ev.type === "file_patch" || ev.type === "executive_summary") {
+                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start" || ev.type === "action_end" || ev.type === "file_patch" || ev.type === "file_delta" || ev.type === "executive_summary") {
                   lastPhase = state.phase
                   applyRender()
                 }

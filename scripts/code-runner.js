@@ -54,6 +54,7 @@ const {
 const { dirname } = require("node:path");
 const {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
   previewConfigMigrationMode,
@@ -76,6 +77,7 @@ const DEV_PORT_POOL = parseDevPortPool(process.env.CODE_RUNNER_DEV_PORT_POOL, DE
 const DEV_IDLE_MS = Math.max(60_000, Number(process.env.CODE_RUNNER_DEV_IDLE_MS) || 30 * 60_000);
 const CTRL_PORT = Number(process.env.CTRL_PORT || 4097);
 const PROJECTS_DIR = `${WORKDIR}/projects`;
+const WORKTREES_DIR = process.env.RUNNER_WORKTREES_DIR || `${WORKDIR}/worktrees`;
 // Host-bind-mounted mirror target (Codex Agent V2 "export to disk", hybrid mode).
 const EXPORT_DIR = process.env.EXPORT_DIR || "/export";
 const CONTROL_TOKEN = controlTokenForEnv(process.env);
@@ -165,6 +167,7 @@ if (typeof migrateOwnershipTree !== "function" || typeof sealWorkspaceRoot !== "
   throw new Error("code-runner filesystem helper is missing ownership safeguards");
 }
 sealWorkspaceRoot(WORKDIR, "projects");
+ensureRootDir(WORKTREES_DIR);
 
 function ensureOwnedDir(path, identity, mode = 0o700) {
   mkdirSync(path, { recursive: true, mode });
@@ -225,6 +228,18 @@ function projectDirOf(id) {
   return `${PROJECTS_DIR}/${id}`;
 }
 
+function worktreeParentOf(id) {
+  return `${WORKTREES_DIR}/${id}`;
+}
+
+function worktreeDirOf(id, runId) {
+  return `${worktreeParentOf(id)}/wt-${runId}`;
+}
+
+function devKeyOf(projectId, runId = null) {
+  return runId ? `${projectId}::run::${runId}` : projectId;
+}
+
 function ensureProjectDirectory(id) {
   const dir = projectDirOf(id);
   const identity = sandboxIdentityFor(id);
@@ -244,15 +259,180 @@ function ensureProjectDirectory(id) {
   return { dir, identity };
 }
 
+function ensureWorktreeParent(id) {
+  const identity = sandboxIdentityFor(id);
+  ensureOwnedDir(worktreeParentOf(id), identity);
+  return { dir: worktreeParentOf(id), identity };
+}
+
+function decodeSyncOutput(value) {
+  if (!value) return "";
+  return new TextDecoder().decode(value);
+}
+
+function runGitAt(projectId, cwd, args) {
+  const result = spawnSandboxedSync(projectId, ["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    ok: result.exitCode === 0,
+    exitCode: result.exitCode,
+    stdout: decodeSyncOutput(result.stdout),
+    stderr: decodeSyncOutput(result.stderr),
+  };
+}
+
+function registeredWorktrees(projectId) {
+  const result = runGitAt(projectId, projectDirOf(projectId), ["worktree", "list", "--porcelain"]);
+  if (!result.ok) throw new Error(result.stderr || "git_worktree_list_failed");
+  const rows = [];
+  let current = null;
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      if (current) rows.push(current);
+      current = { path: line.slice("worktree ".length), branch: null };
+    } else if (current && line.startsWith("branch refs/heads/")) {
+      current.branch = line.slice("branch refs/heads/".length);
+    } else if (!line && current) {
+      rows.push(current);
+      current = null;
+    }
+  }
+  if (current) rows.push(current);
+  return rows;
+}
+
+function safeGitBranch(value) {
+  const branch = String(value || "").trim();
+  return Boolean(
+    branch
+    && branch.length <= 128
+    && !branch.startsWith("-")
+    && !branch.startsWith("refs/")
+    && !branch.endsWith("/")
+    && !branch.endsWith(".")
+    && !/(?:\.\.|\/\/|@\{|[~^:?*[\]\\])/.test(branch)
+    && branch.split("/").every((segment) => (
+      segment && !segment.startsWith(".") && !segment.endsWith(".lock")
+    )),
+  );
+}
+
+function ensureWorkspaceDirectory(id, runId = null) {
+  const base = ensureProjectDirectory(id);
+  if (!runId) return { ...base, runId: null };
+  const dir = worktreeDirOf(id, runId);
+  if (!existsSync(dir)) {
+    const error = new Error("run worktree not found");
+    error.code = "worktree_not_found";
+    throw error;
+  }
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink()) {
+    const error = new Error("unsafe run worktree");
+    error.code = "unsafe_worktree";
+    throw error;
+  }
+  const expectedBranch = `run/${runId}`;
+  const registered = registeredWorktrees(id).find((row) => row.path === dir);
+  if (!registered || registered.branch !== expectedBranch) {
+    const error = new Error("run worktree is not registered for its branch");
+    error.code = "worktree_not_registered";
+    throw error;
+  }
+  return { dir, identity: base.identity, runId };
+}
+
+function createRunWorktree(id, runId, baseBranch) {
+  const { dir: baseDir } = ensureProjectDirectory(id);
+  ensureWorktreeParent(id);
+  const runBranch = `run/${runId}`;
+  const target = worktreeDirOf(id, runId);
+  const existing = registeredWorktrees(id).find((row) => row.path === target);
+  if (existing) {
+    if (existing.branch !== runBranch) {
+      const error = new Error("worktree path belongs to another branch");
+      error.code = "worktree_branch_mismatch";
+      throw error;
+    }
+    return { ok: true, resumed: true, runBranch, baseBranch, dir: `worktrees/${id}/wt-${runId}` };
+  }
+  if (existsSync(target)) {
+    const error = new Error("unregistered worktree path already exists");
+    error.code = "worktree_path_collision";
+    throw error;
+  }
+
+  const branchExists = runGitAt(id, baseDir, [
+    "show-ref", "--verify", "--quiet", `refs/heads/${runBranch}`,
+  ]).ok;
+  const args = branchExists
+    ? ["worktree", "add", target, runBranch]
+    : ["worktree", "add", "-b", runBranch, target, baseBranch];
+  const added = runGitAt(id, baseDir, args);
+  if (!added.ok) {
+    const raced = registeredWorktrees(id).find(
+      (row) => row.path === target && row.branch === runBranch,
+    );
+    if (!raced) {
+      const error = new Error((added.stderr || added.stdout || "git_worktree_add_failed").slice(0, 500));
+      error.code = "git_worktree_add_failed";
+      throw error;
+    }
+  }
+  return {
+    ok: true,
+    resumed: branchExists,
+    runBranch,
+    baseBranch,
+    dir: `worktrees/${id}/wt-${runId}`,
+  };
+}
+
+function removeRunWorktree(id, runId) {
+  const { dir: baseDir } = ensureProjectDirectory(id);
+  const target = worktreeDirOf(id, runId);
+  const registered = registeredWorktrees(id).find((row) => row.path === target);
+  if (!registered) {
+    if (existsSync(target)) {
+      const error = new Error("refusing to remove an unregistered worktree path");
+      error.code = "worktree_path_collision";
+      throw error;
+    }
+    return { ok: true, removed: false };
+  }
+  const state = runGitAt(id, target, ["status", "--porcelain=v1", "-z"]);
+  if (!state.ok || state.stdout) {
+    const error = new Error(state.ok ? "run worktree has uncommitted changes" : "worktree_status_failed");
+    error.code = state.ok ? "worktree_dirty" : "worktree_status_failed";
+    throw error;
+  }
+  stopEntry(devKeyOf(id, runId));
+  const removed = runGitAt(id, baseDir, ["worktree", "remove", target]);
+  if (!removed.ok) {
+    const error = new Error((removed.stderr || removed.stdout || "git_worktree_remove_failed").slice(0, 500));
+    error.code = "git_worktree_remove_failed";
+    throw error;
+  }
+  runGitAt(id, baseDir, ["worktree", "prune"]);
+  return { ok: true, removed: true };
+}
+
 function filesystemHelperError(code, message = code) {
   const error = new Error(message);
   error.code = code;
   return error;
 }
 
-async function callFilesystemHelper(projectId, args, { input = null, outputCap = 1_000_000 } = {}) {
+async function callFilesystemHelper(
+  projectId,
+  args,
+  { input = null, outputCap = 1_000_000, cwd = projectDirOf(projectId) } = {},
+) {
   const proc = spawnSandboxed(projectId, [process.execPath, FS_HELPER_PATH, ...args], {
-    cwd: projectDirOf(projectId),
+    cwd,
     stdin: input == null ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -399,7 +579,7 @@ function pushLog(entry, line) {
 
 function entryStatus(entry) {
   if (!entry) {
-    return { running: false, ready: false, state: "stopped", framework: null, project: null, port: null, basePath: null, error: null, preflight: null, log: [] };
+    return { running: false, ready: false, state: "stopped", framework: null, project: null, run: null, port: null, basePath: null, error: null, preflight: null, log: [] };
   }
   const renderAdmitted = !entry.preflight || entry.preflight.render?.status === "passed";
   return {
@@ -407,7 +587,8 @@ function entryStatus(entry) {
     ready: entry.state === "ready" && renderAdmitted,
     state: entry.state,
     framework: entry.framework || null,
-    project: entry.key === ROOT_KEY ? null : entry.key,
+    project: entry.project || null,
+    run: entry.run || null,
     port: entry.port,
     basePath: entry.basePath || null,
     error: entry.error || null,
@@ -419,7 +600,8 @@ function entryStatus(entry) {
 
 function serversSummary() {
   return devPool.list().map((e) => ({
-    project: e.key === ROOT_KEY ? null : e.key,
+    project: e.project || null,
+    run: e.run || null,
     port: e.port,
     state: e.state,
     startedAt: e.startedAt,
@@ -427,45 +609,37 @@ function serversSummary() {
   }));
 }
 
-async function readProjectJson(projectId, relPath) {
+async function readProjectJson(projectId, relPath, cwd = projectDirOf(projectId)) {
   try {
-    const result = await callFilesystemHelper(projectId, ["read", relPath, "1000000"], { outputCap: 2_000_000 });
+    const result = await callFilesystemHelper(projectId, ["read", relPath, "1000000"], {
+      outputCap: 2_000_000,
+      cwd,
+    });
     return JSON.parse(result.content);
   } catch {
     return null;
   }
 }
 
-function decodeSyncOutput(value) {
-  if (!value) return "";
-  return new TextDecoder().decode(value);
+function runProjectGit(projectId, args, cwd = projectDirOf(projectId)) {
+  return runGitAt(projectId, cwd, args);
 }
 
-function runProjectGit(projectId, args) {
-  const result = spawnSandboxedSync(projectId, ["git", ...args], {
-    cwd: projectDirOf(projectId),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return {
-    ok: result.exitCode === 0,
-    stdout: decodeSyncOutput(result.stdout),
-    stderr: decodeSyncOutput(result.stderr),
-  };
-}
-
-async function migrateLegacyVitePreviewProxy(projectId, entry) {
+async function migrateLegacyVitePreviewProxy(projectId, entry, cwd = projectDirOf(projectId)) {
   let current;
   try {
-    current = await callFilesystemHelper(projectId, ["read", "vite.config.ts", "1000000"], { outputCap: 2_000_000 });
+    current = await callFilesystemHelper(projectId, ["read", "vite.config.ts", "1000000"], {
+      outputCap: 2_000_000,
+      cwd,
+    });
   } catch {
     return false;
   }
   const migrated = migrateLegacyViteProxyConfig(current.content);
   if (!migrated.changed) return false;
 
-  const status = runProjectGit(projectId, ["status", "--porcelain", "--untracked-files=normal"]);
-  const head = runProjectGit(projectId, ["show", "HEAD:vite.config.ts"]);
+  const status = runProjectGit(projectId, ["status", "--porcelain", "--untracked-files=normal"], cwd);
+  const head = runProjectGit(projectId, ["show", "HEAD:vite.config.ts"], cwd);
   const mode = previewConfigMigrationMode({
     status: status.ok ? status.stdout : null,
     headContent: head.ok ? head.stdout : null,
@@ -482,16 +656,17 @@ async function migrateLegacyVitePreviewProxy(projectId, entry) {
       limits: { maxFiles: 1, maxFileBytes: 1_000_000, maxTotalBytes: 1_000_000 },
     }),
     outputCap: 20_000,
+    cwd,
   });
 
   if (mode === "commit") {
-    const added = runProjectGit(projectId, ["add", "--", "vite.config.ts"]);
+    const added = runProjectGit(projectId, ["add", "--", "vite.config.ts"], cwd);
     const committed = added.ok
       ? runProjectGit(projectId, [
         "-c", "user.name=SiraGPT Preview",
         "-c", "user.email=preview@siragpt.local",
         "commit", "-m", "chore(sira): migrate preview config", "--", "vite.config.ts",
-      ])
+      ], cwd)
       : { ok: false };
     if (!committed.ok) {
       await callFilesystemHelper(projectId, ["write"], {
@@ -500,8 +675,9 @@ async function migrateLegacyVitePreviewProxy(projectId, entry) {
           limits: { maxFiles: 1, maxFileBytes: 1_000_000, maxTotalBytes: 1_000_000 },
         }),
         outputCap: 20_000,
+        cwd,
       });
-      runProjectGit(projectId, ["reset", "--", "vite.config.ts"]);
+      runProjectGit(projectId, ["reset", "--", "vite.config.ts"], cwd);
       pushLog(entry, "[runner] preview config migration rolled back because its commit failed");
       return false;
     }
@@ -566,20 +742,21 @@ function safeBasePath(value) {
  * when reusing). Throws { code: "dev_pool_exhausted" } when the pool is full
  * and nothing is evictable.
  */
-async function startDev(projectId = null, basePath = null) {
+async function startDev(projectId = null, runId = null, basePath = null) {
   if (!projectId) {
     const error = new Error("legacy workspace-root execution is disabled; provide a project id");
     error.code = "legacy_root_run_disabled";
     throw error;
   }
-  const key = projectId || ROOT_KEY;
+  const key = devKeyOf(projectId, runId);
   const normBase = safeBasePath(basePath);
-  if (!existsSync(projectDirOf(projectId))) {
+  const expectedDir = runId ? worktreeDirOf(projectId, runId) : projectDirOf(projectId);
+  if (!existsSync(expectedDir)) {
     const error = new Error("project not found");
-    error.code = "project_not_found";
+    error.code = runId ? "worktree_not_found" : "project_not_found";
     throw error;
   }
-  ensureProjectDirectory(projectId);
+  const { dir: workspaceDir } = ensureWorkspaceDirectory(projectId, runId);
 
   // Reuse: same project, already serving with the same base path → no restart
   // (vite watches files, edits are picked up by HMR without a re-run).
@@ -606,6 +783,9 @@ async function startDev(projectId = null, basePath = null) {
     console.log(`[code-runner] evicted dev server ${alloc.evicted.key || "<root>"} on :${alloc.evicted.port}`);
   }
   const entry = alloc.entry;
+  entry.project = projectId;
+  entry.run = runId;
+  entry.workspaceDir = workspaceDir;
   killEntryProc(entry); // restart of an existing slot → kill the old tree first
   entry.gen = (entry.gen || 0) + 1;
   entry.state = "installing";
@@ -622,7 +802,7 @@ async function startDev(projectId = null, basePath = null) {
   entry.lastUsedAt = Date.now();
   lastStartedKey = key;
 
-  runDev(entry, projectId).catch((e) => {
+  runDev(entry, projectId, workspaceDir).catch((e) => {
     if (devPool.get(key) !== entry) return; // superseded/stopped meanwhile
     entry.state = "error";
     entry.error = String(e && e.message ? e.message : e);
@@ -630,21 +810,20 @@ async function startDev(projectId = null, basePath = null) {
   return { port: entry.port, project: projectId, reused: false };
 }
 
-async function runDev(entry, projectId) {
+async function runDev(entry, projectId, cwd) {
   const myGen = entry.gen;
   const key = entry.key;
   const port = entry.port;
   // A newer /run (or /stop) for this project supersedes this generation.
   const stale = () => devPool.get(key) !== entry || entry.gen !== myGen;
 
-  const cwd = projectDirOf(projectId);
-  const pkg = await readProjectJson(projectId, "package.json");
+  const pkg = await readProjectJson(projectId, "package.json", cwd);
   if (!pkg) {
     entry.state = "error";
     entry.error = "No package.json — this project doesn't need a build (use the static preview).";
     return;
   }
-  await migrateLegacyVitePreviewProxy(projectId, entry);
+  await migrateLegacyVitePreviewProxy(projectId, entry, cwd);
 
   // Detect the framework for the right dev command + port flag.
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
@@ -862,13 +1041,72 @@ Bun.serve({
       return Response.json({ ok: true, dir: `projects/${id}` });
     }
 
+    if (url.pathname === "/workspace/worktree" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const runId = sanitizeRunId(body.run);
+      const baseBranch = String(body.baseBranch || "main").trim();
+      if (!id || !runId || !safeGitBranch(baseBranch)) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
+      if (!existsSync(projectDirOf(id))) {
+        return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      }
+      try {
+        return Response.json(createRunWorktree(id, runId, baseBranch));
+      } catch (error) {
+        const code = error.code || "worktree_create_failed";
+        const status = [
+          "worktree_branch_mismatch",
+          "worktree_path_collision",
+        ].includes(code) ? 409 : 500;
+        return Response.json({
+          ok: false,
+          error: code,
+          detail: String(error.message || error).slice(0, 500),
+        }, { status });
+      }
+    }
+
+    if (url.pathname === "/workspace/worktree/remove" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const runId = sanitizeRunId(body.run);
+      if (!id || !runId) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
+      if (!existsSync(projectDirOf(id))) {
+        return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      }
+      try {
+        return Response.json(removeRunWorktree(id, runId));
+      } catch (error) {
+        const code = error.code || "worktree_remove_failed";
+        const status = ["worktree_dirty", "worktree_path_collision"].includes(code) ? 409 : 500;
+        return Response.json({
+          ok: false,
+          error: code,
+          detail: String(error.message || error).slice(0, 500),
+        }, { status });
+      }
+    }
+
     if (url.pathname === "/workspace/write" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = sanitizeProjectId(body.project);
+      const rawRunId = body.run == null || body.run === "" ? null : body.run;
+      const runId = rawRunId == null ? null : sanitizeRunId(rawRunId);
       const files = Array.isArray(body.files) ? body.files : [];
-      if (!id || !files.length) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
-      if (!existsSync(projectDirOf(id))) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
-      ensureProjectDirectory(id);
+      if (!id || (rawRunId != null && !runId) || !files.length) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
+      let workspace;
+      try {
+        workspace = ensureWorkspaceDirectory(id, runId);
+      } catch (error) {
+        const status = ["worktree_not_found", "project_not_found"].includes(error.code) ? 404 : 409;
+        return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
+      }
       const accepted = [];
       let acceptedBytes = 0;
       for (const f of files.slice(0, 200)) {
@@ -886,6 +1124,7 @@ Bun.serve({
             limits: { maxFiles: 200, maxFileBytes: 2_000_000, maxTotalBytes: WRITE_MAX_TOTAL_BYTES },
           }),
           outputCap: 20_000,
+          cwd: workspace.dir,
         });
         return Response.json({ ok: true, written: result.written });
       } catch (error) {
@@ -895,12 +1134,24 @@ Bun.serve({
 
     if (url.pathname === "/workspace/file" && req.method === "GET") {
       const id = sanitizeProjectId(url.searchParams.get("project"));
+      const rawRunId = url.searchParams.get("run");
+      const runId = rawRunId ? sanitizeRunId(rawRunId) : null;
       const rel = resolveProjectRelPath(url.searchParams.get("path"));
-      if (!id || !rel) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
-      if (!existsSync(projectDirOf(id))) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
-      ensureProjectDirectory(id);
+      if (!id || (rawRunId && !runId) || !rel) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
+      let workspace;
       try {
-        const result = await callFilesystemHelper(id, ["read", rel, "200000"], { outputCap: 1_500_000 });
+        workspace = ensureWorkspaceDirectory(id, runId);
+      } catch (error) {
+        const status = ["worktree_not_found", "project_not_found"].includes(error.code) ? 404 : 409;
+        return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
+      }
+      try {
+        const result = await callFilesystemHelper(id, ["read", rel, "200000"], {
+          outputCap: 1_500_000,
+          cwd: workspace.dir,
+        });
         return Response.json({ ok: true, path: result.path, content: result.content });
       } catch (error) {
         if (error.code === "file_not_found") {
@@ -915,12 +1166,24 @@ Bun.serve({
 
     if (url.pathname === "/workspace/file-binary" && req.method === "GET") {
       const id = sanitizeProjectId(url.searchParams.get("project"));
+      const rawRunId = url.searchParams.get("run");
+      const runId = rawRunId ? sanitizeRunId(rawRunId) : null;
       const rel = resolveProjectRelPath(url.searchParams.get("path"));
-      if (!id || !rel) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
-      if (!existsSync(projectDirOf(id))) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
-      ensureProjectDirectory(id);
+      if (!id || (rawRunId && !runId) || !rel) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
+      let workspace;
       try {
-        const result = await callFilesystemHelper(id, ["read-base64", rel, "6000000"], { outputCap: 8_500_000 });
+        workspace = ensureWorkspaceDirectory(id, runId);
+      } catch (error) {
+        const status = ["worktree_not_found", "project_not_found"].includes(error.code) ? 404 : 409;
+        return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
+      }
+      try {
+        const result = await callFilesystemHelper(id, ["read-base64", rel, "6000000"], {
+          outputCap: 8_500_000,
+          cwd: workspace.dir,
+        });
         return Response.json({
           ok: true,
           path: result.path,
@@ -941,16 +1204,23 @@ Bun.serve({
     if (url.pathname === "/workspace/exec" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = sanitizeProjectId(body.project);
+      const rawRunId = body.run == null || body.run === "" ? null : body.run;
+      const runId = rawRunId == null ? null : sanitizeRunId(rawRunId);
       const cmd = body.cmd;
       const rejection = commandRejectionReason(cmd);
-      if (!id || rejection) {
+      if (!id || (rawRunId != null && !runId) || rejection) {
         return Response.json({ ok: false, error: rejection || "invalid_command" }, { status: 400 });
       }
-      if (!existsSync(projectDirOf(id))) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
-      const { dir } = ensureProjectDirectory(id);
+      let workspace;
+      try {
+        workspace = ensureWorkspaceDirectory(id, runId);
+      } catch (error) {
+        const status = ["worktree_not_found", "project_not_found"].includes(error.code) ? 404 : 409;
+        return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
+      }
       const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || EXEC_DEFAULT_TIMEOUT_MS, 1_000), EXEC_MAX_TIMEOUT_MS);
       const started = Date.now();
-      const proc = spawnSandboxed(id, cmd, { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      const proc = spawnSandboxed(id, cmd, { cwd: workspace.dir, stdout: "pipe", stderr: "pipe" });
       const stdoutPromise = collectOutput(proc.stdout);
       const stderrPromise = collectOutput(proc.stderr);
       const { exitCode, timedOut } = await waitForExit(proc, timeoutMs);
@@ -968,15 +1238,20 @@ Bun.serve({
     if (url.pathname === "/workspace/export" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = sanitizeProjectId(body.project);
-      if (!id) return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
-      const src = projectDirOf(id);
-      if (!existsSync(src)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      const rawRunId = body.run == null || body.run === "" ? null : body.run;
+      const runId = rawRunId == null ? null : sanitizeRunId(rawRunId);
+      if (!id || (rawRunId != null && !runId)) {
+        return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      }
       try {
-        ensureProjectDirectory(id);
+        const workspace = ensureWorkspaceDirectory(id, runId);
         const bundle = await callFilesystemHelper(
           id,
           ["export", String(EXPORT_MAX_FILES), String(EXPORT_MAX_BYTES)],
-          { outputCap: Math.ceil(EXPORT_MAX_BYTES * 1.5) + 2_000_000 },
+          {
+            outputCap: Math.ceil(EXPORT_MAX_BYTES * 1.5) + 2_000_000,
+            cwd: workspace.dir,
+          },
         );
         const files = writePrivateExport(id, bundle.files);
         return Response.json({ ok: true, project: id, files, bytes: bundle.totalBytes });
@@ -989,16 +1264,21 @@ Bun.serve({
     if (url.pathname === "/workspace/export-build" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = sanitizeProjectId(body.project);
+      const rawRunId = body.run == null || body.run === "" ? null : body.run;
+      const runId = rawRunId == null ? null : sanitizeRunId(rawRunId);
       const outDir = resolveProjectRelPath(body.outDir || "dist");
-      if (!id || !outDir) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
-      const src = projectDirOf(id);
-      if (!existsSync(src)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      if (!id || (rawRunId != null && !runId) || !outDir) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
       try {
-        ensureProjectDirectory(id);
+        const workspace = ensureWorkspaceDirectory(id, runId);
         const bundle = await callFilesystemHelper(
           id,
           ["export-dir", outDir, String(EXPORT_MAX_FILES), String(EXPORT_MAX_BYTES)],
-          { outputCap: Math.ceil(EXPORT_MAX_BYTES * 1.5) + 2_000_000 },
+          {
+            outputCap: Math.ceil(EXPORT_MAX_BYTES * 1.5) + 2_000_000,
+            cwd: workspace.dir,
+          },
         );
         if (!bundle.files.some((file) => file.path === "index.html")) {
           return Response.json({ ok: false, error: "build_index_missing" }, { status: 422 });
@@ -1023,12 +1303,20 @@ Bun.serve({
 
     if (url.pathname === "/status") {
       const rawProject = url.searchParams.get("project");
+      const rawRunId = url.searchParams.get("run");
+      const runId = rawRunId ? sanitizeRunId(rawRunId) : null;
+      if (rawRunId && !runId) {
+        return Response.json({ ok: false, error: "invalid_run" }, { status: 400 });
+      }
       let entry;
       if (rawProject) {
         const id = sanitizeProjectId(rawProject);
         if (!id) return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
-        entry = devPool.get(id);
-        if (entry) devPool.touch(id); // status polling counts as activity for the reaper
+        const key = devKeyOf(id, runId);
+        entry = devPool.get(key);
+        if (entry) devPool.touch(key); // status polling counts as activity for the reaper
+      } else if (runId) {
+        return Response.json({ ok: false, error: "project_required_for_run" }, { status: 400 });
       } else {
         // Legacy: no project param → the last started server.
         entry = lastStartedKey != null ? devPool.get(lastStartedKey) : null;
@@ -1048,18 +1336,29 @@ Bun.serve({
     if (url.pathname === "/run" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = body && body.project ? sanitizeProjectId(body.project) : null;
-      if (body && body.project && !id) {
-        return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      const rawRunId = body && body.run ? body.run : null;
+      const runId = rawRunId ? sanitizeRunId(rawRunId) : null;
+      if ((body && body.project && !id) || (rawRunId && !runId)) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
       }
       try {
-        const out = await startDev(id, body && body.basePath);
-        return Response.json({ ok: true, port: out.port, project: id, reused: out.reused });
+        const out = await startDev(id, runId, body && body.basePath);
+        return Response.json({
+          ok: true,
+          port: out.port,
+          project: id,
+          run: runId,
+          reused: out.reused,
+        });
       } catch (e) {
         if (e && e.code === "dev_pool_exhausted") {
           return Response.json({ ok: false, error: "dev_pool_exhausted" }, { status: 429 });
         }
         if (e && e.code === "project_not_found") {
           return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+        }
+        if (e && e.code === "worktree_not_found") {
+          return Response.json({ ok: false, error: "worktree_not_found" }, { status: 404 });
         }
         if (e && e.code === "legacy_root_run_disabled") {
           return Response.json({ ok: false, error: "legacy_root_run_disabled" }, { status: 409 });
@@ -1070,12 +1369,17 @@ Bun.serve({
     if (url.pathname === "/stop" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = body && body.project ? sanitizeProjectId(body.project) : null;
-      if (body && body.project && !id) {
-        return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      const rawRunId = body && body.run ? body.run : null;
+      const runId = rawRunId ? sanitizeRunId(rawRunId) : null;
+      if ((body && body.project && !id) || (rawRunId && !runId)) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
       }
       if (id) {
-        const stopped = stopEntry(id);
+        const stopped = stopEntry(devKeyOf(id, runId));
         return Response.json({ ok: true, stopped: stopped ? 1 : 0 });
+      }
+      if (runId) {
+        return Response.json({ ok: false, error: "project_required_for_run" }, { status: 400 });
       }
       // Legacy: no project → stop them ALL.
       let stopped = 0;

@@ -159,6 +159,68 @@ test('CEO Office grounds planning in readiness and persists the shared company p
   assert.equal(prisma.state.project.brief.objectives[0].id, 'business-foundation');
 });
 
+test('CEO Office refreshes a stale business audit and uses its prioritized gaps', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  let analyzerCalls = 0;
+  let proposalMessages = [];
+  const result = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      businessAnalyzer: {
+        analyzeBusiness: async () => {
+          analyzerCalls += 1;
+          return {
+            version: 1,
+            generatedAt: '2026-07-28T18:00:00.000Z',
+            projectId: PROJECT.id,
+            companyName: PROJECT.name,
+            status: 'gaps_detected',
+            score: 25,
+            networkUsed: false,
+            websiteUrl: null,
+            signals: [{
+              id: 'landing',
+              label: 'Landing publica',
+              status: 'blocked',
+              evidence: 'No hay landing publica.',
+              sources: [],
+            }],
+            gaps: [{
+              id: 'landing',
+              priority: 'P0',
+              score: 95,
+              departmentId: 'product-engineering',
+              title: 'Construir la landing principal',
+              action: 'Construir una landing Vite y verificarla.',
+              evidence: 'No hay landing publica.',
+            }],
+            sources: [],
+          };
+        },
+      },
+      businessAnalyzerNetworkEnabled: false,
+      runService: { createRun: async () => ({ id: 'audit-plan' }) },
+      chatComplete: async ({ messages }) => {
+        proposalMessages = messages;
+        return {
+          content: JSON.stringify({
+            title: 'Construir landing',
+            goal: 'Crea la landing priorizada por la auditoria de presencia.',
+          }),
+        };
+      },
+    },
+    env: { NODE_ENV: 'test', CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+
+  assert.equal(result.action, 'proposed');
+  assert.equal(analyzerCalls, 1);
+  assert.equal(prisma.state.project.brief.businessAudit.gaps[0].id, 'landing');
+  assert.match(proposalMessages[1].content, /AUDITORIA DE PRESENCIA/);
+  assert.match(proposalMessages[1].content, /Construir la landing principal/);
+});
+
 test('USD kill switch blocks proposals using persisted run costs', async () => {
   const prisma = fakePrisma({ project: PROJECT });
   prisma.codexRunMetric = {
@@ -496,6 +558,32 @@ test('daily budget cap + explicit 0 disables proposals (falsy-0 respected)', asy
 
   const res0 = await engine.runCycle({ project: PROJECT, deps: { prisma: fakePrisma({ project: PROJECT }), runService: {}, chatComplete: async () => ({ content: '{}' }) }, env: { CODEX_PROACTIVE_MAX_PER_DAY: '0' } });
   assert.equal(res0.action, 'skipped_budget');
+});
+
+test('department pool budget blocks only that turn and advances the round-robin', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      departmentPools: {
+        checkDepartmentPoolBudget: async () => ({
+          allowed: false,
+          reason: 'daily_budget_exceeded',
+          costTodayUsd: 3,
+          dailyBudgetUsd: 3,
+          remainingUsd: 0,
+        }),
+      },
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => { throw new Error('must not propose'); },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(res.action, 'skipped_department_budget');
+  assert.equal(res.department, 'ceo-office');
+  assert.equal(engine.readProactiveState(prisma.state.project).deptIndex, 1);
+  assert.match(engine.readProactiveState(prisma.state.project).lastError, /presupuesto diario/i);
 });
 
 test('invalid model output → skipped_no_proposal with lastError recorded, no run created', async () => {

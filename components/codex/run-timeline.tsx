@@ -9,8 +9,9 @@
 import React from "react"
 import clsx from "clsx"
 import { useTranslations } from "next-intl"
-import { ArrowDown } from "lucide-react"
+import { ArrowDown, Loader2, Volume2 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
+import { codexApi } from "@/lib/codex/codex-api"
 import { markdownRehypePlugins, markdownRemarkPlugins } from "@/lib/markdown-sanitize"
 import { ActionChipsRow } from "./action-chips-row"
 import { ReasoningBlock } from "./reasoning-block"
@@ -22,11 +23,52 @@ export interface CodexRunTimelineProps {
   /** Feature 11 plugs in the rich cards; returns null to use the fallback. */
   cardRenderer?: (item: TimelineItem) => React.ReactNode | null
   className?: string
+  runId?: string | null
 }
 
 type Translate = ReturnType<typeof useTranslations>
 
-function FallbackCard({ item, t }: { item: TimelineItem; t: Translate }) {
+function SummaryAudioButton({ runId }: { runId: string }) {
+  const [busy, setBusy] = React.useState(false)
+  const [audioUrl, setAudioUrl] = React.useState<string | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const generate = async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await codexApi.generateRunSummaryAudio(runId)
+      setAudioUrl(result.audio.audioUrl)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No se pudo generar el audio.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      {audioUrl ? (
+        <audio controls preload="metadata" src={audioUrl} className="h-9 w-full" />
+      ) : (
+        <button
+          type="button"
+          onClick={() => void generate()}
+          disabled={busy}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-100 disabled:opacity-50"
+          aria-label="Escuchar resumen ejecutivo"
+          title="Escuchar resumen ejecutivo"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+        </button>
+      )}
+      {error ? <p className="mt-1 text-[11px] text-amber-300">{error}</p> : null}
+    </div>
+  )
+}
+
+function FallbackCard({ item, t, runId }: { item: TimelineItem; t: Translate; runId?: string | null }) {
   if (item.kind === "plan") {
     return (
       <div className="my-2 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3 text-sm">
@@ -43,6 +85,13 @@ function FallbackCard({ item, t }: { item: TimelineItem; t: Translate }) {
     const m = item.metrics || {}
     return <div className="my-2 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-zinc-300">{t("summary.workedFor", { duration: t("summary.actions", { count: m.actionsCount ?? 0 }) })} · +{m.additions ?? 0} −{m.deletions ?? 0}</div>
   }
+  if (item.kind === "run_audio") {
+    return (
+      <div className="my-2 border-l-2 border-sky-500/40 pl-3">
+        <audio controls preload="metadata" src={item.audioUrl} className="h-9 w-full" />
+      </div>
+    )
+  }
   if (item.kind === "file_patch") {
     return (
       <details className="my-2 border-l-2 border-emerald-500/40 pl-3 text-xs">
@@ -58,6 +107,7 @@ function FallbackCard({ item, t }: { item: TimelineItem; t: Translate }) {
         <div className="font-semibold text-zinc-100">Resumen ejecutivo</div>
         <div className="mt-1 text-zinc-300">{summary.result}</div>
         <div className="mt-1 text-xs text-zinc-400">{summary.impact}</div>
+        {runId ? <SummaryAudioButton runId={runId} /> : null}
       </div>
     )
   }
@@ -80,7 +130,12 @@ function FallbackCard({ item, t }: { item: TimelineItem; t: Translate }) {
   return null
 }
 
-function renderItem(item: TimelineItem, t: Translate, cardRenderer?: CodexRunTimelineProps["cardRenderer"]): React.ReactNode {
+function renderItem(
+  item: TimelineItem,
+  t: Translate,
+  cardRenderer?: CodexRunTimelineProps["cardRenderer"],
+  runId?: string | null,
+): React.ReactNode {
   switch (item.kind) {
     case "narrative":
       return (
@@ -94,12 +149,12 @@ function renderItem(item: TimelineItem, t: Translate, cardRenderer?: CodexRunTim
       return <ActionChipsRow key={item.id} actions={item.actions} />
     default: {
       const custom = cardRenderer?.(item)
-      return <React.Fragment key={item.id}>{custom != null ? custom : <FallbackCard item={item} t={t} />}</React.Fragment>
+      return <React.Fragment key={item.id}>{custom != null ? custom : <FallbackCard item={item} t={t} runId={runId} />}</React.Fragment>
     }
   }
 }
 
-export function CodexRunTimeline({ state, cardRenderer, className }: CodexRunTimelineProps) {
+export function CodexRunTimeline({ state, cardRenderer, className, runId }: CodexRunTimelineProps) {
   const t = useTranslations("codex")
   const stick = useStickToBottom(`${state.items.length}:${state.lastSeq}`)
 
@@ -111,7 +166,7 @@ export function CodexRunTimeline({ state, cardRenderer, className }: CodexRunTim
         className={clsx("flex-1 overflow-y-auto px-3 py-2", className)}
         data-testid="codex-run-timeline"
       >
-        {state.items.map((item) => renderItem(item, t, cardRenderer))}
+        {state.items.map((item) => renderItem(item, t, cardRenderer, runId))}
       </div>
 
       {stick.showPill && (

@@ -28,6 +28,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { body, query, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const { canUseCodexAgent, publicAccess } = require('../services/codex/access-control');
 const projectService = require('../services/codex/project-service');
@@ -538,11 +539,14 @@ router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
     const company = await require('../services/codex/company-operating-profile')
       .loadCompanyOperatingContext({ prisma: codexDb, project });
     const departments = companyDepartments.readDepartments(project);
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma: codexDb, projectId: project.id });
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       state: proactive.readProactiveState(project),
       departments,
-      capacity: companyDepartments.capacitySummary(departments),
+      departmentPools: pools,
+      capacity: companyDepartments.capacitySummary(departments, pools),
       memory,
       company,
     });
@@ -578,10 +582,13 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
     }
     const fresh = await prisma.codexProject.findFirst({ where: { id: project.id, userId: req.user.id } });
     const departments = companyDepartments.readDepartments(fresh || project);
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma, projectId: project.id });
     return res.json({
       state: out.state,
       departments,
-      capacity: companyDepartments.capacitySummary(departments),
+      departmentPools: pools,
+      capacity: companyDepartments.capacitySummary(departments, pools),
     });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
@@ -605,9 +612,12 @@ router.put('/projects/:id/departments', authenticateToken, async (req, res) => {
       project,
       department,
     });
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma: codexDb, projectId: project.id });
     return res.json({
       departments,
-      capacity: service.capacitySummary(departments),
+      departmentPools: pools,
+      capacity: service.capacitySummary(departments, pools),
     });
   } catch (err) {
     const status = err?.message === 'department_name_required' ? 400 : 500;
@@ -628,9 +638,12 @@ router.delete('/projects/:id/departments/:departmentId', authenticateToken, asyn
       project,
       departmentId: req.params.departmentId,
     });
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma: codexDb, projectId: project.id });
     return res.json({
       departments,
-      capacity: service.capacitySummary(departments),
+      departmentPools: pools,
+      capacity: service.capacitySummary(departments, pools),
     });
   } catch (err) {
     const known = {
@@ -640,6 +653,61 @@ router.delete('/projects/:id/departments/:departmentId', authenticateToken, asyn
     const status = known[err?.message] || 500;
     return res.status(status).json({
       error: status === 500 ? 'codex_departments_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+router.get('/projects/:id/department-pools', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const departmentsService = require('../services/codex/company-departments');
+    const poolsService = require('../services/codex/department-pools');
+    const departments = departmentsService.readDepartments(project);
+    const pools = await poolsService.listDepartmentPools({ prisma: codexDb, projectId: project.id });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      departmentPools: pools,
+      capacity: departmentsService.capacitySummary(departments, pools),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_department_pools_failed', message: err.message });
+  }
+});
+
+router.put('/projects/:id/department-pools/:departmentId', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const departmentsService = require('../services/codex/company-departments');
+    const poolsService = require('../services/codex/department-pools');
+    const departments = departmentsService.readDepartments(project);
+    const department = departments.find((row) => row.id === req.params.departmentId);
+    if (!department) {
+      return res.status(404).json({ error: 'department_not_found', message: 'department_not_found' });
+    }
+    await poolsService.upsertDepartmentPool({
+      prisma: codexDb,
+      project,
+      departmentId: department.id,
+      size: req.body?.size ?? department.desiredAgents,
+      dailyBudgetUsd: Object.prototype.hasOwnProperty.call(req.body || {}, 'dailyBudgetUsd')
+        ? req.body.dailyBudgetUsd
+        : undefined,
+      enabled: req.body?.enabled !== false,
+    });
+    const pools = await poolsService.listDepartmentPools({ prisma: codexDb, projectId: project.id });
+    return res.json({
+      departmentPools: pools,
+      capacity: departmentsService.capacitySummary(departments, pools),
+    });
+  } catch (err) {
+    const status = ['invalid_department_pool_budget', 'department_pool_invalid'].includes(err?.message)
+      ? 400
+      : 500;
+    return res.status(status).json({
+      error: status === 400 ? 'validation_failed' : 'codex_department_pools_failed',
       message: err.message,
     });
   }
@@ -736,6 +804,9 @@ router.patch('/projects/:id/company-profile', authenticateToken, async (req, res
     const fresh = await codexDb.codexProject.findFirst({
       where: { id: project.id, userId: req.user.id },
     });
+    await require('../services/codex/company-registry')
+      .ensureCompanyForCodexProject({ prisma: codexDb, codexProject: fresh || project })
+      .catch(() => null);
     const company = await companyProfile.loadCompanyOperatingContext({
       prisma: codexDb,
       project: fresh || project,
@@ -743,6 +814,182 @@ router.patch('/projects/:id/company-profile', authenticateToken, async (req, res
     return res.json({ company });
   } catch (err) {
     return res.status(500).json({ error: 'codex_company_profile_failed', message: err.message });
+  }
+});
+
+router.post(
+  '/projects/:id/business-audit',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyProfile = require('../services/codex/company-operating-profile');
+      const analyzer = require('../services/codex/business-analyzer');
+      const companyContext = await companyProfile.loadCompanyOperatingContext({
+        prisma: codexDb,
+        project,
+      });
+      const audit = await analyzer.analyzeBusiness({
+        project,
+        companyContext,
+        networkEnabled: true,
+      });
+      await analyzer.persistBusinessAudit({ prisma: codexDb, project, audit });
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.json({
+        audit,
+        company: { ...companyContext, businessAudit: audit },
+      });
+    } catch (err) {
+      return res.status(Number(err?.status) || 500).json({
+        error: err?.code || 'codex_business_audit_failed',
+        message: String(err?.message || err || 'Business audit failed.').slice(0, 2_000),
+      });
+    }
+  },
+);
+
+async function loadOwnedCompany(project) {
+  return require('../services/codex/company-registry')
+    .ensureCompanyForCodexProject({ prisma: codexDb, codexProject: project });
+}
+
+router.get('/projects/:id/business-channels', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) {
+      return res.status(409).json({
+        error: 'company_association_required',
+        message: 'Asocia primero esta Empresa con su entorno APPS.',
+      });
+    }
+    const service = require('../services/codex/business-channels');
+    const channels = await service.listBusinessChannels({
+      prisma: codexDb,
+      companyId: company.id,
+      userId: req.user.id,
+    });
+    const inbox = codexDb.inboxMessage?.findMany
+      ? await codexDb.inboxMessage.findMany({
+        where: { companyId: company.id },
+        orderBy: { receivedAt: 'desc' },
+        take: 100,
+      })
+      : [];
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ company, channels, inbox });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_business_channels_failed', message: err.message });
+  }
+});
+
+async function upsertBusinessChannelRoute(req, res) {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const service = require('../services/codex/business-channels');
+    const channel = await service.upsertBusinessChannel({
+      prisma: codexDb,
+      company,
+      channelId: req.params.channelId || null,
+      input: req.body?.channel ?? req.body,
+      env: process.env,
+    });
+    return res.json({ channel });
+  } catch (err) {
+    const known = {
+      invalid_channel_kind: 400,
+      connector_not_available: 409,
+      business_channel_not_found: 404,
+      channel_credentials_key_unavailable: 503,
+    };
+    const status = Number(err?.status) || known[err?.message] || 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_business_channels_failed' : err.message,
+      message: err.message,
+    });
+  }
+}
+
+router.put('/projects/:id/business-channels', authenticateToken, upsertBusinessChannelRoute);
+router.put('/projects/:id/business-channels/:channelId', authenticateToken, upsertBusinessChannelRoute);
+
+router.post('/projects/:id/business-channels/:channelId/pair', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const channel = await require('../services/codex/business-channels').approvePairing({
+      prisma: codexDb,
+      company,
+      channelId: req.params.channelId,
+      senderRef: req.body?.from,
+      code: req.body?.code,
+      env: process.env,
+    });
+    return res.json({ channel });
+  } catch (err) {
+    const status = err?.message === 'business_channel_not_found'
+      ? 404
+      : err?.message === 'invalid_or_expired_pairing_code'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_channel_pairing_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+router.post('/projects/:id/business-channels/:channelId/inbox', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const result = await require('../services/codex/business-channels').recordInboundMessage({
+      prisma: codexDb,
+      company,
+      channelId: req.params.channelId,
+      message: req.body?.message ?? req.body,
+      runService: require('../services/codex/run-service'),
+      env: process.env,
+    });
+    return res.status(result.authorization.allowed ? 202 : 428).json(result);
+  } catch (err) {
+    const status = ['invalid_inbox_message'].includes(err?.message)
+      ? 400
+      : err?.message === 'business_channel_not_found'
+        ? 404
+        : 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_channel_inbox_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+router.get('/projects/:id/business-channels-doctor', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const audit = await require('../services/codex/business-channels').auditChannelPolicies({
+      prisma: codexDb,
+      companyId: company.id,
+      userId: req.user.id,
+    });
+    return res.json({ audit });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_channel_doctor_failed', message: err.message });
   }
 });
 
@@ -1083,19 +1330,9 @@ router.post(
       }
       const logicalAgents = boundedSwarmInteger(body.logicalAgents, 128, 8, 1_000);
       const maxConcurrency = boundedSwarmInteger(body.maxConcurrency, 16, 1, 32);
-      const tasks = require('../services/codex/enterprise-swarm-plan')
-        .buildEnterpriseSwarmTasks({
-          plan: initial.plan,
-          objective,
-          logicalTasks: logicalAgents,
-        });
-      const {
-        CodexSwarmOrchestrator,
-      } = require('../services/codex/swarm-orchestrator');
-      const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
 
       // Stop the legacy ticker before installing the durable plan. This avoids
-      // a race for the project's single writer while preserving its settings.
+      // a race with the durable fleet while preserving its settings.
       await require('../services/codex/proactive-engine').setProactive({
         prisma: codexDb,
         projectId: project.id,
@@ -1103,34 +1340,31 @@ router.post(
         enabled: false,
       });
 
-      const swarm = await orchestrator.createSwarm({
+      const { createFleetSwarm } = require('../services/codex/fleet-orchestrator');
+      const fleet = await createFleetSwarm({
+        prisma: codexDb,
         userId: req.user.id,
-        projectId: project.id,
-        name: `CEO Office · ${initial.company?.profile?.companyName || project.name}`.slice(0, 300),
-        strategy: 'map_reduce',
-        tasks,
-        taskLimit: tasks.length,
+        project,
+        objective,
+        companyPlan: initial.plan,
+        explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
+        planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
+        logicalTasks: Math.min(logicalAgents, 64),
         maxConcurrency,
-        maxConcurrentWriters: 1,
-        metadata: {
-          objective,
-          planId: initial.plan.planId,
-          executiveSummary: initial.plan.executiveSummary,
-          companyName: initial.company?.profile?.companyName || project.name,
-          model: body.model ? String(body.model).slice(0, 120) : null,
-          tier: body.tier ? String(body.tier).slice(0, 80) : null,
-          safety: {
-            parallelAgentsReadOnly: true,
-            serializedWorkspaceWrites: true,
-            externalActionsRequireEvidence: true,
-          },
-        },
+        maxConcurrentWriters: body.maxConcurrentWriters,
+        qaEvery: body.qaEvery,
+        model: body.model ? String(body.model).slice(0, 120) : null,
+        tier: body.tier ? String(body.tier).slice(0, 80) : null,
+        env: process.env,
       });
+      const swarm = fleet.swarm;
       try {
         await require('../services/codex/swarm-runner').enqueueSwarm({
           swarmId: swarm.id,
         });
       } catch (queueError) {
+        const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+        const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
         await orchestrator.cancelSwarm({
           swarmId: swarm.id,
           reason: 'swarm_queue_unavailable',
@@ -1814,6 +2048,32 @@ router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, asyn
     return mapRunError(err, res);
   }
 });
+
+router.post(
+  '/runs/:id/summary-audio',
+  authenticateToken,
+  requireCodexAgentAccess,
+  requirePaidPlan({ feature: 'voice_generation' }),
+  async (req, res) => {
+    try {
+      const result = await require('../services/codex/run-summary-audio').ensureRunSummaryAudio({
+        runId: req.params.id,
+        userId: req.user.id,
+        prisma: codexDb,
+        runService,
+        eventStore,
+        tts: require('../services/ai/elevenlabs-tts'),
+      });
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.json(result);
+    } catch (err) {
+      return res.status(Number(err?.status) || 500).json({
+        error: err?.code || 'codex_summary_audio_failed',
+        message: err.message,
+      });
+    }
+  },
+);
 
 router.post(
   '/runs/:id/tool-permission',
