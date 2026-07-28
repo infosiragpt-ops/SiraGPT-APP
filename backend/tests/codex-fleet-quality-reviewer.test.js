@@ -48,6 +48,17 @@ function fakePrisma(project, activeSwarm = null) {
         dailyBudgetUsd: 5,
         enabled: true,
       }),
+      findUnique: async () => ({
+        id: 'pool-trust',
+        projectId: state.project.id,
+        departmentId: 'trust',
+        size: 2,
+        dailyBudgetUsd: 5,
+        enabled: true,
+      }),
+    },
+    codexSwarmTask: {
+      findMany: async () => [],
     },
     codexRunMetric: {
       findMany: async () => [],
@@ -57,6 +68,9 @@ function fakePrisma(project, activeSwarm = null) {
           costAppliedUsd: 0,
         },
       }),
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
     },
   };
 }
@@ -333,23 +347,94 @@ test('an enqueue failure retries the persisted swarm without rerunning the revie
   assert.equal(state.pendingEnqueue.taskKeys.length, 1);
 
   budgetAllowed = false;
+  const blocked = await fleetQa.reviewMergedCheckpoint(input);
+  assert.equal(blocked.action, 'budget_blocked');
+  assert.equal(blocked.reason, 'daily_budget_exceeded');
+  assert.equal(enqueueCalls, 1, 'a pending swarm is never re-enqueued past the kill-switch');
+
+  budgetAllowed = true;
   const retried = await fleetQa.reviewMergedCheckpoint(input);
   assert.equal(retried.action, 'reviewed');
   assert.equal(retried.retriedEnqueue, true);
   assert.equal(reviewerCalls, 1);
   assert.equal(appendCalls, 1);
   assert.equal(enqueueCalls, 2);
-  assert.equal(budgetChecks, 1);
+  assert.equal(budgetChecks, 4);
   state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
   assert.equal(state.lastReviewedSha, SHAS.one);
   assert.equal(state.mergesSinceReview, 0);
   assert.equal(state.pendingEnqueue, null);
 });
 
+test('a budget change after review leaves remediation pending and never enqueues it', async () => {
+  const prisma = fakePrisma(PROJECT, {
+    id: 'swarm-budget-enqueue',
+    status: 'running',
+    tasks: [],
+  });
+  let enqueueCalls = 0;
+  const result = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-budget-enqueue' },
+    mergeSha: SHAS.one,
+    deps: {
+      runner: fakeRunner(),
+      idFactory: () => 'review-budget-enqueue',
+      checkBudget: async ({ phase }) => (
+        phase === 'enqueue'
+          ? { allowed: false, reason: 'daily_budget_exceeded', dailyBudgetUsd: 5, costTodayUsd: 5 }
+          : { allowed: true, dailyBudgetUsd: 5, costTodayUsd: 4 }
+      ),
+      agentSdk: {
+        runSubagent: async () => ({
+          ok: true,
+          result: JSON.stringify({
+            findings: [{
+              title: 'Validar autorización',
+              severity: 'high',
+              category: 'security',
+              file: 'src/auth.js',
+              line: 12,
+              evidence: 'Falta un guard antes del handler.',
+              remediation: 'Agregar guard y prueba focal.',
+            }],
+          }),
+        }),
+      },
+      orchestrator: {
+        appendTasks: async ({ tasks }) => ({
+          swarm: { id: 'swarm-budget-enqueue' },
+          appended: tasks,
+          replayed: false,
+        }),
+      },
+      enqueueSwarm: async () => {
+        enqueueCalls += 1;
+        return { id: 'must-not-run' };
+      },
+    },
+    env: {
+      NODE_ENV: 'test',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+    now: () => new Date('2026-07-28T18:00:00.000Z'),
+  });
+
+  assert.equal(result.action, 'review_deferred');
+  assert.match(result.error, /fleet_qa_enqueue_budget_blocked:daily_budget_exceeded/);
+  assert.equal(enqueueCalls, 0);
+  const state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
+  assert.equal(state.pendingEnqueue.swarmId, 'swarm-budget-enqueue');
+  assert.equal(state.lastReviewedSha, null);
+});
+
 test('runtime budget rejection stops fleet QA after the accounted turn', async () => {
   const prisma = fakePrisma(PROJECT);
   let budgetChecks = 0;
   let usageCalls = 0;
+  let usageAttribution = null;
   let reviewerAdvanced = false;
   const result = await fleetQa.reviewMergedCheckpoint({
     prisma,
@@ -365,8 +450,9 @@ test('runtime budget rejection stops fleet QA after the accounted turn', async (
           ? { allowed: true, dailyBudgetUsd: 5, costTodayUsd: 4.9 }
           : { allowed: false, reason: 'daily_budget_exceeded', dailyBudgetUsd: 5, costTodayUsd: 5.1 };
       },
-      onUsage: async () => {
+      onUsage: async (_usage, attribution) => {
         usageCalls += 1;
+        usageAttribution = attribution;
         await Promise.resolve();
         return { costOriginalUsd: 0.2 };
       },
@@ -389,6 +475,8 @@ test('runtime budget rejection stops fleet QA after the accounted turn', async (
   assert.match(result.error, /daily_budget_exceeded/);
   assert.equal(budgetChecks, 2);
   assert.equal(usageCalls, 1);
+  assert.equal(usageAttribution.departmentPoolId, 'pool-trust');
+  assert.equal(usageAttribution.reviewId, 'review-budget');
   assert.equal(reviewerAdvanced, false);
   assert.equal(
     fleetQa.normalizeState(prisma.state.project.brief.fleetQa).lastReviewedSha,

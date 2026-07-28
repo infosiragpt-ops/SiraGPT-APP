@@ -70,6 +70,25 @@ test('mixed legacy and current metric rows count the larger cost per row', async
   assert.equal(result, 4.25);
 });
 
+test('company budget includes autonomous usage outside CodexRun metrics', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexRunMetric.findMany = async () => [
+    { costOriginalUsd: 1, costAppliedUsd: 0.5 },
+  ];
+  prisma.codexUsageEntry = {
+    findMany: async ({ where }) => {
+      assert.equal(where.projectId, PROJECT.id);
+      return [{ costOriginalUsd: 0.75, costAppliedUsd: 0.75 }];
+    },
+  };
+  const result = await require('../src/services/codex/project-budget').costTodayUsd({
+    prisma,
+    projectId: PROJECT.id,
+    now: new Date('2026-07-28T18:00:00.000Z'),
+  });
+  assert.equal(result, 1.75);
+});
+
 test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', async () => {
   const prisma = fakePrisma({ project: PROJECT });
   const created = [];

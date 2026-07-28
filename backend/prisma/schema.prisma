@@ -2762,6 +2762,7 @@ model CodexProject {
   user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization      Organization?            @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   runs              CodexRun[]
+  usageEntries      CodexUsageEntry[]
   swarms            CodexSwarm[]
   departmentPools   CodexDepartmentPool[]
   checkpoints       CodexCheckpoint[]
@@ -3153,6 +3154,33 @@ model CodexSwarmTask {
   @@map("codex_swarm_tasks")
 }
 
+// Provider usage generated outside a CodexRun (for example read-only swarm
+// agents and periodic fleet QA). Keeping it in an append-only ledger makes
+// project and department kill-switches account for every autonomous LLM turn.
+model CodexUsageEntry {
+  id               String   @id @default(cuid())
+  projectId        String
+  departmentPoolId String?
+  source           String
+  sourceId         String
+  idempotencyKey   String   @unique
+  tokensIn         Int      @default(0)
+  tokensOut        Int      @default(0)
+  model             String?
+  costSource        String?
+  costOriginalUsd  Float    @default(0)
+  costAppliedUsd   Float    @default(0)
+  costInputUsd     Float    @default(0)
+  costOutputUsd    Float    @default(0)
+  createdAt        DateTime @default(now())
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([departmentPoolId, createdAt])
+  @@index([source, sourceId])
+  @@map("codex_usage_entries")
+}
 // Control-plane persistence for Codex transcripts and resumable loop
 // snapshots. Keeping this outside the executable workspace prevents generated
 // code and agent tools from reading, replacing or racing their own history.

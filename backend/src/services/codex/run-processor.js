@@ -1,5 +1,7 @@
 'use strict';
 
+const { randomUUID } = require('node:crypto');
+
 /**
  * codex/run-processor — the BullMQ job handler body (feature 05). Owns the run
  * LIFECYCLE: load the queued run, flip it to `running` (+ run_status event),
@@ -34,6 +36,7 @@ const {
   snapshotIsResumable,
 } = require('./session-service');
 const autonomousRunPolicy = require('./autonomous-run-policy');
+const usageLedger = require('./usage-ledger');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
@@ -65,94 +68,33 @@ function readFleetQaTimeoutMs(env = process.env, override = null) {
   return Math.max(1_000, Math.min(MAX_FLEET_QA_TIMEOUT_MS, parsed));
 }
 
-function round6(value) {
-  return Number((Math.round(Number(value || 0) * 1e6) / 1e6).toFixed(6));
-}
-
 async function persistFleetQaUsage({
   prisma,
+  project,
   run,
   usage,
+  departmentPoolId,
+  reviewId,
+  idempotencyKey,
   env = process.env,
   costResolver = null,
 }) {
-  if (!prisma?.codexRunMetric?.upsert || !run?.id) {
-    const error = new Error('fleet_qa_metric_store_unavailable');
-    error.code = 'fleet_qa_metric_store_unavailable';
+  if (!project?.id || !run?.id || !departmentPoolId || !reviewId || !idempotencyKey) {
+    const error = new Error('fleet_qa_usage_attribution_unavailable');
+    error.code = 'fleet_qa_usage_attribution_unavailable';
     throw error;
   }
-  const resolveCost = costResolver || require('./cost-resolver').resolveCost;
-  const resolved = await resolveCost(usage, { env });
-  const costOriginalUsd = round6(Math.max(0, Number(resolved?.costUsd) || 0));
-  const costInputOriginalUsd = round6(Math.max(0, Number(resolved?.costInputUsd) || 0));
-  const costOutputOriginalUsd = round6(Math.max(0, Number(resolved?.costOutputUsd) || 0));
-  const existing = prisma.codexRunMetric.findUnique
-    ? await prisma.codexRunMetric.findUnique({ where: { runId: run.id } })
-    : null;
-  let plan = null;
-  if (prisma.user?.findUnique && run.userId) {
-    plan = await prisma.user
-      .findUnique({ where: { id: run.userId }, select: { plan: true } })
-      .then((user) => user?.plan || null)
-      .catch(() => null);
-  }
-  let multiplier;
-  if (plan) {
-    multiplier = require('./pricing-policy')
-      .applyPlanPricing(plan, costOriginalUsd, { env })
-      .multiplier;
-  } else {
-    const previousOriginal = Math.max(0, Number(existing?.costOriginalUsd) || 0);
-    const previousApplied = Math.max(0, Number(existing?.costAppliedUsd) || 0);
-    multiplier = previousOriginal > 0
-      ? Math.max(0, Math.min(1, previousApplied / previousOriginal))
-      : 1;
-  }
-  const costAppliedUsd = round6(costOriginalUsd * multiplier);
-  const costInputUsd = round6(costInputOriginalUsd * multiplier);
-  const costOutputUsd = round6(costOutputOriginalUsd * multiplier);
-  const tokensIn = Math.max(0, Number.parseInt(usage?.tokensIn, 10) || 0);
-  const tokensOut = Math.max(0, Number.parseInt(usage?.tokensOut, 10) || 0);
-  const costSource = require('./cost-resolver').aggregateSource(
-    [existing?.costSource, resolved?.costSource].filter(Boolean),
-  );
-  const model = String(usage?.model || '').trim().slice(0, 160) || null;
-  const metric = await prisma.codexRunMetric.upsert({
-    where: { runId: run.id },
-    create: {
-      runId: run.id,
-      tokensIn,
-      tokensOut,
-      model,
-      costUsd: costAppliedUsd,
-      costSource,
-      costOriginalUsd,
-      costAppliedUsd,
-      costInputUsd,
-      costOutputUsd,
-    },
-    update: {
-      tokensIn: { increment: tokensIn },
-      tokensOut: { increment: tokensOut },
-      ...(!existing?.model && model ? { model } : {}),
-      costUsd: { increment: costAppliedUsd },
-      costSource,
-      costOriginalUsd: { increment: costOriginalUsd },
-      costAppliedUsd: { increment: costAppliedUsd },
-      costInputUsd: { increment: costInputUsd },
-      costOutputUsd: { increment: costOutputUsd },
-    },
+  return usageLedger.recordUsage({
+    prisma,
+    projectId: project.id,
+    departmentPoolId,
+    source: 'fleet_qa',
+    sourceId: reviewId,
+    idempotencyKey,
+    usage,
+    env,
+    costResolver,
   });
-  return {
-    tokensIn,
-    tokensOut,
-    costOriginalUsd,
-    costAppliedUsd,
-    costInputUsd,
-    costOutputUsd,
-    costSource,
-    metric,
-  };
 }
 
 async function publishTerminalSignals({
@@ -572,6 +514,8 @@ async function processCodexRunJob({
       }
     }, qaTimeoutMs);
     qaTimer.unref?.();
+    const qaUsageExecutionId = randomUUID();
+    let qaUsageSequence = 0;
     try {
       fleetQaResult = await Promise.race([
         reviewer.reviewMergedCheckpoint({
@@ -585,13 +529,20 @@ async function processCodexRunJob({
             tier: run.tier || null,
             model: run.model || null,
             signal: qaController.signal,
-            onUsage: (usage) => persistFleetQaUsage({
-              prisma,
-              run,
-              usage,
-              env,
-              costResolver: fleetQaCostResolver,
-            }),
+            onUsage: (usage, attribution = {}) => {
+              qaUsageSequence += 1;
+              return persistFleetQaUsage({
+                prisma,
+                project,
+                run,
+                usage,
+                departmentPoolId: attribution.departmentPoolId,
+                reviewId: attribution.reviewId,
+                idempotencyKey: `fleet-qa:${run.id}:${qaUsageExecutionId}:${qaUsageSequence}`,
+                env,
+                costResolver: fleetQaCostResolver,
+              });
+            },
           },
           env,
           now: clock || (() => new Date()),

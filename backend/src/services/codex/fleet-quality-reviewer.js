@@ -73,6 +73,17 @@ function reviewLeaseMs(env = process.env) {
   return Math.max(60_000, Math.min(4 * 60 * 60_000, parsed));
 }
 
+async function findTrustPool({ prisma, projectId }) {
+  if (!prisma?.codexDepartmentPool?.findFirst) return null;
+  const pool = await prisma.codexDepartmentPool.findFirst({
+    where: {
+      projectId,
+      departmentId: 'trust',
+    },
+  });
+  return pool && poolStatus(pool) === 'active' ? pool : null;
+}
+
 function normalizePendingEnqueue(value) {
   const source = asRecord(value);
   if (
@@ -569,6 +580,7 @@ async function materializeFindings({
   findings,
   baseSha,
   headSha,
+  trustPool: providedTrustPool = null,
   deps = {},
 }) {
   throwIfAborted(deps.signal);
@@ -592,14 +604,12 @@ async function materializeFindings({
     baseSha,
     headSha,
   });
-  const trustPool = await prisma.codexDepartmentPool?.findFirst?.({
-    where: {
-      projectId: project.id,
-      departmentId: 'trust',
-    },
+  const trustPool = providedTrustPool || await findTrustPool({
+    prisma,
+    projectId: project.id,
   });
   throwIfAborted(deps.signal);
-  if (!trustPool || poolStatus(trustPool) !== 'active') {
+  if (!trustPool) {
     throw new Error('fleet_qa_trust_pool_unavailable');
   }
   tasks = distributeTasksToPools({ tasks, pools: [trustPool] }).tasks;
@@ -902,6 +912,52 @@ async function reviewMergedCheckpoint({
         now: now(),
       })
   );
+  const budget = await checkBudget('preflight');
+  if (!budget?.allowed) {
+    return {
+      action: 'budget_blocked',
+      reason: budget?.reason || 'budget_query_failed',
+      dailyBudgetUsd: budget?.dailyBudgetUsd ?? null,
+      costTodayUsd: budget?.costTodayUsd ?? null,
+    };
+  }
+  const trustPool = await findTrustPool({ prisma, projectId: project.id });
+  if (!trustPool) {
+    return {
+      action: 'budget_blocked',
+      reason: 'fleet_qa_trust_pool_unavailable',
+      dailyBudgetUsd: null,
+      costTodayUsd: null,
+    };
+  }
+  const checkTrustBudget = (phase) => (
+    deps.checkPoolBudget
+      ? deps.checkPoolBudget({
+        prisma,
+        project,
+        departmentPoolId: trustPool.id,
+        env,
+        now: now(),
+        phase,
+      })
+      : projectBudget.checkDepartmentPoolBudget({
+        prisma,
+        projectId: project.id,
+        departmentPoolId: trustPool.id,
+        env,
+        now: now(),
+      })
+  );
+  const trustBudget = await checkTrustBudget('preflight');
+  if (!trustBudget?.allowed) {
+    return {
+      action: 'budget_blocked',
+      reason: trustBudget?.reason || 'fleet_qa_trust_budget_query_failed',
+      dailyBudgetUsd: trustBudget?.dailyBudgetUsd ?? null,
+      costTodayUsd: trustBudget?.costTodayUsd ?? null,
+      departmentPoolId: trustPool.id,
+    };
+  }
   const retried = await retryPendingEnqueue({
     prisma,
     project,
@@ -911,15 +967,6 @@ async function reviewMergedCheckpoint({
   });
   if (retried?.action === 'review_deferred' || retried?.headSha === mergeSha) {
     return retried;
-  }
-  const budget = await checkBudget('preflight');
-  if (!budget?.allowed) {
-    return {
-      action: 'budget_blocked',
-      reason: budget?.reason || 'budget_query_failed',
-      dailyBudgetUsd: budget?.dailyBudgetUsd ?? null,
-      costTodayUsd: budget?.costTodayUsd ?? null,
-    };
   }
   throwIfAborted(deps.signal);
   const parentSha = await parentOfMerge({
@@ -958,19 +1005,26 @@ async function reviewMergedCheckpoint({
           error.code = 'fleet_qa_usage_accounting_unavailable';
           throw error;
         }
-        const accounted = await deps.onUsage(usage);
+        const accounted = await deps.onUsage(usage, {
+          departmentPoolId: trustPool.id,
+          reviewId: review.id,
+        });
         throwIfAborted(deps.signal);
-        const runtimeBudget = await checkBudget('runtime');
-        if (!runtimeBudget?.allowed) {
+        const [runtimeBudget, runtimeTrustBudget] = await Promise.all([
+          checkBudget('runtime'),
+          checkTrustBudget('runtime'),
+        ]);
+        if (!runtimeBudget?.allowed || !runtimeTrustBudget?.allowed) {
+          const blocked = !runtimeBudget?.allowed ? runtimeBudget : runtimeTrustBudget;
           const error = new Error(
-            runtimeBudget?.reason === 'daily_budget_exceeded'
+            blocked?.reason === 'daily_budget_exceeded'
               ? 'fleet_qa_daily_budget_exceeded'
-              : `fleet_qa_budget_check_failed:${runtimeBudget?.reason || 'budget_query_failed'}`,
+              : `fleet_qa_budget_check_failed:${blocked?.reason || 'budget_query_failed'}`,
           );
-          error.code = runtimeBudget?.reason === 'daily_budget_exceeded'
+          error.code = blocked?.reason === 'daily_budget_exceeded'
             ? 'fleet_qa_daily_budget_exceeded'
             : 'fleet_qa_budget_check_failed';
-          error.budget = runtimeBudget;
+          error.budget = blocked;
           throw error;
         }
         return accounted;
@@ -997,6 +1051,7 @@ async function reviewMergedCheckpoint({
       findings,
       baseSha: review.baseSha,
       headSha: review.headSha,
+      trustPool,
       deps,
     });
     if (findings.length) {
@@ -1009,6 +1064,21 @@ async function reviewMergedCheckpoint({
         error: null,
         now,
       });
+      const [enqueueBudget, enqueueTrustBudget] = await Promise.all([
+        checkBudget('enqueue'),
+        checkTrustBudget('enqueue'),
+      ]);
+      if (!enqueueBudget?.allowed || !enqueueTrustBudget?.allowed) {
+        const blocked = !enqueueBudget?.allowed ? enqueueBudget : enqueueTrustBudget;
+        return {
+          action: 'review_deferred',
+          reviewId: review.id,
+          headSha: review.headSha,
+          error: `fleet_qa_enqueue_budget_blocked:${blocked?.reason || 'budget_query_failed'}`,
+          swarmId: materialized.swarmId,
+          tasksCreated: materialized.tasksCreated,
+        };
+      }
       const delivery = await retryPendingEnqueue({
         prisma,
         project,

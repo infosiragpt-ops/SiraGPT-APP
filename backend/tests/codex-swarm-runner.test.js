@@ -4,12 +4,111 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  assertSwarmTaskBudgetAvailable,
+  createSwarmUsageAccountant,
   dependencyContext,
   runReadOnlyTask,
   safeResult,
   startLeaseHeartbeat,
   waitForAutonomousRun,
 } = require('../src/services/codex/swarm-runner');
+
+test('read-only swarm preflight refuses a provider call after the company kill-switch', async () => {
+  const prisma = {
+    codexRunMetric: {
+      findMany: async () => [{ costOriginalUsd: 1, costAppliedUsd: 1 }],
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
+  };
+  await assert.rejects(
+    assertSwarmTaskBudgetAvailable({
+      prisma,
+      project: {
+        id: 'project-1',
+        brief: { proactive: { configuredDailyBudgetUsd: 1 } },
+      },
+      task: { id: 'task-1', input: {} },
+      env: { NODE_ENV: 'production' },
+      clock: () => new Date('2026-07-28T18:00:00.000Z'),
+    }),
+    /swarm_company_budget_blocked:daily_budget_exceeded/,
+  );
+});
+
+test('read-only swarm usage is durable and stops at its department reservation', async () => {
+  const rows = [];
+  const prisma = {
+    codexUsageEntry: {
+      async create({ data }) {
+        const row = {
+          id: `usage-${rows.length + 1}`,
+          createdAt: new Date('2026-07-28T18:00:00.000Z'),
+          ...structuredClone(data),
+        };
+        rows.push(row);
+        return structuredClone(row);
+      },
+      async findUnique({ where }) {
+        return rows.find((row) => row.idempotencyKey === where.idempotencyKey) || null;
+      },
+      async findMany() {
+        return rows.map((row) => structuredClone(row));
+      },
+    },
+    codexRunMetric: {
+      findMany: async () => [],
+    },
+    codexDepartmentPool: {
+      findUnique: async () => ({
+        id: 'pool-engineering',
+        projectId: 'project-1',
+        dailyBudgetUsd: 5,
+        enabled: true,
+      }),
+    },
+    codexSwarmTask: {
+      findMany: async () => [],
+    },
+  };
+  const accountant = createSwarmUsageAccountant({
+    prisma,
+    project: {
+      id: 'project-1',
+      brief: { proactive: { configuredDailyBudgetUsd: 5 } },
+    },
+    task: {
+      id: 'task-1',
+      input: {
+        departmentPoolId: 'pool-engineering',
+        poolBudgetReservationUsd: 0.5,
+      },
+    },
+    env: { NODE_ENV: 'production' },
+    idFactory: () => 'execution-1',
+    clock: () => new Date('2026-07-28T18:00:00.000Z'),
+    costResolver: async () => ({
+      costUsd: 0.3,
+      costInputUsd: 0.2,
+      costOutputUsd: 0.1,
+      costSource: 'provider_exact',
+    }),
+  });
+
+  await accountant({ tokensIn: 100, tokensOut: 20, model: 'explorer-model' });
+  await assert.rejects(
+    accountant({ tokensIn: 100, tokensOut: 20, model: 'explorer-model' }),
+    /swarm_department_budget_blocked:department_pool_run_reservation_exceeded/,
+  );
+
+  assert.equal(rows.length, 2, 'every provider turn is persisted before the gate runs');
+  assert.equal(rows[0].source, 'swarm_task');
+  assert.equal(rows[0].sourceId, 'task-1');
+  assert.equal(rows[0].departmentPoolId, 'pool-engineering');
+  assert.equal(rows[0].costOriginalUsd, 0.3);
+  assert.notEqual(rows[0].idempotencyKey, rows[1].idempotencyKey);
+});
 
 test('dependency context includes only declared predecessors and stays bounded', () => {
   const text = dependencyContext([

@@ -15,6 +15,7 @@ function makeDeps({
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued', ...run };
   const projRow = { id: 'p1', userId: 'u1', name: 'Demo', ...project };
   const metricState = { row: metric ? structuredClone(metric) : null };
+  const usageState = { rows: [] };
   const events = [];
   const prisma = {
     codexRun: {
@@ -50,6 +51,23 @@ function makeDeps({
         return structuredClone(metricState.row);
       },
     },
+    codexUsageEntry: {
+      async create({ data }) {
+        const row = {
+          id: `usage-${usageState.rows.length + 1}`,
+          createdAt: new Date('2026-06-13T12:00:00.000Z'),
+          ...structuredClone(data),
+        };
+        usageState.rows.push(row);
+        return structuredClone(row);
+      },
+      async findUnique({ where }) {
+        const row = usageState.rows.find(
+          (candidate) => candidate.idempotencyKey === where.idempotencyKey,
+        );
+        return row ? structuredClone(row) : null;
+      },
+    },
     user: {
       async findUnique() { return { plan: userPlan }; },
     },
@@ -65,6 +83,7 @@ function makeDeps({
     events,
     runRow,
     metricState,
+    usageState,
   };
 }
 
@@ -124,7 +143,7 @@ test('fleet QA starts only after the merged run is durably terminal', async () =
   );
 });
 
-test('fleet QA usage is awaited and added to the originating run metric', async () => {
+test('fleet QA usage is awaited and attributed to the Trust pool ledger', async () => {
   const d = makeDeps({
     metric: {
       id: 'metric-1',
@@ -140,7 +159,7 @@ test('fleet QA usage is awaited and added to the originating run metric', async 
       costOutputUsd: 0.4,
     },
   });
-  let metricVisibleInsideReviewer = false;
+  let usageVisibleInsideReviewer = false;
   const res = await processCodexRunJob({
     runId: 'run-1',
     prisma: d.prisma,
@@ -160,8 +179,11 @@ test('fleet QA usage is awaited and added to the originating run metric', async 
           tokensIn: 10,
           tokensOut: 5,
           model: 'qa-model',
+        }, {
+          departmentPoolId: 'pool-trust',
+          reviewId: 'review-1',
         });
-        metricVisibleInsideReviewer = d.metricState.row.costOriginalUsd === 1.25;
+        usageVisibleInsideReviewer = d.usageState.rows[0]?.costOriginalUsd === 0.25;
         assert.equal(accounted.costOriginalUsd, 0.25);
         return {
           action: 'reviewed',
@@ -181,14 +203,15 @@ test('fleet QA usage is awaited and added to the originating run metric', async 
     env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
   });
   assert.equal(res.status, 'done');
-  assert.equal(metricVisibleInsideReviewer, true);
-  assert.equal(d.metricState.row.tokensIn, 110);
-  assert.equal(d.metricState.row.tokensOut, 25);
-  assert.equal(d.metricState.row.model, 'old-model');
-  assert.equal(d.metricState.row.costOriginalUsd, 1.25);
-  assert.equal(d.metricState.row.costAppliedUsd, 1.25);
-  assert.equal(d.metricState.row.costInputUsd, 0.75);
-  assert.equal(d.metricState.row.costOutputUsd, 0.5);
+  assert.equal(usageVisibleInsideReviewer, true);
+  assert.equal(d.metricState.row.costOriginalUsd, 1, 'originating run metric remains unchanged');
+  assert.equal(d.usageState.rows.length, 1);
+  assert.equal(d.usageState.rows[0].projectId, 'p1');
+  assert.equal(d.usageState.rows[0].departmentPoolId, 'pool-trust');
+  assert.equal(d.usageState.rows[0].source, 'fleet_qa');
+  assert.equal(d.usageState.rows[0].sourceId, 'review-1');
+  assert.equal(d.usageState.rows[0].tokensIn, 10);
+  assert.equal(d.usageState.rows[0].tokensOut, 5);
 });
 
 test('post-terminal fleet QA has an independent hard timeout', async () => {

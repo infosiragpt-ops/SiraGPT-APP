@@ -45,7 +45,26 @@ function rowCostUsd(row) {
   );
 }
 
+async function usageLedgerCostUsd({
+  prisma,
+  projectId,
+  departmentPoolId = undefined,
+  now = new Date(),
+}) {
+  if (!prisma?.codexUsageEntry?.findMany) return 0;
+  const rows = await prisma.codexUsageEntry.findMany({
+    where: {
+      projectId,
+      createdAt: { gte: utcDayStart(now) },
+      ...(departmentPoolId === undefined ? {} : { departmentPoolId }),
+    },
+    select: { costOriginalUsd: true, costAppliedUsd: true },
+  });
+  return rows.reduce((total, row) => total + rowCostUsd(row), 0);
+}
+
 async function costTodayUsd({ prisma, projectId, now = new Date() }) {
+  let runCostUsd;
   if (prisma?.codexRunMetric?.findMany) {
     const rows = await prisma.codexRunMetric.findMany({
       where: {
@@ -54,25 +73,30 @@ async function costTodayUsd({ prisma, projectId, now = new Date() }) {
       },
       select: { costOriginalUsd: true, costAppliedUsd: true },
     });
-    return rows.reduce((total, row) => total + rowCostUsd(row), 0);
-  }
-  if (!prisma?.codexRunMetric?.aggregate) {
+    runCostUsd = rows.reduce((total, row) => total + rowCostUsd(row), 0);
+  } else if (!prisma?.codexRunMetric?.aggregate) {
     const error = new Error('codex run metric aggregation unavailable');
     error.code = 'budget_store_unavailable';
     throw error;
+  } else {
+    const result = await prisma.codexRunMetric.aggregate({
+      where: {
+        createdAt: { gte: utcDayStart(now) },
+        run: { projectId },
+      },
+      _sum: { costOriginalUsd: true, costAppliedUsd: true },
+    });
+    const original = Number(result?._sum?.costOriginalUsd);
+    const applied = Number(result?._sum?.costAppliedUsd);
+    // Aggregate is retained for older stores and narrow test doubles. New
+    // stores sum max(original, applied) per row so mixed legacy data is kept.
+    runCostUsd = Math.max(
+      0,
+      Number.isFinite(original) && original > 0 ? original : (applied || 0),
+    );
   }
-  const result = await prisma.codexRunMetric.aggregate({
-    where: {
-      createdAt: { gte: utcDayStart(now) },
-      run: { projectId },
-    },
-    _sum: { costOriginalUsd: true, costAppliedUsd: true },
-  });
-  const original = Number(result?._sum?.costOriginalUsd);
-  const applied = Number(result?._sum?.costAppliedUsd);
-  // Aggregate is retained for older stores and narrow test doubles. New stores
-  // sum max(original, applied) per row so mixed legacy data is never lost.
-  return Math.max(0, Number.isFinite(original) && original > 0 ? original : (applied || 0));
+  const autonomousCostUsd = await usageLedgerCostUsd({ prisma, projectId, now });
+  return runCostUsd + autonomousCostUsd;
 }
 
 async function costTodayUsdForPool({
@@ -96,7 +120,14 @@ async function costTodayUsdForPool({
     },
     select: { costOriginalUsd: true, costAppliedUsd: true },
   });
-  return rows.reduce((total, row) => total + rowCostUsd(row), 0);
+  const runCostUsd = rows.reduce((total, row) => total + rowCostUsd(row), 0);
+  const autonomousCostUsd = await usageLedgerCostUsd({
+    prisma,
+    projectId,
+    departmentPoolId,
+    now,
+  });
+  return runCostUsd + autonomousCostUsd;
 }
 
 function boundedNonNegative(value) {
@@ -140,6 +171,7 @@ async function checkDepartmentPoolBudget({
   departmentPoolId,
   swarmTaskId = null,
   reservationUsd = null,
+  reservationUsageUsd = null,
   now = new Date(),
   inRunCostUsd = 0,
 }) {
@@ -183,7 +215,11 @@ async function checkDepartmentPoolBudget({
     const reservedForRunUsd = reservationUsd == null
       ? null
       : boundedNonNegative(reservationUsd);
-    const reservationExceeded = reservedForRunUsd != null && runningCost >= reservedForRunUsd;
+    const reservationUsage = reservationUsageUsd == null
+      ? runningCost
+      : boundedNonNegative(reservationUsageUsd);
+    const reservationExceeded = reservedForRunUsd != null
+      && reservationUsage >= reservedForRunUsd;
     const costTodayUsd = persistedCostTodayUsd + activeReservationsUsd + runningCost;
     const allowed = !reservationExceeded && costTodayUsd < dailyBudgetUsd;
     return {
@@ -196,6 +232,7 @@ async function checkDepartmentPoolBudget({
       persistedCostTodayUsd,
       activeReservationsUsd,
       inRunCostUsd: runningCost,
+      reservationUsageUsd: reservationUsage,
       reservationUsd: reservedForRunUsd,
       costTodayUsd,
       dailyBudgetUsd,
@@ -294,6 +331,7 @@ module.exports = {
   configuredCompanyBudgetUsd,
   costTodayUsd,
   costTodayUsdForPool,
+  usageLedgerCostUsd,
   activePoolReservationsUsd,
   checkProjectBudget,
   checkCompanyDailyBudget,
