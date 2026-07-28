@@ -48,7 +48,10 @@ describe("code composer attachments", () => {
     assert.match(source, /function codeAttachmentFileId/)
     assert.match(source, /const fileIds = readyCodeAttachments\.map\(codeAttachmentFileId\)/)
     assert.match(source, /void dispatch\(payload, \{ files: fileIds \}\)/)
-    assert.match(source, /files: override\?\.files && override\.files\.length > 0 \? override\.files : undefined/)
+    assert.match(
+      source,
+      /files:\s*!webGroundedConversation\s*&&\s*override\?\.files\s*&&\s*override\.files\.length\s*>\s*0\s*\?\s*override\.files\s*:\s*undefined/,
+    )
     assert.match(source, /const attachedFileIds = Array\.from\(new Set\(\(opts\?\.files \|\| \[\]\)\.filter\(Boolean\)\)\)/)
     assert.match(source, /await sendPrompt\(action\.instruction, \{ autoApply: true, files: attachedFileIds \}\)/)
     assert.match(source, /pendingInputRef\.current\.push\(\{ text: rawInput, files: attachedFileIds \}\)/)
