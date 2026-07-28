@@ -24,6 +24,11 @@ const {
 } = require('./swarm-orchestrator');
 const agentSdkDefault = require('./agent-sdk');
 const { isCodexV2Enabled } = require('./flags');
+const projectBudget = require('./project-budget');
+const {
+  distributeTasksToPools,
+  poolStatus,
+} = require('./department-pools');
 const { scanBuffer } = require('../security/secret-scanner');
 const { redactString } = require('../../utils/secret-redactor');
 
@@ -53,8 +58,7 @@ function boundedText(value, max) {
 
 function enabled(env = process.env) {
   const configured = env.CODEX_FLEET_QA_ENABLED;
-  if (configured != null) return String(configured).trim() === '1';
-  return env.NODE_ENV === 'production';
+  return configured != null && String(configured).trim() === '1';
 }
 
 function everyMerges(env = process.env) {
@@ -67,6 +71,33 @@ function reviewLeaseMs(env = process.env) {
   const parsed = Number.parseInt(env.CODEX_FLEET_QA_LEASE_MS ?? '', 10);
   if (!Number.isFinite(parsed)) return DEFAULT_REVIEW_LEASE_MS;
   return Math.max(60_000, Math.min(4 * 60 * 60_000, parsed));
+}
+
+function normalizePendingEnqueue(value) {
+  const source = asRecord(value);
+  if (
+    !source.id
+    || !source.swarmId
+    || !SHA_RE.test(String(source.headSha || ''))
+  ) {
+    return null;
+  }
+  return {
+    id: boundedText(source.id, 100),
+    baseSha: SHA_RE.test(String(source.baseSha || '')) ? String(source.baseSha) : null,
+    headSha: String(source.headSha),
+    mergeCount: Math.max(1, Number.parseInt(source.mergeCount, 10) || 1),
+    runId: boundedText(source.runId, 180) || null,
+    swarmId: boundedText(source.swarmId, 200),
+    taskKeys: Array.isArray(source.taskKeys)
+      ? source.taskKeys.map((key) => boundedText(key, 200)).filter(Boolean).slice(0, MAX_FINDINGS)
+      : [],
+    findings: Math.max(0, Number.parseInt(source.findings, 10) || 0),
+    tasksCreated: Math.max(0, Number.parseInt(source.tasksCreated, 10) || 0),
+    deferredAt: boundedText(source.deferredAt, 40) || null,
+    attempts: Math.max(0, Number.parseInt(source.attempts, 10) || 0),
+    lastAttemptAt: boundedText(source.lastAttemptAt, 40) || null,
+  };
 }
 
 function normalizeState(value) {
@@ -89,6 +120,7 @@ function normalizeState(value) {
         runId: boundedText(inFlight.runId, 180) || null,
       }
       : null,
+    pendingEnqueue: normalizePendingEnqueue(source.pendingEnqueue),
     lastReview: lastReview.id
       ? {
         id: boundedText(lastReview.id, 100),
@@ -103,6 +135,20 @@ function normalizeState(value) {
       : null,
     lastError: boundedText(source.lastError, 500) || null,
   };
+}
+
+function abortError(signal) {
+  const reason = signal?.reason;
+  const detail = reason instanceof Error
+    ? reason.message
+    : boundedText(reason, 300) || 'fleet QA cancelled';
+  const error = new Error(detail);
+  error.code = reason?.code || 'fleet_qa_cancelled';
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw abortError(signal);
 }
 
 function safeDiffPath(value) {
@@ -140,8 +186,10 @@ function parseChangedFiles(value) {
   return { files, excluded };
 }
 
-async function git(runner, projectId, args) {
-  const result = await runner.exec(projectId, ['git', ...args]);
+async function git(runner, projectId, args, signal = null) {
+  throwIfAborted(signal);
+  const result = await runner.exec(projectId, ['git', ...args], { signal });
+  throwIfAborted(signal);
   if (result?.exitCode !== 0) {
     const error = new Error(
       `fleet_qa_git_failed:${args[0]}:${boundedText(result?.stderr || result?.stdout, 300)}`,
@@ -152,12 +200,23 @@ async function git(runner, projectId, args) {
   return String(result.stdout || '');
 }
 
-async function parentOfMerge({ runner, projectId, mergeSha }) {
+async function parentOfMerge({
+  runner,
+  projectId,
+  mergeSha,
+  signal = null,
+}) {
   if (!SHA_RE.test(String(mergeSha || ''))) return null;
   try {
-    const parent = (await git(runner, projectId, ['rev-parse', `${mergeSha}^1`])).trim();
+    const parent = (await git(
+      runner,
+      projectId,
+      ['rev-parse', `${mergeSha}^1`],
+      signal,
+    )).trim();
     return SHA_RE.test(parent) ? parent : null;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 }
@@ -167,22 +226,34 @@ async function collectAccumulatedDiff({
   projectId,
   baseSha,
   headSha,
+  signal = null,
 }) {
   if (!runner?.exec || !projectId || !SHA_RE.test(baseSha) || !SHA_RE.test(headSha)) {
     const error = new Error('fleet_qa_diff_range_invalid');
     error.code = 'fleet_qa_diff_range_invalid';
     throw error;
   }
-  await git(runner, projectId, ['merge-base', '--is-ancestor', baseSha, headSha]);
+  await git(
+    runner,
+    projectId,
+    ['merge-base', '--is-ancestor', baseSha, headSha],
+    signal,
+  );
   const [stat, names] = await Promise.all([
-    git(runner, projectId, ['diff', '--no-ext-diff', '--stat', baseSha, headSha]),
-    git(runner, projectId, ['diff', '--no-ext-diff', '--name-only', '-z', baseSha, headSha]),
+    git(runner, projectId, ['diff', '--no-ext-diff', '--stat', baseSha, headSha], signal),
+    git(
+      runner,
+      projectId,
+      ['diff', '--no-ext-diff', '--name-only', '-z', baseSha, headSha],
+      signal,
+    ),
   ]);
   const changed = parseChangedFiles(names);
   const patches = [];
   let patchChars = 0;
   let secretOmissions = 0;
   for (const file of changed.files) {
+    throwIfAborted(signal);
     if (patchChars >= MAX_PATCH_CHARS) break;
     const raw = await git(runner, projectId, [
       'diff',
@@ -192,7 +263,7 @@ async function collectAccumulatedDiff({
       headSha,
       '--',
       file,
-    ]);
+    ], signal);
     const redacted = redactString(raw, {
       maxLen: Math.min(16_000, MAX_PATCH_CHARS - patchChars),
     });
@@ -321,12 +392,19 @@ async function runQaReviewer({
   });
 }
 
-function findingTaskKey(reviewId, finding) {
+function findingTaskKey(headSha, finding, ordinal = 0) {
   const digest = crypto.createHash('sha256')
-    .update(`${reviewId}:${finding.file}:${finding.line}:${finding.title}`)
+    .update([
+      headSha,
+      finding.file,
+      finding.line,
+      finding.category,
+      finding.severity,
+      ordinal,
+    ].join(':'))
     .digest('hex')
     .slice(0, 12);
-  return `fleet-qa-${String(reviewId).replace(/[^a-z0-9]/gi, '').slice(0, 10)}-${digest}`;
+  return `fleet-qa-${String(headSha).slice(0, 10)}-${digest}`;
 }
 
 function priorityForSeverity(severity) {
@@ -345,8 +423,8 @@ function tasksFromFindings({
   baseSha,
   headSha,
 }) {
-  return findings.map((finding) => ({
-    key: findingTaskKey(reviewId, finding),
+  return findings.map((finding, index) => ({
+    key: findingTaskKey(headSha, finding, index),
     title: `[QA ${finding.severity.toUpperCase()}] ${finding.title}`.slice(0, 300),
     role: TASK_ROLES.INTEGRATOR,
     stage: TASK_STAGES.WORK,
@@ -356,6 +434,7 @@ function tasksFromFindings({
     input: {
       source: 'fleet_qa',
       agent: 'debugger',
+      departmentId: 'trust',
       objective: [
         `${finding.remediation}`,
         `Hallazgo verificado en ${finding.file}:${finding.line}: ${finding.evidence}`,
@@ -383,7 +462,9 @@ async function maybeEnqueueSwarm({ swarmId, deps, env }) {
       ? require('./swarm-runner').enqueueSwarm
       : null
   );
-  if (typeof enqueue !== 'function') return { enqueued: false, error: null };
+  if (typeof enqueue !== 'function') {
+    return { enqueued: false, error: 'swarm_queue_unavailable' };
+  }
   try {
     await enqueue({ swarmId });
     return { enqueued: true, error: null };
@@ -395,6 +476,91 @@ async function maybeEnqueueSwarm({ swarmId, deps, env }) {
   }
 }
 
+async function currentFleetQaState({ prisma, project }) {
+  const where = project?.userId
+    ? { id: project.id, userId: project.userId }
+    : { id: project?.id };
+  const current = prisma?.codexProject?.findFirst
+    ? await prisma.codexProject.findFirst({ where })
+    : await prisma?.codexProject?.findUnique?.({ where: { id: project?.id } });
+  return normalizeState(current?.brief?.fleetQa);
+}
+
+async function deferReviewForEnqueue({
+  prisma,
+  project,
+  review,
+  findings,
+  materialized,
+  error,
+  now,
+}) {
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief) => {
+      const state = normalizeState(brief.fleetQa);
+      if (state.inFlight?.id !== review.id) return brief;
+      const at = now().toISOString();
+      return {
+        ...brief,
+        fleetQa: {
+          ...state,
+          inFlight: null,
+          pendingEnqueue: {
+            id: review.id,
+            baseSha: review.baseSha,
+            headSha: review.headSha,
+            mergeCount: review.mergeCount,
+            runId: review.runId || null,
+            swarmId: materialized.swarmId,
+            taskKeys: materialized.taskKeys,
+            findings: findings.length,
+            tasksCreated: materialized.tasksCreated,
+            deferredAt: at,
+            attempts: 0,
+            lastAttemptAt: null,
+          },
+          lastError: error
+            ? boundedText(error?.message || String(error), 500) || 'enqueue_failed'
+            : null,
+        },
+      };
+    },
+  });
+}
+
+async function recordPendingEnqueueFailure({
+  prisma,
+  project,
+  pending,
+  error,
+  now,
+}) {
+  await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief) => {
+      const state = normalizeState(brief.fleetQa);
+      if (state.pendingEnqueue?.id !== pending.id) return brief;
+      return {
+        ...brief,
+        fleetQa: {
+          ...state,
+          pendingEnqueue: {
+            ...state.pendingEnqueue,
+            attempts: state.pendingEnqueue.attempts + 1,
+            lastAttemptAt: now().toISOString(),
+          },
+          lastError: boundedText(error?.message || String(error), 500) || 'enqueue_failed',
+        },
+      };
+    },
+  });
+}
+
 async function materializeFindings({
   prisma,
   project,
@@ -404,8 +570,8 @@ async function materializeFindings({
   baseSha,
   headSha,
   deps = {},
-  env = process.env,
 }) {
+  throwIfAborted(deps.signal);
   if (!findings.length) {
     return { swarmId: null, tasksCreated: 0, taskKeys: [], enqueued: false };
   }
@@ -419,16 +585,28 @@ async function materializeFindings({
     orderBy: { updatedAt: 'desc' },
   }).catch(() => null);
   const parent = active?.tasks?.find((task) => taskOwnsRun(task, run)) || null;
-  const tasks = tasksFromFindings({
+  let tasks = tasksFromFindings({
     reviewId,
     findings,
     parentTaskKey: parent?.key || null,
     baseSha,
     headSha,
   });
+  const trustPool = await prisma.codexDepartmentPool?.findFirst?.({
+    where: {
+      projectId: project.id,
+      departmentId: 'trust',
+    },
+  });
+  throwIfAborted(deps.signal);
+  if (!trustPool || poolStatus(trustPool) !== 'active') {
+    throw new Error('fleet_qa_trust_pool_unavailable');
+  }
+  tasks = distributeTasksToPools({ tasks, pools: [trustPool] }).tasks;
 
   let result;
   if (active) {
+    throwIfAborted(deps.signal);
     try {
       result = await orchestrator.appendTasks({ swarmId: active.id, tasks });
     } catch (error) {
@@ -437,6 +615,7 @@ async function materializeFindings({
     }
   }
   if (!active) {
+    throwIfAborted(deps.signal);
     const created = await orchestrator.createSwarm({
       userId: project.userId,
       projectId: project.id,
@@ -459,13 +638,12 @@ async function materializeFindings({
     };
   }
   const swarmId = result.swarm.id;
-  const queue = await maybeEnqueueSwarm({ swarmId, deps, env });
   return {
     swarmId,
     tasksCreated: result.appended?.length ?? tasks.length,
     taskKeys: tasks.map((task) => task.key),
-    enqueued: queue.enqueued,
-    enqueueError: queue.error,
+    enqueued: false,
+    enqueueError: null,
   };
 }
 
@@ -548,17 +726,25 @@ async function completeReview({
   prisma,
   project,
   review,
-  findings,
+  findings = null,
+  findingCount = null,
   materialized,
   now,
 }) {
+  const completedFindings = Number.isFinite(Number(findingCount))
+    ? Math.max(0, Number(findingCount))
+    : Array.isArray(findings)
+      ? findings.length
+      : 0;
   await mutateProjectBrief({
     prisma,
     projectId: project.id,
     userId: project.userId,
     mutate: (brief) => {
       const state = normalizeState(brief.fleetQa);
-      if (state.inFlight?.id !== review.id) return brief;
+      const ownsInFlight = state.inFlight?.id === review.id;
+      const ownsPendingEnqueue = state.pendingEnqueue?.id === review.id;
+      if (!ownsInFlight && !ownsPendingEnqueue) return brief;
       const remaining = Math.max(0, state.mergesSinceReview - review.mergeCount);
       return {
         ...brief,
@@ -568,13 +754,14 @@ async function completeReview({
           lastReviewedSha: review.headSha,
           mergesSinceReview: remaining,
           inFlight: null,
+          pendingEnqueue: null,
           lastError: materialized.enqueueError || null,
           lastReview: {
             id: review.id,
             baseSha: review.baseSha,
             headSha: review.headSha,
             mergeCount: review.mergeCount,
-            findings: findings.length,
+            findings: completedFindings,
             tasksCreated: materialized.tasksCreated,
             swarmId: materialized.swarmId,
             completedAt: now().toISOString(),
@@ -583,6 +770,75 @@ async function completeReview({
       };
     },
   });
+}
+
+async function retryPendingEnqueue({
+  prisma,
+  project,
+  deps,
+  env,
+  now,
+}) {
+  const state = await currentFleetQaState({ prisma, project });
+  const pending = state.pendingEnqueue;
+  if (!pending) return null;
+  throwIfAborted(deps.signal);
+  const queue = await maybeEnqueueSwarm({
+    swarmId: pending.swarmId,
+    deps,
+    env,
+  });
+  throwIfAborted(deps.signal);
+  if (!queue.enqueued) {
+    const error = new Error(queue.error || 'swarm_queue_unavailable');
+    await recordPendingEnqueueFailure({
+      prisma,
+      project,
+      pending,
+      error,
+      now,
+    });
+    return {
+      action: 'review_deferred',
+      reviewId: pending.id,
+      baseSha: pending.baseSha,
+      headSha: pending.headSha,
+      mergeCount: pending.mergeCount,
+      findings: pending.findings,
+      tasksCreated: pending.tasksCreated,
+      swarmId: pending.swarmId,
+      taskKeys: pending.taskKeys,
+      enqueued: false,
+      enqueueError: error.message,
+      error: error.message,
+      retriedEnqueue: true,
+    };
+  }
+  const materialized = {
+    swarmId: pending.swarmId,
+    tasksCreated: pending.tasksCreated,
+    taskKeys: pending.taskKeys,
+    enqueued: true,
+    enqueueError: null,
+  };
+  await completeReview({
+    prisma,
+    project,
+    review: pending,
+    findingCount: pending.findings,
+    materialized,
+    now,
+  });
+  return {
+    action: 'reviewed',
+    reviewId: pending.id,
+    baseSha: pending.baseSha,
+    headSha: pending.headSha,
+    mergeCount: pending.mergeCount,
+    findings: pending.findings,
+    ...materialized,
+    retriedEnqueue: true,
+  };
 }
 
 async function failReview({
@@ -620,6 +876,7 @@ async function reviewMergedCheckpoint({
   now = () => new Date(),
 }) {
   if (!enabled(env)) return { action: 'disabled' };
+  throwIfAborted(deps.signal);
   if (
     !prisma?.codexProject
     || !project?.id
@@ -629,10 +886,47 @@ async function reviewMergedCheckpoint({
   ) {
     return { action: 'skipped_invalid_context' };
   }
+  const checkBudget = (phase) => (
+    deps.checkBudget
+      ? deps.checkBudget({
+        prisma,
+        project,
+        env,
+        now: now(),
+        phase,
+      })
+      : projectBudget.checkCompanyDailyBudget({
+        prisma,
+        project,
+        env,
+        now: now(),
+      })
+  );
+  const retried = await retryPendingEnqueue({
+    prisma,
+    project,
+    deps,
+    env,
+    now,
+  });
+  if (retried?.action === 'review_deferred' || retried?.headSha === mergeSha) {
+    return retried;
+  }
+  const budget = await checkBudget('preflight');
+  if (!budget?.allowed) {
+    return {
+      action: 'budget_blocked',
+      reason: budget?.reason || 'budget_query_failed',
+      dailyBudgetUsd: budget?.dailyBudgetUsd ?? null,
+      costTodayUsd: budget?.costTodayUsd ?? null,
+    };
+  }
+  throwIfAborted(deps.signal);
   const parentSha = await parentOfMerge({
     runner: deps.runner,
     projectId: project.id,
     mergeSha,
+    signal: deps.signal,
   });
   const decision = await claimReview({
     prisma,
@@ -653,14 +947,43 @@ async function reviewMergedCheckpoint({
       projectId: project.id,
       baseSha: review.baseSha,
       headSha: review.headSha,
+      signal: deps.signal,
     });
+    const reviewerDeps = {
+      ...deps,
+      onUsage: async (usage) => {
+        throwIfAborted(deps.signal);
+        if (typeof deps.onUsage !== 'function') {
+          const error = new Error('fleet_qa_usage_accounting_unavailable');
+          error.code = 'fleet_qa_usage_accounting_unavailable';
+          throw error;
+        }
+        const accounted = await deps.onUsage(usage);
+        throwIfAborted(deps.signal);
+        const runtimeBudget = await checkBudget('runtime');
+        if (!runtimeBudget?.allowed) {
+          const error = new Error(
+            runtimeBudget?.reason === 'daily_budget_exceeded'
+              ? 'fleet_qa_daily_budget_exceeded'
+              : `fleet_qa_budget_check_failed:${runtimeBudget?.reason || 'budget_query_failed'}`,
+          );
+          error.code = runtimeBudget?.reason === 'daily_budget_exceeded'
+            ? 'fleet_qa_daily_budget_exceeded'
+            : 'fleet_qa_budget_check_failed';
+          error.budget = runtimeBudget;
+          throw error;
+        }
+        return accounted;
+      },
+    };
     const outcome = await runQaReviewer({
       project,
       diff,
       mergeCount: review.mergeCount,
-      deps,
+      deps: reviewerDeps,
       env,
     });
+    throwIfAborted(deps.signal);
     if (!outcome?.ok) {
       throw new Error(boundedText(outcome?.result, 500) || 'fleet_qa_reviewer_failed');
     }
@@ -675,8 +998,27 @@ async function reviewMergedCheckpoint({
       baseSha: review.baseSha,
       headSha: review.headSha,
       deps,
-      env,
     });
+    if (findings.length) {
+      await deferReviewForEnqueue({
+        prisma,
+        project,
+        review,
+        findings,
+        materialized,
+        error: null,
+        now,
+      });
+      const delivery = await retryPendingEnqueue({
+        prisma,
+        project,
+        deps,
+        env,
+        now,
+      });
+      if (!delivery) throw new Error('fleet_qa_pending_enqueue_not_persisted');
+      return delivery;
+    }
     await completeReview({
       prisma,
       project,

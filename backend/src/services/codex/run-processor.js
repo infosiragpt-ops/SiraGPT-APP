@@ -38,6 +38,8 @@ const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_MAX_STEPS = 24;
+const DEFAULT_FLEET_QA_TIMEOUT_MS = 5 * 60_000;
+const MAX_FLEET_QA_TIMEOUT_MS = 30 * 60_000;
 
 function nowIso(clock) {
   return (clock ? clock() : new Date()).toISOString();
@@ -53,6 +55,104 @@ function readMaxSteps(env, policy = null) {
   if (policy?.maxSteps) return policy.maxSteps;
   const v = Number.parseInt((env || process.env).CODEX_MAX_STEPS || '', 10);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_STEPS;
+}
+
+function readFleetQaTimeoutMs(env = process.env, override = null) {
+  const explicit = Number(override);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const parsed = Number.parseInt(env.CODEX_FLEET_QA_TIMEOUT_MS || '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_FLEET_QA_TIMEOUT_MS;
+  return Math.max(1_000, Math.min(MAX_FLEET_QA_TIMEOUT_MS, parsed));
+}
+
+function round6(value) {
+  return Number((Math.round(Number(value || 0) * 1e6) / 1e6).toFixed(6));
+}
+
+async function persistFleetQaUsage({
+  prisma,
+  run,
+  usage,
+  env = process.env,
+  costResolver = null,
+}) {
+  if (!prisma?.codexRunMetric?.upsert || !run?.id) {
+    const error = new Error('fleet_qa_metric_store_unavailable');
+    error.code = 'fleet_qa_metric_store_unavailable';
+    throw error;
+  }
+  const resolveCost = costResolver || require('./cost-resolver').resolveCost;
+  const resolved = await resolveCost(usage, { env });
+  const costOriginalUsd = round6(Math.max(0, Number(resolved?.costUsd) || 0));
+  const costInputOriginalUsd = round6(Math.max(0, Number(resolved?.costInputUsd) || 0));
+  const costOutputOriginalUsd = round6(Math.max(0, Number(resolved?.costOutputUsd) || 0));
+  const existing = prisma.codexRunMetric.findUnique
+    ? await prisma.codexRunMetric.findUnique({ where: { runId: run.id } })
+    : null;
+  let plan = null;
+  if (prisma.user?.findUnique && run.userId) {
+    plan = await prisma.user
+      .findUnique({ where: { id: run.userId }, select: { plan: true } })
+      .then((user) => user?.plan || null)
+      .catch(() => null);
+  }
+  let multiplier;
+  if (plan) {
+    multiplier = require('./pricing-policy')
+      .applyPlanPricing(plan, costOriginalUsd, { env })
+      .multiplier;
+  } else {
+    const previousOriginal = Math.max(0, Number(existing?.costOriginalUsd) || 0);
+    const previousApplied = Math.max(0, Number(existing?.costAppliedUsd) || 0);
+    multiplier = previousOriginal > 0
+      ? Math.max(0, Math.min(1, previousApplied / previousOriginal))
+      : 1;
+  }
+  const costAppliedUsd = round6(costOriginalUsd * multiplier);
+  const costInputUsd = round6(costInputOriginalUsd * multiplier);
+  const costOutputUsd = round6(costOutputOriginalUsd * multiplier);
+  const tokensIn = Math.max(0, Number.parseInt(usage?.tokensIn, 10) || 0);
+  const tokensOut = Math.max(0, Number.parseInt(usage?.tokensOut, 10) || 0);
+  const costSource = require('./cost-resolver').aggregateSource(
+    [existing?.costSource, resolved?.costSource].filter(Boolean),
+  );
+  const model = String(usage?.model || '').trim().slice(0, 160) || null;
+  const metric = await prisma.codexRunMetric.upsert({
+    where: { runId: run.id },
+    create: {
+      runId: run.id,
+      tokensIn,
+      tokensOut,
+      model,
+      costUsd: costAppliedUsd,
+      costSource,
+      costOriginalUsd,
+      costAppliedUsd,
+      costInputUsd,
+      costOutputUsd,
+    },
+    update: {
+      tokensIn: { increment: tokensIn },
+      tokensOut: { increment: tokensOut },
+      ...(!existing?.model && model ? { model } : {}),
+      costUsd: { increment: costAppliedUsd },
+      costSource,
+      costOriginalUsd: { increment: costOriginalUsd },
+      costAppliedUsd: { increment: costAppliedUsd },
+      costInputUsd: { increment: costInputUsd },
+      costOutputUsd: { increment: costOutputUsd },
+    },
+  });
+  return {
+    tokensIn,
+    tokensOut,
+    costOriginalUsd,
+    costAppliedUsd,
+    costInputUsd,
+    costOutputUsd,
+    costSource,
+    metric,
+  };
 }
 
 async function publishTerminalSignals({
@@ -127,6 +227,15 @@ class TimeoutError extends Error {
   constructor(ms) { super(`codex run exceeded ${ms}ms hard timeout`); this.name = 'TimeoutError'; this.isTimeout = true; }
 }
 
+class FleetQaTimeoutError extends Error {
+  constructor(ms) {
+    super(`fleet QA exceeded ${ms}ms hard timeout`);
+    this.name = 'FleetQaTimeoutError';
+    this.code = 'fleet_qa_timeout';
+    this.isTimeout = true;
+  }
+}
+
 /**
  * Process one codex run. Returns the final status. Never throws out (errors are
  * captured into the run row + a run_status error event) so BullMQ marks the job
@@ -146,6 +255,10 @@ async function processCodexRunJob({
   env = process.env,
   resumeSnapshot = null,
   triggers = null,
+  fleetQualityReviewer = null,
+  fleetQaSignal = null,
+  fleetQaTimeoutMs = null,
+  fleetQaCostResolver = null,
 } = {}) {
   if (!prisma || !prisma.codexRun) throw new Error('database unavailable');
 
@@ -427,6 +540,88 @@ async function processCodexRunJob({
     });
   }
 
+  let fleetQaResult = null;
+  const mergedSha = outcome?.close?.branchFinalization?.merge?.status === 'merged'
+    ? outcome.close.branchFinalization.merge.commitSha
+    : null;
+  if (status === 'done' && mergedSha) {
+    const reviewer = fleetQualityReviewer || require('./fleet-quality-reviewer');
+    const qaController = new AbortController();
+    const qaTimeoutMs = readFleetQaTimeoutMs(env, fleetQaTimeoutMs);
+    const abortFromParent = () => {
+      if (!qaController.signal.aborted) {
+        qaController.abort(fleetQaSignal?.reason || new Error('fleet QA cancelled'));
+      }
+    };
+    if (fleetQaSignal) {
+      if (fleetQaSignal.aborted) abortFromParent();
+      else fleetQaSignal.addEventListener('abort', abortFromParent, { once: true });
+    }
+    let rejectOnAbort;
+    const aborted = new Promise((_, reject) => {
+      rejectOnAbort = () => {
+        const reason = qaController.signal.reason;
+        reject(reason instanceof Error ? reason : new Error(String(reason || 'fleet QA cancelled')));
+      };
+      if (qaController.signal.aborted) rejectOnAbort();
+      else qaController.signal.addEventListener('abort', rejectOnAbort, { once: true });
+    });
+    const qaTimer = setTimeout(() => {
+      if (!qaController.signal.aborted) {
+        qaController.abort(new FleetQaTimeoutError(qaTimeoutMs));
+      }
+    }, qaTimeoutMs);
+    qaTimer.unref?.();
+    try {
+      fleetQaResult = await Promise.race([
+        reviewer.reviewMergedCheckpoint({
+          prisma,
+          project,
+          run,
+          mergeSha: mergedSha,
+          deps: {
+            // The run is terminal and its scoped worktree may already be gone.
+            runner: nativeRunner?.baseRunner || nativeRunner,
+            tier: run.tier || null,
+            model: run.model || null,
+            signal: qaController.signal,
+            onUsage: (usage) => persistFleetQaUsage({
+              prisma,
+              run,
+              usage,
+              env,
+              costResolver: fleetQaCostResolver,
+            }),
+          },
+          env,
+          now: clock || (() => new Date()),
+        }),
+        aborted,
+      ]);
+      if (fleetQaResult.action === 'reviewed') {
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: `QA de flota revisó ${fleetQaResult.mergeCount} merge(s): ${fleetQaResult.findings} hallazgo(s), ${fleetQaResult.tasksCreated} tarea(s) añadida(s) al DAG.`,
+        }, { prisma }).catch(() => {});
+      } else if (['review_failed', 'review_deferred'].includes(fleetQaResult.action)) {
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: `QA de flota conservará el checkpoint pendiente para reintento: ${fleetQaResult.error}.`,
+        }, { prisma }).catch(() => {});
+      }
+    } catch (qaError) {
+      fleetQaResult = {
+        action: 'review_failed',
+        error: String(qaError?.message || qaError).slice(0, 500),
+      };
+      if (env?.NODE_ENV !== 'test') {
+        console.warn('[codex run-processor] fleet QA failed:', qaError?.message || qaError);
+      }
+    } finally {
+      clearTimeout(qaTimer);
+      qaController.signal.removeEventListener('abort', rejectOnAbort);
+      if (fleetQaSignal) fleetQaSignal.removeEventListener('abort', abortFromParent);
+    }
+  }
+
   let autoContinuedRunId = null;
   let autoContinueError = null;
   if (status === 'waiting_approval' && runtimePolicy.autoExecute) {
@@ -482,14 +677,18 @@ async function processCodexRunJob({
     autoContinuedRunId,
     autoContinueError,
     executionMode: runtimePolicy.depth,
+    fleetQaResult,
   };
 }
 
 module.exports = {
   processCodexRunJob,
   TimeoutError,
+  FleetQaTimeoutError,
   readTimeoutMs,
+  readFleetQaTimeoutMs,
   readMaxSteps,
+  persistFleetQaUsage,
   publishTerminalSignals,
   defaultOnFeature,
   executionContextForAdapter,

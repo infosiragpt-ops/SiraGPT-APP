@@ -39,6 +39,25 @@ function fakePrisma(project, activeSwarm = null) {
         state.activeSwarm ? structuredClone(state.activeSwarm) : null
       ),
     },
+    codexDepartmentPool: {
+      findFirst: async () => ({
+        id: 'pool-trust',
+        projectId: state.project.id,
+        departmentId: 'trust',
+        size: 2,
+        dailyBudgetUsd: 5,
+        enabled: true,
+      }),
+    },
+    codexRunMetric: {
+      findMany: async () => [],
+      aggregate: async () => ({
+        _sum: {
+          costOriginalUsd: 0,
+          costAppliedUsd: 0,
+        },
+      }),
+    },
   };
 }
 
@@ -142,6 +161,7 @@ test('every Kth merged checkpoint runs qa_reviewer and appends findings to the a
         };
       },
     },
+    enqueueSwarm: async () => ({ id: 'qa-job' }),
   };
   const env = {
     NODE_ENV: 'test',
@@ -196,6 +216,184 @@ test('every Kth merged checkpoint runs qa_reviewer and appends findings to the a
   assert.equal(state.mergesSinceReview, 0);
   assert.equal(state.inFlight, null);
   assert.equal(state.lastReview.tasksCreated, 1);
+});
+
+test('fleet QA is opt-in in every environment', () => {
+  assert.equal(fleetQa.enabled({ NODE_ENV: 'production' }), false);
+  assert.equal(fleetQa.enabled({ NODE_ENV: 'production', CODEX_FLEET_QA_ENABLED: '1' }), true);
+});
+
+test('finding task keys are stable when reviewer titles change', () => {
+  const finding = {
+    title: 'First title',
+    severity: 'high',
+    category: 'security',
+    file: 'src/auth.js',
+    line: 12,
+    evidence: 'The route allows anonymous access.',
+    remediation: 'Reject requests without an authenticated user.',
+  };
+  const input = {
+    reviewId: 'review-stable',
+    baseSha: SHAS.base,
+    headSha: SHAS.one,
+  };
+  const first = fleetQa.tasksFromFindings({
+    ...input,
+    findings: [finding],
+  })[0];
+  const renamed = fleetQa.tasksFromFindings({
+    ...input,
+    findings: [{ ...finding, title: 'Different wording for the same finding' }],
+  })[0];
+  assert.equal(first.key, renamed.key);
+  assert.notEqual(first.title, renamed.title);
+});
+
+test('an enqueue failure retries the persisted swarm without rerunning the reviewer', async () => {
+  const prisma = fakePrisma(PROJECT, {
+    id: 'swarm-1',
+    status: 'running',
+    tasks: [],
+  });
+  let reviewerCalls = 0;
+  let appendCalls = 0;
+  let enqueueCalls = 0;
+  let budgetChecks = 0;
+  let budgetAllowed = true;
+  const deps = {
+    runner: fakeRunner(),
+    idFactory: () => 'review-enqueue',
+    checkBudget: async () => {
+      budgetChecks += 1;
+      return budgetAllowed
+        ? { allowed: true, dailyBudgetUsd: 5, costTodayUsd: 1 }
+        : { allowed: false, reason: 'daily_budget_exceeded', dailyBudgetUsd: 5, costTodayUsd: 5 };
+    },
+    agentSdk: {
+      runSubagent: async () => {
+        reviewerCalls += 1;
+        return {
+          ok: true,
+          result: JSON.stringify({
+            findings: [{
+              title: 'Falta autorización',
+              severity: 'high',
+              category: 'security',
+              file: 'src/auth.js',
+              line: 12,
+              evidence: 'La ruta permite continuar sin usuario autenticado.',
+              remediation: 'Rechazar la petición y agregar una prueba focal.',
+            }],
+          }),
+        };
+      },
+    },
+    orchestrator: {
+      appendTasks: async ({ tasks }) => {
+        appendCalls += 1;
+        return {
+          swarm: { id: 'swarm-1' },
+          appended: tasks,
+          replayed: false,
+        };
+      },
+    },
+    enqueueSwarm: async () => {
+      enqueueCalls += 1;
+      if (enqueueCalls === 1) {
+        const state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
+        assert.equal(state.pendingEnqueue.swarmId, 'swarm-1');
+        assert.equal(state.lastReviewedSha, null);
+        throw new Error('redis unavailable');
+      }
+      return { id: 'qa-job' };
+    },
+  };
+  const input = {
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-enqueue' },
+    mergeSha: SHAS.one,
+    deps,
+    env: {
+      NODE_ENV: 'test',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+    now: () => new Date('2026-07-28T18:00:00.000Z'),
+  };
+  const deferred = await fleetQa.reviewMergedCheckpoint(input);
+  assert.equal(deferred.action, 'review_deferred');
+  let state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
+  assert.equal(state.lastReviewedSha, null);
+  assert.equal(state.mergesSinceReview, 1);
+  assert.equal(state.inFlight, null);
+  assert.equal(state.pendingEnqueue.swarmId, 'swarm-1');
+  assert.equal(state.pendingEnqueue.taskKeys.length, 1);
+
+  budgetAllowed = false;
+  const retried = await fleetQa.reviewMergedCheckpoint(input);
+  assert.equal(retried.action, 'reviewed');
+  assert.equal(retried.retriedEnqueue, true);
+  assert.equal(reviewerCalls, 1);
+  assert.equal(appendCalls, 1);
+  assert.equal(enqueueCalls, 2);
+  assert.equal(budgetChecks, 1);
+  state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
+  assert.equal(state.lastReviewedSha, SHAS.one);
+  assert.equal(state.mergesSinceReview, 0);
+  assert.equal(state.pendingEnqueue, null);
+});
+
+test('runtime budget rejection stops fleet QA after the accounted turn', async () => {
+  const prisma = fakePrisma(PROJECT);
+  let budgetChecks = 0;
+  let usageCalls = 0;
+  let reviewerAdvanced = false;
+  const result = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-budget' },
+    mergeSha: SHAS.one,
+    deps: {
+      runner: fakeRunner(),
+      idFactory: () => 'review-budget',
+      checkBudget: async ({ phase }) => {
+        budgetChecks += 1;
+        return phase === 'preflight'
+          ? { allowed: true, dailyBudgetUsd: 5, costTodayUsd: 4.9 }
+          : { allowed: false, reason: 'daily_budget_exceeded', dailyBudgetUsd: 5, costTodayUsd: 5.1 };
+      },
+      onUsage: async () => {
+        usageCalls += 1;
+        await Promise.resolve();
+        return { costOriginalUsd: 0.2 };
+      },
+      agentSdk: {
+        runSubagent: async ({ deps }) => {
+          await deps.onUsage({ tokensIn: 10, tokensOut: 5, costUsd: 0.2 });
+          reviewerAdvanced = true;
+          return { ok: true, result: '{"findings":[]}' };
+        },
+      },
+    },
+    env: {
+      NODE_ENV: 'test',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+    now: () => new Date('2026-07-28T18:00:00.000Z'),
+  });
+  assert.equal(result.action, 'review_failed');
+  assert.match(result.error, /daily_budget_exceeded/);
+  assert.equal(budgetChecks, 2);
+  assert.equal(usageCalls, 1);
+  assert.equal(reviewerAdvanced, false);
+  assert.equal(
+    fleetQa.normalizeState(prisma.state.project.brief.fleetQa).lastReviewedSha,
+    null,
+  );
 });
 
 test('a clean QA review advances the checkpoint without creating DAG tasks', async () => {
