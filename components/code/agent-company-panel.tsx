@@ -24,11 +24,14 @@ import {
   FileCode2,
   FileSpreadsheet,
   FileText,
+  Folder,
   FolderOpen,
   Gauge,
   Languages,
   LayoutDashboard,
+  LayoutGrid,
   Link2,
+  List,
   ListTree,
   Loader2,
   Megaphone,
@@ -5328,6 +5331,22 @@ function artifactIcon(extension: string, kind: CompanyArtifact["kind"]) {
   return File
 }
 
+function artifactTypeLabel(artifact: CompanyArtifact): string {
+  if (artifact.kind === "report") return "Reporte"
+  if (["ts", "tsx", "js", "jsx"].includes(artifact.extension)) return "Código"
+  if (["json", "html", "css", "py"].includes(artifact.extension)) return "Fuente"
+  if (["csv", "xls", "xlsx"].includes(artifact.extension)) return "Hoja"
+  if (["md", "mdx", "txt", "doc", "docx", "pdf"].includes(artifact.extension)) return "Documento"
+  return "Archivo"
+}
+
+function artifactSizeLabel(content: string): string {
+  const bytes = Math.max(0, content.length)
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10_240 ? 1 : 0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 function downloadArtifact(artifact: CompanyArtifact) {
   const blob = new Blob([artifact.content], { type: "text/plain;charset=utf-8" })
   const url = URL.createObjectURL(blob)
@@ -5375,6 +5394,7 @@ function FilesView({
   const [missionBusy, setMissionBusy] = React.useState<string | null>(null)
   const [missionError, setMissionError] = React.useState<string | null>(null)
   const [expandedRecordId, setExpandedRecordId] = React.useState<string | null>(null)
+  const [viewMode, setViewMode] = React.useState<"icons" | "list">("icons")
 
   const refreshMissionLedger = React.useCallback(async () => {
     if (!codexProjectId) {
@@ -5526,359 +5546,452 @@ function FilesView({
   }, [filtered])
   const selected = artifacts.find((artifact) => artifact.id === selectedId) || null
   const reportCount = artifacts.filter((artifact) => artifact.kind === "report").length
+  const workspaceFileCount = artifacts.length - reportCount
+  const sidebarRows = [
+    { value: "all" as const, label: "Todos", count: artifacts.length, icon: FolderOpen },
+    { value: "reports" as const, label: "Memorias", count: reportCount, icon: FileText },
+    { value: "files" as const, label: "Archivos", count: workspaceFileCount, icon: Folder },
+  ]
+  const missionSummary = missionLedger?.summary
 
   const body = (
     <SurfacePage testId="company-files-surface">
-      <div className="flex flex-wrap items-end justify-between gap-5">
-        <div>
-          <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
-          <h1 className="mt-2 text-[28px] font-semibold leading-tight">Archivos y reportes</h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Archivos visibles del workspace, borradores locales y evidencia persistente registrada por misión.
-          </p>
-        </div>
-        <div className="flex gap-5 text-right text-xs text-zinc-500">
-          <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{artifacts.length}</strong>archivos</span>
-          <span><strong className="block text-xl font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">{reportCount}</strong>borradores locales</span>
-        </div>
-      </div>
-
-      <div className="mt-7 flex flex-wrap items-center gap-3 border-y border-zinc-200 py-3 dark:border-white/10">
-        <div className="relative min-w-[240px] flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Buscar archivos, reportes o departamentos"
-            aria-label="Buscar archivos y reportes"
-            className="h-10 rounded-md border-zinc-200 bg-white pl-10 dark:border-white/10 dark:bg-zinc-900"
-          />
-        </div>
-        <div className="flex h-10 items-center rounded-md border border-zinc-200 bg-white p-1 dark:border-white/10 dark:bg-zinc-900" role="group" aria-label="Filtrar archivos">
-          {([
-            ["all", "Todos"],
-            ["reports", "Reportes"],
-            ["files", "Archivos"],
-          ] as const).map(([value, label]) => (
+      <div className="min-h-[680px] overflow-hidden rounded-xl border border-zinc-300/80 bg-[#f4f4f2] shadow-[0_24px_80px_-50px_rgba(15,23,42,0.8)] dark:border-white/10 dark:bg-zinc-950">
+        <div className="flex h-12 items-center gap-3 border-b border-zinc-300/70 bg-[#ededeb]/95 px-3 text-zinc-900 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95 dark:text-zinc-50">
+          <div className="flex shrink-0 items-center gap-2" aria-hidden="true">
+            <span className="h-3 w-3 rounded-full bg-[#ff5f57] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
+            <span className="h-3 w-3 rounded-full bg-[#febc2e] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
+            <span className="h-3 w-3 rounded-full bg-[#28c840] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
+          </div>
+          <div className="hidden h-8 items-center gap-1 rounded-lg border border-zinc-300/70 bg-white/70 p-1 sm:flex dark:border-white/10 dark:bg-white/10" role="group" aria-label="Modo de vista">
             <button
-              key={value}
               type="button"
-              onClick={() => setFilter(value)}
+              onClick={() => setViewMode("icons")}
               className={cn(
-                "h-8 rounded px-3 text-xs font-medium",
-                filter === value ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white" : "text-zinc-500 hover:text-zinc-950 dark:hover:text-white",
+                "flex h-6 w-7 items-center justify-center rounded-md text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white",
+                viewMode === "icons" && "bg-white text-zinc-950 shadow-sm dark:bg-zinc-700 dark:text-white",
               )}
-              aria-pressed={filter === value}
+              aria-pressed={viewMode === "icons"}
+              title="Iconos"
             >
-              {label}
+              <LayoutGrid className="h-3.5 w-3.5" />
             </button>
-          ))}
-        </div>
-      </div>
-
-      <section className="mt-7" data-testid="company-mission-evidence-ledger">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold">Evidencia de misiones</h2>
-            <p className="mt-1 text-xs leading-5 text-zinc-500">
-              Entregables verificables, autoría, fecha y revisión de CEO Office.
-            </p>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              className={cn(
+                "flex h-6 w-7 items-center justify-center rounded-md text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white",
+                viewMode === "list" && "bg-white text-zinc-950 shadow-sm dark:bg-zinc-700 dark:text-white",
+              )}
+              aria-pressed={viewMode === "list"}
+              title="Lista"
+            >
+              <List className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-9 rounded-md"
-              disabled={!codexProjectId || Boolean(missionBusy)}
-              onClick={() => void createReport(false)}
-            >
-              {missionBusy === "report:draft" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-              Generar reporte
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-9 rounded-md"
-              disabled={!codexProjectId || Boolean(missionBusy)}
-              onClick={() => void createReport(true)}
-              title="Solo prepara la cola; no envía correos desde esta vista."
-            >
-              {missionBusy === "report:email" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-              Preparar correo
-            </Button>
+          <div className="min-w-0 flex-1 text-center">
+            <div className="truncate text-[13px] font-semibold">{companyName}</div>
+            <div className="truncate text-[10px] text-zinc-500 dark:text-zinc-400">Archivos</div>
+          </div>
+          <div className="relative w-44 shrink-0 sm:w-64">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar"
+              aria-label="Buscar archivos"
+              className="h-8 rounded-lg border-zinc-300/70 bg-white/75 pl-8 text-[12px] shadow-inner dark:border-white/10 dark:bg-white/10"
+            />
           </div>
         </div>
 
-        {missionLedger ? (
-          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-y border-zinc-200 py-3 text-xs text-zinc-500 dark:border-white/10">
-            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.missions}</strong> misiones</span>
-            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.pendingReview}</strong> pendientes de CEO</span>
-            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.approved}</strong> aprobadas</span>
-            <span><strong className="text-zinc-950 dark:text-zinc-50">{missionLedger.summary.reports}</strong> resúmenes</span>
-          </div>
-        ) : null}
-
-        {missionError ? (
-          <div className="mt-4 flex items-center gap-2 border-l-2 border-amber-400 pl-3 text-xs text-amber-700 dark:text-amber-300">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            {missionError}
-          </div>
-        ) : null}
-
-        {!missionLedger && codexProjectId && !missionError ? (
-          <div className="mt-5 flex items-center gap-2 text-xs text-zinc-500">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Cargando evidencia durable…
-          </div>
-        ) : null}
-
-        {missionLedger?.records.length ? (
-          <div className="mt-4 divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-white/10 dark:border-white/10">
-            {missionLedger.records.slice(0, 20).map((record) => {
-              const expanded = expandedRecordId === record.id
-              const reviewing = missionBusy === `review:${record.id}`
-              return (
-                <article key={record.id} data-testid="company-mission-evidence-record">
-                  <div className="flex flex-col gap-3 py-4 lg:flex-row lg:items-center">
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => setExpandedRecordId(expanded ? null : record.id)}
-                      aria-expanded={expanded}
-                    >
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span className="truncate text-[13px] font-semibold">{record.missionTitle}</span>
-                        <span className={cn(
-                          "rounded px-2 py-0.5 text-[10px] font-medium",
-                          record.status === "completed"
-                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300"
-                            : "bg-amber-50 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300",
-                        )}>
-                          {record.status === "completed" ? "Completada" : "Bloqueada"}
-                        </span>
-                        <span className={cn(
-                          "rounded px-2 py-0.5 text-[10px] font-medium",
-                          record.ceoReview.status === "approved"
-                            ? "bg-sky-50 text-sky-700 dark:bg-sky-950/35 dark:text-sky-300"
-                            : record.ceoReview.status === "changes_requested" || record.ceoReview.status === "rejected"
-                              ? "bg-rose-50 text-rose-700 dark:bg-rose-950/35 dark:text-rose-300"
-                              : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-                        )}>
-                          {missionReviewLabel(record.ceoReview.status)}
-                        </span>
-                      </span>
-                      <span className="mt-1 block truncate text-[11px] text-zinc-500">
-                        {record.department} · {record.author} · {relativeActivity(Date.parse(record.createdAt))}
-                      </span>
-                      <span className="mt-1 block text-[11px] text-zinc-500">
-                        {record.deliverables.length} entregables · {record.evidence.length} evidencias
-                      </span>
-                    </button>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 rounded-md px-2.5 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/30"
-                        disabled={Boolean(missionBusy)}
-                        onClick={() => void reviewMission(record, "rejected")}
-                        title="Rechazar esta versión"
-                      >
-                        <X className="mr-1.5 h-3.5 w-3.5" />
-                        Rechazar
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 rounded-md px-3 text-xs"
-                        disabled={Boolean(missionBusy)}
-                        onClick={() => void reviewMission(record, "changes_requested")}
-                      >
-                        {reviewing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-                        Pedir cambios
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-8 rounded-md px-3 text-xs"
-                        disabled={Boolean(missionBusy)}
-                        onClick={() => void reviewMission(record, "approved")}
-                      >
-                        {reviewing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
-                        Aprobar
-                      </Button>
-                    </div>
-                  </div>
-                  {expanded ? (
-                    <div className="grid gap-5 border-t border-zinc-100 pb-5 pt-4 dark:border-white/5 lg:grid-cols-2">
-                      <div>
-                        <h3 className="text-[11px] font-semibold uppercase text-zinc-500">Entregables</h3>
-                        <div className="mt-2 divide-y divide-zinc-100 dark:divide-white/5">
-                          {record.deliverables.map((deliverable) => (
-                            <div key={deliverable.id} className="flex items-start gap-2 py-2 text-xs">
-                              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                              <span className="min-w-0">
-                                <span className="block font-medium">{deliverable.name}</span>
-                                {deliverable.ref ? <span className="mt-0.5 block break-all font-mono text-[10px] text-zinc-500">{deliverable.ref}</span> : null}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <h3 className="text-[11px] font-semibold uppercase text-zinc-500">Evidencia</h3>
-                        <div className="mt-2 divide-y divide-zinc-100 dark:divide-white/5">
-                          {record.evidence.map((evidence) => (
-                            <div key={evidence.id} className="py-2 text-xs">
-                              <span className="flex items-center gap-2 font-medium">
-                                {evidence.passed === true ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : evidence.passed === false ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> : null}
-                                {evidence.label}
-                              </span>
-                              <p className="mt-1 break-words leading-5 text-zinc-500">{evidence.detail}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="lg:col-span-2">
-                        <p className="text-[11px] font-semibold uppercase text-zinc-500">Objetivo</p>
-                        <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{record.objective}</p>
-                        <p className="mt-4 text-[11px] font-semibold uppercase text-zinc-500">Resultado</p>
-                        <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{record.summary}</p>
-                        <p className="mt-3 break-all font-mono text-[10px] leading-4 text-zinc-500">
-                          v{record.version} · {record.source} · {record.contentHash || "hash pendiente"}
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
-                </article>
-              )
-            })}
-          </div>
-        ) : missionLedger ? (
-          <div className="mt-4 border-y border-dashed border-zinc-300 py-8 text-center text-xs text-zinc-500 dark:border-zinc-700">
-            Las misiones cerradas aparecerán aquí con su evidencia verificable.
-          </div>
-        ) : null}
-
-        {missionLedger?.reports.length ? (
-          <div className="mt-6">
-            <h3 className="text-[11px] font-semibold uppercase text-zinc-500">Resúmenes de actividad</h3>
-            <div className="mt-2 divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-white/10 dark:border-white/10">
-              {missionLedger.reports.slice(0, 8).map((report) => (
-                <div key={report.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium">{report.title}</p>
-                    <p className="mt-1 text-[10px] text-zinc-500">
-                      {report.author} · v{report.version} · {report.counts.missions} misiones · {relativeActivity(Date.parse(report.createdAt))}
-                    </p>
-                  </div>
-                  <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                    {reportDeliveryLabel(report.delivery.status)}
-                  </span>
-                </div>
+        <div className="flex min-h-0 flex-1 flex-col lg:h-[calc(100vh-220px)] lg:min-h-[640px] lg:flex-row">
+          <aside className="shrink-0 border-b border-zinc-300/70 bg-[#e8e8e6]/90 p-3 dark:border-white/10 dark:bg-zinc-900/80 lg:w-56 lg:border-b-0 lg:border-r">
+            <p className="px-2 text-[11px] font-semibold uppercase text-zinc-500 dark:text-zinc-400">Favoritos</p>
+            <div className="mt-2 grid gap-1 sm:grid-cols-3 lg:grid-cols-1">
+              {sidebarRows.map(({ value, label, count, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setFilter(value)}
+                  className={cn(
+                    "flex h-9 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium transition-colors",
+                    filter === value
+                      ? "bg-white/85 text-zinc-950 shadow-sm dark:bg-white/12 dark:text-white"
+                      : "text-zinc-600 hover:bg-white/55 dark:text-zinc-300 dark:hover:bg-white/8",
+                  )}
+                  aria-pressed={filter === value}
+                >
+                  <Icon className={cn("h-4 w-4 shrink-0", value === "files" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-400")} />
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  <span className="shrink-0 rounded-full bg-zinc-200/75 px-1.5 py-0.5 text-[10px] tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{count}</span>
+                </button>
               ))}
+              <button
+                type="button"
+                onClick={() => setFilter("all")}
+                className="flex h-9 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-zinc-600 hover:bg-white/55 dark:text-zinc-300 dark:hover:bg-white/8"
+                title="Departamentos"
+              >
+                <PackageOpen className="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400" />
+                <span className="min-w-0 flex-1 truncate">Habilidades</span>
+                <span className="shrink-0 rounded-full bg-zinc-200/75 px-1.5 py-0.5 text-[10px] tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{departments.length}</span>
+              </button>
             </div>
-          </div>
-        ) : null}
-      </section>
 
-      <div className={cn("mt-6 grid gap-7", selected && "xl:grid-cols-[minmax(0,1fr)_380px]")}>
-        <div className="min-w-0 space-y-8">
-          {groups.map((group) => (
-            <section key={group.id}>
-              <div className="flex items-center gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-md bg-sky-50 text-sky-600 dark:bg-sky-950/35 dark:text-sky-300">
-                  <FolderOpen className="h-5 w-5" />
-                </span>
-                <div className="min-w-0">
-                  <h2 className="truncate text-sm font-semibold">{group.name}</h2>
-                  <p className="text-[11px] text-zinc-500">{group.artifacts.length} elementos</p>
-                </div>
+            <div className="mt-6 rounded-xl border border-zinc-300/70 bg-white/60 p-3 text-xs text-zinc-600 dark:border-white/10 dark:bg-white/8 dark:text-zinc-300">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-zinc-800 dark:text-zinc-100">Evidencia</span>
+                {missionLedger ? (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-300">{missionSummary?.approved || 0}</span>
+                ) : null}
               </div>
-              <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
-                {group.artifacts.map((artifact) => {
-                  const Icon = artifactIcon(artifact.extension, artifact.kind)
-                  return (
-                    <div
-                      key={artifact.id}
-                      className={cn(
-                        "flex min-h-[68px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5",
-                        selectedId === artifact.id && "bg-zinc-50 dark:bg-white/5",
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(artifact.id)}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-800">
-                          <Icon className="h-4 w-4 text-zinc-500" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-medium">{artifact.name}</span>
-                          <span className="mt-1 block truncate text-[10px] text-zinc-500">{artifact.path}</span>
-                        </span>
-                        <span className="hidden shrink-0 text-[10px] tabular-nums text-zinc-500 sm:block">
-                          {relativeActivity(artifact.updatedAt)}
-                        </span>
-                      </button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-9 w-9 shrink-0 rounded-md"
-                        onClick={() => downloadArtifact(artifact)}
-                        aria-label={`Descargar ${artifact.name}`}
-                        title="Descargar"
-                      >
-                        <Download className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  )
-                })}
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <span><strong className="block text-base tabular-nums text-zinc-950 dark:text-white">{missionSummary?.missions || 0}</strong>misiones</span>
+                <span><strong className="block text-base tabular-nums text-zinc-950 dark:text-white">{missionSummary?.pendingReview || 0}</strong>pendientes</span>
               </div>
-            </section>
-          ))}
-          {groups.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-zinc-300 px-5 py-16 text-center dark:border-zinc-700">
-              <FolderOpen className="mx-auto h-6 w-6 text-zinc-400" />
-              <p className="mt-3 text-sm font-medium">No hay resultados</p>
-              <p className="mt-1 text-xs text-zinc-500">Cambia el filtro o solicita un entregable desde CEO Office.</p>
-            </div>
-          ) : null}
-        </div>
-
-        {selected ? (
-          <aside className="h-fit rounded-lg border border-zinc-200 bg-white p-5 xl:sticky xl:top-0 dark:border-white/10 dark:bg-zinc-900">
-            <div className="flex items-start gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800">
-                {React.createElement(artifactIcon(selected.extension, selected.kind), { className: "h-5 w-5 text-zinc-500" })}
-              </span>
-              <div className="min-w-0 flex-1">
-                <h2 className="break-words text-sm font-semibold">{selected.name}</h2>
-                <p className="mt-1 text-[10px] text-zinc-500">{selected.departmentName}</p>
+              {missionError ? (
+                <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{missionError}</span>
+                </p>
+              ) : null}
+              {!missionLedger && codexProjectId && !missionError ? (
+                <p className="mt-3 flex items-center gap-1.5 text-[11px] text-zinc-500">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Cargando
+                </p>
+              ) : null}
+              <div className="mt-3 flex gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 rounded-lg"
+                  disabled={!codexProjectId || Boolean(missionBusy)}
+                  onClick={() => void createReport(false)}
+                  title="Generar reporte"
+                  aria-label="Generar reporte"
+                >
+                  {missionBusy === "report:draft" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 rounded-lg"
+                  disabled={!codexProjectId || Boolean(missionBusy)}
+                  onClick={() => void createReport(true)}
+                  title="Preparar correo"
+                  aria-label="Preparar correo"
+                >
+                  {missionBusy === "report:email" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                </Button>
               </div>
-              <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedId(null)} aria-label="Cerrar detalle">
-                <X className="h-4 w-4" />
-              </Button>
             </div>
-            <div className="mt-5 grid grid-cols-2 gap-3 border-y border-zinc-100 py-4 text-xs dark:border-white/5">
-              <div><span className="block text-[10px] text-zinc-500">Tipo</span><strong className="mt-1 block uppercase">{selected.extension}</strong></div>
-              <div><span className="block text-[10px] text-zinc-500">Actualizado</span><strong className="mt-1 block">{relativeActivity(selected.updatedAt)}</strong></div>
-            </div>
-            <pre className="mt-4 max-h-[340px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-50 p-3 font-mono text-[10px] leading-relaxed text-zinc-600 dark:bg-zinc-950 dark:text-zinc-300">
-              {selected.content.slice(0, 8_000)}
-              {selected.content.length > 8_000 ? "\n\n… vista previa limitada" : ""}
-            </pre>
-            <Button type="button" className="mt-4 w-full rounded-md" onClick={() => downloadArtifact(selected)}>
-              <Download className="mr-2 h-4 w-4" />
-              Descargar archivo
-            </Button>
           </aside>
-        ) : null}
+
+          <main className="min-h-0 min-w-0 flex-1 overflow-auto bg-[#fbfbfa] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
+            <div className="sticky top-0 z-10 flex min-h-12 flex-wrap items-center gap-2 border-b border-zinc-200/80 bg-[#fbfbfa]/92 px-4 py-2 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/92">
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-[15px] font-semibold">Archivos</h1>
+                <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {filtered.length} elementos · {reportCount} memorias · {workspaceFileCount} archivos
+                </p>
+              </div>
+              <div className="flex h-8 items-center rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 dark:border-white/10 dark:bg-white/10" role="group" aria-label="Filtrar archivos">
+                {sidebarRows.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setFilter(value)}
+                    className={cn(
+                      "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+                      filter === value ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-950 dark:hover:text-white",
+                    )}
+                    aria-pressed={filter === value}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="px-4 py-5">
+              {groups.map((group) => (
+                <section key={group.id} className="mb-8 last:mb-0">
+                  <div className="mb-3 flex items-center gap-2 px-1">
+                    <span className="relative flex h-7 w-8 shrink-0 items-end">
+                      <span className="absolute left-1 top-1 h-2.5 w-4 rounded-t-md bg-[#74c7ff]" />
+                      <span className="relative h-5 w-8 rounded-[6px] bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-sm" />
+                    </span>
+                    <div className="min-w-0">
+                      <h2 className="truncate text-[13px] font-semibold">{group.name}</h2>
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">{group.artifacts.length} elementos</p>
+                    </div>
+                  </div>
+
+                  {viewMode === "icons" ? (
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-x-5 gap-y-7 sm:grid-cols-[repeat(auto-fill,minmax(118px,1fr))]">
+                      {group.artifacts.map((artifact) => {
+                        const Icon = artifactIcon(artifact.extension, artifact.kind)
+                        const active = selectedId === artifact.id
+                        return (
+                          <button
+                            key={artifact.id}
+                            type="button"
+                            onClick={() => setSelectedId(artifact.id)}
+                            onDoubleClick={() => downloadArtifact(artifact)}
+                            className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] dark:hover:bg-white/8"
+                            title={artifact.path}
+                          >
+                            <span className={cn(
+                              "relative flex h-[62px] w-[54px] shrink-0 items-center justify-center rounded-[10px] border bg-white shadow-[0_10px_22px_-16px_rgba(15,23,42,0.65)] transition-transform group-hover/file:-translate-y-0.5 dark:border-white/10 dark:bg-zinc-900",
+                              artifact.kind === "report" ? "border-sky-200" : "border-zinc-200",
+                            )}>
+                              <span className="absolute right-0 top-0 h-4 w-4 rounded-bl-md border-b border-l border-zinc-200 bg-zinc-100 dark:border-white/10 dark:bg-zinc-800" />
+                              <Icon className={cn("h-7 w-7", artifact.kind === "report" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-300")} />
+                            </span>
+                            <span className={cn(
+                              "mt-2 line-clamp-2 max-w-[108px] rounded-md px-1.5 py-0.5 text-[12px] font-medium leading-4",
+                              active ? "bg-[#0a84ff] text-white" : "text-zinc-800 dark:text-zinc-100",
+                            )}>
+                              {artifact.name}
+                            </span>
+                            <span className="mt-1 max-w-[108px] truncate text-[10px] uppercase text-zinc-500 dark:text-zinc-400">{artifact.extension}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-lg border border-zinc-200/85 bg-white/80 dark:border-white/10 dark:bg-white/5">
+                      {group.artifacts.map((artifact) => {
+                        const Icon = artifactIcon(artifact.extension, artifact.kind)
+                        const active = selectedId === artifact.id
+                        return (
+                          <button
+                            key={artifact.id}
+                            type="button"
+                            onClick={() => setSelectedId(artifact.id)}
+                            className={cn(
+                              "grid min-h-11 w-full grid-cols-[minmax(0,1fr)_88px_88px] items-center gap-3 border-b border-zinc-100 px-3 text-left text-[12px] last:border-b-0 dark:border-white/5 sm:grid-cols-[minmax(0,1fr)_110px_100px_84px]",
+                              active ? "bg-[#0a84ff] text-white" : "hover:bg-zinc-100 dark:hover:bg-white/8",
+                            )}
+                            title={artifact.path}
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <Icon className={cn("h-4 w-4 shrink-0", active ? "text-white" : "text-zinc-500 dark:text-zinc-300")} />
+                              <span className="truncate font-medium">{artifact.name}</span>
+                            </span>
+                            <span className={cn("hidden truncate text-[11px] sm:block", active ? "text-white/85" : "text-zinc-500")}>{artifactTypeLabel(artifact)}</span>
+                            <span className={cn("truncate text-[11px]", active ? "text-white/85" : "text-zinc-500")}>{relativeActivity(artifact.updatedAt)}</span>
+                            <span className={cn("text-right text-[11px] tabular-nums", active ? "text-white/85" : "text-zinc-500")}>{artifactSizeLabel(artifact.content)}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </section>
+              ))}
+
+              {groups.length === 0 ? (
+                <div className="flex min-h-[340px] flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-white/55 text-center dark:border-zinc-700 dark:bg-white/5">
+                  <span className="relative flex h-16 w-20 items-end">
+                    <span className="absolute left-2 top-2 h-4 w-9 rounded-t-lg bg-[#74c7ff]" />
+                    <span className="relative h-12 w-20 rounded-xl bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-lg" />
+                  </span>
+                  <p className="mt-4 text-sm font-semibold">No hay resultados</p>
+                  <p className="mt-1 text-xs text-zinc-500">Cambia el filtro o busca otro nombre.</p>
+                </div>
+              ) : null}
+
+              <section className="mt-8 border-t border-zinc-200/80 pt-5 dark:border-white/10" data-testid="company-mission-evidence-ledger">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-[13px] font-semibold">Evidencia de misiones</h2>
+                    <p className="mt-0.5 text-[11px] text-zinc-500">CEO Office · {missionSummary?.reports || 0} resúmenes</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 rounded-lg"
+                      disabled={!codexProjectId || Boolean(missionBusy)}
+                      onClick={() => void createReport(false)}
+                    >
+                      {missionBusy === "report:draft" ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1.5 h-3.5 w-3.5" />}
+                      Reporte
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 rounded-lg"
+                      disabled={!codexProjectId || Boolean(missionBusy)}
+                      onClick={() => void createReport(true)}
+                    >
+                      {missionBusy === "report:email" ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+                      Correo
+                    </Button>
+                  </div>
+                </div>
+
+                {missionLedger?.records.length ? (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white/75 dark:border-white/10 dark:bg-white/5">
+                    {missionLedger.records.slice(0, 12).map((record) => {
+                      const expanded = expandedRecordId === record.id
+                      const reviewing = missionBusy === `review:${record.id}`
+                      return (
+                        <article key={record.id} className="border-b border-zinc-100 last:border-b-0 dark:border-white/5" data-testid="company-mission-evidence-record">
+                          <div className="flex flex-col gap-3 px-3 py-3 lg:flex-row lg:items-center">
+                            <button
+                              type="button"
+                              className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+                              onClick={() => setExpandedRecordId(expanded ? null : record.id)}
+                              aria-expanded={expanded}
+                            >
+                              <span className="flex items-center gap-2">
+                                <span className={cn("h-2.5 w-2.5 rounded-full", record.status === "completed" ? "bg-emerald-500" : "bg-amber-500")} />
+                                <span className="truncate text-[12px] font-semibold">{record.missionTitle}</span>
+                                <span className="shrink-0 rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+                                  {missionReviewLabel(record.ceoReview.status)}
+                                </span>
+                              </span>
+                              <span className="mt-1 block truncate text-[11px] text-zinc-500">
+                                {record.department} · {record.author} · {relativeActivity(Date.parse(record.createdAt))}
+                              </span>
+                            </button>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/30"
+                                disabled={Boolean(missionBusy)}
+                                onClick={() => void reviewMission(record, "rejected")}
+                                title="Rechazar"
+                                aria-label="Rechazar"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg"
+                                disabled={Boolean(missionBusy)}
+                                onClick={() => void reviewMission(record, "changes_requested")}
+                                title="Pedir cambios"
+                                aria-label="Pedir cambios"
+                              >
+                                {reviewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg"
+                                disabled={Boolean(missionBusy)}
+                                onClick={() => void reviewMission(record, "approved")}
+                                title="Aprobar"
+                                aria-label="Aprobar"
+                              >
+                                {reviewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                              </Button>
+                            </div>
+                          </div>
+                          {expanded ? (
+                            <div className="grid gap-4 border-t border-zinc-100 px-3 pb-4 pt-3 text-xs dark:border-white/5 lg:grid-cols-2">
+                              <div>
+                                <h3 className="text-[10px] font-semibold uppercase text-zinc-500">Entregables</h3>
+                                <div className="mt-2 space-y-2">
+                                  {record.deliverables.map((deliverable) => (
+                                    <div key={deliverable.id} className="flex items-start gap-2">
+                                      <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                                      <span className="min-w-0">
+                                        <span className="block font-medium">{deliverable.name}</span>
+                                        {deliverable.ref ? <span className="mt-0.5 block break-all font-mono text-[10px] text-zinc-500">{deliverable.ref}</span> : null}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <h3 className="text-[10px] font-semibold uppercase text-zinc-500">Evidencia</h3>
+                                <div className="mt-2 space-y-2">
+                                  {record.evidence.map((evidence) => (
+                                    <div key={evidence.id}>
+                                      <span className="flex items-center gap-2 font-medium">
+                                        {evidence.passed === true ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : evidence.passed === false ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> : null}
+                                        {evidence.label}
+                                      </span>
+                                      <p className="mt-1 break-words leading-5 text-zinc-500">{evidence.detail}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </article>
+                      )
+                    })}
+                  </div>
+                ) : missionLedger ? (
+                  <div className="mt-3 rounded-lg border border-dashed border-zinc-300 py-8 text-center text-xs text-zinc-500 dark:border-zinc-700">
+                    Las misiones cerradas aparecerán aquí.
+                  </div>
+                ) : null}
+              </section>
+            </div>
+          </main>
+
+          <aside className="shrink-0 border-t border-zinc-300/70 bg-[#f3f3f1]/90 p-4 dark:border-white/10 dark:bg-zinc-900/85 lg:w-80 lg:border-l lg:border-t-0">
+            {selected ? (
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase text-zinc-500">Vista previa</p>
+                    <h2 className="mt-1 break-words text-sm font-semibold">{selected.name}</h2>
+                    <p className="mt-1 break-words text-[11px] text-zinc-500">{selected.path}</p>
+                  </div>
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setSelectedId(null)} aria-label="Cerrar detalle" title="Cerrar">
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="mt-5 flex flex-col items-center border-b border-zinc-200 pb-5 dark:border-white/10">
+                  <span className="relative flex h-24 w-20 items-center justify-center rounded-[16px] border border-zinc-200 bg-white shadow-[0_18px_32px_-24px_rgba(15,23,42,0.85)] dark:border-white/10 dark:bg-zinc-950">
+                    <span className="absolute right-0 top-0 h-6 w-6 rounded-bl-lg border-b border-l border-zinc-200 bg-zinc-100 dark:border-white/10 dark:bg-zinc-800" />
+                    {React.createElement(artifactIcon(selected.extension, selected.kind), { className: cn("h-10 w-10", selected.kind === "report" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-300") })}
+                  </span>
+                  <span className="mt-3 rounded-md bg-zinc-200/70 px-2 py-1 text-[10px] font-semibold uppercase text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{selected.extension}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 border-b border-zinc-200 py-4 text-xs dark:border-white/10">
+                  <div><span className="block text-[10px] text-zinc-500">Clase</span><strong className="mt-1 block">{artifactTypeLabel(selected)}</strong></div>
+                  <div><span className="block text-[10px] text-zinc-500">Tamaño</span><strong className="mt-1 block tabular-nums">{artifactSizeLabel(selected.content)}</strong></div>
+                  <div><span className="block text-[10px] text-zinc-500">Origen</span><strong className="mt-1 block truncate">{selected.departmentName}</strong></div>
+                  <div><span className="block text-[10px] text-zinc-500">Actualizado</span><strong className="mt-1 block">{relativeActivity(selected.updatedAt)}</strong></div>
+                </div>
+                <pre className="mt-4 min-h-0 max-h-[320px] flex-1 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white p-3 font-mono text-[10px] leading-relaxed text-zinc-600 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300">
+                  {selected.content.slice(0, 8_000)}
+                  {selected.content.length > 8_000 ? "\n\n… vista previa limitada" : ""}
+                </pre>
+                <Button type="button" className="mt-4 w-full rounded-lg" onClick={() => downloadArtifact(selected)}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Descargar
+                </Button>
+              </div>
+            ) : (
+              <div className="flex h-full min-h-[260px] flex-col items-center justify-center text-center">
+                <span className="relative flex h-20 w-24 items-end">
+                  <span className="absolute left-2 top-2 h-5 w-12 rounded-t-xl bg-[#74c7ff]" />
+                  <span className="relative h-14 w-24 rounded-2xl bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-lg" />
+                </span>
+                <h2 className="mt-5 text-sm font-semibold">Archivos</h2>
+                <p className="mt-1 text-xs text-zinc-500">{artifacts.length} elementos disponibles</p>
+              </div>
+            )}
+          </aside>
+        </div>
       </div>
     </SurfacePage>
   )
