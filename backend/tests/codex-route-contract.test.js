@@ -397,6 +397,70 @@ test('company profile routes return grounded readiness and preserve the owned pr
       .send({ profile: { autonomy: { leadOutreach: 'auto' } }, confirmAuto: true });
     assert.equal(confirmedAuto.status, 200);
     assert.equal(confirmedAuto.body.company.profile.autonomy.leadOutreach, 'auto');
+
+    const emptyOkrs = await request(buildApp()).get('/api/codex/projects/p1/okrs');
+    assert.equal(emptyOkrs.status, 200);
+    assert.equal(emptyOkrs.body.portfolio.revision, 0);
+
+    const reviewedOkrs = await request(buildApp())
+      .put('/api/codex/projects/p1/okrs/review')
+      .send({
+        expectedRevision: 0,
+        rationale: 'CEO Office prioriza activación con una métrica verificable.',
+        objectives: [
+          {
+            id: 'okr-activation',
+            title: 'Aumentar activación',
+            priority: 2,
+            keyResults: [{
+              id: 'kr-activation-rate',
+              title: 'Elevar la tasa de activación',
+              baseline: '20',
+              current: '25',
+              target: '40',
+              unit: '%',
+              status: 'on_track',
+              progress: 25,
+            }],
+          },
+          {
+            id: 'okr-retention',
+            title: 'Mejorar retención',
+            priority: 1,
+            keyResults: [{
+              id: 'kr-week-four',
+              title: 'Retención a cuatro semanas',
+              target: '60',
+              unit: '%',
+            }],
+          },
+        ],
+      });
+    assert.equal(reviewedOkrs.status, 200);
+    assert.equal(reviewedOkrs.body.portfolio.revision, 1);
+    assert.equal(reviewedOkrs.body.portfolio.objectives[0].id, 'okr-retention');
+    assert.equal(reviewedOkrs.body.portfolio.latestReview.source, 'ceo_review');
+
+    const reprioritizedOkrs = await request(buildApp())
+      .post('/api/codex/projects/p1/okrs/reprioritize')
+      .send({
+        expectedRevision: 1,
+        orderedIds: ['okr-activation'],
+        rationale: 'Activación desbloquea el aprendizaje de retención.',
+      });
+    assert.equal(reprioritizedOkrs.status, 200);
+    assert.equal(reprioritizedOkrs.body.portfolio.revision, 2);
+    assert.equal(reprioritizedOkrs.body.portfolio.objectives[0].id, 'okr-activation');
+    assert.equal(reprioritizedOkrs.body.portfolio.latestReview.source, 'ceo_reprioritization');
+
+    const staleReview = await request(buildApp())
+      .put('/api/codex/projects/p1/okrs/review')
+      .send({
+        expectedRevision: 1,
+        objectives: reprioritizedOkrs.body.portfolio.objectives,
+      });
+    assert.equal(staleReview.status, 409);
+    assert.equal(staleReview.body.error, 'okr_revision_conflict');
   } finally {
     codexDb.codexProject.findFirst = originals.projectFindFirst;
     codexDb.codexProject.findUnique = originals.projectFindUnique;

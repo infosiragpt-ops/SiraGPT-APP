@@ -169,6 +169,7 @@ import {
   type CodexMissionEvidenceRecord,
   type CodexMissionReviewStatus,
   type CodexProgressMemory,
+  type CodexObjectivePortfolio,
   type CodexProjectActivity,
   type CodexProactiveState,
   type CodexRun,
@@ -5004,6 +5005,128 @@ function companyObjective(sessions: readonly CodeChatSession[], rootSessionId: s
   return instruction || "Define el objetivo principal desde CEO Office para coordinar a todos los departamentos."
 }
 
+function okrStatusLabel(status: CodexObjectivePortfolio["objectives"][number]["status"]): string {
+  if (status === "at_risk") return "En riesgo"
+  if (status === "done") return "Completado"
+  if (status === "paused") return "En pausa"
+  return "Activo"
+}
+
+function CompanyOkrPortfolio({ portfolio }: { portfolio: CodexObjectivePortfolio }) {
+  const latestReview = portfolio.latestReview
+  return (
+    <section
+      className="mt-7 border-y border-zinc-200 py-6 dark:border-white/10"
+      data-testid="company-okr-portfolio"
+    >
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase text-zinc-500">OKRs empresariales</p>
+          <h2 className="mt-1 text-lg font-semibold">Prioridades revisadas por CEO Office</h2>
+        </div>
+        <div className="text-right text-[11px] text-zinc-500">
+          <p>
+            Revisión {portfolio.revision} · {portfolio.summary.active} activos ·{" "}
+            {portfolio.summary.atRisk} en riesgo
+          </p>
+          <p className="mt-1">
+            {latestReview
+              ? `${latestReview.reviewer} · ${relativeActivityFromDate(latestReview.createdAt)}`
+              : "Pendiente de la primera revisión estructurada"}
+          </p>
+        </div>
+      </div>
+
+      {portfolio.objectives.length ? (
+        <div className="mt-4 grid gap-3 xl:grid-cols-2">
+          {portfolio.objectives.slice(0, 5).map((objective) => {
+            const measured = objective.keyResults.filter((keyResult) => keyResult.progress != null)
+            const progress = measured.length
+              ? Math.round(measured.reduce((sum, keyResult) => sum + Number(keyResult.progress), 0) / measured.length)
+              : objective.status === "done"
+                ? 100
+                : 0
+            return (
+              <article
+                key={objective.id}
+                className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900"
+                data-testid="company-okr-objective"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-200 text-[11px] font-semibold tabular-nums dark:border-white/10">
+                    {objective.priority}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="min-w-0 flex-1 text-[13px] font-semibold">{objective.title}</h3>
+                      <span className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        objective.status === "done"
+                          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                          : objective.status === "at_risk"
+                            ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                            : objective.status === "paused"
+                              ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                              : "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+                      )}>
+                        {okrStatusLabel(objective.status)}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-3">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                        <div
+                          className="h-full rounded-full bg-zinc-900 dark:bg-zinc-100"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                      <strong className="text-[11px] tabular-nums">{progress}%</strong>
+                    </div>
+                    <ul className="mt-3 space-y-2">
+                      {objective.keyResults.slice(0, 5).map((keyResult) => (
+                        <li key={keyResult.id} className="flex items-start gap-2 text-[11px] leading-relaxed">
+                          <span className={cn(
+                            "mt-1.5 h-2 w-2 shrink-0 rounded-full",
+                            keyResult.status === "achieved"
+                              ? "bg-emerald-500"
+                              : keyResult.status === "at_risk"
+                                ? "bg-amber-500"
+                                : keyResult.status === "on_track"
+                                  ? "bg-sky-500"
+                                  : "bg-zinc-300 dark:bg-zinc-700",
+                          )} />
+                          <span className="min-w-0 flex-1 text-zinc-600 dark:text-zinc-300">
+                            {keyResult.title}
+                            {keyResult.target ? ` · Meta ${keyResult.target}` : ""}
+                          </span>
+                          {keyResult.progress == null ? null : (
+                            <span className="shrink-0 tabular-nums text-zinc-500">{keyResult.progress}%</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    {objective.keyResults.length === 0 ? (
+                      <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">
+                        CEO Office debe definir resultados clave medibles en la siguiente revisión.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-dashed border-zinc-300 px-5 py-8 text-center dark:border-white/15">
+          <p className="text-sm font-medium">Aún no hay OKRs persistentes</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            CEO Office los definirá y repriorizará con métricas y resultados clave en el siguiente ciclo.
+          </p>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function CompanyDashboardSurface({
   companyName,
   snapshot,
@@ -5118,6 +5241,8 @@ function CompanyDashboardSurface({
           onOpenCeo()
         }}
       />
+
+      {companyContext?.okrs ? <CompanyOkrPortfolio portfolio={companyContext.okrs} /> : null}
 
       {!commandCenter && companyContext ? (
         <section className="mt-7 border-y border-zinc-200 py-6 dark:border-white/10" data-testid="company-operating-diagnosis">

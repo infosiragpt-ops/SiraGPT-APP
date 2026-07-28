@@ -161,6 +161,12 @@ test("company dashboard renders the evidence-grounded operating diagnosis", () =
   assert.match(companySource, /companyContext\.portfolio\.missions/)
   assert.match(companySource, /mission\.departmentName/)
   assert.match(companySource, /mission\.nextAction/)
+  assert.match(companySource, /data-testid="company-okr-portfolio"/)
+  assert.match(companySource, /companyContext\.okrs/)
+  assert.match(companySource, /objective\.keyResults/)
+  assert.match(codexApiSource, /getCompanyOkrs/)
+  assert.match(codexApiSource, /reviewCompanyOkrs/)
+  assert.match(codexApiSource, /reprioritizeCompanyOkrs/)
 })
 
 test("company runtime identity is durable and legacy browser links are confirmation hints only", () => {

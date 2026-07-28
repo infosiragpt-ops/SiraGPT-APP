@@ -575,6 +575,7 @@ async function loadCompanyOperatingContext({
       source: link?.company ? 'company_model' : 'legacy_company_profile',
       content: renderCompanySoul(profile),
     },
+    okrs: require('./progress-ledger').readObjectivePortfolio(project),
     safeguards: {
       externalActionsRequireConnection: true,
       defaultExternalMode: 'review',
@@ -598,6 +599,8 @@ function formatCompanyContext(context) {
   const portfolio = asRecord(source.portfolio);
   const businessAudit = businessAnalyzer.formatBusinessAudit(source.businessAudit);
   const missions = Array.isArray(portfolio.missions) ? portfolio.missions : [];
+  const okrs = asRecord(source.okrs);
+  const objectives = Array.isArray(okrs.objectives) ? okrs.objectives : [];
   const priorities = missions
     .filter((item) => ['ready_to_execute', 'review_required'].includes(item?.status))
     .slice(0, 5);
@@ -612,6 +615,12 @@ function formatCompanyContext(context) {
     `Oferta: ${boundedText(profile.offer, 600) || 'no confirmada'}`,
     `Cliente objetivo: ${boundedText(profile.targetCustomer, 600) || 'no confirmado'}`,
     `Preparación operativa: ${Number(readiness.score) || 0}%`,
+    objectives.length
+      ? `OKR revisados por CEO Office (revisión ${Number(okrs.revision) || 0}):\n${objectives.slice(0, 5).map((objective) => (
+        `- [P${Number(objective.priority) || '-'} · ${boundedText(objective.status, 40)}] ${boundedText(objective.title, 180)}`
+        + `${Array.isArray(objective.keyResults) && objective.keyResults.length ? ` (${objective.keyResults.length} KR)` : ''}`
+      )).join('\n')}`
+      : 'OKR revisados por CEO Office: aún no existe una cartera estructurada.',
     gaps.length
       ? `Brechas verificadas:\n${gaps.map((gap) => {
         const area = areas.find((item) => item?.id === gap?.id);
