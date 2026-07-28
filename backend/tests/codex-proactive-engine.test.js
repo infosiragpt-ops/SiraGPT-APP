@@ -173,6 +173,56 @@ test('proposal is skipped when the model repeats the same open failure twice', a
   assert.equal(proposal, null);
 });
 
+test('CEO Office routes audit work ahead of the blind department rotation', async () => {
+  const marketingIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'marketing');
+  const project = {
+    ...PROJECT,
+    status: 'ready',
+    workspacePath: 'projects/p1',
+    brief: {
+      proactive: { enabled: true, deptIndex: marketingIndex },
+      businessPresenceAudit: {
+        gaps: [{
+          id: 'landing-missing',
+          area: 'website',
+          severity: 'critical',
+          title: 'La empresa no tiene landing',
+          present: false,
+          recommendation: 'Construir la landing con el generador Vite.',
+        }],
+      },
+    },
+  };
+  const prisma = fakePrisma({ project });
+  const created = [];
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async (args) => {
+          created.push(args);
+          return { id: 'run-audit-routing' };
+        },
+      },
+      socialAutopilot: {
+        generateDepartmentPost: async () => {
+          throw new Error('audit routing must beat the marketing cursor');
+        },
+      },
+      chatComplete: async () => ({
+        content: '{"title":"Construir landing","goal":"Implementa y verifica una landing Vite."}',
+      }),
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+
+  assert.equal(result.action, 'proposed');
+  assert.equal(result.department, 'product-engineering');
+  assert.equal(result.missionId, 'business-website');
+  assert.match(created[0].prompt, /^\[PROACTIVO · Producto e Ingenier/);
+});
+
 test('concurrent schedulers acquire one proactive lease per project', async () => {
   const project = {
     ...PROJECT,

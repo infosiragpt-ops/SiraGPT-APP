@@ -590,7 +590,13 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       state.missionIndex,
     );
   const roundRobinDepartment = departments[state.deptIndex % departments.length];
-  const directDepartmentTurn = !qaCycle && (
+  const sourceCounts = companyContext.portfolio?.summary?.sources || {};
+  const hasDecisionSignals = ['auditFindings', 'ledgerBlockers', 'objectives']
+    .some((key) => Number(sourceCounts[key]) > 0);
+  // CEO Office v2 routes sourced work ahead of the legacy direct-operation
+  // rotation. The old rotation remains a compatibility fallback until the
+  // company has an audit, a ledger blocker or an active OKR.
+  const directDepartmentTurn = !qaCycle && !hasDecisionSignals && (
     roundRobinDepartment.custom === true
     || DIRECT_OPERATION_DEPARTMENTS.has(roundRobinDepartment.id)
   );
