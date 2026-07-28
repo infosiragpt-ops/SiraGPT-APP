@@ -980,6 +980,108 @@ function createPrismaSwarmRepository(prisma) {
       });
     },
 
+    async deferTask({
+      swarmId,
+      taskId,
+      workerId,
+      leaseToken,
+      reason,
+      now,
+    }) {
+      return withSerializableRetry(prisma, async (tx) => {
+        let swarm = await tx.codexSwarm.findUnique({ where: { id: swarmId } });
+        if (!swarm) {
+          throw new CodexSwarmError(
+            'codex_swarm_not_found',
+            'Codex swarm not found.',
+            404,
+          );
+        }
+        if (TERMINAL_SWARM_STATUSES.has(swarm.status)) {
+          throw new CodexSwarmError(
+            'codex_swarm_terminal',
+            `Swarm already finished with status ${swarm.status}.`,
+            409,
+          );
+        }
+        const task = await tx.codexSwarmTask.findFirst({
+          where: { id: taskId, swarmId },
+        });
+        if (!task) {
+          throw new CodexSwarmError(
+            'codex_swarm_task_not_found',
+            'Codex swarm task not found.',
+            404,
+          );
+        }
+        if (
+          task.status !== TASK_STATUSES.RUNNING
+          || task.leaseOwner !== workerId
+          || task.leaseToken !== leaseToken
+        ) {
+          throw new CodexSwarmError(
+            'codex_swarm_lease_conflict',
+            'The task lease is not owned by this worker.',
+            409,
+          );
+        }
+        if (!task.leaseExpiresAt || task.leaseExpiresAt.getTime() <= now.getTime()) {
+          throw new CodexSwarmError(
+            'codex_swarm_lease_expired',
+            'The task lease expired before it could be deferred.',
+            409,
+          );
+        }
+
+        if (swarm.status !== SWARM_STATUSES.PAUSED) {
+          swarm = await tx.codexSwarm.update({
+            where: { id: swarmId },
+            data: {
+              status: SWARM_STATUSES.PAUSED,
+              version: { increment: 1 },
+            },
+          });
+        }
+        const deferred = await tx.codexSwarmTask.updateMany({
+          where: {
+            id: task.id,
+            swarmId,
+            status: TASK_STATUSES.RUNNING,
+            leaseOwner: workerId,
+            leaseToken,
+            leaseExpiresAt: { gt: now },
+          },
+          data: {
+            status: TASK_STATUSES.QUEUED,
+            claimId: null,
+            leaseOwner: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+            claimedAt: null,
+            lastHeartbeatAt: now,
+            error: reason,
+            finishedAt: null,
+            attemptCount: { decrement: 1 },
+            version: { increment: 1 },
+          },
+        });
+        if (deferred.count !== 1) {
+          throw new CodexSwarmError(
+            'codex_swarm_lease_conflict',
+            'The task changed concurrently before it could be deferred.',
+            409,
+          );
+        }
+        const reconciled = await reconcileInTransaction(tx, swarm, now);
+        return {
+          task: reconciled.tasks.find((candidate) => candidate.id === task.id),
+          swarm: reconciled.swarm,
+          progress: reconciled.aggregate,
+          replayed: false,
+        };
+      });
+    },
+
     async finishTask({
       swarmId,
       taskId,
@@ -1251,6 +1353,7 @@ class CodexSwarmOrchestrator {
       'appendTasks',
       'claimTask',
       'renewLease',
+      'deferTask',
       'finishTask',
       'pauseSwarm',
       'resumeSwarm',
@@ -1454,6 +1557,23 @@ class CodexSwarmOrchestrator {
       error: status === TASK_STATUSES.FAILED
         ? (normalizedError || 'task_failed')
         : normalizedError,
+      now: this.now(),
+    });
+  }
+
+  async deferTask({
+    swarmId,
+    taskId,
+    workerId,
+    leaseToken,
+    reason = 'budget_deferred',
+  } = {}) {
+    return this.repository.deferTask({
+      swarmId: requiredString(swarmId, 'swarmId', 200),
+      taskId: requiredString(taskId, 'taskId', 200),
+      workerId: requiredString(workerId, 'workerId', 200),
+      leaseToken: requiredString(leaseToken, 'leaseToken', 500),
+      reason: requiredString(reason, 'reason', 20_000),
       now: this.now(),
     });
   }

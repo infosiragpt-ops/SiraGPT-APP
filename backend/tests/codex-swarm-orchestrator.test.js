@@ -279,6 +279,51 @@ function createMemoryRepository() {
       return copy(task);
     },
 
+    async deferTask({
+      swarmId,
+      taskId,
+      workerId,
+      leaseToken,
+      reason,
+      now,
+    }) {
+      const swarm = swarms.get(swarmId);
+      const task = tasksFor(swarmId).find((candidate) => candidate.id === taskId);
+      if (!task) throw new CodexSwarmError('codex_swarm_task_not_found', 'not found', 404);
+      if (
+        task.status !== TASK_STATUSES.RUNNING
+        || task.leaseOwner !== workerId
+        || task.leaseToken !== leaseToken
+      ) {
+        throw new CodexSwarmError('codex_swarm_lease_conflict', 'conflict', 409);
+      }
+      if (!task.leaseExpiresAt || task.leaseExpiresAt.getTime() <= now.getTime()) {
+        throw new CodexSwarmError('codex_swarm_lease_expired', 'expired', 409);
+      }
+      swarm.status = SWARM_STATUSES.PAUSED;
+      swarm.version += 1;
+      Object.assign(task, {
+        status: TASK_STATUSES.QUEUED,
+        claimId: null,
+        leaseOwner: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        claimedAt: null,
+        lastHeartbeatAt: new Date(now),
+        error: reason,
+        finishedAt: null,
+        attemptCount: Math.max(0, task.attemptCount - 1),
+        version: task.version + 1,
+      });
+      const progress = refresh(swarmId, now);
+      return {
+        task: copy(task),
+        swarm: copy(swarm),
+        progress: copy(progress),
+        replayed: false,
+      };
+    },
+
     async finishTask({
       swarmId,
       taskId,
@@ -1041,6 +1086,45 @@ test('pause blocks new claims and resume continues the same durable swarm', asyn
   });
   assert.equal(resumed.swarm.status, SWARM_STATUSES.RUNNING);
   assert.equal(second.task.key, 'audit-b');
+});
+
+test('budget deferral releases the lease, preserves the task and pauses the swarm', async () => {
+  const { orchestrator } = createHarness();
+  const swarm = await createBasicSwarm(orchestrator, {
+    tasks: [
+      { key: 'audit-a', role: TASK_ROLES.READ_ONLY },
+      { key: 'audit-b', role: TASK_ROLES.READ_ONLY },
+    ],
+    maxConcurrency: 1,
+  });
+  const claim = await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-1',
+    claimId: 'claim-budget',
+  });
+  const deferred = await orchestrator.deferTask({
+    swarmId: swarm.id,
+    taskId: claim.task.id,
+    workerId: 'worker-1',
+    leaseToken: claim.task.leaseToken,
+    reason: 'swarm_project_budget_blocked:daily_budget_exceeded',
+  });
+
+  assert.equal(deferred.swarm.status, SWARM_STATUSES.PAUSED);
+  assert.equal(deferred.task.status, TASK_STATUSES.QUEUED);
+  assert.equal(deferred.task.claimId, null);
+  assert.equal(deferred.task.leaseOwner, null);
+  assert.equal(deferred.task.leaseToken, null);
+  assert.equal(deferred.task.attemptCount, 0);
+  assert.equal(deferred.progress.counts.queued, 2);
+
+  const blocked = await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-2',
+    claimId: 'claim-after-budget',
+  });
+  assert.equal(blocked.task, null);
+  assert.equal(blocked.reason, 'swarm_paused');
 });
 
 test('aggregate progress reports statuses, roles and active writers', () => {

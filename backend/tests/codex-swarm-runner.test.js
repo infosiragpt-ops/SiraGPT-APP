@@ -7,12 +7,123 @@ const {
   assertSwarmTaskBudgetAvailable,
   createSwarmUsageAccountant,
   dependencyContext,
+  isBudgetDeferralError,
   loadSwarmProjectSettings,
+  processSwarmJob,
   runReadOnlyTask,
   safeResult,
   startLeaseHeartbeat,
   waitForAutonomousRun,
 } = require('../src/services/codex/swarm-runner');
+
+test('budget errors are classified as deferrals instead of terminal task failures', () => {
+  assert.equal(isBudgetDeferralError({ code: 'swarm_project_budget_exceeded' }), true);
+  assert.equal(isBudgetDeferralError({ code: 'swarm_company_budget_check_failed' }), true);
+  assert.equal(isBudgetDeferralError({ code: 'swarm_department_budget_exceeded' }), true);
+  assert.equal(isBudgetDeferralError({ code: 'swarm_usage_accounting_failed' }), true);
+  assert.equal(isBudgetDeferralError({ code: 'codex_provider_failed' }), false);
+});
+
+test('a reached project budget releases the claimed task and stops before claiming the queue', async () => {
+  const project = {
+    id: 'project-budget-stop',
+    userId: 'user-1',
+    brief: {
+      settings: { budget: { dailyUsd: 0.01 } },
+      proactive: { configuredDailyBudgetUsd: 100 },
+    },
+  };
+  const swarm = {
+    id: 'swarm-budget-stop',
+    project,
+    maxConcurrency: 1,
+    status: 'running',
+  };
+  const tasks = [
+    {
+      id: 'task-1',
+      key: 'task-1',
+      role: 'read-only',
+      input: {},
+      leaseToken: 'lease-1',
+    },
+    {
+      id: 'task-2',
+      key: 'task-2',
+      role: 'read-only',
+      input: {},
+      leaseToken: 'lease-2',
+    },
+  ];
+  let claimCalls = 0;
+  const deferred = [];
+  const failed = [];
+  const orchestrator = {
+    async claimNextTask() {
+      claimCalls += 1;
+      return claimCalls <= tasks.length
+        ? { task: structuredClone(tasks[claimCalls - 1]) }
+        : { task: null, reason: 'no_ready_tasks' };
+    },
+    async getProgress() {
+      return {
+        swarm,
+        tasks,
+        progress: { counts: { queued: tasks.length } },
+      };
+    },
+    async renewTaskLease() {},
+    async deferTask(input) {
+      deferred.push(input);
+      swarm.status = 'paused';
+    },
+    async finishTask(input) {
+      failed.push(input);
+    },
+    async pauseSwarm() {
+      swarm.status = 'paused';
+    },
+  };
+  const result = await processSwarmJob({
+    swarmId: swarm.id,
+    prisma: {
+      codexSwarm: {
+        findUnique: async () => swarm,
+      },
+      codexRunMetric: {
+        findMany: async () => [{ costOriginalUsd: 0.02, costAppliedUsd: 0.02 }],
+      },
+      codexUsageEntry: {
+        findMany: async () => [],
+      },
+    },
+    orchestrator,
+    runner: {
+      readFile: async () => {
+        const error = new Error('ENOENT .sira/settings.json');
+        error.status = 404;
+        throw error;
+      },
+    },
+    sdk: {
+      runSubagent: async () => {
+        throw new Error('provider must not be called');
+      },
+    },
+    env: {
+      NODE_ENV: 'production',
+      CODEX_SWARM_RUNNER_CONCURRENCY: '1',
+      CODEX_SWARM_POLL_MS: '250',
+    },
+  });
+
+  assert.equal(result.swarm.status, 'paused');
+  assert.equal(claimCalls, 1);
+  assert.equal(deferred.length, 1);
+  assert.equal(deferred[0].taskId, 'task-1');
+  assert.match(deferred[0].reason, /swarm_project_budget_blocked:daily_budget_exceeded/);
+  assert.equal(failed.length, 0);
+});
 
 test('swarm project settings fail closed in production when the workspace reader is unavailable', async () => {
   await assert.rejects(

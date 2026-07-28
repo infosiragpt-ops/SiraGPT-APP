@@ -129,6 +129,15 @@ function recordValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function isBudgetDeferralError(error) {
+  const code = String(error?.code || '').trim();
+  return code.startsWith('swarm_project_budget_')
+    || code.startsWith('swarm_company_budget_')
+    || code.startsWith('swarm_department_budget_')
+    || code === 'swarm_usage_accounting_failed'
+    || code === 'codex_usage_ledger_unavailable';
+}
+
 async function assertProjectBudgetAvailable({
   prisma,
   project,
@@ -201,17 +210,25 @@ function createSwarmUsageAccountant({
 
   return async (usage) => {
     sequence += 1;
-    const entry = await usageLedger.recordUsage({
-      prisma,
-      projectId: project?.id,
-      departmentPoolId,
-      source: 'swarm_task',
-      sourceId: task?.id,
-      idempotencyKey: `swarm:${task?.id}:${executionId}:${sequence}`,
-      usage,
-      env,
-      costResolver,
-    });
+    let entry;
+    try {
+      entry = await usageLedger.recordUsage({
+        prisma,
+        projectId: project?.id,
+        departmentPoolId,
+        source: 'swarm_task',
+        sourceId: task?.id,
+        idempotencyKey: `swarm:${task?.id}:${executionId}:${sequence}`,
+        usage,
+        env,
+        costResolver,
+      });
+    } catch (cause) {
+      const error = new Error(`swarm_usage_accounting_failed:${cause?.message || cause}`);
+      error.code = 'swarm_usage_accounting_failed';
+      error.cause = cause;
+      throw error;
+    }
     taskCostUsd += Math.max(
       0,
       Number(entry?.costOriginalUsd) || 0,
@@ -755,10 +772,13 @@ async function processSwarmJob({
     integer(env.CODEX_SWARM_RUNNER_CONCURRENCY, DEFAULT_RUNTIME_CONCURRENCY, 1, MAX_RUNTIME_CONCURRENCY),
   );
   const pollMs = integer(env.CODEX_SWARM_POLL_MS, DEFAULT_POLL_MS, 250, 10_000);
+  let stopRequested = false;
+  let stopReason = null;
 
   const runWorker = async (index) => {
     const workerId = `swarm:${swarm.id}:${index}`;
     while (true) {
+      if (stopRequested) return;
       const claim = await orchestrator.claimNextTask({
         swarmId: swarm.id,
         workerId,
@@ -766,12 +786,29 @@ async function processSwarmJob({
         leaseMs: MAX_LEASE_MS,
       });
       if (!claim.task) {
+        if (claim.reason === 'swarm_paused') return;
+        if (claim.reason === 'department_pool_budget_limit') {
+          stopRequested = true;
+          stopReason = claim.reason;
+          await orchestrator.pauseSwarm({ swarmId: swarm.id });
+          return;
+        }
         const progress = await orchestrator.getProgress(swarm.id);
         if (TERMINAL_SWARM_STATUSES.has(progress.swarm.status)) return;
         await sleep(pollMs);
         continue;
       }
       claim.workerId = workerId;
+      if (stopRequested) {
+        await orchestrator.deferTask({
+          swarmId: swarm.id,
+          taskId: claim.task.id,
+          workerId,
+          leaseToken: claim.task.leaseToken,
+          reason: stopReason || 'swarm_budget_deferred',
+        });
+        return;
+      }
       try {
         await processClaimedTask({
           claimed: claim,
@@ -788,6 +825,18 @@ async function processSwarmJob({
           usageCostResolver,
         });
       } catch (error) {
+        if (isBudgetDeferralError(error)) {
+          stopRequested = true;
+          stopReason = String(error?.message || error).slice(0, 20_000);
+          await orchestrator.deferTask({
+            swarmId: swarm.id,
+            taskId: claim.task.id,
+            workerId,
+            leaseToken: claim.task.leaseToken,
+            reason: stopReason,
+          });
+          return;
+        }
         await orchestrator.finishTask({
           swarmId: swarm.id,
           taskId: claim.task.id,
@@ -854,6 +903,7 @@ module.exports = {
   createSwarmUsageAccountant,
   enqueueSwarm,
   getSwarmQueue,
+  isBudgetDeferralError,
   loadSwarmProjectSettings,
   processClaimedTask,
   processSwarmJob,
