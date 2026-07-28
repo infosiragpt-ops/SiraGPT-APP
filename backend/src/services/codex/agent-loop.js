@@ -26,6 +26,7 @@ const runMetrics = require('./run-metrics');
 const progressLedger = require('./progress-ledger');
 const proactiveMetrics = require('./proactive-metrics');
 const proactiveSwarm = require('./proactive-swarm');
+const fleetQualityReviewer = require('./fleet-quality-reviewer');
 const toolScheduler = require('./tool-scheduler');
 const projectHooks = require('./project-hooks');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
@@ -2656,6 +2657,47 @@ async function closeBuild({
   const branchPassed = !branchFinalization || branchFinalization.ok === true;
   const checkpointPassed = !checkpointError;
   const finalOutcome = projectGatesPassed && proactivePassed && branchPassed && checkpointPassed ? 'passed' : 'failed';
+  let fleetQaResult = null;
+  if (
+    finalOutcome === 'passed'
+    && checkpoint?.commitSha
+    && branchFinalization?.merge?.status === 'merged'
+    && branchFinalization.merge.commitSha
+  ) {
+    try {
+      fleetQaResult = await fleetQualityReviewer.reviewMergedCheckpoint({
+        prisma,
+        project,
+        run,
+        mergeSha: branchFinalization.merge.commitSha,
+        deps: {
+          runner,
+          llmTurn,
+          tier: run.tier || null,
+          model: run.model || null,
+        },
+        env,
+        now: clock,
+      });
+      if (fleetQaResult.action === 'reviewed') {
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: `QA de flota revisó ${fleetQaResult.mergeCount} merge(s): ${fleetQaResult.findings} hallazgo(s), ${fleetQaResult.tasksCreated} tarea(s) añadida(s) al DAG.`,
+        }, { prisma }).catch(() => {});
+      } else if (fleetQaResult.action === 'review_failed') {
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: `QA de flota conservará el checkpoint pendiente para reintento: ${fleetQaResult.error}.`,
+        }, { prisma }).catch(() => {});
+      }
+    } catch (error) {
+      fleetQaResult = {
+        action: 'review_failed',
+        error: String(error?.message || error).slice(0, 500),
+      };
+      if (env?.NODE_ENV !== 'test') {
+        console.warn('[codex agent-loop] fleet QA failed:', error?.message || error);
+      }
+    }
+  }
   const learningEvidence = {
     project: projectGateVerification,
     proactive: verification,
@@ -2666,6 +2708,7 @@ async function closeBuild({
         merge: branchFinalization.merge || null,
       }
       : null,
+    fleetQa: fleetQaResult,
     checkpointError,
   };
   let learned = {

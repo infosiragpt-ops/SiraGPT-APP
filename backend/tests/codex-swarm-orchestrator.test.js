@@ -23,6 +23,7 @@ const {
   aggregateTaskProgress,
   deriveSwarmStatus,
   createPrismaSwarmRepository,
+  normalizeAdditionalTasks,
 } = require('../src/services/codex/swarm-orchestrator');
 
 function copy(value) {
@@ -145,6 +146,47 @@ function createMemoryRepository() {
         }))),
       );
       return copy({ ...swarms.get(swarm.id), tasks: tasksFor(swarm.id) });
+    },
+
+    async appendTasks({
+      swarmId,
+      rawTasks,
+      idFactory,
+      now,
+    }) {
+      const swarm = swarms.get(swarmId);
+      if (!swarm) throw new CodexSwarmError('codex_swarm_not_found', 'not found', 404);
+      if (TERMINAL_SWARM_STATUSES.has(swarm.status) || swarm.cancelRequestedAt) {
+        throw new CodexSwarmError('codex_swarm_terminal', 'terminal', 409);
+      }
+      const normalized = normalizeAdditionalTasks(rawTasks, {
+        existingTasks: tasksFor(swarmId),
+        taskLimit: swarm.taskLimit,
+        idFactory,
+      });
+      tasksFor(swarmId).push(...copy(normalized.tasks.map((task) => ({
+        ...task,
+        swarmId,
+        result: null,
+        error: null,
+        claimId: null,
+        leaseOwner: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        claimedAt: null,
+        lastHeartbeatAt: null,
+        startedAt: null,
+        finishedAt: null,
+      }))));
+      reconcileDependencies(swarmId, now);
+      const progress = refresh(swarmId, now);
+      return {
+        swarm: copy(swarm),
+        tasks: copy(tasksFor(swarmId)),
+        progress: copy(progress),
+        appended: copy(normalized.tasks),
+        replayed: normalized.replayed,
+      };
     },
 
     async claimTask({
@@ -436,6 +478,79 @@ test('creates exactly 1000 logical tasks with durable initial counters', async (
   assert.equal(swarm.blockedTaskCount, 0);
   assert.equal(swarm.maxConcurrency, 16);
   assert.equal(swarm.maxConcurrentWriters, 4);
+});
+
+test('appends idempotent remediation tasks to a running DAG and unlocks dependencies', async () => {
+  const { orchestrator } = createHarness();
+  const swarm = await createBasicSwarm(orchestrator);
+  const parent = await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'writer-1',
+    claimId: 'claim-parent',
+  });
+
+  const appended = await orchestrator.appendTasks({
+    swarmId: swarm.id,
+    tasks: [{
+      key: 'qa-fix-auth',
+      title: 'Corrige autorización rota',
+      role: TASK_ROLES.INTEGRATOR,
+      dependsOn: ['task-a'],
+      priority: 90,
+      input: { source: 'fleet_qa', severity: 'high' },
+    }],
+  });
+  assert.equal(appended.appended.length, 1);
+  assert.equal(appended.progress.counts.total, 2);
+  assert.equal(
+    appended.tasks.find((task) => task.key === 'qa-fix-auth').status,
+    TASK_STATUSES.BLOCKED,
+  );
+
+  const replay = await orchestrator.appendTasks({
+    swarmId: swarm.id,
+    tasks: [{
+      key: 'qa-fix-auth',
+      title: 'Corrige autorización rota',
+      role: TASK_ROLES.INTEGRATOR,
+      dependsOn: ['task-a'],
+    }],
+  });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.progress.counts.total, 2);
+
+  await orchestrator.finishTask({
+    swarmId: swarm.id,
+    taskId: parent.task.id,
+    workerId: 'writer-1',
+    leaseToken: parent.task.leaseToken,
+    status: TASK_STATUSES.SUCCEEDED,
+  });
+  const ready = await orchestrator.getProgress(swarm.id);
+  assert.equal(
+    ready.tasks.find((task) => task.key === 'qa-fix-auth').status,
+    TASK_STATUSES.QUEUED,
+  );
+});
+
+test('rejects appended tasks that would reference a missing DAG dependency', async () => {
+  const { orchestrator } = createHarness();
+  const swarm = await createBasicSwarm(orchestrator);
+  await assert.rejects(
+    orchestrator.appendTasks({
+      swarmId: swarm.id,
+      tasks: [{
+        key: 'qa-invalid',
+        title: 'Invalid remediation',
+        role: TASK_ROLES.INTEGRATOR,
+        dependsOn: ['missing-task'],
+      }],
+    }),
+    (error) => error instanceof CodexSwarmError
+      && error.code === 'codex_swarm_missing_dependency',
+  );
+  const progress = await orchestrator.getProgress(swarm.id);
+  assert.equal(progress.progress.counts.total, 1);
 });
 
 test('rejects more than 1000 logical tasks before persistence', async () => {

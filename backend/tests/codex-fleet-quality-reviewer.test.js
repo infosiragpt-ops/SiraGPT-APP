@@ -1,0 +1,300 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const fleetQa = require('../src/services/codex/fleet-quality-reviewer');
+const {
+  TASK_ROLES,
+  TASK_STATUSES,
+} = require('../src/services/codex/swarm-orchestrator');
+
+const SHAS = {
+  base: '0'.repeat(40),
+  one: 'a'.repeat(40),
+  two: 'b'.repeat(40),
+  three: 'c'.repeat(40),
+};
+
+function fakePrisma(project, activeSwarm = null) {
+  const state = {
+    project: structuredClone(project),
+    activeSwarm: activeSwarm ? structuredClone(activeSwarm) : null,
+  };
+  return {
+    state,
+    codexProject: {
+      findFirst: async ({ where }) => (
+        where.id === state.project.id && (!where.userId || where.userId === state.project.userId)
+          ? structuredClone(state.project)
+          : null
+      ),
+      update: async ({ data }) => {
+        state.project = { ...state.project, ...structuredClone(data) };
+        return structuredClone(state.project);
+      },
+    },
+    codexSwarm: {
+      findFirst: async () => (
+        state.activeSwarm ? structuredClone(state.activeSwarm) : null
+      ),
+    },
+  };
+}
+
+function fakeRunner({ tokenPatch = false } = {}) {
+  const calls = [];
+  const runner = {
+    calls,
+    exec: async (_projectId, command) => {
+      calls.push(command);
+      const args = command.slice(1);
+      if (args[0] === 'rev-parse') {
+        const sha = String(args[1]).replace(/\^1$/, '');
+        const parents = {
+          [SHAS.one]: SHAS.base,
+          [SHAS.two]: SHAS.one,
+          [SHAS.three]: SHAS.two,
+        };
+        return { exitCode: 0, stdout: `${parents[sha] || SHAS.base}\n`, stderr: '' };
+      }
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'diff' && args.includes('--stat')) {
+        return { exitCode: 0, stdout: ' src/auth.js | 4 +++-\n 1 file changed\n', stderr: '' };
+      }
+      if (args[0] === 'diff' && args.includes('--name-only')) {
+        return { exitCode: 0, stdout: 'src/auth.js\0.env\0', stderr: '' };
+      }
+      if (args[0] === 'diff' && args.includes('src/auth.js')) {
+        const fakeToken = ['ghp_', 'a'.repeat(36)].join('');
+        const added = tokenPatch
+          ? `+const token = "${fakeToken}";`
+          : '+if (!user) return forbidden();';
+        return {
+          exitCode: 0,
+          stdout: `diff --git a/src/auth.js b/src/auth.js\n@@ -1 +1 @@\n-allow();\n${added}\n`,
+          stderr: '',
+        };
+      }
+      throw new Error(`unexpected runner command: ${command.join(' ')}`);
+    },
+  };
+  return runner;
+}
+
+const PROJECT = {
+  id: 'project-1',
+  userId: 'user-1',
+  name: 'SiraGPT',
+  brief: {},
+};
+
+test('every Kth merged checkpoint runs qa_reviewer and appends findings to the active DAG', async () => {
+  const activeSwarm = {
+    id: 'swarm-1',
+    status: 'running',
+    tasks: [{
+      id: 'task-integrate',
+      key: 'integrate-main',
+      role: TASK_ROLES.INTEGRATOR,
+      status: TASK_STATUSES.RUNNING,
+      ordinal: 4,
+      result: { planRunId: 'plan-3' },
+    }],
+  };
+  const prisma = fakePrisma(PROJECT, activeSwarm);
+  const runner = fakeRunner();
+  const appended = [];
+  let reviewerCalls = 0;
+  const deps = {
+    runner,
+    idFactory: () => 'review-1',
+    agentSdk: {
+      runSubagent: async ({ name, task, context }) => {
+        reviewerCalls += 1;
+        assert.equal(name, 'qa_reviewer');
+        assert.match(task, /SOLO JSON válido/);
+        assert.match(context, /src\/auth\.js/);
+        assert.doesNotMatch(context, /\.env/);
+        return {
+          ok: true,
+          result: JSON.stringify({
+            findings: [{
+              title: 'Ruta sin autorización',
+              severity: 'high',
+              category: 'security',
+              file: 'src/auth.js',
+              line: 12,
+              evidence: 'La rama permite continuar cuando user es nulo.',
+              remediation: 'Rechazar el request sin usuario y cubrirlo con una prueba.',
+            }],
+          }),
+        };
+      },
+    },
+    orchestrator: {
+      appendTasks: async (input) => {
+        appended.push(input);
+        return {
+          swarm: { id: 'swarm-1' },
+          appended: input.tasks,
+          replayed: false,
+        };
+      },
+    },
+  };
+  const env = {
+    NODE_ENV: 'test',
+    CODEX_FLEET_QA_ENABLED: '1',
+    CODEX_FLEET_QA_EVERY_MERGES: '3',
+  };
+  const now = () => new Date('2026-07-28T18:00:00.000Z');
+
+  const first = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-1', planRunId: 'plan-1' },
+    mergeSha: SHAS.one,
+    deps,
+    env,
+    now,
+  });
+  const second = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-2', planRunId: 'plan-2' },
+    mergeSha: SHAS.two,
+    deps,
+    env,
+    now,
+  });
+  const third = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-3', planRunId: 'plan-3' },
+    mergeSha: SHAS.three,
+    deps,
+    env,
+    now,
+  });
+
+  assert.equal(first.action, 'not_due');
+  assert.equal(second.action, 'not_due');
+  assert.equal(third.action, 'reviewed');
+  assert.equal(third.mergeCount, 3);
+  assert.equal(third.findings, 1);
+  assert.equal(reviewerCalls, 1);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].swarmId, 'swarm-1');
+  assert.equal(appended[0].tasks[0].role, TASK_ROLES.INTEGRATOR);
+  assert.deepEqual(appended[0].tasks[0].dependsOn, ['integrate-main']);
+  assert.equal(appended[0].tasks[0].input.source, 'fleet_qa');
+  assert.match(appended[0].tasks[0].input.objective, /prueba de regresión/);
+
+  const state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
+  assert.equal(state.lastReviewedSha, SHAS.three);
+  assert.equal(state.mergesSinceReview, 0);
+  assert.equal(state.inFlight, null);
+  assert.equal(state.lastReview.tasksCreated, 1);
+});
+
+test('a clean QA review advances the checkpoint without creating DAG tasks', async () => {
+  const prisma = fakePrisma(PROJECT);
+  const result = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-clean' },
+    mergeSha: SHAS.one,
+    deps: {
+      runner: fakeRunner(),
+      idFactory: () => 'review-clean',
+      agentSdk: {
+        runSubagent: async () => ({ ok: true, result: '{"findings":[]}' }),
+      },
+    },
+    env: {
+      NODE_ENV: 'test',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+    now: () => new Date('2026-07-28T18:00:00.000Z'),
+  });
+  assert.equal(result.action, 'reviewed');
+  assert.equal(result.findings, 0);
+  assert.equal(result.tasksCreated, 0);
+  assert.equal(
+    fleetQa.normalizeState(prisma.state.project.brief.fleetQa).lastReviewedSha,
+    SHAS.one,
+  );
+});
+
+test('invalid reviewer output keeps the merge range pending for a later retry', async () => {
+  const prisma = fakePrisma(PROJECT);
+  const result = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-invalid' },
+    mergeSha: SHAS.one,
+    deps: {
+      runner: fakeRunner(),
+      idFactory: () => 'review-invalid',
+      agentSdk: {
+        runSubagent: async () => ({ ok: true, result: 'No encontré nada.' }),
+      },
+    },
+    env: {
+      NODE_ENV: 'test',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+    now: () => new Date('2026-07-28T18:00:00.000Z'),
+  });
+  assert.equal(result.action, 'review_failed');
+  assert.match(result.error, /invalid_review_json/);
+  const state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
+  assert.equal(state.mergesSinceReview, 1);
+  assert.equal(state.lastReviewedSha, null);
+  assert.equal(state.inFlight, null);
+});
+
+test('accumulated diff excludes sensitive paths and redacts detected tokens', async () => {
+  const runner = fakeRunner({ tokenPatch: true });
+  const diff = await fleetQa.collectAccumulatedDiff({
+    runner,
+    projectId: 'project-1',
+    baseSha: SHAS.base,
+    headSha: SHAS.one,
+  });
+  assert.deepEqual(diff.files, ['src/auth.js']);
+  assert.equal(diff.excludedFiles, 1);
+  assert.doesNotMatch(diff.patch, /ghp_a{36}/);
+  assert.ok(
+    runner.calls.every((command) => !command.includes('.env')),
+    'sensitive files must never be requested from the runner',
+  );
+});
+
+test('finding normalization rejects files outside the accumulated diff', () => {
+  const findings = fleetQa.normalizeFindings({
+    findings: [
+      {
+        title: 'Speculative unrelated issue',
+        severity: 'high',
+        category: 'logic',
+        file: 'src/unrelated.js',
+        evidence: 'The reviewer mentioned an unchanged file.',
+        remediation: 'Rewrite the unrelated module.',
+      },
+      {
+        title: 'Changed file issue',
+        severity: 'medium',
+        category: 'test',
+        file: 'src/auth.js',
+        evidence: 'The changed branch has no regression assertion.',
+        remediation: 'Add one focused authorization regression test.',
+      },
+    ],
+  }, ['src/auth.js']);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].title, 'Changed file issue');
+});

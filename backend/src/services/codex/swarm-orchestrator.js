@@ -202,7 +202,11 @@ function normalizeDependencies(value, taskKey) {
   return dependencies;
 }
 
-function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
+function normalizeTaskRows(rawTasks, {
+  taskLimit,
+  idFactory,
+  ordinalOffset = 0,
+}) {
   if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
     throw new CodexSwarmError(
       'codex_swarm_tasks_required',
@@ -219,16 +223,17 @@ function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
     );
   }
 
-  const tasks = rawTasks.map((rawTask, ordinal) => {
+  return rawTasks.map((rawTask, index) => {
     const source = rawTask && typeof rawTask === 'object' ? rawTask : {};
-    const key = requiredString(source.key, `tasks[${ordinal}].key`, 160);
+    const ordinal = ordinalOffset + index;
+    const key = requiredString(source.key, `tasks[${index}].key`, 160);
     const role = normalizeRole(source.role);
     const dependsOn = normalizeDependencies(source.dependsOn, key);
     return {
-      id: requiredString(idFactory('task'), `tasks[${ordinal}].id`, 200),
+      id: requiredString(idFactory('task'), `tasks[${index}].id`, 200),
       key,
       ordinal,
-      title: requiredString(source.title || key, `tasks[${ordinal}].title`, 300),
+      title: requiredString(source.title || key, `tasks[${index}].title`, 300),
       role,
       stage: normalizeStage(source.stage),
       status: dependsOn.length ? TASK_STATUSES.BLOCKED : TASK_STATUSES.QUEUED,
@@ -237,24 +242,57 @@ function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
         0,
         -1_000_000,
         1_000_000,
-        `tasks[${ordinal}].priority`,
+        `tasks[${index}].priority`,
       ),
       dependsOn,
-      input: normalizeJson(source.input, `tasks[${ordinal}].input`),
+      input: normalizeJson(source.input, `tasks[${index}].input`),
       maxAttempts: integerInRange(
         source.maxAttempts,
         3,
         1,
         20,
-        `tasks[${ordinal}].maxAttempts`,
+        `tasks[${index}].maxAttempts`,
       ),
       attemptCount: 0,
       version: 0,
     };
   });
+}
 
+function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
+  const tasks = normalizeTaskRows(rawTasks, { taskLimit, idFactory });
   validateTaskGraph(tasks);
   return tasks;
+}
+
+function normalizeAdditionalTasks(rawTasks, {
+  existingTasks,
+  taskLimit,
+  idFactory,
+}) {
+  const current = Array.isArray(existingTasks) ? existingTasks : [];
+  const existingKeys = new Set(current.map((task) => task.key));
+  const pending = Array.isArray(rawTasks)
+    ? rawTasks.filter((task) => !existingKeys.has(String(task?.key || '').trim()))
+    : rawTasks;
+  if (Array.isArray(pending) && pending.length === 0) {
+    return { tasks: [], replayed: true };
+  }
+  if (current.length + (Array.isArray(pending) ? pending.length : 0) > taskLimit) {
+    throw new CodexSwarmError(
+      'codex_swarm_task_limit',
+      `A swarm supports at most ${taskLimit} logical tasks.`,
+      413,
+      { count: current.length + pending.length, taskLimit },
+    );
+  }
+  const tasks = normalizeTaskRows(pending, {
+    taskLimit: Math.max(0, taskLimit - current.length),
+    idFactory,
+    ordinalOffset: current.length,
+  });
+  validateTaskGraph([...current, ...tasks]);
+  return { tasks, replayed: false };
 }
 
 function validateTaskGraph(tasks) {
@@ -704,6 +742,56 @@ function createPrismaSwarmRepository(prisma) {
           where: { id: swarm.id },
           include: { tasks: { orderBy: { ordinal: 'asc' } } },
         });
+      });
+    },
+
+    async appendTasks({
+      swarmId,
+      rawTasks,
+      idFactory,
+      now,
+    }) {
+      return withSerializableRetry(prisma, async (tx) => {
+        let swarm = await tx.codexSwarm.findUnique({ where: { id: swarmId } });
+        if (!swarm) {
+          throw new CodexSwarmError(
+            'codex_swarm_not_found',
+            'Codex swarm not found.',
+            404,
+          );
+        }
+        if (TERMINAL_SWARM_STATUSES.has(swarm.status) || swarm.cancelRequestedAt) {
+          throw new CodexSwarmError(
+            'codex_swarm_terminal',
+            'Tasks cannot be appended to a terminal or cancelling swarm.',
+            409,
+            { swarmId, status: swarm.status },
+          );
+        }
+        const existingTasks = await loadTasks(tx, swarmId);
+        const normalized = normalizeAdditionalTasks(rawTasks, {
+          existingTasks,
+          taskLimit: swarm.taskLimit,
+          idFactory,
+        });
+        if (normalized.tasks.length) {
+          await tx.codexSwarmTask.createMany({
+            data: normalized.tasks.map((task) => ({
+              ...task,
+              swarmId,
+              ...(task.input == null ? {} : { input: task.input }),
+            })),
+          });
+        }
+        const reconciled = await reconcileInTransaction(tx, swarm, now);
+        swarm = reconciled.swarm;
+        return {
+          swarm,
+          tasks: reconciled.tasks,
+          progress: reconciled.aggregate,
+          appended: normalized.tasks,
+          replayed: normalized.replayed,
+        };
       });
     },
 
@@ -1160,6 +1248,7 @@ class CodexSwarmOrchestrator {
     }
     for (const method of [
       'createSwarm',
+      'appendTasks',
       'claimTask',
       'renewLease',
       'finishTask',
@@ -1274,6 +1363,18 @@ class CodexSwarmOrchestrator {
       ...params,
       strategy: SWARM_STRATEGIES.MAP_REDUCE,
       tasks,
+    });
+  }
+
+  async appendTasks({
+    swarmId,
+    tasks,
+  } = {}) {
+    return this.repository.appendTasks({
+      swarmId: requiredString(swarmId, 'swarmId', 200),
+      rawTasks: tasks,
+      idFactory: this.idFactory,
+      now: this.now(),
     });
   }
 
@@ -1408,6 +1509,7 @@ module.exports = {
   CodexSwarmError,
   CodexSwarmOrchestrator,
   normalizeTasks,
+  normalizeAdditionalTasks,
   validateTaskGraph,
   validateMapReduceShape,
   buildMapReduceTaskGraph,
