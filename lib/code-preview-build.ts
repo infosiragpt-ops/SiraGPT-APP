@@ -339,10 +339,14 @@ function stripModuleSyntax(code: string): string {
     .replace(/^\s*import\s*\{[\s\S]*?\}\s*from\s*['"][^'"]+['"]\s*;?\s*$/gm, "")
     .replace(/^\s*import\s+[\w*\s,{}]*\s+from\s*['"][^'"]+['"]\s*;?\s*$/gm, "")
     .replace(/^\s*import\s+['"][^'"]+['"]\s*;?\s*$/gm, "")
-    .replace(/export\s+default\s+(function|class)/g, "$1")
-    .replace(/export\s+default\s+/g, "window.__sgpt_default = ")
-    .replace(/export\s+(const|let|var|async\s+function|function|class)/g, "$1")
-    .replace(/^\s*export\s*\{[^}]*\}\s*;?\s*$/gm, "")
+    .replace(
+      /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*['"][^'"]+['"]\s*;?\s*$/gm,
+      "",
+    )
+    .replace(
+      /^\s*export\s+(?:type\s+)?\{[\s\S]*?\}\s*from\s*['"][^'"]+['"]\s*;?\s*$/gm,
+      "",
+    )
 }
 
 // Last top-level Capitalized declaration — a render fallback when the code
@@ -402,6 +406,7 @@ function buildReactDocument(files: CodeFiles, entry: string | null): string {
   const footer = `
 const __sgptTarget = (typeof App !== 'undefined' && App)
   || window.__sgpt_default
+  || (typeof exports !== 'undefined' && exports.default)
   || (typeof Page !== 'undefined' && Page)
   || (typeof Main !== 'undefined' && Main)
   ${fallbackComp ? `|| (typeof ${fallbackComp} !== 'undefined' && ${fallbackComp})` : ""}
@@ -451,7 +456,7 @@ ${workspaceCss}
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react,typescript">
+<script id="sgpt-react-source" type="text/plain">
 const { useState, useEffect, useMemo, useRef, useCallback, useReducer, useContext, useLayoutEffect, Fragment, createContext } = React;
 const _ = window._;
 const Recharts = window.Recharts;
@@ -464,6 +469,32 @@ const AnimatePresence = (window.Motion && window.Motion.AnimatePresence) || (fun
 ${bundle}
 
 ${footer}
+</script>
+<script>
+(function () {
+  try {
+    const source = document.getElementById('sgpt-react-source').textContent || '';
+    const compiled = Babel.transform(source, {
+      filename: 'workspace.tsx',
+      presets: [['react', { runtime: 'classic' }], 'typescript'],
+      plugins: ['transform-modules-commonjs'],
+      sourceType: 'module',
+    }).code;
+    window.__sgptModule = { exports: {} };
+    window.exports = window.__sgptModule.exports;
+    window.module = window.__sgptModule;
+    const executable = document.createElement('script');
+    executable.textContent = compiled;
+    document.body.appendChild(executable);
+    window.__sgpt_default = window.__sgpt_default || window.__sgptModule.exports.default;
+  } catch (e) {
+    const o = document.createElement('div');
+    o.id = 'sgpt-error';
+    o.innerHTML = '<b>⚠ Error de compilación</b>\\n\\n' + String((e && e.stack) || e).replace(/[<>&]/g, function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];});
+    document.body.appendChild(o);
+    console.error(e);
+  }
+})();
 </script>
 </body>
 </html>`

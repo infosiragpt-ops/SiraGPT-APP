@@ -55,6 +55,39 @@ describe("buildPreviewDocument", () => {
     assert.match(r.html, /hola react/)
   })
 
+  it("forces the classic JSX runtime so standalone Babel cannot emit ESM imports", () => {
+    const r = buildPreviewDocument(
+      files({
+        "App.tsx":
+          "import React from 'react'\n" +
+          "export interface Props { label: string }\n" +
+          "export type Count = number\n" +
+          "export enum Status { Ready = 'ready' }\n" +
+          "export namespace Tools { export const value = 'kept' }\n" +
+          "const literal = 'export type LiteralMustStay'\n" +
+          "export * as Utils from './utils'\n" +
+          "export type * from './types'\n" +
+          "export default function App(){ return <div>visible</div> }",
+      }),
+      "App.tsx",
+    )
+    assert.equal(r.kind, "react")
+    assert.match(r.html, /Babel\.transform/)
+    assert.match(r.html, /presets: \[\['react', \{ runtime: 'classic' \}\], 'typescript'\]/)
+    assert.match(r.html, /plugins: \['transform-modules-commonjs'\]/)
+    assert.match(r.html, /sourceType: 'module'/)
+    assert.doesNotMatch(r.html, /type="text\/babel"/)
+    const source = r.html.match(/<script id="sgpt-react-source" type="text\/plain">([\s\S]*?)<\/script>/)?.[1]
+    assert.ok(source)
+    assert.doesNotMatch(source, /^\s*import\b/m)
+    assert.doesNotMatch(source, /^\s*export\s+(?:type\s+)?\*/m)
+    assert.match(source, /interface Props/)
+    assert.match(source, /type Count/)
+    assert.match(source, /enum Status/)
+    assert.match(source, /export namespace Tools \{ export const value = 'kept' \}/)
+    assert.match(source, /'export type LiteralMustStay'/)
+  })
+
   it("injects workspace css and inlines json imports in react mode", () => {
     const r = buildPreviewDocument(
       files({
