@@ -139,14 +139,31 @@ describe("chat video auto-activation source contract", () => {
       "both initial and in-chat composers should derive a needsPrompt state"
     )
 
-    const arrowAffordanceBlocks = source.match(/const Icon = canSend \|\| needsPrompt \? ArrowUp : AudioLines/g) || []
+    // The primary button is now unconditionally Send. This is strictly stronger
+    // than the old rule (arrow only for prompt-required media modes): Voice
+    // Studio can no longer take over the button in ANY empty state, so it never
+    // sits next to the dictation mic as a second, indistinguishable speech
+    // affordance. Voice Studio moved to the "+" menu.
+    const arrowAffordanceBlocks = source.match(/const Icon = ArrowUp/g) || []
     assert.equal(
       arrowAffordanceBlocks.length,
       2,
-      "both initial and in-chat composers should keep the arrow send affordance for empty Video mode instead of showing Voice Studio"
+      "both initial and in-chat composers should always show the arrow send affordance"
     )
 
-    const disabledBlocks = source.match(/disabled=\{\(canSend && busy\) \|\| needsPrompt\}/g) || []
+    const alwaysSendBlocks = source.match(/const action = handleSend/g) || []
+    assert.equal(
+      alwaysSendBlocks.length,
+      2,
+      "the primary button must always send — never open Voice Studio"
+    )
+    assert.doesNotMatch(
+      source,
+      /const action = canSend[\s\S]{0,80}openGrokVoicePanel/,
+      "no composer variant should route its primary action to Voice Studio"
+    )
+
+    const disabledBlocks = source.match(/disabled=\{!canSend \|\| busy\}/g) || []
     assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
   })
 
