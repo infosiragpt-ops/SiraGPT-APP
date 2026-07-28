@@ -90,12 +90,6 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
@@ -2828,6 +2822,7 @@ function CompanyHome({
   onToggleProactive: () => void
 }) {
   const pinnedSet = React.useMemo(() => new Set(pinnedDepartmentIds), [pinnedDepartmentIds])
+  const [openDepartmentMenuId, setOpenDepartmentMenuId] = React.useState<string | null>(null)
   return (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
@@ -2906,125 +2901,158 @@ function CompanyHome({
           </Button>
         </div>
 
-        <TooltipProvider delayDuration={250}>
-          <div className="mt-1 space-y-0.5">
-            {departmentRows.map(({ department, activeCount, latest, latestRun }) => {
-              const status = latestRun
-                ? codeRunStatus(latestRun)
-                : latest
-                  ? codeSessionStatus(latest)
-                  : { label: "Disponible", tone: "idle" as const }
-              const isPinned = pinnedSet.has(department.id)
-              const canDelete = department.id !== "ceo-office"
-              return (
-                <div
-                  key={department.id}
+        <div className="mt-1 space-y-0.5">
+          {departmentRows.map(({ department, activeCount, latest, latestRun }) => {
+            const status = latestRun
+              ? codeRunStatus(latestRun)
+              : latest
+                ? codeSessionStatus(latest)
+                : { label: "Disponible", tone: "idle" as const }
+            const isPinned = pinnedSet.has(department.id)
+            const canDelete = department.id !== "ceo-office"
+            const menuOpen = openDepartmentMenuId === department.id
+            return (
+              <div
+                key={department.id}
+                className={cn(
+                  "group/dept relative flex min-h-[58px] w-full items-center gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
+                  hideFooter && "min-h-[46px] gap-1 rounded-md px-1.5 py-1.5",
+                  department.id === "ceo-office" && "bg-muted/50",
+                  isPinned && "bg-sky-50/70 ring-1 ring-sky-500/10 dark:bg-sky-950/20",
+                  menuOpen && "bg-muted/55",
+                )}
+                data-testid={`agent-company-department-${department.id}`}
+              >
+                <button
+                  type="button"
                   className={cn(
-                    "group/dept relative flex min-h-[58px] w-full items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
-                    hideFooter && "min-h-[46px] gap-1.5 rounded-md px-1.5 py-1.5",
-                    department.id === "ceo-office" && "bg-muted/50",
-                    isPinned && "bg-sky-50/70 ring-1 ring-sky-500/10 dark:bg-sky-950/20",
+                    "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    hideFooter && "gap-2",
                   )}
-                  data-testid={`agent-company-department-${department.id}`}
+                  onClick={() => onOpenDepartment(department.id)}
+                  aria-label={`Abrir ${department.name}`}
                 >
-                  <button
-                    type="button"
+                  <span
                     className={cn(
-                      "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      hideFooter && "gap-2",
+                      "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/55 bg-muted/40 text-muted-foreground",
+                      hideFooter && "h-8 w-8",
                     )}
-                    onClick={() => onOpenDepartment(department.id)}
-                    aria-label={`Abrir ${department.name}`}
                   >
+                    <DepartmentGlyph departmentId={department.id} className={hideFooter ? "h-3.5 w-3.5" : "h-4 w-4"} />
                     <span
                       className={cn(
-                        "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/55 bg-muted/40 text-muted-foreground",
-                        hideFooter && "h-8 w-8",
+                        "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background",
+                        hideFooter && "h-2 w-2",
+                        STATUS_STYLES[status.tone],
                       )}
-                    >
-                      <DepartmentGlyph departmentId={department.id} className={hideFooter ? "h-3.5 w-3.5" : "h-4 w-4"} />
-                      <span
-                        className={cn(
-                          "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background",
-                          hideFooter && "h-2 w-2",
-                          STATUS_STYLES[status.tone],
-                        )}
-                      />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
-                          {department.name}
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5">
+                      <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
+                        {department.name}
+                      </span>
+                      {isPinned ? (
+                        <Pin
+                          className={cn(
+                            "h-3 w-3 shrink-0 fill-sky-500/20 text-sky-600 dark:text-sky-300",
+                            hideFooter && "h-2.5 w-2.5",
+                          )}
+                          aria-label="Fijado"
+                        />
+                      ) : null}
+                      {activeCount > 0 ? (
+                        <span className={cn(
+                          "shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+                          hideFooter && "text-[9px]",
+                        )}>
+                          {activeCount}
                         </span>
-                        {isPinned ? (
-                          <Pin
-                            className={cn(
-                              "h-3 w-3 shrink-0 fill-sky-500/20 text-sky-600 dark:text-sky-300",
-                              hideFooter && "h-2.5 w-2.5",
-                            )}
-                            aria-label="Fijado"
-                          />
-                        ) : null}
-                        {activeCount > 0 ? (
-                          <span className={cn(
-                            "shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
-                            hideFooter && "text-[9px]",
-                          )}>
-                            {activeCount}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className={cn(
-                        "mt-0.5 block truncate text-[11px] text-muted-foreground",
-                        hideFooter && "text-[9px] leading-3",
-                      )}>
-                        {latestRun
-                          ? runSummary(latestRun)
-                          : latest?.turns.some((turn) => turn.content.trim())
-                            ? latestSessionLine(latest)
-                            : department.description}
-                      </span>
+                      ) : null}
                     </span>
-                  </button>
+                    <span className={cn(
+                      "mt-0.5 block truncate text-[11px] text-muted-foreground",
+                      hideFooter && "text-[9px] leading-3",
+                    )}>
+                      {latestRun
+                        ? runSummary(latestRun)
+                        : latest?.turns.some((turn) => turn.content.trim())
+                          ? latestSessionLine(latest)
+                          : department.description}
+                    </span>
+                  </span>
+                </button>
 
-                  <div
-                    className={cn(
-                      "flex shrink-0 items-center gap-0.5 rounded-md border border-transparent bg-background/80 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-all sm:opacity-0 sm:group-hover/dept:opacity-100 sm:group-focus-within/dept:opacity-100",
-                      isPinned && "sm:opacity-100",
-                    )}
+                <DropdownMenu
+                  open={menuOpen}
+                  onOpenChange={(open) => setOpenDepartmentMenuId(open ? department.id : null)}
+                >
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-background/90 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        hideFooter && "h-7 w-7",
+                        menuOpen
+                          ? "bg-background/90 text-foreground opacity-100"
+                          : "opacity-100 sm:opacity-0 sm:group-hover/dept:opacity-100 sm:group-focus-within/dept:opacity-100",
+                      )}
+                      aria-label={`Opciones de ${department.name}`}
+                      data-testid={`agent-company-department-menu-${department.id}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <MoreHorizontal className={cn("h-4 w-4", hideFooter && "h-3.5 w-3.5")} />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    sideOffset={6}
+                    className="w-48 rounded-lg p-1.5"
+                    onClick={(event) => event.stopPropagation()}
                   >
-                    <DepartmentActionButton
-                      label={isPinned ? "Desfijar" : "Fijar"}
-                      active={isPinned}
-                      onClick={() => onToggleDepartmentPin(department.id)}
-                      testId={`agent-company-department-pin-${department.id}`}
+                    <DropdownMenuItem
+                      className="gap-2 rounded-md"
+                      data-testid={`agent-company-department-pin-${department.id}`}
+                      onSelect={() => onToggleDepartmentPin(department.id)}
                     >
-                      {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-                    </DepartmentActionButton>
-                    <DepartmentActionButton
-                      label="Editar"
-                      onClick={() => onEditDepartment(department)}
-                      testId={`agent-company-department-edit-${department.id}`}
+                      {isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                      {isPinned ? "Desfijar" : "Fijar"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="gap-2 rounded-md"
+                      data-testid={`agent-company-department-edit-${department.id}`}
+                      onSelect={() => onEditDepartment(department)}
                     >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </DepartmentActionButton>
-                    <DepartmentActionButton
-                      label={canDelete ? "Eliminar" : "CEO Office no se elimina"}
-                      destructive={canDelete}
+                      <Pencil className="h-4 w-4" />
+                      Editar
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="gap-2 rounded-md text-destructive focus:bg-destructive/10 focus:text-destructive"
                       disabled={!canDelete}
-                      onClick={() => onDeleteDepartment(department)}
-                      testId={`agent-company-department-delete-${department.id}`}
+                      data-testid={`agent-company-department-delete-${department.id}`}
+                      onSelect={() => {
+                        if (canDelete) onDeleteDepartment(department)
+                      }}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </DepartmentActionButton>
-                  </div>
+                      <Trash2 className="h-4 w-4" />
+                      Eliminar
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
-                  <ChevronRight className="hidden h-4 w-4 shrink-0 text-muted-foreground/45 transition-transform group-hover/dept:translate-x-0.5 sm:block sm:group-hover/dept:hidden" />
-                </div>
-              )
-            })}
-          </div>
-        </TooltipProvider>
+                <ChevronRight
+                  className={cn(
+                    "hidden h-4 w-4 shrink-0 text-muted-foreground/45 transition-opacity sm:block",
+                    menuOpen || isPinned
+                      ? "sm:hidden"
+                      : "sm:group-hover/dept:hidden sm:group-focus-within/dept:hidden",
+                  )}
+                />
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       <footer
@@ -3081,52 +3109,6 @@ function CompanyHome({
         </button>
       </footer>
     </>
-  )
-}
-
-function DepartmentActionButton({
-  label,
-  onClick,
-  children,
-  active = false,
-  destructive = false,
-  disabled = false,
-  testId,
-}: {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-  active?: boolean
-  destructive?: boolean
-  disabled?: boolean
-  testId?: string
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          data-testid={testId}
-          disabled={disabled}
-          aria-label={label}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            if (!disabled) onClick()
-          }}
-          className={cn(
-            "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
-            active && "bg-sky-500/10 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300",
-            destructive && !disabled && "hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-300",
-          )}
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="text-xs">
-        {label}
-      </TooltipContent>
-    </Tooltip>
   )
 }
 
