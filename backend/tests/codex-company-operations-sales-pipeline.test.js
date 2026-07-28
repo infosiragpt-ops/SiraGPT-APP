@@ -140,6 +140,42 @@ test('repeating outreach returns the existing action without creating another dr
   };
   const result = await sales.prepareLeadOutreach({
     prisma: {
+      codexProject: {
+        findFirst: async () => ({
+          id: 'p',
+          userId: 'u',
+          deletedAt: null,
+          brief: {
+            companyProfile: { autonomy: { leadOutreach: 'review' } },
+            companyResources: {
+              assignments: { 'connector:gmail': 'sales' },
+              pinned: [],
+            },
+          },
+          companyLink: {
+            project: { id: 'company-p', userId: 'u', deletedAt: null },
+          },
+        }),
+      },
+      connectorAccount: {
+        findFirst: async () => ({
+          id: 'connector-gmail',
+          userId: 'u',
+          provider: 'gmail',
+          status: 'connected',
+        }),
+      },
+      projectConnectorAssignment: {
+        findFirst: async () => ({
+          id: 'assignment-gmail',
+          projectId: 'company-p',
+          connectorAccountId: 'connector-gmail',
+          status: 'active',
+        }),
+      },
+      user: {
+        findUnique: async () => ({ gmailTokens: 'encrypted-gmail' }),
+      },
       codexCompanyLead: {
         findFirst: async () => ({
           id: 'lead-1',

@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const policy = require('./external-action-policy');
 const { loadGmailClientForUser } = require('../../gmail-user-client');
 const companyOperatingProfile = require('../company-operating-profile');
+const resourceAccess = require('./company-resource-access');
 
 const EXTERNAL_ACTION_LOCK_CLASS = 0x0ea71;
 const localLocks = new Map();
@@ -148,71 +149,60 @@ async function executeExternalAction({
       if (action.status === 'executing') return { action: 'already_executing', record: action };
       if (action.status !== 'approved') return { action: 'approval_required', record: action };
 
+      let authorized;
+      try {
+        authorized = await resourceAccess.requireExternalActionResourceAccess({
+          prisma: client,
+          project,
+          kind: action.kind,
+          payload: action.payload,
+        });
+      } catch (error) {
+        if (!(error instanceof resourceAccess.CompanyResourceAccessError)) throw error;
+        const record = await client.codexExternalAction.update({
+          where: { id: action.id },
+          data: { status: 'pending_review', error: error.code },
+        });
+        return { action: error.code, record };
+      }
+
       const start = new Date(now());
       start.setUTCHours(0, 0, 0, 0);
-      const [freshProject, user, socialConnection, sentToday] = await Promise.all([
-        client.codexProject?.findFirst
-          ? client.codexProject.findFirst({
-            where: { id: project.id, userId: project.userId },
-          })
-          : project,
-        client.user?.findUnique
-          ? client.user.findUnique({
-            where: { id: project.userId },
-            select: { gmailTokens: true },
-          })
-          : null,
-        action.kind === 'social_reply' && client.socialConnection?.findFirst
-          ? client.socialConnection.findFirst({
-            where: {
-              id: action.payload?.connectionId,
-              userId: project.userId,
-              platform: action.payload?.platform,
-            },
-          })
-          : null,
-        client.codexExternalAction.count({
-          where: {
-            projectId: project.id,
-            kind: action.kind,
-            status: { in: ['executing', 'completed'] },
-            OR: [
-              { executedAt: { gte: start } },
-              { executedAt: null, updatedAt: { gte: start } },
-            ],
-          },
-        }),
-      ]);
+      const sentToday = await client.codexExternalAction.count({
+        where: {
+          projectId: project.id,
+          kind: action.kind,
+          status: { in: ['executing', 'completed'] },
+          OR: [
+            { executedAt: { gte: start } },
+            { executedAt: null, updatedAt: { gte: start } },
+          ],
+        },
+      });
+      const freshProject = authorized.project;
+      const user = authorized.user || null;
+      const socialConnection = authorized.socialConnection || null;
       const existingEvidence = companyContext?.readiness?.evidence || {};
       const socialConnections = socialConnection
         ? [{
           platform: socialConnection.platform,
           accountName: socialConnection.accountName || null,
         }]
-        : Array.isArray(existingEvidence.socialConnections)
-          ? existingEvidence.socialConnections
-          : [];
-      const liveContext = freshProject
-        ? {
-          profile: companyOperatingProfile.readCompanyProfile(freshProject, { now: now() }),
-          readiness: {
-            evidence: {
-              ...existingEvidence,
-              gmailConnected: user
-                ? Boolean(user.gmailTokens)
-                : Boolean(companyContext?.readiness?.evidence?.gmailConnected ?? true),
-              socialConnections,
-            },
+        : [];
+      const liveContext = {
+        profile: companyOperatingProfile.readCompanyProfile(freshProject, { now: now() }),
+        readiness: {
+          evidence: {
+            ...existingEvidence,
+            gmailConnected: action.kind === 'social_reply'
+              ? false
+              : Boolean(user?.gmailTokens),
+            socialConnections,
           },
-        }
-        : companyContext;
+        },
+      };
       const connected = action.kind === 'social_reply'
-        ? Boolean(
-          socialConnection
-          || socialConnections.some((connection) => (
-            connection?.platform === action.payload?.platform
-          )),
-        )
+        ? Boolean(socialConnection)
         : Boolean(liveContext?.readiness?.evidence?.gmailConnected);
       const decision = policy.decideExternalAction({
         companyContext: liveContext,
@@ -252,12 +242,27 @@ async function executeExternalAction({
     });
   });
   if (claim.action !== 'claimed') return claim;
-  const action = claim.record;
+  let action = claim.record;
 
   try {
     let result;
     if (action.kind === 'email_reply') {
       const { client } = await gmailLoader({ prisma, userId: project.userId });
+      action = await prisma.codexExternalAction.findFirst({
+        where: {
+          id: action.id,
+          projectId: project.id,
+          userId: project.userId,
+          status: 'executing',
+        },
+      });
+      if (!action) return { action: 'not_executing', record: claim.record };
+      await resourceAccess.requireExternalActionResourceAccess({
+        prisma,
+        project,
+        kind: action.kind,
+        payload: action.payload,
+      });
       result = action.payload.providerDraftId
         ? await client.sendDraft({ draftId: action.payload.providerDraftId })
         : await client.replyToEmail({
@@ -278,6 +283,21 @@ async function executeExternalAction({
       });
     } else if (action.kind === 'lead_outreach') {
       const { client } = await gmailLoader({ prisma, userId: project.userId });
+      action = await prisma.codexExternalAction.findFirst({
+        where: {
+          id: action.id,
+          projectId: project.id,
+          userId: project.userId,
+          status: 'executing',
+        },
+      });
+      if (!action) return { action: 'not_executing', record: claim.record };
+      await resourceAccess.requireExternalActionResourceAccess({
+        prisma,
+        project,
+        kind: action.kind,
+        payload: action.payload,
+      });
       result = action.payload.providerDraftId
         ? await client.sendDraft({ draftId: action.payload.providerDraftId })
         : await client.sendEmail({
@@ -297,18 +317,22 @@ async function executeExternalAction({
         },
       });
     } else if (action.kind === 'social_reply') {
-      const connection = await prisma.socialConnection.findFirst({
+      action = await prisma.codexExternalAction.findFirst({
         where: {
-          id: action.payload?.connectionId,
+          id: action.id,
+          projectId: project.id,
           userId: project.userId,
-          platform: action.payload?.platform,
+          status: 'executing',
         },
       });
-      if (!connection) {
-        const error = new Error('La conexión social requerida ya no está disponible.');
-        error.code = 'SOCIAL_CONNECTION_REQUIRED';
-        throw error;
-      }
+      if (!action) return { action: 'not_executing', record: claim.record };
+      const authorized = await resourceAccess.requireExternalActionResourceAccess({
+        prisma,
+        project,
+        kind: action.kind,
+        payload: action.payload,
+      });
+      const connection = authorized.socialConnection;
       const sender = socialReplySender
         || require('../../social-company/conversations').sendSocialReply;
       result = await sender({
@@ -355,14 +379,17 @@ async function executeExternalAction({
     });
     return { action: 'completed', record };
   } catch (error) {
+    const accessDenied = error instanceof resourceAccess.CompanyResourceAccessError;
     const record = await prisma.codexExternalAction.update({
       where: { id: action.id },
       data: {
-        status: 'error',
-        error: String(error?.message || error).slice(0, 2000),
+        status: accessDenied ? 'pending_review' : 'error',
+        error: accessDenied
+          ? error.code
+          : String(error?.message || error).slice(0, 2000),
       },
     });
-    return { action: 'error', record };
+    return { action: accessDenied ? error.code : 'error', record };
   }
 }
 
@@ -378,6 +405,17 @@ async function approveExternalAction({ prisma, project, actionId, ...deps }) {
   if (existing.status === 'completed') return { action: 'already_completed', record: existing };
   if (!['pending_review', 'error', 'approved'].includes(existing.status)) {
     return { action: 'not_approvable', record: existing };
+  }
+  try {
+    await resourceAccess.requireExternalActionResourceAccess({
+      prisma,
+      project,
+      kind: existing.kind,
+      payload: existing.payload,
+    });
+  } catch (error) {
+    if (!(error instanceof resourceAccess.CompanyResourceAccessError)) throw error;
+    return { action: error.code, record: existing };
   }
   if (existing.status !== 'approved' || existing.payload?._approval !== 'human') {
     await prisma.codexExternalAction.update({
@@ -421,15 +459,26 @@ async function rejectExternalAction({ prisma, project, actionId }) {
   return { action: result?.count ? 'rejected' : 'not_rejectable' };
 }
 
-async function decisionForAction({ prisma, project, companyContext, kind, env, now = new Date() }) {
+async function decisionForAction({
+  prisma,
+  project,
+  companyContext,
+  kind,
+  payload = null,
+  env,
+  now = new Date(),
+}) {
+  await resourceAccess.requireExternalActionResourceAccess({
+    prisma,
+    project,
+    kind,
+    payload,
+  });
   const sentToday = await completedToday({ prisma, projectId: project.id, kind, now });
-  const connected = kind === 'social_reply'
-    ? Boolean(companyContext?.readiness?.evidence?.socialConnections?.length)
-    : Boolean(companyContext?.readiness?.evidence?.gmailConnected);
   return policy.decideExternalAction({
     companyContext,
     kind,
-    connected,
+    connected: true,
     sentToday,
     env,
   });

@@ -30,7 +30,15 @@ function createMemoryDb(seed = {}) {
   const now = () => new Date(`2026-07-27T20:00:${String(sequence++).padStart(2, '0')}.000Z`);
   const db = {
     _state: state,
-    $transaction: async (callback) => callback(db),
+    $transaction: async (callback) => {
+      const snapshot = structuredClone(state);
+      try {
+        return await callback(db);
+      } catch (error) {
+        for (const key of Object.keys(state)) state[key] = snapshot[key];
+        throw error;
+      }
+    },
     project: {
       findUnique: async ({ where }) => state.projects.find((row) => row.id === where.id) || null,
       findMany: async ({ where }) => state.projects.filter((row) => {
@@ -151,6 +159,7 @@ function baseSeed() {
         name: 'Runtime A',
         status: 'ready',
         deletedAt: null,
+        brief: {},
         updatedAt,
       },
       {
@@ -160,6 +169,7 @@ function baseSeed() {
         name: 'Runtime B',
         status: 'ready',
         deletedAt: null,
+        brief: {},
         updatedAt,
       },
     ],
@@ -305,4 +315,46 @@ test('connector replacement is idempotent and revokes removed company grants', a
   });
   assert.equal(db._state.assignments.find((row) => row.connectorAccountId === 'gmail-a').status, 'revoked');
   assert.equal(db._state.assignments.find((row) => row.connectorAccountId === 'drive-a').status, 'active');
+});
+
+test('atomic connector add/remove never replaces unrelated company grants', async () => {
+  const seed = baseSeed();
+  seed.connectors.push({
+    ...seed.connectors[0],
+    id: 'drive-a',
+    provider: 'google_drive',
+    accountLabel: 'Drive Empresa A',
+  });
+  const db = createMemoryDb(seed);
+  await service.associateCompany(db, {
+    userId: 'user-a',
+    projectId: 'company-a',
+    codexProjectId: 'codex-a',
+    connectorAccountIds: ['gmail-a'],
+  });
+
+  const added = await service.addCompanyConnector(db, {
+    userId: 'user-a',
+    projectId: 'company-a',
+    connectorAccountId: 'drive-a',
+  });
+  assert.equal(added.changed, true);
+  assert.equal(db._state.assignments.find((row) => row.connectorAccountId === 'gmail-a').status, 'active');
+  assert.equal(db._state.assignments.find((row) => row.connectorAccountId === 'drive-a').status, 'active');
+
+  const duplicate = await service.addCompanyConnector(db, {
+    userId: 'user-a',
+    projectId: 'company-a',
+    connectorAccountId: 'drive-a',
+  });
+  assert.equal(duplicate.changed, false);
+
+  const removed = await service.removeCompanyConnector(db, {
+    userId: 'user-a',
+    projectId: 'company-a',
+    connectorAccountId: 'drive-a',
+  });
+  assert.equal(removed.changed, true);
+  assert.equal(db._state.assignments.find((row) => row.connectorAccountId === 'gmail-a').status, 'active');
+  assert.equal(db._state.assignments.find((row) => row.connectorAccountId === 'drive-a').status, 'revoked');
 });

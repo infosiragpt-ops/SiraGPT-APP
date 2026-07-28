@@ -5,10 +5,69 @@ const assert = require('node:assert/strict');
 
 const inbox = require('../src/services/codex/company-operations/inbox-triage');
 
-function fakePrisma() {
-  const state = { items: [], actions: [], drafts: 0 };
+function fakePrisma({
+  resourceDepartment = 'customer-success',
+  companyDeletedAt = null,
+} = {}) {
+  const state = {
+    items: [],
+    actions: [],
+    drafts: 0,
+    project: {
+      id: 'project-a',
+      userId: 'user-a',
+      deletedAt: null,
+      brief: {
+        companyResources: {
+          assignments: resourceDepartment
+            ? { 'connector:gmail': resourceDepartment }
+            : {},
+          pinned: [],
+        },
+      },
+      companyLink: {
+        project: {
+          id: 'company-a',
+          userId: 'user-a',
+          deletedAt: companyDeletedAt,
+        },
+      },
+    },
+  };
   return {
     state,
+    codexProject: {
+      findFirst: async ({ where }) => (
+        where.id === state.project.id
+        && where.userId === state.project.userId
+        && state.project.deletedAt == null
+          ? structuredClone(state.project)
+          : null
+      ),
+    },
+    connectorAccount: {
+      findFirst: async ({ where }) => (
+        where.userId === 'user-a'
+        && where.provider === 'gmail'
+        && where.status === 'connected'
+          ? { id: 'connector-gmail', userId: 'user-a', provider: 'gmail', status: 'connected' }
+          : null
+      ),
+    },
+    projectConnectorAssignment: {
+      findFirst: async ({ where }) => (
+        where.projectId === 'company-a'
+        && where.connectorAccountId === 'connector-gmail'
+        && where.status === 'active'
+          ? { id: 'assignment-gmail', ...where }
+          : null
+      ),
+    },
+    user: {
+      findUnique: async ({ where }) => (
+        where.id === 'user-a' ? { gmailTokens: 'encrypted-gmail' } : null
+      ),
+    },
     codexCompanyInboxItem: {
       upsert: async ({ where, create, update }) => {
         const key = where.projectId_provider_externalId;
@@ -124,4 +183,48 @@ test('review mode creates one Gmail draft and one idempotent action', async () =
   assert.equal(prisma.state.drafts, 1);
   assert.equal(prisma.state.items.length, 1);
   assert.equal(prisma.state.actions.length, 1);
+});
+
+test('missing Gmail resource blocks inbox reads before loading the user account', async () => {
+  const prisma = fakePrisma({ resourceDepartment: null });
+  let gmailLoads = 0;
+  await assert.rejects(
+    inbox.triageInbox({
+      prisma,
+      project: { id: 'project-a', userId: 'user-a' },
+      companyContext: {
+        profile: { autonomy: { emailReplies: 'review' } },
+        readiness: { evidence: { gmailConnected: true } },
+      },
+      chatComplete: async () => ({ content: '{"items":[]}' }),
+      gmailLoader: async () => {
+        gmailLoads += 1;
+        throw new Error('must not load');
+      },
+    }),
+    (error) => error?.code === 'company_resource_not_assigned',
+  );
+  assert.equal(gmailLoads, 0);
+});
+
+test('trashed company blocks inbox reads even when Gmail is still connected', async () => {
+  const prisma = fakePrisma({ companyDeletedAt: new Date() });
+  let gmailLoads = 0;
+  await assert.rejects(
+    inbox.triageInbox({
+      prisma,
+      project: { id: 'project-a', userId: 'user-a' },
+      companyContext: {
+        profile: { autonomy: { emailReplies: 'review' } },
+        readiness: { evidence: { gmailConnected: true } },
+      },
+      chatComplete: async () => ({ content: '{"items":[]}' }),
+      gmailLoader: async () => {
+        gmailLoads += 1;
+        throw new Error('must not load');
+      },
+    }),
+    (error) => error?.code === 'company_project_not_active',
+  );
+  assert.equal(gmailLoads, 0);
 });

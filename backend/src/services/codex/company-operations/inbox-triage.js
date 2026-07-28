@@ -2,6 +2,7 @@
 
 const { loadGmailClientForUser } = require('../../gmail-user-client');
 const externalActions = require('./external-actions');
+const resourceAccess = require('./company-resource-access');
 
 const CATEGORIES = new Set(['lead', 'support', 'billing', 'operations', 'other']);
 const URGENCIES = new Set(['low', 'normal', 'high', 'critical']);
@@ -77,7 +78,19 @@ async function triageInbox({
   now = () => new Date(),
   maxResults = 15,
 }) {
+  await resourceAccess.requireCompanyResourceAccess({
+    prisma,
+    project,
+    departmentId: resourceAccess.CUSTOMER_SUCCESS_DEPARTMENT_ID,
+    resourceKey: resourceAccess.GMAIL_RESOURCE_KEY,
+  });
   const { client } = await gmailLoader({ prisma, userId: project.userId });
+  await resourceAccess.requireCompanyResourceAccess({
+    prisma,
+    project,
+    departmentId: resourceAccess.CUSTOMER_SUCCESS_DEPARTMENT_ID,
+    resourceKey: resourceAccess.GMAIL_RESOURCE_KEY,
+  });
   const emails = await client.getEmails({
     query: 'in:inbox',
     unreadOnly: true,
@@ -173,6 +186,12 @@ async function triageInbox({
       let action = ensured.record;
       if (ensured.created && policyDecision.action === 'review' && !item.providerDraftId) {
         try {
+          await resourceAccess.requireCompanyResourceAccess({
+            prisma,
+            project,
+            departmentId: resourceAccess.CUSTOMER_SUCCESS_DEPARTMENT_ID,
+            resourceKey: resourceAccess.GMAIL_RESOURCE_KEY,
+          });
           const draft = await client.createReplyDraft({
             threadId: email.threadId,
             messageId: email.id,

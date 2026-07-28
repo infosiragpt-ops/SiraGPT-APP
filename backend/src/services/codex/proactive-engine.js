@@ -36,6 +36,7 @@ const proactiveMetrics = require('./proactive-metrics');
 const companyOperatingProfile = require('./company-operating-profile');
 const companyMissionOrchestrator = require('./company-mission-orchestrator');
 const companyDepartments = require('./company-departments');
+const companyResources = require('./company-resources');
 const proactiveLease = require('./proactive-lease');
 const { mutateProjectBrief } = require('./project-brief-store');
 
@@ -173,6 +174,14 @@ function extractJson(text) {
   try { return JSON.parse(body.slice(start, end + 1)); } catch { return null; }
 }
 
+function resourcesAssignedToDepartment(project, departmentId, assignments = null) {
+  const source = assignments || companyResources.readCompanyResources(project).assignments;
+  return Object.entries(source)
+    .filter(([, ownerDepartmentId]) => ownerDepartmentId === departmentId)
+    .map(([resourceKey]) => resourceKey)
+    .sort();
+}
+
 function autoMarketingTask(result = {}) {
   if (result.action === 'drafted_review') return 'Contenido preparado como borrador para revisión humana.';
   if (result.action === 'scheduled_auto') return 'Contenido programado bajo política auto explícitamente habilitada.';
@@ -245,6 +254,7 @@ async function proposeTask({
   qaCycle = false,
   chatComplete,
 }) {
+  const assignedResources = resourcesAssignedToDepartment(project, department.id);
   const responseSchema = department.id === 'ceo-office'
     ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
     : '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[]}';
@@ -275,6 +285,9 @@ async function proposeTask({
         `Proyecto: ${project.name || project.id}`,
         project.brief && project.brief.goal ? `Objetivo del proyecto: ${String(project.brief.goal).slice(0, 500)}` : null,
         `Departamento: ${department.name} — ${department.mission}`,
+        assignedResources.length
+          ? `Recursos asignados a este departamento (no asumas acceso a otros):\n${assignedResources.map((resourceKey) => `- ${resourceKey}`).join('\n')}`
+          : null,
         companyContext ? `Contexto operativo compartido:\n${companyOperatingProfile.formatCompanyContext(companyContext)}` : null,
         mission ? companyMissionOrchestrator.formatMissionContext(mission) : null,
         fileTree ? `Archivos del workspace:\n${String(fileTree).slice(0, 1800)}` : 'Workspace aún vacío (proyecto nuevo).',
@@ -448,6 +461,12 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     : directDepartmentTurn
       ? roundRobinDepartment
       : missionDepartment || roundRobinDepartment;
+  const resourceAssignments = companyResources.readCompanyResources(project).assignments;
+  const assignedResources = resourcesAssignedToDepartment(
+    project,
+    department.id,
+    resourceAssignments,
+  );
   const chatComplete = deps.chatComplete || ((a) => require('./llm-provider').chatComplete(a));
 
   // Marketing is an external-effect department, not another code generator.
@@ -460,6 +479,9 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       project,
       ledger: memory.ledger,
       objectives: memory.objectives,
+      allowedPlatforms: assignedResources
+        .map((resourceKey) => companyResources.parseSocialResourceKey(resourceKey)?.platform)
+        .filter(Boolean),
       chatComplete,
       now,
     });
@@ -547,32 +569,46 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
 
   if (!qaCycle && department.id === 'customer-success') {
     const operations = deps.companyOperations || require('./company-operations');
-    let inboxResult;
-    try {
-      inboxResult = await operations.triageInbox({
-        prisma,
-        project,
-        companyContext,
-        chatComplete,
-        gmailLoader: deps.gmailLoader,
-        env,
-        now,
-      });
-    } catch (error) {
-      inboxResult = {
-        action: error?.code || 'inbox_unavailable',
-        items: [],
-        actions: [],
-        error: String(error?.message || error).slice(0, 500),
-      };
+    const hasGmailResource = assignedResources.includes('connector:gmail');
+    const hasSocialResource = assignedResources.some(
+      (resourceKey) => resourceKey.startsWith('social:'),
+    );
+    let inboxResult = {
+      action: 'company_resource_not_assigned',
+      items: [],
+      actions: [],
+      error: 'connector:gmail is not assigned to customer-success',
+    };
+    if (hasGmailResource) {
+      try {
+        inboxResult = await operations.triageInbox({
+          prisma,
+          project,
+          companyContext,
+          chatComplete,
+          gmailLoader: deps.gmailLoader,
+          env,
+          now,
+        });
+      } catch (error) {
+        inboxResult = {
+          action: error?.code || 'inbox_unavailable',
+          items: [],
+          actions: [],
+          error: String(error?.message || error).slice(0, 500),
+        };
+      }
     }
     let socialResult = {
-      action: 'social_not_connected',
+      action: 'company_social_resource_not_assigned',
       items: [],
       actions: [],
       errors: [],
     };
-    if (typeof operations.triageSocialConversations === 'function') {
+    if (
+      hasSocialResource
+      && typeof operations.triageSocialConversations === 'function'
+    ) {
       try {
         socialResult = await operations.triageSocialConversations({
           prisma,

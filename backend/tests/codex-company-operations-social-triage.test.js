@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const socialTriage = require('../src/services/codex/company-operations/social-triage');
+const companyResources = require('../src/services/codex/company-resources');
 
 function fakePrisma({ mode = 'review', platform = 'x' } = {}) {
   const connection = {
@@ -14,6 +15,7 @@ function fakePrisma({ mode = 'review', platform = 'x' } = {}) {
     accountName: '@sira',
     accessToken: 'encrypted',
   };
+  const resourceKey = companyResources.socialResourceKeyForConnection(connection);
   const state = { items: [], actions: [], connection, sent: [] };
   return {
     state,
@@ -31,11 +33,23 @@ function fakePrisma({ mode = 'review', platform = 'x' } = {}) {
       findFirst: async () => ({
         id: 'project-a',
         userId: 'user-a',
+        deletedAt: null,
         name: 'SiraGPT',
         brief: {
           companyProfile: {
             companyName: 'SiraGPT',
             autonomy: { socialReplies: mode },
+          },
+          companyResources: {
+            assignments: { [resourceKey]: 'customer-success' },
+            pinned: [],
+          },
+        },
+        companyLink: {
+          project: {
+            id: 'company-a',
+            userId: 'user-a',
+            deletedAt: null,
           },
         },
       }),

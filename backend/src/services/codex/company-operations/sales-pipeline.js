@@ -2,6 +2,7 @@
 
 const { createHash } = require('node:crypto');
 const externalActions = require('./external-actions');
+const resourceAccess = require('./company-resource-access');
 const { loadGmailClientForUser } = require('../../gmail-user-client');
 
 function bounded(value, max = 500) {
@@ -308,6 +309,12 @@ async function prepareLeadOutreach({
   let gmailClient = null;
   if (decision.action === 'review') {
     try {
+      await resourceAccess.requireCompanyResourceAccess({
+        prisma,
+        project,
+        departmentId: resourceAccess.SALES_DEPARTMENT_ID,
+        resourceKey: resourceAccess.GMAIL_RESOURCE_KEY,
+      });
       const loaded = await gmailLoader({ prisma, userId: project.userId });
       gmailClient = loaded.client;
       const draft = await gmailClient.createDraft({

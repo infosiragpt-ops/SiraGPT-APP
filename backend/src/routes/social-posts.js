@@ -17,7 +17,15 @@ const {
   postCallbackUrl,
   publicProviderStatus,
 } = require('../services/social-company/platforms');
-const { readPolicy, writePolicy } = require('../services/social-company/policy');
+const {
+  readPolicy,
+  resolvePolicyScopeId,
+  writePolicy,
+} = require('../services/social-company/policy');
+const {
+  loadActiveOwnedCompanyProject,
+  marketingSocialPlatforms,
+} = require('../services/codex/company-resources');
 const { processPost } = require('../services/social-company/worker');
 
 const router = express.Router();
@@ -28,6 +36,13 @@ const LEGACY_PLATFORMS = new Set([
   'tiktok',
   'linkedin',
   'x',
+]);
+const LEGACY_ASSIGNABLE_STATUSES = new Set([
+  'draft',
+  'scheduled',
+  'published',
+  'failed',
+  'cancelled',
 ]);
 
 function validationFail(req, res) {
@@ -65,6 +80,7 @@ function buildSeriesPostData({
   start,
   batchId,
   referenceImages,
+  workspaceId = null,
 }) {
   const rows = [];
   for (let i = 0; i < days; i += 1) {
@@ -83,6 +99,8 @@ function buildSeriesPostData({
         dayIndex: i + 1,
         totalDays: days,
         approved: false,
+        source: 'ceo_office_series',
+        workspaceId,
       },
     });
   }
@@ -115,6 +133,151 @@ function validRemoteImageUrl(value) {
   } catch {
     return null;
   }
+}
+
+function scheduledPostScopeWhere(scope) {
+  const scopeId = resolvePolicyScopeId(scope);
+  return scopeId
+    ? { config: { path: ['workspaceId'], equals: scopeId } }
+    : {};
+}
+
+function requestedPolicyScope(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  const provided = ['workspaceId', 'projectId']
+    .some((field) => Object.prototype.hasOwnProperty.call(source, field));
+  return {
+    provided,
+    scopeId: resolvePolicyScopeId(source),
+  };
+}
+
+async function authorizeMarketingPlatforms({ userId, projectId, platforms }) {
+  const context = await loadMarketingAuthorization({ userId, projectId });
+  if (!context.ok) return context;
+  const denied = platforms.filter((platform) => !context.allowed.has(platform));
+  if (denied.length > 0) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'social_resource_not_assigned',
+      error: 'One or more social channels are not assigned to Marketing for this company',
+      denied,
+    };
+  }
+  return context;
+}
+
+async function loadMarketingAuthorization({ userId, projectId }) {
+  const project = await loadActiveOwnedCompanyProject({
+    prisma,
+    projectId,
+    userId,
+  });
+  if (!project) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'company_project_not_found',
+      error: 'The active company project was not found',
+    };
+  }
+  const connections = await prisma.socialConnection.findMany({
+    where: {
+      userId,
+      platform: { in: PLATFORM_IDS },
+    },
+    select: {
+      id: true,
+      platform: true,
+      accountId: true,
+      accessToken: true,
+      profile: true,
+    },
+  });
+  const allowed = marketingSocialPlatforms(project, connections);
+  return { ok: true, project, allowed, connections };
+}
+
+function sendMarketingAuthorization(res, authorization) {
+  return res.status(authorization.status).json({
+    error: authorization.error,
+    code: authorization.code,
+    ...(authorization.denied ? { denied: authorization.denied } : {}),
+  });
+}
+
+function normalizedStoredPlatforms(post) {
+  return [...new Set(
+    (Array.isArray(post?.platforms) ? post.platforms : [])
+      .map(cleanPlatform)
+      .filter(Boolean),
+  )];
+}
+
+function isLegacyUnscopedPost(post) {
+  const config = post?.config && typeof post.config === 'object' && !Array.isArray(post.config)
+    ? post.config
+    : {};
+  return !resolvePolicyScopeId({
+    workspaceId: config.workspaceId,
+    projectId: config.projectId,
+  });
+}
+
+function assessLegacyPost(post, allowedPlatforms) {
+  if (!LEGACY_ASSIGNABLE_STATUSES.has(String(post?.status || ''))) {
+    return { assignable: false, reason: 'status_not_assignable', denied: [] };
+  }
+  const platforms = normalizedStoredPlatforms(post);
+  if (platforms.length === 0) {
+    return { assignable: false, reason: 'no_supported_platforms', denied: [] };
+  }
+  const denied = platforms.filter((platform) => !allowedPlatforms.has(platform));
+  if (denied.length > 0) {
+    return { assignable: false, reason: 'resources_not_authorized', denied };
+  }
+  return { assignable: true, reason: null, denied: [], platforms };
+}
+
+async function listLegacyOwnedPosts(userId) {
+  const posts = await prisma.scheduledPost.findMany({
+    where: { userId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      userId: true,
+      status: true,
+      platforms: true,
+      config: true,
+      batchId: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  return posts.filter(isLegacyUnscopedPost);
+}
+
+function summarizeLegacyPosts(posts, allowedPlatforms) {
+  const reasons = {};
+  const deniedPlatforms = new Set();
+  let assignable = 0;
+  for (const post of posts) {
+    const assessment = assessLegacyPost(post, allowedPlatforms);
+    if (assessment.assignable) {
+      assignable += 1;
+      continue;
+    }
+    reasons[assessment.reason] = Number(reasons[assessment.reason] || 0) + 1;
+    for (const platform of assessment.denied) deniedPlatforms.add(platform);
+  }
+  return {
+    total: posts.length,
+    assignable,
+    skipped: posts.length - assignable,
+    skippedByReason: reasons,
+    deniedPlatforms: [...deniedPlatforms].sort(),
+  };
 }
 
 // OAuth callback is public. User identity comes exclusively from the signed,
@@ -159,8 +322,20 @@ router.get('/', async (req, res) => {
     const batchId = typeof req.query.batchId === 'string' && req.query.batchId.trim()
       ? req.query.batchId.trim()
       : undefined;
+    const policyScope = requestedPolicyScope(req.query);
+    if (policyScope.provided && !policyScope.scopeId) {
+      return res.status(400).json({
+        error: 'workspaceId or projectId is invalid',
+        code: 'social_policy_scope_invalid',
+      });
+    }
+    const policyScopeId = policyScope.scopeId;
     const posts = await prisma.scheduledPost.findMany({
-      where: { userId: req.user.id, ...(batchId ? { batchId } : {}) },
+      where: {
+        userId: req.user.id,
+        ...scheduledPostScopeWhere(policyScopeId),
+        ...(batchId ? { batchId } : {}),
+      },
       orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'desc' }],
       take: 100,
     });
@@ -184,20 +359,177 @@ router.get('/connections', async (req, res) => {
   }
 });
 
+router.get('/legacy', async (req, res) => {
+  try {
+    const scope = requestedPolicyScope(req.query);
+    if (!scope.provided || !scope.scopeId) {
+      return res.status(400).json({
+        error: 'workspaceId is required to inspect legacy posts',
+        code: 'social_policy_scope_required',
+      });
+    }
+    const authorization = await loadMarketingAuthorization({
+      userId: req.user.id,
+      projectId: scope.scopeId,
+    });
+    if (!authorization.ok) return sendMarketingAuthorization(res, authorization);
+    const posts = await listLegacyOwnedPosts(req.user.id);
+    return res.json({
+      workspaceId: scope.scopeId,
+      legacy: summarizeLegacyPosts(posts, authorization.allowed),
+    });
+  } catch (error) {
+    console.error('[social-posts] legacy summary error:', error);
+    return res.status(500).json({ error: 'Failed to inspect legacy social posts' });
+  }
+});
+
+router.post(
+  '/legacy/assign',
+  [
+    body('workspaceId').isString().trim().isLength({ min: 1, max: 180 }),
+    body('confirm').custom((value) => value === true),
+  ],
+  async (req, res) => {
+    if (validationFail(req, res)) return;
+    try {
+      const workspaceId = resolvePolicyScopeId({ workspaceId: req.body.workspaceId });
+      if (!workspaceId) {
+        return res.status(400).json({
+          error: 'workspaceId is invalid',
+          code: 'social_policy_scope_invalid',
+        });
+      }
+      const authorization = await loadMarketingAuthorization({
+        userId: req.user.id,
+        projectId: workspaceId,
+      });
+      if (!authorization.ok) return sendMarketingAuthorization(res, authorization);
+
+      const candidates = await listLegacyOwnedPosts(req.user.id);
+      const skippedByReason = {};
+      const deniedPlatforms = new Set();
+      let assigned = 0;
+      let skipped = 0;
+
+      for (const candidate of candidates) {
+        // Re-read every owned row immediately before the conditional update.
+        // Approval/retry/cancel may legitimately change the row while this
+        // explicit migration is open in another tab.
+        // eslint-disable-next-line no-await-in-loop
+        const current = await prisma.scheduledPost.findFirst({
+          where: { id: candidate.id, userId: req.user.id },
+        });
+        if (!current || !isLegacyUnscopedPost(current)) {
+          skipped += 1;
+          skippedByReason.changed = Number(skippedByReason.changed || 0) + 1;
+          continue;
+        }
+        const assessment = assessLegacyPost(current, authorization.allowed);
+        if (!assessment.assignable) {
+          skipped += 1;
+          skippedByReason[assessment.reason] = Number(skippedByReason[assessment.reason] || 0) + 1;
+          for (const platform of assessment.denied) deniedPlatforms.add(platform);
+          continue;
+        }
+        const config = current.config && typeof current.config === 'object' && !Array.isArray(current.config)
+          ? current.config
+          : {};
+        const isPublishedHistory = current.status === 'published';
+        const migratedConfig = {
+          ...config,
+          workspaceId,
+          legacyScopeAssignedAt: new Date().toISOString(),
+          legacyScopeAssignedBy: req.user.id,
+          ...(!isPublishedHistory ? {
+            approved: false,
+            approvedAt: null,
+            legacyApprovalRevokedAt: new Date().toISOString(),
+          } : {}),
+        };
+        // updatedAt is the optimistic concurrency token. A concurrent worker
+        // or user action wins and this row is reported as skipped instead of
+        // having its newer config overwritten.
+        // eslint-disable-next-line no-await-in-loop
+        const update = await prisma.scheduledPost.updateMany({
+          where: {
+            id: current.id,
+            userId: req.user.id,
+            updatedAt: current.updatedAt,
+          },
+          data: {
+            config: migratedConfig,
+            ...(!isPublishedHistory ? {
+              status: 'draft',
+              scheduledAt: null,
+              lastError: null,
+            } : {}),
+          },
+        });
+        if (Number(update.count || 0) === 1) {
+          assigned += 1;
+        } else {
+          skipped += 1;
+          skippedByReason.changed = Number(skippedByReason.changed || 0) + 1;
+        }
+      }
+
+      await writeAuditLog(prisma, {
+        req,
+        action: 'social_legacy_posts_assigned',
+        resource: 'codex_project',
+        resourceId: workspaceId,
+        metadata: {
+          total: candidates.length,
+          assigned,
+          skipped,
+          skippedByReason,
+          deniedPlatforms: [...deniedPlatforms].sort(),
+        },
+        tags: ['social', 'legacy', 'explicit-migration'],
+      });
+      return res.json({
+        workspaceId,
+        total: candidates.length,
+        assigned,
+        skipped,
+        skippedByReason,
+        deniedPlatforms: [...deniedPlatforms].sort(),
+      });
+    } catch (error) {
+      console.error('[social-posts] legacy assignment error:', error);
+      return res.status(500).json({ error: 'Failed to assign legacy social posts' });
+    }
+  },
+);
+
 router.get('/operations', async (req, res) => {
   try {
+    const policyScope = requestedPolicyScope(req.query);
+    if (policyScope.provided && !policyScope.scopeId) {
+      return res.status(400).json({
+        error: 'workspaceId or projectId is invalid',
+        code: 'social_policy_scope_invalid',
+      });
+    }
+    const policyScopeId = policyScope.scopeId;
     const [connections, policy, queued, publishedToday] = await Promise.all([
       prisma.socialConnection.findMany({
         where: { userId: req.user.id, platform: { in: PLATFORM_IDS } },
         orderBy: { updatedAt: 'desc' },
       }),
-      readPolicy(prisma, req.user.id),
+      readPolicy(prisma, req.user.id, policyScopeId),
       prisma.scheduledPost.count({
-        where: { userId: req.user.id, status: { in: ['draft', 'scheduled', 'publishing', 'failed'] } },
+        where: {
+          userId: req.user.id,
+          ...scheduledPostScopeWhere(policyScopeId),
+          status: { in: ['draft', 'scheduled', 'publishing', 'failed'] },
+        },
       }),
       prisma.scheduledPost.count({
         where: {
           userId: req.user.id,
+          ...scheduledPostScopeWhere(policyScopeId),
           status: 'published',
           publishedAt: { gte: new Date(new Date().setUTCHours(0, 0, 0, 0)) },
         },
@@ -227,12 +559,20 @@ router.patch(
     body('dailyLimit').optional().isInt({ min: 1, max: 20 }),
     body('platforms').optional().isObject(),
     body('workspaceId').optional({ nullable: true }).isString().isLength({ max: 180 }),
+    body('projectId').optional({ nullable: true }).isString().isLength({ max: 180 }),
     body('confirmAutopublish').optional().isBoolean(),
   ],
   async (req, res) => {
     if (validationFail(req, res)) return;
     try {
-      const current = await readPolicy(prisma, req.user.id);
+      const policyScopeId = requestedPolicyScope(req.body).scopeId;
+      if (!policyScopeId) {
+        return res.status(400).json({
+          error: 'workspaceId or projectId is required to update a social policy',
+          code: 'social_policy_scope_required',
+        });
+      }
+      const current = await readPolicy(prisma, req.user.id, policyScopeId);
       const requestedMode = req.body.mode || current.mode;
       const requestedEnabled = req.body.enabled ?? current.enabled;
       const requestedAutopilot = req.body.autopilot ?? current.autopilot;
@@ -250,13 +590,14 @@ router.patch(
       const policy = await writePolicy(prisma, req.user.id, {
         ...current,
         ...req.body,
+        workspaceId: policyScopeId,
         platforms: {
           ...current.platforms,
           ...(req.body.platforms && typeof req.body.platforms === 'object'
             ? req.body.platforms
             : {}),
         },
-      });
+      }, policyScopeId);
       await writeAuditLog(prisma, {
         req,
         action: 'social_policy_updated',
@@ -327,7 +668,7 @@ router.post(
     body('scheduledAt').optional().isISO8601(),
     body('imageUrl').optional({ nullable: true }).isString().isLength({ max: 4_000 }),
     body('approved').optional().isBoolean(),
-    body('workspaceId').optional({ nullable: true }).isString().isLength({ max: 180 }),
+    body('workspaceId').isString().trim().isLength({ min: 1, max: 180 }),
   ],
   async (req, res) => {
     if (validationFail(req, res)) return;
@@ -337,6 +678,19 @@ router.post(
     if (req.body.imageUrl && !imageUrl) {
       return res.status(400).json({ error: 'imageUrl must be a public HTTPS URL' });
     }
+    const workspaceId = resolvePolicyScopeId(req.body.workspaceId);
+    if (!workspaceId) {
+      return res.status(400).json({
+        error: 'workspaceId is required',
+        code: 'social_policy_scope_required',
+      });
+    }
+    const authorization = await authorizeMarketingPlatforms({
+      userId: req.user.id,
+      projectId: workspaceId,
+      platforms,
+    });
+    if (!authorization.ok) return sendMarketingAuthorization(res, authorization);
     const scheduledAt = req.body.scheduledAt ? new Date(req.body.scheduledAt) : new Date();
     const post = await prisma.scheduledPost.create({
       data: {
@@ -350,7 +704,7 @@ router.post(
         config: {
           approved: req.body.approved === true,
           source: 'ceo_office',
-          workspaceId: req.body.workspaceId || null,
+          workspaceId,
         },
       },
     });
@@ -374,13 +728,31 @@ router.post(
     body('days').optional().isInt({ min: 1, max: 60 }),
     body('platforms').optional().isArray({ min: 1, max: 8 }),
     body('referenceImages').optional().isArray({ max: 8 }),
+    body('workspaceId').isString().trim().isLength({ min: 1, max: 180 }),
   ],
   async (req, res) => {
     try {
       if (validationFail(req, res)) return;
       const days = Math.min(Math.max(Number(req.body.days || 1), 1), 60);
-      const platforms = normalizePlatforms(req.body.platforms);
+      const platforms = [...new Set(
+        (Array.isArray(req.body.platforms) ? req.body.platforms : [])
+          .map(cleanPlatform)
+          .filter(Boolean),
+      )];
       if (platforms.length === 0) return res.status(400).json({ error: 'At least one supported platform is required' });
+      const workspaceId = resolvePolicyScopeId(req.body.workspaceId);
+      if (!workspaceId) {
+        return res.status(400).json({
+          error: 'workspaceId is required',
+          code: 'social_policy_scope_required',
+        });
+      }
+      const authorization = await authorizeMarketingPlatforms({
+        userId: req.user.id,
+        projectId: workspaceId,
+        platforms,
+      });
+      if (!authorization.ok) return sendMarketingAuthorization(res, authorization);
       const start = req.body.startDate
         ? new Date(`${req.body.startDate}T14:00:00.000Z`)
         : new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -397,6 +769,7 @@ router.post(
         start,
         batchId,
         referenceImages,
+        workspaceId,
       });
       const posts = await prisma.scheduledPost.createManyAndReturn({ data: rows });
       return res.status(201).json({ batchId, posts });
@@ -458,9 +831,29 @@ router.post('/:id/cancel', async (req, res) => {
   if (post.status === 'published') {
     return res.status(409).json({ error: 'Published posts cannot be cancelled from SiraGPT' });
   }
-  const updated = await prisma.scheduledPost.update({
-    where: { id: post.id },
+  const result = await prisma.scheduledPost.updateMany({
+    where: {
+      id: post.id,
+      userId: req.user.id,
+      status: { not: 'published' },
+    },
     data: { status: 'cancelled' },
+  });
+  if (Number(result.count || 0) !== 1) {
+    const current = await prisma.scheduledPost.findFirst({
+      where: { id: post.id, userId: req.user.id },
+    });
+    if (!current) {
+      return res.status(404).json({ error: 'Scheduled post not found' });
+    }
+    return res.status(409).json({
+      error: current.status === 'published'
+        ? 'Published posts cannot be cancelled from SiraGPT'
+        : 'The scheduled post changed before cancellation could be applied',
+    });
+  }
+  const updated = await prisma.scheduledPost.findFirst({
+    where: { id: post.id, userId: req.user.id },
   });
   await writeAuditLog(prisma, {
     req,
@@ -475,14 +868,35 @@ router.post('/:id/cancel', async (req, res) => {
 router.post('/:id/publish-now', async (req, res) => {
   const post = await ownedPost(req, res);
   if (!post) return;
-  const policy = await readPolicy(prisma, req.user.id);
+  const config = post.config && typeof post.config === 'object' ? post.config : {};
+  const policyScopeId = resolvePolicyScopeId({
+    workspaceId: config.workspaceId,
+    projectId: config.projectId,
+  });
+  if (!policyScopeId) {
+    return res.status(409).json({
+      error: 'The scheduled post has no active company scope',
+      code: 'social_policy_scope_required',
+    });
+  }
+  const platforms = [...new Set(
+    (Array.isArray(post.platforms) ? post.platforms : [])
+      .map(cleanPlatform)
+      .filter(Boolean),
+  )];
+  const authorization = await authorizeMarketingPlatforms({
+    userId: req.user.id,
+    projectId: policyScopeId,
+    platforms,
+  });
+  if (!authorization.ok) return sendMarketingAuthorization(res, authorization);
+  const policy = await readPolicy(prisma, req.user.id, policyScopeId);
   if (!policy.enabled) {
     return res.status(409).json({
       error: 'Autonomous publishing is paused',
       code: 'social_publishing_paused',
     });
   }
-  const config = post.config && typeof post.config === 'object' ? post.config : {};
   const ready = await prisma.scheduledPost.update({
     where: { id: post.id },
     data: {
@@ -498,8 +912,15 @@ router.post('/:id/publish-now', async (req, res) => {
 module.exports = router;
 module.exports.INTERNAL = {
   addDays,
+  assessLegacyPost,
+  authorizeMarketingPlatforms,
   buildSeriesPostData,
+  isLegacyUnscopedPost,
   normalizePlatforms,
+  normalizedStoredPlatforms,
+  requestedPolicyScope,
   safeConnection,
+  scheduledPostScopeWhere,
+  summarizeLegacyPosts,
   validRemoteImageUrl,
 };
