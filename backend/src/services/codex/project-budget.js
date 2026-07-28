@@ -140,6 +140,7 @@ function boundedNonNegative(value) {
 }
 
 function taskBudgetReservationUsd(task, defaultReservationUsd = 0) {
+  if (!task) return 0;
   const input = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
     ? task.input
     : {};
@@ -173,8 +174,8 @@ async function checkSwarmClaimBudget({
   try {
     const runningTasks = await prisma.codexSwarmTask.findMany({
       where: {
-        createdAt: { gte: utcDayStart(now) },
         status: 'running',
+        leaseExpiresAt: { gt: now },
         swarm: { projectId },
       },
       select: { input: true },
@@ -243,8 +244,8 @@ async function activePoolReservationsUsd({
   }
   const rows = await prisma.codexSwarmTask.findMany({
     where: {
-      createdAt: { gte: utcDayStart(now) },
       status: 'running',
+      leaseExpiresAt: { gt: now },
       swarm: { projectId },
       ...(excludeTaskId ? { id: { not: excludeTaskId } } : {}),
     },

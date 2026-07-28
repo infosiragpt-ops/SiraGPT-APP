@@ -850,16 +850,21 @@ function createPrismaSwarmRepository(prisma) {
       budgetPolicy,
     }) {
       const claim = async () => withSerializableRetry(prisma, async (tx) => {
-        const existing = await tx.codexSwarmTask.findUnique({ where: { claimId } });
-        if (existing) {
-          if (existing.swarmId !== swarmId || existing.leaseOwner !== workerId) {
-            throw new CodexSwarmError(
-              'codex_swarm_claim_id_conflict',
-              'claimId is already owned by another worker or swarm.',
-              409,
-            );
-          }
-          return { task: existing, replayed: true, reason: null };
+        const existingBeforeReconcile = await tx.codexSwarmTask.findUnique({
+          where: { claimId },
+        });
+        if (
+          existingBeforeReconcile
+          && (
+            existingBeforeReconcile.swarmId !== swarmId
+            || existingBeforeReconcile.leaseOwner !== workerId
+          )
+        ) {
+          throw new CodexSwarmError(
+            'codex_swarm_claim_id_conflict',
+            'claimId is already owned by another worker or swarm.',
+            409,
+          );
         }
 
         let swarm = await tx.codexSwarm.findUnique({ where: { id: swarmId } });
@@ -872,13 +877,92 @@ function createPrismaSwarmRepository(prisma) {
         }
         let reconciled = await reconcileInTransaction(tx, swarm, now);
         swarm = reconciled.swarm;
-        const tasks = reconciled.tasks;
+        let tasks = reconciled.tasks;
 
         if (TERMINAL_SWARM_STATUSES.has(swarm.status) || swarm.cancelRequestedAt) {
           return { task: null, replayed: false, reason: 'swarm_terminal' };
         }
         if (swarm.status === SWARM_STATUSES.PAUSED) {
           return { task: null, replayed: false, reason: 'swarm_paused' };
+        }
+
+        if (existingBeforeReconcile) {
+          const existing = await tx.codexSwarmTask.findUnique({
+            where: { id: existingBeforeReconcile.id },
+          });
+          if (
+            !existing
+            || existing.status !== TASK_STATUSES.RUNNING
+            || existing.leaseOwner !== workerId
+            || existing.leaseToken !== existingBeforeReconcile.leaseToken
+            || !existing.leaseExpiresAt
+            || existing.leaseExpiresAt.getTime() <= now.getTime()
+          ) {
+            throw new CodexSwarmError(
+              'codex_swarm_claim_expired',
+              'The replayed claim no longer owns an active lease.',
+              409,
+            );
+          }
+          if (budgetPolicy) {
+            const admission = await projectBudget.checkSwarmClaimBudget({
+              prisma: tx,
+              projectId: swarm.projectId,
+              task: null,
+              projectDailyBudgetUsd: budgetPolicy.projectDailyBudgetUsd,
+              companyDailyBudgetUsd: budgetPolicy.companyDailyBudgetUsd,
+              defaultReservationUsd: budgetPolicy.defaultReservationUsd,
+              now,
+            });
+            if (!admission.allowed) {
+              const released = await tx.codexSwarmTask.updateMany({
+                where: {
+                  id: existing.id,
+                  swarmId,
+                  status: TASK_STATUSES.RUNNING,
+                  leaseOwner: workerId,
+                  leaseToken: existing.leaseToken,
+                  leaseExpiresAt: { gt: now },
+                },
+                data: {
+                  status: TASK_STATUSES.QUEUED,
+                  claimId: null,
+                  leaseOwner: null,
+                  leaseToken: null,
+                  leaseExpiresAt: null,
+                  claimedAt: null,
+                  lastHeartbeatAt: now,
+                  error: `claim_replay_deferred:${admission.reason}`,
+                  finishedAt: null,
+                  attemptCount: { decrement: 1 },
+                  version: { increment: 1 },
+                },
+              });
+              if (released.count !== 1) {
+                throw new CodexSwarmError(
+                  'codex_swarm_lease_conflict',
+                  'The replayed claim changed before it could be deferred.',
+                  409,
+                );
+              }
+              swarm = await tx.codexSwarm.update({
+                where: { id: swarmId },
+                data: {
+                  status: SWARM_STATUSES.PAUSED,
+                  version: { increment: 1 },
+                },
+              });
+              reconciled = await reconcileInTransaction(tx, swarm, now);
+              tasks = reconciled.tasks;
+              return {
+                task: null,
+                replayed: false,
+                reason: admission.reason,
+                budget: admission,
+              };
+            }
+          }
+          return { task: existing, replayed: true, reason: null };
         }
 
         const running = tasks.filter((task) => (
@@ -972,19 +1056,9 @@ function createPrismaSwarmRepository(prisma) {
         return await claim();
       } catch (error) {
         if (error?.code !== 'P2002') throw error;
-        const existing = await prisma.codexSwarmTask.findUnique({ where: { claimId } });
-        if (
-          !existing
-          || existing.swarmId !== swarmId
-          || existing.leaseOwner !== workerId
-        ) {
-          throw new CodexSwarmError(
-            'codex_swarm_claim_id_conflict',
-            'claimId is already owned by another worker or swarm.',
-            409,
-          );
-        }
-        return { task: existing, replayed: true, reason: null };
+        // Re-enter the full transactional path so the winner's claim is
+        // reconciled and revalidated against swarm state and budget policy.
+        return claim();
       }
     },
 

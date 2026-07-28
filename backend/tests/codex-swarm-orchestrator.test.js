@@ -201,14 +201,17 @@ function createMemoryRepository() {
     }) {
       const swarm = swarms.get(swarmId);
       if (!swarm) throw new CodexSwarmError('codex_swarm_not_found', 'not found', 404);
-      const existing = Array.from(tasksBySwarm.values())
+      const existingBeforeReconcile = Array.from(tasksBySwarm.values())
         .flat()
         .find((task) => task.claimId === claimId);
-      if (existing) {
-        if (existing.swarmId !== swarmId || existing.leaseOwner !== workerId) {
-          throw new CodexSwarmError('codex_swarm_claim_id_conflict', 'conflict', 409);
-        }
-        return { task: copy(existing), replayed: true, reason: null };
+      if (
+        existingBeforeReconcile
+        && (
+          existingBeforeReconcile.swarmId !== swarmId
+          || existingBeforeReconcile.leaseOwner !== workerId
+        )
+      ) {
+        throw new CodexSwarmError('codex_swarm_claim_id_conflict', 'conflict', 409);
       }
 
       reconcileExpired(swarmId, now);
@@ -220,6 +223,56 @@ function createMemoryRepository() {
       }
       const tasks = tasksFor(swarmId);
       const running = tasks.filter((task) => task.status === TASK_STATUSES.RUNNING);
+      if (existingBeforeReconcile) {
+        const existing = tasks.find((task) => task.id === existingBeforeReconcile.id);
+        if (
+          !existing
+          || existing.status !== TASK_STATUSES.RUNNING
+          || existing.leaseOwner !== workerId
+          || existing.leaseToken !== existingBeforeReconcile.leaseToken
+          || !existing.leaseExpiresAt
+          || existing.leaseExpiresAt.getTime() <= now.getTime()
+        ) {
+          throw new CodexSwarmError('codex_swarm_claim_expired', 'expired', 409);
+        }
+        if (budgetPolicy) {
+          const activeReservationsUsd = running.reduce(
+            (total, row) => total + taskBudgetReservationUsd(
+              row,
+              budgetPolicy.defaultReservationUsd,
+            ),
+            0,
+          );
+          const projectBlocked = budgetPolicy.projectDailyBudgetUsd != null
+            && activeReservationsUsd > budgetPolicy.projectDailyBudgetUsd;
+          const companyBlocked = budgetPolicy.companyDailyBudgetUsd != null
+            && activeReservationsUsd > budgetPolicy.companyDailyBudgetUsd;
+          if (projectBlocked || companyBlocked) {
+            swarm.status = SWARM_STATUSES.PAUSED;
+            swarm.version += 1;
+            Object.assign(existing, {
+              status: TASK_STATUSES.QUEUED,
+              claimId: null,
+              leaseOwner: null,
+              leaseToken: null,
+              leaseExpiresAt: null,
+              claimedAt: null,
+              error: `claim_replay_deferred:${
+                projectBlocked ? 'project_budget_limit' : 'company_budget_limit'
+              }`,
+              attemptCount: Math.max(0, existing.attemptCount - 1),
+              version: existing.version + 1,
+            });
+            refresh(swarmId, now);
+            return {
+              task: null,
+              replayed: false,
+              reason: projectBlocked ? 'project_budget_limit' : 'company_budget_limit',
+            };
+          }
+        }
+        return { task: copy(existing), replayed: true, reason: null };
+      }
       if (running.length >= swarm.maxConcurrency) {
         return { task: null, replayed: false, reason: 'concurrency_limit' };
       }
@@ -778,6 +831,65 @@ test('claim is idempotent for the same worker and claimId', async () => {
   assert.equal(replay.task.id, first.task.id);
   assert.equal(replay.task.leaseToken, first.task.leaseToken);
   assert.equal(replay.task.attemptCount, 1);
+});
+
+test('an expired claim replay reconciles the lease before it can return a task', async () => {
+  const { orchestrator, advance } = createHarness();
+  const swarm = await createBasicSwarm(orchestrator);
+  await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-1',
+    claimId: 'claim-expired',
+    leaseMs: 5_000,
+  });
+  advance(6_000);
+  await assert.rejects(
+    orchestrator.claimNextTask({
+      swarmId: swarm.id,
+      workerId: 'worker-1',
+      claimId: 'claim-expired',
+      budgetPolicy: {
+        projectDailyBudgetUsd: 0,
+        companyDailyBudgetUsd: 0,
+        defaultReservationUsd: 0.25,
+      },
+    }),
+    (error) => error.code === 'codex_swarm_claim_expired',
+  );
+  const progress = await orchestrator.getProgress(swarm.id);
+  assert.equal(progress.tasks[0].status, TASK_STATUSES.QUEUED);
+  assert.equal(progress.tasks[0].leaseToken, null);
+});
+
+test('an active replay rechecks a lowered budget and releases its lease', async () => {
+  const { orchestrator } = createHarness();
+  const swarm = await createBasicSwarm(orchestrator);
+  await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-1',
+    claimId: 'claim-lowered-budget',
+    budgetPolicy: {
+      projectDailyBudgetUsd: 0.25,
+      companyDailyBudgetUsd: 1,
+      defaultReservationUsd: 0.25,
+    },
+  });
+  const replay = await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-1',
+    claimId: 'claim-lowered-budget',
+    budgetPolicy: {
+      projectDailyBudgetUsd: 0,
+      companyDailyBudgetUsd: 0,
+      defaultReservationUsd: 0.25,
+    },
+  });
+  const progress = await orchestrator.getProgress(swarm.id);
+  assert.equal(replay.task, null);
+  assert.equal(replay.reason, 'project_budget_limit');
+  assert.equal(progress.swarm.status, SWARM_STATUSES.PAUSED);
+  assert.equal(progress.tasks[0].status, TASK_STATUSES.QUEUED);
+  assert.equal(progress.tasks[0].attemptCount, 0);
 });
 
 test('claimId cannot be replayed by another worker', async () => {
