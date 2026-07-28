@@ -176,6 +176,86 @@ test('OT-7: a merge conflict is structured and main is restored cleanly', async 
   assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'main change\n');
 });
 
+test('A1: two run worktrees edit the same project without sharing a working tree', async (t) => {
+  const fixture = gitFixture(t, 'codex-worktree-isolation-');
+  const worktreesDir = path.join(fixture.root, 'worktrees');
+  fs.mkdirSync(worktreesDir, { recursive: true });
+
+  const execAt = async (cwd, command) => {
+    try {
+      return {
+        exitCode: 0,
+        stdout: execFileSync(command[0], command.slice(1), { cwd, encoding: 'utf8' }),
+        stderr: '',
+      };
+    } catch (error) {
+      return {
+        exitCode: Number.isInteger(error.status) ? error.status : 1,
+        stdout: String(error.stdout || ''),
+        stderr: String(error.stderr || error.message || ''),
+      };
+    }
+  };
+  let baseRunner;
+  const scopedRunner = (runId) => {
+    const dir = path.join(worktreesDir, `wt-${runId}`);
+    return {
+      exec: (_projectId, command) => execAt(dir, command),
+      unscoped: () => baseRunner,
+      removeWorktree: async () => {
+        git(fixture.projectDir, ['worktree', 'remove', dir]);
+        return { ok: true, removed: true };
+      },
+    };
+  };
+  baseRunner = {
+    exec: (_projectId, command) => execAt(fixture.projectDir, command),
+    async createWorktree(_projectId, runId, baseBranch) {
+      const dir = path.join(worktreesDir, `wt-${runId}`);
+      git(fixture.projectDir, ['worktree', 'add', '-b', `run/${runId}`, dir, baseBranch]);
+      return { ok: true, dir, resumed: false };
+    },
+    forRun: (runId) => scopedRunner(runId),
+    unscoped: () => baseRunner,
+  };
+
+  const first = await startRunBranch({
+    runner: baseRunner,
+    projectId: fixture.projectId,
+    runId: 'fleet-a',
+  });
+  const second = await startRunBranch({
+    runner: baseRunner,
+    projectId: fixture.projectId,
+    runId: 'fleet-b',
+  });
+  assert.equal(first.worktree, true);
+  assert.equal(second.worktree, true);
+
+  const firstDir = path.join(worktreesDir, 'wt-fleet-a');
+  const secondDir = path.join(worktreesDir, 'wt-fleet-b');
+  fs.writeFileSync(path.join(firstDir, 'app.txt'), 'run A\n');
+  fs.writeFileSync(path.join(secondDir, 'app.txt'), 'run B\n');
+  assert.equal(fs.readFileSync(path.join(firstDir, 'app.txt'), 'utf8'), 'run A\n');
+  assert.equal(fs.readFileSync(path.join(secondDir, 'app.txt'), 'utf8'), 'run B\n');
+  assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'base\n');
+  assert.equal(git(fixture.projectDir, ['status', '--porcelain']), '');
+
+  git(firstDir, ['add', '-A']);
+  git(firstDir, ['commit', '-m', 'fleet A']);
+  const merged = await mergeRunBranch({
+    runner: scopedRunner('fleet-a'),
+    projectId: fixture.projectId,
+    runId: 'fleet-a',
+    verification: true,
+  });
+  assert.equal(merged.ok, true);
+  assert.deepEqual(merged.worktreeCleanup, { ok: true, removed: true });
+  assert.equal(fs.existsSync(firstDir), false);
+  assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'run A\n');
+  assert.equal(fs.readFileSync(path.join(secondDir, 'app.txt'), 'utf8'), 'run B\n');
+});
+
 test('OT-7: configured production-main is used as the run base and merge target', async (t) => {
   const fixture = gitFixture(t, 'codex-production-main-');
   git(fixture.projectDir, ['branch', '-m', 'production-main']);

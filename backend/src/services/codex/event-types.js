@@ -86,6 +86,14 @@ const VALIDATORS = {
     isStr(d.patch) &&
     (d.truncated === undefined || typeof d.truncated === 'boolean'),
 
+  // Incremental editor contract requested by the live workspace surface.
+  // file_patch remains as a compatibility event for older clients.
+  file_delta: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.path) &&
+    isStr(d.hunk) &&
+    (d.truncated === undefined || typeof d.truncated === 'boolean'),
+
   budget_status: (d) =>
     isObj(d) &&
     typeof d.allowed === 'boolean' &&
@@ -101,6 +109,15 @@ const VALIDATORS = {
     isStr(d.title),
 
   run_summary: (d) => isObj(d) && isObj(d.metrics) && validateMetricsShape(d.metrics),
+
+  run_audio: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.audioUrl) &&
+    d.mime === 'audio/mpeg' &&
+    isNum(d.sizeBytes) &&
+    isNum(d.characters) &&
+    optStr(d.voiceId) &&
+    optStr(d.modelId),
 
   executive_summary: (d) =>
     isObj(d) &&

@@ -24,9 +24,11 @@ const VALID = {
   action_end: { actionId: 'a1', status: 'done', outputSummary: 'clean', durationMs: 120, linesRead: 0 },
   narrative_delta: { text: 'Estoy creando el layout.' },
   file_patch: { path: 'src/App.tsx', patch: '@@ -1 +1 @@\n-old\n+new', truncated: false },
+  file_delta: { path: 'src/App.tsx', hunk: '@@ -1 +1 @@\n-old\n+new', truncated: false },
   budget_status: { allowed: true, reason: 'within_budget', costTodayUsd: 1.2, dailyBudgetUsd: 10, remainingUsd: 8.8 },
   checkpoint_created: { checkpointId: 'c1', commitSha: 'abc1234', title: 'feat: layout', createdAt: '2026-06-13' },
   run_summary: { metrics: { timeWorkedMs: 1000, actionsCount: 3, costSource: 'estimated' } },
+  run_audio: { audioUrl: '/api/elevenlabs/audio/run.mp3', mime: 'audio/mpeg', sizeBytes: 1024, characters: 120, voiceId: 'voice-1', modelId: 'model-1' },
   executive_summary: {
     status: 'passed',
     department: 'CEO Office',
@@ -103,9 +105,11 @@ test('action_required requires patternId/title/rawError/blockedCapabilities', ()
   assert.equal(isValidEvent('action_required', { patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: 'no' }), false);
 });
 
-test('file_patch and executive_summary reject incomplete evidence', () => {
+test('file_patch, file_delta and executive_summary reject incomplete evidence', () => {
   assert.equal(isValidEvent('file_patch', { path: 'src/App.tsx', patch: '' }), true);
   assert.equal(isValidEvent('file_patch', { path: '', patch: 'x' }), false);
+  assert.equal(isValidEvent('file_delta', { path: 'src/App.tsx', hunk: '' }), true);
+  assert.equal(isValidEvent('file_delta', { path: '', hunk: 'x' }), false);
   assert.equal(isValidEvent('executive_summary', VALID.executive_summary), true);
   assert.equal(isValidEvent('executive_summary', { ...VALID.executive_summary, status: 'done' }), false);
   assert.equal(isValidEvent('executive_summary', { ...VALID.executive_summary, audioText: '' }), false);

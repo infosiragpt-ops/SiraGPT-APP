@@ -145,6 +145,54 @@ function subagentForTask(task) {
   return requested || 'explorer';
 }
 
+function shouldRetryWriterTask(task, result) {
+  return [TASK_ROLES.WRITER, TASK_ROLES.INTEGRATOR].includes(task?.role)
+    && result?.ok !== true
+    && Number(task?.attemptCount || 0) < Number(task?.maxAttempts || 1)
+    && result?.status !== 'cancelled';
+}
+
+async function requeueWriterTask({
+  prisma,
+  task,
+  workerId,
+  leaseToken,
+  result,
+}) {
+  const retry = await prisma.codexSwarmTask.updateMany({
+    where: {
+      id: task.id,
+      status: TASK_STATUSES.RUNNING,
+      leaseOwner: workerId,
+      leaseToken,
+    },
+    data: {
+      status: TASK_STATUSES.QUEUED,
+      claimId: null,
+      leaseOwner: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      lastHeartbeatAt: new Date(),
+      result: {
+        ...result,
+        retrying: true,
+        previousAttempt: task.attemptCount,
+      },
+      error: null,
+      finishedAt: null,
+      version: { increment: 1 },
+    },
+  });
+  if (retry?.count !== 1) {
+    throw new CodexSwarmError(
+      'codex_swarm_lease_conflict',
+      'The writer task changed before it could be requeued.',
+      409,
+    );
+  }
+  return { requeued: true, attemptCount: task.attemptCount };
+}
+
 async function runReadOnlyTask({
   task,
   swarm,
@@ -311,7 +359,7 @@ function startLeaseHeartbeat({
   };
 }
 
-async function createIntegratorRun({
+async function createWriterRun({
   task,
   swarm,
   project,
@@ -322,17 +370,30 @@ async function createIntegratorRun({
 }) {
   const evidence = dependencyContext(tasks, task);
   const objective = String(task?.input?.objective || swarm?.metadata?.objective || task.title).slice(0, 4_000);
+  const departmentId = String(task?.input?.departmentId || 'product-engineering').slice(0, 120);
+  const acceptance = Array.isArray(task?.input?.acceptance)
+    ? task.input.acceptance.map((item) => `- ${String(item).slice(0, 500)}`).join('\n')
+    : '';
+  const isIntegrator = task.role === TASK_ROLES.INTEGRATOR;
   const prompt = [
-    '[SWARM · CEO Office]',
-    'Eres el integrador único de un enjambre de agentes. Implementa el objetivo en el workspace real.',
+    `[SWARM · ${departmentId}]`,
+    isIntegrator
+      ? 'Eres el integrador final de una flota de agentes. Integra y verifica el objetivo en el workspace real.'
+      : 'Eres un writer aislado de una flota de agentes. Implementa solamente tu tarea en el worktree asignado.',
     `Objetivo: ${objective}`,
+    `Tarea: ${String(task?.input?.instruction || task.title).slice(0, 8_000)}`,
+    acceptance ? `Criterios de aceptación:\n${acceptance}` : null,
     '',
-    'Informes reducidos y verificados:',
+    'Contexto de dependencias ya terminadas:',
     evidence || 'No se recibieron informes; inspecciona el workspace antes de actuar.',
     '',
-    'Contrato: lee antes de editar, no permitas escrituras concurrentes, aplica cambios incrementales, ejecuta type-check/pruebas/preview, corrige fallos y entrega un checkpoint con resumen ejecutivo breve.',
+    task?.result?.error
+      ? `Intento anterior: ${String(task.result.error).slice(0, 4_000)}`
+      : null,
+    'Contrato: lee antes de editar, limita los cambios al encargo, ejecuta type-check/pruebas/preview, corrige fallos y entrega un checkpoint con resumen ejecutivo breve.',
+    'El runtime integra tu rama de forma serializada. Si hay conflicto, informa rutas y contexto exacto; no fuerces ni borres cambios de otros runs.',
     'No ejecutes publicaciones, correos, ventas ni otros efectos externos desde esta corrida.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   const planRun = await runService.createRun({
     userId: project.userId,
     projectId: project.id,
@@ -342,6 +403,7 @@ async function createIntegratorRun({
     tier: swarm?.metadata?.tier || null,
     autoExecute: true,
     db: prisma,
+    env,
   });
   await prisma.codexSwarmTask.update({
     where: { id: task.id },
@@ -362,6 +424,8 @@ async function createIntegratorRun({
     env,
   });
 }
+
+const createIntegratorRun = createWriterRun;
 
 async function processClaimedTask({
   claimed,
@@ -386,8 +450,8 @@ async function processClaimedTask({
   });
   let result;
   try {
-    if (task.role === TASK_ROLES.INTEGRATOR) {
-      result = await createIntegratorRun({
+    if ([TASK_ROLES.WRITER, TASK_ROLES.INTEGRATOR].includes(task.role)) {
+      result = await createWriterRun({
         task,
         swarm: progress.swarm,
         project,
@@ -413,6 +477,16 @@ async function processClaimedTask({
   }
   if (heartbeat.error) throw heartbeat.error;
   const ok = result?.ok === true;
+  if (shouldRetryWriterTask(task, result)) {
+    await requeueWriterTask({
+      prisma,
+      task,
+      workerId: claimed.workerId,
+      leaseToken: task.leaseToken,
+      result,
+    });
+    return;
+  }
   await orchestrator.finishTask({
     swarmId: swarm.id,
     taskId: task.id,
@@ -536,16 +610,19 @@ module.exports = {
   QUEUE_NAME,
   closeSwarmRuntime,
   createIntegratorRun,
+  createWriterRun,
   dependencyContext,
   enqueueSwarm,
   getSwarmQueue,
   processClaimedTask,
   processSwarmJob,
   recoverSwarmJobs,
+  requeueWriterTask,
   runReadOnlyTask,
   safeResult,
   startLeaseHeartbeat,
   startSwarmWorker,
   subagentForTask,
+  shouldRetryWriterTask,
   waitForAutonomousRun,
 };

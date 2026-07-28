@@ -36,7 +36,9 @@ const proactiveMetrics = require('./proactive-metrics');
 const companyOperatingProfile = require('./company-operating-profile');
 const companyMissionOrchestrator = require('./company-mission-orchestrator');
 const companyDepartments = require('./company-departments');
+const departmentPools = require('./department-pools');
 const companyResources = require('./company-resources');
+const businessAnalyzer = require('./business-analyzer');
 const proactiveLease = require('./proactive-lease');
 const { mutateProjectBrief } = require('./project-brief-store');
 
@@ -46,6 +48,12 @@ const DIRECT_OPERATION_DEPARTMENTS = new Set(['sales', 'customer-success', 'mark
 
 function dayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
+}
+
+function businessAnalyzerEnabled(env = process.env) {
+  if (env.CODEX_BUSINESS_ANALYZER_ENABLED === '1') return true;
+  if (env.CODEX_BUSINESS_ANALYZER_ENABLED === '0') return false;
+  return env.NODE_ENV === 'production';
 }
 
 function readProactiveState(project) {
@@ -364,6 +372,39 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       && active.status === 'waiting_approval'
       && String(active.prompt || '').startsWith(PROACTIVE_PREFIX);
     if (!isOwnPlan) return { action: 'skipped_active' };
+    const activeDepartmentId = progressLedger.taskMetaFromPrompt(active.prompt)?.departmentId;
+    const activePoolBudget = activeDepartmentId
+      ? await (deps.departmentPools || departmentPools).checkDepartmentPoolBudget({
+        prisma,
+        projectId: project.id,
+        departmentId: activeDepartmentId,
+        env,
+        now: now(),
+      })
+      : { allowed: true };
+    if (!activePoolBudget.allowed) {
+      const message = activePoolBudget.reason === 'pool_disabled'
+        ? `El pool ${activeDepartmentId} está pausado.`
+        : `El pool ${activeDepartmentId} alcanzó su presupuesto diario.`;
+      await writeProactiveState({
+        prisma,
+        project,
+        patch: {
+          lastCycleAt: now().toISOString(),
+          lastError: message,
+          costTodayUsd: spentUsd,
+          dailyBudgetUsd: budgetUsd,
+          budgetBlocked: false,
+        },
+      });
+      return {
+        action: activePoolBudget.reason === 'pool_disabled'
+          ? 'skipped_department_pool'
+          : 'skipped_department_budget',
+        department: activeDepartmentId,
+        poolBudget: activePoolBudget,
+      };
+    }
     if (budgetBlocked) {
       const message = `Presupuesto proactivo diario alcanzado: $${spentUsd.toFixed(4)} de $${budgetUsd.toFixed(2)}.`;
       await writeProactiveState({
@@ -437,6 +478,39 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     project,
     now: now(),
   });
+  const analyzer = deps.businessAnalyzer || (
+    businessAnalyzerEnabled(env) ? businessAnalyzer : null
+  );
+  if (
+    analyzer
+    && !businessAnalyzer.isAuditFresh(companyContext.businessAudit, now())
+  ) {
+    try {
+      const analyze = typeof analyzer === 'function'
+        ? analyzer
+        : analyzer.analyzeBusiness;
+      if (typeof analyze === 'function') {
+        const audit = await analyze({
+          project,
+          companyContext,
+          webSearch: deps.webSearch,
+          webFetch: deps.webFetch,
+          browserAudit: deps.browserAudit,
+          networkEnabled: deps.businessAnalyzerNetworkEnabled == null
+            ? env.CODEX_BUSINESS_ANALYZER_WEB_ENABLED !== '0'
+            : deps.businessAnalyzerNetworkEnabled === true,
+          now,
+        });
+        if (audit) {
+          companyContext.businessAudit = audit;
+          await businessAnalyzer.persistBusinessAudit({ prisma, project, audit });
+        }
+      }
+    } catch {
+      // A presence audit is advisory. Cached readiness still lets the cycle
+      // continue when search or the public website is temporarily unavailable.
+    }
+  }
   const prioritizedMission = qaCycle
     ? null
     : companyMissionOrchestrator.selectMissionForCycle(
@@ -461,6 +535,39 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     : directDepartmentTurn
       ? roundRobinDepartment
       : missionDepartment || roundRobinDepartment;
+  const poolBudget = await (deps.departmentPools || departmentPools).checkDepartmentPoolBudget({
+    prisma,
+    projectId: project.id,
+    departmentId: department.id,
+    env,
+    now: now(),
+  });
+  if (!poolBudget.allowed) {
+    const message = poolBudget.reason === 'pool_disabled'
+      ? `El pool ${department.name} está pausado.`
+      : `El pool ${department.name} alcanzó su presupuesto diario.`;
+    await writeProactiveState({
+      prisma,
+      project,
+      patch: {
+        dayKey: today,
+        deptIndex: qaCycle ? state.deptIndex : (state.deptIndex + 1) % departments.length,
+        lastCycleAt: now().toISOString(),
+        lastError: message,
+        costTodayUsd: spentUsd,
+        dailyBudgetUsd: budgetUsd,
+        budgetBlocked: false,
+        lastDepartment: department.id,
+      },
+    });
+    return {
+      action: poolBudget.reason === 'pool_disabled'
+        ? 'skipped_department_pool'
+        : 'skipped_department_budget',
+      department: department.id,
+      poolBudget,
+    };
+  }
   const resourceAssignments = companyResources.readCompanyResources(project).assignments;
   const assignedResources = resourcesAssignedToDepartment(
     project,

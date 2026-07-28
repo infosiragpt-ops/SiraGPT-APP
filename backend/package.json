@@ -28,6 +28,8 @@
     "generate:api-types:check": "node scripts/generate-api-types.js --check",
     "eval:attribution": "node scripts/run-attribution-eval.js",
     "eval:attribution:json": "node scripts/run-attribution-eval.js --json",
+    "eval:company-agent": "node scripts/run-company-agent-platform-evals.js",
+    "eval:company-agent:json": "node scripts/run-company-agent-platform-evals.js --json",
     "inspect:attribution": "node scripts/inspect-attribution.js",
     "test:codex-parity": "NODE_ENV=test node --test --test-concurrency=1 tests/codex-*.test.js",
     "test:codex-project-database": "node --test tests/codex-project-database-foundation.test.js tests/codex-project-database-provider-contract.test.js tests/codex-project-database-vault.test.js",

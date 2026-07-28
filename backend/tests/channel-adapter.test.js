@@ -71,11 +71,15 @@ describe('ChannelAdapter · constructor', () => {
 });
 
 describe('ChannelAdapter · isAllowed', () => {
-  it('allows everyone when allowlist is empty', () => {
+  it('fails closed when allowlist is empty unless open is explicit', () => {
     const a = new ChannelAdapter('slack');
-    assert.equal(a.isAllowed(undefined), true);
-    assert.equal(a.isAllowed(''), true);
-    assert.equal(a.isAllowed('anyone'), true);
+    assert.equal(a.isAllowed(undefined), false);
+    assert.equal(a.isAllowed(''), false);
+    assert.equal(a.isAllowed('anyone'), false);
+
+    const opened = new ChannelAdapter('slack', { dmPolicy: 'open' });
+    assert.equal(opened.isAllowed(undefined), true);
+    assert.equal(opened.isAllowed('anyone'), true);
   });
 
   it('rejects missing accessGroup when allowlist is non-empty', () => {

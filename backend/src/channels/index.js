@@ -5,6 +5,7 @@ const { TelegramAdapter } = require('./telegram');
 const { DiscordAdapter } = require('./discord');
 const { SlackAdapter } = require('./slack');
 const { WhatsAppAdapter } = require('./whatsapp');
+const { EmailAdapter } = require('./email');
 const { DedupCache } = require('./dedup-cache');
 const { ChannelMetrics, sharedMetrics, KINDS } = require('./metrics');
 
@@ -34,6 +35,7 @@ module.exports = {
   DiscordAdapter,
   SlackAdapter,
   WhatsAppAdapter,
+  EmailAdapter,
   DedupCache,
   ChannelMetrics,
   ChannelRegistry,

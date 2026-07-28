@@ -248,6 +248,9 @@ async function processCodexRunJob({
         });
         return { status: 'error', error };
       }
+      if (branch.worktree && typeof nativeRunner.forRun === 'function') {
+        nativeRunner = nativeRunner.forRun(run.id, run.projectId);
+      }
     }
 
     if (
@@ -318,6 +321,13 @@ async function processCodexRunJob({
   let outcome;
   let timer;
   try {
+    const companySoul = await require('./company-registry')
+      .loadCompanySoul({ prisma, codexProject: project })
+      .catch(() => ({ company: null, prompt: '' }));
+    const promptBlocks = [
+      openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile),
+      companySoul.prompt,
+    ].filter(Boolean);
     const request = createImplementerRequest({
       run: agentRun,
       project,
@@ -347,8 +357,7 @@ async function processCodexRunJob({
         sessionService: nativeSessionService,
         resumeSnapshot: nativeResumeSnapshot,
         openclawRuntimeProfile,
-        openclawPromptBlock:
-          openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile),
+        openclawPromptBlock: promptBlocks.join('\n\n'),
       },
       // Test injection remains at the native boundary; production lazily
       // resolves agent-loop inside native-codex-adapter.

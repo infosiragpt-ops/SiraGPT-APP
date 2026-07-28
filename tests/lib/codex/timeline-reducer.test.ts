@@ -124,6 +124,34 @@ describe('timelineReducer', () => {
     expect(patches.at(-1)?.path).toBe('src/file-13.ts')
   })
 
+  it('projects live file_delta hunks and keeps only the latest change per file', () => {
+    const s = apply([
+      ev('file_delta', { path: 'src/App.tsx', hunk: 'first', truncated: false }),
+      ev('file_delta', { path: 'src/App.tsx', hunk: 'latest', truncated: true }),
+    ])
+    expect(s.items).toHaveLength(1)
+    expect(s.items[0]).toMatchObject({
+      kind: 'file_patch',
+      path: 'src/App.tsx',
+      patch: 'latest',
+      truncated: true,
+    })
+  })
+
+  it('projects the latest durable run audio into the timeline', () => {
+    const s = apply([
+      ev('run_audio', { audioUrl: '/audio/first.mp3', mime: 'audio/mpeg', characters: 100 }),
+      ev('run_audio', { audioUrl: '/audio/latest.mp3', mime: 'audio/mpeg', characters: 120 }),
+    ])
+    expect(s.items).toHaveLength(1)
+    expect(s.items[0]).toMatchObject({
+      kind: 'run_audio',
+      audioUrl: '/audio/latest.mp3',
+      mime: 'audio/mpeg',
+      characters: 120,
+    })
+  })
+
   it('heartbeat is ignored (wire-only)', () => {
     const s = apply([ev('heartbeat', {}), ev('narrative_delta', { text: 'x' })])
     expect(s.items).toHaveLength(1)
@@ -139,7 +167,7 @@ describe('timelineReducer', () => {
   })
 
   it('covers all catalog event types without throwing', () => {
-    const types = ['run_status', 'plan_proposed', 'plan_updated', 'reasoning_start', 'reasoning_delta', 'reasoning_end', 'action_start', 'action_end', 'narrative_delta', 'file_patch', 'checkpoint_created', 'run_summary', 'executive_summary', 'action_required', 'heartbeat']
+    const types = ['run_status', 'plan_proposed', 'plan_updated', 'reasoning_start', 'reasoning_delta', 'reasoning_end', 'action_start', 'action_end', 'narrative_delta', 'file_patch', 'file_delta', 'checkpoint_created', 'run_summary', 'run_audio', 'executive_summary', 'action_required', 'heartbeat']
     let s = initialTimelineState()
     for (const t of types) s = timelineReducer(s, { type: t, seq: seq++, data: { status: 'done', blockId: 'b', actionId: 'a', groupId: 'g', kind: 'terminal', status_: 'done', architecture: 'x', pages: [], components: [], tasks: [], metrics: {}, patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: [], commitSha: 'abc1234', checkpointId: 'c', text: 'x' } })
     expect(s).toBeTruthy()

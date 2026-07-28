@@ -1953,6 +1953,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         });
         if (livePatch) {
           await eventStore.appendEvent(run.id, 'file_patch', livePatch, { prisma }).catch(() => {});
+          await eventStore.appendEvent(run.id, 'file_delta', {
+            path: livePatch.path,
+            hunk: livePatch.patch,
+            truncated: livePatch.truncated,
+          }, { prisma }).catch(() => {});
         }
       }
 

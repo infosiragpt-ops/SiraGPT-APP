@@ -28,24 +28,27 @@ const { sharedMetrics, KINDS } = require('./metrics');
 class ChannelAdapter {
   /**
    * @param {string} name
-   * @param {{ allowlist?: string[], dedup?: DedupCache, metrics?: object, fetchImpl?: typeof fetch }} [opts]
+   * @param {{ allowlist?: string[], allowFrom?: string[], dmPolicy?: string, dedup?: DedupCache, metrics?: object, fetchImpl?: typeof fetch }} [opts]
    */
   constructor(name, opts = {}) {
     if (!name) throw new Error('ChannelAdapter requires a name');
     this.name = name;
-    this.allowlist = new Set(opts.allowlist || []);
+    this.dmPolicy = ['pairing', 'allowlist', 'open', 'closed'].includes(opts.dmPolicy)
+      ? opts.dmPolicy
+      : 'pairing';
+    this.allowlist = new Set(opts.allowFrom || opts.allowlist || []);
     this.dedup = opts.dedup || new DedupCache();
     this.metrics = opts.metrics || sharedMetrics;
     this.fetchImpl = opts.fetchImpl || globalThis.fetch;
   }
 
   /**
-   * Returns true when no allowlist is configured or `accessGroup` is in it.
-   * `accessGroup` may be undefined; in that case it's allowed only if no
-   * allowlist is configured.
+   * Channels fail closed. An empty allowlist requires pairing unless the owner
+   * deliberately selected the explicit `open` policy.
    */
   isAllowed(accessGroup) {
-    if (this.allowlist.size === 0) return true;
+    if (this.dmPolicy === 'open') return true;
+    if (this.dmPolicy === 'closed') return false;
     if (!accessGroup) return false;
     return this.allowlist.has(accessGroup);
   }
@@ -74,6 +77,28 @@ class ChannelAdapter {
 
   /** @returns {Promise<object>} */
   async sendOutbound(_msg) { throw new Error(`sendOutbound() not implemented for ${this.name}`); }
+
+  /**
+   * Common interface used by the business-channel router. Verification,
+   * allowlisting and dedup happen before a message reaches a department.
+   */
+  async receive(req, { skipVerify = false } = {}) {
+    if (!skipVerify && !await this.verify(req)) return null;
+    const parsed = await this.parseInbound(req);
+    if (!parsed || this.isDuplicate(parsed) || !this.isAllowed(parsed.accessGroup || parsed.userId)) {
+      return null;
+    }
+    this.metrics.inc(this.name, KINDS.INBOUND);
+    return parsed;
+  }
+
+  async send(msg) {
+    return this.sendOutbound(msg);
+  }
+
+  async listThreads() {
+    return [];
+  }
 }
 
 module.exports = { ChannelAdapter };

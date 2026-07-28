@@ -100,9 +100,17 @@ async function switchBranch({ runner, projectId, branch, createFrom = null }) {
   };
 }
 
+function baseRunnerOf(runner) {
+  if (runner && typeof runner.unscoped === 'function') {
+    return runner.unscoped() || runner;
+  }
+  return runner;
+}
+
 /**
- * Create or resume run/<id> from main. A dirty workspace is reported without
- * touching refs so concurrent or interrupted work is never silently moved.
+ * Create or resume run/<id> from the configured base. Worktree-aware runners
+ * keep the base checkout untouched and return a run-scoped workspace. Legacy
+ * runners retain the historical branch-switching behavior.
  */
 async function startRunBranch({
   runner,
@@ -114,6 +122,30 @@ async function startRunBranch({
   if (!runBranch) return { ok: false, status: 'rejected', code: 'invalid_run_id' };
   if (!isSafeBranchName(baseBranch)) {
     return { ok: false, status: 'rejected', code: 'invalid_base_branch' };
+  }
+
+  if (runner && typeof runner.createWorktree === 'function') {
+    try {
+      const created = await runner.createWorktree(projectId, runId, baseBranch);
+      return {
+        ok: true,
+        status: 'ready',
+        runBranch,
+        baseBranch,
+        resumed: Boolean(created?.resumed),
+        worktree: true,
+        worktreeDir: created?.dir || null,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: error?.status === 409 ? 'blocked' : 'error',
+        code: error?.body?.error || 'worktree_create_failed',
+        detail: redactGitOutput(error?.body?.detail || error?.message || error),
+        runBranch,
+        baseBranch,
+      };
+    }
   }
 
   const active = await currentBranch({ runner, projectId });
@@ -227,12 +259,13 @@ async function mergeRunBranch({
     };
   }
 
-  if (!(await branchExists({ runner, projectId, branch: runBranch }))) {
+  const mergeRunner = baseRunnerOf(runner);
+  if (!(await branchExists({ runner: mergeRunner, projectId, branch: runBranch }))) {
     return { ok: false, status: 'not_found', code: 'run_branch_not_found', runBranch, baseBranch };
   }
 
   if (expectedCommitSha) {
-    const head = await gitExec(runner, projectId, ['rev-parse', runBranch]);
+    const head = await gitExec(mergeRunner, projectId, ['rev-parse', runBranch]);
     const actualCommitSha = head.exitCode === 0 ? head.stdout.trim() : null;
     if (actualCommitSha !== expectedCommitSha) {
       return {
@@ -245,7 +278,7 @@ async function mergeRunBranch({
     }
   }
   if (expectedTreeSha) {
-    const treeOut = await gitExec(runner, projectId, ['rev-parse', `${runBranch}^{tree}`]);
+    const treeOut = await gitExec(mergeRunner, projectId, ['rev-parse', `${runBranch}^{tree}`]);
     const actualTreeSha = treeOut.exitCode === 0 ? treeOut.stdout.trim() : null;
     if (actualTreeSha !== expectedTreeSha) {
       return {
@@ -258,38 +291,53 @@ async function mergeRunBranch({
     }
   }
 
-  const tree = await workingTreeState({ runner, projectId });
-  if (!tree.ok) return tree;
-  if (!tree.clean) {
+  const runTree = await workingTreeState({ runner, projectId });
+  if (!runTree.ok) return runTree;
+  if (!runTree.clean) {
     return {
       ok: false,
       status: 'blocked',
       code: 'working_tree_dirty',
       runBranch,
       baseBranch,
-      files: tree.files,
+      files: runTree.files,
     };
   }
 
-  const active = await currentBranch({ runner, projectId });
+  if (mergeRunner !== runner) {
+    const baseTree = await workingTreeState({ runner: mergeRunner, projectId });
+    if (!baseTree.ok) return baseTree;
+    if (!baseTree.clean) {
+      return {
+        ok: false,
+        status: 'blocked',
+        code: 'base_working_tree_dirty',
+        runBranch,
+        baseBranch,
+        files: baseTree.files,
+      };
+    }
+  }
+
+  const active = await currentBranch({ runner: mergeRunner, projectId });
   if (active !== baseBranch) {
-    const switched = await switchBranch({ runner, projectId, branch: baseBranch });
+    const switched = await switchBranch({ runner: mergeRunner, projectId, branch: baseBranch });
     if (!switched.ok) return { ...switched, runBranch, baseBranch };
   }
 
   const merge = await gitExec(
-    runner,
+    mergeRunner,
     projectId,
     [...GIT_IDENT, 'merge', '--no-ff', '--no-edit', runBranch],
   );
   if (merge.exitCode !== 0) {
     const unresolved = await gitExec(
-      runner,
+      mergeRunner,
       projectId,
       ['diff', '--name-only', '--diff-filter=U', '-z'],
     ).catch(() => ({ stdout: '' }));
     const conflicts = parseConflictFiles(unresolved.stdout);
-    await gitExec(runner, projectId, ['merge', '--abort']).catch(() => null);
+    await gitExec(mergeRunner, projectId, ['merge', '--abort']).catch(() => null);
     return {
       ok: false,
       status: conflicts.length ? 'conflict' : 'error',
@@ -301,7 +349,7 @@ async function mergeRunBranch({
     };
   }
 
-  const head = await gitExec(runner, projectId, ['rev-parse', 'HEAD']);
+  const head = await gitExec(mergeRunner, projectId, ['rev-parse', 'HEAD']);
   if (head.exitCode !== 0) {
     return {
       ok: false,
@@ -312,6 +360,22 @@ async function mergeRunBranch({
       detail: redactGitOutput(head.stderr || head.stdout),
     };
   }
+  let worktreeCleanup = null;
+  if (runner && typeof runner.removeWorktree === 'function') {
+    try {
+      const removed = await runner.removeWorktree(projectId, runId);
+      worktreeCleanup = { ok: true, removed: Boolean(removed?.removed) };
+    } catch (error) {
+      worktreeCleanup = {
+        ok: false,
+        code: error?.body?.error || 'worktree_remove_failed',
+        detail: redactGitOutput(error?.body?.detail || error?.message || error),
+      };
+    }
+  }
+  if (typeof mergeRunner.exportWorkspace === 'function') {
+    Promise.resolve(mergeRunner.exportWorkspace(projectId)).catch(() => {});
+  }
   return {
     ok: true,
     status: 'merged',
@@ -319,6 +383,7 @@ async function mergeRunBranch({
     baseBranch,
     commitSha: head.stdout.trim(),
     verification: gate.result,
+    worktreeCleanup,
   };
 }
 

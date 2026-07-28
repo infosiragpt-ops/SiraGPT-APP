@@ -27,8 +27,10 @@ test('built-in departments expose bounded logical capacity', () => {
   assert.ok(rows.some((row) => row.id === 'customer-success'));
   assert.equal(capacity.departments, rows.length);
   assert.ok(capacity.logicalAgents > rows.length);
+  assert.equal(capacity.departmentPools, 0);
+  assert.equal(capacity.physicalAgents, 0);
   assert.equal(capacity.writerConcurrency, 1);
-  assert.equal(capacity.strategy, 'parallel_readers_serialized_writer');
+  assert.equal(capacity.strategy, 'isolated_worktrees_serialized_merge');
 });
 
 test('custom departments persist in brief and clamp capacity to 1000', async () => {

@@ -12,6 +12,7 @@ const PROFILE_VERSION = 1;
 const MAX_GAPS = 12;
 const EXTERNAL_ACTION_MODES = Object.freeze(['review', 'auto', 'off']);
 const { mutateProjectBrief } = require('./project-brief-store');
+const businessAnalyzer = require('./business-analyzer');
 
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -337,6 +338,7 @@ async function loadCompanyOperatingContext({
   const context = {
     profile,
     readiness,
+    businessAudit: businessAnalyzer.readBusinessAudit(project),
     safeguards: {
       externalActionsRequireConnection: true,
       defaultExternalMode: 'review',
@@ -358,6 +360,7 @@ function formatCompanyContext(context) {
   const gaps = Array.isArray(readiness.gaps) ? readiness.gaps : [];
   const areas = Array.isArray(readiness.areas) ? readiness.areas : [];
   const portfolio = asRecord(source.portfolio);
+  const businessAudit = businessAnalyzer.formatBusinessAudit(source.businessAudit);
   const missions = Array.isArray(portfolio.missions) ? portfolio.missions : [];
   const priorities = missions
     .filter((item) => ['ready_to_execute', 'review_required'].includes(item?.status))
@@ -382,8 +385,9 @@ function formatCompanyContext(context) {
         `- [P${Number(item.priority) || '-'}] ${boundedText(item.title, 180)} → ${boundedText(item.departmentName, 160)} (${boundedText(item.status, 80)})`
       )).join('\n')}`
       : 'Misiones CEO prioritarias: ninguna lista para ejecución.',
+    businessAudit || null,
     'Regla: no conviertas una hipótesis en hecho; las conexiones y publicaciones solo son reales cuando aparecen en la evidencia de preparación.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 module.exports = {

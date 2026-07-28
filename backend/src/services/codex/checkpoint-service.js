@@ -30,6 +30,50 @@ const SHA_RE = /^[0-9a-f]{7,40}$/;
 const RECOVERY_REF_RE = /^refs\/sira\/recovery\/[a-z0-9][a-z0-9._-]{7,119}$/;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'; // git hash-object of the empty tree
 const DIFF_CAP = 500_000;
+const CODEX_MERGE_LOCK_CLASS = 0x0c0df;
+const mergeLockTails = new Map();
+
+function mergeLockId(projectId) {
+  const value = String(projectId || '');
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash | 0;
+}
+
+async function withLocalMergeLock(projectId, work) {
+  const key = String(projectId);
+  const previous = mergeLockTails.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  mergeLockTails.set(key, current);
+  await previous.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    release();
+    if (mergeLockTails.get(key) === current) mergeLockTails.delete(key);
+  }
+}
+
+async function withProjectMergeLock(prisma, projectId, work) {
+  return withLocalMergeLock(projectId, async () => {
+    const canAdvisoryLock = prisma
+      && typeof prisma.$transaction === 'function'
+      && typeof prisma.$queryRawUnsafe === 'function';
+    if (!canAdvisoryLock) return work();
+    return prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'WITH _lock AS (SELECT pg_advisory_xact_lock($1::int, $2::int)) SELECT 1::int AS locked FROM _lock',
+        CODEX_MERGE_LOCK_CLASS,
+        mergeLockId(projectId),
+      );
+      return work();
+    }, { maxWait: 30_000, timeout: 180_000 });
+  });
+}
 
 function isValidSha(sha) {
   return typeof sha === 'string' && SHA_RE.test(sha);
@@ -387,7 +431,7 @@ async function createCheckpoint({ run, project, deps = {} }) {
   // Hybrid "export to disk": mirror the just-committed source to the host
   // folder. Best-effort and non-blocking — a runner without export support
   // (older sidecar / test mocks) or an export failure must never fail the run.
-  if (typeof runner.exportWorkspace === 'function') {
+  if (!runner.scope?.run && typeof runner.exportWorkspace === 'function') {
     Promise.resolve(runner.exportWorkspace(projectId)).catch(() => {});
   }
   return checkpoint;
@@ -473,16 +517,18 @@ async function finalizeRunCheckpoint({
     }
   }
 
-  const merge = await mergeRunBranch({
-    runner: deps.runner,
-    projectId,
-    runId: run.id,
-    baseBranch,
-    verification,
-    verify,
-    expectedCommitSha: checkpoint?.commitSha || null,
-    expectedTreeSha: deps.expectedTreeSha || null,
-  });
+  const merge = await withProjectMergeLock(deps.prisma || defaultPrisma, projectId, () => (
+    mergeRunBranch({
+      runner: deps.runner,
+      projectId,
+      runId: run.id,
+      baseBranch,
+      verification,
+      verify,
+      expectedCommitSha: checkpoint?.commitSha || null,
+      expectedTreeSha: deps.expectedTreeSha || null,
+    })
+  ));
   return {
     ok: merge.ok,
     status: merge.status,
@@ -662,5 +708,6 @@ module.exports = {
   captureWorkspaceTree,
   commitTreeSha,
   publicCheckpoint,
+  withProjectMergeLock,
   EMPTY_TREE,
 };
