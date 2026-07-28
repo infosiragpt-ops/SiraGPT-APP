@@ -6,6 +6,7 @@ const {
 } = require('./swarm-orchestrator');
 const { buildEnterpriseSwarmTasks } = require('./enterprise-swarm-plan');
 const { configuredRunCap } = require('./run-service');
+const { listDepartmentPools } = require('./department-pools');
 
 const DEFAULT_PLANNER_TASKS = 8;
 const MAX_PLANNER_TASKS = 64;
@@ -262,6 +263,49 @@ async function planFleetTasks({
   };
 }
 
+function poolDepartmentId(departmentId) {
+  return departmentId === 'trust-quality' ? 'trust' : departmentId;
+}
+
+function assignDepartmentPools(tasks, pools) {
+  const byDepartment = new Map(
+    (pools || []).map((pool) => [String(pool.departmentId), pool]),
+  );
+  const counts = new Map();
+  for (const task of tasks) {
+    const departmentId = poolDepartmentId(String(task?.input?.departmentId || ''));
+    const pool = byDepartment.get(departmentId);
+    if (pool?.enabled !== false) counts.set(pool.id, (counts.get(pool.id) || 0) + 1);
+  }
+  return tasks.map((task) => {
+    const input = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
+      ? task.input
+      : {};
+    const departmentId = poolDepartmentId(String(input.departmentId || ''));
+    const pool = byDepartment.get(departmentId);
+    if (!pool) return task;
+    if (pool.enabled === false) {
+      const error = new Error(`department_pool_disabled:${departmentId}`);
+      error.code = 'department_pool_disabled';
+      throw error;
+    }
+    const budget = pool.dailyBudgetUsd == null ? null : Number(pool.dailyBudgetUsd);
+    const taskCount = Math.max(1, counts.get(pool.id) || 1);
+    const reservation = budget != null && Number.isFinite(budget) && budget >= 0
+      ? Math.floor((budget / taskCount) * 10_000) / 10_000
+      : null;
+    return {
+      ...task,
+      input: {
+        ...input,
+        departmentId,
+        departmentPoolId: pool.id,
+        ...(reservation == null ? {} : { poolBudgetReservationUsd: reservation }),
+      },
+    };
+  });
+}
+
 async function createFleetSwarm({
   prisma,
   userId,
@@ -289,6 +333,8 @@ async function createFleetSwarm({
     model,
   });
   const runCap = configuredRunCap(project, env);
+  const pools = await listDepartmentPools({ prisma, projectId: project.id });
+  const plannedTasks = assignDepartmentPools(planned.tasks, pools);
   const writerCap = Math.min(
     maxConcurrency,
     runCap,
@@ -300,8 +346,8 @@ async function createFleetSwarm({
     projectId: project.id,
     name: `Fleet · ${project.name}`.slice(0, 300),
     strategy: 'dag',
-    tasks: planned.tasks,
-    taskLimit: planned.tasks.length,
+    tasks: plannedTasks,
+    taskLimit: plannedTasks.length,
     maxConcurrency,
     maxConcurrentWriters: writerCap,
     metadata: {
@@ -314,7 +360,7 @@ async function createFleetSwarm({
       runCap,
       worktrees: true,
       departments: Array.from(new Set(
-        planned.tasks.map((task) => task.input?.departmentId).filter(Boolean),
+        plannedTasks.map((task) => task.input?.departmentId).filter(Boolean),
       )),
       safety: {
         isolatedWriterWorktrees: true,
@@ -324,7 +370,7 @@ async function createFleetSwarm({
     },
   });
   if (typeof enqueue === 'function') await enqueue({ swarmId: swarm.id });
-  return { swarm, tasks: planned.tasks, planner: planned };
+  return { swarm, tasks: plannedTasks, planner: planned };
 }
 
 module.exports = {
@@ -332,6 +378,7 @@ module.exports = {
   DEFAULT_QA_EVERY,
   MAX_PLANNER_TASKS,
   addQaCheckpoints,
+  assignDepartmentPools,
   createFleetSwarm,
   extractJson,
   fallbackFleetTasks,

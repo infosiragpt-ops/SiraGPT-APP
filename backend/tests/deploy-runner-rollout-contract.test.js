@@ -17,6 +17,14 @@ const GVISOR_WORKFLOW = fs.readFileSync(
   path.resolve(__dirname, '..', '..', '.github', 'workflows', 'gvisor-runner-compat.yml'),
   'utf8',
 );
+const RUNNER = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', 'scripts', 'code-runner.js'),
+  'utf8',
+);
+const GVISOR_SMOKE = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', 'scripts', 'gvisor-runner-smoke.mjs'),
+  'utf8',
+);
 
 function position(fragment) {
   const index = WORKFLOW.indexOf(fragment);
@@ -38,11 +46,19 @@ test('production deploy preserves and restores the exact runner image', () => {
   assert.match(WORKFLOW, /siragpt-runner:rollback-\*/);
 });
 
-test('runner mounts every control-plane module required by code-runner.js', () => {
+test('runner mounts the integrated control-plane modules required by code-runner.js', () => {
   assert.match(COMPOSE, /\.\/scripts\/code-runner\.js:\/scripts\/code-runner\.js:ro/);
   assert.match(COMPOSE, /\.\/scripts\/code-runner-utils\.js:\/scripts\/code-runner-utils\.js:ro/);
-  assert.match(COMPOSE, /\.\/scripts\/code-runner-worktrees\.js:\/scripts\/code-runner-worktrees\.js:ro/);
-  assert.match(GVISOR_WORKFLOW, /code-runner-worktrees\.js",dst=\/scripts\/code-runner-worktrees\.js,readonly/);
+  assert.doesNotMatch(COMPOSE, /code-runner-worktrees\.js/);
+  assert.doesNotMatch(GVISOR_WORKFLOW, /code-runner-worktrees\.js/);
+});
+
+test('runner recovery preserves dirty base work under a durable private ref', () => {
+  assert.match(RUNNER, /\/workspace\/worktree\/recover-base/);
+  assert.match(RUNNER, /refs\/sira\/recovery\/\$\{runId\}-/);
+  assert.match(RUNNER, /latestStash\.stdout\.trim\(\) === recoverySha/);
+  assert.match(GVISOR_SMOKE, /assert\.equal\(dirtyWorktree\.error, 'working_tree_dirty'\)/);
+  assert.match(GVISOR_SMOKE, /assert\.match\(recoveredBase\.recoveryRef, \/\^refs\\\/sira\\\/recovery/);
 });
 
 test('production keeps run concurrency and fleet QA disabled by default', () => {
@@ -58,6 +74,11 @@ test('production keeps run concurrency and fleet QA disabled by default', () => 
   assert.match(
     COMPOSE,
     /CODEX_RUN_OS_ISOLATION_ATTESTED:[^\n]*\$\{CODEX_RUN_OS_ISOLATION_ATTESTED:-0\}/,
+  );
+  assert.equal(
+    COMPOSE.match(/^\s+CODEX_RUN_OS_ISOLATION_ATTESTED:/gm)?.length,
+    2,
+    'runner and backend must agree on the OS isolation attestation',
   );
   assert.match(COMPOSE, /CODEX_MAX_CONCURRENT_RUNS:[^\n]*\$\{CODEX_MAX_CONCURRENT_RUNS:-1\}/);
   assert.match(COMPOSE, /CODEX_FLEET_QA_ENABLED:[^\n]*\$\{CODEX_FLEET_QA_ENABLED:-0\}/);

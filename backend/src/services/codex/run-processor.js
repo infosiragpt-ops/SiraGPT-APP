@@ -204,18 +204,27 @@ async function processCodexRunJob({
 } = {}) {
   if (!prisma || !prisma.codexRun) throw new Error('database unavailable');
 
-  const run = await prisma.codexRun.findUnique({ where: { id: runId } });
-  if (!run) return { status: 'not_found' };
+  const queuedRun = await prisma.codexRun.findUnique({ where: { id: runId } });
+  if (!queuedRun) return { status: 'not_found' };
   // Idempotency: only a freshly-queued run should be processed.
-  if (run.status !== 'queued') return { status: run.status, skipped: true };
+  if (queuedRun.status !== 'queued') return { status: queuedRun.status, skipped: true };
+
+  const startedAt = new Date(nowIso(clock));
+  const claim = await prisma.codexRun.updateMany({
+    where: { id: runId, status: 'queued' },
+    data: { status: 'running', startedAt },
+  });
+  if (claim?.count !== 1) {
+    const current = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
+    return { status: current?.status || 'not_found', skipped: true, claimLost: true };
+  }
+  const run = await prisma.codexRun.findUnique({ where: { id: runId } })
+    .catch(() => null) || { ...queuedRun, status: 'running', startedAt };
 
   const project = run.projectId
     ? await prisma.codexProject.findUnique({ where: { id: run.projectId } }).catch(() => null)
     : null;
 
-  // A worker that has claimed the queued job owns its lifecycle from this
-  // point onward, including configuration/preflight failures.
-  await prisma.codexRun.update({ where: { id: runId }, data: { status: 'running', startedAt: new Date(nowIso(clock)) } });
   await eventStore.appendEvent(runId, 'run_status', { status: 'running' }, { prisma });
 
   const registry = agentAdapterRegistry || getDefaultAgentAdapterRegistry();
@@ -275,7 +284,7 @@ async function processCodexRunJob({
     }
 
     if (run.mode === 'build' && defaultOnFeature(env, 'CODEX_RUN_BRANCHES')) {
-      const branch = await checkpointService.prepareRunBranch({
+      let branch = await checkpointService.prepareRunBranch({
         run,
         project,
         deps: { runner: nativeRunner },
@@ -284,6 +293,39 @@ async function processCodexRunJob({
         code: 'run_branch_setup_failed',
         detail: String(error?.message || error).slice(0, 1000),
       }));
+      if (
+        !branch?.ok
+        && branch?.code === 'working_tree_dirty'
+        && typeof nativeRunner.recoverRunBase === 'function'
+      ) {
+        const baseBranch = checkpointService.projectBaseBranch(project);
+        const recovery = baseBranch
+          ? await nativeRunner.recoverRunBase(run.projectId, run.id, { baseBranch }).catch((error) => ({
+            ok: false,
+            code: error?.body?.error || 'run_worktree_recovery_failed',
+            detail: String(error?.body?.detail || error?.message || error).slice(0, 1000),
+          }))
+          : { ok: false, code: 'invalid_base_branch' };
+        if (recovery?.ok) {
+          branch = await checkpointService.prepareRunBranch({
+            run,
+            project,
+            deps: { runner: nativeRunner },
+          }).catch((error) => ({
+            ok: false,
+            code: 'run_branch_setup_failed',
+            detail: String(error?.message || error).slice(0, 1000),
+          }));
+          if (branch?.ok) {
+            branch.recovery = recovery;
+            await eventStore.appendEvent(run.id, 'narrative_delta', {
+              text: `Se preservó el workspace previo en ${recovery.recoveryRef || 'una referencia Git de recuperación'} antes de aislar la ejecución.`,
+            }, { prisma }).catch(() => {});
+          }
+        } else {
+          branch = recovery;
+        }
+      }
       if (!branch?.ok) {
         const error = `run branch setup failed (${branch?.code || 'unknown'}): ${String(branch?.detail || '').slice(0, 1000)}`;
         await prisma.codexRun.update({

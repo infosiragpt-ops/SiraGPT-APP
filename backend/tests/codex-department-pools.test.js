@@ -140,7 +140,8 @@ test('updating pool size preserves an existing budget when no budget field is se
 });
 
 test('department pool daily budget counts only that department and acts as a kill switch', async () => {
-  let aggregateWhere = null;
+  let metricWhere = null;
+  let ledgerWhere = null;
   const prisma = {
     codexDepartmentPool: {
       findUnique: async () => ({
@@ -155,10 +156,19 @@ test('department pool daily budget counts only that department and acts as a kil
       }),
     },
     codexRunMetric: {
-      aggregate: async ({ where }) => {
-        aggregateWhere = where;
-        return { _sum: { costOriginalUsd: 4.25, costAppliedUsd: 2 } };
+      findMany: async ({ where }) => {
+        metricWhere = where;
+        return [{ costOriginalUsd: 3.25, costAppliedUsd: 2 }];
       },
+    },
+    codexUsageEntry: {
+      findMany: async ({ where }) => {
+        ledgerWhere = where;
+        return [{ costOriginalUsd: 1, costAppliedUsd: 0.5 }];
+      },
+    },
+    codexSwarmTask: {
+      findMany: async () => [],
     },
   };
   const status = await pools.checkDepartmentPoolBudget({
@@ -171,11 +181,13 @@ test('department pool daily budget counts only that department and acts as a kil
   assert.equal(status.reason, 'daily_budget_exceeded');
   assert.equal(status.costTodayUsd, 4.25);
   assert.equal(status.remainingUsd, 0);
-  assert.deepEqual(aggregateWhere.run, {
+  assert.deepEqual(metricWhere.run, {
     projectId: 'p1',
-    prompt: { contains: '"departmentId":"engineering"' },
+    departmentPoolId: 'pool-engineering',
   });
-  assert.equal(aggregateWhere.createdAt.gte.toISOString(), '2026-07-28T00:00:00.000Z');
+  assert.equal(metricWhere.createdAt.gte.toISOString(), '2026-07-28T00:00:00.000Z');
+  assert.equal(ledgerWhere.departmentPoolId, 'pool-engineering');
+  assert.equal(ledgerWhere.createdAt.gte.toISOString(), '2026-07-28T00:00:00.000Z');
 });
 
 test('configured pool budget fails closed in production when cost aggregation is unavailable', async () => {
@@ -201,4 +213,30 @@ test('configured pool budget fails closed in production when cost aggregation is
   });
   assert.equal(status.allowed, false);
   assert.equal(status.reason, 'budget_query_failed');
+});
+
+test('an enabled pool without a daily limit remains unlimited', async () => {
+  const prisma = {
+    codexDepartmentPool: {
+      findUnique: async () => ({
+        id: 'pool-product',
+        projectId: 'p1',
+        departmentId: 'product',
+        size: 2,
+        dailyBudgetUsd: null,
+        enabled: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    },
+  };
+  const status = await pools.checkDepartmentPoolBudget({
+    prisma,
+    projectId: 'p1',
+    departmentId: 'product',
+    env: { NODE_ENV: 'production' },
+  });
+  assert.equal(status.allowed, true);
+  assert.equal(status.reason, 'unlimited');
+  assert.equal(status.dailyBudgetUsd, null);
 });

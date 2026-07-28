@@ -150,6 +150,13 @@ function taskBudgetReservationUsd(task, defaultReservationUsd = 0) {
   return explicit > 0 ? explicit : boundedNonNegative(defaultReservationUsd);
 }
 
+function taskDepartmentPoolId(task) {
+  const input = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
+    ? task.input
+    : {};
+  return String(input.departmentPoolId || '').trim() || null;
+}
+
 async function checkSwarmClaimBudget({
   prisma,
   projectId,
@@ -165,7 +172,8 @@ async function checkSwarmClaimBudget({
   const companyLimit = companyDailyBudgetUsd == null
     ? null
     : boundedNonNegative(companyDailyBudgetUsd);
-  if (projectLimit == null && companyLimit == null) {
+  const departmentPoolId = taskDepartmentPoolId(task);
+  if (projectLimit == null && companyLimit == null && !departmentPoolId) {
     return { allowed: true, reason: 'unlimited' };
   }
   if (!prisma?.codexSwarmTask?.findMany) {
@@ -178,10 +186,14 @@ async function checkSwarmClaimBudget({
         leaseExpiresAt: { gt: now },
         swarm: { projectId },
       },
-      select: { input: true },
+      select: { id: true, input: true },
     });
     const activeReservationsUsd = runningTasks.reduce(
-      (total, row) => total + taskBudgetReservationUsd(row, defaultReservationUsd),
+      (total, row) => (
+        row.id === task?.id
+          ? total
+          : total + taskBudgetReservationUsd(row, defaultReservationUsd)
+      ),
       0,
     );
     const reservationUsd = taskBudgetReservationUsd(task, defaultReservationUsd);
@@ -211,11 +223,33 @@ async function checkSwarmClaimBudget({
         projectedCostUsd,
       };
     }
+    if (departmentPoolId) {
+      const poolBudget = await checkDepartmentPoolBudget({
+        prisma,
+        projectId,
+        departmentPoolId,
+        swarmTaskId: task?.id || null,
+        admissionReservationUsd: reservationUsd,
+        now,
+      });
+      if (!poolBudget.allowed) {
+        return {
+          ...poolBudget,
+          projectDailyBudgetUsd: projectLimit,
+          companyDailyBudgetUsd: companyLimit,
+          projectPersistedCostTodayUsd: persistedCostTodayUsd,
+          projectActiveReservationsUsd: activeReservationsUsd,
+          projectReservationUsd: reservationUsd,
+          projectProjectedCostUsd: projectedCostUsd,
+        };
+      }
+    }
     return {
       allowed: true,
       reason: 'swarm_budget_available',
       projectDailyBudgetUsd: projectLimit,
       companyDailyBudgetUsd: companyLimit,
+      departmentPoolId,
       persistedCostTodayUsd,
       activeReservationsUsd,
       reservationUsd,
@@ -267,6 +301,7 @@ async function checkDepartmentPoolBudget({
   swarmTaskId = null,
   reservationUsd = null,
   reservationUsageUsd = null,
+  admissionReservationUsd = null,
   now = new Date(),
   inRunCostUsd = 0,
 }) {
@@ -288,6 +323,31 @@ async function checkDepartmentPoolBudget({
     if (pool.enabled === false) {
       return { allowed: false, reason: 'department_pool_paused', inRunCostUsd: runningCost };
     }
+    const reservedForRunUsd = reservationUsd == null
+      ? null
+      : boundedNonNegative(reservationUsd);
+    const reservationUsage = reservationUsageUsd == null
+      ? runningCost
+      : boundedNonNegative(reservationUsageUsd);
+    const reservationExceeded = reservedForRunUsd != null
+      && reservationUsage >= reservedForRunUsd;
+    if (pool.dailyBudgetUsd == null) {
+      return {
+        allowed: !reservationExceeded,
+        reason: reservationExceeded
+          ? 'department_pool_run_reservation_exceeded'
+          : 'department_pool_unlimited',
+        persistedCostTodayUsd: null,
+        activeReservationsUsd: null,
+        admissionReservationUsd: boundedNonNegative(admissionReservationUsd),
+        inRunCostUsd: runningCost,
+        reservationUsageUsd: reservationUsage,
+        reservationUsd: reservedForRunUsd,
+        costTodayUsd: runningCost,
+        dailyBudgetUsd: null,
+        remainingUsd: null,
+      };
+    }
     const dailyBudgetUsd = boundedNonNegative(pool.dailyBudgetUsd);
     if (dailyBudgetUsd === 0) {
       return {
@@ -307,15 +367,11 @@ async function checkDepartmentPoolBudget({
         now,
       }),
     ]);
-    const reservedForRunUsd = reservationUsd == null
-      ? null
-      : boundedNonNegative(reservationUsd);
-    const reservationUsage = reservationUsageUsd == null
-      ? runningCost
-      : boundedNonNegative(reservationUsageUsd);
-    const reservationExceeded = reservedForRunUsd != null
-      && reservationUsage >= reservedForRunUsd;
-    const costTodayUsd = persistedCostTodayUsd + activeReservationsUsd + runningCost;
+    const admissionReservation = boundedNonNegative(admissionReservationUsd);
+    const costTodayUsd = persistedCostTodayUsd
+      + activeReservationsUsd
+      + runningCost
+      + admissionReservation;
     const allowed = !reservationExceeded && costTodayUsd < dailyBudgetUsd;
     return {
       allowed,
@@ -326,6 +382,7 @@ async function checkDepartmentPoolBudget({
           : 'department_pool_budget_limit',
       persistedCostTodayUsd,
       activeReservationsUsd,
+      admissionReservationUsd: admissionReservation,
       inRunCostUsd: runningCost,
       reservationUsageUsd: reservationUsage,
       reservationUsd: reservedForRunUsd,
@@ -428,6 +485,7 @@ module.exports = {
   costTodayUsdForPool,
   usageLedgerCostUsd,
   taskBudgetReservationUsd,
+  taskDepartmentPoolId,
   checkSwarmClaimBudget,
   activePoolReservationsUsd,
   checkProjectBudget,

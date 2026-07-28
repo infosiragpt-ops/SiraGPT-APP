@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   assertSwarmTaskBudgetAvailable,
   createSwarmUsageAccountant,
+  createWriterRun,
   dependencyContext,
   isBudgetDeferralError,
   loadSwarmProjectSettings,
@@ -23,6 +24,83 @@ test('budget errors are classified as deferrals instead of terminal task failure
   assert.equal(isBudgetDeferralError({ code: 'swarm_department_budget_exceeded' }), true);
   assert.equal(isBudgetDeferralError({ code: 'swarm_usage_accounting_failed' }), true);
   assert.equal(isBudgetDeferralError({ code: 'codex_provider_failed' }), false);
+});
+
+test('writer plans use per-attempt idempotency and durable pool lineage', async () => {
+  const calls = [];
+  const updates = [];
+  const task = {
+    id: 'task-writer-1',
+    title: 'Implementa inventario',
+    role: 'writer',
+    attemptCount: 1,
+    input: {
+      objective: 'Construir inventario',
+      departmentId: 'product-engineering',
+      departmentPoolId: 'pool-engineering',
+      instruction: 'Implementa el modulo.',
+    },
+  };
+  const result = await createWriterRun({
+    task,
+    tasks: [task],
+    swarm: { id: 'swarm-1', metadata: {} },
+    project: { id: 'project-1', userId: 'user-1', name: 'Demo' },
+    prisma: {
+      codexSwarmTask: {
+        async update(args) { updates.push(args); return {}; },
+      },
+      codexRun: {
+        async findUnique() { return { id: 'plan-1', status: 'done', error: null }; },
+        async findFirst() { return null; },
+      },
+      codexSwarm: {
+        async findUnique() { return { status: 'running', cancelRequestedAt: null }; },
+      },
+    },
+    runService: {
+      async createRun(args) {
+        calls.push(args);
+        return { id: 'plan-1' };
+      },
+    },
+    env: {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].idempotencyKey, 'swarm-task:task-writer-1:attempt:1:plan');
+  assert.equal(calls[0].departmentPoolId, 'pool-engineering');
+  assert.equal(calls[0].swarmTaskId, task.id);
+  assert.equal(updates[0].data.result.planRunId, 'plan-1');
+
+  task.attemptCount = 2;
+  await createWriterRun({
+    task,
+    tasks: [task],
+    swarm: { id: 'swarm-1', metadata: {} },
+    project: { id: 'project-1', userId: 'user-1', name: 'Demo' },
+    prisma: {
+      codexSwarmTask: {
+        async update(args) { updates.push(args); return {}; },
+      },
+      codexRun: {
+        async findUnique() { return { id: 'plan-2', status: 'done', error: null }; },
+        async findFirst() { return null; },
+      },
+      codexSwarm: {
+        async findUnique() { return { status: 'running', cancelRequestedAt: null }; },
+      },
+    },
+    runService: {
+      async createRun(args) {
+        calls.push(args);
+        return { id: 'plan-2' };
+      },
+    },
+    env: {},
+  });
+  assert.equal(calls[1].idempotencyKey, 'swarm-task:task-writer-1:attempt:2:plan');
+  assert.notEqual(calls[0].idempotencyKey, calls[1].idempotencyKey);
 });
 
 test('a reached project budget releases the claimed task and stops before claiming the queue', async () => {

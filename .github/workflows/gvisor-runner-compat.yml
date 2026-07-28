@@ -191,7 +191,6 @@ jobs:
             --env GVISOR_SMOKE_PROJECT_UID="${GVS_PROJECT_UID}" \
             --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner.js",dst=/scripts/code-runner.js,readonly \
             --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner-utils.js",dst=/scripts/code-runner-utils.js,readonly \
-            --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/code-runner-worktrees.js",dst=/scripts/code-runner-worktrees.js,readonly \
             --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/gvisor-runner-smoke.mjs",dst=/smoke/gvisor-runner-smoke.mjs,readonly \
             "${RUNNER_IMAGE}" bun /scripts/code-runner.js
 

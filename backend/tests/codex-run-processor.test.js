@@ -287,21 +287,22 @@ test('build processor provisions a run worktree before handing the scoped runner
   const calls = [];
   const scopedRunner = { runScope: { project: 'p1', run: 'run-1' } };
   const runner = {
-    async initRunWorkspace(project, run, options) {
-      calls.push(['init', project, run, options]);
-      return { ok: true, branch: `run/${run}` };
+    async createWorktree(project, run, baseBranch) {
+      calls.push(['create', project, run, baseBranch]);
+      return { ok: true, runBranch: `run/${run}` };
     },
-    forRun(project, run) {
-      calls.push(['scope', project, run]);
+    forRun(run, project) {
+      calls.push(['scope', run, project]);
       return scopedRunner;
     },
   };
   let loopRunner;
   const checkpointService = {
     projectBaseBranch: () => 'main',
-    async prepareRunBranch({ deps }) {
+    async prepareRunBranch({ run, project, deps }) {
       calls.push(['branch', deps.runner]);
-      return { ok: true };
+      await deps.runner.createWorktree(project.id, run.id, 'main');
+      return { ok: true, worktree: true };
     },
   };
   const result = await processCodexRunJob({
@@ -323,10 +324,10 @@ test('build processor provisions a run worktree before handing the scoped runner
   });
 
   assert.equal(result.status, 'done');
-  assert.deepEqual(calls[0], ['init', 'p1', 'run-1', { baseBranch: 'main' }]);
-  assert.deepEqual(calls[1], ['scope', 'p1', 'run-1']);
-  assert.equal(calls[2][0], 'branch');
-  assert.equal(calls[2][1], scopedRunner);
+  assert.equal(calls[0][0], 'branch');
+  assert.equal(calls[0][1], runner);
+  assert.deepEqual(calls[1], ['create', 'p1', 'run-1', 'main']);
+  assert.deepEqual(calls[2], ['scope', 'run-1', 'p1']);
   assert.equal(loopRunner, scopedRunner);
 });
 
@@ -455,6 +456,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued' };
   const events = [];
   let cancelFlips = 0;
+  let runningReads = 0;
   const prisma = {
     codexRun: {
       async findUnique({ where }) {
@@ -464,8 +466,11 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
         // row is `cancelled` by the time the guarded terminal write runs.
         const snapshot = { ...runRow };
         if (runRow.status === 'running') {
-          cancelFlips += 1;
-          runRow.status = 'cancelled'; // flips just AFTER this read returns `running`
+          runningReads += 1;
+          if (runningReads === 2) {
+            cancelFlips += 1;
+            runRow.status = 'cancelled'; // flips just AFTER the cancellation check
+          }
         }
         return snapshot;
       },
@@ -493,6 +498,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   // The row was cancelled out-of-band; the guarded write must not revert it to done.
   assert.equal(runRow.status, 'cancelled');
   assert.equal(res.raced, true);
+  assert.equal(cancelFlips, 1);
   // Only `running` was emitted by the processor; no terminal done/error event.
   const statuses = events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running']);

@@ -163,12 +163,12 @@ test('worktree canary proves two run-scoped writes are isolated and cleans both 
       return { content: baseSource };
     },
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
-    initRunWorkspace: async (_project, run) => {
+    createWorktree: async (_project, run) => {
       calls.push(['init-worktree', run]);
       worktrees.set(run, baseSource);
       return { ok: true };
     },
-    forRun: (_project, run) => ({
+    forRun: (run) => ({
       writeFiles: async (_candidate, files) => {
         worktrees.set(run, files[0].content);
         return { ok: true };
@@ -185,10 +185,10 @@ test('worktree canary proves two run-scoped writes are isolated and cleans both 
         return { exitCode: 0, stdout: '', stderr: '' };
       },
     }),
-    cleanupRunWorkspace: async (_project, run) => {
+    removeWorktree: async (_project, run) => {
       calls.push(['cleanup-worktree', run]);
       worktrees.delete(run);
-      return { ok: true };
+      return { ok: true, removed: true };
     },
   };
 

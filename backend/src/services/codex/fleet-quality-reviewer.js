@@ -26,10 +26,6 @@ const agentSdkDefault = require('./agent-sdk');
 const { isCodexV2Enabled } = require('./flags');
 const projectBudget = require('./project-budget');
 const projectSettings = require('./project-settings');
-const {
-  distributeTasksToPools,
-  poolStatus,
-} = require('./department-pools');
 const { scanBuffer } = require('../security/secret-scanner');
 const { redactString } = require('../../utils/secret-redactor');
 
@@ -102,7 +98,24 @@ async function findTrustPool({ prisma, projectId }) {
       departmentId: 'trust',
     },
   });
-  return pool && poolStatus(pool) === 'active' ? pool : null;
+  return pool && pool.enabled !== false ? pool : null;
+}
+
+function assignTasksToPool(tasks, pool) {
+  const count = Math.max(1, tasks.length);
+  const budget = pool?.dailyBudgetUsd == null ? null : Number(pool.dailyBudgetUsd);
+  const reservation = budget != null && Number.isFinite(budget) && budget >= 0
+    ? Math.floor((budget / count) * 10_000) / 10_000
+    : null;
+  return tasks.map((task) => ({
+    ...task,
+    input: {
+      ...asRecord(task.input),
+      departmentId: pool.departmentId,
+      departmentPoolId: pool.id,
+      ...(reservation == null ? {} : { poolBudgetReservationUsd: reservation }),
+    },
+  }));
 }
 
 function normalizePendingEnqueue(value) {
@@ -634,7 +647,7 @@ async function materializeFindings({
   if (!trustPool) {
     throw new Error('fleet_qa_trust_pool_unavailable');
   }
-  tasks = distributeTasksToPools({ tasks, pools: [trustPool] }).tasks;
+  tasks = assignTasksToPool(tasks, trustPool);
 
   let result;
   if (active) {

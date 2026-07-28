@@ -117,6 +117,90 @@ test('auto-executable plan stores control metadata but exposes a clean prompt', 
   assert.match(db._runs.find((row) => row.id === run.id).prompt, /^\[SIRAGPT_AUTOEXEC_V1\]/);
 });
 
+test('pooled swarm runs persist lineage and replay idempotently', async () => {
+  const db = makeDb({ projects: [PROJECT] });
+  db.codexDepartmentPool = {
+    async findFirst({ where }) {
+      return where.id === 'pool-engineering'
+        && where.projectId === PROJECT.id
+        && where.enabled === true
+        ? { id: 'pool-engineering' }
+        : null;
+    },
+  };
+  db.codexSwarmTask = {
+    async findFirst({ where }) {
+      return where.id === 'task-1' && where.swarm.projectId === PROJECT.id
+        ? {
+          id: 'task-1',
+          input: { departmentPoolId: 'pool-engineering' },
+        }
+        : null;
+    },
+  };
+  const calls = [];
+  const input = {
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'plan',
+    prompt: 'implementa una tarea aislada',
+    idempotencyKey: 'swarm-task:task-1:plan',
+    departmentPoolId: 'pool-engineering',
+    swarmTaskId: 'task-1',
+    db,
+    queue: fakeQueue(calls),
+  };
+  const first = await createRun(input);
+  const replay = await createRun(input);
+
+  assert.equal(first.id, replay.id);
+  assert.equal(first.departmentPoolId, 'pool-engineering');
+  assert.equal(first.swarmTaskId, 'task-1');
+  assert.equal(calls.length, 1, 'an idempotent replay must not enqueue twice');
+  assert.equal(db._runs.length, 1);
+  assert.equal(db._runs[0].idempotencyKey, 'swarm-task:task-1:plan');
+});
+
+test('swarm lineage validation fails closed and build continuations cannot switch pools', async () => {
+  const noStore = makeDb({ projects: [PROJECT] });
+  await assert.rejects(
+    () => createRun({
+      userId: 'u1',
+      projectId: 'p1',
+      mode: 'plan',
+      departmentPoolId: 'pool-engineering',
+      db: noStore,
+      queue: fakeQueue(),
+    }),
+    (error) => error.code === 'department_pool_store_unavailable' && error.status === 503,
+  );
+
+  const db = makeDb({
+    projects: [PROJECT],
+    runs: [{
+      id: 'plan-pooled',
+      projectId: 'p1',
+      userId: 'u1',
+      mode: 'plan',
+      status: 'waiting_approval',
+      departmentPoolId: 'pool-engineering',
+      swarmTaskId: 'task-1',
+    }],
+  });
+  await assert.rejects(
+    () => createRun({
+      userId: 'u1',
+      projectId: 'p1',
+      mode: 'build',
+      planRunId: 'plan-pooled',
+      departmentPoolId: 'pool-sales',
+      db,
+      queue: fakeQueue(),
+    }),
+    (error) => error.code === 'run_lineage_mismatch' && error.status === 409,
+  );
+});
+
 test('createRun (build) requires a valid approvable planRunId', async () => {
   const db = makeDb({ projects: [PROJECT] });
   await assert.rejects(
@@ -218,6 +302,9 @@ test('worktree concurrency cap admits three runs and rejects the fourth', async 
     NODE_ENV: 'production',
     CODEX_RUN_BRANCHES: '1',
     CODEX_RUN_WORKTREES: '1',
+    CODEX_RUN_CONCURRENCY_ENABLED: '1',
+    CODEX_RUN_OS_ISOLATION_ATTESTED: '1',
+    CODEX_MAX_CONCURRENT_RUNS: '3',
   };
   const first = await createRun({
     userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue(), env,
@@ -239,7 +326,7 @@ test('worktree concurrency cap admits three runs and rejects the fourth', async 
   );
 });
 
-test('configured concurrency is clamped to one unless branches and worktrees are enabled', () => {
+test('configured concurrency is clamped to one until every isolation gate is attested', () => {
   const project = { ...PROJECT, brief: { maxConcurrentRuns: 9 } };
   assert.equal(runService.configuredRunCap(project, { NODE_ENV: 'test' }), 1);
   assert.equal(runService.configuredRunCap(project, {
@@ -251,7 +338,24 @@ test('configured concurrency is clamped to one unless branches and worktrees are
     NODE_ENV: 'test',
     CODEX_RUN_BRANCHES: '1',
     CODEX_RUN_WORKTREES: '1',
-  }), 9);
+    CODEX_RUN_CONCURRENCY_ENABLED: '0',
+  }), 1);
+  assert.equal(runService.configuredRunCap(project, {
+    NODE_ENV: 'test',
+    CODEX_RUN_BRANCHES: '1',
+    CODEX_RUN_WORKTREES: '1',
+    CODEX_RUN_CONCURRENCY_ENABLED: '1',
+    CODEX_RUN_OS_ISOLATION_ATTESTED: '0',
+    CODEX_MAX_CONCURRENT_RUNS: '9',
+  }), 1);
+  assert.equal(runService.configuredRunCap(project, {
+    NODE_ENV: 'test',
+    CODEX_RUN_BRANCHES: '1',
+    CODEX_RUN_WORKTREES: '1',
+    CODEX_RUN_CONCURRENCY_ENABLED: '1',
+    CODEX_RUN_OS_ISOLATION_ATTESTED: '1',
+    CODEX_MAX_CONCURRENT_RUNS: '4',
+  }), 4);
 });
 
 // Postgres-shaped fake: adds the $transaction + $queryRawUnsafe surface so

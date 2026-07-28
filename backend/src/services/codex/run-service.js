@@ -22,6 +22,8 @@ const MODES = ['plan', 'build'];
 const ACTIVE_STATUSES = ['queued', 'running', 'waiting_approval'];
 const TERMINAL_STATUSES = ['done', 'error', 'cancelled'];
 const APPROVABLE_PLAN_STATUSES = ['waiting_approval', 'done'];
+const DEFAULT_MAX_CONCURRENT_RUNS = 1;
+const MAX_CONCURRENT_RUNS_HARD_CAP = 32;
 
 class RunServiceError extends Error {
   constructor(code, message, status = 400) {
@@ -99,16 +101,30 @@ function featureEnabled(env, key) {
   return env?.NODE_ENV === 'production';
 }
 
+function explicitlyEnabled(env, key) {
+  return /^(1|true|on|yes)$/i.test(String(env?.[key] ?? '').trim());
+}
+
 function configuredRunCap(project, env = process.env) {
   if (
     !featureEnabled(env, 'CODEX_RUN_BRANCHES')
     || !featureEnabled(env, 'CODEX_RUN_WORKTREES')
+    || !explicitlyEnabled(env, 'CODEX_RUN_CONCURRENCY_ENABLED')
+    || !explicitlyEnabled(env, 'CODEX_RUN_OS_ISOLATION_ATTESTED')
   ) {
-    return 1;
+    return DEFAULT_MAX_CONCURRENT_RUNS;
   }
-  const raw = project?.brief?.maxConcurrentRuns ?? env?.CODEX_MAX_CONCURRENT_RUNS ?? 1;
+  const operatorRaw = env?.CODEX_MAX_CONCURRENT_RUNS ?? DEFAULT_MAX_CONCURRENT_RUNS;
+  const operatorParsed = Math.trunc(Number(operatorRaw));
+  const operatorCap = Number.isFinite(operatorParsed)
+    ? Math.min(Math.max(operatorParsed, DEFAULT_MAX_CONCURRENT_RUNS), MAX_CONCURRENT_RUNS_HARD_CAP)
+    : DEFAULT_MAX_CONCURRENT_RUNS;
+  const raw = project?.brief?.maxConcurrentRuns ?? operatorCap;
   const parsed = Math.trunc(Number(raw));
-  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 64) : 1;
+  const projectCap = Number.isFinite(parsed)
+    ? Math.min(Math.max(parsed, DEFAULT_MAX_CONCURRENT_RUNS), MAX_CONCURRENT_RUNS_HARD_CAP)
+    : operatorCap;
+  return Math.min(projectCap, operatorCap);
 }
 
 /** Public projection — never leaks userId/jobId. */
@@ -122,6 +138,8 @@ function publicRun(row) {
     model: row.model ?? null,
     tier: row.tier ?? null,
     planRunId: row.planRunId ?? null,
+    departmentPoolId: row.departmentPoolId ?? null,
+    swarmTaskId: row.swarmTaskId ?? null,
     prompt: row.prompt == null ? null : autonomousRunPolicy.stripAutoExecutePrompt(row.prompt),
     autoExecute: autonomousRunPolicy.isAutoExecutePrompt(row.prompt),
     error: row.error ?? null,
@@ -165,6 +183,9 @@ async function createRun({
   tier = null,
   planRunId = null,
   autoExecute = false,
+  idempotencyKey = null,
+  departmentPoolId = null,
+  swarmTaskId = null,
   db = defaultPrisma,
   queue = runQueue,
   eventStore = eventStoreDefault,
@@ -173,6 +194,17 @@ async function createRun({
 }) {
   const prisma = requireDb(db);
   if (!MODES.includes(mode)) throw new RunServiceError('invalid_mode', 'mode must be plan or build', 400);
+  const normalizeLink = (value, field, max = 200) => {
+    if (value == null) return null;
+    const normalized = String(value).trim();
+    if (!normalized || normalized.length > max) {
+      throw new RunServiceError(`invalid_${field}`, `${field} is invalid`, 400);
+    }
+    return normalized;
+  };
+  const normalizedIdempotencyKey = normalizeLink(idempotencyKey, 'idempotency_key', 300);
+  const requestedDepartmentPoolId = normalizeLink(departmentPoolId, 'department_pool_id');
+  const requestedSwarmTaskId = normalizeLink(swarmTaskId, 'swarm_task_id');
 
   const project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
   if (!project) throw new RunServiceError('project_not_found', 'project not found', 404);
@@ -187,6 +219,75 @@ async function createRun({
       throw new RunServiceError('invalid_plan_run', 'planRunId must reference an approvable plan run', 400);
     }
   }
+  if (
+    planRun?.departmentPoolId
+    && requestedDepartmentPoolId
+    && requestedDepartmentPoolId !== planRun.departmentPoolId
+  ) {
+    throw new RunServiceError(
+      'run_lineage_mismatch',
+      'build continuation cannot change its department pool',
+      409,
+    );
+  }
+  if (
+    planRun?.swarmTaskId
+    && requestedSwarmTaskId
+    && requestedSwarmTaskId !== planRun.swarmTaskId
+  ) {
+    throw new RunServiceError(
+      'run_lineage_mismatch',
+      'build continuation cannot change its swarm task',
+      409,
+    );
+  }
+  let effectiveDepartmentPoolId = requestedDepartmentPoolId || planRun?.departmentPoolId || null;
+  const effectiveSwarmTaskId = requestedSwarmTaskId || planRun?.swarmTaskId || null;
+  if (effectiveSwarmTaskId) {
+    if (!prisma.codexSwarmTask?.findFirst) {
+      throw new RunServiceError(
+        'swarm_task_store_unavailable',
+        'swarm task validation is unavailable',
+        503,
+      );
+    }
+    const task = await prisma.codexSwarmTask.findFirst({
+      where: { id: effectiveSwarmTaskId, swarm: { projectId } },
+      select: { id: true, input: true },
+    });
+    const taskInput = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
+      ? task.input
+      : {};
+    const taskPoolId = String(taskInput.departmentPoolId || '').trim() || null;
+    if (!task || (effectiveDepartmentPoolId && taskPoolId !== effectiveDepartmentPoolId)) {
+      throw new RunServiceError(
+        'swarm_task_unavailable',
+        'swarm task is unavailable for this project and department pool',
+        409,
+      );
+    }
+    if (!effectiveDepartmentPoolId && taskPoolId) effectiveDepartmentPoolId = taskPoolId;
+  }
+  if (effectiveDepartmentPoolId) {
+    if (!prisma.codexDepartmentPool?.findFirst) {
+      throw new RunServiceError(
+        'department_pool_store_unavailable',
+        'department pool validation is unavailable',
+        503,
+      );
+    }
+    const pool = await prisma.codexDepartmentPool.findFirst({
+      where: { id: effectiveDepartmentPoolId, projectId, enabled: true },
+      select: { id: true },
+    });
+    if (!pool) {
+      throw new RunServiceError(
+        'department_pool_unavailable',
+        'department pool is unavailable for this project',
+        409,
+      );
+    }
+  }
 
   // At most one active run per project — EXCEPT a build approving its own
   // waiting_approval plan run (that plan is "active" but the build is its
@@ -199,16 +300,30 @@ async function createRun({
   const storedPrompt = inheritAutoExecute
     ? autonomousRunPolicy.withAutoExecutePrompt(sourcePrompt)
     : sourcePrompt;
-  const existingWhere = mode === 'build' && planRunId
-    ? { projectId, userId, mode: 'build', planRunId }
-    : null;
+  const existingWhere = normalizedIdempotencyKey
+    ? { projectId, userId, idempotencyKey: normalizedIdempotencyKey }
+    : mode === 'build' && planRunId
+      ? { projectId, userId, mode: 'build', planRunId }
+      : null;
 
   const inserted = await insertRunGuarded(prisma, {
     projectId,
     activeWhere,
     existingWhere,
     activeCap: configuredRunCap(project, env),
-    data: { projectId, userId, mode, status: 'queued', prompt: storedPrompt, model, tier, planRunId },
+    data: {
+      projectId,
+      userId,
+      mode,
+      status: 'queued',
+      prompt: storedPrompt,
+      model,
+      tier,
+      planRunId,
+      idempotencyKey: normalizedIdempotencyKey,
+      departmentPoolId: effectiveDepartmentPoolId,
+      swarmTaskId: effectiveSwarmTaskId,
+    },
   });
   const { row, created } = inserted;
 
@@ -420,6 +535,8 @@ module.exports = {
   MODES,
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,
+  DEFAULT_MAX_CONCURRENT_RUNS,
+  MAX_CONCURRENT_RUNS_HARD_CAP,
   configuredRunCap,
   featureEnabled,
 };

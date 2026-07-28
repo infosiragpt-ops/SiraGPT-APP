@@ -908,7 +908,7 @@ function createPrismaSwarmRepository(prisma) {
             const admission = await projectBudget.checkSwarmClaimBudget({
               prisma: tx,
               projectId: swarm.projectId,
-              task: null,
+              task: existing,
               projectDailyBudgetUsd: budgetPolicy.projectDailyBudgetUsd,
               companyDailyBudgetUsd: budgetPolicy.companyDailyBudgetUsd,
               defaultReservationUsd: budgetPolicy.defaultReservationUsd,

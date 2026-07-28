@@ -301,28 +301,48 @@ test('OT-7: configured production-main is used as the run base and merge target'
 test('OT-7: post-merge export and cleanup failures are warnings, not duplicate-run failures', async () => {
   const run = { id: 'cleanup-warning-1', projectId: 'project-1', prompt: 'cambio verificado' };
   const project = { id: run.projectId };
-  const calls = [];
-  const runner = {
-    runScope: { project: run.projectId, run: run.id },
-    baseRunner: {
-      async exportWorkspace() {
-        throw new Error('export unavailable');
-      },
-    },
+  const scopedCalls = [];
+  const baseCalls = [];
+  const baseRunner = {
     async exec(_projectId, command) {
-      if (command.join(' ') === 'git rev-parse --abbrev-ref HEAD') {
-        return { exitCode: 0, stdout: `run/${run.id}\n`, stderr: '' };
-      }
-      if (command.join(' ') === 'git status --porcelain') {
+      const text = command.join(' ');
+      baseCalls.push(text);
+      if (text === `git show-ref --verify --quiet refs/heads/run/${run.id}`) {
         return { exitCode: 0, stdout: '', stderr: '' };
       }
-      throw new Error(`unexpected command: ${command.join(' ')}`);
+      if (text === 'git status --porcelain=v1 -z') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: 'main\n', stderr: '' };
+      }
+      if (text.includes(`merge --no-ff --no-edit run/${run.id}`)) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git rev-parse HEAD') {
+        return { exitCode: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+      }
+      throw new Error(`unexpected base command: ${text}`);
     },
-    async integrateRunWorkspace(projectId, runId, options) {
-      calls.push({ projectId, runId, options });
-      return { ok: true, status: 'merged', commitSha: 'a'.repeat(40) };
+    async exportWorkspace() {
+      throw new Error('export unavailable');
     },
-    async cleanupRunWorkspace() {
+  };
+  const runner = {
+    scope: { project: run.projectId, run: run.id },
+    unscoped: () => baseRunner,
+    async exec(_projectId, command) {
+      const text = command.join(' ');
+      scopedCalls.push(text);
+      if (text === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: `run/${run.id}\n`, stderr: '' };
+      }
+      if (text === 'git status --porcelain' || text === 'git status --porcelain=v1 -z') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected scoped command: ${text}`);
+    },
+    async removeWorktree() {
       throw new Error('cleanup unavailable');
     },
   };
@@ -335,12 +355,12 @@ test('OT-7: post-merge export and cleanup failures are warnings, not duplicate-r
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.status, 'merged');
-  assert.equal(result.cleanupWarning, true);
-  assert.equal(result.exportResult.ok, false);
-  assert.equal(result.cleanup.ok, false);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].runId, run.id);
+  assert.equal(result.merge.status, 'merged');
+  assert.equal(result.merge.cleanupWarning, true);
+  assert.equal(result.merge.exportResult.ok, false);
+  assert.equal(result.merge.worktreeCleanup.ok, false);
+  assert.ok(scopedCalls.includes('git status --porcelain=v1 -z'));
+  assert.ok(baseCalls.some((call) => call.includes(`merge --no-ff --no-edit run/${run.id}`)));
 });
 
 test('OT-7: workspace mutation after verification never reaches the base branch', async (t) => {

@@ -614,6 +614,7 @@ async function createWriterRun({
     ? task.input.acceptance.map((item) => `- ${String(item).slice(0, 500)}`).join('\n')
     : '';
   const isIntegrator = task.role === TASK_ROLES.INTEGRATOR;
+  const attempt = Math.max(1, Number.parseInt(task?.attemptCount, 10) || 1);
   const prompt = [
     `[SWARM · ${departmentId}]`,
     isIntegrator
@@ -641,6 +642,7 @@ async function createWriterRun({
     model: swarm?.metadata?.model || null,
     tier: swarm?.metadata?.tier || null,
     autoExecute: true,
+    idempotencyKey: `swarm-task:${task.id}:attempt:${attempt}:plan`,
     departmentPoolId: task?.input?.departmentPoolId || null,
     swarmTaskId: task.id,
     db: prisma,

@@ -165,9 +165,9 @@ async function runWorktreeIsolationCanary({
     return { enabled: false, isolated: false, skipped: 'feature_disabled' };
   }
   if (
-    typeof runner?.initRunWorkspace !== 'function'
+    typeof runner?.createWorktree !== 'function'
     || typeof runner?.forRun !== 'function'
-    || typeof runner?.cleanupRunWorkspace !== 'function'
+    || typeof runner?.removeWorktree !== 'function'
   ) {
     throw new RuntimeCanaryError(
       'worktree_isolation',
@@ -190,7 +190,7 @@ async function runWorktreeIsolationCanary({
   try {
     const baseBefore = await runner.readFile(projectId, 'src/main.jsx');
     const initResults = await Promise.allSettled(runIds.map((run) => (
-      runner.initRunWorkspace(projectId, run, { baseBranch })
+      runner.createWorktree(projectId, run, baseBranch)
     )));
     initResults.forEach((entry, index) => {
       if (entry.status === 'fulfilled' && entry.value?.ok !== false) initialized.add(runIds[index]);
@@ -209,7 +209,7 @@ async function runWorktreeIsolationCanary({
       );
     }
 
-    const scoped = runIds.map((run) => runner.forRun(projectId, run));
+    const scoped = runIds.map((run) => runner.forRun(run, projectId));
     await Promise.all(scoped.map((runRunner, index) => (
       runRunner.writeFiles(projectId, [{
         path: 'src/main.jsx',
@@ -269,7 +269,7 @@ async function runWorktreeIsolationCanary({
   }
 
   const cleanup = await Promise.allSettled([...initialized].map(async (runId) => {
-    const scoped = runner.forRun(projectId, runId);
+    const scoped = runner.forRun(runId, projectId);
     await checkedExec(
       scoped,
       projectId,
@@ -277,12 +277,12 @@ async function runWorktreeIsolationCanary({
       'worktree_isolation.reset',
       30_000,
     );
-    return runner.cleanupRunWorkspace(projectId, runId);
+    return runner.removeWorktree(projectId, runId);
   }));
   const cleanupFailed = cleanup.some((entry) => (
     entry.status === 'rejected'
     || entry.value?.ok === false
-    || entry.value?.branchDeleted === false
+    || entry.value?.removed === false
   ));
   if (primaryError) throw primaryError;
   if (cleanupFailed || initialized.size !== runIds.length) {
