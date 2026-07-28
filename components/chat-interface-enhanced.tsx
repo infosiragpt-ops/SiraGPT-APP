@@ -1154,6 +1154,7 @@ const ActionsDropdown = ({
   setIsExcelConnectorActive,
   setShowAudioPanel,
   setAudioTab,
+  openVoicePanel,
   handleAndUploadFiles,
   isUploading,
   isWebSearching,
@@ -1610,6 +1611,27 @@ const ActionsDropdown = ({
               {isWebSearchActive && (
                 <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
+            </div>
+          </DropdownMenuItem>
+          {/* Voice mode. This used to be reachable only by pressing the
+              composer's primary button while it was empty, where it rendered as
+              a waveform icon sitting right next to the dictation mic — two
+              adjacent speech affordances with no way to tell them apart. The
+              primary button is now always Send, so voice mode lives here. */}
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onClick={() => openVoicePanel?.()}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
+                <AudioLines className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">Modo de voz</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Habla en lugar de escribir
+                </div>
+              </div>
             </div>
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -6987,6 +7009,9 @@ But first, you need to connect your Spotify account securely using the button be
     )
   }
 
+  // No `title` on the button: the Radix tooltip below is the hover affordance
+  // and carries richer copy (it warns when the browser has no speech support).
+  // A native title would race it and win with weaker, contradictory text.
   const renderDictationButton = () => (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -6997,7 +7022,6 @@ But first, you need to connect your Spotify account securely using the button be
           disabled={isDictationTranscribing}
           aria-label={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           aria-pressed={isRecording}
-          title={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           className={cn(
             "relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
@@ -7017,7 +7041,7 @@ But first, you need to connect your Spotify account securely using the button be
             <>
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-full bg-red-500/30 animate-ping"
+                className="composer-mic-pulse pointer-events-none absolute inset-0 rounded-full bg-red-500/30 animate-ping"
               />
               <span
                 aria-hidden
@@ -11872,6 +11896,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isExcelConnectorActive={isExcelConnectorActive}
                           setIsExcelConnectorActive={setIsExcelConnectorActive}
                           setShowAudioPanel={setShowAudioPanel}
+                          openVoicePanel={openGrokVoicePanel}
                           handleComputerUseToggle={handleComputerUseToggle}
                           handleGmailToggle={handleGmailToggle}
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
@@ -11986,28 +12011,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             const needsPrompt = requiresPromptBeforePrimarySend && !hasText
                             const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                             const busy = isCurrentChatLocalJobBusy || isUploading
-                            // In prompt-driven media modes (Video/Image/Voice/Music), an empty
-                            // composer should not open Voice Studio. Keep the primary CTA
-                            // as the send/create affordance and disable it until the user
-                            // writes the generation prompt.
-                            const action = canSend
-                              ? handleSend
-                              : openGrokVoicePanel
+                            // The primary button is always Send. It used to flip to a
+                            // waveform icon that opened Voice Studio whenever the composer
+                            // was empty, which put two different speech affordances side by
+                            // side (this button and the dictation mic) with nothing to tell
+                            // them apart. Voice Studio now lives in the "+" menu instead.
+                            const action = handleSend
                             const label = canSend
                               ? 'Enviar (⏎)'
                               : needsPrompt
                                 ? 'Describe lo que quieres crear'
-                                : 'Modo de voz'
-                            const Icon = canSend || needsPrompt ? ArrowUp : AudioLines
+                                : 'Escribe un mensaje para enviar'
+                            const Icon = ArrowUp
                             return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={(canSend && busy) || needsPrompt}
+                                    disabled={!canSend || busy}
                                     size="icon"
                                     aria-label={label}
-                                    title={label}
                                     className={cn(
                                       "h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
                                       "bg-foreground text-background",
@@ -12037,8 +12060,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 <Button
                                   onClick={handleSend}
                                   size="icon"
-                                  aria-label="Enviar a la cola"
-                                  title="Enviar a la cola · se procesa en orden"
+                                  aria-label="Enviar a la cola · se procesa en orden"
                                   className={cn(
                                       "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                       "bg-[hsl(var(--accent-violet))] text-white",
@@ -12351,6 +12373,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isExcelConnectorActive={isExcelConnectorActive}
                               setIsExcelConnectorActive={setIsExcelConnectorActive}
                               setShowAudioPanel={setShowAudioPanel}
+                              openVoicePanel={openGrokVoicePanel}
                               handleComputerUseToggle={handleComputerUseToggle}
                               handleGmailToggle={handleGmailToggle}
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
@@ -12457,24 +12480,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 const needsPrompt = requiresPromptBeforePrimarySend && !hasText
                                 const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                                 const busy = isCurrentChatLocalJobBusy || isUploading
-                                const action = canSend
-                                  ? handleSend
-                                  : openGrokVoicePanel
+                                // Always Send — see the matching note on the empty-state
+                                // composer above. Voice Studio moved to the "+" menu.
+                                const action = handleSend
                                 const label = canSend
                                   ? 'Enviar (⏎)'
                                   : needsPrompt
                                     ? 'Describe lo que quieres crear'
-                                    : 'Modo de voz'
-                                const Icon = canSend || needsPrompt ? ArrowUp : AudioLines
+                                    : 'Escribe un mensaje para enviar'
+                                const Icon = ArrowUp
                                 return (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={(canSend && busy) || needsPrompt}
+                                        disabled={!canSend || busy}
                                         size="icon"
                                         aria-label={label}
-                                        title={label}
                                         className={cn(
                                           "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                           "bg-foreground text-background",
@@ -12510,8 +12532,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     <Button
                                       onClick={handleSend}
                                       size="icon"
-                                      aria-label="Enviar a la cola"
-                                      title="Enviar a la cola · se procesa en orden"
+                                      aria-label="Enviar a la cola · se procesa en orden"
                                       className={cn(
                                         "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                         "bg-[hsl(var(--accent-violet))] text-white",
