@@ -169,6 +169,7 @@ import { cn } from "@/lib/utils"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { AgentOfficeScene } from "./agent-office/agent-office-scene"
+import { CompanyResourcesSurface } from "./company-resources-surface"
 import {
   EnterpriseCommandCenter,
   type EnterpriseDepartment,
@@ -2202,6 +2203,7 @@ export function AgentCompanyPanel() {
             surface={isMobile}
             companyName={companyName}
             workspaceId={activeFolder?.id || null}
+            departments={allDepartments}
             onOpenCeo={openCeoOffice}
           />
         ) : view === "department" && selectedDepartment ? (
@@ -2682,6 +2684,7 @@ export function AgentCompanyPanel() {
           surface
           companyName={companyName}
           workspaceId={activeFolder?.id || null}
+          departments={allDepartments}
           onOpenCeo={() => {
             setPreviewView(null)
             openCeoOffice()
@@ -3164,11 +3167,13 @@ const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; class
 function ResourcesView({
   companyName,
   workspaceId,
+  departments = AGENT_COMPANY_DEPARTMENTS,
   onOpenCeo,
   surface = false,
 }: {
   companyName: string
   workspaceId: string | null
+  departments?: readonly AgentDepartmentDefinition[]
   onOpenCeo: () => void
   surface?: boolean
 }) {
@@ -3518,368 +3523,61 @@ function ResourcesView({
   const autonomous = draft.enabled && draft.mode === "auto"
 
   if (surface) {
-    const connectedPlatforms = new Set(
-      operations.providers
-        .filter((provider) => provider.connection?.connected && provider.supports.text)
-        .map((provider) => provider.platform),
-    )
     return (
-      <SurfacePage testId="company-resources-surface">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
-            <h1 className="mt-2 text-[28px] font-semibold leading-tight">Activos de la empresa agente</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
-              Conecta cuentas autorizadas y publica contenido de texto con control explícito del usuario.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-10 rounded-md bg-white dark:bg-zinc-900"
-            onClick={() => void load()}
-            disabled={loading}
-          >
-            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
-            Actualizar estado
-          </Button>
-        </div>
-
-        <div className="mt-7 grid overflow-hidden rounded-lg border border-zinc-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-white/10 dark:bg-zinc-900">
-          {[
-            { label: "Canales conectados", value: connectedCount, detail: `${operations.providers.length} compatibles`, icon: Link2 },
-            { label: "En cola", value: operations.metrics.queued, detail: "borradores y programadas", icon: Clock3 },
-            { label: "Publicados hoy", value: operations.metrics.publishedToday, detail: "confirmados por proveedor", icon: Send },
-            { label: "Modo de salida", value: draft.mode === "auto" ? "Auto" : "Revisión", detail: draft.enabled ? "publicación habilitada" : "publicación pausada", icon: ShieldCheck },
-          ].map(({ label, value, detail, icon: Icon }, index) => (
-            <div
-              key={label}
-              className={cn(
-                "min-h-[124px] p-5",
-                index > 0 && "border-t border-zinc-200 sm:border-l sm:border-t-0 dark:border-white/10",
-                index === 2 && "sm:border-l-0 xl:border-l",
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-zinc-500">{label}</span>
-                <Icon className="h-4 w-4 text-zinc-400" />
-              </div>
-              <div className="mt-4 text-2xl font-semibold tabular-nums">{value}</div>
-              <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
-            </div>
-          ))}
-        </div>
-
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[#fbfbfc] dark:bg-background">
         {companyOps ? (
-          <CompanyOperationsPanel
-            operations={companyOps}
-            context={companyOpsContext}
-            busy={companyOpsBusy}
-            onResearch={() => runCompanyOperation(
-              "research",
-              (projectId) => codexApi.researchCompanyLeads(projectId),
-              "Investigación comercial actualizada.",
-            )}
-            onTriage={() => runCompanyOperation(
-              "inbox",
-              (projectId) => codexApi.triageCompanyInbox(projectId),
-              "Bandeja revisada y acciones preparadas.",
-            )}
-            onSocialTriage={() => runCompanyOperation(
-              "social",
-              triageSocialChannels,
-              "Conversaciones sociales revisadas.",
-            )}
-            onResolve={resolveCompanyAction}
-            onPolicy={updateCompanyPolicy}
-            onUpdateLead={(leadId, patch) => runCompanyOperation(
-              `lead:${leadId}`,
-              (projectId) => codexApi.updateCompanyLead(projectId, leadId, patch),
-              patch.status === "do_not_contact" ? "Lead marcado como no contactar." : "Contacto actualizado.",
-            )}
-            onOutreach={(leadId) => runCompanyOperation(
-              `outreach:${leadId}`,
-              (projectId) => codexApi.prepareLeadOutreach(projectId, leadId),
-              "Correo comercial preparado según la política.",
-            )}
-          />
-        ) : null}
-
-        <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
-          <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold">Nueva publicación de texto</h2>
-                <p className="mt-1 text-xs text-zinc-500">El contenido solo sale a cuentas conectadas y seleccionadas.</p>
-              </div>
-              <MessageSquareText className="h-5 w-5 text-zinc-400" />
-            </div>
-            <Label htmlFor="company-social-caption" className="mt-5 block text-xs font-semibold">Contenido</Label>
-            <Textarea
-              id="company-social-caption"
-              value={caption}
-              onChange={(event) => setCaption(event.target.value)}
-              placeholder="Escribe el contenido que deseas publicar..."
-              maxLength={5_000}
-              className="mt-2 min-h-[170px] resize-y rounded-md border-zinc-200 text-sm leading-relaxed dark:border-white/10"
-            />
-            <div className="mt-2 text-right text-[10px] tabular-nums text-zinc-500">{caption.length}/5000</div>
-
-            <div className="mt-5">
-              <Label className="text-xs font-semibold">Canales</Label>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {operations.providers.map((provider) => {
-                  const connected = connectedPlatforms.has(provider.platform)
-                  const selected = selectedPlatforms.includes(provider.platform)
-                  const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
-                  return (
-                    <button
-                      key={`composer-${provider.platform}`}
-                      type="button"
-                      disabled={!connected}
-                      onClick={() => toggleComposerPlatform(provider.platform)}
-                      className={cn(
-                        "inline-flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45",
-                        selected
-                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
-                          : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5",
-                      )}
-                      aria-pressed={selected}
-                      title={connected ? `Publicar en ${provider.label}` : `${provider.label} no está conectado`}
-                    >
-                      <span className={cn("flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold", mark.className)}>
-                        {mark.mark}
-                      </span>
-                      {provider.label}
-                      {connected ? <Check className="h-3.5 w-3.5" /> : null}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-[auto_1fr]">
-              <div className="flex h-10 items-center rounded-md border border-zinc-200 p-1 dark:border-white/10" role="group" aria-label="Momento de publicación">
-                {([
-                  ["now", "Ahora"],
-                  ["scheduled", "Programar"],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDelivery(value)}
-                    className={cn(
-                      "h-8 rounded px-3 text-xs font-medium",
-                      delivery === value ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white" : "text-zinc-500",
-                    )}
-                    aria-pressed={delivery === value}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {delivery === "scheduled" ? (
-                <Input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(event) => setScheduledAt(event.target.value)}
-                  aria-label="Fecha y hora de publicación"
-                  className="h-10 rounded-md border-zinc-200 dark:border-white/10"
-                />
-              ) : (
-                <div className="flex h-10 items-center rounded-md bg-zinc-50 px-3 text-xs text-zinc-500 dark:bg-zinc-950">
-                  Se enviará inmediatamente al confirmar.
-                </div>
+          <div className="mx-auto w-full max-w-[1100px] px-4 pt-4 sm:px-6 lg:px-8">
+            <CompanyOperationsPanel
+              operations={companyOps}
+              context={companyOpsContext}
+              busy={companyOpsBusy}
+              onResearch={() => runCompanyOperation(
+                "research",
+                (projectId) => codexApi.researchCompanyLeads(projectId),
+                "Investigación comercial actualizada.",
               )}
-            </div>
-
-            {!draft.enabled && delivery === "now" ? (
-              <div className="mt-4 flex items-start gap-2 rounded-md bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/25 dark:text-amber-200">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                Activa la publicación en la configuración antes de enviar contenido ahora.
-              </div>
-            ) : null}
-
-            <Button
-              type="button"
-              className="mt-5 h-11 w-full rounded-md"
-              onClick={() => void submitTextPost()}
-              disabled={!caption.trim() || selectedPlatforms.length === 0 || postBusy || (delivery === "scheduled" && !scheduledAt)}
-            >
-              {postBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : delivery === "now" ? <Send className="mr-2 h-4 w-4" /> : <CalendarClock className="mr-2 h-4 w-4" />}
-              {postBusy ? "Procesando..." : delivery === "now" ? "Publicar ahora" : "Programar publicación"}
-            </Button>
-          </section>
-
-          <section>
-            <div className="flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold">Apps e integraciones</h2>
-                <p className="mt-1 text-xs text-zinc-500">OAuth real y permisos confirmados por el proveedor.</p>
-              </div>
-              <span className="text-xs tabular-nums text-zinc-500">{connectedCount} conectadas</span>
-            </div>
-            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
-              {operations.providers.map((provider) => {
-                const connection = provider.connection
-                const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
-                const busy = providerBusy === provider.platform
-                return (
-                  <div key={provider.platform} className="flex min-h-[76px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5">
-                    <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-xs font-bold", mark.className)}>
-                      {mark.mark}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <strong className="truncate text-[13px]">{provider.label}</strong>
-                        <span className={cn("h-2 w-2 rounded-full", connection?.connected ? "bg-emerald-500" : provider.configured ? "bg-amber-400" : "bg-zinc-300")} />
-                      </span>
-                      <span className="mt-1 block truncate text-[10px] text-zinc-500">
-                        {connection?.connected
-                          ? connection.accountName || "Cuenta conectada"
-                          : provider.configured
-                            ? "Disponible para conectar"
-                            : "Credenciales del servidor pendientes"}
-                      </span>
-                    </span>
-                    {connection?.connected ? (
-                      <Button type="button" variant="ghost" size="sm" className="h-9 rounded-md text-xs" onClick={() => void disconnect(provider.platform)} disabled={busy}>
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Desconectar"}
-                      </Button>
-                    ) : (
-                      <Button type="button" variant="outline" size="sm" className="h-9 rounded-md text-xs" onClick={() => void connect(provider.platform)} disabled={!provider.configured || busy}>
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
-              {businessConnectors.map((connector) => {
-                const connected = connector.account?.status === "connected"
-                const busy = connectorBusy === connector.id
-                const detail = connected
-                  ? connector.account?.accountLabel || "Cuenta conectada"
-                  : `${connector.capabilities.length} capacidades · escritura con confirmación`
-                return (
-                  <div key={connector.id} className="flex min-h-[76px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                      {connector.id === "gmail" ? <MessageSquareText className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <strong className="truncate text-[13px]">{connector.name}</strong>
-                        <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-amber-400")} />
-                      </span>
-                      <span className="mt-1 block truncate text-[10px] text-zinc-500">{detail}</span>
-                    </span>
-                    {connected ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-9 rounded-md text-xs"
-                        onClick={() => void disconnectBusinessConnector(connector)}
-                        disabled={busy}
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Desconectar"}
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-9 rounded-md text-xs"
-                        onClick={() => void connectBusinessConnector(connector)}
-                        disabled={busy}
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-sm font-semibold">Control de publicación</h3>
-                  <p className="mt-1 text-[11px] text-zinc-500">Pausa global y aprobación de salida.</p>
-                </div>
-                <Switch
-                  checked={draft.enabled}
-                  onCheckedChange={(enabled) => patchDraft({ enabled })}
-                  aria-label="Habilitar publicación social"
-                />
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-1 rounded-md bg-zinc-100 p-1 dark:bg-zinc-800">
-                {([
-                  ["review", "Con revisión"],
-                  ["auto", "Automático"],
-                ] as const).map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => patchDraft({ mode })}
-                    className={cn(
-                      "h-9 rounded text-xs font-medium",
-                      draft.mode === mode ? "bg-white shadow-sm dark:bg-zinc-950" : "text-zinc-500",
-                    )}
-                    aria-pressed={draft.mode === mode}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <Button type="button" variant="outline" className="mt-4 w-full rounded-md" onClick={() => void save()} disabled={saving}>
-                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                Guardar configuración
-              </Button>
-            </div>
-          </section>
-        </div>
-
-        <section className="mt-8">
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">Historial de publicaciones</h2>
-              <p className="mt-1 text-xs text-zinc-500">Últimos estados devueltos por la cola y los proveedores.</p>
-            </div>
-            <span className="text-xs tabular-nums text-zinc-500">{posts.length} registros</span>
+              onTriage={() => runCompanyOperation(
+                "inbox",
+                (projectId) => codexApi.triageCompanyInbox(projectId),
+                "Bandeja revisada y acciones preparadas.",
+              )}
+              onSocialTriage={() => runCompanyOperation(
+                "social",
+                triageSocialChannels,
+                "Conversaciones sociales revisadas.",
+              )}
+              onResolve={resolveCompanyAction}
+              onPolicy={updateCompanyPolicy}
+              onUpdateLead={(leadId, patch) => runCompanyOperation(
+                `lead:${leadId}`,
+                (projectId) => codexApi.updateCompanyLead(projectId, leadId, patch),
+                patch.status === "do_not_contact" ? "Lead marcado como no contactar." : "Contacto actualizado.",
+              )}
+              onOutreach={(leadId) => runCompanyOperation(
+                `outreach:${leadId}`,
+                (projectId) => codexApi.prepareLeadOutreach(projectId, leadId),
+                "Correo comercial preparado según la política.",
+              )}
+            />
           </div>
-          <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
-            {posts.slice(0, 12).map((post) => (
-              <div key={post.id} className="grid min-h-[72px] items-center gap-3 border-b border-zinc-100 px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto_auto] dark:border-white/5">
-                <div className="min-w-0">
-                  <p className="truncate text-[13px] font-medium">{post.caption || post.prompt}</p>
-                  <p className="mt-1 truncate text-[10px] text-zinc-500">
-                    {post.platforms.map((platform) => operations.providers.find((provider) => provider.platform === platform)?.label || platform).join(" · ")}
-                  </p>
-                </div>
-                <span className={cn(
-                  "w-fit rounded-full px-2 py-1 text-[10px] font-semibold",
-                  post.status === "published" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300",
-                  ["scheduled", "publishing"].includes(post.status) && "bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
-                  post.status === "failed" && "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300",
-                  !["published", "scheduled", "publishing", "failed"].includes(post.status) && "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-                )}>
-                  {post.status === "published" ? "Publicado" : post.status === "scheduled" ? "Programado" : post.status === "publishing" ? "Publicando" : post.status === "failed" ? "Falló" : post.status}
-                </span>
-                <span className="text-[10px] tabular-nums text-zinc-500">
-                  {relativeActivity(Date.parse(post.publishedAt || post.scheduledAt || post.createdAt))}
-                </span>
-              </div>
-            ))}
-            {posts.length === 0 ? (
-              <div className="px-5 py-12 text-center">
-                <MessageSquareText className="mx-auto h-5 w-5 text-zinc-400" />
-                <p className="mt-2 text-sm font-medium">Sin publicaciones todavía</p>
-                <p className="mt-1 text-xs text-zinc-500">Conecta un canal y prepara el primer contenido.</p>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      </SurfacePage>
+        ) : null}
+        <CompanyResourcesSurface
+          companyName={companyName}
+          workspaceId={workspaceId}
+          departments={departments}
+          operations={operations}
+          businessConnectors={businessConnectors}
+          loading={loading}
+          providerBusy={providerBusy}
+          connectorBusy={connectorBusy}
+          onRefresh={() => void load()}
+          onConnectSocial={(platform) => void connect(platform)}
+          onDisconnectSocial={(platform) => void disconnect(platform)}
+          onConnectConnector={(connector) => void connectBusinessConnector(connector)}
+          onDisconnectConnector={(connector) => void disconnectBusinessConnector(connector)}
+          onOpenCeo={onOpenCeo}
+        />
+      </div>
     )
   }
 
