@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   RuntimeCanaryError,
+  runWorktreeIsolationCanary,
   runRuntimeCanary,
 } = require('../src/services/codex/runtime-canary');
 
@@ -149,4 +150,71 @@ test('runtime canary fails when the second render is stale', async () => {
   );
   assert.ok(checks > 2);
   assert.equal(runner.calls.at(-1)[0], 'stop');
+});
+
+test('worktree canary proves two run-scoped writes are isolated and cleans both trees', async () => {
+  const baseSource = 'export default function App(){ return "base" }\n';
+  const worktrees = new Map();
+  const calls = [];
+  const runner = {
+    calls,
+    readFile: async (_project, path) => {
+      assert.equal(path, 'src/main.jsx');
+      return { content: baseSource };
+    },
+    exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    createWorktree: async (_project, run) => {
+      calls.push(['init-worktree', run]);
+      worktrees.set(run, baseSource);
+      return { ok: true };
+    },
+    forRun: (run) => ({
+      writeFiles: async (_candidate, files) => {
+        worktrees.set(run, files[0].content);
+        return { ok: true };
+      },
+      readFile: async () => ({ content: worktrees.get(run) }),
+      exec: async (_candidate, command) => {
+        if (command.join(' ') === 'git status --porcelain') {
+          return { exitCode: 0, stdout: ' M src/main.jsx\n', stderr: '' };
+        }
+        if (command.join(' ') === 'git reset --hard HEAD') {
+          worktrees.set(run, baseSource);
+          return { exitCode: 0, stdout: 'HEAD is now at canary\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    }),
+    removeWorktree: async (_project, run) => {
+      calls.push(['cleanup-worktree', run]);
+      worktrees.delete(run);
+      return { ok: true, removed: true };
+    },
+  };
+
+  const result = await runWorktreeIsolationCanary({
+    runner,
+    projectId: 'sira-runtime-canary',
+    probeId: 'fixed',
+    env: { CODEX_RUN_WORKTREES: '1' },
+  });
+
+  assert.equal(result.isolated, true);
+  assert.equal(result.basePreserved, true);
+  assert.equal(result.cleaned, true);
+  assert.equal(calls.filter(([name]) => name === 'init-worktree').length, 2);
+  assert.equal(calls.filter(([name]) => name === 'cleanup-worktree').length, 2);
+  assert.equal(worktrees.size, 0);
+});
+
+test('worktree canary fails closed when the runner contract is unavailable', async () => {
+  await assert.rejects(
+    () => runWorktreeIsolationCanary({
+      runner: {},
+      projectId: 'sira-runtime-canary',
+      probeId: 'unsupported',
+      env: { CODEX_RUN_WORKTREES: '1' },
+    }),
+    (error) => error instanceof RuntimeCanaryError && error.phase === 'worktree_isolation',
+  );
 });

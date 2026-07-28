@@ -126,6 +126,12 @@ function createRunnerClient({
       initWorkspace: (project) => call('POST', '/workspace/init', { project }),
       createWorktree: (project, runId, baseBranch = 'main') =>
         call('POST', '/workspace/worktree', { project, run: runId, baseBranch }),
+      recoverRunBase: (project, runId, { baseBranch = 'main' } = {}) =>
+        call('POST', '/workspace/worktree/recover-base', {
+          project,
+          run: runId,
+          baseBranch,
+        }),
       removeWorktree: (project, runId) =>
         call('POST', '/workspace/worktree/remove', { project, run: runId }),
       writeFiles: (project, files) =>

@@ -214,6 +214,94 @@ assert.equal(written.written, 3);
 const readback = await response(`/workspace/file?project=${project}&path=README.md`);
 assert.equal(readback.content, '# gVisor runner smoke\n');
 
+for (const cmd of [
+  ['git', 'add', '-A'],
+  [
+    'git',
+    '-c',
+    'user.name=SiraGPT gVisor Smoke',
+    '-c',
+    'user.email=gvisor-smoke@siragpt.local',
+    'commit',
+    '-m',
+    'test(runner): establish worktree gate fixture',
+  ],
+]) {
+  const committed = await response('/workspace/exec', {
+    method: 'POST',
+    body: { project, cmd, timeoutMs: 15_000 },
+  });
+  assert.equal(committed.exitCode, 0, committed.stderr || committed.stdout);
+}
+
+const firstRunWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-a', baseBranch: 'main' },
+});
+assert.equal(firstRunWorktree.ok, true);
+const blockedSiblingWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-b', baseBranch: 'main' },
+  expectedStatus: 409,
+});
+assert.equal(blockedSiblingWorktree.error, 'run_concurrency_isolation_unavailable');
+const firstRunCleanup = await response('/workspace/worktree/remove', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-a' },
+});
+assert.equal(firstRunCleanup.ok, true);
+const sequentialRunWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-b', baseBranch: 'main' },
+});
+assert.equal(sequentialRunWorktree.ok, true);
+const sequentialRunCleanup = await response('/workspace/worktree/remove', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-b' },
+});
+assert.equal(sequentialRunCleanup.ok, true);
+
+const dirtyFixture = await response('/workspace/write', {
+  method: 'POST',
+  body: {
+    project,
+    files: [{ path: 'RECOVERY_PROBE.txt', content: 'preserve this operator change\n' }],
+  },
+});
+assert.equal(dirtyFixture.written, 1);
+const dirtyWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery', baseBranch: 'main' },
+  expectedStatus: 409,
+});
+assert.equal(dirtyWorktree.error, 'working_tree_dirty');
+const recoveredBase = await response('/workspace/worktree/recover-base', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery', baseBranch: 'main' },
+});
+assert.equal(recoveredBase.ok, true);
+assert.equal(recoveredBase.recovered, true);
+assert.match(recoveredBase.recoveryRef, /^refs\/sira\/recovery\/gvisor-recovery-/);
+const recoveryRefProbe = await response('/workspace/exec', {
+  method: 'POST',
+  body: {
+    project,
+    cmd: ['git', 'rev-parse', '--verify', recoveredBase.recoveryRef],
+    timeoutMs: 15_000,
+  },
+});
+assert.equal(recoveryRefProbe.exitCode, 0, recoveryRefProbe.stderr || recoveryRefProbe.stdout);
+const recoveredWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery', baseBranch: 'main' },
+});
+assert.equal(recoveredWorktree.ok, true);
+const recoveredWorktreeCleanup = await response('/workspace/worktree/remove', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery' },
+});
+assert.equal(recoveredWorktreeCleanup.ok, true);
+
 const nodeProbe = await response('/workspace/exec', {
   method: 'POST',
   body: {

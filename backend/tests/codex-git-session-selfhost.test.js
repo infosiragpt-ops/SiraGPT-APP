@@ -298,6 +298,71 @@ test('OT-7: configured production-main is used as the run base and merge target'
   assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'production feature\n');
 });
 
+test('OT-7: post-merge export and cleanup failures are warnings, not duplicate-run failures', async () => {
+  const run = { id: 'cleanup-warning-1', projectId: 'project-1', prompt: 'cambio verificado' };
+  const project = { id: run.projectId };
+  const scopedCalls = [];
+  const baseCalls = [];
+  const baseRunner = {
+    async exec(_projectId, command) {
+      const text = command.join(' ');
+      baseCalls.push(text);
+      if (text === `git show-ref --verify --quiet refs/heads/run/${run.id}`) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git status --porcelain=v1 -z') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: 'main\n', stderr: '' };
+      }
+      if (text.includes(`merge --no-ff --no-edit run/${run.id}`)) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git rev-parse HEAD') {
+        return { exitCode: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+      }
+      throw new Error(`unexpected base command: ${text}`);
+    },
+    async exportWorkspace() {
+      throw new Error('export unavailable');
+    },
+  };
+  const runner = {
+    scope: { project: run.projectId, run: run.id },
+    unscoped: () => baseRunner,
+    async exec(_projectId, command) {
+      const text = command.join(' ');
+      scopedCalls.push(text);
+      if (text === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: `run/${run.id}\n`, stderr: '' };
+      }
+      if (text === 'git status --porcelain' || text === 'git status --porcelain=v1 -z') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected scoped command: ${text}`);
+    },
+    async removeWorktree() {
+      throw new Error('cleanup unavailable');
+    },
+  };
+
+  const result = await checkpointService.finalizeRunCheckpoint({
+    run,
+    project,
+    verification: { ok: true, status: 'passed' },
+    deps: { runner, prisma: {} },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.merge.status, 'merged');
+  assert.equal(result.merge.cleanupWarning, true);
+  assert.equal(result.merge.exportResult.ok, false);
+  assert.equal(result.merge.worktreeCleanup.ok, false);
+  assert.ok(scopedCalls.includes('git status --porcelain=v1 -z'));
+  assert.ok(baseCalls.some((call) => call.includes(`merge --no-ff --no-edit run/${run.id}`)));
+});
+
 test('OT-7: workspace mutation after verification never reaches the base branch', async (t) => {
   const fixture = gitFixture(t, 'codex-tree-race-');
   const run = { id: 'tree-race-1', projectId: fixture.projectId, prompt: 'cambio verificado' };

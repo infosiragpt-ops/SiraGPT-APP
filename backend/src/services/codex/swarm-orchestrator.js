@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const projectBudget = require('./project-budget');
 
 const MAX_LOGICAL_TASKS = 1000;
 const DEFAULT_EFFECTIVE_CONCURRENCY = 16;
@@ -118,6 +119,46 @@ function integerInRange(value, fallback, min, max, field) {
   return candidate;
 }
 
+function optionalBudgetLimit(value, field) {
+  if (value == null) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100_000) {
+    throw new CodexSwarmError(
+      'codex_swarm_invalid_limit',
+      `${field} must be null or a number between 0 and 100000.`,
+      400,
+      { field },
+    );
+  }
+  return parsed;
+}
+
+function normalizeClaimBudgetPolicy(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new CodexSwarmError(
+      'codex_swarm_invalid_input',
+      'budgetPolicy must be an object.',
+      400,
+      { field: 'budgetPolicy' },
+    );
+  }
+  return {
+    projectDailyBudgetUsd: optionalBudgetLimit(
+      value.projectDailyBudgetUsd,
+      'budgetPolicy.projectDailyBudgetUsd',
+    ),
+    companyDailyBudgetUsd: optionalBudgetLimit(
+      value.companyDailyBudgetUsd,
+      'budgetPolicy.companyDailyBudgetUsd',
+    ),
+    defaultReservationUsd: optionalBudgetLimit(
+      value.defaultReservationUsd ?? 0,
+      'budgetPolicy.defaultReservationUsd',
+    ),
+  };
+}
+
 function normalizeJson(value, field) {
   if (value == null) return null;
   try {
@@ -202,7 +243,11 @@ function normalizeDependencies(value, taskKey) {
   return dependencies;
 }
 
-function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
+function normalizeTaskRows(rawTasks, {
+  taskLimit,
+  idFactory,
+  ordinalOffset = 0,
+}) {
   if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
     throw new CodexSwarmError(
       'codex_swarm_tasks_required',
@@ -219,16 +264,17 @@ function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
     );
   }
 
-  const tasks = rawTasks.map((rawTask, ordinal) => {
+  return rawTasks.map((rawTask, index) => {
     const source = rawTask && typeof rawTask === 'object' ? rawTask : {};
-    const key = requiredString(source.key, `tasks[${ordinal}].key`, 160);
+    const ordinal = ordinalOffset + index;
+    const key = requiredString(source.key, `tasks[${index}].key`, 160);
     const role = normalizeRole(source.role);
     const dependsOn = normalizeDependencies(source.dependsOn, key);
     return {
-      id: requiredString(idFactory('task'), `tasks[${ordinal}].id`, 200),
+      id: requiredString(idFactory('task'), `tasks[${index}].id`, 200),
       key,
       ordinal,
-      title: requiredString(source.title || key, `tasks[${ordinal}].title`, 300),
+      title: requiredString(source.title || key, `tasks[${index}].title`, 300),
       role,
       stage: normalizeStage(source.stage),
       status: dependsOn.length ? TASK_STATUSES.BLOCKED : TASK_STATUSES.QUEUED,
@@ -237,24 +283,57 @@ function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
         0,
         -1_000_000,
         1_000_000,
-        `tasks[${ordinal}].priority`,
+        `tasks[${index}].priority`,
       ),
       dependsOn,
-      input: normalizeJson(source.input, `tasks[${ordinal}].input`),
+      input: normalizeJson(source.input, `tasks[${index}].input`),
       maxAttempts: integerInRange(
         source.maxAttempts,
         3,
         1,
         20,
-        `tasks[${ordinal}].maxAttempts`,
+        `tasks[${index}].maxAttempts`,
       ),
       attemptCount: 0,
       version: 0,
     };
   });
+}
 
+function normalizeTasks(rawTasks, { taskLimit, idFactory }) {
+  const tasks = normalizeTaskRows(rawTasks, { taskLimit, idFactory });
   validateTaskGraph(tasks);
   return tasks;
+}
+
+function normalizeAdditionalTasks(rawTasks, {
+  existingTasks,
+  taskLimit,
+  idFactory,
+}) {
+  const current = Array.isArray(existingTasks) ? existingTasks : [];
+  const existingKeys = new Set(current.map((task) => task.key));
+  const pending = Array.isArray(rawTasks)
+    ? rawTasks.filter((task) => !existingKeys.has(String(task?.key || '').trim()))
+    : rawTasks;
+  if (Array.isArray(pending) && pending.length === 0) {
+    return { tasks: [], replayed: true };
+  }
+  if (current.length + (Array.isArray(pending) ? pending.length : 0) > taskLimit) {
+    throw new CodexSwarmError(
+      'codex_swarm_task_limit',
+      `A swarm supports at most ${taskLimit} logical tasks.`,
+      413,
+      { count: current.length + pending.length, taskLimit },
+    );
+  }
+  const tasks = normalizeTaskRows(pending, {
+    taskLimit: Math.max(0, taskLimit - current.length),
+    idFactory,
+    ordinalOffset: current.length,
+  });
+  validateTaskGraph([...current, ...tasks]);
+  return { tasks, replayed: false };
 }
 
 function validateTaskGraph(tasks) {
@@ -707,6 +786,56 @@ function createPrismaSwarmRepository(prisma) {
       });
     },
 
+    async appendTasks({
+      swarmId,
+      rawTasks,
+      idFactory,
+      now,
+    }) {
+      return withSerializableRetry(prisma, async (tx) => {
+        let swarm = await tx.codexSwarm.findUnique({ where: { id: swarmId } });
+        if (!swarm) {
+          throw new CodexSwarmError(
+            'codex_swarm_not_found',
+            'Codex swarm not found.',
+            404,
+          );
+        }
+        if (TERMINAL_SWARM_STATUSES.has(swarm.status) || swarm.cancelRequestedAt) {
+          throw new CodexSwarmError(
+            'codex_swarm_terminal',
+            'Tasks cannot be appended to a terminal or cancelling swarm.',
+            409,
+            { swarmId, status: swarm.status },
+          );
+        }
+        const existingTasks = await loadTasks(tx, swarmId);
+        const normalized = normalizeAdditionalTasks(rawTasks, {
+          existingTasks,
+          taskLimit: swarm.taskLimit,
+          idFactory,
+        });
+        if (normalized.tasks.length) {
+          await tx.codexSwarmTask.createMany({
+            data: normalized.tasks.map((task) => ({
+              ...task,
+              swarmId,
+              ...(task.input == null ? {} : { input: task.input }),
+            })),
+          });
+        }
+        const reconciled = await reconcileInTransaction(tx, swarm, now);
+        swarm = reconciled.swarm;
+        return {
+          swarm,
+          tasks: reconciled.tasks,
+          progress: reconciled.aggregate,
+          appended: normalized.tasks,
+          replayed: normalized.replayed,
+        };
+      });
+    },
+
     async getSwarm(swarmId) {
       return prisma.codexSwarm.findUnique({ where: { id: swarmId } });
     },
@@ -718,18 +847,24 @@ function createPrismaSwarmRepository(prisma) {
       leaseToken,
       now,
       leaseExpiresAt,
+      budgetPolicy,
     }) {
       const claim = async () => withSerializableRetry(prisma, async (tx) => {
-        const existing = await tx.codexSwarmTask.findUnique({ where: { claimId } });
-        if (existing) {
-          if (existing.swarmId !== swarmId || existing.leaseOwner !== workerId) {
-            throw new CodexSwarmError(
-              'codex_swarm_claim_id_conflict',
-              'claimId is already owned by another worker or swarm.',
-              409,
-            );
-          }
-          return { task: existing, replayed: true, reason: null };
+        const existingBeforeReconcile = await tx.codexSwarmTask.findUnique({
+          where: { claimId },
+        });
+        if (
+          existingBeforeReconcile
+          && (
+            existingBeforeReconcile.swarmId !== swarmId
+            || existingBeforeReconcile.leaseOwner !== workerId
+          )
+        ) {
+          throw new CodexSwarmError(
+            'codex_swarm_claim_id_conflict',
+            'claimId is already owned by another worker or swarm.',
+            409,
+          );
         }
 
         let swarm = await tx.codexSwarm.findUnique({ where: { id: swarmId } });
@@ -742,13 +877,92 @@ function createPrismaSwarmRepository(prisma) {
         }
         let reconciled = await reconcileInTransaction(tx, swarm, now);
         swarm = reconciled.swarm;
-        const tasks = reconciled.tasks;
+        let tasks = reconciled.tasks;
 
         if (TERMINAL_SWARM_STATUSES.has(swarm.status) || swarm.cancelRequestedAt) {
           return { task: null, replayed: false, reason: 'swarm_terminal' };
         }
         if (swarm.status === SWARM_STATUSES.PAUSED) {
           return { task: null, replayed: false, reason: 'swarm_paused' };
+        }
+
+        if (existingBeforeReconcile) {
+          const existing = await tx.codexSwarmTask.findUnique({
+            where: { id: existingBeforeReconcile.id },
+          });
+          if (
+            !existing
+            || existing.status !== TASK_STATUSES.RUNNING
+            || existing.leaseOwner !== workerId
+            || existing.leaseToken !== existingBeforeReconcile.leaseToken
+            || !existing.leaseExpiresAt
+            || existing.leaseExpiresAt.getTime() <= now.getTime()
+          ) {
+            throw new CodexSwarmError(
+              'codex_swarm_claim_expired',
+              'The replayed claim no longer owns an active lease.',
+              409,
+            );
+          }
+          if (budgetPolicy) {
+            const admission = await projectBudget.checkSwarmClaimBudget({
+              prisma: tx,
+              projectId: swarm.projectId,
+              task: existing,
+              projectDailyBudgetUsd: budgetPolicy.projectDailyBudgetUsd,
+              companyDailyBudgetUsd: budgetPolicy.companyDailyBudgetUsd,
+              defaultReservationUsd: budgetPolicy.defaultReservationUsd,
+              now,
+            });
+            if (!admission.allowed) {
+              const released = await tx.codexSwarmTask.updateMany({
+                where: {
+                  id: existing.id,
+                  swarmId,
+                  status: TASK_STATUSES.RUNNING,
+                  leaseOwner: workerId,
+                  leaseToken: existing.leaseToken,
+                  leaseExpiresAt: { gt: now },
+                },
+                data: {
+                  status: TASK_STATUSES.QUEUED,
+                  claimId: null,
+                  leaseOwner: null,
+                  leaseToken: null,
+                  leaseExpiresAt: null,
+                  claimedAt: null,
+                  lastHeartbeatAt: now,
+                  error: `claim_replay_deferred:${admission.reason}`,
+                  finishedAt: null,
+                  attemptCount: { decrement: 1 },
+                  version: { increment: 1 },
+                },
+              });
+              if (released.count !== 1) {
+                throw new CodexSwarmError(
+                  'codex_swarm_lease_conflict',
+                  'The replayed claim changed before it could be deferred.',
+                  409,
+                );
+              }
+              swarm = await tx.codexSwarm.update({
+                where: { id: swarmId },
+                data: {
+                  status: SWARM_STATUSES.PAUSED,
+                  version: { increment: 1 },
+                },
+              });
+              reconciled = await reconcileInTransaction(tx, swarm, now);
+              tasks = reconciled.tasks;
+              return {
+                task: null,
+                replayed: false,
+                reason: admission.reason,
+                budget: admission,
+              };
+            }
+          }
+          return { task: existing, replayed: true, reason: null };
         }
 
         const running = tasks.filter((task) => (
@@ -773,6 +987,34 @@ function createPrismaSwarmRepository(prisma) {
             replayed: false,
             reason: writerWaiting ? 'writer_concurrency_limit' : 'no_ready_tasks',
           };
+        }
+
+        if (budgetPolicy) {
+          const admission = await projectBudget.checkSwarmClaimBudget({
+            prisma: tx,
+            projectId: swarm.projectId,
+            task,
+            projectDailyBudgetUsd: budgetPolicy.projectDailyBudgetUsd,
+            companyDailyBudgetUsd: budgetPolicy.companyDailyBudgetUsd,
+            defaultReservationUsd: budgetPolicy.defaultReservationUsd,
+            now,
+          });
+          if (!admission.allowed) {
+            swarm = await tx.codexSwarm.update({
+              where: { id: swarmId },
+              data: {
+                status: SWARM_STATUSES.PAUSED,
+                version: { increment: 1 },
+              },
+            });
+            await persistAggregate(tx, swarm, tasks, now);
+            return {
+              task: null,
+              replayed: false,
+              reason: admission.reason,
+              budget: admission,
+            };
+          }
         }
 
         const claimed = await tx.codexSwarmTask.updateMany({
@@ -814,19 +1056,9 @@ function createPrismaSwarmRepository(prisma) {
         return await claim();
       } catch (error) {
         if (error?.code !== 'P2002') throw error;
-        const existing = await prisma.codexSwarmTask.findUnique({ where: { claimId } });
-        if (
-          !existing
-          || existing.swarmId !== swarmId
-          || existing.leaseOwner !== workerId
-        ) {
-          throw new CodexSwarmError(
-            'codex_swarm_claim_id_conflict',
-            'claimId is already owned by another worker or swarm.',
-            409,
-          );
-        }
-        return { task: existing, replayed: true, reason: null };
+        // Re-enter the full transactional path so the winner's claim is
+        // reconciled and revalidated against swarm state and budget policy.
+        return claim();
       }
     },
 
@@ -889,6 +1121,108 @@ function createPrismaSwarmRepository(prisma) {
           );
         }
         return tx.codexSwarmTask.findUnique({ where: { id: task.id } });
+      });
+    },
+
+    async deferTask({
+      swarmId,
+      taskId,
+      workerId,
+      leaseToken,
+      reason,
+      now,
+    }) {
+      return withSerializableRetry(prisma, async (tx) => {
+        let swarm = await tx.codexSwarm.findUnique({ where: { id: swarmId } });
+        if (!swarm) {
+          throw new CodexSwarmError(
+            'codex_swarm_not_found',
+            'Codex swarm not found.',
+            404,
+          );
+        }
+        if (TERMINAL_SWARM_STATUSES.has(swarm.status)) {
+          throw new CodexSwarmError(
+            'codex_swarm_terminal',
+            `Swarm already finished with status ${swarm.status}.`,
+            409,
+          );
+        }
+        const task = await tx.codexSwarmTask.findFirst({
+          where: { id: taskId, swarmId },
+        });
+        if (!task) {
+          throw new CodexSwarmError(
+            'codex_swarm_task_not_found',
+            'Codex swarm task not found.',
+            404,
+          );
+        }
+        if (
+          task.status !== TASK_STATUSES.RUNNING
+          || task.leaseOwner !== workerId
+          || task.leaseToken !== leaseToken
+        ) {
+          throw new CodexSwarmError(
+            'codex_swarm_lease_conflict',
+            'The task lease is not owned by this worker.',
+            409,
+          );
+        }
+        if (!task.leaseExpiresAt || task.leaseExpiresAt.getTime() <= now.getTime()) {
+          throw new CodexSwarmError(
+            'codex_swarm_lease_expired',
+            'The task lease expired before it could be deferred.',
+            409,
+          );
+        }
+
+        if (swarm.status !== SWARM_STATUSES.PAUSED) {
+          swarm = await tx.codexSwarm.update({
+            where: { id: swarmId },
+            data: {
+              status: SWARM_STATUSES.PAUSED,
+              version: { increment: 1 },
+            },
+          });
+        }
+        const deferred = await tx.codexSwarmTask.updateMany({
+          where: {
+            id: task.id,
+            swarmId,
+            status: TASK_STATUSES.RUNNING,
+            leaseOwner: workerId,
+            leaseToken,
+            leaseExpiresAt: { gt: now },
+          },
+          data: {
+            status: TASK_STATUSES.QUEUED,
+            claimId: null,
+            leaseOwner: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+            claimedAt: null,
+            lastHeartbeatAt: now,
+            error: reason,
+            finishedAt: null,
+            attemptCount: { decrement: 1 },
+            version: { increment: 1 },
+          },
+        });
+        if (deferred.count !== 1) {
+          throw new CodexSwarmError(
+            'codex_swarm_lease_conflict',
+            'The task changed concurrently before it could be deferred.',
+            409,
+          );
+        }
+        const reconciled = await reconcileInTransaction(tx, swarm, now);
+        return {
+          task: reconciled.tasks.find((candidate) => candidate.id === task.id),
+          swarm: reconciled.swarm,
+          progress: reconciled.aggregate,
+          replayed: false,
+        };
       });
     },
 
@@ -1160,8 +1494,10 @@ class CodexSwarmOrchestrator {
     }
     for (const method of [
       'createSwarm',
+      'appendTasks',
       'claimTask',
       'renewLease',
+      'deferTask',
       'finishTask',
       'pauseSwarm',
       'resumeSwarm',
@@ -1277,11 +1613,24 @@ class CodexSwarmOrchestrator {
     });
   }
 
+  async appendTasks({
+    swarmId,
+    tasks,
+  } = {}) {
+    return this.repository.appendTasks({
+      swarmId: requiredString(swarmId, 'swarmId', 200),
+      rawTasks: tasks,
+      idFactory: this.idFactory,
+      now: this.now(),
+    });
+  }
+
   async claimNextTask({
     swarmId,
     workerId,
     claimId,
     leaseMs = DEFAULT_LEASE_MS,
+    budgetPolicy = null,
   } = {}) {
     const normalizedLeaseMs = integerInRange(
       leaseMs,
@@ -1298,6 +1647,7 @@ class CodexSwarmOrchestrator {
       leaseToken: requiredString(this.tokenFactory(), 'leaseToken', 500),
       now,
       leaseExpiresAt: new Date(now.getTime() + normalizedLeaseMs),
+      budgetPolicy: normalizeClaimBudgetPolicy(budgetPolicy),
     });
   }
 
@@ -1357,6 +1707,23 @@ class CodexSwarmOrchestrator {
     });
   }
 
+  async deferTask({
+    swarmId,
+    taskId,
+    workerId,
+    leaseToken,
+    reason = 'budget_deferred',
+  } = {}) {
+    return this.repository.deferTask({
+      swarmId: requiredString(swarmId, 'swarmId', 200),
+      taskId: requiredString(taskId, 'taskId', 200),
+      workerId: requiredString(workerId, 'workerId', 200),
+      leaseToken: requiredString(leaseToken, 'leaseToken', 500),
+      reason: requiredString(reason, 'reason', 20_000),
+      now: this.now(),
+    });
+  }
+
   async cancelSwarm({ swarmId, reason = 'cancelled_by_user' } = {}) {
     return this.repository.cancelSwarm({
       swarmId: requiredString(swarmId, 'swarmId', 200),
@@ -1408,6 +1775,7 @@ module.exports = {
   CodexSwarmError,
   CodexSwarmOrchestrator,
   normalizeTasks,
+  normalizeAdditionalTasks,
   validateTaskGraph,
   validateMapReduceShape,
   buildMapReduceTaskGraph,

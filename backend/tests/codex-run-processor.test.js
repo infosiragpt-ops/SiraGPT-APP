@@ -6,9 +6,16 @@ const assert = require('node:assert/strict');
 const { processCodexRunJob } = require('../src/services/codex/run-processor');
 
 // Fake prisma: one run + one project, mutable status.
-function makeDeps({ run, project } = {}) {
+function makeDeps({
+  run,
+  project,
+  metric = null,
+  userPlan = 'PRO',
+} = {}) {
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued', ...run };
-  const projRow = { id: 'p1', name: 'Demo', ...project };
+  const projRow = { id: 'p1', userId: 'u1', name: 'Demo', ...project };
+  const metricState = { row: metric ? structuredClone(metric) : null };
+  const usageState = { rows: [] };
   const events = [];
   const prisma = {
     codexRun: {
@@ -25,12 +32,59 @@ function makeDeps({ run, project } = {}) {
     codexProject: {
       async findUnique({ where }) { return where.id === projRow.id ? { ...projRow } : null; },
     },
+    codexRunMetric: {
+      async findUnique({ where }) {
+        return metricState.row?.runId === where.runId ? structuredClone(metricState.row) : null;
+      },
+      async upsert({ create, update }) {
+        if (!metricState.row) {
+          metricState.row = { id: 'metric-1', ...structuredClone(create) };
+          return structuredClone(metricState.row);
+        }
+        for (const [key, value] of Object.entries(update)) {
+          if (value && typeof value === 'object' && 'increment' in value) {
+            metricState.row[key] = Number(metricState.row[key] || 0) + Number(value.increment || 0);
+          } else {
+            metricState.row[key] = value;
+          }
+        }
+        return structuredClone(metricState.row);
+      },
+    },
+    codexUsageEntry: {
+      async create({ data }) {
+        const row = {
+          id: `usage-${usageState.rows.length + 1}`,
+          createdAt: new Date('2026-06-13T12:00:00.000Z'),
+          ...structuredClone(data),
+        };
+        usageState.rows.push(row);
+        return structuredClone(row);
+      },
+      async findUnique({ where }) {
+        const row = usageState.rows.find(
+          (candidate) => candidate.idempotencyKey === where.idempotencyKey,
+        );
+        return row ? structuredClone(row) : null;
+      },
+    },
+    user: {
+      async findUnique() { return { plan: userPlan }; },
+    },
   };
   const eventStore = {
     async appendEvent(runId, type, data) { events.push({ runId, type, data }); return { runId, type, data, seq: events.length }; },
   };
   const clock = () => new Date('2026-06-13T12:00:00.000Z');
-  return { prisma, eventStore, clock, events, runRow };
+  return {
+    prisma,
+    eventStore,
+    clock,
+    events,
+    runRow,
+    metricState,
+    usageState,
+  };
 }
 
 test('build run: queued → running → done with run_status events in order', async () => {
@@ -47,6 +101,234 @@ test('build run: queued → running → done with run_status events in order', a
   assert.equal(nativeInput.deps.eventStore, d.eventStore);
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running', 'done']);
+});
+
+test('fleet QA starts only after the merged run is durably terminal', async () => {
+  const d = makeDeps();
+  const reviews = [];
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      async reviewMergedCheckpoint(input) {
+        assert.equal(d.runRow.status, 'done');
+        reviews.push(input);
+        return {
+          action: 'reviewed',
+          mergeCount: 1,
+          findings: 0,
+          tasksCreated: 0,
+        };
+      },
+    },
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].mergeSha, 'a'.repeat(40));
+  assert.ok(
+    d.events.findIndex((event) => event.type === 'run_status' && event.data.status === 'done')
+      < d.events.findIndex((event) => event.type === 'narrative_delta'),
+  );
+});
+
+test('fleet QA usage is awaited and attributed to the Trust pool ledger', async () => {
+  const d = makeDeps({
+    metric: {
+      id: 'metric-1',
+      runId: 'run-1',
+      tokensIn: 100,
+      tokensOut: 20,
+      model: 'old-model',
+      costUsd: 1,
+      costSource: 'provider_exact',
+      costOriginalUsd: 1,
+      costAppliedUsd: 1,
+      costInputUsd: 0.6,
+      costOutputUsd: 0.4,
+    },
+  });
+  let usageVisibleInsideReviewer = false;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      async reviewMergedCheckpoint({ deps }) {
+        const accounted = await deps.onUsage({
+          tokensIn: 10,
+          tokensOut: 5,
+          model: 'qa-model',
+        }, {
+          departmentPoolId: 'pool-trust',
+          reviewId: 'review-1',
+        });
+        usageVisibleInsideReviewer = d.usageState.rows[0]?.costOriginalUsd === 0.25;
+        assert.equal(accounted.costOriginalUsd, 0.25);
+        return {
+          action: 'reviewed',
+          mergeCount: 1,
+          findings: 0,
+          tasksCreated: 0,
+        };
+      },
+    },
+    fleetQaCostResolver: async () => ({
+      costUsd: 0.25,
+      costInputUsd: 0.15,
+      costOutputUsd: 0.1,
+      costSource: 'provider_exact',
+    }),
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(usageVisibleInsideReviewer, true);
+  assert.equal(d.metricState.row.costOriginalUsd, 1, 'originating run metric remains unchanged');
+  assert.equal(d.usageState.rows.length, 1);
+  assert.equal(d.usageState.rows[0].projectId, 'p1');
+  assert.equal(d.usageState.rows[0].departmentPoolId, 'pool-trust');
+  assert.equal(d.usageState.rows[0].source, 'fleet_qa');
+  assert.equal(d.usageState.rows[0].sourceId, 'review-1');
+  assert.equal(d.usageState.rows[0].tokensIn, 10);
+  assert.equal(d.usageState.rows[0].tokensOut, 5);
+});
+
+test('post-terminal fleet QA has an independent hard timeout', async () => {
+  const d = makeDeps();
+  let qaSignal;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      reviewMergedCheckpoint({ deps }) {
+        qaSignal = deps.signal;
+        return new Promise(() => {});
+      },
+    },
+    fleetQaTimeoutMs: 20,
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(qaSignal.aborted, true);
+  assert.equal(res.fleetQaResult.action, 'review_failed');
+  assert.match(res.fleetQaResult.error, /fleet QA exceeded 20ms/);
+});
+
+test('post-terminal fleet QA accepts an independent cancellation signal', async () => {
+  const d = makeDeps();
+  const cancellation = new AbortController();
+  let qaSignal;
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      reviewMergedCheckpoint({ deps }) {
+        qaSignal = deps.signal;
+        return new Promise(() => {});
+      },
+    },
+    fleetQaSignal: cancellation.signal,
+    fleetQaTimeoutMs: 5_000,
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  cancellation.abort(new Error('operator cancelled QA'));
+  const res = await processing;
+  assert.equal(qaSignal.aborted, true);
+  assert.equal(res.fleetQaResult.action, 'review_failed');
+  assert.match(res.fleetQaResult.error, /operator cancelled QA/);
+});
+
+test('build processor provisions a run worktree before handing the scoped runner to every tool', async () => {
+  const d = makeDeps();
+  const calls = [];
+  const scopedRunner = { runScope: { project: 'p1', run: 'run-1' } };
+  const runner = {
+    async createWorktree(project, run, baseBranch) {
+      calls.push(['create', project, run, baseBranch]);
+      return { ok: true, runBranch: `run/${run}` };
+    },
+    forRun(run, project) {
+      calls.push(['scope', run, project]);
+      return scopedRunner;
+    },
+  };
+  let loopRunner;
+  const checkpointService = {
+    projectBaseBranch: () => 'main',
+    async prepareRunBranch({ run, project, deps }) {
+      calls.push(['branch', deps.runner]);
+      await deps.runner.createWorktree(project.id, run.id, 'main');
+      return { ok: true, worktree: true };
+    },
+  };
+  const result = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner,
+    checkpointService,
+    runAgentLoop: async ({ deps }) => {
+      loopRunner = deps.runner;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: {
+      NODE_ENV: 'test',
+      CODEX_RUN_BRANCHES: '1',
+      CODEX_RUN_WORKTREES: '1',
+    },
+  });
+
+  assert.equal(result.status, 'done');
+  assert.equal(calls[0][0], 'branch');
+  assert.equal(calls[0][1], runner);
+  assert.deepEqual(calls[1], ['create', 'p1', 'run-1', 'main']);
+  assert.deepEqual(calls[2], ['scope', 'run-1', 'p1']);
+  assert.equal(loopRunner, scopedRunner);
 });
 
 test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
@@ -174,6 +456,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued' };
   const events = [];
   let cancelFlips = 0;
+  let runningReads = 0;
   const prisma = {
     codexRun: {
       async findUnique({ where }) {
@@ -183,8 +466,11 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
         // row is `cancelled` by the time the guarded terminal write runs.
         const snapshot = { ...runRow };
         if (runRow.status === 'running') {
-          cancelFlips += 1;
-          runRow.status = 'cancelled'; // flips just AFTER this read returns `running`
+          runningReads += 1;
+          if (runningReads === 2) {
+            cancelFlips += 1;
+            runRow.status = 'cancelled'; // flips just AFTER the cancellation check
+          }
         }
         return snapshot;
       },
@@ -212,6 +498,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   // The row was cancelled out-of-band; the guarded write must not revert it to done.
   assert.equal(runRow.status, 'cancelled');
   assert.equal(res.raced, true);
+  assert.equal(cancelFlips, 1);
   // Only `running` was emitted by the processor; no terminal done/error event.
   const statuses = events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running']);

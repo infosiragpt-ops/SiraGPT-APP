@@ -373,9 +373,23 @@ async function mergeRunBranch({
       };
     }
   }
+  let exportResult = null;
   if (typeof mergeRunner.exportWorkspace === 'function') {
-    Promise.resolve(mergeRunner.exportWorkspace(projectId)).catch(() => {});
+    try {
+      const exported = await mergeRunner.exportWorkspace(projectId);
+      exportResult = {
+        ok: true,
+        exported: exported?.exported !== false,
+      };
+    } catch (error) {
+      exportResult = {
+        ok: false,
+        code: error?.body?.error || 'workspace_export_failed',
+        detail: redactGitOutput(error?.body?.detail || error?.message || error),
+      };
+    }
   }
+  const cleanupWarning = worktreeCleanup?.ok === false || exportResult?.ok === false;
   return {
     ok: true,
     status: 'merged',
@@ -384,6 +398,8 @@ async function mergeRunBranch({
     commitSha: head.stdout.trim(),
     verification: gate.result,
     worktreeCleanup,
+    exportResult,
+    cleanupWarning,
   };
 }
 

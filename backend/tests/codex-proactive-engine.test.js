@@ -34,6 +34,12 @@ function fakePrisma({ project, activeRun = null, recentRuns = [] } = {}) {
       findFirst: async () => activeRun,
       findMany: async () => recentRuns,
     },
+    codexRunMetric: {
+      aggregate: async () => ({ _sum: { costOriginalUsd: 0, costAppliedUsd: 0 } }),
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
 }
 
@@ -41,6 +47,7 @@ const PROJECT = { id: 'p1', userId: 'u1', name: 'SiraGPT.COM', brief: { proactiv
 
 test('readProactiveState defaults + setProactive persists into brief JSON', async () => {
   assert.equal(engine.readProactiveState({ brief: null }).enabled, false);
+  assert.equal(engine.readProactiveState({ brief: null }).dailyBudgetUsd, null);
   const prisma = fakePrisma({ project: { ...PROJECT, brief: { goal: 'x' } } });
   const out = await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: true });
   assert.equal(out.state.enabled, true);
@@ -49,6 +56,40 @@ test('readProactiveState defaults + setProactive persists into brief JSON', asyn
 
   const off = await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: false });
   assert.equal(off.state.enabled, false);
+});
+
+test('mixed legacy and current metric rows count the larger cost per row', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexRunMetric.findMany = async () => [
+    { costOriginalUsd: 1.25, costAppliedUsd: 0.5 },
+    { costOriginalUsd: null, costAppliedUsd: 2 },
+    { costOriginalUsd: 0.75, costAppliedUsd: 1 },
+  ];
+  const result = await require('../src/services/codex/project-budget').costTodayUsd({
+    prisma,
+    projectId: PROJECT.id,
+    now: new Date('2026-07-28T18:00:00.000Z'),
+  });
+  assert.equal(result, 4.25);
+});
+
+test('company budget includes autonomous usage outside CodexRun metrics', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexRunMetric.findMany = async () => [
+    { costOriginalUsd: 1, costAppliedUsd: 0.5 },
+  ];
+  prisma.codexUsageEntry = {
+    findMany: async ({ where }) => {
+      assert.equal(where.projectId, PROJECT.id);
+      return [{ costOriginalUsd: 0.75, costAppliedUsd: 0.75 }];
+    },
+  };
+  const result = await require('../src/services/codex/project-budget').costTodayUsd({
+    prisma,
+    projectId: PROJECT.id,
+    now: new Date('2026-07-28T18:00:00.000Z'),
+  });
+  assert.equal(result, 1.75);
 });
 
 test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', async () => {
@@ -238,6 +279,94 @@ test('USD kill switch blocks proposals using persisted run costs', async () => {
   assert.equal(res.action, 'skipped_cost_budget');
   assert.equal(res.costTodayUsd, 2.75);
   assert.equal(engine.readProactiveState(prisma.state.project).budgetBlocked, true);
+});
+
+test('USD kill switch uses configuredDailyBudgetUsd before the environment default', async () => {
+  const project = {
+    ...PROJECT,
+    brief: { proactive: { enabled: true, configuredDailyBudgetUsd: 1 } },
+  };
+  const prisma = fakePrisma({ project });
+  prisma.codexRunMetric.aggregate = async () => ({
+    _sum: { costOriginalUsd: 1, costAppliedUsd: 0.5 },
+  });
+
+  const res = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => { throw new Error('must not propose'); },
+    },
+    env: { CODEX_PROACTIVE_DAILY_BUDGET_USD: '99' },
+  });
+
+  assert.equal(res.action, 'skipped_cost_budget');
+  assert.equal(res.reason, 'daily_budget_exceeded');
+  assert.equal(res.dailyBudgetUsd, 1);
+  assert.equal(res.costTodayUsd, 1, 'kill switch uses provider spend before discounts');
+});
+
+test('telemetry from a prior cycle never overrides a later operator budget change', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  let spend = 0;
+  prisma.codexRunMetric.aggregate = async () => ({
+    _sum: { costOriginalUsd: spend, costAppliedUsd: spend },
+  });
+  const created = [];
+  const first = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async (args) => {
+          created.push(args);
+          return { id: 'first-run' };
+        },
+      },
+      chatComplete: async () => ({
+        content: '{"title":"Primera tarea","goal":"Ejecuta una mejora incremental."}',
+      }),
+    },
+    env: { CODEX_PROACTIVE_DAILY_BUDGET_USD: '25' },
+  });
+  assert.equal(first.action, 'proposed');
+  assert.equal(engine.readProactiveState(prisma.state.project).dailyBudgetUsd, 25);
+
+  spend = 5;
+  const second = await engine.runCycle({
+    project: prisma.state.project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => { throw new Error('must not propose'); },
+    },
+    env: { CODEX_PROACTIVE_DAILY_BUDGET_USD: '5' },
+  });
+  assert.equal(second.action, 'skipped_cost_budget');
+  assert.equal(second.dailyBudgetUsd, 5);
+  assert.equal(created.length, 1);
+});
+
+test('USD kill switch fails closed when the daily cost store cannot be read', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexRunMetric.aggregate = async () => { throw new Error('database unavailable'); };
+
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create'); } },
+      chatComplete: async () => { throw new Error('must not propose'); },
+    },
+    env: { NODE_ENV: 'test', CODEX_PROACTIVE_DAILY_BUDGET_USD: '25' },
+  });
+
+  assert.equal(res.action, 'skipped_cost_budget');
+  assert.equal(res.reason, 'budget_query_failed');
+  assert.equal(res.costTodayUsd, null);
+  assert.equal(engine.readProactiveState(prisma.state.project).budgetBlocked, true);
+  assert.match(engine.readProactiveState(prisma.state.project).lastError, /no se pudo verificar/i);
 });
 
 test('every Kth proposal is a QA cycle and does not advance the department cursor', async () => {

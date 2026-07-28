@@ -31,6 +31,14 @@ test('proactive createRun paths request autoExecute for durable hours-long work'
       findFirst: async () => null,
       findMany: async () => [],
     },
+    codexRunMetric: {
+      aggregate: async () => ({
+        _sum: { costOriginalUsd: 0, costAppliedUsd: 0 },
+      }),
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
   const res = await engine.runCycle({
     project,

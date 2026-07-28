@@ -11,6 +11,9 @@ const {
 } = require('./run-queue');
 const { isCodexV2Enabled } = require('./flags');
 const runServiceDefault = require('./run-service');
+const projectBudget = require('./project-budget');
+const projectSettings = require('./project-settings');
+const usageLedger = require('./usage-ledger');
 const {
   CodexSwarmError,
   CodexSwarmOrchestrator,
@@ -26,6 +29,7 @@ const DEFAULT_RUNTIME_CONCURRENCY = 8;
 const MAX_RUNTIME_CONCURRENCY = 32;
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_INTEGRATION_TIMEOUT_MS = 45 * 60_000;
+const DEFAULT_TASK_BUDGET_RESERVATION_USD = 0.25;
 
 let queue = null;
 let queueConnection = null;
@@ -122,6 +126,238 @@ function safeResult(outcome) {
   };
 }
 
+function recordValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function swarmClaimBudgetPolicy({
+  project,
+  settings,
+  env = process.env,
+}) {
+  const configuredReservation = Number(env.CODEX_SWARM_DEFAULT_RESERVATION_USD);
+  return {
+    projectDailyBudgetUsd: projectBudget.configuredBudgetUsd(settings, env),
+    companyDailyBudgetUsd: projectBudget.configuredCompanyBudgetUsd(project, env),
+    defaultReservationUsd: Number.isFinite(configuredReservation) && configuredReservation > 0
+      ? Math.min(100_000, configuredReservation)
+      : DEFAULT_TASK_BUDGET_RESERVATION_USD,
+  };
+}
+
+function isBudgetDeferralError(error) {
+  const code = String(error?.code || '').trim();
+  return code.startsWith('swarm_project_budget_')
+    || code.startsWith('swarm_company_budget_')
+    || code.startsWith('swarm_department_budget_')
+    || code === 'swarm_usage_accounting_failed'
+    || code === 'codex_usage_ledger_unavailable';
+}
+
+async function assertProjectBudgetAvailable({
+  prisma,
+  project,
+  settings,
+  env,
+  now,
+}) {
+  const budget = await projectBudget.checkProjectBudget({
+    prisma,
+    projectId: project.id,
+    settings: settings || projectSettings.settingsFromProject(project),
+    env,
+    now,
+  });
+  if (!budget?.allowed) {
+    const error = new Error(`swarm_project_budget_blocked:${budget?.reason || 'unknown'}`);
+    error.code = budget?.reason === 'daily_budget_exceeded'
+      ? 'swarm_project_budget_exceeded'
+      : 'swarm_project_budget_check_failed';
+    error.budget = budget;
+    throw error;
+  }
+  return budget;
+}
+
+async function loadSwarmProjectSettings({
+  runner,
+  project,
+  env = process.env,
+}) {
+  if (typeof runner?.readFile !== 'function') {
+    if (env.NODE_ENV === 'production') {
+      const error = new Error('swarm project settings store unavailable');
+      error.code = 'swarm_project_settings_unavailable';
+      throw error;
+    }
+    return projectSettings.settingsFromProject(project);
+  }
+  const state = await projectSettings.loadProjectSettings({
+    runner,
+    projectId: project.id,
+    project,
+  });
+  if (state.error) {
+    const error = new Error(`swarm project settings unavailable: ${state.error}`);
+    error.code = 'swarm_project_settings_unavailable';
+    throw error;
+  }
+  return state.settings;
+}
+
+function createSwarmUsageAccountant({
+  prisma,
+  project,
+  task,
+  settings = null,
+  env = process.env,
+  costResolver = null,
+  idFactory = randomUUID,
+  clock = () => new Date(),
+}) {
+  const input = recordValue(task?.input);
+  const departmentPoolId = String(input.departmentPoolId || '').trim() || null;
+  const reservationUsd = Number.isFinite(Number(input.poolBudgetReservationUsd))
+    ? Math.max(0, Number(input.poolBudgetReservationUsd))
+    : null;
+  const executionId = idFactory();
+  let sequence = 0;
+  let taskCostUsd = 0;
+
+  return async (usage) => {
+    sequence += 1;
+    let entry;
+    try {
+      entry = await usageLedger.recordUsage({
+        prisma,
+        projectId: project?.id,
+        departmentPoolId,
+        source: 'swarm_task',
+        sourceId: task?.id,
+        idempotencyKey: `swarm:${task?.id}:${executionId}:${sequence}`,
+        usage,
+        env,
+        costResolver,
+      });
+    } catch (cause) {
+      const error = new Error(`swarm_usage_accounting_failed:${cause?.message || cause}`);
+      error.code = 'swarm_usage_accounting_failed';
+      error.cause = cause;
+      throw error;
+    }
+    taskCostUsd += Math.max(
+      0,
+      Number(entry?.costOriginalUsd) || 0,
+      Number(entry?.costAppliedUsd) || 0,
+    );
+
+    const checkAt = clock();
+    await assertProjectBudgetAvailable({
+      prisma,
+      project,
+      settings,
+      env,
+      now: checkAt,
+    });
+    const companyBudget = await projectBudget.checkCompanyDailyBudget({
+      prisma,
+      project,
+      env,
+      now: checkAt,
+    });
+    if (!companyBudget?.allowed) {
+      const error = new Error(`swarm_company_budget_blocked:${companyBudget?.reason || 'unknown'}`);
+      error.code = companyBudget?.reason === 'daily_budget_exceeded'
+        ? 'swarm_company_budget_exceeded'
+        : 'swarm_company_budget_check_failed';
+      error.budget = companyBudget;
+      throw error;
+    }
+
+    if (departmentPoolId) {
+      const poolBudget = await projectBudget.checkDepartmentPoolBudget({
+        prisma,
+        projectId: project.id,
+        departmentPoolId,
+        swarmTaskId: task.id,
+        reservationUsd,
+        reservationUsageUsd: taskCostUsd,
+        env,
+        now: checkAt,
+      });
+      if (!poolBudget?.allowed) {
+        const error = new Error(`swarm_department_budget_blocked:${poolBudget?.reason || 'unknown'}`);
+        error.code = ['department_pool_budget_limit', 'department_pool_run_reservation_exceeded']
+          .includes(poolBudget?.reason)
+          ? 'swarm_department_budget_exceeded'
+          : 'swarm_department_budget_check_failed';
+        error.budget = poolBudget;
+        throw error;
+      }
+    }
+    return entry;
+  };
+}
+
+async function assertSwarmTaskBudgetAvailable({
+  prisma,
+  project,
+  task,
+  settings = null,
+  env = process.env,
+  clock = () => new Date(),
+}) {
+  const checkAt = clock();
+  await assertProjectBudgetAvailable({
+    prisma,
+    project,
+    settings,
+    env,
+    now: checkAt,
+  });
+  const companyBudget = await projectBudget.checkCompanyDailyBudget({
+    prisma,
+    project,
+    env,
+    now: checkAt,
+  });
+  if (!companyBudget?.allowed) {
+    const error = new Error(`swarm_company_budget_blocked:${companyBudget?.reason || 'unknown'}`);
+    error.code = companyBudget?.reason === 'daily_budget_exceeded'
+      ? 'swarm_company_budget_exceeded'
+      : 'swarm_company_budget_check_failed';
+    error.budget = companyBudget;
+    throw error;
+  }
+
+  const input = recordValue(task?.input);
+  const departmentPoolId = String(input.departmentPoolId || '').trim();
+  if (!departmentPoolId) return companyBudget;
+  const reservationUsd = Number.isFinite(Number(input.poolBudgetReservationUsd))
+    ? Math.max(0, Number(input.poolBudgetReservationUsd))
+    : null;
+  const poolBudget = await projectBudget.checkDepartmentPoolBudget({
+    prisma,
+    projectId: project.id,
+    departmentPoolId,
+    swarmTaskId: task.id,
+    reservationUsd,
+    reservationUsageUsd: 0,
+    env,
+    now: checkAt,
+  });
+  if (!poolBudget?.allowed) {
+    const error = new Error(`swarm_department_budget_blocked:${poolBudget?.reason || 'unknown'}`);
+    error.code = ['department_pool_budget_limit', 'department_pool_run_reservation_exceeded']
+      .includes(poolBudget?.reason)
+      ? 'swarm_department_budget_exceeded'
+      : 'swarm_department_budget_check_failed';
+    error.budget = poolBudget;
+    throw error;
+  }
+  return poolBudget;
+}
+
 function dependencyContext(tasks, task, maxChars = 24_000) {
   const dependencies = new Set(Array.isArray(task?.dependsOn) ? task.dependsOn : []);
   const reports = tasks
@@ -202,6 +438,7 @@ async function runReadOnlyTask({
   sdk,
   env,
   webSearch,
+  onUsage = null,
 }) {
   const agent = subagentForTask(task);
   const definition = sdk.getSubagent(agent);
@@ -226,6 +463,8 @@ async function runReadOnlyTask({
       env,
       tier: swarm?.metadata?.tier || null,
       webSearch,
+      onUsage,
+      propagateUsageErrors: true,
     },
   });
   return safeResult(outcome);
@@ -375,6 +614,7 @@ async function createWriterRun({
     ? task.input.acceptance.map((item) => `- ${String(item).slice(0, 500)}`).join('\n')
     : '';
   const isIntegrator = task.role === TASK_ROLES.INTEGRATOR;
+  const attempt = Math.max(1, Number.parseInt(task?.attemptCount, 10) || 1);
   const prompt = [
     `[SWARM · ${departmentId}]`,
     isIntegrator
@@ -402,6 +642,9 @@ async function createWriterRun({
     model: swarm?.metadata?.model || null,
     tier: swarm?.metadata?.tier || null,
     autoExecute: true,
+    idempotencyKey: `swarm-task:${task.id}:attempt:${attempt}:plan`,
+    departmentPoolId: task?.input?.departmentPoolId || null,
+    swarmTaskId: task.id,
     db: prisma,
     env,
   });
@@ -438,6 +681,10 @@ async function processClaimedTask({
   runService,
   env,
   webSearch,
+  settings = null,
+  usageCostResolver = null,
+  usageIdFactory = randomUUID,
+  usageClock = () => new Date(),
 }) {
   const progress = await orchestrator.getProgress(swarm.id);
   const task = claimed.task;
@@ -450,6 +697,14 @@ async function processClaimedTask({
   });
   let result;
   try {
+    await assertSwarmTaskBudgetAvailable({
+      prisma,
+      project,
+      task,
+      settings,
+      env,
+      clock: usageClock,
+    });
     if ([TASK_ROLES.WRITER, TASK_ROLES.INTEGRATOR].includes(task.role)) {
       result = await createWriterRun({
         task,
@@ -470,6 +725,16 @@ async function processClaimedTask({
         sdk,
         env,
         webSearch,
+        onUsage: createSwarmUsageAccountant({
+          prisma,
+          project,
+          task,
+          settings,
+          env,
+          costResolver: usageCostResolver,
+          idFactory: usageIdFactory,
+          clock: usageClock,
+        }),
       });
     }
   } finally {
@@ -507,6 +772,7 @@ async function processSwarmJob({
   sdk = require('./agent-sdk'),
   runService = runServiceDefault,
   webSearch = defaultWebSearch,
+  usageCostResolver = null,
 } = {}) {
   const swarm = await prisma.codexSwarm.findUnique({
     where: { id: swarmId },
@@ -514,29 +780,62 @@ async function processSwarmJob({
   });
   if (!swarm) throw new CodexSwarmError('codex_swarm_not_found', 'Codex swarm not found.', 404);
   if (TERMINAL_SWARM_STATUSES.has(swarm.status)) return orchestrator.getProgress(swarm.id);
+  const settings = await loadSwarmProjectSettings({
+    runner,
+    project: swarm.project,
+    env,
+  });
+  const budgetPolicy = swarmClaimBudgetPolicy({
+    project: swarm.project,
+    settings,
+    env,
+  });
 
   const runtimeConcurrency = Math.min(
     swarm.maxConcurrency,
     integer(env.CODEX_SWARM_RUNNER_CONCURRENCY, DEFAULT_RUNTIME_CONCURRENCY, 1, MAX_RUNTIME_CONCURRENCY),
   );
   const pollMs = integer(env.CODEX_SWARM_POLL_MS, DEFAULT_POLL_MS, 250, 10_000);
+  let stopRequested = false;
+  let stopReason = null;
 
   const runWorker = async (index) => {
     const workerId = `swarm:${swarm.id}:${index}`;
     while (true) {
+      if (stopRequested) return;
       const claim = await orchestrator.claimNextTask({
         swarmId: swarm.id,
         workerId,
         claimId: `${workerId}:${randomUUID()}`,
         leaseMs: MAX_LEASE_MS,
+        budgetPolicy,
       });
       if (!claim.task) {
+        if (claim.reason === 'swarm_paused') return;
+        if (String(claim.reason || '').includes('budget')) {
+          stopRequested = true;
+          stopReason = claim.reason;
+          if (claim.reason === 'department_pool_budget_limit') {
+            await orchestrator.pauseSwarm({ swarmId: swarm.id });
+          }
+          return;
+        }
         const progress = await orchestrator.getProgress(swarm.id);
         if (TERMINAL_SWARM_STATUSES.has(progress.swarm.status)) return;
         await sleep(pollMs);
         continue;
       }
       claim.workerId = workerId;
+      if (stopRequested) {
+        await orchestrator.deferTask({
+          swarmId: swarm.id,
+          taskId: claim.task.id,
+          workerId,
+          leaseToken: claim.task.leaseToken,
+          reason: stopReason || 'swarm_budget_deferred',
+        });
+        return;
+      }
       try {
         await processClaimedTask({
           claimed: claim,
@@ -549,8 +848,22 @@ async function processSwarmJob({
           runService,
           env,
           webSearch,
+          settings,
+          usageCostResolver,
         });
       } catch (error) {
+        if (isBudgetDeferralError(error)) {
+          stopRequested = true;
+          stopReason = String(error?.message || error).slice(0, 20_000);
+          await orchestrator.deferTask({
+            swarmId: swarm.id,
+            taskId: claim.task.id,
+            workerId,
+            leaseToken: claim.task.leaseToken,
+            reason: stopReason,
+          });
+          return;
+        }
         await orchestrator.finishTask({
           swarmId: swarm.id,
           taskId: claim.task.id,
@@ -606,20 +919,27 @@ async function closeSwarmRuntime() {
 module.exports = {
   DEFAULT_INTEGRATION_TIMEOUT_MS,
   DEFAULT_RUNTIME_CONCURRENCY,
+  DEFAULT_TASK_BUDGET_RESERVATION_USD,
   MAX_RUNTIME_CONCURRENCY,
   QUEUE_NAME,
   closeSwarmRuntime,
+  assertSwarmTaskBudgetAvailable,
+  assertProjectBudgetAvailable,
   createIntegratorRun,
   createWriterRun,
   dependencyContext,
+  createSwarmUsageAccountant,
   enqueueSwarm,
   getSwarmQueue,
+  isBudgetDeferralError,
+  loadSwarmProjectSettings,
   processClaimedTask,
   processSwarmJob,
   recoverSwarmJobs,
   requeueWriterTask,
   runReadOnlyTask,
   safeResult,
+  swarmClaimBudgetPolicy,
   startLeaseHeartbeat,
   startSwarmWorker,
   subagentForTask,

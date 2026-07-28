@@ -1189,6 +1189,113 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     return { status: 'error', error };
   }
 
+  const companyBudgetEnabled = env?.NODE_ENV === 'production'
+    || project?.brief?.proactive?.configuredDailyBudgetUsd != null
+    || String(env?.CODEX_PROACTIVE_DAILY_BUDGET_USD ?? '').trim() !== '';
+  let companyBudget = {
+    allowed: true,
+    reason: 'not_configured',
+    dailyBudgetUsd: null,
+  };
+  if (companyBudgetEnabled) {
+    companyBudget = await projectBudget.checkCompanyDailyBudget({
+      prisma,
+      project,
+      env,
+      now: clock(),
+    });
+    await eventStore.appendEvent(run.id, 'budget_status', {
+      allowed: companyBudget.allowed,
+      reason: companyBudget.reason,
+      costTodayUsd: companyBudget.costTodayUsd,
+      dailyBudgetUsd: companyBudget.dailyBudgetUsd,
+      remainingUsd: companyBudget.remainingUsd,
+      scope: 'company',
+    }, { prisma }).catch(() => {});
+    if (!companyBudget.allowed) {
+      const error = companyBudget.reason === 'daily_budget_exceeded'
+        ? `company daily budget exceeded: $${Number(companyBudget.costTodayUsd || 0).toFixed(4)} of $${Number(companyBudget.dailyBudgetUsd || 0).toFixed(2)}`
+        : `company budget preflight failed: ${companyBudget.error || companyBudget.reason}`;
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: companyBudget.reason === 'daily_budget_exceeded'
+          ? `No inicié esta corrida: la empresa alcanzó su presupuesto diario de $${Number(companyBudget.dailyBudgetUsd || 0).toFixed(2)}.`
+          : 'No inicié esta corrida porque no pude verificar de forma segura el presupuesto diario de la empresa.',
+      }, { prisma }).catch(() => {});
+      return { status: 'error', error };
+    }
+  }
+
+  let poolBudgetContext = null;
+  if (run.departmentPoolId) {
+    if (!run.swarmTaskId || !prisma?.codexSwarmTask?.findUnique) {
+      const error = 'department pool budget preflight failed: swarm task attribution unavailable';
+      await eventStore.appendEvent(run.id, 'budget_status', {
+        allowed: false,
+        reason: 'department_pool_task_missing',
+        costTodayUsd: null,
+        dailyBudgetUsd: null,
+        remainingUsd: null,
+        scope: 'department_pool',
+      }, { prisma }).catch(() => {});
+      return { status: 'error', error };
+    }
+    const poolTask = await prisma.codexSwarmTask.findUnique({
+      where: { id: run.swarmTaskId },
+      select: { id: true, input: true },
+    }).catch(() => null);
+    const poolTaskInput = poolTask?.input
+      && typeof poolTask.input === 'object'
+      && !Array.isArray(poolTask.input)
+      ? poolTask.input
+      : {};
+    if (
+      !poolTask
+      || String(poolTaskInput.departmentPoolId || '') !== String(run.departmentPoolId)
+    ) {
+      const error = 'department pool budget preflight failed: swarm task attribution mismatch';
+      await eventStore.appendEvent(run.id, 'budget_status', {
+        allowed: false,
+        reason: 'department_pool_task_mismatch',
+        costTodayUsd: null,
+        dailyBudgetUsd: null,
+        remainingUsd: null,
+        scope: 'department_pool',
+      }, { prisma }).catch(() => {});
+      return { status: 'error', error };
+    }
+    poolBudgetContext = {
+      departmentPoolId: run.departmentPoolId,
+      swarmTaskId: run.swarmTaskId,
+      reservationUsd: Number.isFinite(Number(poolTaskInput.poolBudgetReservationUsd))
+        ? Math.max(0, Number(poolTaskInput.poolBudgetReservationUsd))
+        : null,
+    };
+    const poolBudget = await projectBudget.checkDepartmentPoolBudget({
+      prisma,
+      projectId,
+      ...poolBudgetContext,
+      env,
+      now: clock(),
+    });
+    await eventStore.appendEvent(run.id, 'budget_status', {
+      allowed: poolBudget.allowed,
+      reason: poolBudget.reason,
+      costTodayUsd: poolBudget.costTodayUsd ?? null,
+      dailyBudgetUsd: poolBudget.dailyBudgetUsd ?? null,
+      remainingUsd: poolBudget.remainingUsd ?? null,
+      scope: 'department_pool',
+      departmentPoolId: run.departmentPoolId,
+      reservationUsd: poolBudget.reservationUsd ?? poolBudgetContext.reservationUsd,
+    }, { prisma }).catch(() => {});
+    if (!poolBudget.allowed) {
+      const error = `department pool budget preflight failed: ${poolBudget.error || poolBudget.reason}`;
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: 'No inicié esta corrida porque el presupuesto del departamento no está disponible o no pudo verificarse.',
+      }, { prisma }).catch(() => {});
+      return { status: 'error', error };
+    }
+  }
+
   const resolveCost = deps.costResolver || require('./cost-resolver').resolveCost;
   let inRunCostOriginalUsd = 0;
   let inRunCostUsd = 0;
@@ -1204,6 +1311,27 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     error.budget = status;
     return error;
   };
+  const companyBudgetError = (status) => {
+    const error = new Error(status.reason === 'daily_budget_exceeded'
+      ? `company daily budget exceeded during run: $${Number(status.costTodayUsd || 0).toFixed(4)} of $${Number(status.dailyBudgetUsd || 0).toFixed(2)}`
+      : `company budget runtime check failed: ${status.error || status.reason}`);
+    error.code = status.reason === 'daily_budget_exceeded'
+      ? 'CODEX_COMPANY_DAILY_BUDGET_EXCEEDED'
+      : 'CODEX_COMPANY_BUDGET_CHECK_FAILED';
+    error.budget = status;
+    return error;
+  };
+  const poolBudgetError = (status) => {
+    const error = new Error(
+      `department pool budget runtime check failed: ${status.error || status.reason}`,
+    );
+    error.code = status.reason === 'department_pool_budget_limit'
+      || status.reason === 'department_pool_run_reservation_exceeded'
+      ? 'CODEX_DEPARTMENT_POOL_BUDGET_EXCEEDED'
+      : 'CODEX_DEPARTMENT_POOL_BUDGET_CHECK_FAILED';
+    error.budget = status;
+    return error;
+  };
 
   const llmTurn = async (args) => {
     if (budgetTerminalError) throw budgetTerminalError;
@@ -1211,13 +1339,20 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const usage = turn?.usage;
     recordLlmUsageOnce(metrics, usage);
 
-    if (budget.dailyBudgetUsd != null && usage) {
+    if (
+      (
+        budget.dailyBudgetUsd != null
+        || companyBudget.dailyBudgetUsd != null
+        || poolBudgetContext
+      )
+      && usage
+    ) {
       let resolved;
       try {
         resolved = await resolveCost(usage, { env, fetchImpl: deps.fetchImpl });
       } catch (error) {
         const status = {
-          allowed: env?.NODE_ENV !== 'production',
+          allowed: !poolBudgetContext && env?.NODE_ENV !== 'production',
           reason: 'budget_cost_resolution_failed',
           error: String(error?.message || error).slice(0, 500),
           costTodayUsd: null,
@@ -1262,6 +1397,63 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           text: runtimeBudget.reason === 'daily_budget_exceeded'
             ? `Detuve la corrida al alcanzar el presupuesto diario de $${Number(runtimeBudget.dailyBudgetUsd || 0).toFixed(2)}. No ejecuté las herramientas propuestas en esa respuesta.`
             : 'Detuve la corrida porque no pude volver a verificar de forma segura el presupuesto diario.',
+        }, { prisma }).catch(() => {});
+        throw budgetTerminalError;
+      }
+    }
+    if (companyBudget.dailyBudgetUsd != null) {
+      const runtimeCompanyBudget = await projectBudget.checkCompanyDailyBudget({
+        prisma,
+        project,
+        env,
+        now: clock(),
+        inRunCostUsd,
+      });
+      await eventStore.appendEvent(run.id, 'budget_status', {
+        allowed: runtimeCompanyBudget.allowed,
+        reason: runtimeCompanyBudget.reason,
+        costTodayUsd: runtimeCompanyBudget.costTodayUsd,
+        persistedCostTodayUsd: runtimeCompanyBudget.persistedCostTodayUsd,
+        inRunCostUsd: runtimeCompanyBudget.inRunCostUsd,
+        dailyBudgetUsd: runtimeCompanyBudget.dailyBudgetUsd,
+        remainingUsd: runtimeCompanyBudget.remainingUsd,
+        scope: 'company',
+      }, { prisma }).catch(() => {});
+      if (!runtimeCompanyBudget.allowed) {
+        budgetTerminalError = companyBudgetError(runtimeCompanyBudget);
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: runtimeCompanyBudget.reason === 'daily_budget_exceeded'
+            ? `Detuve la corrida al alcanzar el presupuesto diario de la empresa de $${Number(runtimeCompanyBudget.dailyBudgetUsd || 0).toFixed(2)}. No ejecuté las herramientas propuestas en esa respuesta.`
+            : 'Detuve la corrida porque no pude volver a verificar de forma segura el presupuesto diario de la empresa.',
+        }, { prisma }).catch(() => {});
+        throw budgetTerminalError;
+      }
+    }
+    if (poolBudgetContext) {
+      const runtimePoolBudget = await projectBudget.checkDepartmentPoolBudget({
+        prisma,
+        projectId,
+        ...poolBudgetContext,
+        env,
+        now: clock(),
+        inRunCostUsd,
+      });
+      await eventStore.appendEvent(run.id, 'budget_status', {
+        allowed: runtimePoolBudget.allowed,
+        reason: runtimePoolBudget.reason,
+        costTodayUsd: runtimePoolBudget.costTodayUsd ?? null,
+        dailyBudgetUsd: runtimePoolBudget.dailyBudgetUsd ?? null,
+        remainingUsd: runtimePoolBudget.remainingUsd ?? null,
+        scope: 'department_pool',
+        departmentPoolId: run.departmentPoolId,
+        reservationUsd: runtimePoolBudget.reservationUsd ?? poolBudgetContext.reservationUsd,
+      }, { prisma }).catch(() => {});
+      if (!runtimePoolBudget.allowed) {
+        budgetTerminalError = poolBudgetError(runtimePoolBudget);
+        await eventStore.appendEvent(run.id, 'narrative_delta', {
+          text: runtimePoolBudget.reason === 'department_pool_run_reservation_exceeded'
+            ? 'Detuve la corrida al consumir su reserva de presupuesto del departamento.'
+            : 'Detuve la corrida al alcanzar el presupuesto diario del departamento.',
         }, { prisma }).catch(() => {});
         throw budgetTerminalError;
       }
@@ -2416,15 +2608,23 @@ function acceptanceEvidence(meta, verification) {
 
 function terminalOutcomeAfterClose(closed, stopHook, fallbackError) {
   if (closed?.ok === false) {
-    return { status: 'error', error: closed.error || fallbackError || 'quality gate failed' };
+    return {
+      status: 'error',
+      error: closed.error || fallbackError || 'quality gate failed',
+      close: closed,
+    };
   }
   const transformed = stopHook?.outcome || {};
   const status = ['done', 'error', 'cancelled'].includes(transformed.status)
     ? transformed.status
     : 'done';
   return status === 'error'
-    ? { status, error: String(transformed.error || transformed.reason || 'stop hook transformed outcome').slice(0, 2000) }
-    : { status };
+    ? {
+      status,
+      error: String(transformed.error || transformed.reason || 'stop hook transformed outcome').slice(0, 2000),
+      close: closed,
+    }
+    : { status, close: closed };
 }
 
 function recordGateMetrics(verification) {

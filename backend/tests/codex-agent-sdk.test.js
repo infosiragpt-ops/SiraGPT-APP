@@ -127,6 +127,7 @@ test('runSubagent: an llmTurn transport error fails the delegation cleanly', asy
 
 test('onUsage bubbles usage to the caller (metrics)', async () => {
   const usages = [];
+  let callbackCompleted = false;
   const llmTurn = scriptedLlm([
     { toolCalls: [{ id: 't', name: 'list_files', args: {} }], usage: { tokensIn: 5, tokensOut: 2 } },
     { text: 'fin', usage: { tokensIn: 3, tokensOut: 1 } },
@@ -134,9 +135,110 @@ test('onUsage bubbles usage to the caller (metrics)', async () => {
   await sdk.runSubagent({
     name: 'planner',
     task: 'plan',
-    deps: { llmTurn, runner: fakeRunner(), project: 'p1', env: { NODE_ENV: 'test' }, onUsage: (u) => usages.push(u) },
+    deps: {
+      llmTurn,
+      runner: fakeRunner(),
+      project: 'p1',
+      env: { NODE_ENV: 'test' },
+      onUsage: async (usage) => {
+        await Promise.resolve();
+        usages.push(usage);
+        callbackCompleted = true;
+      },
+    },
   });
+  assert.equal(callbackCompleted, true);
   assert.equal(usages.length, 2);
+});
+
+test('an awaitable usage gate stops tools and later turns when accounting rejects', async () => {
+  const llmTurn = scriptedLlm([
+    {
+      toolCalls: [{ id: 't', name: 'list_files', args: {} }],
+      usage: { tokensIn: 5, tokensOut: 2 },
+    },
+    { text: 'this turn must never run' },
+  ]);
+  let usageCalls = 0;
+  const out = await sdk.runSubagent({
+    name: 'planner',
+    task: 'plan',
+    deps: {
+      llmTurn,
+      runner: fakeRunner(),
+      project: 'p1',
+      env: { NODE_ENV: 'test' },
+      onUsage: async () => {
+        usageCalls += 1;
+        await Promise.resolve();
+        throw new Error('fleet_qa_daily_budget_exceeded');
+      },
+    },
+  });
+  assert.equal(out.ok, false);
+  assert.equal(usageCalls, 1);
+  assert.equal(llmTurn.seen.length, 1);
+  assert.equal(out.toolCallsCount, 0);
+  assert.match(out.result, /daily_budget_exceeded/);
+});
+
+test('usage accounting errors can propagate to an owning scheduler for durable deferral', async () => {
+  const budgetError = new Error('swarm_project_budget_blocked:daily_budget_exceeded');
+  budgetError.code = 'swarm_project_budget_exceeded';
+  await assert.rejects(
+    sdk.runSubagent({
+      name: 'planner',
+      task: 'plan',
+      deps: {
+        llmTurn: scriptedLlm([
+          {
+            toolCalls: [{ id: 't', name: 'list_files', args: {} }],
+            usage: { tokensIn: 5, tokensOut: 2 },
+          },
+        ]),
+        runner: fakeRunner(),
+        project: 'p1',
+        env: { NODE_ENV: 'test' },
+        propagateUsageErrors: true,
+        onUsage: async () => {
+          throw budgetError;
+        },
+      },
+    }),
+    (error) => error === budgetError,
+  );
+});
+
+test('cancellation while publishing an action prevents the tool from starting', async () => {
+  const cancellation = new AbortController();
+  let runnerCalls = 0;
+  const runner = fakeRunner({
+    exec: async () => {
+      runnerCalls += 1;
+      return { exitCode: 0, stdout: 'src/App.tsx\n', stderr: '' };
+    },
+  });
+  const out = await sdk.runSubagent({
+    name: 'planner',
+    task: 'plan',
+    deps: {
+      llmTurn: scriptedLlm([
+        { toolCalls: [{ id: 't', name: 'list_files', args: {} }] },
+      ]),
+      runner,
+      project: 'p1',
+      signal: cancellation.signal,
+      env: { NODE_ENV: 'test' },
+      emitAction: async () => {
+        cancellation.abort(new Error('fleet QA cancelled'));
+        return null;
+      },
+    },
+  });
+  assert.equal(out.ok, false);
+  assert.match(out.result, /fleet QA cancelled/);
+  assert.equal(out.toolCallsCount, 0);
+  assert.equal(runnerCalls, 1, 'only the initial file-tree orientation may run');
 });
 
 test('formatSubagentReport is compact and model-facing', () => {

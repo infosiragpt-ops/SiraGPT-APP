@@ -323,6 +323,9 @@ test('runtime daily budget stops after the LLM response and before its tool call
         return { _sum: { costAppliedUsd: 0.6 } };
       },
     },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
   const f = fakeDeps({
     prisma,
@@ -365,15 +368,140 @@ test('runtime daily budget stops after the LLM response and before its tool call
   assert.equal(res.status, 'error');
   assert.match(res.error, /daily budget exceeded during run/i);
   assert.equal(llmCalls, 2);
-  assert.equal(aggregateCalls, 3, 'preflight + una revalidación después de cada respuesta');
+  assert.equal(aggregateCalls, 5, 'proyecto y empresa se validan antes y durante la corrida');
   assert.deepEqual(f.writes, [], 'la segunda respuesta, que cruza el límite acumulado, no puede escribir');
-  const runtimeStatuses = f.events.filter((event) => event.type === 'budget_status');
+  const runtimeStatuses = f.events.filter((event) => (
+    event.type === 'budget_status' && event.data.scope !== 'company'
+  ));
   assert.equal(runtimeStatuses.at(-2).data.allowed, true);
   assert.equal(runtimeStatuses.at(-2).data.inRunCostUsd, 0.2);
   const runtimeStatus = runtimeStatuses.at(-1);
   assert.equal(runtimeStatus.data.allowed, false);
   assert.equal(runtimeStatus.data.inRunCostUsd, 0.45);
   assert.equal(runtimeStatus.data.costTodayUsd, 1.05);
+});
+
+test('runtime company budget stops before tools even when the project budget remains available', async () => {
+  const prisma = {
+    codexRunMetric: {
+      aggregate: async () => ({ _sum: { costAppliedUsd: 0.6 } }),
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
+  };
+  const f = fakeDeps({
+    prisma,
+    env: {
+      NODE_ENV: 'production',
+      CODEX_AUTO_VERIFY: '0',
+      CODEX_AUTO_MEMORY: '0',
+      CODEX_CONTEXT_SUMMARY: '0',
+      CODEX_RUN_BRANCHES: '0',
+    },
+    llmTurn: async () => ({
+      text: 'Voy a escribir.',
+      usage: {
+        provider: 'openai',
+        model: 'gpt-test',
+        tokensIn: 100,
+        tokensOut: 50,
+        costUsd: 0.45,
+      },
+      toolCalls: [{ name: 'write_file', args: { path: 'src/App.tsx', content: '<App />' } }],
+    }),
+  });
+
+  const res = await runAgentLoop({
+    run: { id: 'r-company-budget', userId: 'u-free', mode: 'build', prompt: 'crea una app' },
+    project: {
+      id: 'p1',
+      name: 'X',
+      brief: {
+        settings: { budget: { dailyUsd: 10 } },
+        proactive: { configuredDailyBudgetUsd: 1 },
+      },
+    },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'error');
+  assert.match(res.error, /company daily budget exceeded during run/i);
+  assert.deepEqual(f.writes, []);
+  const companyStatuses = f.events.filter((event) => (
+    event.type === 'budget_status' && event.data.scope === 'company'
+  ));
+  assert.equal(companyStatuses.at(-1).data.allowed, false);
+  assert.equal(companyStatuses.at(-1).data.inRunCostUsd, 0.45);
+  assert.equal(companyStatuses.at(-1).data.costTodayUsd, 1.05);
+});
+
+test('a pooled run stops at its own reservation before executing proposed tools', async () => {
+  const metricQueries = [];
+  const prisma = {
+    codexRunMetric: {
+      findMany: async (query) => {
+        metricQueries.push(query);
+        return [];
+      },
+    },
+    codexDepartmentPool: {
+      findUnique: async () => ({
+        id: 'pool-trust',
+        projectId: 'p1',
+        enabled: true,
+        dailyBudgetUsd: 5,
+      }),
+    },
+    codexSwarmTask: {
+      findUnique: async () => ({
+        id: 'task-qa',
+        input: {
+          departmentPoolId: 'pool-trust',
+          poolBudgetReservationUsd: 0.5,
+        },
+      }),
+      findMany: async () => [],
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
+  };
+  const f = fakeDeps({
+    prisma,
+    llmTurn: async () => ({
+      text: 'Voy a escribir.',
+      usage: {
+        provider: 'openai',
+        model: 'gpt-test',
+        tokensIn: 100,
+        tokensOut: 50,
+        costUsd: 0.6,
+      },
+      toolCalls: [{ name: 'write_file', args: { path: 'src/App.tsx', content: '<App />' } }],
+    }),
+  });
+  const res = await runAgentLoop({
+    run: {
+      id: 'r-pooled',
+      userId: 'u1',
+      mode: 'build',
+      prompt: 'revisa la aplicación',
+      departmentPoolId: 'pool-trust',
+      swarmTaskId: 'task-qa',
+    },
+    project: { id: 'p1', name: 'X' },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'error');
+  assert.match(res.error, /department pool budget runtime check failed/i);
+  assert.deepEqual(f.writes, []);
+  assert.ok(metricQueries.every((query) => query.where.run.departmentPoolId === 'pool-trust'));
+  const poolStatuses = f.events.filter((event) => (
+    event.type === 'budget_status' && event.data.scope === 'department_pool'
+  ));
+  assert.equal(poolStatuses.at(-1).data.reason, 'department_pool_run_reservation_exceeded');
 });
 
 test('a blocking LLM error (402) emits action_required before the run errors', async () => {

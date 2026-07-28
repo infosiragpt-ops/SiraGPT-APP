@@ -29,6 +29,8 @@
  *
  * Workspace API (Codex Agent V2, flag-gated at the backend):
  *   POST /workspace/init  { project }          → mkdir + git init -b main
+ *   POST /workspace/worktree/recover-base { project, run, baseBranch }
+ *                   → preserve a dirty base in refs/sira/recovery/*.
  *   POST /workspace/write { project, files[] } → write files (paths sanitized)
  *   GET  /workspace/file?project&path          → read a text file (cap 200k)
  *   GET  /workspace/file-binary?project&path   → read binary as base64 (cap 6MB)
@@ -38,6 +40,7 @@
  * The dev server itself is reachable on DEV_PORT (published in compose).
  */
 
+const { randomBytes } = require("node:crypto");
 const {
   mkdirSync,
   writeFileSync,
@@ -82,6 +85,17 @@ const WORKTREES_DIR = process.env.RUNNER_WORKTREES_DIR || `${WORKDIR}/worktrees`
 const EXPORT_DIR = process.env.EXPORT_DIR || "/export";
 const CONTROL_TOKEN = controlTokenForEnv(process.env);
 const FS_HELPER_PATH = process.env.CODE_RUNNER_FS_HELPER_PATH || "/opt/code-runner/code-runner-fs-helper.js";
+const TRUSTED_CANARY_RUN_RE = /^canary-[A-Za-z0-9_-]{1,72}-(?:a|b)$/;
+
+function envEnabled(value) {
+  return /^(1|true|on|yes)$/i.test(String(value ?? "").trim());
+}
+
+const RUN_CONCURRENCY_ENABLED = envEnabled(process.env.CODEX_RUN_CONCURRENCY_ENABLED);
+const RUN_OS_ISOLATION_ATTESTED = envEnabled(process.env.CODEX_RUN_OS_ISOLATION_ATTESTED);
+if (RUN_CONCURRENCY_ENABLED && !RUN_OS_ISOLATION_ATTESTED) {
+  throw new Error("run_concurrency_isolation_unavailable");
+}
 
 function boundedPositiveEnv(name, fallback, min, max) {
   const parsed = Math.trunc(Number(process.env[name]));
@@ -320,6 +334,36 @@ function safeGitBranch(value) {
   );
 }
 
+function trustedCanaryRun(runId) {
+  return TRUSTED_CANARY_RUN_RE.test(String(runId || ""));
+}
+
+function registeredRunIds(projectId) {
+  return registeredWorktrees(projectId)
+    .map((row) => String(row.branch || "").match(/^run\/(.+)$/)?.[1] || null)
+    .filter(Boolean);
+}
+
+function assertRunWorktreeAdmission(projectId, runId) {
+  if (RUN_CONCURRENCY_ENABLED && RUN_OS_ISOLATION_ATTESTED) return;
+  const siblings = registeredRunIds(projectId).filter((candidate) => candidate !== runId);
+  if (!siblings.length) return;
+  if (trustedCanaryRun(runId) && siblings.every(trustedCanaryRun)) return;
+  const error = new Error(`active sibling worktree(s): ${siblings.slice(0, 20).join(", ")}`);
+  error.code = "run_concurrency_isolation_unavailable";
+  throw error;
+}
+
+function baseWorkingTreeState(projectId, baseDir) {
+  const state = runGitAt(projectId, baseDir, ["status", "--porcelain=v1", "-z"]);
+  if (!state.ok) {
+    const error = new Error((state.stderr || state.stdout || "git_status_failed").slice(0, 500));
+    error.code = "worktree_status_failed";
+    throw error;
+  }
+  return state.stdout;
+}
+
 function ensureWorkspaceDirectory(id, runId = null) {
   const base = ensureProjectDirectory(id);
   if (!runId) return { ...base, runId: null };
@@ -364,6 +408,14 @@ function createRunWorktree(id, runId, baseBranch) {
     error.code = "worktree_path_collision";
     throw error;
   }
+  assertRunWorktreeAdmission(id, runId);
+  const baseState = baseWorkingTreeState(id, baseDir);
+  if (baseState) {
+    const error = new Error("project base working tree has uncommitted changes");
+    error.code = "working_tree_dirty";
+    error.detail = `${baseState.split("\0").filter(Boolean).length} changed entr${baseState.split("\0").filter(Boolean).length === 1 ? "y" : "ies"}`;
+    throw error;
+  }
 
   const branchExists = runGitAt(id, baseDir, [
     "show-ref", "--verify", "--quiet", `refs/heads/${runBranch}`,
@@ -388,6 +440,95 @@ function createRunWorktree(id, runId, baseBranch) {
     runBranch,
     baseBranch,
     dir: `worktrees/${id}/wt-${runId}`,
+  };
+}
+
+function recoverRunBase(id, runId, baseBranch) {
+  const { dir: baseDir } = ensureProjectDirectory(id);
+  const activeBranch = runGitAt(id, baseDir, ["branch", "--show-current"]);
+  if (!activeBranch.ok || activeBranch.stdout.trim() !== baseBranch) {
+    const error = new Error("dirty workspace is not on the configured base branch");
+    error.code = "dirty_non_base_branch";
+    throw error;
+  }
+  const baseShaResult = runGitAt(id, baseDir, ["rev-parse", baseBranch]);
+  if (!baseShaResult.ok) {
+    const error = new Error("configured base branch is unavailable");
+    error.code = "dirty_recovery_base_unavailable";
+    throw error;
+  }
+  const baseSha = baseShaResult.stdout.trim();
+  const state = baseWorkingTreeState(id, baseDir);
+  const changedEntries = state.split("\0").filter(Boolean).length;
+  if (!changedEntries) {
+    return {
+      ok: true,
+      recovered: false,
+      baseSha,
+      changedEntries: 0,
+    };
+  }
+
+  const previousStash = runGitAt(id, baseDir, ["rev-parse", "--verify", "refs/stash"]);
+  const previousStashSha = previousStash.ok ? previousStash.stdout.trim() : null;
+  const saved = runGitAt(id, baseDir, [
+    "stash",
+    "push",
+    "--include-untracked",
+    "--message",
+    `SiraGPT recovery ${runId}`,
+  ]);
+  if (!saved.ok) {
+    const error = new Error((saved.stderr || saved.stdout || "git_stash_failed").slice(0, 500));
+    error.code = "dirty_recovery_stash_failed";
+    throw error;
+  }
+  const recoveryShaResult = runGitAt(id, baseDir, ["rev-parse", "refs/stash"]);
+  if (!recoveryShaResult.ok) {
+    const error = new Error("recovery object is unavailable");
+    error.code = "dirty_recovery_object_unavailable";
+    throw error;
+  }
+  const recoverySha = recoveryShaResult.stdout.trim();
+  if (recoverySha === previousStashSha) {
+    const error = new Error("git stash did not create a recovery object");
+    error.code = "dirty_recovery_object_not_created";
+    throw error;
+  }
+  const recoveryRef = `refs/sira/recovery/${runId}-${randomBytes(8).toString("hex")}`;
+  const pinned = runGitAt(id, baseDir, ["update-ref", recoveryRef, recoverySha]);
+  if (!pinned.ok) {
+    const error = new Error((pinned.stderr || pinned.stdout || "git_update_ref_failed").slice(0, 500));
+    error.code = "dirty_recovery_ref_failed";
+    throw error;
+  }
+  const baseAfter = runGitAt(id, baseDir, ["rev-parse", baseBranch]);
+  if (!baseAfter.ok || baseAfter.stdout.trim() !== baseSha) {
+    const error = new Error("base branch moved while preserving dirty workspace content");
+    error.code = "dirty_recovery_base_changed";
+    throw error;
+  }
+  const remaining = baseWorkingTreeState(id, baseDir);
+  if (remaining) {
+    const error = new Error("workspace remained dirty after recovery");
+    error.code = "dirty_recovery_incomplete";
+    throw error;
+  }
+  // The dedicated ref owns the recovery object now. Dropping refs/stash is
+  // best-effort. Only drop it if it is still the entry this request created;
+  // another concurrent recovery may have pushed a newer user state.
+  const latestStash = runGitAt(id, baseDir, ["rev-parse", "--verify", "refs/stash"]);
+  if (latestStash.ok && latestStash.stdout.trim() === recoverySha) {
+    runGitAt(id, baseDir, ["stash", "drop", "stash@{0}"]);
+  }
+  return {
+    ok: true,
+    recovered: true,
+    baseSha,
+    recoveryRef,
+    recoverySha,
+    changedEntries,
+    restoreCommand: ["git", "stash", "apply", "--index", recoveryRef],
   };
 }
 
@@ -1059,6 +1200,36 @@ Bun.serve({
         const status = [
           "worktree_branch_mismatch",
           "worktree_path_collision",
+          "working_tree_dirty",
+          "run_concurrency_isolation_unavailable",
+        ].includes(code) ? 409 : 500;
+        return Response.json({
+          ok: false,
+          error: code,
+          detail: String(error.message || error).slice(0, 500),
+        }, { status });
+      }
+    }
+
+    if (url.pathname === "/workspace/worktree/recover-base" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const runId = sanitizeRunId(body.run);
+      const baseBranch = String(body.baseBranch || "main").trim();
+      if (!id || !runId || !safeGitBranch(baseBranch)) {
+        return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      }
+      if (!existsSync(projectDirOf(id))) {
+        return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      }
+      try {
+        return Response.json(recoverRunBase(id, runId, baseBranch));
+      } catch (error) {
+        const code = error.code || "worktree_recovery_failed";
+        const status = [
+          "dirty_non_base_branch",
+          "dirty_recovery_base_changed",
+          "dirty_recovery_incomplete",
         ].includes(code) ? 409 : 500;
         return Response.json({
           ok: false,

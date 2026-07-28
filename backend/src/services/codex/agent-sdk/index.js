@@ -277,10 +277,16 @@ function readPosInt(raw, fallback) {
 
 /** Fresh workspace listing injected into the specialist's first message so it
  * never wastes a step orienting itself. Best-effort. */
-async function freshFileTree(runner, project) {
+async function freshFileTree(runner, project, signal = null) {
   if (!runner || typeof runner.exec !== 'function' || !project) return '';
+  if (signal?.aborted) return '';
   try {
-    const out = await runner.exec(project, ['git', 'ls-files', '--cached', '--others', '--exclude-standard']);
+    const out = await runner.exec(
+      project,
+      ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+      { signal },
+    );
+    if (signal?.aborted) return '';
     if (out?.exitCode === 0 && out.stdout) return String(out.stdout).slice(0, 3000);
   } catch { /* orientation is optional */ }
   return '';
@@ -327,7 +333,7 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
   const maxSteps = Math.min(readPosInt(env.CODEX_SUBAGENT_MAX_STEPS, DEFAULT_SUBAGENT_MAX_STEPS), def.maxSteps + 4);
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
 
-  const tree = await freshFileTree(runner, project);
+  const tree = await freshFileTree(runner, project, signal);
   const userParts = [String(task)];
   if (context) userParts.push(`Contexto del proyecto:\n${context}`);
   if (tree) userParts.push(`Archivos actuales del workspace:\n${tree}`);
@@ -348,9 +354,16 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
     model: selectedModel,
     effort: selectedEffort,
   });
+  const cancelled = (steps) => {
+    const reason = signal?.reason;
+    const detail = reason instanceof Error
+      ? reason.message
+      : String(reason || 'cancelled');
+    return done(false, `El subagente fue cancelado: ${detail}`, steps);
+  };
 
   for (let step = 0; step < maxSteps; step += 1) {
-    if (signal?.aborted) break;
+    if (signal?.aborted) return cancelled(step);
     let turn;
     try {
       turn = await llmTurn({
@@ -363,13 +376,26 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
         effort: selectedEffort,
       });
     } catch (err) {
+      if (signal?.aborted) return cancelled(step);
       return done(false, `El subagente falló: ${String(err?.message || err)}`, step);
     }
     if (turn?.usage) {
       tokensIn += Number(turn.usage.tokensIn) || 0;
       tokensOut += Number(turn.usage.tokensOut) || 0;
-      if (typeof deps.onUsage === 'function') deps.onUsage(turn.usage);
+      if (typeof deps.onUsage === 'function') {
+        try {
+          await deps.onUsage(turn.usage);
+        } catch (error) {
+          if (deps.propagateUsageErrors === true) throw error;
+          return done(
+            false,
+            `El subagente se detuvo durante la contabilidad de uso: ${String(error?.message || error)}`,
+            step + 1,
+          );
+        }
+      }
     }
+    if (signal?.aborted) return cancelled(step + 1);
 
     if (turn?.text && turn.text.trim()) {
       lastText = turn.text.trim();
@@ -382,14 +408,13 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
     }
 
     for (const call of calls) {
+      if (signal?.aborted) return cancelled(step + 1);
       // No recursive delegation: a subagent can never call run_subagent.
       const tool = call.name === 'run_subagent' ? null : buildTools.getTool(call.name);
       if (!tool || !def.tools.includes(call.name)) {
         messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] Error: herramienta no disponible para este subagente.` });
         continue;
       }
-      toolCallsCount += 1;
-
       // Live visibility: surface this specialist tool call on the run timeline.
       let live = null;
       if (typeof deps.emitAction === 'function') {
@@ -400,6 +425,8 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
           path: tool.pathFor(call.args) || undefined,
         })).catch(() => null);
       }
+      if (signal?.aborted) return cancelled(step + 1);
+      toolCallsCount += 1;
 
       const result = await tool.execute(call.args, {
         runner,
@@ -413,6 +440,7 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
         modelCapabilities: deps.modelCapabilities,
         modelProvider: deps.modelProvider,
       });
+      if (signal?.aborted) return cancelled(step + 1);
       const summary = String(result.summary || '').slice(0, 300);
       actions.push({ tool: call.name, ok: !result.isError, summary });
       if (live && typeof live.end === 'function') {
@@ -430,6 +458,7 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
     }
   }
 
+  if (signal?.aborted) return cancelled(maxSteps);
   return done(true, lastText || 'El subagente agotó su presupuesto de pasos; revisa las acciones ejecutadas.', maxSteps);
 }
 

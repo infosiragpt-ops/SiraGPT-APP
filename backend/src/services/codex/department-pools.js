@@ -1,6 +1,7 @@
 'use strict';
 
 const { mutateProjectBrief } = require('./project-brief-store');
+const projectBudget = require('./project-budget');
 
 const MAX_DEPARTMENT_POOL_SIZE = 64;
 const MAX_PROJECT_POOL_CAPACITY = 64;
@@ -45,12 +46,6 @@ function poolCapacity(pools) {
   };
 }
 
-function utcDayStart(now = new Date()) {
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  return start;
-}
-
 async function findDepartmentPool({ prisma, projectId, departmentId }) {
   if (!projectId || !departmentId) return null;
   let row = null;
@@ -72,22 +67,14 @@ async function departmentCostTodayUsd({
   departmentId,
   now = new Date(),
 }) {
-  if (!prisma?.codexRunMetric?.aggregate) {
-    throw new Error('department_pool_metric_aggregation_unavailable');
-  }
-  const result = await prisma.codexRunMetric.aggregate({
-    where: {
-      createdAt: { gte: utcDayStart(now) },
-      run: {
-        projectId,
-        prompt: { contains: `"departmentId":${JSON.stringify(departmentId)}` },
-      },
-    },
-    _sum: { costOriginalUsd: true, costAppliedUsd: true },
+  const pool = await findDepartmentPool({ prisma, projectId, departmentId });
+  if (!pool) return 0;
+  return projectBudget.costTodayUsdForPool({
+    prisma,
+    projectId,
+    departmentPoolId: pool.id,
+    now,
   });
-  const original = Number(result?._sum?.costOriginalUsd);
-  const applied = Number(result?._sum?.costAppliedUsd);
-  return Math.max(0, Number.isFinite(original) && original > 0 ? original : (applied || 0));
 }
 
 async function checkDepartmentPoolBudget({
@@ -129,24 +116,32 @@ async function checkDepartmentPoolBudget({
     };
   }
   try {
-    const spent = await departmentCostTodayUsd({
+    const status = await projectBudget.checkDepartmentPoolBudget({
       prisma,
       projectId,
-      departmentId,
+      departmentPoolId: pool.id,
       now,
     });
-    const allowed = spent < pool.dailyBudgetUsd;
+    const allowed = status.allowed === true;
     return {
       allowed,
-      reason: allowed ? 'within_budget' : 'daily_budget_exceeded',
+      reason: allowed
+        ? (status.reason === 'department_pool_unlimited' ? 'unlimited' : 'within_budget')
+        : status.reason === 'department_pool_paused'
+          ? 'pool_disabled'
+          : status.reason === 'department_pool_budget_limit'
+            || status.reason === 'department_pool_budget_blocked'
+            ? 'daily_budget_exceeded'
+            : 'budget_query_failed',
       pool,
-      costTodayUsd: spent,
+      costTodayUsd: status.costTodayUsd,
       dailyBudgetUsd: pool.dailyBudgetUsd,
-      remainingUsd: Math.max(0, pool.dailyBudgetUsd - spent),
+      remainingUsd: status.remainingUsd,
+      detail: status,
     };
   } catch (error) {
     return {
-      allowed: env.NODE_ENV !== 'production',
+      allowed: false,
       reason: 'budget_query_failed',
       error: String(error?.message || error).slice(0, 300),
       pool,
@@ -244,6 +239,5 @@ module.exports = {
   persistProjectCap,
   poolCapacity,
   removeDepartmentPool,
-  utcDayStart,
   upsertDepartmentPool,
 };
