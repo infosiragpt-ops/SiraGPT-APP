@@ -110,6 +110,69 @@ test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', asyn
   assert.equal(p.deptIndex, 1, 'round-robin advances');
 });
 
+test('proposal retries an open failed task and only accepts a different remediation', async () => {
+  const calls = [];
+  const proposal = await engine.proposeTask({
+    project: { id: 'p-ledger', name: 'SiraGPT', brief: {} },
+    department: { id: 'product-engineering', name: 'Producto', mission: 'Mejora el producto.' },
+    recentRuns: [],
+    fileTree: 'src/App.tsx',
+    notes: '',
+    ledger: [{
+      runId: 'run-failed',
+      department: 'Producto',
+      title: 'Corrige checkout roto',
+      outcome: 'failed',
+      learnings: ['El contrato de pagos no acepta currency vacía.'],
+      ts: '2026-07-25T10:00:00.000Z',
+    }],
+    objectives: [],
+    chatComplete: async ({ messages }) => {
+      calls.push(messages.map((message) => ({ ...message })));
+      if (calls.length === 1) {
+        return {
+          content: '{"title":"Corrige checkout roto","goal":"Repite el cambio anterior."}',
+        };
+      }
+      return {
+        content: '{"title":"Valida moneda antes del pago","goal":"Añade validación previa de currency y una prueba de regresión."}',
+      };
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[0][1].content, /FALLOS ABIERTOS DEL LEDGER/);
+  assert.match(calls[0][1].content, /failureKey=corrige-checkout-roto/);
+  assert.match(calls[1].at(-1).content, /PROPUESTA RECHAZADA/);
+  assert.equal(proposal.title, 'Valida moneda antes del pago');
+});
+
+test('proposal is skipped when the model repeats the same open failure twice', async () => {
+  let calls = 0;
+  const proposal = await engine.proposeTask({
+    project: { id: 'p-ledger', name: 'SiraGPT', brief: {} },
+    department: { id: 'product-engineering', name: 'Producto', mission: 'Mejora el producto.' },
+    recentRuns: [],
+    fileTree: '',
+    notes: '',
+    ledger: [{
+      runId: 'run-failed',
+      title: 'Corrige checkout roto',
+      outcome: 'failed',
+    }],
+    objectives: [],
+    chatComplete: async () => {
+      calls += 1;
+      return {
+        content: '{"title":"Corrige checkout roto","goal":"Vuelve a intentar exactamente lo mismo."}',
+      };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(proposal, null);
+});
+
 test('concurrent schedulers acquire one proactive lease per project', async () => {
   const project = {
     ...PROJECT,

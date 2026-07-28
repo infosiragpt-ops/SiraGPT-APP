@@ -80,6 +80,41 @@ test('appendLedgerEntry preserves other brief fields and replaces the same run i
     deletions: 3,
     filesChanged: 0,
   });
+  assert.equal(state.project.brief.ledger[0].title, null);
+  assert.equal(state.project.brief.ledger[0].ts, state.project.brief.ledger[0].createdAt);
+});
+
+test('failed build memory stays open beyond the recent window and a later pass resolves it', () => {
+  const failed = {
+    runId: 'run-failed',
+    department: 'Producto',
+    title: 'Corrige checkout roto',
+    outcome: 'failed',
+    learnings: ['El contrato de pagos no acepta currency vacía.'],
+    ts: '2026-07-25T10:00:00.000Z',
+  };
+  const unrelated = Array.from({ length: 20 }, (_, index) => ({
+    runId: `run-${index}`,
+    title: `Tarea distinta ${index}`,
+    outcome: 'passed',
+  }));
+  const open = ledger.readOpenFailures([failed, ...unrelated]);
+
+  assert.equal(open.length, 1);
+  assert.equal(open[0].runId, 'run-failed');
+  assert.equal(open[0].failureKey, 'corrige-checkout-roto');
+  assert.equal(ledger.findOpenFailure([failed, ...unrelated], 'Corrige checkout roto').runId, 'run-failed');
+
+  const resolved = ledger.readOpenFailures([
+    failed,
+    ...unrelated,
+    {
+      runId: 'run-fixed',
+      title: 'Corrige checkout roto',
+      outcome: 'passed',
+    },
+  ]);
+  assert.deepEqual(resolved, []);
 });
 
 test('CEO objective merge keeps stable ids and applies the new priority', () => {

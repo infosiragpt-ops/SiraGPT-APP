@@ -280,6 +280,7 @@ async function proposeTask({
   chatComplete,
 }) {
   const assignedResources = resourcesAssignedToDepartment(project, department.id);
+  const openFailures = progressLedger.readOpenFailures(ledger);
   const responseSchema = department.id === 'ceo-office'
     ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
     : '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[]}';
@@ -322,19 +323,51 @@ async function proposeTask({
           : 'Aún no hay OKR estructurados.',
         ledger.length
           ? `Progress Ledger (resultados acumulados, no repitas fallos ni trabajo):\n${ledger.slice(-12).map((item) => {
-            const diff = `+${item.diffstat.additions}/-${item.diffstat.deletions}`;
-            const learning = item.learnings[0] ? ` · ${item.learnings[0]}` : '';
+            const diff = `+${Math.max(0, Number(item.diffstat?.additions) || 0)}/-${Math.max(0, Number(item.diffstat?.deletions) || 0)}`;
+            const learning = item.learnings?.[0] ? ` · ${item.learnings[0]}` : '';
             return `- [${item.outcome}] ${item.department} · ${diff} · ${item.task || item.runId}${learning}`;
           }).join('\n')}`
           : 'Progress Ledger vacío: esta será una de las primeras decisiones.',
+        openFailures.length
+          ? `FALLOS ABIERTOS DEL LEDGER (no propongas de nuevo el mismo título/tarea; elige otro avance o una remediación explícitamente distinta):\n${openFailures.slice(-12).map((item) => {
+            const learning = item.learnings[0] ? ` · evidencia: ${item.learnings[0]}` : '';
+            return `- failureKey=${item.failureKey} · run=${item.runId} · ${item.title || item.task || 'tarea sin título'}${learning}`;
+          }).join('\n')}`
+          : 'Sin fallos abiertos en el ledger.',
         recentRuns && recentRuns.length
           ? `Últimos trabajos (no los repitas):\n${recentRuns.map((r) => `- [${r.status}] ${String(r.prompt || '').slice(0, 140)}`).join('\n')}`
           : 'Sin trabajos previos.',
       ].filter(Boolean).join('\n\n'),
     },
   ];
-  const out = await chatComplete({ messages, temperature: 0.5, maxTokens: department.id === 'ceo-office' ? 700 : 450 });
-  const parsed = extractJson(out && out.content);
+  const completionOptions = {
+    temperature: 0.5,
+    maxTokens: department.id === 'ceo-office' ? 700 : 450,
+  };
+  let out = await chatComplete({ messages, ...completionOptions });
+  let parsed = extractJson(out && out.content);
+  let repeatedFailure = parsed?.title
+    ? progressLedger.findOpenFailure(ledger, parsed.title)
+    : null;
+  if (repeatedFailure) {
+    messages.push({
+      role: 'assistant',
+      content: String(out?.content || '').slice(0, 4000),
+    });
+    messages.push({
+      role: 'user',
+      content: [
+        `PROPUESTA RECHAZADA: repite el fallo abierto ${repeatedFailure.failureKey} del run ${repeatedFailure.runId}.`,
+        'Propón una tarea diferente. Si debes perseguir el mismo objetivo, cambia explícitamente el enfoque usando la evidencia del fallo y asigna un título que describa la remediación concreta.',
+      ].join(' '),
+    });
+    out = await chatComplete({ messages, ...completionOptions });
+    parsed = extractJson(out && out.content);
+    repeatedFailure = parsed?.title
+      ? progressLedger.findOpenFailure(ledger, parsed.title)
+      : null;
+    if (repeatedFailure) return null;
+  }
   if (!parsed || !parsed.goal || typeof parsed.goal !== 'string') return null;
   const title = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : 'Tarea proactiva';
   const acceptanceCriteria = progressLedger.normalizeAcceptanceCriteria(parsed.acceptanceCriteria);

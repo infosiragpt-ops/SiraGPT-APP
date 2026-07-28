@@ -12,6 +12,7 @@ const MAX_OBJECTIVES = 12;
 const MAX_ACCEPTANCE_CRITERIA = 8;
 const MAX_SWARM_SPECIALISTS = 12;
 const PROACTIVE_META_MARKER = '[SIRA_PROACTIVE_META]';
+const OPEN_FAILURE_OUTCOMES = new Set(['failed', 'blocked']);
 
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -29,6 +30,17 @@ function slug(value) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 64);
+}
+
+function taskFingerprint(value) {
+  return boundedText(value, 600)
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, '-')
+    .slice(0, 180);
 }
 
 function normalizeAcceptanceCriteria(input) {
@@ -93,6 +105,9 @@ function normalizeLedgerEntry(value) {
   const runId = boundedText(source.runId, 180);
   if (!runId) return null;
   const missionId = boundedText(source.missionId, 100) || null;
+  const task = boundedText(source.title || source.task, 600) || null;
+  const failureKey = boundedText(source.failureKey, 180) || taskFingerprint(task);
+  const createdAt = boundedText(source.ts || source.createdAt, 40) || new Date().toISOString();
   const acceptance = Array.isArray(source.acceptance)
     ? source.acceptance.slice(0, MAX_ACCEPTANCE_CRITERIA).map((item) => ({
       criterion: boundedText(item?.criterion, 280),
@@ -107,7 +122,9 @@ function normalizeLedgerEntry(value) {
     outcome: ['passed', 'failed', 'cancelled', 'blocked'].includes(source.outcome)
       ? source.outcome
       : 'failed',
-    task: boundedText(source.task, 600) || null,
+    title: task,
+    task,
+    failureKey: failureKey || null,
     checkpointSha: boundedText(source.checkpointSha, 80) || null,
     diffstat: {
       additions: Math.max(0, Number(source.diffstat?.additions) || 0),
@@ -119,7 +136,8 @@ function normalizeLedgerEntry(value) {
     learnings: Array.isArray(source.learnings)
       ? source.learnings.map((item) => boundedText(item, 500)).filter(Boolean).slice(0, 8)
       : [],
-    createdAt: boundedText(source.createdAt, 40) || new Date().toISOString(),
+    ts: createdAt,
+    createdAt,
   };
 }
 
@@ -139,6 +157,25 @@ function readProgressContext(project) {
     objectives: normalizeObjectives(brief.objectives),
     ledger: normalizeLedger(brief.ledger),
   };
+}
+
+function readOpenFailures(input) {
+  const open = new Map();
+  for (const entry of normalizeLedger(input)) {
+    if (!entry.failureKey) continue;
+    if (OPEN_FAILURE_OUTCOMES.has(entry.outcome)) {
+      open.set(entry.failureKey, entry);
+    } else if (entry.outcome === 'passed') {
+      open.delete(entry.failureKey);
+    }
+  }
+  return [...open.values()];
+}
+
+function findOpenFailure(input, title) {
+  const failureKey = taskFingerprint(title);
+  if (!failureKey) return null;
+  return readOpenFailures(input).find((entry) => entry.failureKey === failureKey) || null;
 }
 
 function formatProgressContext(project, { maxEntries = 12, maxChars = 9000 } = {}) {
@@ -400,9 +437,12 @@ module.exports = {
   normalizeSwarm,
   normalizeObjectives,
   readProgressContext,
+  readOpenFailures,
+  findOpenFailure,
   formatProgressContext,
   generateAutoLearnings,
   deterministicLearnings,
+  taskFingerprint,
   taskMetaFromPrompt,
   writeObjectives,
 };
