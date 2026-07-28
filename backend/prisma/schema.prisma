@@ -2118,26 +2118,31 @@ model Project {
 // remains the user-facing workspace; Company supplies business semantics and
 // an explicit root for channel policy.
 model Company {
-  id        String  @id @default(cuid())
-  userId    String
-  projectId String  @unique
-  name      String
-  mission   String? @db.Text
-  vision    String? @db.Text
-  industry  String?
-  urls      Json?
-  metadata  Json?
+  id             String  @id @default(cuid())
+  userId         String
+  projectId      String  @unique
+  organizationId String?
+  name           String
+  mission        String? @db.Text
+  vision         String? @db.Text
+  industry       String?
+  urls           Json?
+  metadata       Json?
+  brief          Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project         Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization    Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  codexLinks      CompanyCodexProjectLink[]
   channels        BusinessChannel[]
   inboxMessages   InboxMessage[]
   channelPairings BusinessChannelPairing[]
 
   @@index([userId, updatedAt])
+  @@index([organizationId, updatedAt])
   @@map("companies")
 }
 
@@ -2682,6 +2687,7 @@ model Organization {
   researchCollectionComments  ResearchCollectionComment[]
   researchTemplates           ResearchTemplate[]
   projects                    Project[]
+  companies                   Company[]
   codexProjects               CodexProject[]
   connectorAccounts           ConnectorAccount[]
   companyCodexLinks           CompanyCodexProjectLink[]
@@ -2811,6 +2817,7 @@ model CompanyCodexProjectLink {
   id             String   @id @default(cuid())
   projectId      String   @unique
   codexProjectId String   @unique
+  companyId      String?  @unique
   organizationId String?
   linkedByUserId String
   source         String   @default("manual") // manual | created_for_company
@@ -2819,6 +2826,7 @@ model CompanyCodexProjectLink {
 
   project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   codexProject CodexProject  @relation(fields: [codexProjectId], references: [id], onDelete: Cascade)
+  company      Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, updatedAt])

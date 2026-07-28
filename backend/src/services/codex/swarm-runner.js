@@ -438,6 +438,7 @@ async function runReadOnlyTask({
   sdk,
   env,
   webSearch,
+  prisma,
   onUsage = null,
 }) {
   const agent = subagentForTask(task);
@@ -451,6 +452,9 @@ async function runReadOnlyTask({
     `Objetivo del enjambre: ${String(swarm?.metadata?.objective || '').slice(0, 4_000)}`,
     dependencyContext(tasks, task),
   ].filter(Boolean).join('\n\n');
+  const companySoul = String((await require('./company-operating-profile')
+    .loadCompanySoul({ prisma, project })
+    .catch(() => null))?.content || '');
   const outcome = await sdk.runSubagent({
     name: agent,
     task: instruction,
@@ -463,6 +467,7 @@ async function runReadOnlyTask({
       env,
       tier: swarm?.metadata?.tier || null,
       webSearch,
+      companySoul,
       onUsage,
       propagateUsageErrors: true,
     },
@@ -725,6 +730,7 @@ async function processClaimedTask({
         sdk,
         env,
         webSearch,
+        prisma,
         onUsage: createSwarmUsageAccountant({
           prisma,
           project,

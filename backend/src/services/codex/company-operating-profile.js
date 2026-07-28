@@ -9,6 +9,8 @@
  */
 
 const PROFILE_VERSION = 1;
+const COMPANY_MODEL_VERSION = 1;
+const SOUL_VERSION = 1;
 const MAX_GAPS = 12;
 const EXTERNAL_ACTION_MODES = Object.freeze(['review', 'auto', 'off']);
 const { mutateProjectBrief } = require('./project-brief-store');
@@ -32,6 +34,39 @@ function asBriefRecord(value) {
 function nullableText(value, max = 500) {
   const text = boundedText(value, max);
   return text || null;
+}
+
+function normalizeSocialUrls(value) {
+  const source = Array.isArray(value)
+    ? Object.fromEntries(value
+      .map((item) => [boundedText(item?.platform, 40).toLowerCase(), item?.url])
+      .filter(([platform]) => platform))
+    : asRecord(value);
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([platform, url]) => [
+        boundedText(platform, 40).toLowerCase().replace(/[^a-z0-9_-]+/g, '-'),
+        nullableText(url, 500),
+      ])
+      .filter(([platform, url]) => platform && url)
+      .slice(0, 20),
+  );
+}
+
+function normalizeCompanyUrls(value, current = {}) {
+  const source = asRecord(value);
+  const previous = asRecord(current);
+  return {
+    web: Object.prototype.hasOwnProperty.call(source, 'web')
+      ? nullableText(source.web, 500)
+      : nullableText(previous.web, 500),
+    landing: Object.prototype.hasOwnProperty.call(source, 'landing')
+      ? nullableText(source.landing, 500)
+      : nullableText(previous.landing, 500),
+    socials: Object.prototype.hasOwnProperty.call(source, 'socials')
+      ? normalizeSocialUrls(source.socials)
+      : normalizeSocialUrls(previous.socials),
+  };
 }
 
 function normalizeStage(value) {
@@ -69,6 +104,13 @@ function mergeCompanyProfile(current, patch, {
   const nextCompanyName = fieldFromPatch(source, previous, 'companyName', 120)
     || nullableText(companyName, 120)
     || 'Empresa';
+  const urls = normalizeCompanyUrls(source.urls, previous.urls);
+  const websiteUrl = Object.prototype.hasOwnProperty.call(source, 'websiteUrl')
+    ? nullableText(source.websiteUrl, 500)
+    : Object.prototype.hasOwnProperty.call(asRecord(source.urls), 'web')
+      ? urls.web
+      : nullableText(previous.websiteUrl, 500) || urls.web;
+  urls.web = websiteUrl;
   return {
     version: PROFILE_VERSION,
     companyName: nextCompanyName,
@@ -83,18 +125,142 @@ function mergeCompanyProfile(current, patch, {
     industry: fieldFromPatch(source, previous, 'industry', 240),
     market: fieldFromPatch(source, previous, 'market', 240),
     brandVoice: fieldFromPatch(source, previous, 'brandVoice', 300),
-    websiteUrl: fieldFromPatch(source, previous, 'websiteUrl', 500),
+    websiteUrl,
+    urls,
     salesProcess: fieldFromPatch(source, previous, 'salesProcess', 600),
     autonomy: normalizeAutonomy(source.autonomy, previous.autonomy),
     updatedAt: now.toISOString(),
   };
 }
 
-function readCompanyProfile(project, { now = new Date() } = {}) {
+function profileFromCompanyRecord(company) {
+  if (!company) return {};
+  const brief = asRecord(company.brief);
+  const urls = normalizeCompanyUrls(company.urls, brief.urls);
+  return {
+    ...brief,
+    companyName: nullableText(company.name, 120) || nullableText(brief.companyName, 120),
+    mission: nullableText(company.mission, 600) || nullableText(brief.mission, 600),
+    vision: nullableText(company.vision, 600) || nullableText(brief.vision, 600),
+    industry: nullableText(company.industry, 240) || nullableText(brief.industry, 240),
+    websiteUrl: urls.web || nullableText(brief.websiteUrl, 500),
+    urls,
+  };
+}
+
+function readCompanyProfile(project, { now = new Date(), company = null } = {}) {
   const brief = asRecord(project?.brief);
-  return mergeCompanyProfile({}, asRecord(brief.companyProfile), {
+  return mergeCompanyProfile({}, company
+    ? profileFromCompanyRecord(company)
+    : asRecord(brief.companyProfile), {
     companyName: project?.name,
     now,
+  });
+}
+
+function companyIdForLink(linkId) {
+  const id = boundedText(linkId, 140);
+  return id ? `company_${id}` : null;
+}
+
+function companyDataFromProfile({ profile, project, link }) {
+  const normalized = mergeCompanyProfile({}, profile, {
+    companyName: project?.name,
+  });
+  return {
+    userId: project.userId,
+    projectId: link.projectId,
+    organizationId: link?.organizationId || project.organizationId || null,
+    name: normalized.companyName,
+    mission: normalized.mission,
+    vision: normalized.vision,
+    urls: normalized.urls,
+    industry: normalized.industry,
+    brief: normalized,
+  };
+}
+
+async function loadCompanyLink({ prisma, projectId }) {
+  if (!prisma?.companyCodexProjectLink?.findUnique || !projectId) return null;
+  return prisma.companyCodexProjectLink.findUnique({
+    where: { codexProjectId: projectId },
+    select: {
+      id: true,
+      projectId: true,
+      codexProjectId: true,
+      companyId: true,
+      organizationId: true,
+      company: {
+        select: {
+          id: true,
+          userId: true,
+          organizationId: true,
+          name: true,
+          mission: true,
+          vision: true,
+          urls: true,
+          industry: true,
+          brief: true,
+          updatedAt: true,
+        },
+      },
+    },
+  }).catch(() => null);
+}
+
+async function upsertCompanyForLink({
+  prisma,
+  project,
+  profile,
+  link = null,
+}) {
+  if (
+    !prisma?.company?.upsert
+    || !prisma?.companyCodexProjectLink?.update
+    || !project?.id
+  ) return null;
+  const resolvedLink = link || await loadCompanyLink({ prisma, projectId: project.id });
+  if (!resolvedLink?.id) return null;
+  const id = resolvedLink.companyId || companyIdForLink(resolvedLink.id);
+  if (!id) return null;
+  const data = companyDataFromProfile({ profile, project, link: resolvedLink });
+  const company = await prisma.company.upsert({
+    where: { projectId: resolvedLink.projectId },
+    create: { id, ...data },
+    update: data,
+  });
+  if (resolvedLink.companyId !== company.id) {
+    await prisma.companyCodexProjectLink.update({
+      where: { id: resolvedLink.id },
+      data: { companyId: company.id },
+    });
+  }
+  return company;
+}
+
+async function ensureCompanyForAssociation({
+  prisma,
+  companyProject,
+  codexProject,
+  link,
+  now = new Date(),
+}) {
+  if (!companyProject || !codexProject || !link) return null;
+  const profile = mergeCompanyProfile(
+    {},
+    asRecord(asRecord(codexProject.brief).companyProfile),
+    { companyName: companyProject.name, now },
+  );
+  return upsertCompanyForLink({
+    prisma,
+    project: {
+      ...codexProject,
+      userId: companyProject.userId,
+      organizationId: link.organizationId || companyProject.organizationId || null,
+      name: companyProject.name,
+    },
+    profile,
+    link,
   });
 }
 
@@ -105,7 +271,18 @@ async function writeCompanyProfile({
   now = new Date(),
 }) {
   if (!prisma?.codexProject?.update || !project?.id) return null;
-  let profile = null;
+  const link = await loadCompanyLink({ prisma, projectId: project.id });
+  const profile = mergeCompanyProfile(
+    readCompanyProfile(project, { now, company: link?.company || null }),
+    patch,
+    { companyName: project.name, now },
+  );
+  await upsertCompanyForLink({
+    prisma,
+    project,
+    profile,
+    link,
+  });
   await mutateProjectBrief({
     prisma,
     projectId: project.id,
@@ -114,14 +291,69 @@ async function writeCompanyProfile({
       const source = Object.keys(brief).length
         ? asBriefRecord(brief)
         : asBriefRecord(sourceProject.brief);
-      profile = mergeCompanyProfile(source.companyProfile, patch, {
-        companyName: sourceProject.name,
-        now,
-      });
       return { ...source, companyProfile: profile };
     },
   });
   return profile;
+}
+
+function renderCompanySoul(profile) {
+  const normalized = mergeCompanyProfile({}, profile);
+  const socials = Object.entries(asRecord(normalized.urls?.socials));
+  const presence = [
+    normalized.urls?.web ? `- Web: ${normalized.urls.web}` : null,
+    normalized.urls?.landing ? `- Landing: ${normalized.urls.landing}` : null,
+    ...socials.map(([platform, url]) => `- ${platform}: ${url}`),
+  ].filter(Boolean);
+  return [
+    `# SOUL.md — ${normalized.companyName}`,
+    '',
+    '> Contexto de empresa generado por SiraGPT desde el modelo Company. Es identidad operativa, no evidencia de conexiones o publicaciones.',
+    '',
+    '## Identidad',
+    `- Empresa: ${normalized.companyName}`,
+    `- Industria: ${normalized.industry || 'no confirmada'}`,
+    `- Etapa: ${normalized.stage}`,
+    '',
+    '## Propósito',
+    `- Misión: ${normalized.mission || 'no confirmada'}`,
+    `- Visión: ${normalized.vision || 'no confirmada'}`,
+    '',
+    '## Negocio',
+    `- Oferta: ${normalized.offer || 'no confirmada'}`,
+    `- Cliente objetivo: ${normalized.targetCustomer || 'no confirmado'}`,
+    `- Modelo de negocio: ${normalized.businessModel || 'no confirmado'}`,
+    `- Mercado: ${normalized.market || 'no confirmado'}`,
+    `- Voz de marca: ${normalized.brandVoice || 'no confirmada'}`,
+    '',
+    '## Presencia declarada',
+    ...(presence.length ? presence : ['- No hay URLs confirmadas.']),
+    '',
+    '## Límites',
+    '- Distingue hechos verificados de hipótesis y pide evidencia antes de afirmar resultados.',
+    '- Investigar y preparar borradores no autoriza publicar, enviar correos ni contactar leads.',
+    '- Toda acción externa conserva la política de conexión, consentimiento, revisión y auditoría de la empresa.',
+  ].join('\n').slice(0, 8_000);
+}
+
+async function loadCompanySoul({
+  prisma,
+  project,
+  now = new Date(),
+}) {
+  if (!project) return null;
+  const link = await loadCompanyLink({ prisma, projectId: project.id });
+  const profile = readCompanyProfile(project, {
+    now,
+    company: link?.company || null,
+  });
+  return {
+    version: SOUL_VERSION,
+    filename: 'SOUL.md',
+    companyId: link?.company?.id || link?.companyId || null,
+    source: link?.company ? 'company_model' : 'legacy_company_profile',
+    content: renderCompanySoul(profile),
+  };
 }
 
 function normalizeSocialConnections(value) {
@@ -274,17 +506,14 @@ async function loadCompanyOperatingContext({
   project,
   now = new Date(),
 } = {}) {
-  const profile = readCompanyProfile(project, { now });
   const assignmentStorageAvailable = Boolean(
     prisma?.companyCodexProjectLink?.findUnique
     && prisma?.projectConnectorAssignment?.findMany,
   );
   const link = assignmentStorageAvailable
-    ? await prisma.companyCodexProjectLink.findUnique({
-      where: { codexProjectId: project.id },
-      select: { projectId: true },
-    }).catch(() => null)
+    ? await loadCompanyLink({ prisma, projectId: project.id })
     : null;
+  const profile = readCompanyProfile(project, { now, company: link?.company || null });
   const assignedConnectorRows = link
     ? await prisma.projectConnectorAssignment.findMany({
       where: { projectId: link.projectId, status: 'active' },
@@ -336,9 +565,16 @@ async function loadCompanyOperatingContext({
     accountIds: assignedConnectors.map((account) => account.id).sort(),
   };
   const context = {
+    companyId: link?.company?.id || link?.companyId || null,
     profile,
     readiness,
     businessAudit: businessAnalyzer.readBusinessAudit(project),
+    soul: {
+      version: SOUL_VERSION,
+      filename: 'SOUL.md',
+      source: link?.company ? 'company_model' : 'legacy_company_profile',
+      content: renderCompanySoul(profile),
+    },
     safeguards: {
       externalActionsRequireConnection: true,
       defaultExternalMode: 'review',
@@ -366,6 +602,9 @@ function formatCompanyContext(context) {
     .filter((item) => ['ready_to_execute', 'review_required'].includes(item?.status))
     .slice(0, 5);
   return [
+    source.soul?.content
+      ? `SOUL.md generado:\n${boundedText(source.soul.content, 8_000)}`
+      : null,
     `Empresa: ${boundedText(profile.companyName, 120) || 'sin nombre confirmado'}`,
     `Etapa: ${normalizeStage(profile.stage)}`,
     `Misión: ${boundedText(profile.mission, 600) || 'no confirmada'}`,
@@ -391,14 +630,25 @@ function formatCompanyContext(context) {
 }
 
 module.exports = {
+  COMPANY_MODEL_VERSION,
   PROFILE_VERSION,
+  SOUL_VERSION,
   EXTERNAL_ACTION_MODES,
+  companyDataFromProfile,
+  companyIdForLink,
   deriveCompanyReadiness,
+  ensureCompanyForAssociation,
   formatCompanyContext,
+  loadCompanyLink,
   loadCompanyOperatingContext,
+  loadCompanySoul,
   mergeCompanyProfile,
   normalizeAutonomy,
+  normalizeCompanyUrls,
   normalizeSocialConnections,
+  profileFromCompanyRecord,
   readCompanyProfile,
+  renderCompanySoul,
+  upsertCompanyForLink,
   writeCompanyProfile,
 };

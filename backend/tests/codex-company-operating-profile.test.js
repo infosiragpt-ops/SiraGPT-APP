@@ -316,3 +316,121 @@ test('formatted CEO context calls out verified gaps and anti-hallucination rule'
   assert.match(text, /no conviertas una hipótesis en hecho/);
   assert.match(text, /Redes sociales/);
 });
+
+test('canonical Company fields generate bounded SOUL context for the main agent', async () => {
+  const context = await company.loadCompanyOperatingContext({
+    project: {
+      id: 'codex-1',
+      userId: 'u1',
+      name: 'Legacy runtime name',
+      status: 'ready',
+      workspacePath: 'projects/codex-1',
+      brief: { companyProfile: { mission: 'Legacy mission' } },
+    },
+    now: NOW,
+    prisma: {
+      companyCodexProjectLink: {
+        findUnique: async () => ({
+          id: 'link-1',
+          projectId: 'project-1',
+          companyId: 'company-1',
+          company: {
+            id: 'company-1',
+            name: 'Acme',
+            mission: 'Reducir trabajo manual.',
+            vision: 'Operaciones verificables.',
+            industry: 'Software',
+            urls: {
+              web: 'https://acme.test',
+              socials: { linkedin: 'https://linkedin.com/company/acme' },
+            },
+            brief: { brandVoice: 'Clara y directa' },
+          },
+        }),
+      },
+      projectConnectorAssignment: { findMany: async () => [] },
+      socialConnection: { findMany: async () => [] },
+      user: { findUnique: async () => ({ gmailTokens: null }) },
+    },
+  });
+
+  assert.equal(context.companyId, 'company-1');
+  assert.equal(context.profile.companyName, 'Acme');
+  assert.equal(context.profile.mission, 'Reducir trabajo manual.');
+  assert.match(context.soul.content, /# SOUL\.md — Acme/);
+  assert.match(context.soul.content, /Industria: Software/);
+  assert.match(context.soul.content, /linkedin\.com\/company\/acme/);
+
+  const prompt = require('../src/services/codex/agent-loop').buildSystemPrompt({
+    project: { name: 'Runtime' },
+    sourcePrompt: 'Construye',
+    companySoul: context.soul.content,
+  });
+  assert.match(prompt, /SOUL\.md DE LA EMPRESA/);
+  assert.match(prompt, /Reducir trabajo manual/);
+});
+
+test('profile writes update Company and the legacy brief compatibility shadow', async () => {
+  const state = {
+    project: {
+      id: 'codex-1',
+      userId: 'u1',
+      organizationId: null,
+      name: 'Acme runtime',
+      brief: { objectives: [{ id: 'okr-1', title: 'Crecer' }] },
+    },
+    company: null,
+    companyId: null,
+  };
+  const prisma = {
+    companyCodexProjectLink: {
+      findUnique: async () => ({
+        id: 'link-1',
+        projectId: 'project-1',
+        codexProjectId: 'codex-1',
+        companyId: state.companyId,
+        organizationId: null,
+        company: state.company,
+      }),
+      update: async ({ data }) => {
+        state.companyId = data.companyId;
+        return { id: 'link-1', ...data };
+      },
+    },
+    company: {
+      upsert: async ({ where, create, update }) => {
+        state.company = state.company
+          ? { ...state.company, ...update }
+          : { ...create, id: where.id };
+        return state.company;
+      },
+    },
+    codexProject: {
+      findUnique: async () => state.project,
+      update: async ({ data }) => {
+        state.project = { ...state.project, ...data };
+        return state.project;
+      },
+    },
+  };
+
+  await company.writeCompanyProfile({
+    prisma,
+    project: state.project,
+    patch: {
+      companyName: 'Acme',
+      mission: 'Automatizar con evidencia.',
+      vision: 'Ser referente operativo.',
+      industry: 'Software',
+      urls: { web: 'https://acme.test' },
+    },
+    now: NOW,
+  });
+
+  assert.equal(state.companyId, 'company_link-1');
+  assert.equal(state.company.name, 'Acme');
+  assert.equal(state.company.mission, 'Automatizar con evidencia.');
+  assert.equal(state.company.urls.web, 'https://acme.test');
+  assert.equal(state.project.brief.companyProfile.vision, 'Ser referente operativo.');
+  assert.equal(state.project.brief.objectives[0].id, 'okr-1');
+});

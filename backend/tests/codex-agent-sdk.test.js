@@ -411,3 +411,21 @@ test('debugger specialist has the diagnose-and-fix toolset and method prompt', (
   assert.match(def.systemPrompt, /causa raíz/i);
   assert.match(def.systemPrompt, /@ts-ignore/);
 });
+
+test('runSubagent injects the generated Company SOUL into every specialist', async () => {
+  const llmTurn = scriptedLlm([{ text: 'identidad recibida' }]);
+  await sdk.runSubagent({
+    name: 'planner',
+    task: 'Planea el siguiente paso',
+    deps: {
+      llmTurn,
+      runner: fakeRunner(),
+      project: 'p1',
+      companySoul: '# SOUL.md — Acme\n- Misión: operar con evidencia.',
+      env: { NODE_ENV: 'test' },
+    },
+  });
+
+  assert.match(llmTurn.seen[0].messages[0].content, /SOUL\.md DE LA EMPRESA/);
+  assert.match(llmTurn.seen[0].messages[0].content, /operar con evidencia/);
+});

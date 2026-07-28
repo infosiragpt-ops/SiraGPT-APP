@@ -382,6 +382,7 @@ function buildSystemPrompt({
   parallelSubagents = false,
   parallelTools = true,
   openclawPromptBlock = '',
+  companySoul = '',
 }) {
   const appsMode = isAppsPrompt(sourcePrompt);
   const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
@@ -416,6 +417,10 @@ function buildSystemPrompt({
   }
   if (openclawPromptBlock) {
     lines.push(openclawPromptBlock);
+  }
+  if (companySoul) {
+    lines.push('SOUL.md DE LA EMPRESA (generado desde Company; aplica a esta corrida y a todos sus subagentes):');
+    lines.push(String(companySoul).slice(0, 8000));
   }
   if (forceViteApps) {
     lines.push('Este run viene de /apps. Stack OBLIGATORIO: React 18 + Vite 7 + TypeScript (el starter ya provisto). Construye componentes .tsx en src/; el entry es src/main.tsx que monta <App/> en #root.');
@@ -1553,6 +1558,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
+  const companySoul = deps.companySoul != null
+    ? deps.companySoul
+    : String((await require('./company-operating-profile')
+      .loadCompanySoul({ prisma, project })
+      .catch(() => null))?.content || '');
   const progressContext = deps.progressContext != null
     ? deps.progressContext
     : progressLedger.formatProgressContext(project);
@@ -1581,6 +1591,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         parallelSubagents,
         parallelTools,
         openclawPromptBlock: deps.openclawPromptBlock || '',
+        companySoul,
       }),
     },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
@@ -1636,6 +1647,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         tier: run?.tier || null,
         model: run?.model || null,
         projectSettings,
+        companySoul,
         onUsage: (usage) => {
           recordLlmUsageOnce(metrics, usage);
         },
@@ -2066,6 +2078,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         modelCapabilities,
         modelProvider: activeProvider.provider,
         projectSettings,
+        companySoul,
         backgroundTaskService: deps.backgroundTaskService,
         watchBackgroundTask: (task, service) => {
           if (!task?.taskId || typeof service?.watch !== 'function') return;
@@ -3044,7 +3057,16 @@ async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {
   if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 
   if (run.mode === 'plan') {
-    return planMode.runPlanMode({ run, project, deps: { ...deps, llmTurn } });
+    const companySoul = deps.companySoul != null
+      ? deps.companySoul
+      : String((await require('./company-operating-profile')
+        .loadCompanySoul({ prisma: deps.prisma, project })
+        .catch(() => null))?.content || '');
+    return planMode.runPlanMode({
+      run,
+      project,
+      deps: { ...deps, llmTurn, companySoul },
+    });
   }
   return runBuildLoop({ run, project, signal, isCancelled, deps: { ...deps, llmTurn } });
 }

@@ -870,6 +870,7 @@ const TOOLS = {
             emitAction: ctx.emitAction,
             customAgents,
             projectSettings: ctx.projectSettings,
+            companySoul: ctx.companySoul,
             modelCapabilities: ctx.modelCapabilities,
             modelProvider: ctx.modelProvider,
           },
