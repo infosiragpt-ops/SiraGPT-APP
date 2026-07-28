@@ -156,6 +156,44 @@ export function isConversationalMessage(text: string): boolean {
 }
 
 /**
+ * A conversational /code turn that still needs the read-only web toolchain.
+ *
+ * CEO Office deliberately keeps ordinary chat on the low-latency plain stream,
+ * but a pasted URL or an explicit request to search/read the public web is not
+ * ordinary small-talk. Those turns request deterministic server-side web
+ * grounding before the same plain stream runs. The general agent toolset stays
+ * disabled so untrusted pages cannot reach shell, files or private connectors.
+ */
+export function needsWebTools(text: string): boolean {
+  const raw = clean(text)
+  if (!raw) return false
+  if (/\bhttps?:\/\/[^\s<>"')\]]+/i.test(raw)) return true
+
+  const normalized = raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+
+  const webTarget =
+    /\b(?:internet|web|google|navegador|browser|sitio|website|pagina|url|enlace|link)\b/
+  const readAction =
+    /\b(?:busca|buscar|buscame|investiga|investigar|consulta|consultar|verifica|verificar|revisa|revisar|accede|acceder|abre|abrir|lee|leer|navega|navegar|raspa|scrapea|scrapear|search|browse|fetch|open|read)\b/
+  const publicDomain =
+    /\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)(?:\/[^\s]*)?\b/
+  const discoveryAction =
+    /\b(?:busca|buscar|buscame|investiga|investigar|research|search|googlea|googlear)\b/
+  const localCodeTarget =
+    /\b(?:codigo|code|bug|error|proyecto|project|workspace|repositorio|repo|archivo|file|componente|component)\b/
+  const freshFact =
+    /\b(?:hoy|actual|actualmente|reciente|ultimo|ultimos|noticias|clima|precio|precios|cotizacion|competidor|competidores|mercado|latest|current|today|news|weather|price|prices)\b/
+
+  if (webTarget.test(normalized) && readAction.test(normalized)) return true
+  if (publicDomain.test(normalized) && readAction.test(normalized)) return true
+  if (discoveryAction.test(normalized) && !localCodeTarget.test(normalized)) return true
+  return freshFact.test(normalized) && (readAction.test(normalized) || raw.includes("?"))
+}
+
+/**
  * A build ORDER with no content of its own: "ok, créala", "hazlo",
  * "constrúyela ya", "procede", "adelante". The substance lives in the
  * previous conversation — briefFromConversation() recovers it so the build

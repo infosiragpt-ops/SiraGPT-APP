@@ -78,10 +78,86 @@ test('stop-stream handler is authenticated and namespaces the map by user id', (
 });
 
 test('generate registers/unregisters controllers under the namespaced key', () => {
-  const setMatches = src.match(
-    /streamControllers\.set\(`\$\{req\.user\.id\}:\$\{streamId\}`,\s*controller\)/g,
+  assert.match(
+    src,
+    /__streamControllerKey\s*=\s*`\$\{req\.user\.id\}:\$\{streamId\}`/,
+    'main generate path must construct a caller-namespaced key',
   );
-  assert.ok(setMatches && setMatches.length >= 2, 'both generate paths must register namespaced');
+  assert.match(
+    src,
+    /streamControllers\.set\(__streamControllerKey,\s*controller\)/,
+    'main generate path must register with the namespaced key',
+  );
+  assert.match(
+    src,
+    /streamControllers\.get\(__streamControllerKey\)\s*===\s*controller[\s\S]*streamControllers\.delete\(__streamControllerKey\)/,
+    'main generate path may only unregister its own controller',
+  );
+  assert.match(
+    src,
+    /streamControllers\.set\(`\$\{req\.user\.id\}:\$\{streamId\}`,\s*controller\)/,
+    'secondary generate path must register with the caller-namespaced key',
+  );
+});
+
+// ── Finding 3: URL grounding must stay read-only ───────────────────────────
+
+test('public-web grounding returns through an isolated context-free stream', () => {
+  assert.match(
+    src,
+    /body\('enableWebGrounding'\)\.optional\(\)\.isBoolean\(\)/,
+    'the explicit web-grounding flag must be validated',
+  );
+  assert.match(
+    src,
+    /__publicWebReadonly\s*&&\s*\(chatId\s*\|\|\s*\(Array\.isArray\(files\)/,
+    'read-only web grounding must reject chat history and private attachments',
+  );
+  assert.match(
+    src,
+    /__publicWebReadonly\s*&&\s*!__publicWebQuery/,
+    'read-only web grounding must require a separate current-message query',
+  );
+  assert.match(
+    src,
+    /__publicWebReadonly\s*&&\s*\(typeof streamId\s*!==\s*'string'/,
+    'read-only web grounding must require the stable stream id used for retry dedupe',
+  );
+
+  const branchStart = src.indexOf('// ── Public web read-only turn: isolated early-return path');
+  const privatePrefetch = src.indexOf('// ── Parallel prefetch: chat context + user profile + org settings', branchStart);
+  assert.ok(branchStart > -1 && privatePrefetch > branchStart, 'isolated branch must precede private prefetch');
+  const branch = src.slice(branchStart, privatePrefetch);
+
+  assert.match(branch, /enrichWithWebSearch\(__publicWebQuery,/);
+  assert.match(
+    src,
+    /publicWebTurnDedupe\.acquire\(\{[\s\S]*?userId,[\s\S]*?streamId,[\s\S]*?query:\s*__publicWebQuery/,
+    'full-turn retry dedupe must bind the authenticated user, stream and current query',
+  );
+  assert.match(branch, /chatId:\s*null/);
+  assert.match(branch, /files:\s*\[\]/);
+  assert.match(branch, /qualityGuard:\s*false/);
+  assert.match(branch, /scrubPublicWebResponse\(fullResponseContent/);
+  assert.match(branch, /try\s*\{\s*res\.write\('data: \[DONE\]/);
+  assert.match(branch, /\n\s*return;\s*\n\s*}/);
+  assert.doesNotMatch(branch, /activeMemory|userProfile|attributionSuite|saliencyTracker|ciraEngine|CREATE_DOCUMENT:/);
+
+  assert.match(
+    src,
+    /if\s*\(!__publicWebReadonly\)\s*\{\s*req\._filterCtx\s*=/,
+    'memory-capable pre/post filters must not run in the isolated branch',
+  );
+  assert.match(
+    src,
+    /if\s*\(userId\s*&&\s*!__publicWebReadonly\s*&&\s*typeof prompt === 'string'\s*&&\s*fullResponseContent\)/,
+    'untrusted web output must not be extracted into durable memory/profile state',
+  );
+  assert.match(
+    src,
+    /if\s*\(isAuth\s*&&\s*!__publicWebReadonly\)\s*\{\s*\/\/ Tolerant CREATE_DOCUMENT matcher/,
+    'untrusted web output must not reach CREATE_DOCUMENT or file persistence',
+  );
 });
 
 // ── Behavioural proof of the namespaced-map ownership semantics ────────────

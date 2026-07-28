@@ -38,6 +38,24 @@ function sseResponse(content = 'done') {
   }
 }
 
+function sseEvents(events: Array<Record<string, unknown>>) {
+  const encoder = new TextEncoder()
+  const payload = `${events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload))
+      controller.close()
+    },
+  })
+
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body,
+  }
+}
+
 function jsonError(status: number, payload: Record<string, unknown>) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -94,6 +112,32 @@ describe('generateAIStream cookie session CSRF transport', () => {
     expect(options.credentials).toBe('include')
     expect(headers.get('X-CSRF-Token')).toBe('csrf-cookie-session')
     expect(headers.has('Authorization')).toBe(false)
+  })
+
+  it('delivers replacement frames through onReplace without appending them', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-replace')
+    mockFetch.mockResolvedValueOnce(sseEvents([
+      { content: 'respuesta parcial' },
+      { replace: true, content: 'respuesta saneada' },
+    ]))
+    const chunks: string[] = []
+    const replacements: string[] = []
+    const onClose = vi.fn()
+    const onError = vi.fn()
+
+    await api.generateAIStream(
+      streamData,
+      chunk => chunks.push(chunk),
+      onClose,
+      onError,
+      undefined,
+      { onReplace: content => replacements.push(content) },
+    )
+
+    expect(chunks.join('')).toBe('respuesta parcial')
+    expect(replacements).toEqual(['respuesta saneada'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
   })
 
   it('prepares cookie credentials and CSRF again before a transport reconnect', async () => {

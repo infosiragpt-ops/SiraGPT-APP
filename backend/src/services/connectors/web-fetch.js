@@ -103,29 +103,59 @@ function clampInt(raw, fallback, min, max) {
 
 function isPrivateOrReservedAddress(addr) {
   if (typeof addr !== 'string' || !addr) return true; // fail-closed
-  const family = net.isIP(addr);
+  let normalized = addr.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  const family = net.isIP(normalized);
   if (family === 0) return false; // not an IP literal
   if (family === 4) {
-    const parts = addr.split('.').map((n) => Number.parseInt(n, 10));
-    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return true;
-    const [a, b] = parts;
+    const parts = normalized.split('.').map((n) => Number.parseInt(n, 10));
+    if (
+      parts.length !== 4
+      || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
+    ) return true;
+    const [a, b, c] = parts;
     if (a === 10) return true;                      // 10.0.0.0/8
     if (a === 127) return true;                     // loopback
     if (a === 0) return true;                       // 0.0.0.0/8
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT / Tailscale + Alibaba metadata
+    if (a === 168 && b === 63 && c === 129 && parts[3] === 16) return true; // Azure WireServer
     if (a === 169 && b === 254) return true;        // link-local + cloud metadata
     if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
     if (a === 192 && b === 168) return true;        // 192.168.0.0/16
+    if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments
+    if (a === 192 && b === 0 && c === 2) return true; // TEST-NET-1
+    if (a === 192 && b === 88 && c === 99) return true; // deprecated 6to4 relay anycast
     if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
-    if (a === 224) return true;                     // multicast
+    if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
+    if (a >= 224 && a <= 239) return true;           // multicast 224.0.0.0/4
     if (a >= 240) return true;                      // reserved
     return false;
   }
   // IPv6
-  const lower = addr.toLowerCase();
+  // DNS resolvers and injectable lookup functions may return an expanded
+  // spelling (`0:0:0:0:0:ffff:7f00:1`). Canonicalize before matching so the
+  // SSRF defense cannot be bypassed by textual representation.
+  try {
+    normalized = new URL(`http://[${normalized}]/`).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  } catch {
+    return true;
+  }
+  const lower = normalized;
   if (lower === '::1' || lower === '::') return true;
-  if (lower.startsWith('fe80:')) return true;       // link-local
-  if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // ULA
-  if (lower.startsWith('ff')) return true;          // multicast
+  const firstHextet = Number.parseInt(lower.split(':', 1)[0], 16);
+  const leadingHextets = lower.split(':');
+  const secondHextet = Number.parseInt(leadingHextets[1] || '0', 16);
+  if (Number.isInteger(firstHextet)) {
+    if ((firstHextet & 0xffc0) === 0xfe80) return true; // link-local fe80::/10 (fe80-febf)
+    if ((firstHextet & 0xffc0) === 0xfec0) return true; // deprecated site-local fec0::/10
+    if ((firstHextet & 0xfe00) === 0xfc00) return true; // ULA fc00::/7
+    if ((firstHextet & 0xff00) === 0xff00) return true; // multicast ff00::/8
+    if (firstHextet === 0x0100 && secondHextet === 0) return true; // discard-only 100::/64
+    if (firstHextet === 0x2001 && secondHextet === 0x0db8) return true; // documentation
+    if (firstHextet === 0x2001 && secondHextet === 0x0002) return true; // benchmarking
+    if (firstHextet === 0x3fff && (secondHextet & 0xf000) === 0) return true; // documentation 3fff::/20
+    if (firstHextet === 0x5f00) return true; // segment-routing SIDs, not public endpoints
+  }
   // IPv4-mapped / IPv4-compatible IPv6 (e.g. ::ffff:127.0.0.1, ::169.254.169.254,
   // or the hex form ::ffff:7f00:1) can smuggle a private/loopback/metadata IPv4
   // past the prefix checks above. Extract the embedded IPv4 and re-check it.
