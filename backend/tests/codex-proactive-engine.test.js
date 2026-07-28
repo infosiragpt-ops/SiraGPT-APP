@@ -37,6 +37,9 @@ function fakePrisma({ project, activeRun = null, recentRuns = [] } = {}) {
     codexRunMetric: {
       aggregate: async () => ({ _sum: { costOriginalUsd: 0, costAppliedUsd: 0 } }),
     },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
 }
 

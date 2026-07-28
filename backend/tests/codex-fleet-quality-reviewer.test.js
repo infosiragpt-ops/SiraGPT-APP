@@ -237,6 +237,65 @@ test('fleet QA is opt-in in every environment', () => {
   assert.equal(fleetQa.enabled({ NODE_ENV: 'production', CODEX_FLEET_QA_ENABLED: '1' }), true);
 });
 
+test('fleet QA fails closed in production when project settings cannot be read', async () => {
+  const prisma = fakePrisma(PROJECT);
+  const result = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-settings' },
+    mergeSha: SHAS.one,
+    deps: {
+      runner: fakeRunner(),
+    },
+    env: {
+      NODE_ENV: 'production',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+  });
+  assert.equal(result.action, 'budget_blocked');
+  assert.equal(result.reason, 'fleet_qa_project_settings_store_unavailable');
+});
+
+test('fleet QA enforces the project budget before invoking the reviewer', async () => {
+  const prisma = fakePrisma(PROJECT);
+  let reviewerCalls = 0;
+  const result = await fleetQa.reviewMergedCheckpoint({
+    prisma,
+    project: PROJECT,
+    run: { id: 'run-project-budget' },
+    mergeSha: SHAS.one,
+    deps: {
+      runner: fakeRunner(),
+      checkProjectBudget: async () => ({
+        allowed: false,
+        reason: 'daily_budget_exceeded',
+        dailyBudgetUsd: 1,
+        costTodayUsd: 1,
+      }),
+      checkBudget: async () => ({
+        allowed: true,
+        dailyBudgetUsd: 100,
+        costTodayUsd: 1,
+      }),
+      agentSdk: {
+        runSubagent: async () => {
+          reviewerCalls += 1;
+          return { ok: true, result: '{"findings":[]}' };
+        },
+      },
+    },
+    env: {
+      NODE_ENV: 'test',
+      CODEX_FLEET_QA_ENABLED: '1',
+      CODEX_FLEET_QA_EVERY_MERGES: '1',
+    },
+  });
+  assert.equal(result.action, 'budget_blocked');
+  assert.equal(result.reason, 'daily_budget_exceeded');
+  assert.equal(reviewerCalls, 0);
+});
+
 test('finding task keys are stable when reviewer titles change', () => {
   const finding = {
     title: 'First title',
@@ -366,12 +425,13 @@ test('an enqueue failure retries the persisted swarm without rerunning the revie
   assert.equal(state.pendingEnqueue, null);
 });
 
-test('a budget change after review leaves remediation pending and never enqueues it', async () => {
+test('a budget change after review blocks remediation before tasks are materialized', async () => {
   const prisma = fakePrisma(PROJECT, {
     id: 'swarm-budget-enqueue',
     status: 'running',
     tasks: [],
   });
+  let appendCalls = 0;
   let enqueueCalls = 0;
   const result = await fleetQa.reviewMergedCheckpoint({
     prisma,
@@ -382,7 +442,7 @@ test('a budget change after review leaves remediation pending and never enqueues
       runner: fakeRunner(),
       idFactory: () => 'review-budget-enqueue',
       checkBudget: async ({ phase }) => (
-        phase === 'enqueue'
+        phase === 'materialize'
           ? { allowed: false, reason: 'daily_budget_exceeded', dailyBudgetUsd: 5, costTodayUsd: 5 }
           : { allowed: true, dailyBudgetUsd: 5, costTodayUsd: 4 }
       ),
@@ -403,11 +463,14 @@ test('a budget change after review leaves remediation pending and never enqueues
         }),
       },
       orchestrator: {
-        appendTasks: async ({ tasks }) => ({
-          swarm: { id: 'swarm-budget-enqueue' },
-          appended: tasks,
-          replayed: false,
-        }),
+        appendTasks: async ({ tasks }) => {
+          appendCalls += 1;
+          return {
+            swarm: { id: 'swarm-budget-enqueue' },
+            appended: tasks,
+            replayed: false,
+          };
+        },
       },
       enqueueSwarm: async () => {
         enqueueCalls += 1;
@@ -423,10 +486,14 @@ test('a budget change after review leaves remediation pending and never enqueues
   });
 
   assert.equal(result.action, 'review_deferred');
-  assert.match(result.error, /fleet_qa_enqueue_budget_blocked:daily_budget_exceeded/);
+  assert.match(result.error, /fleet_qa_materialize_budget_blocked:daily_budget_exceeded/);
+  assert.equal(result.swarmId, null);
+  assert.equal(result.tasksCreated, 0);
+  assert.equal(appendCalls, 0, 'an active worker cannot claim tasks before the final budget gate');
   assert.equal(enqueueCalls, 0);
   const state = fleetQa.normalizeState(prisma.state.project.brief.fleetQa);
-  assert.equal(state.pendingEnqueue.swarmId, 'swarm-budget-enqueue');
+  assert.equal(state.pendingEnqueue, null);
+  assert.equal(state.inFlight, null);
   assert.equal(state.lastReviewedSha, null);
 });
 

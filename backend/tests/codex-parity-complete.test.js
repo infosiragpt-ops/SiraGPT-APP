@@ -192,6 +192,9 @@ test('project daily budget aggregates metrics and fails closed in production', a
         return { _sum: { costAppliedUsd: 2.5 } };
       },
     },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
   const allowed = await checkProjectBudget({
     prisma,
@@ -228,6 +231,9 @@ test('project daily budget includes unpersisted cost from the active run', async
   const prisma = {
     codexRunMetric: {
       aggregate: async () => ({ _sum: { costOriginalUsd: 0.6, costAppliedUsd: 0 } }),
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
     },
   };
   const status = await checkProjectBudget({

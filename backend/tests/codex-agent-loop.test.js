@@ -323,6 +323,9 @@ test('runtime daily budget stops after the LLM response and before its tool call
         return { _sum: { costAppliedUsd: 0.6 } };
       },
     },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
   const f = fakeDeps({
     prisma,
@@ -401,6 +404,9 @@ test('a pooled run stops at its own reservation before executing proposed tools'
           poolBudgetReservationUsd: 0.5,
         },
       }),
+      findMany: async () => [],
+    },
+    codexUsageEntry: {
       findMany: async () => [],
     },
   };

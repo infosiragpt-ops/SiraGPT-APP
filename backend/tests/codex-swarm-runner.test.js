@@ -7,11 +7,74 @@ const {
   assertSwarmTaskBudgetAvailable,
   createSwarmUsageAccountant,
   dependencyContext,
+  loadSwarmProjectSettings,
   runReadOnlyTask,
   safeResult,
   startLeaseHeartbeat,
   waitForAutonomousRun,
 } = require('../src/services/codex/swarm-runner');
+
+test('swarm project settings fail closed in production when the workspace reader is unavailable', async () => {
+  await assert.rejects(
+    loadSwarmProjectSettings({
+      runner: {},
+      project: { id: 'project-1', brief: {} },
+      env: { NODE_ENV: 'production' },
+    }),
+    /swarm project settings store unavailable/,
+  );
+});
+
+test('read-only swarm preflight enforces the project budget before the company budget', async () => {
+  const prisma = {
+    codexRunMetric: {
+      findMany: async () => [{ costOriginalUsd: 0.02, costAppliedUsd: 0.02 }],
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
+  };
+  await assert.rejects(
+    assertSwarmTaskBudgetAvailable({
+      prisma,
+      project: {
+        id: 'project-1',
+        brief: { proactive: { configuredDailyBudgetUsd: 100 } },
+      },
+      task: { id: 'task-1', input: {} },
+      env: {
+        NODE_ENV: 'production',
+        CODEX_PROJECT_DAILY_BUDGET_USD: '0.01',
+      },
+      clock: () => new Date('2026-07-28T18:00:00.000Z'),
+    }),
+    /swarm_project_budget_blocked:daily_budget_exceeded/,
+  );
+});
+
+test('read-only swarm preflight fails closed when the autonomous usage ledger is unavailable', async () => {
+  const prisma = {
+    codexRunMetric: {
+      findMany: async () => [],
+    },
+  };
+  await assert.rejects(
+    assertSwarmTaskBudgetAvailable({
+      prisma,
+      project: {
+        id: 'project-1',
+        brief: { proactive: { configuredDailyBudgetUsd: 100 } },
+      },
+      task: { id: 'task-1', input: {} },
+      env: {
+        NODE_ENV: 'production',
+        CODEX_PROJECT_DAILY_BUDGET_USD: '10',
+      },
+      clock: () => new Date('2026-07-28T18:00:00.000Z'),
+    }),
+    /swarm_project_budget_blocked:budget_query_failed/,
+  );
+});
 
 test('read-only swarm preflight refuses a provider call after the company kill-switch', async () => {
   const prisma = {

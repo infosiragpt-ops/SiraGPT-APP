@@ -51,7 +51,11 @@ async function usageLedgerCostUsd({
   departmentPoolId = undefined,
   now = new Date(),
 }) {
-  if (!prisma?.codexUsageEntry?.findMany) return 0;
+  if (!prisma?.codexUsageEntry?.findMany) {
+    const error = new Error('codex autonomous usage aggregation unavailable');
+    error.code = 'budget_store_unavailable';
+    throw error;
+  }
   const rows = await prisma.codexUsageEntry.findMany({
     where: {
       projectId,

@@ -12,6 +12,7 @@ const {
 const { isCodexV2Enabled } = require('./flags');
 const runServiceDefault = require('./run-service');
 const projectBudget = require('./project-budget');
+const projectSettings = require('./project-settings');
 const usageLedger = require('./usage-ledger');
 const {
   CodexSwarmError,
@@ -128,10 +129,62 @@ function recordValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+async function assertProjectBudgetAvailable({
+  prisma,
+  project,
+  settings,
+  env,
+  now,
+}) {
+  const budget = await projectBudget.checkProjectBudget({
+    prisma,
+    projectId: project.id,
+    settings: settings || projectSettings.settingsFromProject(project),
+    env,
+    now,
+  });
+  if (!budget?.allowed) {
+    const error = new Error(`swarm_project_budget_blocked:${budget?.reason || 'unknown'}`);
+    error.code = budget?.reason === 'daily_budget_exceeded'
+      ? 'swarm_project_budget_exceeded'
+      : 'swarm_project_budget_check_failed';
+    error.budget = budget;
+    throw error;
+  }
+  return budget;
+}
+
+async function loadSwarmProjectSettings({
+  runner,
+  project,
+  env = process.env,
+}) {
+  if (typeof runner?.readFile !== 'function') {
+    if (env.NODE_ENV === 'production') {
+      const error = new Error('swarm project settings store unavailable');
+      error.code = 'swarm_project_settings_unavailable';
+      throw error;
+    }
+    return projectSettings.settingsFromProject(project);
+  }
+  const state = await projectSettings.loadProjectSettings({
+    runner,
+    projectId: project.id,
+    project,
+  });
+  if (state.error) {
+    const error = new Error(`swarm project settings unavailable: ${state.error}`);
+    error.code = 'swarm_project_settings_unavailable';
+    throw error;
+  }
+  return state.settings;
+}
+
 function createSwarmUsageAccountant({
   prisma,
   project,
   task,
+  settings = null,
   env = process.env,
   costResolver = null,
   idFactory = randomUUID,
@@ -165,11 +218,19 @@ function createSwarmUsageAccountant({
       Number(entry?.costAppliedUsd) || 0,
     );
 
+    const checkAt = clock();
+    await assertProjectBudgetAvailable({
+      prisma,
+      project,
+      settings,
+      env,
+      now: checkAt,
+    });
     const companyBudget = await projectBudget.checkCompanyDailyBudget({
       prisma,
       project,
       env,
-      now: clock(),
+      now: checkAt,
     });
     if (!companyBudget?.allowed) {
       const error = new Error(`swarm_company_budget_blocked:${companyBudget?.reason || 'unknown'}`);
@@ -189,7 +250,7 @@ function createSwarmUsageAccountant({
         reservationUsd,
         reservationUsageUsd: taskCostUsd,
         env,
-        now: clock(),
+        now: checkAt,
       });
       if (!poolBudget?.allowed) {
         const error = new Error(`swarm_department_budget_blocked:${poolBudget?.reason || 'unknown'}`);
@@ -209,14 +270,23 @@ async function assertSwarmTaskBudgetAvailable({
   prisma,
   project,
   task,
+  settings = null,
   env = process.env,
   clock = () => new Date(),
 }) {
+  const checkAt = clock();
+  await assertProjectBudgetAvailable({
+    prisma,
+    project,
+    settings,
+    env,
+    now: checkAt,
+  });
   const companyBudget = await projectBudget.checkCompanyDailyBudget({
     prisma,
     project,
     env,
-    now: clock(),
+    now: checkAt,
   });
   if (!companyBudget?.allowed) {
     const error = new Error(`swarm_company_budget_blocked:${companyBudget?.reason || 'unknown'}`);
@@ -241,7 +311,7 @@ async function assertSwarmTaskBudgetAvailable({
     reservationUsd,
     reservationUsageUsd: 0,
     env,
-    now: clock(),
+    now: checkAt,
   });
   if (!poolBudget?.allowed) {
     const error = new Error(`swarm_department_budget_blocked:${poolBudget?.reason || 'unknown'}`);
@@ -575,6 +645,7 @@ async function processClaimedTask({
   runService,
   env,
   webSearch,
+  settings = null,
   usageCostResolver = null,
   usageIdFactory = randomUUID,
   usageClock = () => new Date(),
@@ -590,6 +661,14 @@ async function processClaimedTask({
   });
   let result;
   try {
+    await assertSwarmTaskBudgetAvailable({
+      prisma,
+      project,
+      task,
+      settings,
+      env,
+      clock: usageClock,
+    });
     if ([TASK_ROLES.WRITER, TASK_ROLES.INTEGRATOR].includes(task.role)) {
       result = await createWriterRun({
         task,
@@ -601,13 +680,6 @@ async function processClaimedTask({
         env,
       });
     } else {
-      await assertSwarmTaskBudgetAvailable({
-        prisma,
-        project,
-        task,
-        env,
-        clock: usageClock,
-      });
       result = await runReadOnlyTask({
         task,
         swarm: progress.swarm,
@@ -621,6 +693,7 @@ async function processClaimedTask({
           prisma,
           project,
           task,
+          settings,
           env,
           costResolver: usageCostResolver,
           idFactory: usageIdFactory,
@@ -671,6 +744,11 @@ async function processSwarmJob({
   });
   if (!swarm) throw new CodexSwarmError('codex_swarm_not_found', 'Codex swarm not found.', 404);
   if (TERMINAL_SWARM_STATUSES.has(swarm.status)) return orchestrator.getProgress(swarm.id);
+  const settings = await loadSwarmProjectSettings({
+    runner,
+    project: swarm.project,
+    env,
+  });
 
   const runtimeConcurrency = Math.min(
     swarm.maxConcurrency,
@@ -706,6 +784,7 @@ async function processSwarmJob({
           runService,
           env,
           webSearch,
+          settings,
           usageCostResolver,
         });
       } catch (error) {
@@ -768,12 +847,14 @@ module.exports = {
   QUEUE_NAME,
   closeSwarmRuntime,
   assertSwarmTaskBudgetAvailable,
+  assertProjectBudgetAvailable,
   createIntegratorRun,
   createWriterRun,
   dependencyContext,
   createSwarmUsageAccountant,
   enqueueSwarm,
   getSwarmQueue,
+  loadSwarmProjectSettings,
   processClaimedTask,
   processSwarmJob,
   recoverSwarmJobs,

@@ -25,6 +25,7 @@ const {
 const agentSdkDefault = require('./agent-sdk');
 const { isCodexV2Enabled } = require('./flags');
 const projectBudget = require('./project-budget');
+const projectSettings = require('./project-settings');
 const {
   distributeTasksToPools,
   poolStatus,
@@ -71,6 +72,26 @@ function reviewLeaseMs(env = process.env) {
   const parsed = Number.parseInt(env.CODEX_FLEET_QA_LEASE_MS ?? '', 10);
   if (!Number.isFinite(parsed)) return DEFAULT_REVIEW_LEASE_MS;
   return Math.max(60_000, Math.min(4 * 60 * 60_000, parsed));
+}
+
+async function loadFleetProjectSettings({ runner, project, env = process.env }) {
+  if (typeof runner?.readFile !== 'function') {
+    if (env.NODE_ENV === 'production') {
+      return {
+        settings: null,
+        error: 'fleet_qa_project_settings_store_unavailable',
+      };
+    }
+    return {
+      settings: projectSettings.settingsFromProject(project),
+      error: null,
+    };
+  }
+  return projectSettings.loadProjectSettings({
+    runner,
+    projectId: project.id,
+    project,
+  });
 }
 
 async function findTrustPool({ prisma, projectId }) {
@@ -896,6 +917,37 @@ async function reviewMergedCheckpoint({
   ) {
     return { action: 'skipped_invalid_context' };
   }
+  const settingsState = await loadFleetProjectSettings({
+    runner: deps.runner,
+    project,
+    env,
+  });
+  if (settingsState.error) {
+    return {
+      action: 'budget_blocked',
+      reason: settingsState.error,
+      dailyBudgetUsd: null,
+      costTodayUsd: null,
+    };
+  }
+  const checkProjectBudget = (phase) => (
+    deps.checkProjectBudget
+      ? deps.checkProjectBudget({
+        prisma,
+        project,
+        settings: settingsState.settings,
+        env,
+        now: now(),
+        phase,
+      })
+      : projectBudget.checkProjectBudget({
+        prisma,
+        projectId: project.id,
+        settings: settingsState.settings,
+        env,
+        now: now(),
+      })
+  );
   const checkBudget = (phase) => (
     deps.checkBudget
       ? deps.checkBudget({
@@ -912,13 +964,17 @@ async function reviewMergedCheckpoint({
         now: now(),
       })
   );
-  const budget = await checkBudget('preflight');
-  if (!budget?.allowed) {
+  const [projectBudgetStatus, budget] = await Promise.all([
+    checkProjectBudget('preflight'),
+    checkBudget('preflight'),
+  ]);
+  if (!projectBudgetStatus?.allowed || !budget?.allowed) {
+    const blocked = !projectBudgetStatus?.allowed ? projectBudgetStatus : budget;
     return {
       action: 'budget_blocked',
-      reason: budget?.reason || 'budget_query_failed',
-      dailyBudgetUsd: budget?.dailyBudgetUsd ?? null,
-      costTodayUsd: budget?.costTodayUsd ?? null,
+      reason: blocked?.reason || 'budget_query_failed',
+      dailyBudgetUsd: blocked?.dailyBudgetUsd ?? null,
+      costTodayUsd: blocked?.costTodayUsd ?? null,
     };
   }
   const trustPool = await findTrustPool({ prisma, projectId: project.id });
@@ -1010,12 +1066,21 @@ async function reviewMergedCheckpoint({
           reviewId: review.id,
         });
         throwIfAborted(deps.signal);
-        const [runtimeBudget, runtimeTrustBudget] = await Promise.all([
+        const [runtimeProjectBudget, runtimeBudget, runtimeTrustBudget] = await Promise.all([
+          checkProjectBudget('runtime'),
           checkBudget('runtime'),
           checkTrustBudget('runtime'),
         ]);
-        if (!runtimeBudget?.allowed || !runtimeTrustBudget?.allowed) {
-          const blocked = !runtimeBudget?.allowed ? runtimeBudget : runtimeTrustBudget;
+        if (
+          !runtimeProjectBudget?.allowed
+          || !runtimeBudget?.allowed
+          || !runtimeTrustBudget?.allowed
+        ) {
+          const blocked = !runtimeProjectBudget?.allowed
+            ? runtimeProjectBudget
+            : !runtimeBudget?.allowed
+              ? runtimeBudget
+              : runtimeTrustBudget;
           const error = new Error(
             blocked?.reason === 'daily_budget_exceeded'
               ? 'fleet_qa_daily_budget_exceeded'
@@ -1043,6 +1108,40 @@ async function reviewMergedCheckpoint({
     }
     const findings = normalizeFindings(outcome.result, diff.files);
     if (!findings) throw new Error('fleet_qa_invalid_review_json');
+    if (findings.length) {
+      const [
+        materializeProjectBudget,
+        materializeBudget,
+        materializeTrustBudget,
+      ] = await Promise.all([
+        checkProjectBudget('materialize'),
+        checkBudget('materialize'),
+        checkTrustBudget('materialize'),
+      ]);
+      if (
+        !materializeProjectBudget?.allowed
+        || !materializeBudget?.allowed
+        || !materializeTrustBudget?.allowed
+      ) {
+        const blocked = !materializeProjectBudget?.allowed
+          ? materializeProjectBudget
+          : !materializeBudget?.allowed
+            ? materializeBudget
+            : materializeTrustBudget;
+        const error = new Error(
+          `fleet_qa_materialize_budget_blocked:${blocked?.reason || 'budget_query_failed'}`,
+        );
+        await failReview({ prisma, project, review, error });
+        return {
+          action: 'review_deferred',
+          reviewId: review.id,
+          headSha: review.headSha,
+          error: error.message,
+          swarmId: null,
+          tasksCreated: 0,
+        };
+      }
+    }
     const materialized = await materializeFindings({
       prisma,
       project,
@@ -1064,21 +1163,6 @@ async function reviewMergedCheckpoint({
         error: null,
         now,
       });
-      const [enqueueBudget, enqueueTrustBudget] = await Promise.all([
-        checkBudget('enqueue'),
-        checkTrustBudget('enqueue'),
-      ]);
-      if (!enqueueBudget?.allowed || !enqueueTrustBudget?.allowed) {
-        const blocked = !enqueueBudget?.allowed ? enqueueBudget : enqueueTrustBudget;
-        return {
-          action: 'review_deferred',
-          reviewId: review.id,
-          headSha: review.headSha,
-          error: `fleet_qa_enqueue_budget_blocked:${blocked?.reason || 'budget_query_failed'}`,
-          swarmId: materialized.swarmId,
-          tasksCreated: materialized.tasksCreated,
-        };
-      }
       const delivery = await retryPendingEnqueue({
         prisma,
         project,
