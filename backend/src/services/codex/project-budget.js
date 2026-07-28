@@ -139,6 +139,96 @@ function boundedNonNegative(value) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
+function taskBudgetReservationUsd(task, defaultReservationUsd = 0) {
+  const input = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
+    ? task.input
+    : {};
+  const explicit = boundedNonNegative(
+    input.projectBudgetReservationUsd ?? input.poolBudgetReservationUsd,
+  );
+  return explicit > 0 ? explicit : boundedNonNegative(defaultReservationUsd);
+}
+
+async function checkSwarmClaimBudget({
+  prisma,
+  projectId,
+  task,
+  projectDailyBudgetUsd = null,
+  companyDailyBudgetUsd = null,
+  defaultReservationUsd = 0,
+  now = new Date(),
+}) {
+  const projectLimit = projectDailyBudgetUsd == null
+    ? null
+    : boundedNonNegative(projectDailyBudgetUsd);
+  const companyLimit = companyDailyBudgetUsd == null
+    ? null
+    : boundedNonNegative(companyDailyBudgetUsd);
+  if (projectLimit == null && companyLimit == null) {
+    return { allowed: true, reason: 'unlimited' };
+  }
+  if (!prisma?.codexSwarmTask?.findMany) {
+    return { allowed: false, reason: 'swarm_budget_store_unavailable' };
+  }
+  try {
+    const runningTasks = await prisma.codexSwarmTask.findMany({
+      where: {
+        createdAt: { gte: utcDayStart(now) },
+        status: 'running',
+        swarm: { projectId },
+      },
+      select: { input: true },
+    });
+    const activeReservationsUsd = runningTasks.reduce(
+      (total, row) => total + taskBudgetReservationUsd(row, defaultReservationUsd),
+      0,
+    );
+    const reservationUsd = taskBudgetReservationUsd(task, defaultReservationUsd);
+    const persistedCostTodayUsd = await costTodayUsd({ prisma, projectId, now });
+    const projectedCostUsd = persistedCostTodayUsd + activeReservationsUsd + reservationUsd;
+    if (projectLimit != null && projectedCostUsd > projectLimit) {
+      return {
+        allowed: false,
+        reason: 'project_budget_limit',
+        projectDailyBudgetUsd: projectLimit,
+        companyDailyBudgetUsd: companyLimit,
+        persistedCostTodayUsd,
+        activeReservationsUsd,
+        reservationUsd,
+        projectedCostUsd,
+      };
+    }
+    if (companyLimit != null && projectedCostUsd > companyLimit) {
+      return {
+        allowed: false,
+        reason: 'company_budget_limit',
+        projectDailyBudgetUsd: projectLimit,
+        companyDailyBudgetUsd: companyLimit,
+        persistedCostTodayUsd,
+        activeReservationsUsd,
+        reservationUsd,
+        projectedCostUsd,
+      };
+    }
+    return {
+      allowed: true,
+      reason: 'swarm_budget_available',
+      projectDailyBudgetUsd: projectLimit,
+      companyDailyBudgetUsd: companyLimit,
+      persistedCostTodayUsd,
+      activeReservationsUsd,
+      reservationUsd,
+      projectedCostUsd,
+    };
+  } catch (error) {
+    return {
+      allowed: false,
+      reason: 'swarm_budget_query_failed',
+      error: String(error?.message || error).slice(0, 500),
+    };
+  }
+}
+
 async function activePoolReservationsUsd({
   prisma,
   projectId,
@@ -336,6 +426,8 @@ module.exports = {
   costTodayUsd,
   costTodayUsdForPool,
   usageLedgerCostUsd,
+  taskBudgetReservationUsd,
+  checkSwarmClaimBudget,
   activePoolReservationsUsd,
   checkProjectBudget,
   checkCompanyDailyBudget,

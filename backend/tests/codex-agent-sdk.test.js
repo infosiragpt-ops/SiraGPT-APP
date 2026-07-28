@@ -182,6 +182,33 @@ test('an awaitable usage gate stops tools and later turns when accounting reject
   assert.match(out.result, /daily_budget_exceeded/);
 });
 
+test('usage accounting errors can propagate to an owning scheduler for durable deferral', async () => {
+  const budgetError = new Error('swarm_project_budget_blocked:daily_budget_exceeded');
+  budgetError.code = 'swarm_project_budget_exceeded';
+  await assert.rejects(
+    sdk.runSubagent({
+      name: 'planner',
+      task: 'plan',
+      deps: {
+        llmTurn: scriptedLlm([
+          {
+            toolCalls: [{ id: 't', name: 'list_files', args: {} }],
+            usage: { tokensIn: 5, tokensOut: 2 },
+          },
+        ]),
+        runner: fakeRunner(),
+        project: 'p1',
+        env: { NODE_ENV: 'test' },
+        propagateUsageErrors: true,
+        onUsage: async () => {
+          throw budgetError;
+        },
+      },
+    }),
+    (error) => error === budgetError,
+  );
+});
+
 test('cancellation while publishing an action prevents the tool from starting', async () => {
   const cancellation = new AbortController();
   let runnerCalls = 0;

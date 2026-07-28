@@ -29,6 +29,7 @@ const DEFAULT_RUNTIME_CONCURRENCY = 8;
 const MAX_RUNTIME_CONCURRENCY = 32;
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_INTEGRATION_TIMEOUT_MS = 45 * 60_000;
+const DEFAULT_TASK_BUDGET_RESERVATION_USD = 0.25;
 
 let queue = null;
 let queueConnection = null;
@@ -127,6 +128,21 @@ function safeResult(outcome) {
 
 function recordValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function swarmClaimBudgetPolicy({
+  project,
+  settings,
+  env = process.env,
+}) {
+  const configuredReservation = Number(env.CODEX_SWARM_DEFAULT_RESERVATION_USD);
+  return {
+    projectDailyBudgetUsd: projectBudget.configuredBudgetUsd(settings, env),
+    companyDailyBudgetUsd: projectBudget.configuredCompanyBudgetUsd(project, env),
+    defaultReservationUsd: Number.isFinite(configuredReservation) && configuredReservation > 0
+      ? Math.min(100_000, configuredReservation)
+      : DEFAULT_TASK_BUDGET_RESERVATION_USD,
+  };
 }
 
 function isBudgetDeferralError(error) {
@@ -448,6 +464,7 @@ async function runReadOnlyTask({
       tier: swarm?.metadata?.tier || null,
       webSearch,
       onUsage,
+      propagateUsageErrors: true,
     },
   });
   return safeResult(outcome);
@@ -766,6 +783,11 @@ async function processSwarmJob({
     project: swarm.project,
     env,
   });
+  const budgetPolicy = swarmClaimBudgetPolicy({
+    project: swarm.project,
+    settings,
+    env,
+  });
 
   const runtimeConcurrency = Math.min(
     swarm.maxConcurrency,
@@ -784,13 +806,16 @@ async function processSwarmJob({
         workerId,
         claimId: `${workerId}:${randomUUID()}`,
         leaseMs: MAX_LEASE_MS,
+        budgetPolicy,
       });
       if (!claim.task) {
         if (claim.reason === 'swarm_paused') return;
-        if (claim.reason === 'department_pool_budget_limit') {
+        if (String(claim.reason || '').includes('budget')) {
           stopRequested = true;
           stopReason = claim.reason;
-          await orchestrator.pauseSwarm({ swarmId: swarm.id });
+          if (claim.reason === 'department_pool_budget_limit') {
+            await orchestrator.pauseSwarm({ swarmId: swarm.id });
+          }
           return;
         }
         const progress = await orchestrator.getProgress(swarm.id);
@@ -892,6 +917,7 @@ async function closeSwarmRuntime() {
 module.exports = {
   DEFAULT_INTEGRATION_TIMEOUT_MS,
   DEFAULT_RUNTIME_CONCURRENCY,
+  DEFAULT_TASK_BUDGET_RESERVATION_USD,
   MAX_RUNTIME_CONCURRENCY,
   QUEUE_NAME,
   closeSwarmRuntime,
@@ -911,6 +937,7 @@ module.exports = {
   requeueWriterTask,
   runReadOnlyTask,
   safeResult,
+  swarmClaimBudgetPolicy,
   startLeaseHeartbeat,
   startSwarmWorker,
   subagentForTask,

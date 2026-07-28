@@ -419,6 +419,7 @@ async function runQaReviewer({
       model: deps.model || null,
       signal: deps.signal,
       onUsage: deps.onUsage,
+      propagateUsageErrors: true,
       emitAction: deps.emitAction,
     },
   });

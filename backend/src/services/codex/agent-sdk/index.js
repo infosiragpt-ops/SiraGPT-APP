@@ -386,6 +386,7 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
         try {
           await deps.onUsage(turn.usage);
         } catch (error) {
+          if (deps.propagateUsageErrors === true) throw error;
           return done(
             false,
             `El subagente se detuvo durante la contabilidad de uso: ${String(error?.message || error)}`,

@@ -25,6 +25,7 @@ const {
   createPrismaSwarmRepository,
   normalizeAdditionalTasks,
 } = require('../src/services/codex/swarm-orchestrator');
+const { taskBudgetReservationUsd } = require('../src/services/codex/project-budget');
 
 function copy(value) {
   return structuredClone(value);
@@ -196,6 +197,7 @@ function createMemoryRepository() {
       leaseToken,
       now,
       leaseExpiresAt,
+      budgetPolicy,
     }) {
       const swarm = swarms.get(swarmId);
       if (!swarm) throw new CodexSwarmError('codex_swarm_not_found', 'not found', 404);
@@ -236,6 +238,33 @@ function createMemoryRepository() {
             ? 'writer_concurrency_limit'
             : 'no_ready_tasks',
         };
+      }
+      if (budgetPolicy) {
+        const activeReservationsUsd = running.reduce(
+          (total, row) => total + taskBudgetReservationUsd(
+            row,
+            budgetPolicy.defaultReservationUsd,
+          ),
+          0,
+        );
+        const projectedCostUsd = activeReservationsUsd + taskBudgetReservationUsd(
+          task,
+          budgetPolicy.defaultReservationUsd,
+        );
+        const projectBlocked = budgetPolicy.projectDailyBudgetUsd != null
+          && projectedCostUsd > budgetPolicy.projectDailyBudgetUsd;
+        const companyBlocked = budgetPolicy.companyDailyBudgetUsd != null
+          && projectedCostUsd > budgetPolicy.companyDailyBudgetUsd;
+        if (projectBlocked || companyBlocked) {
+          swarm.status = SWARM_STATUSES.PAUSED;
+          swarm.version += 1;
+          refresh(swarmId, now);
+          return {
+            task: null,
+            replayed: false,
+            reason: projectBlocked ? 'project_budget_limit' : 'company_budget_limit',
+          };
+        }
       }
       Object.assign(task, {
         status: TASK_STATUSES.RUNNING,
@@ -1125,6 +1154,43 @@ test('budget deferral releases the lease, preserves the task and pauses the swar
   });
   assert.equal(blocked.task, null);
   assert.equal(blocked.reason, 'swarm_paused');
+});
+
+test('claim-time reservations atomically prevent a second worker from oversubscribing budget', async () => {
+  const { orchestrator } = createHarness();
+  const swarm = await createBasicSwarm(orchestrator, {
+    tasks: [
+      { key: 'audit-a', role: TASK_ROLES.READ_ONLY },
+      { key: 'audit-b', role: TASK_ROLES.READ_ONLY },
+    ],
+    maxConcurrency: 2,
+  });
+  const budgetPolicy = {
+    projectDailyBudgetUsd: 0.25,
+    companyDailyBudgetUsd: 1,
+    defaultReservationUsd: 0.25,
+  };
+  const first = await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-1',
+    claimId: 'claim-budget-a',
+    budgetPolicy,
+  });
+  const second = await orchestrator.claimNextTask({
+    swarmId: swarm.id,
+    workerId: 'worker-2',
+    claimId: 'claim-budget-b',
+    budgetPolicy,
+  });
+  const progress = await orchestrator.getProgress(swarm.id);
+
+  assert.equal(first.task.key, 'audit-a');
+  assert.equal(second.task, null);
+  assert.equal(second.reason, 'project_budget_limit');
+  assert.equal(progress.swarm.status, SWARM_STATUSES.PAUSED);
+  assert.equal(progress.progress.counts.running, 1);
+  assert.equal(progress.progress.counts.queued, 1);
+  assert.equal(progress.tasks.find((task) => task.key === 'audit-b').attemptCount, 0);
 });
 
 test('aggregate progress reports statuses, roles and active writers', () => {

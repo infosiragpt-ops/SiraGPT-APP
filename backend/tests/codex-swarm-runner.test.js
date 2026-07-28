@@ -13,6 +13,7 @@ const {
   runReadOnlyTask,
   safeResult,
   startLeaseHeartbeat,
+  swarmClaimBudgetPolicy,
   waitForAutonomousRun,
 } = require('../src/services/codex/swarm-runner');
 
@@ -59,7 +60,10 @@ test('a reached project budget releases the claimed task and stops before claimi
   const deferred = [];
   const failed = [];
   const orchestrator = {
-    async claimNextTask() {
+    async claimNextTask({ budgetPolicy }) {
+      assert.equal(budgetPolicy.projectDailyBudgetUsd, 0.01);
+      assert.equal(budgetPolicy.companyDailyBudgetUsd, 100);
+      assert.equal(budgetPolicy.defaultReservationUsd, 0.25);
       claimCalls += 1;
       return claimCalls <= tasks.length
         ? { task: structuredClone(tasks[claimCalls - 1]) }
@@ -123,6 +127,27 @@ test('a reached project budget releases the claimed task and stops before claimi
   assert.equal(deferred[0].taskId, 'task-1');
   assert.match(deferred[0].reason, /swarm_project_budget_blocked:daily_budget_exceeded/);
   assert.equal(failed.length, 0);
+});
+
+test('swarm claim policy uses project, company and nonzero default reservations', () => {
+  assert.deepEqual(
+    swarmClaimBudgetPolicy({
+      project: {
+        id: 'project-1',
+        brief: { proactive: { configuredDailyBudgetUsd: 5 } },
+      },
+      settings: { budget: { dailyUsd: 2 } },
+      env: {
+        NODE_ENV: 'production',
+        CODEX_SWARM_DEFAULT_RESERVATION_USD: '0',
+      },
+    }),
+    {
+      projectDailyBudgetUsd: 2,
+      companyDailyBudgetUsd: 5,
+      defaultReservationUsd: 0.25,
+    },
+  );
 });
 
 test('swarm project settings fail closed in production when the workspace reader is unavailable', async () => {
