@@ -15,6 +15,10 @@ WORKDIR /app
 
 RUN apk add --no-cache libc6-compat
 
+# The frontend uses the bundled CPU/WASM runtime. Avoid downloading the
+# optional Linux CUDA provider from NuGet during a CPU-only image build.
+ENV ONNXRUNTIME_NODE_INSTALL=skip
+
 # Install deps separately for layer caching
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package-lock.json ./backend/
