@@ -77,6 +77,92 @@ export function hasBuildVerb(text: string): boolean {
   return BUILD_VERB.test(text.toLowerCase())
 }
 
+function normalizeCodeIntent(text: string): string {
+  return clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:'’]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+/** Educational, explanatory or explicitly negated code wording is read-only. */
+export function isCodeInformationRequest(text: string): boolean {
+  const normalized = normalizeCodeIntent(text)
+  if (!normalized) return false
+  if (
+    /^(?:como\b|que\b|cual(?:es)?\b|por que\b|explicame\b|explica\b|dime como\b|quiero saber\b|necesito saber\b|quiero aprender\b|necesito aprender\b|puedes explicarme\b|podrias explicarme\b|me explicas\b|ayudame a entender\b|ensename (?:a|como)\b|muestrame como\b|tutorial\b|guia\b|pasos para\b|how\b|what\b|why\b|show me how\b|teach me how\b)/.test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+  const isQuestion = /^[¿]/.test(clean(text)) || /\?\s*$/.test(clean(text))
+  const explicitRequestQuestion =
+    /^(?:(?:por favor|please) )?(?:puedes|podrias|can you|could you)\b/.test(normalized)
+    || /^(?:por favor|please) (?:cambia|modifica|edita|corrige|arregla|agrega|anade|incluye|elimina|borra|quita|actualiza|reemplaza|renombra|mueve|instala|configura|sube|publica|despliega|sincroniza|change|edit|update|delete|remove|publish|upload|deploy|fix|add|install|configure|rename|move|sync)\b/.test(
+      normalized,
+    )
+  if (
+    isQuestion
+    && !explicitRequestQuestion
+    && /^(?:cambia|modifica|edita|corrige|arregla|agrega|anade|incluye|elimina|borra|quita|actualiza|reemplaza|renombra|mueve|instala|configura|sube|publica|despliega|sincroniza|change|edit|update|delete|remove|publish|upload|deploy|fix|add|install|configure|rename|move|sync)\b/.test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+
+  // Negation is fail-closed: in a preview session even a terse "no hagas
+  // nada" must never fall through to the generic patch branch.
+  if (
+    /^(?:(?:por favor|please) )?(?:no\b|nunca\b|do not\b|don t\b|never\b)/.test(normalized)
+    || /^(?:quiero|necesito) que no\b/.test(normalized)
+    || /^(?:(?:por favor )?sin) (?:hacer|tocar|cambiar|modificar|editar|corregir|arreglar|agregar|anadir|incluir|eliminar|borrar|quitar|actualizar|reemplazar|renombrar|mover|instalar|configurar|subir|publicar|desplegar|sincronizar|commit|push)\b/.test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+  const mentionedMutation =
+    "(?:cambi[a-z]*|modifi[a-z]*|edit[a-z]*|corr(?:eg|ij)[a-z]*|arregl[a-z]*|agreg[a-z]*|anad[a-z]*|inclu[a-z]*|elimin[a-z]*|borr[a-z]*|quit[a-z]*|actuali[a-z]*|reempla[a-z]*|renombr[a-z]*|muev[a-z]*|mov[a-z]*|instal[a-z]*|configur[a-z]*|sub(?:e|ir|elo|ela|as|an|amos)[a-z]*|publi[a-z]*|despleg[a-z]*|sincron[a-z]*|toc[a-z]*|(?:hag[a-z]*|hacer) (?:un )?(?:commit|push)|commit|push|chang[a-z]*|updat[a-z]*|delet[a-z]*|remov[a-z]*|publish[a-z]*|upload[a-z]*|deploy[a-z]*|fix[a-z]*|add[a-z]*|install[a-z]*|renam[a-z]*|sync[a-z]*)"
+  if (
+    new RegExp(
+      `\\b(?:no|nunca|never|not|do not|don t)\\b(?: [a-z0-9_-]+){0,5} ${mentionedMutation}\\b`,
+    ).test(normalized)
+    || new RegExp(`\\bsin\\b(?: [a-z0-9_-]+){0,4} ${mentionedMutation}\\b`).test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+  return /\b(?:solo|solamente|just) (?:explicame|explica|dime|explain|tell me)\b/.test(
+    normalized,
+  )
+}
+
+/** Explicit mutation of an existing project, including publish/version-control actions. */
+export function isCodeWriteRequest(text: string): boolean {
+  const normalized = normalizeCodeIntent(text)
+  if (isCodeInformationRequest(text)) return false
+
+  const writeVerb =
+    "(?:cambia(?:r|lo|la|s)?|cambies|modifica(?:r|lo|la|s)?|modifiques|edita(?:r|lo|la|s)?|edites|corrige(?:lo|la|s)?|corrijas|corregir|arregla(?:r|lo|la|s)?|arregles|agrega(?:r|lo|la|s)?|agregues|anade(?:r|lo|la|s)?|anadas|incluye(?:lo|la|s)?|incluyas|incluir|elimina(?:r|lo|la|s)?|elimines|borra(?:r|lo|la|s)?|borres|quita(?:r|lo|la|s)?|quites|actualiza(?:r|lo|la|s)?|actualices|reemplaza(?:r|lo|la|s)?|reemplaces|renombra(?:r|lo|la|s)?|renombres|mueve(?:r|lo|la|s)?|muevas|instala(?:r|lo|la|s)?|instales|configura(?:r|lo|la|s)?|configures|sube|subir|subelo|subas|publica|publicar|publicalo|publiques|despliega|desplegar|despliegues|sincroniza|sincronizar|sincronices|commit|push|change|edit|update|delete|remove|publish|upload|deploy|fix|add|install|configure|rename|move|sync)"
+  const directPrefix =
+    "(?:(?:por favor|please) )?(?:(?:puedes|podrias|quiero que|necesito que|debes|vamos a|can you|could you) )?"
+  if (new RegExp(`^${directPrefix}${writeVerb}\\b`).test(normalized)) return true
+  if (new RegExp(`^${directPrefix}(?:haz|hagas|make|do) (?:un |a )?(?:commit|push)\\b`).test(normalized)) {
+    return true
+  }
+
+  // A read/review step may precede the actual mutation in the same order:
+  // "revisa el proyecto y luego súbelo a GitHub".
+  return new RegExp(
+    `\\b(?:y(?: luego)?|despues|entonces) (?:${directPrefix})?${writeVerb}\\b`,
+  ).test(normalized)
+}
+
 /** Short social greeting: should stay instant and never open the app intake. */
 export function isQuickGreeting(text: string): boolean {
   const raw = clean(text)
@@ -176,8 +262,14 @@ export function needsWebTools(text: string): boolean {
 
   const webTarget =
     /\b(?:internet|web|google|navegador|browser|sitio|website|pagina|url|enlace|link)\b/
+  const publicCodeHost =
+    /\b(?:github|gitlab|bitbucket|codeberg|sourceforge)\b/
   const readAction =
     /\b(?:busca|buscar|buscame|investiga|investigar|consulta|consultar|verifica|verificar|revisa|revisar|accede|acceder|abre|abrir|lee|leer|navega|navegar|raspa|scrapea|scrapear|search|browse|fetch|open|read)\b/
+  const localCodeOperation =
+    /\b(?:workspace|codigo local|repositorio local|repo local|proyecto local|mi proyecto|este proyecto|esta aplicacion|archivos? locales?|working tree|rama local)\b/
+  const codeHostWriteAction =
+    /\b(?:sube|subir|subelo|publica|publicar|publicalo|push|commit|clona|clonar|clone|sincroniza|sincronizar|despliega|desplegar|deploy)\b/
   const publicDomain =
     /\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)(?:\/[^\s]*)?\b/
   const discoveryAction =
@@ -188,9 +280,145 @@ export function needsWebTools(text: string): boolean {
     /\b(?:hoy|actual|actualmente|reciente|ultimo|ultimos|noticias|clima|precio|precios|cotizacion|competidor|competidores|mercado|latest|current|today|news|weather|price|prices)\b/
 
   if (webTarget.test(normalized) && readAction.test(normalized)) return true
+  if (
+    publicCodeHost.test(normalized)
+    && readAction.test(normalized)
+    && !localCodeOperation.test(normalized)
+    && !codeHostWriteAction.test(normalized)
+  ) {
+    return true
+  }
   if (publicDomain.test(normalized) && readAction.test(normalized)) return true
   if (discoveryAction.test(normalized) && !localCodeTarget.test(normalized)) return true
   return freshFact.test(normalized) && (readAction.test(normalized) || raw.includes("?"))
+}
+
+type WebConversationTurn = Readonly<{ role: string; content: string }>
+
+const WEB_FOLLOW_UP_ACK =
+  /^(?:(?:si|yes|claro(?: que si)?|dale|ok(?:ey)?|vale|de acuerdo)(?: (?:(?:hazlo|buscalo|investigalo|consultalo|verificalo|abrelo|leelo|busca|investiga|consulta|verifica|abre|lee|procede|adelante)(?: ya| ahora)?|go ahead|do it))?|(?:hazlo|buscalo|investigalo|consultalo|verificalo|abrelo|leelo|busca|investiga|consulta|verifica|abre|lee|procede|adelante)(?: ya| ahora)?|go ahead|do it)$/
+const WEB_ACTION_OR_TARGET =
+  /\b(?:busca|buscar|busco|busque|investiga|investigar|consulta|consultar|verifica|verificar|accede|acceder|abre|abrir|lee|leer|navega|navegar|github|gitlab|bitbucket|codeberg|sourceforge|internet|web|sitio|website|url|enlace|link|repositorio|repo|search|browse|fetch|open|read)\b/
+const WEB_OFFER =
+  /\b(?:quieres|deseas|prefieres|puedo|podria|debo|hago|lo busco|lo investigo|lo consulto|lo verifico|lo abro|lo leo|shall i|should i|want me to|would you like me to)\b/
+const DEICTIC_WEB_TARGET =
+  /\b(?:su|sus|ese|esa|eso|este|esta|esto|aquel|aquella|ella|ello|dicho|dicha|anterior)\b/
+
+function normalizeWebFollowUp(text: string): string {
+  return clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function isWebFollowUpAck(text: string): boolean {
+  const normalized = normalizeWebFollowUp(text)
+    .replace(/\b(?:por favor|please)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  return WEB_FOLLOW_UP_ACK.test(normalized)
+}
+
+function normalizePublicHostname(hostname: string): string | null {
+  const normalized = hostname.toLowerCase().replace(/^www\./, "")
+  return /^(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)$/.test(
+    normalized,
+  )
+    ? normalized
+    : null
+}
+
+function lastPublicHostname(turns: ReadonlyArray<WebConversationTurn>): string | null {
+  let userTurnsWithoutTarget = 0
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (!turn || turn.role !== "user") continue
+    const content = clean(turn.content)
+    if (!content) continue
+
+    const urls = content.match(/https?:\/\/[^\s<>"')\]]+/gi) || []
+    for (let urlIndex = urls.length - 1; urlIndex >= 0; urlIndex -= 1) {
+      try {
+        const hostname = normalizePublicHostname(
+          new URL(urls[urlIndex].replace(/[.,;:!?]+$/g, "")).hostname,
+        )
+        if (hostname) return hostname
+      } catch {
+        // Keep looking for another explicit public target.
+      }
+    }
+
+    const domains = content.match(
+      /\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)\b/gi,
+    )
+    if (domains?.length) return normalizePublicHostname(domains[domains.length - 1])
+
+    // Do not inherit a hostname across an unrelated user topic. A single
+    // acknowledgement may bridge the immediately preceding public-web target,
+    // but arbitrary older domains are never carried into a new lookup.
+    userTurnsWithoutTarget += 1
+    if (!isWebFollowUpAck(content) || userTurnsWithoutTarget > 1) return null
+  }
+  return null
+}
+
+function resolveDeicticWebTarget(
+  request: string,
+  priorTurns: ReadonlyArray<WebConversationTurn>,
+): string {
+  if (/\bhttps?:\/\//i.test(request)) return request
+  if (!DEICTIC_WEB_TARGET.test(normalizeWebFollowUp(request))) return request
+  const hostname = lastPublicHostname(priorTurns)
+  return hostname ? `${request}\nObjetivo público referido: ${hostname}` : request
+}
+
+/**
+ * Resolve the safe public-web query for the current /code turn.
+ *
+ * This keeps multi-turn confirmations such as "sí" in read-only web mode
+ * instead of letting them fall into the code engine. Only the latest explicit
+ * web request and, when needed, one public hostname are carried forward; the
+ * full chat transcript and private workspace context never leave this scope.
+ */
+export function buildWebGroundingQuery(
+  text: string,
+  turns: ReadonlyArray<WebConversationTurn>,
+): string | null {
+  const raw = clean(text)
+  if (!raw) return null
+
+  // Resolve contextual confirmations before treating words such as "busca"
+  // as a new, targetless lookup. This preserves the previous public objective.
+  if (isWebFollowUpAck(raw)) {
+    let previousIndex = turns.length - 1
+    while (previousIndex >= 0 && !clean(turns[previousIndex]?.content || "")) previousIndex -= 1
+    const previous = previousIndex >= 0 ? turns[previousIndex] : null
+    const previousNormalized = normalizeWebFollowUp(previous?.content || "")
+    if (
+      previous
+      && previous.role === "assistant"
+      && WEB_ACTION_OR_TARGET.test(previousNormalized)
+      && WEB_OFFER.test(previousNormalized)
+    ) {
+      for (let index = previousIndex - 1; index >= 0; index -= 1) {
+        const turn = turns[index]
+        if (!turn || turn.role !== "user") continue
+        const request = clean(turn.content)
+        if (!request || !needsWebTools(request)) continue
+        const resolved = resolveDeicticWebTarget(request, turns.slice(0, index))
+        return `${resolved}\nEl usuario confirmó que se realice ahora. Responde con el resultado y no pidas otra confirmación.`
+      }
+    }
+  }
+
+  if (needsWebTools(raw)) {
+    return resolveDeicticWebTarget(raw, turns)
+  }
+
+  return null
 }
 
 /**
@@ -305,8 +533,25 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "generate", context: seedGoal(state.context, text), tier: "deterministic" }
   }
 
-  // 6) Iterating on an already-built app.
+  // 6) Informational intent stays read-only in every app/build phase.
+  // Explicit write requests phrased as questions ("¿puedes cambiar...?") are
+  // excluded and continue to the mutation classifier below.
+  if (
+    isCodeInformationRequest(text)
+    || (isConversationalMessage(text) && !isCodeWriteRequest(text))
+  ) {
+    return { type: "passthrough" }
+  }
+
+  // 7) Iterating on an already-built app.
   if (state.phase === "preview" && !isBuildRequest(text) && text.length > 0) {
+    return { type: "patch", instruction: text }
+  }
+
+  if (
+    (signal.mode === "app" || signal.mode === "build")
+    && isCodeWriteRequest(text)
+  ) {
     return { type: "patch", instruction: text }
   }
 
@@ -318,12 +563,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     (signal.mode === "app" && text.length > 80)
   const isStart = (signal.mode === "app" || signal.mode === "build") && isBuildSeed
 
-  // 7) Intake gate (app/build). A conversational question mid-intake gets a
-  //    CHAT answer instead of being stuffed into a slot and force-generating
-  //    (a stalled intake used to swallow "¿puedes ayudarme?" into a build).
-  if (inIntake && isConversationalMessage(text) && !isBuildRequest(text)) {
-    return { type: "passthrough" }
-  }
+  // 8) Intake/build gate.
   if (isStart || inIntake) {
     if (inIntake) {
       const idx = Math.max(0, state.intakeStep - 1) // the slot we just asked about
@@ -334,7 +574,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "generate", context: seedAutonomousBrief(state.context, text), tier }
   }
 
-  // 8) Default (e.g. app-mode follow-up that is not a build request).
+  // 9) Default (e.g. app-mode follow-up that is not a build request).
   return { type: "passthrough" }
 }
 

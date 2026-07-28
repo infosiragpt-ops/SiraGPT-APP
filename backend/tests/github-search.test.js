@@ -114,12 +114,15 @@ test('normaliseRepo maps GitHub fields to the canonical shape', () => {
     open_issues_count: 3, language: 'TypeScript', topics: ['x'],
     license: { spdx_id: 'MIT' }, default_branch: 'main', size: 99,
     archived: false, fork: false, pushed_at: '2024-01-01T00:00:00Z',
+    private: false, visibility: 'public',
   });
   assert.equal(r.type, 'repository');
   assert.equal(r.fullName, 'a/b');
   assert.equal(r.owner, 'a');
   assert.equal(r.stars, 42);
   assert.equal(r.license, 'MIT');
+  assert.equal(r.private, false);
+  assert.equal(r.visibility, 'public');
   assert.deepEqual(r.topics, ['x']);
 });
 

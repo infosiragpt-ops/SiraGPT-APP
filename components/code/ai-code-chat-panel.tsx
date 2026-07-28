@@ -112,14 +112,16 @@ import {
 } from "@/lib/code-chat-metrics"
 import { defaultAgentState, type AgentBuildContext, type AgentPhase, type BuildErrorVerdict } from "@/lib/code-agent/types"
 import {
+  buildWebGroundingQuery,
   classifyBuildError,
   buildDeterministicPreviewPatches,
   isBuildRequest,
+  isCodeInformationRequest,
+  isCodeWriteRequest,
   briefFromConversation,
   isBareBuildCommand,
   isConversationalMessage,
   isQuickGreeting,
-  needsWebTools,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
   promptFromContext,
@@ -1684,6 +1686,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
          *  build rail nor "Aplicando cambios" — the agent is talking, not
          *  building. Implies no file work in this turn. */
         conversational?: boolean
+        /** Resolved current public-web request. It may carry one safe public
+         *  hostname from a prior user turn, but never the full transcript. */
+        webGroundingQuery?: string
         /** Phrasing for the spoken completion digest (default "patch");
          *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
         spokenKind?: "patch" | "debug"
@@ -1723,7 +1728,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // thinking label while the reply streams. CodeAgentProgress renders null
       // when agentPhases is absent, so the rail simply never appears.
       const conversational = !!override?.conversational
-      const webGroundedConversation = conversational && needsWebTools(text)
+      const webGroundingQuery = conversational
+        ? override?.webGroundingQuery?.trim() || buildWebGroundingQuery(text, turns)
+        : null
+      const webGroundedConversation = Boolean(webGroundingQuery)
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
@@ -1832,7 +1840,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // never gain access to code, shell, files or private connectors.
             disableAgentic: true,
             enableWebGrounding: webGroundedConversation,
-            webGroundingQuery: webGroundedConversation ? text : undefined,
+            webGroundingQuery: webGroundingQuery || undefined,
           },
           (chunk) => {
             assistantText += chunk
@@ -3710,13 +3718,23 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // app because "quiero" counts as a build verb). Applies ALWAYS — a stalled
       // intake used to swallow "¿puedes ayudarme?" into a build; slot answers
       // ("una cafetería") are not conversational, so the FSM still gets them.
-      if (isConversationalMessage(text) || (needsWebTools(text) && !isBuildRequest(text))) {
+      const webGroundingQuery = buildWebGroundingQuery(text, turns)
+      const codeWriteRequest = isCodeWriteRequest(text)
+      if (
+        !codeWriteRequest
+        && (
+          isCodeInformationRequest(text)
+          || isConversationalMessage(text)
+          || (webGroundingQuery && !isBuildRequest(text))
+        )
+      ) {
         if (activeModelName) {
           await sendPrompt(text, {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
             autoApply: false,
             plainStyle: true,
             conversational: true,
+            webGroundingQuery: webGroundingQuery || undefined,
             files: attachedFileIds,
           })
         } else {
@@ -3852,32 +3870,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           return
         }
         default:
-          // Ask/Plan/Image are read-only: they must stream an answer via
-          // sendPrompt (autoApply stays false because composerMode !== "app")
-          // and must NEVER route into runCodexEngine/runEngine, which apply files.
-          if (attachedFileIds.length > 0 && activeModelName) {
-            await sendPrompt(text, {
-              autoApply: composerMode === "app" || composerMode === "build",
-              files: attachedFileIds,
-            })
-            return
-          }
-          if ((composerMode === "app" || composerMode === "build") && codexAvailable) {
-            // Codex build mode iterates on the session's existing project
-            // (after syncing the local workspace into it). A failed sync falls
-            // through to the next tier as if Codex were unavailable.
-            const out = await runCodexEngine(buildText, sid, { iterate: true, displayText: text })
-            if (out !== "workspace_sync_failed") return
-          }
-          if (
-            (composerMode === "app" || composerMode === "build") &&
-            engineMode &&
-            engineAvailable
-          ) {
-            await runEngine(buildText, sid, { displayText: text })
-          } else {
-            await sendPrompt(text, { autoApply: composerMode === "app" || composerMode === "build" })
-          }
+          // `passthrough` has no explicit write intent. Keep it in read-only
+          // conversation even when the composer is visually in App mode; only
+          // generate/patch/debug actions may enter a code-writing engine.
+          await sendPrompt(text, {
+            autoApply: false,
+            files: attachedFileIds,
+          })
+          return
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

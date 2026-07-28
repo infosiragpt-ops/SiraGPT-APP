@@ -26,6 +26,7 @@
  *     type:'repository', id, fullName, name, owner, description, url, htmlUrl,
  *     homepage, stars, forks, watchers, openIssues, language, topics[], license,
  *     createdAt, updatedAt, pushedAt, archived, isFork, defaultBranch, sizeKb,
+ *     private, visibility,
  *   }
  *   code → { type:'code', name, path, repository, htmlUrl, url, sha }
  *   issue → {
@@ -234,6 +235,14 @@ function buildRepoQuery(query, opts = {}) {
 }
 
 function normaliseRepo(r) {
+  const privateFlag = typeof r.private === 'boolean' ? r.private : null;
+  const visibility = typeof r.visibility === 'string'
+    ? r.visibility.toLowerCase()
+    : privateFlag === false
+      ? 'public'
+      : privateFlag === true
+        ? 'private'
+        : null;
   return {
     type: 'repository',
     id: r.id,
@@ -258,6 +267,8 @@ function normaliseRepo(r) {
     isFork: !!r.fork,
     defaultBranch: r.default_branch || null,
     sizeKb: typeof r.size === 'number' ? r.size : null,
+    private: privateFlag,
+    visibility,
   };
 }
 
