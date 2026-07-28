@@ -1,6 +1,7 @@
 'use strict';
 
 const externalActions = require('./external-actions');
+const resourceAccess = require('./company-resource-access');
 
 const CATEGORIES = new Set(['lead', 'support', 'billing', 'feedback', 'other']);
 const URGENCIES = new Set(['low', 'normal', 'high', 'critical']);
@@ -89,32 +90,36 @@ async function triageSocialConversations({
   const list = listInteractions
     || require('../../social-company/conversations').listSocialInteractions;
   const sender = sendReply || null;
-  const connections = await prisma.socialConnection.findMany({
-    where: { userId: project.userId },
-    orderBy: { updatedAt: 'desc' },
-    take: 20,
+  const authorized = await resourceAccess.authorizedSocialConnectionsForDepartment({
+    prisma,
+    project,
+    departmentId: resourceAccess.CUSTOMER_SUCCESS_DEPARTMENT_ID,
   });
-  if (!connections.length) {
-    return {
-      action: 'social_not_connected',
-      items: [],
-      actions: [],
-      errors: [],
-    };
-  }
+  const connections = authorized.connections;
 
   const limit = Math.max(1, Math.min(50, Number(maxResults) || 20));
-  const settled = await Promise.allSettled(connections.map(async (connection) => ({
-    connection,
-    interactions: await list({
-      connection,
+  const settled = await Promise.allSettled(connections.map(async (connection) => {
+    await resourceAccess.requireExternalActionResourceAccess({
       prisma,
-      env,
-      fetchImpl,
-      vault,
-      limit,
-    }),
-  })));
+      project,
+      kind: 'social_reply',
+      payload: {
+        platform: connection.platform,
+        connectionId: connection.id,
+      },
+    });
+    return {
+      connection,
+      interactions: await list({
+        connection,
+        prisma,
+        env,
+        fetchImpl,
+        vault,
+        limit,
+      }),
+    };
+  }));
   const errors = [];
   const byKey = new Map();
   for (let index = 0; index < settled.length; index += 1) {
@@ -163,6 +168,10 @@ async function triageSocialConversations({
     project,
     companyContext,
     kind: 'social_reply',
+    payload: {
+      platform: connections[0].platform,
+      connectionId: connections[0].id,
+    },
     env,
     now: now(),
   });

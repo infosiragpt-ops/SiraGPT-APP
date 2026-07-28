@@ -98,12 +98,17 @@ import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-sl
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
+  associatedCodexProjectIdForCompany,
+  shouldAcceptCompanyAssociationResponse,
+} from "@/lib/company-association-scope"
+import {
   companySocialApi,
   type CompanySocialOperations,
   type CompanySocialPlatform,
   type CompanySocialPolicy,
   type CompanySocialPost,
 } from "@/lib/company-social-api"
+import { assignedCompanySocialPlatforms } from "@/lib/company-resource-keys"
 import {
   AGENT_COMPANY_DEPARTMENTS,
   agentCompanyDisplayName,
@@ -152,6 +157,7 @@ import {
   type CodexCompanyCapacity,
   type CodexCompanyContext,
   type CodexCompanyOperations,
+  type CodexCompanyResourceState,
   type CodexExternalAction,
   type CodexEnterpriseCommandCenter,
   type CodexMissionEvidenceLedger,
@@ -172,6 +178,7 @@ import { cn } from "@/lib/utils"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { AgentOfficeScene } from "./agent-office/agent-office-scene"
+import { CompanyResourcesSurface } from "./company-resources-surface"
 import {
   EnterpriseCommandCenter,
   type EnterpriseDepartment,
@@ -673,7 +680,14 @@ export function AgentCompanyPanel() {
     if (!value || value.startsWith("local:")) return null
     return value.replace(/^project:/, "")
   }, [activeFolder?.id])
-  const associatedCodexProjectId = associationState?.association?.codexProject.id || null
+  const associationLoadGenerationRef = React.useRef(0)
+  const associationRequestCompanyRef = React.useRef<string | null>(null)
+  const companyProjectIdRef = React.useRef<string | null>(companyProjectId)
+  companyProjectIdRef.current = companyProjectId
+  const associatedCodexProjectId = associatedCodexProjectIdForCompany(
+    associationState,
+    companyProjectId,
+  )
 
   React.useEffect(() => {
     let alive = true
@@ -771,24 +785,41 @@ export function AgentCompanyPanel() {
   }, [activeFolder?.id])
 
   const refreshCompanyAssociation = React.useCallback(async () => {
-    if (!companyProjectId) {
+    const requestedCompanyId = companyProjectId
+    const requestedWorkspaceId = activeFolder?.id || null
+    const generation = ++associationLoadGenerationRef.current
+    const companyChanged = associationRequestCompanyRef.current !== requestedCompanyId
+    associationRequestCompanyRef.current = requestedCompanyId
+    if (companyChanged) {
       setAssociationState(null)
       setAssociationCandidateId("")
       setAssociationConnectorIds([])
+    }
+    if (!requestedCompanyId) {
+      setAssociationState(null)
+      setAssociationLoading(false)
+      setActiveCodexProject(null)
       return null
     }
     setAssociationLoading(true)
     try {
-      const state = await codexApi.getCompanyAssociation(companyProjectId)
+      const state = await codexApi.getCompanyAssociation(requestedCompanyId)
+      if (!shouldAcceptCompanyAssociationResponse({
+        requestedCompanyId,
+        currentCompanyId: companyProjectIdRef.current,
+        requestGeneration: generation,
+        currentGeneration: associationLoadGenerationRef.current,
+        state,
+      })) return null
       setAssociationState(state)
       if (state.association) {
         const codexProjectId = state.association.codexProject.id
         setAssociationCandidateId(codexProjectId)
         setAssociationConnectorIds(state.association.connectors.map((connector) => connector.id))
-        persistWorkspaceCodexProject(activeFolder?.id, codexProjectId)
+        persistWorkspaceCodexProject(requestedWorkspaceId, codexProjectId)
         setActiveCodexProject(codexProjectId)
       } else {
-        const legacyHint = readWorkspaceCodexProject(activeFolder?.id)
+        const legacyHint = readWorkspaceCodexProject(requestedWorkspaceId)
         const confirmedCandidate = state.candidates.find((candidate) => candidate.id === legacyHint)
         setAssociationCandidateId(confirmedCandidate?.id || state.candidates[0]?.id || "")
         setAssociationConnectorIds([])
@@ -796,11 +827,18 @@ export function AgentCompanyPanel() {
       }
       return state
     } catch {
+      if (
+        generation !== associationLoadGenerationRef.current
+        || companyProjectIdRef.current !== requestedCompanyId
+      ) return null
       setAssociationState(null)
       setActiveCodexProject(null)
       return null
     } finally {
-      setAssociationLoading(false)
+      if (
+        generation === associationLoadGenerationRef.current
+        && companyProjectIdRef.current === requestedCompanyId
+      ) setAssociationLoading(false)
     }
   }, [activeFolder?.id, companyProjectId])
 
@@ -2205,6 +2243,14 @@ export function AgentCompanyPanel() {
             surface={isMobile}
             companyName={companyName}
             workspaceId={activeFolder?.id || null}
+            companyProjectId={companyProjectId}
+            codexProjectId={associatedCodexProjectId}
+            ownerId={user?.id || null}
+            departments={allDepartments}
+            availableConnectorAccountIds={
+              associationState?.association?.connectors.map((connector) => connector.id) || []
+            }
+            onRefreshCompanyAssociation={refreshCompanyAssociation}
             onOpenCeo={openCeoOffice}
           />
         ) : view === "department" && selectedDepartment ? (
@@ -2685,6 +2731,14 @@ export function AgentCompanyPanel() {
           surface
           companyName={companyName}
           workspaceId={activeFolder?.id || null}
+          companyProjectId={companyProjectId}
+          codexProjectId={associatedCodexProjectId}
+          ownerId={user?.id || null}
+          departments={allDepartments}
+          availableConnectorAccountIds={
+            associationState?.association?.connectors.map((connector) => connector.id) || []
+          }
+          onRefreshCompanyAssociation={refreshCompanyAssociation}
           onOpenCeo={() => {
             setPreviewView(null)
             openCeoOffice()
@@ -3167,16 +3221,29 @@ const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; class
 function ResourcesView({
   companyName,
   workspaceId,
+  companyProjectId,
+  codexProjectId,
+  ownerId,
+  departments = AGENT_COMPANY_DEPARTMENTS,
+  availableConnectorAccountIds = [],
+  onRefreshCompanyAssociation,
   onOpenCeo,
   surface = false,
 }: {
   companyName: string
   workspaceId: string | null
+  companyProjectId?: string | null
+  codexProjectId?: string | null
+  ownerId?: string | null
+  departments?: readonly AgentDepartmentDefinition[]
+  availableConnectorAccountIds?: readonly string[]
+  onRefreshCompanyAssociation?: () => Promise<CodexCompanyAssociationState | null>
   onOpenCeo: () => void
   surface?: boolean
 }) {
   const [operations, setOperations] = React.useState<CompanySocialOperations | null>(null)
   const [businessConnectors, setBusinessConnectors] = React.useState<CoworkConnector[]>([])
+  const [connectorsLoadError, setConnectorsLoadError] = React.useState<string | null>(null)
   const [posts, setPosts] = React.useState<CompanySocialPost[]>([])
   const [draft, setDraft] = React.useState<CompanySocialPolicy | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -3191,16 +3258,74 @@ function ResourcesView({
   const [companyOps, setCompanyOps] = React.useState<CodexCompanyOperations | null>(null)
   const [companyOpsContext, setCompanyOpsContext] = React.useState<CodexCompanyContext | null>(null)
   const [companyOpsBusy, setCompanyOpsBusy] = React.useState<string | null>(null)
-  const [activeCodexProjectId, setActiveCodexProjectIdState] = React.useState<string | null>(
-    () => getActiveCodexProject(),
+  const [companyResourceState, setCompanyResourceState] = React.useState<CodexCompanyResourceState | null>(null)
+  const socialLoadGenerationRef = React.useRef(0)
+  const socialScopeRef = React.useRef<string | null>(null)
+  const companyProjectScopeRef = React.useRef<string | null>(companyProjectId || null)
+  companyProjectScopeRef.current = companyProjectId || null
+  const socialScopeId = codexProjectId || workspaceId
+  socialScopeRef.current = socialScopeId
+  const marketingAllowedPlatforms = React.useMemo(
+    () => assignedCompanySocialPlatforms(
+      companyResourceState?.assignments || {},
+      operations?.providers || [],
+      "marketing",
+    ),
+    [companyResourceState?.assignments, operations?.providers],
+  )
+  const marketingPublishingPlatforms = React.useMemo(
+    () => marketingAllowedPlatforms.filter((platform) => {
+      const provider = operations?.providers.find((entry) => entry.platform === platform)
+      return Boolean(
+        provider?.connection?.connected
+        && provider.supports.text
+        && draft?.platforms[platform],
+      )
+    }),
+    [draft?.platforms, marketingAllowedPlatforms, operations?.providers],
   )
 
+  React.useEffect(() => {
+    setCompanyResourceState(null)
+  }, [codexProjectId, workspaceId])
+
+  React.useEffect(() => {
+    setSelectedPlatforms((current) => {
+      const retained = current.filter((platform) => marketingPublishingPlatforms.includes(platform))
+      return retained.length > 0 ? retained : marketingPublishingPlatforms
+    })
+  }, [marketingPublishingPlatforms])
+
   const load = React.useCallback(async () => {
+    const generation = ++socialLoadGenerationRef.current
+    const resourceScopeId = codexProjectId || workspaceId
     setLoading(true)
-    const codexProjectId = activeCodexProjectId || getActiveCodexProject()
-    const [socialResult, postsResult, opsResult, contextResult, connectorResult] = await Promise.allSettled([
-      companySocialApi.operations(),
-      companySocialApi.listPosts(),
+    setOperations(null)
+    setDraft(null)
+    setPosts([])
+    setCompanyOps(null)
+    setCompanyOpsContext(null)
+    setCompanyOpsBusy(null)
+    setConnectorsLoadError(null)
+    setSaving(false)
+    setPostBusy(false)
+
+    const shouldMigrateLocalScope = Boolean(
+      codexProjectId
+      && workspaceId
+      && codexProjectId !== workspaceId,
+    )
+    const [
+      socialResult,
+      postsResult,
+      opsResult,
+      contextResult,
+      connectorResult,
+      localSocialResult,
+      localPostsResult,
+    ] = await Promise.allSettled([
+      companySocialApi.operations(resourceScopeId),
+      companySocialApi.listPosts(resourceScopeId),
       codexProjectId
         ? codexApi.getCompanyOperations(codexProjectId)
         : Promise.resolve(null),
@@ -3208,12 +3333,82 @@ function ResourcesView({
         ? codexApi.getCompanyProfile(codexProjectId)
         : Promise.resolve(null),
       coworkApi.listConnectors(),
+      shouldMigrateLocalScope
+        ? companySocialApi.operations(workspaceId)
+        : Promise.resolve(null),
+      shouldMigrateLocalScope
+        ? companySocialApi.listPosts(workspaceId)
+        : Promise.resolve([]),
     ])
 
+    if (
+      generation !== socialLoadGenerationRef.current
+      || socialScopeRef.current !== resourceScopeId
+    ) return
+
     if (socialResult.status === "fulfilled") {
-      const result = socialResult.value
+      let result = socialResult.value
+      const localResult = localSocialResult.status === "fulfilled"
+        ? localSocialResult.value
+        : null
+      if (
+        shouldMigrateLocalScope
+        && localResult
+        && Boolean(localResult.policy.updatedAt)
+      ) {
+        let migratedPolicy: CompanySocialPolicy | null = null
+        let pausedLocalPolicy = false
+        try {
+          if (!result.policy.updatedAt) {
+            migratedPolicy = await companySocialApi.updatePolicy({
+              ...localResult.policy,
+              workspaceId: resourceScopeId,
+              confirmAutopublish: localResult.policy.enabled
+                && (localResult.policy.mode === "auto" || localResult.policy.autopilot),
+            })
+            result = { ...result, policy: migratedPolicy }
+          }
+          if (localResult.policy.enabled || localResult.policy.autopilot) {
+            await companySocialApi.updatePolicy({
+              ...localResult.policy,
+              enabled: false,
+              autopilot: false,
+              workspaceId,
+            })
+            pausedLocalPolicy = true
+          }
+          if (
+            generation !== socialLoadGenerationRef.current
+            || socialScopeRef.current !== resourceScopeId
+          ) return
+          if (migratedPolicy || pausedLocalPolicy) {
+            toast.success(migratedPolicy
+              ? "La configuración social local se migró al entorno persistente y el scope anterior quedó pausado."
+              : "El scope social local anterior quedó pausado; se conservó la política persistente existente.")
+          }
+        } catch (error) {
+          if (migratedPolicy) {
+            await companySocialApi.updatePolicy({
+              ...migratedPolicy,
+              enabled: false,
+              autopilot: false,
+              workspaceId: resourceScopeId,
+            }).catch(() => undefined)
+          }
+          if (
+            generation === socialLoadGenerationRef.current
+            && socialScopeRef.current === resourceScopeId
+          ) {
+            toast.error(error instanceof Error
+              ? `No se migró la configuración social: ${error.message}`
+              : "No se migró la configuración social. Los controles permanecen bloqueados.")
+            setLoading(false)
+          }
+          return
+        }
+      }
       setOperations(result)
-      setDraft({ ...result.policy, workspaceId })
+      setDraft({ ...result.policy, workspaceId: resourceScopeId })
       setSelectedPlatforms((current) => {
         const connected = result.providers
           .filter((provider) => provider.connection?.connected && provider.supports.text)
@@ -3224,47 +3419,74 @@ function ResourcesView({
     } else {
       toast.error("No se pudieron cargar las conexiones sociales.")
     }
-    if (postsResult.status === "fulfilled") setPosts(postsResult.value)
+    if (postsResult.status === "fulfilled") {
+      const localPosts = localPostsResult.status === "fulfilled"
+        ? localPostsResult.value
+        : []
+      const postsById = new Map(
+        [...postsResult.value, ...localPosts].map((post) => [post.id, post]),
+      )
+      setPosts([...postsById.values()])
+    }
     if (opsResult.status === "fulfilled") setCompanyOps(opsResult.value)
     else toast.error("No se pudieron cargar las operaciones de empresa.")
     if (contextResult.status === "fulfilled") setCompanyOpsContext(contextResult.value)
     if (connectorResult.status === "fulfilled") {
       setBusinessConnectors(connectorResult.value.connectors || [])
+      setConnectorsLoadError(null)
     } else {
       setBusinessConnectors([])
+      setConnectorsLoadError("No se pudo cargar el catálogo de integraciones.")
     }
     setLoading(false)
-  }, [activeCodexProjectId, workspaceId])
+  }, [codexProjectId, workspaceId])
 
   const refreshCompanyOps = React.useCallback(async () => {
-    const codexProjectId = activeCodexProjectId || getActiveCodexProject()
     if (!codexProjectId) return
+    const operationScope = codexProjectId || workspaceId
+    const generation = socialLoadGenerationRef.current
     const [snapshot, context] = await Promise.all([
       codexApi.getCompanyOperations(codexProjectId),
       codexApi.getCompanyProfile(codexProjectId),
     ])
+    if (
+      socialScopeRef.current !== operationScope
+      || socialLoadGenerationRef.current !== generation
+    ) return
     setCompanyOps(snapshot)
     setCompanyOpsContext(context)
-  }, [activeCodexProjectId])
+  }, [codexProjectId, workspaceId])
 
   const runCompanyOperation = React.useCallback(async (
     key: string,
     operation: (projectId: string) => Promise<unknown>,
     success: string,
   ) => {
-    const codexProjectId = getActiveCodexProject()
     if (!codexProjectId || companyOpsBusy) return
+    const operationScope = codexProjectId || workspaceId
+    const generation = socialLoadGenerationRef.current
+    if (socialScopeRef.current !== operationScope) return
     setCompanyOpsBusy(key)
     try {
       await operation(codexProjectId)
       await refreshCompanyOps()
+      if (
+        socialScopeRef.current !== operationScope
+        || socialLoadGenerationRef.current !== generation
+      ) return
       toast.success(success)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
+      if (
+        socialScopeRef.current === operationScope
+        && socialLoadGenerationRef.current === generation
+      ) toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
     } finally {
-      setCompanyOpsBusy(null)
+      if (
+        socialScopeRef.current === operationScope
+        && socialLoadGenerationRef.current === generation
+      ) setCompanyOpsBusy(null)
     }
-  }, [companyOpsBusy, refreshCompanyOps])
+  }, [codexProjectId, companyOpsBusy, refreshCompanyOps, workspaceId])
 
   const triageSocialChannels = React.useCallback(async (projectId: string) => {
     const result = await codexApi.triageCompanySocial(projectId)
@@ -3284,8 +3506,10 @@ function ResourcesView({
     field: "emailReplies" | "socialReplies" | "leadOutreach",
     mode: "review" | "auto" | "off",
   ) => {
-    const codexProjectId = getActiveCodexProject()
     if (!codexProjectId || companyOpsBusy) return
+    const policyScope = codexProjectId || workspaceId
+    const generation = socialLoadGenerationRef.current
+    if (socialScopeRef.current !== policyScope) return
     if (
       mode === "auto"
       && !window.confirm("El modo automático puede enviar acciones externas sin revisión individual. ¿Deseas activarlo?")
@@ -3297,14 +3521,24 @@ function ResourcesView({
       const context = await codexApi.updateCompanyProfile(codexProjectId, {
         autonomy: { [field]: mode },
       }, { confirmAuto: mode === "auto" })
+      if (
+        socialScopeRef.current !== policyScope
+        || socialLoadGenerationRef.current !== generation
+      ) return
       setCompanyOpsContext(context)
       toast.success("Política operativa actualizada.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo actualizar la política.")
+      if (
+        socialScopeRef.current === policyScope
+        && socialLoadGenerationRef.current === generation
+      ) toast.error(error instanceof Error ? error.message : "No se pudo actualizar la política.")
     } finally {
-      setCompanyOpsBusy(null)
+      if (
+        socialScopeRef.current === policyScope
+        && socialLoadGenerationRef.current === generation
+      ) setCompanyOpsBusy(null)
     }
-  }, [companyOpsBusy])
+  }, [codexProjectId, companyOpsBusy, workspaceId])
 
   const resolveCompanyAction = React.useCallback(async (
     action: CodexExternalAction,
@@ -3321,16 +3555,10 @@ function ResourcesView({
 
   React.useEffect(() => {
     void load()
-  }, [load])
-
-  React.useEffect(() => {
-    const onProject = (event: Event) => {
-      const projectId = (event as CustomEvent<{ projectId?: string | null }>).detail?.projectId || null
-      setActiveCodexProjectIdState(projectId)
+    return () => {
+      socialLoadGenerationRef.current += 1
     }
-    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onProject)
-    return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onProject)
-  }, [])
+  }, [load])
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -3360,42 +3588,76 @@ function ResourcesView({
 
   const save = React.useCallback(async () => {
     if (!draft || saving) return
+    const draftScope = draft.workspaceId || null
+    if (!draftScope || draftScope !== socialScopeRef.current) {
+      toast.error("La empresa cambió mientras editabas. Actualiza antes de guardar.")
+      void load()
+      return
+    }
+    const generation = socialLoadGenerationRef.current
     setSaving(true)
     try {
       const policy = await companySocialApi.updatePolicy({
         ...draft,
-        workspaceId,
+        workspaceId: draftScope,
         confirmAutopublish: draft.enabled && (draft.mode === "auto" || draft.autopilot),
       })
+      if (
+        socialScopeRef.current !== draftScope
+        || socialLoadGenerationRef.current !== generation
+      ) return
       setDraft(policy)
       setOperations((current) => current ? { ...current, policy } : current)
       toast.success(policy.enabled ? "Operación social actualizada." : "Publicación autónoma pausada.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo guardar la operación.")
+      if (
+        socialScopeRef.current === draftScope
+        && socialLoadGenerationRef.current === generation
+      ) toast.error(error instanceof Error ? error.message : "No se pudo guardar la operación.")
     } finally {
-      setSaving(false)
+      if (
+        socialScopeRef.current === draftScope
+        && socialLoadGenerationRef.current === generation
+      ) setSaving(false)
     }
-  }, [draft, saving, workspaceId])
+  }, [draft, load, saving])
 
   const pause = React.useCallback(async () => {
     if (!draft || saving) return
+    const draftScope = draft.workspaceId || null
+    if (!draftScope || draftScope !== socialScopeRef.current) {
+      toast.error("La empresa cambió mientras editabas. Actualiza antes de continuar.")
+      void load()
+      return
+    }
+    const generation = socialLoadGenerationRef.current
     setSaving(true)
     try {
       const policy = await companySocialApi.updatePolicy({
         ...draft,
         enabled: false,
         autopilot: false,
-        workspaceId,
+        workspaceId: draftScope,
       })
+      if (
+        socialScopeRef.current !== draftScope
+        || socialLoadGenerationRef.current !== generation
+      ) return
       setDraft(policy)
       setOperations((current) => current ? { ...current, policy } : current)
       toast.success("Publicación autónoma detenida.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo detener la publicación.")
+      if (
+        socialScopeRef.current === draftScope
+        && socialLoadGenerationRef.current === generation
+      ) toast.error(error instanceof Error ? error.message : "No se pudo detener la publicación.")
     } finally {
-      setSaving(false)
+      if (
+        socialScopeRef.current === draftScope
+        && socialLoadGenerationRef.current === generation
+      ) setSaving(false)
     }
-  }, [draft, saving, workspaceId])
+  }, [draft, load, saving])
 
   const connect = React.useCallback(async (platform: CompanySocialPlatform) => {
     setProviderBusy(platform)
@@ -3409,6 +3671,9 @@ function ResourcesView({
   }, [])
 
   const disconnect = React.useCallback(async (platform: CompanySocialPlatform) => {
+    if (!window.confirm("Esta acción desconectará la cuenta para todas tus empresas. ¿Deseas continuar?")) {
+      return
+    }
     setProviderBusy(platform)
     try {
       await companySocialApi.disconnect(platform)
@@ -3434,6 +3699,9 @@ function ResourcesView({
   }, [load])
 
   const disconnectBusinessConnector = React.useCallback(async (connector: CoworkConnector) => {
+    if (!window.confirm(`Esta acción desconectará ${connector.name} para todas tus empresas. ¿Deseas continuar?`)) {
+      return
+    }
     setConnectorBusy(connector.id)
     try {
       await coworkApi.disconnectConnector(connector.id)
@@ -3446,6 +3714,65 @@ function ResourcesView({
     }
   }, [load])
 
+  const assignBusinessConnectorToCompany = React.useCallback(async (connector: CoworkConnector) => {
+    const accountId = connector.account?.id
+    const operationCompanyId = companyProjectId
+    if (!accountId || !operationCompanyId) {
+      throw new Error("Asocia primero el entorno persistente de esta empresa.")
+    }
+    const ensureCurrentCompany = () => {
+      if (companyProjectScopeRef.current !== operationCompanyId) {
+        throw new Error("La empresa cambió durante la operación. Actualiza Recursos antes de continuar.")
+      }
+    }
+    const syncAssociation = async () => {
+      ensureCurrentCompany()
+      const refreshed = await onRefreshCompanyAssociation?.()
+      ensureCurrentCompany()
+      if (onRefreshCompanyAssociation && refreshed?.company.id !== operationCompanyId) {
+        throw new Error("No se pudo confirmar la asociación actualizada. Reintenta desde Recursos.")
+      }
+    }
+
+    try {
+      const before = await codexApi.getCompanyAssociation(operationCompanyId)
+      ensureCurrentCompany()
+      if (!before.association) {
+        throw new Error("Asocia primero el entorno persistente de esta empresa.")
+      }
+      const wasAvailable = before.association.connectors.some((entry) => entry.id === accountId)
+      if (wasAvailable) {
+        await syncAssociation()
+        return false
+      }
+      try {
+        const result = await codexApi.addCompanyConnector(operationCompanyId, accountId)
+        await syncAssociation()
+        return result.changed
+      } catch (error) {
+        ensureCurrentCompany()
+        const status = Number((error as { status?: number } | null)?.status || 0)
+        if (status > 0 && status < 500) throw error
+        const reconciled = await codexApi.getCompanyAssociation(operationCompanyId)
+        ensureCurrentCompany()
+        const isAvailable = Boolean(
+          reconciled.association?.connectors.some((entry) => entry.id === accountId),
+        )
+        if (isAvailable) {
+          await syncAssociation()
+          return true
+        }
+        throw error
+      }
+    } catch (error) {
+      throw new Error(
+        error instanceof Error
+          ? error.message
+          : "No se pudo dejar la cuenta disponible para esta empresa.",
+      )
+    }
+  }, [companyProjectId, onRefreshCompanyAssociation])
+
   const toggleComposerPlatform = React.useCallback((platform: CompanySocialPlatform) => {
     setSelectedPlatforms((current) => current.includes(platform)
       ? current.filter((entry) => entry !== platform)
@@ -3455,8 +3782,18 @@ function ResourcesView({
   const submitTextPost = React.useCallback(async () => {
     const text = caption.trim()
     if (!text || postBusy) return
-    if (selectedPlatforms.length === 0) {
-      toast.error("Conecta y selecciona al menos una red social.")
+    const draftScope = draft?.workspaceId || null
+    if (!draftScope || draftScope !== socialScopeRef.current) {
+      toast.error("La empresa cambió mientras preparabas la publicación. Actualiza antes de enviarla.")
+      void load()
+      return
+    }
+    const generation = socialLoadGenerationRef.current
+    const publishPlatforms = selectedPlatforms.filter((platform) => (
+      marketingPublishingPlatforms.includes(platform)
+    ))
+    if (publishPlatforms.length === 0) {
+      toast.error("Asigna a Marketing al menos una red social conectada.")
       return
     }
     if (delivery === "scheduled" && !scheduledAt) {
@@ -3472,12 +3809,27 @@ function ResourcesView({
     try {
       const post = await companySocialApi.queueTextPost({
         caption: text,
-        platforms: selectedPlatforms,
+        platforms: publishPlatforms,
         scheduledAt: delivery === "scheduled" ? new Date(scheduledAt).toISOString() : undefined,
-        workspaceId,
+        workspaceId: draftScope,
       })
+      if (
+        socialScopeRef.current !== draftScope
+        || socialLoadGenerationRef.current !== generation
+      ) return
       if (delivery === "now") {
-        await companySocialApi.publishNow(post.id)
+        const { result } = await companySocialApi.publishNow(post.id)
+        if (
+          result.action !== "published"
+          || Number(result.published || 0) < 1
+          || Number(result.failed || 0) > 0
+        ) {
+          throw new Error(
+            result.action === "skipped_daily_limit"
+              ? "Se alcanzó el límite diario de esta empresa."
+              : "El proveedor no confirmó la publicación. Revisa el historial antes de reintentar.",
+          )
+        }
         toast.success("Publicación enviada a los canales seleccionados.")
       } else {
         toast.success("Publicación programada.")
@@ -3485,11 +3837,17 @@ function ResourcesView({
       setCaption("")
       await load()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo preparar la publicación.")
+      if (
+        socialScopeRef.current === draftScope
+        && socialLoadGenerationRef.current === generation
+      ) toast.error(error instanceof Error ? error.message : "No se pudo preparar la publicación.")
     } finally {
-      setPostBusy(false)
+      if (
+        socialScopeRef.current === draftScope
+        && socialLoadGenerationRef.current === generation
+      ) setPostBusy(false)
     }
-  }, [caption, delivery, draft?.enabled, load, postBusy, scheduledAt, selectedPlatforms, workspaceId])
+  }, [caption, delivery, draft, load, marketingPublishingPlatforms, postBusy, scheduledAt, selectedPlatforms])
 
   if (loading && !operations) {
     return (
@@ -3521,368 +3879,84 @@ function ResourcesView({
   const autonomous = draft.enabled && draft.mode === "auto"
 
   if (surface) {
-    const connectedPlatforms = new Set(
-      operations.providers
-        .filter((provider) => provider.connection?.connected && provider.supports.text)
-        .map((provider) => provider.platform),
-    )
     return (
-      <SurfacePage testId="company-resources-surface">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <p className="text-[11px] font-semibold uppercase text-zinc-500">{companyName}</p>
-            <h1 className="mt-2 text-[28px] font-semibold leading-tight">Activos de la empresa agente</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
-              Conecta cuentas autorizadas y publica contenido de texto con control explícito del usuario.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-10 rounded-md bg-white dark:bg-zinc-900"
-            onClick={() => void load()}
-            disabled={loading}
-          >
-            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
-            Actualizar estado
-          </Button>
-        </div>
-
-        <div className="mt-7 grid overflow-hidden rounded-lg border border-zinc-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-white/10 dark:bg-zinc-900">
-          {[
-            { label: "Canales conectados", value: connectedCount, detail: `${operations.providers.length} compatibles`, icon: Link2 },
-            { label: "En cola", value: operations.metrics.queued, detail: "borradores y programadas", icon: Clock3 },
-            { label: "Publicados hoy", value: operations.metrics.publishedToday, detail: "confirmados por proveedor", icon: Send },
-            { label: "Modo de salida", value: draft.mode === "auto" ? "Auto" : "Revisión", detail: draft.enabled ? "publicación habilitada" : "publicación pausada", icon: ShieldCheck },
-          ].map(({ label, value, detail, icon: Icon }, index) => (
-            <div
-              key={label}
-              className={cn(
-                "min-h-[124px] p-5",
-                index > 0 && "border-t border-zinc-200 sm:border-l sm:border-t-0 dark:border-white/10",
-                index === 2 && "sm:border-l-0 xl:border-l",
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-zinc-500">{label}</span>
-                <Icon className="h-4 w-4 text-zinc-400" />
-              </div>
-              <div className="mt-4 text-2xl font-semibold tabular-nums">{value}</div>
-              <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
-            </div>
-          ))}
-        </div>
-
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[#fbfbfc] dark:bg-background">
+        <CompanyResourcesSurface
+          companyName={companyName}
+          workspaceId={workspaceId}
+          codexProjectId={codexProjectId || null}
+          ownerId={ownerId}
+          departments={departments}
+          availableConnectorAccountIds={availableConnectorAccountIds}
+          operations={operations}
+          businessConnectors={businessConnectors}
+          connectorsLoadError={connectorsLoadError}
+          loading={loading}
+          providerBusy={providerBusy}
+          connectorBusy={connectorBusy}
+          onRefresh={() => void load()}
+          onConnectSocial={(platform) => void connect(platform)}
+          onConnectConnector={(connector) => void connectBusinessConnector(connector)}
+          onAssignConnectorToCompany={assignBusinessConnectorToCompany}
+          onResourceStateChange={setCompanyResourceState}
+        />
         {companyOps ? (
-          <CompanyOperationsPanel
-            operations={companyOps}
-            context={companyOpsContext}
-            busy={companyOpsBusy}
-            onResearch={() => runCompanyOperation(
-              "research",
-              (projectId) => codexApi.researchCompanyLeads(projectId),
-              "Investigación comercial actualizada.",
-            )}
-            onTriage={() => runCompanyOperation(
-              "inbox",
-              (projectId) => codexApi.triageCompanyInbox(projectId),
-              "Bandeja revisada y acciones preparadas.",
-            )}
-            onSocialTriage={() => runCompanyOperation(
-              "social",
-              triageSocialChannels,
-              "Conversaciones sociales revisadas.",
-            )}
-            onResolve={resolveCompanyAction}
-            onPolicy={updateCompanyPolicy}
-            onUpdateLead={(leadId, patch) => runCompanyOperation(
-              `lead:${leadId}`,
-              (projectId) => codexApi.updateCompanyLead(projectId, leadId, patch),
-              patch.status === "do_not_contact" ? "Lead marcado como no contactar." : "Contacto actualizado.",
-            )}
-            onOutreach={(leadId) => runCompanyOperation(
-              `outreach:${leadId}`,
-              (projectId) => codexApi.prepareLeadOutreach(projectId, leadId),
-              "Correo comercial preparado según la política.",
-            )}
-          />
-        ) : null}
-
-        <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
-          <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold">Nueva publicación de texto</h2>
-                <p className="mt-1 text-xs text-zinc-500">El contenido solo sale a cuentas conectadas y seleccionadas.</p>
-              </div>
-              <MessageSquareText className="h-5 w-5 text-zinc-400" />
-            </div>
-            <Label htmlFor="company-social-caption" className="mt-5 block text-xs font-semibold">Contenido</Label>
-            <Textarea
-              id="company-social-caption"
-              value={caption}
-              onChange={(event) => setCaption(event.target.value)}
-              placeholder="Escribe el contenido que deseas publicar..."
-              maxLength={5_000}
-              className="mt-2 min-h-[170px] resize-y rounded-md border-zinc-200 text-sm leading-relaxed dark:border-white/10"
-            />
-            <div className="mt-2 text-right text-[10px] tabular-nums text-zinc-500">{caption.length}/5000</div>
-
-            <div className="mt-5">
-              <Label className="text-xs font-semibold">Canales</Label>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {operations.providers.map((provider) => {
-                  const connected = connectedPlatforms.has(provider.platform)
-                  const selected = selectedPlatforms.includes(provider.platform)
-                  const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
-                  return (
-                    <button
-                      key={`composer-${provider.platform}`}
-                      type="button"
-                      disabled={!connected}
-                      onClick={() => toggleComposerPlatform(provider.platform)}
-                      className={cn(
-                        "inline-flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45",
-                        selected
-                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
-                          : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5",
-                      )}
-                      aria-pressed={selected}
-                      title={connected ? `Publicar en ${provider.label}` : `${provider.label} no está conectado`}
-                    >
-                      <span className={cn("flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold", mark.className)}>
-                        {mark.mark}
-                      </span>
-                      {provider.label}
-                      {connected ? <Check className="h-3.5 w-3.5" /> : null}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-[auto_1fr]">
-              <div className="flex h-10 items-center rounded-md border border-zinc-200 p-1 dark:border-white/10" role="group" aria-label="Momento de publicación">
-                {([
-                  ["now", "Ahora"],
-                  ["scheduled", "Programar"],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDelivery(value)}
-                    className={cn(
-                      "h-8 rounded px-3 text-xs font-medium",
-                      delivery === value ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white" : "text-zinc-500",
-                    )}
-                    aria-pressed={delivery === value}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {delivery === "scheduled" ? (
-                <Input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(event) => setScheduledAt(event.target.value)}
-                  aria-label="Fecha y hora de publicación"
-                  className="h-10 rounded-md border-zinc-200 dark:border-white/10"
-                />
-              ) : (
-                <div className="flex h-10 items-center rounded-md bg-zinc-50 px-3 text-xs text-zinc-500 dark:bg-zinc-950">
-                  Se enviará inmediatamente al confirmar.
-                </div>
+          <div className="mx-auto w-full max-w-[1100px] px-4 pb-10 sm:px-6 lg:px-8">
+            <CompanyOperationsPanel
+              operations={companyOps}
+              context={companyOpsContext}
+              busy={companyOpsBusy}
+              onResearch={() => runCompanyOperation(
+                "research",
+                (projectId) => codexApi.researchCompanyLeads(projectId),
+                "Investigación comercial actualizada.",
               )}
-            </div>
-
-            {!draft.enabled && delivery === "now" ? (
-              <div className="mt-4 flex items-start gap-2 rounded-md bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/25 dark:text-amber-200">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                Activa la publicación en la configuración antes de enviar contenido ahora.
-              </div>
-            ) : null}
-
-            <Button
-              type="button"
-              className="mt-5 h-11 w-full rounded-md"
-              onClick={() => void submitTextPost()}
-              disabled={!caption.trim() || selectedPlatforms.length === 0 || postBusy || (delivery === "scheduled" && !scheduledAt)}
-            >
-              {postBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : delivery === "now" ? <Send className="mr-2 h-4 w-4" /> : <CalendarClock className="mr-2 h-4 w-4" />}
-              {postBusy ? "Procesando..." : delivery === "now" ? "Publicar ahora" : "Programar publicación"}
-            </Button>
-          </section>
-
-          <section>
-            <div className="flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold">Apps e integraciones</h2>
-                <p className="mt-1 text-xs text-zinc-500">OAuth real y permisos confirmados por el proveedor.</p>
-              </div>
-              <span className="text-xs tabular-nums text-zinc-500">{connectedCount} conectadas</span>
-            </div>
-            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
-              {operations.providers.map((provider) => {
-                const connection = provider.connection
-                const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
-                const busy = providerBusy === provider.platform
-                return (
-                  <div key={provider.platform} className="flex min-h-[76px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5">
-                    <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-xs font-bold", mark.className)}>
-                      {mark.mark}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <strong className="truncate text-[13px]">{provider.label}</strong>
-                        <span className={cn("h-2 w-2 rounded-full", connection?.connected ? "bg-emerald-500" : provider.configured ? "bg-amber-400" : "bg-zinc-300")} />
-                      </span>
-                      <span className="mt-1 block truncate text-[10px] text-zinc-500">
-                        {connection?.connected
-                          ? connection.accountName || "Cuenta conectada"
-                          : provider.configured
-                            ? "Disponible para conectar"
-                            : "Credenciales del servidor pendientes"}
-                      </span>
-                    </span>
-                    {connection?.connected ? (
-                      <Button type="button" variant="ghost" size="sm" className="h-9 rounded-md text-xs" onClick={() => void disconnect(provider.platform)} disabled={busy}>
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Desconectar"}
-                      </Button>
-                    ) : (
-                      <Button type="button" variant="outline" size="sm" className="h-9 rounded-md text-xs" onClick={() => void connect(provider.platform)} disabled={!provider.configured || busy}>
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
-              {businessConnectors.map((connector) => {
-                const connected = connector.account?.status === "connected"
-                const busy = connectorBusy === connector.id
-                const detail = connected
-                  ? connector.account?.accountLabel || "Cuenta conectada"
-                  : `${connector.capabilities.length} capacidades · escritura con confirmación`
-                return (
-                  <div key={connector.id} className="flex min-h-[76px] items-center gap-3 border-b border-zinc-100 px-4 last:border-b-0 dark:border-white/5">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                      {connector.id === "gmail" ? <MessageSquareText className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <strong className="truncate text-[13px]">{connector.name}</strong>
-                        <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-amber-400")} />
-                      </span>
-                      <span className="mt-1 block truncate text-[10px] text-zinc-500">{detail}</span>
-                    </span>
-                    {connected ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-9 rounded-md text-xs"
-                        onClick={() => void disconnectBusinessConnector(connector)}
-                        disabled={busy}
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Desconectar"}
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-9 rounded-md text-xs"
-                        onClick={() => void connectBusinessConnector(connector)}
-                        disabled={busy}
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Conectar"}
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-zinc-900">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-sm font-semibold">Control de publicación</h3>
-                  <p className="mt-1 text-[11px] text-zinc-500">Pausa global y aprobación de salida.</p>
-                </div>
-                <Switch
-                  checked={draft.enabled}
-                  onCheckedChange={(enabled) => patchDraft({ enabled })}
-                  aria-label="Habilitar publicación social"
-                />
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-1 rounded-md bg-zinc-100 p-1 dark:bg-zinc-800">
-                {([
-                  ["review", "Con revisión"],
-                  ["auto", "Automático"],
-                ] as const).map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => patchDraft({ mode })}
-                    className={cn(
-                      "h-9 rounded text-xs font-medium",
-                      draft.mode === mode ? "bg-white shadow-sm dark:bg-zinc-950" : "text-zinc-500",
-                    )}
-                    aria-pressed={draft.mode === mode}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <Button type="button" variant="outline" className="mt-4 w-full rounded-md" onClick={() => void save()} disabled={saving}>
-                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                Guardar configuración
-              </Button>
-            </div>
-          </section>
-        </div>
-
-        <section className="mt-8">
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">Historial de publicaciones</h2>
-              <p className="mt-1 text-xs text-zinc-500">Últimos estados devueltos por la cola y los proveedores.</p>
-            </div>
-            <span className="text-xs tabular-nums text-zinc-500">{posts.length} registros</span>
+              onTriage={() => runCompanyOperation(
+                "inbox",
+                (projectId) => codexApi.triageCompanyInbox(projectId),
+                "Bandeja revisada y acciones preparadas.",
+              )}
+              onSocialTriage={() => runCompanyOperation(
+                "social",
+                triageSocialChannels,
+                "Conversaciones sociales revisadas.",
+              )}
+              onResolve={resolveCompanyAction}
+              onPolicy={updateCompanyPolicy}
+              onUpdateLead={(leadId, patch) => runCompanyOperation(
+                `lead:${leadId}`,
+                (projectId) => codexApi.updateCompanyLead(projectId, leadId, patch),
+                patch.status === "do_not_contact" ? "Lead marcado como no contactar." : "Contacto actualizado.",
+              )}
+              onOutreach={(leadId) => runCompanyOperation(
+                `outreach:${leadId}`,
+                (projectId) => codexApi.prepareLeadOutreach(projectId, leadId),
+                "Correo comercial preparado según la política.",
+              )}
+            />
           </div>
-          <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900">
-            {posts.slice(0, 12).map((post) => (
-              <div key={post.id} className="grid min-h-[72px] items-center gap-3 border-b border-zinc-100 px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto_auto] dark:border-white/5">
-                <div className="min-w-0">
-                  <p className="truncate text-[13px] font-medium">{post.caption || post.prompt}</p>
-                  <p className="mt-1 truncate text-[10px] text-zinc-500">
-                    {post.platforms.map((platform) => operations.providers.find((provider) => provider.platform === platform)?.label || platform).join(" · ")}
-                  </p>
-                </div>
-                <span className={cn(
-                  "w-fit rounded-full px-2 py-1 text-[10px] font-semibold",
-                  post.status === "published" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300",
-                  ["scheduled", "publishing"].includes(post.status) && "bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
-                  post.status === "failed" && "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300",
-                  !["published", "scheduled", "publishing", "failed"].includes(post.status) && "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-                )}>
-                  {post.status === "published" ? "Publicado" : post.status === "scheduled" ? "Programado" : post.status === "publishing" ? "Publicando" : post.status === "failed" ? "Falló" : post.status}
-                </span>
-                <span className="text-[10px] tabular-nums text-zinc-500">
-                  {relativeActivity(Date.parse(post.publishedAt || post.scheduledAt || post.createdAt))}
-                </span>
-              </div>
-            ))}
-            {posts.length === 0 ? (
-              <div className="px-5 py-12 text-center">
-                <MessageSquareText className="mx-auto h-5 w-5 text-zinc-400" />
-                <p className="mt-2 text-sm font-medium">Sin publicaciones todavía</p>
-                <p className="mt-1 text-xs text-zinc-500">Conecta un canal y prepara el primer contenido.</p>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      </SurfacePage>
+        ) : null}
+        <MarketingPublishingPanel
+          operations={operations}
+          posts={posts}
+          draft={draft}
+          caption={caption}
+          onCaptionChange={setCaption}
+          selectedPlatforms={selectedPlatforms}
+          allowedPlatforms={marketingAllowedPlatforms}
+          onTogglePlatform={toggleComposerPlatform}
+          delivery={delivery}
+          onDeliveryChange={setDelivery}
+          scheduledAt={scheduledAt}
+          onScheduledAtChange={setScheduledAt}
+          postBusy={postBusy}
+          onSubmit={() => void submitTextPost()}
+          saving={saving}
+          onPatchPolicy={patchDraft}
+          onPatchPlatform={patchPlatform}
+          onSavePolicy={() => void save()}
+        />
+      </div>
     )
   }
 
@@ -4142,6 +4216,323 @@ function ResourcesView({
         Coordinar desde CEO Office
       </Button>
     </ViewBody>
+  )
+}
+
+function MarketingPublishingPanel({
+  operations,
+  posts,
+  draft,
+  caption,
+  onCaptionChange,
+  selectedPlatforms,
+  allowedPlatforms,
+  onTogglePlatform,
+  delivery,
+  onDeliveryChange,
+  scheduledAt,
+  onScheduledAtChange,
+  postBusy,
+  onSubmit,
+  saving,
+  onPatchPolicy,
+  onPatchPlatform,
+  onSavePolicy,
+}: {
+  operations: CompanySocialOperations
+  posts: CompanySocialPost[]
+  draft: CompanySocialPolicy
+  caption: string
+  onCaptionChange: (value: string) => void
+  selectedPlatforms: CompanySocialPlatform[]
+  allowedPlatforms: CompanySocialPlatform[]
+  onTogglePlatform: (platform: CompanySocialPlatform) => void
+  delivery: "now" | "scheduled"
+  onDeliveryChange: (value: "now" | "scheduled") => void
+  scheduledAt: string
+  onScheduledAtChange: (value: string) => void
+  postBusy: boolean
+  onSubmit: () => void
+  saving: boolean
+  onPatchPolicy: (patch: Partial<CompanySocialPolicy>) => void
+  onPatchPlatform: (platform: CompanySocialPlatform, enabled: boolean) => void
+  onSavePolicy: () => void
+}) {
+  const connectedPlatforms = React.useMemo(
+    () => new Set(
+      operations.providers
+        .filter((provider) => (
+          provider.connection?.connected
+          && provider.supports.text
+          && allowedPlatforms.includes(provider.platform)
+          && draft.platforms[provider.platform]
+        ))
+        .map((provider) => provider.platform),
+    ),
+    [allowedPlatforms, draft.platforms, operations.providers],
+  )
+
+  return (
+    <section
+      className="mx-auto w-full max-w-[1100px] px-4 pb-12 sm:px-6 lg:px-8"
+      aria-label="Operación de Marketing"
+    >
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">Departamento de Marketing</p>
+          <h2 className="mt-1 text-lg font-semibold">Publicación y control de salida</h2>
+          <p className="mt-1 text-xs text-zinc-500">
+            La política, la cola y el historial pertenecen únicamente a esta empresa.
+          </p>
+        </div>
+        <span className="rounded-full bg-zinc-100 px-3 py-1 text-[11px] font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+          {operations.metrics.queued} pendientes · {operations.metrics.publishedToday} publicadas hoy
+        </span>
+      </div>
+
+      <div className="grid overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-[0_12px_40px_-30px_rgba(15,23,42,0.35)] dark:border-white/10 dark:bg-zinc-950 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
+        <div className="p-5 xl:border-r xl:border-zinc-100 dark:xl:border-white/5">
+          <Label htmlFor="company-marketing-caption" className="text-xs font-semibold">Contenido</Label>
+          <Textarea
+            id="company-marketing-caption"
+            value={caption}
+            onChange={(event) => onCaptionChange(event.target.value)}
+            placeholder="Escribe el contenido que Marketing publicará..."
+            maxLength={5_000}
+            className="mt-2 min-h-[140px] resize-y rounded-xl border-zinc-200 text-sm leading-relaxed dark:border-white/10"
+          />
+          <div className="mt-2 text-right text-[10px] tabular-nums text-zinc-400">{caption.length}/5000</div>
+
+          <div className="mt-4">
+            <Label className="text-xs font-semibold">Canales conectados</Label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {operations.providers.map((provider) => {
+                const connected = connectedPlatforms.has(provider.platform)
+                const selected = selectedPlatforms.includes(provider.platform)
+                const mark = SOCIAL_PROVIDER_MARKS[provider.platform]
+                return (
+                  <button
+                    key={`marketing-${provider.platform}`}
+                    type="button"
+                    disabled={!connected}
+                    onClick={() => onTogglePlatform(provider.platform)}
+                    className={cn(
+                      "inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                      selected
+                        ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-zinc-950"
+                        : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300",
+                    )}
+                    aria-pressed={selected}
+                  >
+                    <span className={cn("flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold", mark.className)}>
+                      {mark.mark}
+                    </span>
+                    {provider.label}
+                    {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-[auto_1fr]">
+            <div className="flex h-10 items-center rounded-full border border-zinc-200 p-1 dark:border-white/10">
+              {([
+                ["now", "Ahora"],
+                ["scheduled", "Programar"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => onDeliveryChange(value)}
+                  className={cn(
+                    "h-8 rounded-full px-3 text-xs font-medium",
+                    delivery === value ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white" : "text-zinc-500",
+                  )}
+                  aria-pressed={delivery === value}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {delivery === "scheduled" ? (
+              <Input
+                type="datetime-local"
+                value={scheduledAt}
+                onChange={(event) => onScheduledAtChange(event.target.value)}
+                className="h-10 rounded-full border-zinc-200 dark:border-white/10"
+                aria-label="Fecha y hora de publicación"
+              />
+            ) : (
+              <div className="flex h-10 items-center rounded-full bg-zinc-50 px-4 text-xs text-zinc-500 dark:bg-zinc-900">
+                Se enviará al confirmar.
+              </div>
+            )}
+          </div>
+
+          <Button
+            type="button"
+            className="mt-4 h-10 w-full rounded-full"
+            onClick={onSubmit}
+            disabled={
+              !caption.trim()
+              || selectedPlatforms.length === 0
+              || postBusy
+              || (delivery === "scheduled" && !scheduledAt)
+            }
+          >
+            {postBusy
+              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              : delivery === "now"
+                ? <Send className="mr-2 h-4 w-4" />
+                : <CalendarClock className="mr-2 h-4 w-4" />}
+            {postBusy ? "Procesando..." : delivery === "now" ? "Publicar ahora" : "Programar publicación"}
+          </Button>
+        </div>
+
+        <div className="border-t border-zinc-100 p-5 dark:border-white/5 xl:border-t-0">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">Política de Marketing</h3>
+              <p className="mt-1 text-[11px] text-zinc-500">Control explícito por empresa.</p>
+            </div>
+            <Switch
+              checked={draft.enabled}
+              onCheckedChange={(enabled) => onPatchPolicy({ enabled })}
+              aria-label="Habilitar publicación para esta empresa"
+            />
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
+            {([
+              ["review", "Con revisión"],
+              ["auto", "Automático"],
+            ] as const).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => onPatchPolicy({ mode })}
+                className={cn(
+                  "h-9 rounded-lg text-xs font-medium",
+                  draft.mode === mode ? "bg-white shadow-sm dark:bg-zinc-950" : "text-zinc-500",
+                )}
+                aria-pressed={draft.mode === mode}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-zinc-200/80 px-3 py-2.5 dark:border-white/10">
+            <div>
+              <p className="text-xs font-semibold">Contenido diario</p>
+              <p className="mt-0.5 text-[10px] text-zinc-500">Marketing operará con los recursos que tenga asignados.</p>
+            </div>
+            <Switch
+              checked={draft.autopilot}
+              onCheckedChange={(autopilot) => onPatchPolicy({ autopilot })}
+              disabled={draft.mode !== "auto"}
+              aria-label="Habilitar contenido diario de Marketing"
+            />
+          </div>
+
+          <div className="mt-4 space-y-1.5">
+            <p className="text-xs font-semibold">Canales habilitados</p>
+            {operations.providers.map((provider) => {
+              const assigned = allowedPlatforms.includes(provider.platform)
+                && Boolean(provider.connection?.connected)
+              return (
+                <label
+                  key={`marketing-policy-${provider.platform}`}
+                  className="flex min-h-9 items-center justify-between gap-3 rounded-lg px-2 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                >
+                  <span>
+                    {provider.label}
+                    {!assigned ? (
+                      <span className="ml-1.5 text-[10px] text-zinc-400">No asignado</span>
+                    ) : null}
+                  </span>
+                  <Switch
+                    checked={assigned && draft.platforms[provider.platform]}
+                    onCheckedChange={(enabled) => onPatchPlatform(provider.platform, enabled)}
+                    disabled={!assigned}
+                    aria-label={`Habilitar ${provider.label} para Marketing`}
+                  />
+                </label>
+              )
+            })}
+          </div>
+
+          <Label htmlFor="company-marketing-objective" className="mt-4 block text-xs font-semibold">Objetivo</Label>
+          <Textarea
+            id="company-marketing-objective"
+            value={draft.objective}
+            onChange={(event) => onPatchPolicy({ objective: event.target.value })}
+            placeholder="Ej. Educar al mercado y captar oportunidades calificadas."
+            maxLength={2_000}
+            className="mt-2 min-h-[88px] resize-none rounded-xl text-xs"
+          />
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <Label htmlFor="company-marketing-daily-limit" className="text-xs font-semibold">Límite diario</Label>
+            <Input
+              id="company-marketing-daily-limit"
+              type="number"
+              min={1}
+              max={20}
+              value={draft.dailyLimit}
+              onChange={(event) => onPatchPolicy({
+                dailyLimit: Math.max(1, Math.min(20, Number(event.target.value) || 1)),
+              })}
+              className="h-9 w-20 rounded-full text-right text-xs tabular-nums"
+            />
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-4 w-full rounded-full"
+            onClick={onSavePolicy}
+            disabled={saving}
+          >
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Guardar para esta empresa
+          </Button>
+
+          <div className="mt-5 border-t border-zinc-100 pt-4 dark:border-white/5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold">Actividad reciente</h3>
+              <span className="text-[10px] tabular-nums text-zinc-400">{posts.length} registros</span>
+            </div>
+            <div className="mt-2 space-y-2">
+              {posts.slice(0, 4).map((post) => (
+                <div key={post.id} className="rounded-xl bg-zinc-50 px-3 py-2 dark:bg-zinc-900">
+                  <p className="truncate text-[11px] font-medium">{post.caption || post.prompt}</p>
+                  <p className="mt-1 text-[10px] text-zinc-500">
+                    {post.status === "published"
+                      ? "Publicado"
+                      : post.status === "scheduled"
+                        ? "Programado"
+                        : post.status === "publishing"
+                          ? "Publicando"
+                          : post.status === "failed"
+                            ? "Falló"
+                            : "Borrador"}
+                    {" · "}
+                    {relativeActivity(Date.parse(post.publishedAt || post.scheduledAt || post.createdAt))}
+                  </p>
+                </div>
+              ))}
+              {posts.length === 0 ? (
+                <p className="rounded-xl bg-zinc-50 px-3 py-4 text-center text-[11px] text-zinc-500 dark:bg-zinc-900">
+                  Todavía no hay publicaciones para esta empresa.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   )
 }
 

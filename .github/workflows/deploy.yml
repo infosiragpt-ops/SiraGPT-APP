@@ -766,6 +766,7 @@ jobs:
         if: env.SENTRY_AUTH_TOKEN != ''
         env:
           GENERATE_SOURCEMAP: 'true'
+          ONNXRUNTIME_NODE_INSTALL: skip
         run: npm ci --no-audit --no-fund && npm run build
 
       - name: Upload source maps

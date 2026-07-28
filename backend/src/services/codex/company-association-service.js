@@ -448,6 +448,92 @@ async function assignCompanyConnectors(prisma, {
   });
 }
 
+async function mutateCompanyConnector(prisma, {
+  userId,
+  projectId,
+  connectorAccountId,
+  action,
+}) {
+  const db = requireDb(prisma);
+  const ownerId = cleanId(userId, 'userId');
+  const companyId = cleanId(projectId, 'projectId');
+  const accountId = cleanId(connectorAccountId, 'connectorAccountId');
+  return db.$transaction(async (tx) => {
+    const company = await loadOwnedCompany(tx, { userId: ownerId, projectId: companyId });
+    const link = await tx.companyCodexProjectLink.findUnique({ where: { projectId: companyId } });
+    if (!link) {
+      throw new CompanyAssociationError(
+        'company_association_required',
+        'Associate a Codex project before assigning connectors.',
+        409,
+      );
+    }
+    const [connector] = await validateConnectors(tx, {
+      userId: ownerId,
+      organizationId: company.organizationId || null,
+      connectorAccountIds: [accountId],
+    });
+    const existing = await tx.projectConnectorAssignment.findMany({
+      where: {
+        projectId: companyId,
+        connectorAccountId: accountId,
+      },
+      take: 1,
+    });
+    const wasActive = existing[0]?.status === 'active';
+
+    if (action === 'add') {
+      await tx.projectConnectorAssignment.upsert({
+        where: {
+          projectId_connectorAccountId: {
+            projectId: companyId,
+            connectorAccountId: accountId,
+          },
+        },
+        create: {
+          projectId: companyId,
+          connectorAccountId: accountId,
+          organizationId: company.organizationId || null,
+          assignedByUserId: ownerId,
+          status: 'active',
+          capabilities: Array.isArray(connector.scopes) ? connector.scopes : [],
+        },
+        update: {
+          organizationId: company.organizationId || null,
+          assignedByUserId: ownerId,
+          status: 'active',
+          capabilities: Array.isArray(connector.scopes) ? connector.scopes : [],
+        },
+      });
+      return {
+        connector: publicConnector(connector),
+        changed: !wasActive,
+      };
+    }
+
+    const result = await tx.projectConnectorAssignment.updateMany({
+      where: {
+        projectId: companyId,
+        connectorAccountId: accountId,
+        status: 'active',
+      },
+      data: { status: 'revoked' },
+    });
+    return {
+      connector: publicConnector(connector),
+      changed: Number(result?.count || 0) > 0,
+    };
+  });
+}
+
+async function addCompanyConnector(prisma, input) {
+  return mutateCompanyConnector(prisma, { ...input, action: 'add' });
+}
+
+async function removeCompanyConnector(prisma, input) {
+  return mutateCompanyConnector(prisma, { ...input, action: 'remove' });
+}
+
 async function listOrphans(prisma, { userId }) {
   const db = requireDb(prisma);
   const ownerId = cleanId(userId, 'userId');
@@ -486,8 +572,10 @@ module.exports = {
   CODEX_PROJECT_SELECT,
   CONNECTOR_SELECT,
   associationForCompany,
+  addCompanyConnector,
   associateCompany,
   assignCompanyConnectors,
   listOrphans,
   hasOrganizationAccess,
+  removeCompanyConnector,
 };

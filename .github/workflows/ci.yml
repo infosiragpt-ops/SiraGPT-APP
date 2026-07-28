@@ -15,6 +15,10 @@ concurrency:
 
 env:
   NODE_VERSION: '24'
+  # onnxruntime-node already bundles the CPU runtime used by the web build.
+  # Its optional Linux CUDA provider is fetched from NuGet during postinstall,
+  # which makes ordinary CPU-only CI depend on a large, unrelated GPU download.
+  ONNXRUNTIME_NODE_INSTALL: skip
   # Dummy NEXT_PUBLIC_* values for `next build`. The build step statically
   # evaluates them into client bundles; real values are injected at deploy
   # time via the host's env (Vercel/VPS/etc.), not baked into CI artifacts.

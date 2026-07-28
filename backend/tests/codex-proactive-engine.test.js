@@ -4,6 +4,17 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const engine = require('../src/services/codex/proactive-engine');
+const {
+  socialResourceKeyForConnection,
+} = require('../src/services/codex/company-resources');
+
+function socialKey(platform) {
+  return socialResourceKeyForConnection({
+    id: `connection-${platform}`,
+    platform,
+    accountId: `account-${platform}`,
+  });
+}
 
 function fakePrisma({ project, activeRun = null, recentRuns = [] } = {}) {
   const state = { project: { ...project }, updates: [] };
@@ -217,14 +228,16 @@ test('Marketing department delegates to social-company instead of creating a cod
   };
   prisma.user = { findUnique: async () => ({ gmailTokens: null }) };
   let calls = 0;
+  let allowedPlatforms = 'not-called';
   const result = await engine.runCycle({
     project,
     deps: {
       prisma,
       runService: { createRun: async () => { throw new Error('must not create a code run'); } },
       socialAutopilot: {
-        generateDepartmentPost: async () => {
+        generateDepartmentPost: async (args) => {
           calls += 1;
+          allowedPlatforms = args.allowedPlatforms;
           return { action: 'drafted_review', postId: 'post-1' };
         },
       },
@@ -233,12 +246,50 @@ test('Marketing department delegates to social-company instead of creating a cod
     env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
   });
   assert.equal(calls, 1);
+  assert.deepEqual(allowedPlatforms, [], 'no resource assignments must fail closed');
   assert.equal(result.action, 'marketing_drafted_review');
   assert.equal(
     engine.readProactiveState(prisma.state.project).deptIndex,
     (marketingIndex + 1) % engine.DEPARTMENTS.length,
   );
   assert.equal(prisma.state.project.brief.ledger[0].runId, 'social:post-1');
+});
+
+test('Marketing receives only social platforms explicitly assigned to its department', async () => {
+  const marketingIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'marketing');
+  const project = {
+    ...PROJECT,
+    brief: {
+      proactive: { enabled: true, deptIndex: marketingIndex },
+      companyResources: {
+        assignments: {
+          [socialKey('linkedin')]: 'marketing',
+          [socialKey('x')]: 'sales',
+          'connector:notion': 'marketing',
+        },
+        pinned: [],
+      },
+    },
+  };
+  const prisma = fakePrisma({ project });
+  let allowedPlatforms = null;
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create a code run'); } },
+      socialAutopilot: {
+        generateDepartmentPost: async (args) => {
+          allowedPlatforms = args.allowedPlatforms;
+          return { action: 'drafted_review', postId: 'post-allowlisted' };
+        },
+      },
+      chatComplete: async () => { throw new Error('must not propose code'); },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(result.action, 'marketing_drafted_review');
+  assert.deepEqual(allowedPlatforms, ['linkedin']);
 });
 
 test('Sales department performs evidence-backed lead research instead of creating code', async () => {
@@ -279,7 +330,16 @@ test('Customer Success creates review-first inbox work and records it in the led
   const departmentIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'customer-success');
   const project = {
     ...PROJECT,
-    brief: { proactive: { enabled: true, deptIndex: departmentIndex } },
+    brief: {
+      proactive: { enabled: true, deptIndex: departmentIndex },
+      companyResources: {
+        assignments: {
+          'connector:gmail': 'customer-success',
+          'social:v2:x:connection-x:account-x': 'customer-success',
+        },
+        pinned: [],
+      },
+    },
   };
   const prisma = fakePrisma({ project });
   const result = await engine.runCycle({
@@ -313,6 +373,44 @@ test('Customer Success creates review-first inbox work and records it in the led
   assert.match(prisma.state.project.brief.ledger[0].acceptance[0].evidence, /social_policy=review/);
 });
 
+test('Customer Success does not touch provider operations without an assigned resource', async () => {
+  const departmentIndex = engine.DEPARTMENTS.findIndex(
+    (department) => department.id === 'customer-success',
+  );
+  const project = {
+    ...PROJECT,
+    brief: {
+      proactive: { enabled: true, deptIndex: departmentIndex },
+      companyResources: { assignments: {}, pinned: [] },
+    },
+  };
+  const prisma = fakePrisma({ project });
+  let operationCalls = 0;
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: { createRun: async () => { throw new Error('must not create code'); } },
+      companyOperations: {
+        triageInbox: async () => {
+          operationCalls += 1;
+          throw new Error('must not read Gmail');
+        },
+        triageSocialConversations: async () => {
+          operationCalls += 1;
+          throw new Error('must not read social providers');
+        },
+      },
+      chatComplete: async () => { throw new Error('must not call the model'); },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+
+  assert.equal(result.action, 'customer_success_company_resource_not_assigned');
+  assert.equal(operationCalls, 0);
+  assert.equal(prisma.state.project.brief.ledger[0].outcome, 'blocked');
+});
+
 test('custom departments participate in the persisted round-robin', async () => {
   const project = {
     ...PROJECT,
@@ -327,10 +425,18 @@ test('custom departments participate in the persisted round-robin', async () => 
         mission: 'Identifica alianzas verificables para distribución.',
         desiredAgents: 40,
       }],
+      companyResources: {
+        assignments: {
+          'connector:notion': 'custom-partnerships',
+          [socialKey('x')]: 'marketing',
+        },
+        pinned: [],
+      },
     },
   };
   const prisma = fakePrisma({ project });
   const created = [];
+  let proposalMessages = [];
   const result = await engine.runCycle({
     project,
     deps: {
@@ -341,14 +447,20 @@ test('custom departments participate in the persisted round-robin', async () => 
           return { id: 'partnership-plan' };
         },
       },
-      chatComplete: async () => ({
-        content: '{"title":"Mapea alianzas","goal":"Documenta cinco aliados con evidencia publica."}',
-      }),
+      chatComplete: async ({ messages }) => {
+        proposalMessages = messages;
+        return {
+          content: '{"title":"Mapea alianzas","goal":"Documenta cinco aliados con evidencia publica."}',
+        };
+      },
     },
     env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
   });
   assert.equal(result.department, 'custom-partnerships');
   assert.match(created[0].prompt, /^\[PROACTIVO · Alianzas\]/);
+  assert.match(proposalMessages[1].content, /Recursos asignados a este departamento/);
+  assert.match(proposalMessages[1].content, /connector:notion/);
+  assert.doesNotMatch(proposalMessages[1].content, /social:x/);
   assert.equal(engine.readProactiveState(prisma.state.project).deptIndex, 0);
 });
 

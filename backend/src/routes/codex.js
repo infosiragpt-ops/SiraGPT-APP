@@ -416,6 +416,38 @@ router.put(
 );
 
 router.post(
+  '/company-associations/:projectId/connectors/:connectorAccountId',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      return res.json(await companyAssociationService.addCompanyConnector(codexDb, {
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        connectorAccountId: req.params.connectorAccountId,
+      }));
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.delete(
+  '/company-associations/:projectId/connectors/:connectorAccountId',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      return res.json(await companyAssociationService.removeCompanyConnector(codexDb, {
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        connectorAccountId: req.params.connectorAccountId,
+      }));
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.post(
   '/projects',
   authenticateToken,
   requireCodexAgentAccess,
@@ -608,6 +640,52 @@ router.delete('/projects/:id/departments/:departmentId', authenticateToken, asyn
     const status = known[err?.message] || 500;
     return res.status(status).json({
       error: status === 500 ? 'codex_departments_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+// ── Recursos asignados por empresa/departamento ────────────────────────────
+// Stored in CodexProject.brief so the same authenticated user sees the same
+// assignments on every browser without leaking them across companies.
+router.get('/projects/:id/company-resources', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const service = require('../services/codex/company-resources');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ resources: service.readCompanyResources(project) });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'codex_company_resources_failed',
+      message: err.message,
+    });
+  }
+});
+
+router.put('/projects/:id/company-resources', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const service = require('../services/codex/company-resources');
+    const resources = await service.writeCompanyResources({
+      prisma: codexDb,
+      project,
+      resources: req.body,
+      expectedRevision: req.body?.expectedRevision,
+    });
+    return res.json({ resources });
+  } catch (err) {
+    const service = require('../services/codex/company-resources');
+    if (err instanceof service.CompanyResourcesError) {
+      return res.status(err.status).json({
+        error: err.code,
+        message: err.message,
+        ...(err.details ? { details: err.details } : {}),
+      });
+    }
+    return res.status(500).json({
+      error: 'codex_company_resources_failed',
       message: err.message,
     });
   }

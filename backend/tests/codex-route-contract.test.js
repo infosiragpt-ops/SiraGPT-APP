@@ -214,10 +214,12 @@ test('GET /access reports flag and user execution access', async () => {
 
 test('company association routes persist explicit owner choices and never infer a backfill', async () => {
   const originals = {
+    addCompanyConnector: companyAssociationService.addCompanyConnector,
     associationForCompany: companyAssociationService.associationForCompany,
     associateCompany: companyAssociationService.associateCompany,
     assignCompanyConnectors: companyAssociationService.assignCompanyConnectors,
     listOrphans: companyAssociationService.listOrphans,
+    removeCompanyConnector: companyAssociationService.removeCompanyConnector,
   };
   const calls = [];
   companyAssociationService.associationForCompany = async (_db, args) => {
@@ -245,6 +247,14 @@ test('company association routes persist explicit owner choices and never infer 
   companyAssociationService.assignCompanyConnectors = async (_db, args) => {
     calls.push(['connectors', args]);
     return { connectors: [] };
+  };
+  companyAssociationService.addCompanyConnector = async (_db, args) => {
+    calls.push(['connector-add', args]);
+    return { connector: { id: args.connectorAccountId }, changed: true };
+  };
+  companyAssociationService.removeCompanyConnector = async (_db, args) => {
+    calls.push(['connector-remove', args]);
+    return { connector: { id: args.connectorAccountId }, changed: true };
   };
   companyAssociationService.listOrphans = async (_db, args) => {
     calls.push(['orphans', args]);
@@ -275,6 +285,16 @@ test('company association routes persist explicit owner choices and never infer 
       .send({ connectorAccountIds: [] });
     assert.equal(connectors.status, 200);
 
+    const connectorAdded = await request(buildApp())
+      .post('/api/codex/company-associations/company-a/connectors/gmail-a');
+    assert.equal(connectorAdded.status, 200);
+    assert.equal(connectorAdded.body.changed, true);
+
+    const connectorRemoved = await request(buildApp())
+      .delete('/api/codex/company-associations/company-a/connectors/gmail-a');
+    assert.equal(connectorRemoved.status, 200);
+    assert.equal(connectorRemoved.body.changed, true);
+
     const orphans = await request(buildApp())
       .get('/api/codex/company-associations/orphans');
     assert.equal(orphans.status, 200);
@@ -282,10 +302,12 @@ test('company association routes persist explicit owner choices and never infer 
 
     for (const [, args] of calls) assert.equal(args.userId, 'u-1');
   } finally {
+    companyAssociationService.addCompanyConnector = originals.addCompanyConnector;
     companyAssociationService.associationForCompany = originals.associationForCompany;
     companyAssociationService.associateCompany = originals.associateCompany;
     companyAssociationService.assignCompanyConnectors = originals.assignCompanyConnectors;
     companyAssociationService.listOrphans = originals.listOrphans;
+    companyAssociationService.removeCompanyConnector = originals.removeCompanyConnector;
   }
 });
 
@@ -465,8 +487,8 @@ test('company operations routes scope every record to the owned user and project
     const socialTriage = await request(buildApp())
       .post('/api/codex/projects/p1/company-operations/triage-social')
       .send({ maxResults: 10 });
-    assert.equal(socialTriage.status, 200);
-    assert.equal(socialTriage.body.result.action, 'social_not_connected');
+    assert.equal(socialTriage.status, 403);
+    assert.equal(socialTriage.body.error, 'company_project_not_active');
 
     for (const [, where] of scopes) {
       assert.equal(where.projectId, 'p1');

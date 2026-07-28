@@ -349,6 +349,11 @@ export interface CodexCompanyCapacity {
   writerConcurrency: number
   strategy: "parallel_readers_serialized_writer"
 }
+export interface CodexCompanyResourceState {
+  assignments: Record<string, string>
+  pinned: string[]
+  revision: number
+}
 export interface CodexCompanyLead {
   id: string
   companyName: string
@@ -587,6 +592,16 @@ export const codexApi = {
         body: JSON.stringify({ connectorAccountIds }),
       },
     ).then((result) => result.connectors),
+  addCompanyConnector: (projectId: string, connectorAccountId: string) =>
+    req<{ connector: CodexCompanyConnectorAssignment; changed: boolean }>(
+      `/company-associations/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(connectorAccountId)}`,
+      { method: "POST" },
+    ),
+  removeCompanyConnector: (projectId: string, connectorAccountId: string) =>
+    req<{ connector: CodexCompanyConnectorAssignment; changed: boolean }>(
+      `/company-associations/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(connectorAccountId)}`,
+      { method: "DELETE" },
+    ),
 
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),
   createProject: (name: string, brief?: unknown, organizationId?: string | null) =>
@@ -632,6 +647,22 @@ export const codexApi = {
       `/projects/${id}/departments/${encodeURIComponent(departmentId)}`,
       { method: "DELETE" },
     ),
+  getCompanyResources: (id: string) =>
+    req<{ resources: CodexCompanyResourceState }>(
+      `/projects/${id}/company-resources`,
+      { cache: "no-store" },
+    ).then((result) => result.resources),
+  updateCompanyResources: (id: string, resources: CodexCompanyResourceState) =>
+    req<{ resources: CodexCompanyResourceState }>(
+      `/projects/${id}/company-resources`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          ...resources,
+          expectedRevision: resources.revision,
+        }),
+      },
+    ).then((result) => result.resources),
   getCompanyProfile: (id: string) =>
     req<{ company: CodexCompanyContext }>(`/projects/${id}/company-profile`, { cache: "no-store" })
       .then((result) => result.company),

@@ -64,6 +64,31 @@ export type CompanySocialPost = {
   createdAt: string
 }
 
+export type CompanySocialPublishResult = {
+  action: string
+  postId?: string
+  published?: number
+  failed?: number
+  post?: CompanySocialPost
+}
+
+export type CompanySocialLegacySummary = {
+  total: number
+  assignable: number
+  skipped: number
+  skippedByReason: Record<string, number>
+  deniedPlatforms: string[]
+}
+
+export type CompanySocialLegacyAssignment = {
+  workspaceId: string
+  total: number
+  assigned: number
+  skipped: number
+  skippedByReason: Record<string, number>
+  deniedPlatforms: string[]
+}
+
 const BASE = `${getNormalizedApiBaseUrl()}/social-posts`
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -91,9 +116,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const companySocialApi = {
-  operations: () => request<CompanySocialOperations>("/operations", { cache: "no-store" }),
-  listPosts: () => request<{ posts: CompanySocialPost[] }>("/", { cache: "no-store" })
+  operations: (workspaceId?: string | null) =>
+    request<CompanySocialOperations>(
+      `/operations${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+      { cache: "no-store" },
+    ),
+  listPosts: (workspaceId?: string | null) =>
+    request<{ posts: CompanySocialPost[] }>(
+      `/${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+      { cache: "no-store" },
+    )
     .then((result) => result.posts),
+  legacySummary: (workspaceId: string) =>
+    request<{ workspaceId: string; legacy: CompanySocialLegacySummary }>(
+      `/legacy?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { cache: "no-store" },
+    ).then((result) => result.legacy),
+  assignLegacyPosts: (workspaceId: string) =>
+    request<CompanySocialLegacyAssignment>("/legacy/assign", {
+      method: "POST",
+      body: JSON.stringify({ workspaceId, confirm: true }),
+    }),
   connectUrl: (platform: CompanySocialPlatform) =>
     request<{ platform: CompanySocialPlatform; url: string }>(`/connect/${platform}`),
   disconnect: (platform: CompanySocialPlatform) =>
@@ -108,7 +151,7 @@ export const companySocialApi = {
     caption: string
     platforms: CompanySocialPlatform[]
     scheduledAt?: string
-    workspaceId?: string | null
+    workspaceId: string
   }) => request<{ post: CompanySocialPost }>("/queue", {
     method: "POST",
     body: JSON.stringify({
@@ -118,5 +161,8 @@ export const companySocialApi = {
     }),
   }).then((result) => result.post),
   publishNow: (postId: string) =>
-    request<{ result: unknown }>(`/${encodeURIComponent(postId)}/publish-now`, { method: "POST" }),
+    request<{ result: CompanySocialPublishResult }>(
+      `/${encodeURIComponent(postId)}/publish-now`,
+      { method: "POST" },
+    ),
 }

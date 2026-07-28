@@ -12,17 +12,61 @@ function matchesStatus(actual, expected) {
   return true;
 }
 
-function externalActionPrisma(actions) {
+function externalActionPrisma(actions, {
+  resourceDepartment = 'customer-success',
+  companyDeletedAt = null,
+} = {}) {
+  const project = {
+    id: 'project-1',
+    userId: 'user-1',
+    deletedAt: null,
+    name: 'SiraGPT',
+    brief: {
+      companyProfile: {
+        autonomy: { emailReplies: 'review', leadOutreach: 'review' },
+      },
+      companyResources: {
+        assignments: { 'connector:gmail': resourceDepartment },
+        pinned: [],
+      },
+    },
+    companyLink: {
+      project: {
+        id: 'company-1',
+        userId: 'user-1',
+        deletedAt: companyDeletedAt,
+      },
+    },
+  };
   return {
     codexProject: {
-      findFirst: async () => ({
-        id: 'project-1',
-        userId: 'user-1',
-        name: 'SiraGPT',
-        brief: { companyProfile: { autonomy: { emailReplies: 'review', leadOutreach: 'review' } } },
-      }),
+      findFirst: async ({ where }) => (
+        where.id === project.id
+        && where.userId === project.userId
+        && project.deletedAt == null
+          ? structuredClone(project)
+          : null
+      ),
     },
     user: { findUnique: async () => ({ gmailTokens: { accessToken: 'encrypted' } }) },
+    connectorAccount: {
+      findFirst: async ({ where }) => (
+        where.userId === 'user-1'
+        && where.provider === 'gmail'
+        && where.status === 'connected'
+          ? { id: 'connector-gmail', userId: 'user-1', provider: 'gmail', status: 'connected' }
+          : null
+      ),
+    },
+    projectConnectorAssignment: {
+      findFirst: async ({ where }) => (
+        where.projectId === 'company-1'
+        && where.connectorAccountId === 'connector-gmail'
+        && where.status === 'active'
+          ? { id: 'assignment-gmail', ...where }
+          : null
+      ),
+    },
     codexExternalAction: {
       findFirst: async ({ where }) => actions.find((row) =>
         (!where.id || row.id === where.id)
@@ -132,7 +176,7 @@ test('two concurrent approvals consume one remaining daily email slot', async ()
 
 test('concurrent lead preparation creates one durable action before one Gmail draft', async () => {
   const actions = [];
-  const prisma = externalActionPrisma(actions);
+  const prisma = externalActionPrisma(actions, { resourceDepartment: 'sales' });
   prisma.codexCompanyLead.findFirst = async () => ({
     id: 'lead-1',
     projectId: 'project-1',
@@ -176,4 +220,46 @@ test('concurrent lead preparation creates one durable action before one Gmail dr
   assert.equal(drafts, 1);
   assert.equal(results.filter((result) => result.action === 'outreach_review').length, 1);
   assert.equal(results.filter((result) => result.action === 'outreach_already_prepared').length, 1);
+});
+
+test('resource revoked after approval prevents the Gmail effect', async () => {
+  const now = new Date('2026-07-27T12:00:00.000Z');
+  const actions = [{
+    id: 'action-revoked',
+    projectId: 'project-1',
+    userId: 'user-1',
+    kind: 'email_reply',
+    targetRef: 'message-revoked',
+    status: 'pending_review',
+    payload: { providerDraftId: 'draft-revoked', messageId: 'message-revoked' },
+    updatedAt: now,
+    executedAt: null,
+  }];
+  const prisma = externalActionPrisma(actions);
+  let sends = 0;
+  const result = await externalActions.approveExternalAction({
+    prisma,
+    project: { id: 'project-1', userId: 'user-1' },
+    actionId: 'action-revoked',
+    gmailLoader: async () => {
+      const current = await prisma.codexProject.findFirst({
+        where: { id: 'project-1', userId: 'user-1' },
+      });
+      current.brief.companyResources.assignments = {};
+      prisma.codexProject.findFirst = async () => structuredClone(current);
+      return {
+        client: {
+          sendDraft: async () => {
+            sends += 1;
+            return { messageId: 'must-not-send' };
+          },
+        },
+      };
+    },
+    now: () => now,
+  });
+
+  assert.equal(result.action, 'company_resource_not_assigned');
+  assert.equal(result.record.status, 'pending_review');
+  assert.equal(sends, 0);
 });
