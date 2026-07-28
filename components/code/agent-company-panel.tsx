@@ -1235,7 +1235,7 @@ export function AgentCompanyPanel() {
       if (enabled) openCompanyLoop()
       toast.success(
         enabled
-          ? "Modo PROACTIVO activado — la empresa de agentes opera de forma autónoma."
+          ? "Modo PROACTIVO activado — todos los departamentos operan en flota continua hasta que lo pauses."
           : "Modo PROACTIVO desactivado.",
       )
     } catch (error) {
@@ -3051,8 +3051,8 @@ function CompanyHome({
             canRun === false && !proactiveOn
               ? "Ejecución protegida: requiere un runtime aislado o autorización administrativa."
               : proactiveOn
-              ? "Modo PROACTIVO ACTIVO (matrix.build-style). Clic para pausar."
-              : "Activar PROACTIVO — empresa de agentes autónoma (matrix.build)"
+              ? "Modo PROACTIVO ACTIVO — flota multi-departamento continua. Clic para pausar."
+              : "Activar PROACTIVO — todos los departamentos trabajan sin detenerse"
           }
           className={cn(
             "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
