@@ -189,6 +189,15 @@ function buildWorkPackets(mode, prompt, profile = {}) {
     });
   }
 
+  if (profile.signals?.opaqueImplementationRequested) {
+    packets.splice(3, 0, {
+      id: 'maintainable_source',
+      label: 'Translate opaque-code request into maintainable architecture',
+      required: true,
+      doneWhen: 'active code uses documented project languages, readable contracts, and reviewable tests',
+    });
+  }
+
   if (profile.signals?.wantsAutonomousAgent) {
     packets.splice(3, 0, {
       id: 'autonomous_runtime',
@@ -245,6 +254,9 @@ function buildQualityGates(mode, profile = {}) {
       'bulk_copy_kept_out_of_active_runtime',
     );
   }
+  if (profile.signals?.opaqueImplementationRequested) {
+    gates.push('maintainable_standard_language', 'auditable_source_and_tests');
+  }
   if (profile.signals?.wantsAutonomousAgent) gates.push('autonomous_plan_execute_verify_loop');
   if (profile.signals?.referencesVisualContext) gates.push('attachment_or_visual_evidence_checked');
   if (profile.signals?.wantsRepair) gates.push('previous_mismatch_corrected');
@@ -298,6 +310,12 @@ function buildRiskControls(profile = {}) {
     controls.push({
       risk: 'license_attribution_loss',
       mitigation: 'preserve MIT notices for reference snapshots and document source commit before any copied material is stored',
+    });
+  }
+  if (profile.signals?.opaqueImplementationRequested) {
+    controls.push({
+      risk: 'intentional_code_obfuscation',
+      mitigation: 'convert requested complexity into modular architecture and keep active source readable, documented, and testable',
     });
   }
   if (profile.signals?.wantsAutonomousAgent) {
