@@ -258,7 +258,11 @@ async function withChannelPairingLock({ prisma, channelId, operation }) {
           `;
           return operation(tx);
         }, {
-          isolationLevel: 'Serializable',
+          // The advisory lock is the serialization boundary for a channel.
+          // READ COMMITTED ensures a transaction that waited for the lock sees
+          // the previous holder's commit instead of retaining a stale
+          // SERIALIZABLE snapshot and repeatedly failing with Prisma P2034.
+          isolationLevel: 'ReadCommitted',
           maxWait: 5_000,
           timeout: 10_000,
         });
