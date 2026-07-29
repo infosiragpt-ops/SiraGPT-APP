@@ -74,6 +74,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -986,6 +987,26 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // the live stream). Auto-selected from the catalog, persisted, user-overridable.
   const [codeModel, setCodeModel] = React.useState<{ name: string; provider?: string } | null>(null)
 
+  // Reasoning effort for /code streams (Bajo/Medio/Extra/Max). Shared key with
+  // the main composer so the user's preference carries across surfaces.
+  const [selectedEffort, setSelectedEffortState] = React.useState<string>("Medio")
+  React.useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("sira:composer:effort")
+      if (saved) setSelectedEffortState(saved)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+  const setSelectedEffort = React.useCallback((effort: string) => {
+    setSelectedEffortState(effort)
+    try {
+      window.localStorage.setItem("sira:composer:effort", effort)
+    } catch {
+      /* quota / private mode */
+    }
+  }, [])
+
   // FREE-plan / sparse catalogs return models:[] but the backend still ships a
   // policy.fallbackModel it will route to. Surface it so the composer never gets
   // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
@@ -1804,6 +1825,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             disableAgentic: true,
             enableWebGrounding: webGroundedConversation,
             webGroundingQuery: webGroundingQuery || undefined,
+            reasoningEffort: selectedEffort,
           },
           (chunk) => {
             assistantText += chunk
@@ -2100,6 +2122,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       files,
       includeContext,
       markVoiced,
+      selectedEffort,
       sessionId,
       setTurns,
       turns,
@@ -4314,6 +4337,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               models={pickerModels}
               selectedModel={activeModelName || ""}
               fast={modelIsFast}
+              selectedEffort={selectedEffort}
+              onSelectEffort={setSelectedEffort}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
             <button
@@ -5005,19 +5030,61 @@ function ComposerPlusMenu({
 
 type ModelOption = { name: string; provider?: string; displayName?: string }
 
+// Values match backend aliases in reasoning-orchestrator.computeForEffort.
+const COMPOSER_EFFORT_LEVELS = [
+  {
+    value: "Bajo",
+    label: "Low",
+    description: "Faster replies. Lower reasoning depth and cost.",
+  },
+  {
+    value: "Medio",
+    label: "Medium",
+    description: "Balanced reasoning depth for most tasks.",
+  },
+  {
+    value: "Extra",
+    label: "High",
+    description: "Deeper reasoning. Higher cost and slower.",
+  },
+  {
+    value: "Max",
+    label: "Max",
+    description: "Maximum reasoning depth. Highest cost and slowest.",
+  },
+] as const
+
+function resolveComposerEffortIndex(effort: string | null | undefined) {
+  const normalized = String(effort || "").trim().toLowerCase()
+  const aliases: Record<string, number> = {
+    bajo: 0, low: 0, minimo: 0, "mínimo": 0, fast: 0, rapido: 0, "rápido": 0,
+    medio: 1, medium: 1, normal: 1, balanced: 1,
+    extra: 2, alto: 2, high: 2, deep: 2,
+    max: 3, maximo: 3, "máximo": 3, maximum: 3, ultra: 3,
+  }
+  const index = aliases[normalized]
+  return typeof index === "number" ? index : 1
+}
+
 function ModelPickerInline({
   models,
   selectedModel,
   fast,
+  selectedEffort,
+  onSelectEffort,
   onSelect,
 }: {
   models: ModelOption[]
   selectedModel: string
   fast?: boolean
+  selectedEffort: string
+  onSelectEffort: (effort: string) => void
   onSelect: (model: ModelOption) => void
 }) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState("")
+  const effortIndex = resolveComposerEffortIndex(selectedEffort)
+  const effortLevel = COMPOSER_EFFORT_LEVELS[effortIndex] || COMPOSER_EFFORT_LEVELS[1]
 
   const grouped = React.useMemo(() => {
     const map = new Map<string, ModelOption[]>()
@@ -5079,7 +5146,7 @@ function ModelPickerInline({
         side="top"
         sideOffset={8}
         collisionPadding={16}
-        className="z-[1000] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-lg border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
+        className="z-[1000] w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-lg border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
       >
         <div className="border-b border-border/50 px-2.5 py-2">
           <div className="relative">
@@ -5093,7 +5160,7 @@ function ModelPickerInline({
             />
           </div>
         </div>
-        <div className="max-h-[min(320px,calc(100vh-180px))] overflow-y-auto p-1">
+        <div className="max-h-[min(280px,calc(100vh-240px))] overflow-y-auto p-1">
           {models.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">
               Cargando modelos…
@@ -5136,6 +5203,56 @@ function ModelPickerInline({
               </React.Fragment>
             ))
           )}
+        </div>
+
+        <div
+          className="model-picker-effort"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <div className="model-picker-effort-header">
+            <span className="model-picker-effort-title">Effort</span>
+            <span className="model-picker-effort-value">{effortLevel.label}</span>
+          </div>
+
+          <div className="model-picker-effort-slider-wrap">
+            <Slider
+              min={0}
+              max={COMPOSER_EFFORT_LEVELS.length - 1}
+              step={1}
+              value={[effortIndex]}
+              onValueChange={(values) => {
+                const next = COMPOSER_EFFORT_LEVELS[values[0] ?? effortIndex]
+                if (next) onSelectEffort(next.value)
+              }}
+              aria-label="Effort"
+              aria-valuetext={effortLevel.label}
+              className="model-picker-effort-slider"
+            />
+            <div className="model-picker-effort-stops" aria-hidden="true">
+              {COMPOSER_EFFORT_LEVELS.map((level, index) => (
+                <button
+                  key={level.value}
+                  type="button"
+                  tabIndex={-1}
+                  className={cn(
+                    "model-picker-effort-stop",
+                    index <= effortIndex && "is-active",
+                    index === effortIndex && "is-current",
+                  )}
+                  onClick={() => onSelectEffort(level.value)}
+                  title={level.label}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="model-picker-effort-ends">
+            <span>Low</span>
+            <span>Max</span>
+          </div>
+          <p className="model-picker-effort-description">{effortLevel.description}</p>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
