@@ -158,11 +158,13 @@ import {
   type CodexCompanyContext,
   type CodexCompanyOperations,
   type CodexCompanyResourceState,
+  type CodexDepartmentPool,
   type CodexExternalAction,
   type CodexEnterpriseCommandCenter,
   type CodexMissionEvidenceLedger,
   type CodexMissionEvidenceRecord,
   type CodexMissionReviewStatus,
+  type CodexProgressMemory,
   type CodexProjectActivity,
   type CodexProactiveState,
   type CodexRun,
@@ -658,6 +660,10 @@ export function AgentCompanyPanel() {
   const [deleteDepartmentTarget, setDeleteDepartmentTarget] = React.useState<AgentDepartmentDefinition | null>(null)
   const [deletingDepartment, setDeletingDepartment] = React.useState(false)
   const [companyCapacity, setCompanyCapacity] = React.useState<CodexCompanyCapacity | null>(null)
+  const [departmentPools, setDepartmentPools] = React.useState<CodexDepartmentPool[]>([])
+  const [progressMemory, setProgressMemory] = React.useState<CodexProgressMemory | null>(null)
+  const [missionEvidence, setMissionEvidence] = React.useState<CodexMissionEvidenceLedger | null>(null)
+  const [companyOperations, setCompanyOperations] = React.useState<CodexCompanyOperations | null>(null)
   const [proactiveOn, setProactiveOn] = React.useState(false)
   const [proactiveBusy, setProactiveBusy] = React.useState(false)
   const [proactiveState, setProactiveState] = React.useState<CodexProactiveState>(EMPTY_PROACTIVE_STATE)
@@ -715,17 +721,32 @@ export function AgentCompanyPanel() {
           setProactiveState(EMPTY_PROACTIVE_STATE)
           setCompanyContext(null)
           setCompanyCapacity(null)
+          setDepartmentPools([])
+          setProgressMemory(null)
+          setMissionEvidence(null)
+          setCompanyOperations(null)
           setCommandCenter(null)
           return
         }
 
-        const [accessResult, proactiveResult, runsResult, checkpointsResult, activityResult, commandCenterResult] = await Promise.allSettled([
+        const [
+          accessResult,
+          proactiveResult,
+          runsResult,
+          checkpointsResult,
+          activityResult,
+          commandCenterResult,
+          missionEvidenceResult,
+          operationsResult,
+        ] = await Promise.allSettled([
           codexApi.access(),
           codexApi.getProactive(codexProjectId),
           codexApi.listRuns(codexProjectId),
           codexApi.listCheckpoints(codexProjectId),
           codexApi.listProjectActivity(codexProjectId, 80),
           codexApi.getCommandCenter(codexProjectId),
+          codexApi.getMissionEvidence(codexProjectId),
+          codexApi.getCompanyOperations(codexProjectId),
         ])
         if (!alive) return
         if (accessResult.status === "fulfilled") setCodexAccess(accessResult.value)
@@ -743,6 +764,12 @@ export function AgentCompanyPanel() {
           setCommandCenter(commandCenterResult.value.commandCenter)
           setCompanyContext(commandCenterResult.value.company)
         }
+        if (missionEvidenceResult.status === "fulfilled") {
+          setMissionEvidence(missionEvidenceResult.value || null)
+        }
+        if (operationsResult.status === "fulfilled") {
+          setCompanyOperations(operationsResult.value || null)
+        }
         if (
           proactiveResult.status === "fulfilled" &&
           mutationVersion === proactiveMutationVersionRef.current
@@ -752,6 +779,8 @@ export function AgentCompanyPanel() {
           setProactiveState(nextState)
           setCompanyContext(proactiveResult.value.company || null)
           setCompanyCapacity(proactiveResult.value.capacity || null)
+          setDepartmentPools(Array.isArray(proactiveResult.value.departmentPools) ? proactiveResult.value.departmentPools : [])
+          setProgressMemory(proactiveResult.value.memory || null)
           const custom = proactiveResult.value.departments
             .filter((department) => department.custom)
             .map((department) => ({ ...department, custom: true as const }))
@@ -1024,8 +1053,27 @@ export function AgentCompanyPanel() {
         sessions: codeChatSessions,
         runs: codexRuns,
         rootSessionId: snapshot.rootSessionId,
+        departmentPools,
+        capacity: companyCapacity,
+        proactive: proactiveState,
+        commandCenter,
+        missionEvidence,
+        operations: companyOperations,
+        progressMemory,
       }),
-    [allDepartments, codeChatSessions, codexRuns, snapshot.rootSessionId],
+    [
+      allDepartments,
+      codeChatSessions,
+      codexRuns,
+      snapshot.rootSessionId,
+      departmentPools,
+      companyCapacity,
+      proactiveState,
+      commandCenter,
+      missionEvidence,
+      companyOperations,
+      progressMemory,
+    ],
   )
 
   const openCompanySurface = React.useCallback((nextView: CompanyPreviewView) => {
@@ -2895,7 +2943,12 @@ function CompanyHome({
           </div>
           <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-md border border-white/70 bg-white/[0.9] px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
             <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-zinc-400")} />
-            Oficina · {officeModel.activeCount} {officeModel.activeCount === 1 ? "activo" : "activos"}
+            Oficina · {officeModel.truth.occupiedDesks}/{officeModel.truth.physicalAgents || officeModel.activeCount} puestos
+            {officeModel.truth.latestBlockers.length > 0
+              ? ` · ${officeModel.truth.latestBlockers.length} bloqueos`
+              : officeModel.truth.pendingApprovals > 0
+                ? ` · ${officeModel.truth.pendingApprovals} aprob.`
+                : ""}
           </span>
           <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/[0.78] px-3 py-2 text-white opacity-100 backdrop-blur-sm transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-visible:opacity-100">
             <span className="truncate text-[11px] font-medium">Entrar a la sede de {companyName}</span>

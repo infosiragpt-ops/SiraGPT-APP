@@ -5,16 +5,20 @@ import { createPortal } from "react-dom"
 import {
   Activity,
   ArrowUpRight,
+  BadgeCheck,
   Building2,
   CircleAlert,
+  CircleDollarSign,
   CloudSun,
   Clock3,
+  FileWarning,
   Layers3,
   Loader2,
   Moon,
   Pause,
   Play,
   RotateCcw,
+  ShieldAlert,
   Sun,
   Users,
   Volume2,
@@ -65,10 +69,33 @@ function relativeTime(timestamp: number): string {
 }
 
 function statusDot(worker: AgentOfficeWorker) {
+  if (worker.blocker) return "bg-amber-400"
   if (worker.statusTone === "active") return "bg-sky-400"
   if (worker.statusTone === "ready") return "bg-emerald-400"
   if (worker.statusTone === "attention") return "bg-amber-400"
   return "bg-zinc-400"
+}
+
+function money(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—"
+  return `$${value.toFixed(value >= 10 ? 2 : 3)}`
+}
+
+function evidenceLabel(status: AgentOfficeWorker["evidenceReview"]): string {
+  switch (status) {
+    case "pending":
+      return "Pendiente de CEO"
+    case "approved":
+      return "Aprobada"
+    case "changes_requested":
+      return "Cambios pedidos"
+    case "rejected":
+      return "Rechazada"
+    case "blocked":
+      return "Bloqueada"
+    default:
+      return "Sin evidencia"
+  }
 }
 
 export function AgentOfficeOverlay({
@@ -143,6 +170,8 @@ export function AgentOfficeOverlay({
       workers,
       activeCount: workers.filter((worker) => worker.active).length,
       totalCount: workers.length,
+      // Keep company-wide operational truth even when the roster is filtered.
+      truth: model.truth,
     }
   }, [activeOnly, departmentId, model])
   const sound = useOfficeSoundscape({
@@ -161,6 +190,11 @@ export function AgentOfficeOverlay({
 
   const selectedWorker =
     model.workers.find((worker) => worker.id === selectedWorkerId) || null
+  const truth = model.truth
+  const focusedDepartment =
+    departmentId === "all"
+      ? null
+      : model.departments.find((department) => department.id === departmentId) || null
 
   if (!mounted || !open) return null
 
@@ -202,12 +236,12 @@ export function AgentOfficeOverlay({
           <span className="min-w-0 max-w-[92px] sm:max-w-[280px]">
             <span className="block truncate text-sm font-semibold sm:text-base">{companyName}</span>
             <span className="hidden truncate text-[11px] text-zinc-500 sm:block">
-              Distrito Edge · Oficina ejecutiva · {timeLabel}
+              Oficina operativa · pools reales · {timeLabel}
             </span>
           </span>
         </div>
 
-        <div className="pointer-events-auto ml-auto hidden items-center gap-1.5 sm:flex">
+        <div className="pointer-events-auto ml-auto hidden items-center gap-1.5 lg:flex" data-testid="agent-office-truth-chips">
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
             <span
               className={cn(
@@ -215,15 +249,24 @@ export function AgentOfficeOverlay({
                 model.activeCount > 0 ? "animate-pulse bg-sky-500" : "bg-zinc-300",
               )}
             />
-            {model.activeCount} {model.activeCount === 1 ? "activo" : "activos"}
+            {truth.occupiedDesks}/{truth.physicalAgents || model.totalCount} puestos
           </span>
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <Users className="h-3.5 w-3.5 text-zinc-500" />
-            {model.totalCount} {model.totalCount === 1 ? "agente" : "agentes"}
+            <CircleDollarSign className="h-3.5 w-3.5 text-zinc-500" />
+            {money(truth.costTodayUsd)}
+            {truth.dailyBudgetUsd != null ? ` / ${money(truth.dailyBudgetUsd)}` : ""}
+          </span>
+          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
+            <BadgeCheck className="h-3.5 w-3.5 text-zinc-500" />
+            {truth.pendingApprovals} aprob.
+          </span>
+          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
+            <ShieldAlert className="h-3.5 w-3.5 text-zinc-500" />
+            {truth.latestBlockers.length} bloqueos
           </span>
           <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
             <Layers3 className="h-3.5 w-3.5 text-zinc-500" />
-            {model.departments.length} departamentos
+            {model.departments.length} depts
           </span>
         </div>
 
@@ -397,6 +440,87 @@ export function AgentOfficeOverlay({
         </div>
       </div>
 
+      <div
+        className="pointer-events-none absolute left-3 right-3 top-[126px] z-20 sm:left-5 sm:right-auto sm:max-w-[720px]"
+        data-testid="agent-office-truth-strip"
+      >
+        <div className="pointer-events-auto grid grid-cols-2 gap-2 rounded-md border border-white/75 bg-white/90 p-2 shadow-sm backdrop-blur-xl sm:grid-cols-4">
+          <div className="rounded bg-zinc-50 px-2.5 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Pool</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums">
+              {focusedDepartment
+                ? `${focusedDepartment.pool.occupied}/${focusedDepartment.pool.size}`
+                : `${truth.occupiedDesks}/${truth.physicalAgents || "—"}`}
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              {focusedDepartment
+                ? focusedDepartment.pool.enabled
+                  ? `${focusedDepartment.pool.free} libres`
+                  : "Pool pausado"
+                : `${truth.freeDesks} libres · x${truth.writerConcurrency} writers`}
+            </p>
+          </div>
+          <div className="rounded bg-zinc-50 px-2.5 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Coste hoy</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums">
+              {money(focusedDepartment ? focusedDepartment.costTodayUsd : truth.costTodayUsd)}
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              {focusedDepartment?.pool.dailyBudgetUsd != null || truth.dailyBudgetUsd != null
+                ? `tope ${money(focusedDepartment?.pool.dailyBudgetUsd ?? truth.dailyBudgetUsd)}`
+                : "sin tope diario"}
+            </p>
+          </div>
+          <div className="rounded bg-zinc-50 px-2.5 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Evidencia</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums">
+              {focusedDepartment
+                ? focusedDepartment.evidencePending
+                : truth.pendingEvidenceReview}{" "}
+              rev.
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              {focusedDepartment
+                ? `${focusedDepartment.evidenceBlocked} bloqueadas`
+                : `${truth.blockedMissions} misiones bloqueadas`}
+            </p>
+          </div>
+          <div className="rounded bg-zinc-50 px-2.5 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Estado</p>
+            <p className="mt-0.5 text-sm font-semibold">
+              {focusedDepartment
+                ? focusedDepartment.commandStatus
+                : truth.readinessStatus === "unknown"
+                  ? "sin readiness"
+                  : truth.readinessStatus}
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              {focusedDepartment?.currentWork
+                || (truth.atRiskObjectives > 0
+                  ? `${truth.atRiskObjectives} OKR en riesgo`
+                  : `${truth.activeObjectives} OKR activos`)}
+            </p>
+          </div>
+        </div>
+        {truth.latestBlockers.length > 0 && departmentId === "all" ? (
+          <div className="pointer-events-auto mt-2 flex items-start gap-2 rounded-md border border-amber-200/80 bg-amber-50/95 px-3 py-2 text-[11px] text-amber-950 shadow-sm backdrop-blur-xl">
+            <FileWarning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0">
+              <span className="font-semibold">Bloqueo reciente: </span>
+              <span className="line-clamp-2">{truth.latestBlockers[0]?.label}</span>
+            </span>
+          </div>
+        ) : focusedDepartment && focusedDepartment.blockers[0] ? (
+          <div className="pointer-events-auto mt-2 flex items-start gap-2 rounded-md border border-amber-200/80 bg-amber-50/95 px-3 py-2 text-[11px] text-amber-950 shadow-sm backdrop-blur-xl">
+            <FileWarning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0">
+              <span className="font-semibold">Bloqueo del depto: </span>
+              <span className="line-clamp-2">{focusedDepartment.blockers[0].label}</span>
+            </span>
+          </div>
+        ) : null}
+      </div>
+
       <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-center gap-3 rounded-md border border-white/70 bg-white/80 px-3 py-2 text-[11px] font-medium text-zinc-600 shadow-sm backdrop-blur-xl sm:flex">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-sky-400" />
@@ -480,10 +604,38 @@ export function AgentOfficeOverlay({
                     <dd className="mt-1 text-sm font-medium">{selectedWorker.source === "run" ? "Ejecución" : "Sesión"}</dd>
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-4 py-3">
+                  <div>
+                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Coste</dt>
+                    <dd className="mt-1 text-sm font-medium tabular-nums">{money(selectedWorker.costUsd)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Evidencia</dt>
+                    <dd className="mt-1 text-sm font-medium">{evidenceLabel(selectedWorker.evidenceReview)}</dd>
+                  </div>
+                </div>
+                {selectedWorker.blocker ? (
+                  <div className="py-3">
+                    <dt className="text-[10px] font-semibold uppercase text-amber-700">Bloqueo</dt>
+                    <dd className="mt-1.5 text-sm leading-5 text-amber-950">{selectedWorker.blocker}</dd>
+                  </div>
+                ) : null}
+                {selectedWorker.evidenceSummary ? (
+                  <div className="py-3">
+                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Resumen de evidencia</dt>
+                    <dd className="mt-1.5 text-sm leading-5 text-zinc-900">{selectedWorker.evidenceSummary}</dd>
+                  </div>
+                ) : null}
                 <div className="py-3">
                   <dt className="text-[10px] font-semibold uppercase text-zinc-500">Última actividad</dt>
                   <dd className="mt-1 text-sm font-medium">{relativeTime(selectedWorker.updatedAt)}</dd>
                 </div>
+                {selectedWorker.runId ? (
+                  <div className="py-3">
+                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Run</dt>
+                    <dd className="mt-1 font-mono text-xs text-zinc-700">{selectedWorker.runId}</dd>
+                  </div>
+                ) : null}
               </dl>
 
               <Button
