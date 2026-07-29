@@ -57,6 +57,32 @@ describe("composer effort picker source contract", () => {
     )
   })
 
+  it("supports real dragging, not just stop clicks", () => {
+    // Anchor the end at the next top-level declaration: the component's typed
+    // destructure closes with "\n}" too, which a lazy match stops at.
+    const section = chatInterface.match(
+      /function EffortSection\(([\s\S]*?)\nfunction areNavbarModelSelectorPropsEqual/,
+    )
+    assert.ok(section, "EffortSection must exist")
+    assert.match(section![1], /onPointerDown=/, "the track must start drags on pointer down")
+    assert.match(section![1], /onPointerMove=/, "the track must follow pointer moves")
+    assert.match(
+      section![1],
+      /setPointerCapture/,
+      "pointer capture keeps the drag alive when the cursor leaves the track"
+    )
+    assert.match(
+      section![1],
+      /indexFromPointer/,
+      "any x on the track must map to the nearest stop"
+    )
+    assert.match(
+      globals,
+      /\.effort-track \{[\s\S]{0,400}touch-action: none/,
+      "touch drags must move the thumb, not scroll the dropdown"
+    )
+  })
+
   it("ships the effort styles in the curated stylesheet", () => {
     for (const cls of [".effort-section", ".effort-track-fill", ".effort-stop-active", ".effort-caption"]) {
       assert.ok(globals.includes(`${cls} {`), `${cls} must exist in globals.css`)

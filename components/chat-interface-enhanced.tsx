@@ -3676,9 +3676,22 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
 }) {
   const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((l) => l.value === selectedEffort))
   const active = EFFORT_LEVELS[activeIndex]
+  const trackRef = React.useRef<HTMLDivElement | null>(null)
+  const draggingRef = React.useRef(false)
   const moveTo = (index: number) => {
     const clamped = Math.min(EFFORT_LEVELS.length - 1, Math.max(0, index))
     if (clamped !== activeIndex) setSelectedEffort(EFFORT_LEVELS[clamped].value)
+  }
+  // Real dragging, not just stop-clicks: any x on the track maps to the
+  // nearest stop, and pointer capture keeps the drag alive even when the
+  // finger/cursor leaves the dropdown. Pointer events cover mouse + touch.
+  const indexFromPointer = (clientX: number) => {
+    const track = trackRef.current
+    if (!track) return activeIndex
+    const rect = track.getBoundingClientRect()
+    if (rect.width <= 0) return activeIndex
+    const fraction = (clientX - rect.left) / rect.width
+    return Math.round(Math.min(1, Math.max(0, fraction)) * (EFFORT_LEVELS.length - 1))
   }
   return (
     <div className="effort-section" onClick={(e) => e.stopPropagation()}>
@@ -3687,6 +3700,7 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
         <span className="effort-value">{active.value}</span>
       </div>
       <div
+        ref={trackRef}
         className="effort-track"
         role="slider"
         tabIndex={0}
@@ -3695,6 +3709,23 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
         aria-valuemax={EFFORT_LEVELS.length - 1}
         aria-valuenow={activeIndex}
         aria-valuetext={active.value}
+        onPointerDown={(e) => {
+          // Primary button / touch only; capture so the drag survives leaving
+          // the track and the dropdown never sees these events as item picks.
+          if (e.button !== 0 && e.pointerType === "mouse") return
+          draggingRef.current = true
+          try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* older browsers */ }
+          moveTo(indexFromPointer(e.clientX))
+        }}
+        onPointerMove={(e) => {
+          if (!draggingRef.current) return
+          moveTo(indexFromPointer(e.clientX))
+        }}
+        onPointerUp={(e) => {
+          draggingRef.current = false
+          try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* noop */ }
+        }}
+        onPointerCancel={() => { draggingRef.current = false }}
         onKeyDown={(e) => {
           if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); moveTo(activeIndex + 1) }
           else if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); moveTo(activeIndex - 1) }
@@ -11916,6 +11947,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onClose={() => setSlashMenuOpen(false)}
                     />
                     <CredentialWarning text={input} />
+                    <div
+                      data-testid="chat-composer-surface"
+                      className={cn(
+                        "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
+                        pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
+                        "bg-background",
+                        "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
+                        "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
+                        "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
+                    )}
+                  >
+                    {/* Attachments live INSIDE the composer border (Claude-style):
+                        the surface's rounded overflow clips them, so a dropped
+                        file reads as part of the input, not a floating card. */}
                     <div className="composer-context-tray">
                       <ActiveOptionsDisplay
                         uploadedFiles={uploadedFiles}
@@ -11934,17 +11979,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         </div>
                       )}
                     </div>
-                    <div
-                      data-testid="chat-composer-surface"
-                      className={cn(
-                        "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
-                        pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                        "bg-background",
-                        "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                        "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
-                        "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
-                    )}
-                  >
                     {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
@@ -12395,6 +12429,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       <CredentialWarning text={input} />
                       <div className="relative">
                         {pasteCapture.Overlay}
+                        <div
+                          data-testid="chat-composer-surface"
+                          className={cn(
+                            "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
+                            pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
+                            "bg-background",
+                            "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
+                            "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
+                            "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
+                        )}
+                      >
+                        {/* Attachments live INSIDE the composer border (Claude-style):
+                            the surface's rounded overflow clips them, so a dropped
+                            file reads as part of the input, not a floating card. */}
                         <div className="composer-context-tray">
                           <ActiveOptionsDisplay
                             uploadedFiles={uploadedFiles}
@@ -12413,17 +12461,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             </div>
                           )}
                         </div>
-                        <div
-                          data-testid="chat-composer-surface"
-                          className={cn(
-                            "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
-                            pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                            "bg-background",
-                            "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                            "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
-                            "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
-                        )}
-                      >
                         <TooltipProvider>
                           <div
                             className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"

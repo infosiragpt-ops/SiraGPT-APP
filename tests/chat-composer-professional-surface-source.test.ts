@@ -113,7 +113,7 @@ describe("professional chat composer surface source contract", () => {
     )
   })
 
-  it("keeps attachments and connector context outside the fixed input surface", () => {
+  it("renders attachments INSIDE the composer border, Claude-style", () => {
     assert.match(
       globals,
       /\.composer-context-tray:empty\s*\{\s*display: none;/,
@@ -122,7 +122,23 @@ describe("professional chat composer surface source contract", () => {
     assert.equal(
       (chatInterface.match(/className="composer-context-tray"/g) || []).length,
       2,
-      "both composer render paths should use the independent context tray"
+      "both composer render paths should use the context tray"
+    )
+    // The tray must be a child of the surface: dropped files sit within the
+    // same rounded border as the input, never as a floating card above it.
+    assert.equal(
+      (chatInterface.match(
+        /data-testid="chat-composer-surface"[\s\S]{0,1400}?className="composer-context-tray"/g
+      ) || []).length,
+      2,
+      "both composers must nest the tray inside the surface"
+    )
+    // [^}] keeps the check inside the rule body — [\s\S] would spill past the
+    // closing brace and false-positive on the next selector's border.
+    assert.doesNotMatch(
+      globals,
+      /\.composer-context-tray\s*\{[^}]{0,300}border: 0\.5px solid/,
+      "the tray must not paint its own card border inside the surface"
     )
   })
 })

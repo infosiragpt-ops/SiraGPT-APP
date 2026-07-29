@@ -942,6 +942,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   height: 1.25rem;
   border-radius: 999px;
   outline: none;
+  cursor: pointer;
+  /* The track is a drag surface: without this, touch drags scroll the
+     dropdown instead of moving the thumb. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .effort-track:focus-visible {
@@ -5433,21 +5439,22 @@ footer {
 }
 
 /* Attachments and connector controls remain fully available without changing
-   the approved composer dimensions. They use a separate tray above the fixed
-   input surface, so adding context never causes the bar itself to jump. */
+   the approved composer dimensions. The tray renders INSIDE the composer
+   surface (Claude-style), so dropped files sit within the same rounded
+   border as the input instead of floating above it as a separate card. */
 .composer-context-tray:empty {
   display: none;
 }
 
 .composer-context-tray {
   max-height: min(12rem, 28vh);
-  margin-bottom: 0.5rem;
   overflow-x: hidden;
   overflow-y: auto;
-  border: 0.5px solid hsl(220 13% 86% / 0.78);
-  border-radius: 1rem;
-  background: hsl(0 0% 100% / 0.98);
-  box-shadow: 0 12px 30px -26px hsl(220 30% 18% / 0.28);
+  padding: 0.625rem 0.75rem 0.125rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   scrollbar-width: thin;
 }
 
@@ -5457,7 +5464,7 @@ footer {
 
 .composer-context-tray .composer-media-controls-row {
   margin: 0;
-  padding: 0.625rem 0.75rem;
+  padding: 0.25rem 0 0.375rem;
 }
 
 .composer-input-row > :first-child {
@@ -5527,90 +5534,34 @@ footer {
   display: none;
 }
 
+/* Plain "+" (Claude-style): no circle, no border, no gradient — just the
+   glyph. The 44px hit area stays (contract test), and hover/open paint a
+   soft rounded wash so the affordance is still discoverable. */
 .composer-plus-liquid-button {
   position: relative;
-  isolation: isolate;
-  overflow: hidden;
   width: 2.75rem !important;
   min-width: 2.75rem;
   height: 2.75rem !important;
   min-height: 2.75rem;
-  /* Calm resting state: hairline border + near-flat surface + one soft
-     contact shadow. The embossed-sphere insets read dated next to the
-     otherwise flat composer; the liquid shimmer stays on hover (below). */
-  border: 1px solid hsl(220 13% 88% / 0.9) !important;
-  color: hsl(220 15% 26%);
-  background: linear-gradient(180deg, hsl(0 0% 100%), hsl(220 14% 97.5%));
-  box-shadow: 0 1px 2px hsl(220 30% 18% / 0.06);
+  border: none !important;
+  color: hsl(220 10% 40%);
+  background: transparent;
+  box-shadow: none;
   transition:
-    transform 210ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)),
-    color 180ms ease-out,
-    border-color 180ms ease-out,
-    background-color 180ms ease-out,
-    box-shadow 210ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
-}
-
-.composer-plus-liquid-button::before,
-.composer-plus-liquid-button::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-  border-radius: inherit;
-}
-
-.composer-plus-liquid-button::before {
-  inset: -42%;
-  z-index: -1;
-  background:
-    radial-gradient(circle at 28% 44%, hsl(var(--accent-violet) / 0.18), transparent 32%),
-    radial-gradient(circle at 72% 56%, hsl(203 96% 56% / 0.16), transparent 31%),
-    conic-gradient(from 110deg, transparent, hsl(0 0% 100% / 0.62), transparent 38%);
-  opacity: 0;
-  filter: blur(10px);
-  transform: scale(0.72) rotate(0deg);
-  transition:
-    opacity 240ms ease-out,
-    transform 520ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
-}
-
-.composer-plus-liquid-button::after {
-  inset: 1px;
-  z-index: 0;
-  background: linear-gradient(112deg, transparent 8%, hsl(0 0% 100% / 0.7) 42%, transparent 62%);
-  opacity: 0;
-  transform: translateX(-72%) skewX(-16deg);
-  transition:
-    opacity 180ms ease-out,
-    transform 560ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+    color 160ms ease-out,
+    background-color 160ms ease-out,
+    transform 160ms ease-out;
 }
 
 .composer-plus-liquid-button:hover,
 .composer-plus-liquid-button:focus-visible,
 .composer-plus-liquid-button[data-state="open"] {
-  color: hsl(220 20% 6%);
-  transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.9),
-    inset 0 -12px 22px -22px hsl(var(--accent-violet) / 0.54),
-    0 14px 30px -22px hsl(var(--accent-violet) / 0.38);
-}
-
-.composer-plus-liquid-button:hover::before,
-.composer-plus-liquid-button:focus-visible::before,
-.composer-plus-liquid-button[data-state="open"]::before {
-  opacity: 1;
-  transform: scale(1) rotate(22deg);
-}
-
-.composer-plus-liquid-button:hover::after,
-.composer-plus-liquid-button:focus-visible::after,
-.composer-plus-liquid-button[data-state="open"]::after {
-  opacity: 0.95;
-  transform: translateX(72%) skewX(-16deg);
+  color: hsl(220 20% 10%);
+  background: hsl(220 14% 92% / 0.75);
 }
 
 .composer-plus-liquid-button:active {
-  transform: translateY(0) scale(0.96);
+  transform: scale(0.94);
   transition-duration: 90ms;
 }
 
@@ -5797,24 +5748,17 @@ button.anti-bribery-context-chip:not(:disabled):active {
   background: radial-gradient(circle, hsl(var(--accent-violet) / 0.12), transparent 70%);
 }
 .dark .composer-plus-liquid-button {
-  border: 1px solid hsl(0 0% 100% / 0.1) !important;
-  color: hsl(216 29% 97% / 0.9);
-  background:
-    radial-gradient(circle at 42% 18%, hsl(0 0% 100% / 0.16), transparent 38%),
-    linear-gradient(145deg, hsl(216 24% 17% / 0.78), hsl(220 32% 10% / 0.7));
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.12),
-    inset 0 -12px 22px -22px hsl(var(--accent-violet) / 0.64),
-    0 12px 26px -24px hsl(0 0% 0% / 0.8);
+  border: none !important;
+  color: hsl(216 20% 80%);
+  background: transparent;
+  box-shadow: none;
 }
 .dark .composer-plus-liquid-button:hover,
 .dark .composer-plus-liquid-button:focus-visible,
 .dark .composer-plus-liquid-button[data-state="open"] {
   color: hsl(216 29% 98%);
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.18),
-    inset 0 -12px 22px -22px hsl(var(--accent-violet) / 0.72),
-    0 18px 34px -26px hsl(var(--accent-violet) / 0.55);
+  background: hsl(0 0% 100% / 0.08);
+  box-shadow: none;
 }
 .dark .anti-bribery-context-chip {
   border-color: hsl(0 0% 100% / 0.11);
@@ -5878,9 +5822,9 @@ button.anti-bribery-context-chip:not(:disabled):active {
 }
 
 .dark .composer-context-tray {
-  border-color: hsl(var(--composer-border) / 0.78);
-  background: hsl(var(--composer-bg) / 0.98);
-  box-shadow: 0 14px 32px -24px rgba(0, 0, 0, 0.78);
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* ─── Composer — premium dark surface ────────────────────────────── */
