@@ -120,7 +120,66 @@ export interface CodexRun {
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
 export interface CodexCheckpoint { id: string; commitSha: string; shortSha: string; title: string; createdAt: string; additions: number | null; deletions: number | null }
-export interface CodexObjective { id: string; title: string; metric: string | null; target: string | null; status: "active" | "at_risk" | "done" | "paused"; priority: number; updatedAt: string | null }
+export interface CodexKeyResult {
+  id: string
+  title: string
+  metric: string | null
+  baseline: string | null
+  current: string | null
+  target: string | null
+  unit: string | null
+  status: "not_started" | "on_track" | "at_risk" | "achieved"
+  progress: number | null
+  updatedAt: string | null
+}
+export interface CodexObjective {
+  id: string
+  title: string
+  description: string | null
+  ownerDepartmentId: string | null
+  metric: string | null
+  target: string | null
+  keyResults: CodexKeyResult[]
+  status: "active" | "at_risk" | "done" | "paused"
+  priority: number
+  reviewStatus: "pending" | "approved" | "changes_requested"
+  reviewNote: string | null
+  reviewedBy: string | null
+  reviewedAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+export interface CodexObjectiveReview {
+  id: string
+  revision: number
+  reviewer: string
+  source: string
+  decision: "approved" | "changes_requested"
+  rationale: string | null
+  objectiveIds: string[]
+  changes: {
+    added: number
+    removed: number
+    reprioritized: number
+    statusChanged: number
+    keyResultsChanged: number
+  }
+  createdAt: string
+}
+export interface CodexObjectivePortfolio {
+  version: number
+  revision: number
+  objectives: CodexObjective[]
+  latestReview: CodexObjectiveReview | null
+  summary: {
+    total: number
+    active: number
+    atRisk: number
+    done: number
+    averageProgress: number
+  }
+  reviews: CodexObjectiveReview[]
+}
 export interface CodexLedgerEntry {
   department: string
   runId: string
@@ -204,6 +263,7 @@ export interface CodexBusinessAudit {
 }
 export interface CodexCompanyContext {
   profile: CodexCompanyProfile
+  okrs: CodexObjectivePortfolio
   readiness: {
     score: number
     readyCount: number
@@ -684,6 +744,48 @@ export const codexApi = {
     req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity; memory: CodexProgressMemory; company: CodexCompanyContext }>(`/projects/${id}/proactive`, { cache: "no-store" }),
   setProactive: (id: string, enabled: boolean) =>
     req<{ state: CodexProactiveState; departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(`/projects/${id}/proactive`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  getCompanyOkrs: (id: string) =>
+    req<{ portfolio: CodexObjectivePortfolio }>(
+      `/projects/${id}/okrs`,
+      { cache: "no-store" },
+    ).then((result) => result.portfolio),
+  reviewCompanyOkrs: (
+    id: string,
+    portfolio: Pick<CodexObjectivePortfolio, "revision" | "objectives">,
+    options?: {
+      decision?: CodexObjectiveReview["decision"]
+      rationale?: string | null
+    },
+  ) =>
+    req<{ portfolio: CodexObjectivePortfolio }>(
+      `/projects/${id}/okrs/review`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          objectives: portfolio.objectives,
+          expectedRevision: portfolio.revision,
+          decision: options?.decision || "approved",
+          rationale: options?.rationale || null,
+        }),
+      },
+    ).then((result) => result.portfolio),
+  reprioritizeCompanyOkrs: (
+    id: string,
+    orderedIds: string[],
+    expectedRevision: number,
+    rationale?: string | null,
+  ) =>
+    req<{ portfolio: CodexObjectivePortfolio }>(
+      `/projects/${id}/okrs/reprioritize`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          orderedIds,
+          expectedRevision,
+          rationale: rationale || null,
+        }),
+      },
+    ).then((result) => result.portfolio),
   upsertDepartment: (id: string, department: Partial<CodexCompanyDepartment> & { name: string; poolSize?: number; dailyBudgetUsd?: number | null }) =>
     req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(
       `/projects/${id}/departments`,

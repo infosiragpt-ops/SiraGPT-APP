@@ -338,7 +338,15 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
   if (context) userParts.push(`Contexto del proyecto:\n${context}`);
   if (tree) userParts.push(`Archivos actuales del workspace:\n${tree}`);
   const messages = [
-    { role: 'system', content: def.systemPrompt },
+    {
+      role: 'system',
+      content: [
+        def.systemPrompt,
+        deps.companySoul
+          ? `SOUL.md DE LA EMPRESA (generado desde Company; respeta esta identidad y sus límites):\n${String(deps.companySoul).slice(0, 8000)}`
+          : '',
+      ].filter(Boolean).join('\n\n'),
+    },
     { role: 'user', content: userParts.join('\n\n') },
   ];
 

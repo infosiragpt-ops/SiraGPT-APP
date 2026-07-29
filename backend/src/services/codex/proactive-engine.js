@@ -280,8 +280,9 @@ async function proposeTask({
   chatComplete,
 }) {
   const assignedResources = resourcesAssignedToDepartment(project, department.id);
+  const openFailures = progressLedger.readOpenFailures(ledger);
   const responseSchema = department.id === 'ceo-office'
-    ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[{"id":"...","title":"...","metric":"...","target":"...","status":"active","priority":1}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
+    ? '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[{"id":"...","title":"...","ownerDepartmentId":"...","status":"active|at_risk|done|paused","priority":1,"keyResults":[{"id":"...","title":"...","metric":"...","baseline":"...","current":"...","target":"...","unit":"...","status":"not_started|on_track|at_risk|achieved","progress":0}]}],"companyProfile":{"stage":"new|existing|growing|unknown","mission":"... o null","vision":"... o null","offer":"... o null","targetCustomer":"... o null","businessModel":"... o null","industry":"... o null","market":"... o null","brandVoice":"... o null","websiteUrl":"... o null","salesProcess":"... o null"}}'
     : '{"title":"<3-8 palabras>","goal":"<instrucción concreta y autosuficiente, 1-3 frases>","acceptanceCriteria":["<resultado observable>"],"objectiveIds":["<id>"],"swarm":[{"agent":"explorer|planner|qa_reviewer|enterprise_analyst|market_researcher|sales_strategist|customer_success","task":"<investigación concreta de solo lectura>"}],"objectives":[]}';
   const messages = [
     {
@@ -294,7 +295,7 @@ async function proposeTask({
         'Incluye entre 2 y 5 criterios de aceptación observables. No uses criterios vagos como "que se vea bien".',
         'Para swarm elige de 2 a 6 especialistas de solo lectura con tareas distintas que puedan ejecutarse en paralelo antes de escribir. Usa market_researcher/sales_strategist/customer_success solo cuando el objetivo empresarial lo requiera.',
         department.id === 'ceo-office'
-          ? 'Como CEO Office, re-prioriza objectives con un máximo de 5 OKR medibles y actualiza companyProfile solo con hechos sostenidos por el contexto. Conserva ids estables cuando un objetivo siga vigente; usa null cuando un dato del negocio no esté confirmado.'
+          ? 'Como CEO Office, revisa y re-prioriza objectives con un máximo de 5 OKR medibles. Cada OKR debe tener de 1 a 5 keyResults observables; conserva ids estables para objetivos y KR vigentes, actualiza current/progress solo con evidencia y no conviertas hipótesis en resultados. Actualiza companyProfile solo con hechos sostenidos por el contexto; usa null cuando un dato del negocio no esté confirmado.'
           : 'Para objectives devuelve [] y enlaza la tarea a los objectiveIds vigentes que corresponda.',
         qaCycle
           ? 'Esta es una auditoría acumulada: el constructor DEBE delegar primero en qa_reviewer, revisar el diff y añadir o mejorar smoke tests antes de corregir hallazgos.'
@@ -318,23 +319,60 @@ async function proposeTask({
         fileTree ? `Archivos del workspace:\n${String(fileTree).slice(0, 1800)}` : 'Workspace aún vacío (proyecto nuevo).',
         notes ? `Notas del proyecto (.sira/notes.md):\n${String(notes).slice(0, 1200)}` : null,
         objectives.length
-          ? `OKR vigentes:\n${objectives.map((item) => `- ${item.id} [P${item.priority}, ${item.status}] ${item.title}${item.metric ? ` · ${item.metric}: ${item.target || 'sin meta'}` : ''}`).join('\n')}`
+          ? `OKR vigentes:\n${objectives.map((item) => {
+            const keyResults = Array.isArray(item.keyResults)
+              ? item.keyResults.map((kr) => `  - ${kr.id} [${kr.status}${kr.progress == null ? '' : `, ${kr.progress}%`}] ${kr.title}${kr.target ? ` · meta ${kr.target}` : ''}`).join('\n')
+              : '';
+            return `- ${item.id} [P${item.priority}, ${item.status}] ${item.title}${item.metric ? ` · ${item.metric}: ${item.target || 'sin meta'}` : ''}${keyResults ? `\n${keyResults}` : ''}`;
+          }).join('\n')}`
           : 'Aún no hay OKR estructurados.',
         ledger.length
           ? `Progress Ledger (resultados acumulados, no repitas fallos ni trabajo):\n${ledger.slice(-12).map((item) => {
-            const diff = `+${item.diffstat.additions}/-${item.diffstat.deletions}`;
-            const learning = item.learnings[0] ? ` · ${item.learnings[0]}` : '';
+            const diff = `+${Math.max(0, Number(item.diffstat?.additions) || 0)}/-${Math.max(0, Number(item.diffstat?.deletions) || 0)}`;
+            const learning = item.learnings?.[0] ? ` · ${item.learnings[0]}` : '';
             return `- [${item.outcome}] ${item.department} · ${diff} · ${item.task || item.runId}${learning}`;
           }).join('\n')}`
           : 'Progress Ledger vacío: esta será una de las primeras decisiones.',
+        openFailures.length
+          ? `FALLOS ABIERTOS DEL LEDGER (no propongas de nuevo el mismo título/tarea; elige otro avance o una remediación explícitamente distinta):\n${openFailures.slice(-12).map((item) => {
+            const learning = item.learnings[0] ? ` · evidencia: ${item.learnings[0]}` : '';
+            return `- failureKey=${item.failureKey} · run=${item.runId} · ${item.title || item.task || 'tarea sin título'}${learning}`;
+          }).join('\n')}`
+          : 'Sin fallos abiertos en el ledger.',
         recentRuns && recentRuns.length
           ? `Últimos trabajos (no los repitas):\n${recentRuns.map((r) => `- [${r.status}] ${String(r.prompt || '').slice(0, 140)}`).join('\n')}`
           : 'Sin trabajos previos.',
       ].filter(Boolean).join('\n\n'),
     },
   ];
-  const out = await chatComplete({ messages, temperature: 0.5, maxTokens: department.id === 'ceo-office' ? 700 : 450 });
-  const parsed = extractJson(out && out.content);
+  const completionOptions = {
+    temperature: 0.5,
+    maxTokens: department.id === 'ceo-office' ? 1_000 : 450,
+  };
+  let out = await chatComplete({ messages, ...completionOptions });
+  let parsed = extractJson(out && out.content);
+  let repeatedFailure = parsed?.title
+    ? progressLedger.findOpenFailure(ledger, parsed.title)
+    : null;
+  if (repeatedFailure) {
+    messages.push({
+      role: 'assistant',
+      content: String(out?.content || '').slice(0, 4000),
+    });
+    messages.push({
+      role: 'user',
+      content: [
+        `PROPUESTA RECHAZADA: repite el fallo abierto ${repeatedFailure.failureKey} del run ${repeatedFailure.runId}.`,
+        'Propón una tarea diferente. Si debes perseguir el mismo objetivo, cambia explícitamente el enfoque usando la evidencia del fallo y asigna un título que describa la remediación concreta.',
+      ].join(' '),
+    });
+    out = await chatComplete({ messages, ...completionOptions });
+    parsed = extractJson(out && out.content);
+    repeatedFailure = parsed?.title
+      ? progressLedger.findOpenFailure(ledger, parsed.title)
+      : null;
+    if (repeatedFailure) return null;
+  }
   if (!parsed || !parsed.goal || typeof parsed.goal !== 'string') return null;
   const title = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : 'Tarea proactiva';
   const acceptanceCriteria = progressLedger.normalizeAcceptanceCriteria(parsed.acceptanceCriteria);
@@ -552,7 +590,13 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       state.missionIndex,
     );
   const roundRobinDepartment = departments[state.deptIndex % departments.length];
-  const directDepartmentTurn = !qaCycle && (
+  const sourceCounts = companyContext.portfolio?.summary?.sources || {};
+  const hasDecisionSignals = ['auditFindings', 'ledgerBlockers', 'objectives']
+    .some((key) => Number(sourceCounts[key]) > 0);
+  // CEO Office v2 routes sourced work ahead of the legacy direct-operation
+  // rotation. The old rotation remains a compatibility fallback until the
+  // company has an audit, a ledger blocker or an active OKR.
+  const directDepartmentTurn = !qaCycle && !hasDecisionSignals && (
     roundRobinDepartment.custom === true
     || DIRECT_OPERATION_DEPARTMENTS.has(roundRobinDepartment.id)
   );
@@ -847,7 +891,17 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
   }
 
   if (proposal.objectives.length) {
-    await progressLedger.writeObjectives({ prisma, project, objectives: proposal.objectives, now: now() });
+    await progressLedger.writeObjectives({
+      prisma,
+      project,
+      objectives: proposal.objectives,
+      reviewer: 'CEO Office',
+      source: 'proactive_cycle',
+      rationale: selectedMission
+        ? `Cartera revisada para priorizar la misión ${selectedMission.id}.`
+        : 'Cartera revisada para seleccionar el siguiente trabajo empresarial verificable.',
+      now: now(),
+    });
   }
   if (proposal.companyProfile) {
     await companyOperatingProfile.writeCompanyProfile({

@@ -595,6 +595,107 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
   }
 });
 
+function sendOkrError(res, error) {
+  const progressLedger = require('../services/codex/progress-ledger');
+  if (error instanceof progressLedger.ObjectivePortfolioError) {
+    return res.status(error.status).json({
+      error: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    });
+  }
+  return res.status(500).json({
+    error: 'codex_okrs_failed',
+    message: String(error?.message || error || 'OKR operation failed.').slice(0, 2_000),
+  });
+}
+
+// ── Cartera OKR revisada por CEO Office ────────────────────────────────────
+// Objectives remain in the existing tenant-owned CodexProject brief. Every
+// review/reprioritization increments a revision and appends bounded audit
+// metadata; none of these routes can trigger a run or an external action.
+router.get('/projects/:id/okrs', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const portfolio = require('../services/codex/progress-ledger')
+      .readObjectivePortfolio(project);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ portfolio });
+  } catch (error) {
+    return sendOkrError(res, error);
+  }
+});
+
+router.put('/projects/:id/okrs/review', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    if (!Array.isArray(req.body?.objectives) || !req.body.objectives.length) {
+      return res.status(400).json({
+        error: 'okr_objectives_required',
+        message: 'objectives must contain at least one business objective.',
+      });
+    }
+    const expectedRevision = Number.parseInt(req.body?.expectedRevision, 10);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({
+        error: 'okr_revision_required',
+        message: 'expectedRevision must be a non-negative integer.',
+      });
+    }
+    const reviewerIdentity = String(
+      req.user?.name || req.user?.email || req.user?.id || 'Owner',
+    ).slice(0, 100);
+    const portfolio = await require('../services/codex/progress-ledger').reviewObjectives({
+      prisma: codexDb,
+      project,
+      objectives: req.body.objectives,
+      reviewer: `CEO Office · ${reviewerIdentity}`,
+      source: 'ceo_review',
+      decision: req.body?.decision,
+      rationale: typeof req.body?.rationale === 'string'
+        ? req.body.rationale.slice(0, 1_200)
+        : null,
+      expectedRevision,
+    });
+    return res.json({ portfolio });
+  } catch (error) {
+    return sendOkrError(res, error);
+  }
+});
+
+router.post('/projects/:id/okrs/reprioritize', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const expectedRevision = Number.parseInt(req.body?.expectedRevision, 10);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({
+        error: 'okr_revision_required',
+        message: 'expectedRevision must be a non-negative integer.',
+      });
+    }
+    const reviewerIdentity = String(
+      req.user?.name || req.user?.email || req.user?.id || 'Owner',
+    ).slice(0, 100);
+    const portfolio = await require('../services/codex/progress-ledger')
+      .reprioritizeObjectives({
+        prisma: codexDb,
+        project,
+        orderedIds: req.body?.orderedIds,
+        reviewer: `CEO Office · ${reviewerIdentity}`,
+        rationale: typeof req.body?.rationale === 'string'
+          ? req.body.rationale.slice(0, 1_200)
+          : null,
+        expectedRevision,
+      });
+    return res.json({ portfolio });
+  } catch (error) {
+    return sendOkrError(res, error);
+  }
+});
+
 router.put('/projects/:id/departments', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProjectRecord(req, res);

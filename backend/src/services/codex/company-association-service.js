@@ -32,6 +32,7 @@ const CODEX_PROJECT_SELECT = Object.freeze({
   organizationId: true,
   name: true,
   status: true,
+  brief: true,
   deletedAt: true,
   updatedAt: true,
 });
@@ -388,7 +389,7 @@ async function associateCompany(prisma, {
         data: { organizationId },
       });
     }
-    const link = companyLink || await tx.companyCodexProjectLink.create({
+    let link = companyLink || await tx.companyCodexProjectLink.create({
       data: {
         projectId: companyId,
         codexProjectId: runtimeId,
@@ -397,6 +398,18 @@ async function associateCompany(prisma, {
         source: associationSource,
       },
     });
+    if (tx.company?.upsert && tx.companyCodexProjectLink?.update) {
+      const companyModel = await require('./company-operating-profile')
+        .ensureCompanyForAssociation({
+          prisma: tx,
+          companyProject: company,
+          codexProject,
+          link,
+        });
+      if (companyModel && link.companyId !== companyModel.id) {
+        link = { ...link, companyId: companyModel.id };
+      }
+    }
     const connectors = await replaceConnectorAssignments(tx, {
       projectId: companyId,
       userId: ownerId,
@@ -406,6 +419,7 @@ async function associateCompany(prisma, {
     return {
       association: {
         id: link.id,
+        companyId: link.companyId || null,
         source: link.source,
         organizationId,
         linkedAt: link.createdAt,

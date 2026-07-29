@@ -110,6 +110,119 @@ test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', asyn
   assert.equal(p.deptIndex, 1, 'round-robin advances');
 });
 
+test('proposal retries an open failed task and only accepts a different remediation', async () => {
+  const calls = [];
+  const proposal = await engine.proposeTask({
+    project: { id: 'p-ledger', name: 'SiraGPT', brief: {} },
+    department: { id: 'product-engineering', name: 'Producto', mission: 'Mejora el producto.' },
+    recentRuns: [],
+    fileTree: 'src/App.tsx',
+    notes: '',
+    ledger: [{
+      runId: 'run-failed',
+      department: 'Producto',
+      title: 'Corrige checkout roto',
+      outcome: 'failed',
+      learnings: ['El contrato de pagos no acepta currency vacía.'],
+      ts: '2026-07-25T10:00:00.000Z',
+    }],
+    objectives: [],
+    chatComplete: async ({ messages }) => {
+      calls.push(messages.map((message) => ({ ...message })));
+      if (calls.length === 1) {
+        return {
+          content: '{"title":"Corrige checkout roto","goal":"Repite el cambio anterior."}',
+        };
+      }
+      return {
+        content: '{"title":"Valida moneda antes del pago","goal":"Añade validación previa de currency y una prueba de regresión."}',
+      };
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[0][1].content, /FALLOS ABIERTOS DEL LEDGER/);
+  assert.match(calls[0][1].content, /failureKey=corrige-checkout-roto/);
+  assert.match(calls[1].at(-1).content, /PROPUESTA RECHAZADA/);
+  assert.equal(proposal.title, 'Valida moneda antes del pago');
+});
+
+test('proposal is skipped when the model repeats the same open failure twice', async () => {
+  let calls = 0;
+  const proposal = await engine.proposeTask({
+    project: { id: 'p-ledger', name: 'SiraGPT', brief: {} },
+    department: { id: 'product-engineering', name: 'Producto', mission: 'Mejora el producto.' },
+    recentRuns: [],
+    fileTree: '',
+    notes: '',
+    ledger: [{
+      runId: 'run-failed',
+      title: 'Corrige checkout roto',
+      outcome: 'failed',
+    }],
+    objectives: [],
+    chatComplete: async () => {
+      calls += 1;
+      return {
+        content: '{"title":"Corrige checkout roto","goal":"Vuelve a intentar exactamente lo mismo."}',
+      };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(proposal, null);
+});
+
+test('CEO Office routes audit work ahead of the blind department rotation', async () => {
+  const marketingIndex = engine.DEPARTMENTS.findIndex((department) => department.id === 'marketing');
+  const project = {
+    ...PROJECT,
+    status: 'ready',
+    workspacePath: 'projects/p1',
+    brief: {
+      proactive: { enabled: true, deptIndex: marketingIndex },
+      businessPresenceAudit: {
+        gaps: [{
+          id: 'landing-missing',
+          area: 'website',
+          severity: 'critical',
+          title: 'La empresa no tiene landing',
+          present: false,
+          recommendation: 'Construir la landing con el generador Vite.',
+        }],
+      },
+    },
+  };
+  const prisma = fakePrisma({ project });
+  const created = [];
+  const result = await engine.runCycle({
+    project,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async (args) => {
+          created.push(args);
+          return { id: 'run-audit-routing' };
+        },
+      },
+      socialAutopilot: {
+        generateDepartmentPost: async () => {
+          throw new Error('audit routing must beat the marketing cursor');
+        },
+      },
+      chatComplete: async () => ({
+        content: '{"title":"Construir landing","goal":"Implementa y verifica una landing Vite."}',
+      }),
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+
+  assert.equal(result.action, 'proposed');
+  assert.equal(result.department, 'product-engineering');
+  assert.equal(result.missionId, 'business-website');
+  assert.match(created[0].prompt, /^\[PROACTIVO · Producto e Ingenier/);
+});
+
 test('concurrent schedulers acquire one proactive lease per project', async () => {
   const project = {
     ...PROJECT,

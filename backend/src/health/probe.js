@@ -191,6 +191,7 @@ class Probe {
         startedAt,
         status: STATUS.TIMEOUT,
         error: new Error(`probe "${this.name}" timed out after ${this.timeoutMs}ms`),
+        minimumElapsedMs: this.timeoutMs,
       });
     }
 
@@ -212,8 +213,15 @@ class Probe {
     });
   }
 
-  _format({ startedAt, status, error = null, details = null, message = null }) {
-    const elapsedMs = Math.max(0, this._now() - startedAt);
+  _format({
+    startedAt,
+    status,
+    error = null,
+    details = null,
+    message = null,
+    minimumElapsedMs = 0,
+  }) {
+    const elapsedMs = Math.max(minimumElapsedMs, this._now() - startedAt, 0);
     const out = {
       name: this.name,
       category: this.category,
