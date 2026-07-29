@@ -26,6 +26,7 @@ function fakePairingPrisma(channel) {
     pairing: null,
     pairings: [],
     transactionFailureCodes: [],
+    transactionIsolationLevels: [],
     transactions: 0,
     user: {
       id: channel.userId,
@@ -183,8 +184,9 @@ function fakePairingPrisma(channel) {
       },
     },
   };
-  client.$transaction = async (operation) => {
+  client.$transaction = async (operation, options) => {
     state.transactions += 1;
+    state.transactionIsolationLevels.push(options?.isolationLevel);
     const snapshot = structuredClone({
       channel: state.channel,
       inboxMessages: state.inboxMessages,
@@ -489,7 +491,7 @@ test('approval rollback leaves the pending code retryable', async () => {
   assert.equal(prisma.state.pairings[0].status, 'approved');
 });
 
-test('serializable write conflicts retry without duplicating pairing state', async () => {
+test('pairing transaction write conflicts retry without duplicating pairing state', async () => {
   const channel = {
     id: 'channel-transaction-retry',
     companyId: 'company-1',
@@ -503,7 +505,7 @@ test('serializable write conflicts retry without duplicating pairing state', asy
     updatedAt: new Date(),
   };
   const prisma = fakePairingPrisma(channel);
-  prisma.state.transactionFailureCodes.push('P2034');
+  prisma.state.transactionFailureCodes.push('P2034', 'P2034', 'P2034');
   const result = await service.authorizeSender({
     prisma,
     channel,
@@ -511,8 +513,72 @@ test('serializable write conflicts retry without duplicating pairing state', asy
     env: ENV,
   });
   assert.equal(result.reason, 'pairing_required');
-  assert.equal(prisma.state.transactions, 2);
+  assert.equal(prisma.state.transactions, 4);
+  assert.deepEqual(
+    prisma.state.transactionIsolationLevels,
+    ['ReadCommitted', 'ReadCommitted', 'ReadCommitted', 'ReadCommitted'],
+  );
   assert.equal(prisma.state.pairings.length, 1);
+});
+
+test('pairing transaction stops after its bounded retry budget', async () => {
+  const channel = {
+    id: 'channel-transaction-retry-exhausted',
+    companyId: 'company-1',
+    userId: 'user-1',
+    kind: 'telegram',
+    status: 'active',
+    dmPolicy: 'pairing',
+    outboundMode: 'review',
+    allowFrom: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const prisma = fakePairingPrisma(channel);
+  prisma.state.transactionFailureCodes.push('P2034', 'P2034', 'P2034', 'P2034');
+
+  await assert.rejects(
+    service.authorizeSender({
+      prisma,
+      channel,
+      senderRef: 'tg:retry-exhausted',
+      env: ENV,
+    }),
+    (error) => error?.code === 'P2034',
+  );
+
+  assert.equal(prisma.state.transactions, 4);
+  assert.equal(prisma.state.pairings.length, 0);
+});
+
+test('pairing transaction does not retry non-retryable failures', async () => {
+  const channel = {
+    id: 'channel-transaction-non-retryable',
+    companyId: 'company-1',
+    userId: 'user-1',
+    kind: 'telegram',
+    status: 'active',
+    dmPolicy: 'pairing',
+    outboundMode: 'review',
+    allowFrom: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const prisma = fakePairingPrisma(channel);
+  prisma.state.failNextTransactionAfterOperation = true;
+
+  await assert.rejects(
+    service.authorizeSender({
+      prisma,
+      channel,
+      senderRef: 'tg:non-retryable',
+      env: ENV,
+    }),
+    /injected_transaction_failure/,
+  );
+
+  assert.equal(prisma.state.transactions, 1);
+  assert.equal(prisma.state.pairings.length, 0);
 });
 
 test('concurrent approvals preserve both persistent grants', async () => {
