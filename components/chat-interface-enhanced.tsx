@@ -11791,7 +11791,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
-                        className="composer-input-row flex items-center gap-2 pl-2 pr-2 py-1.5"
+                        className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
                       >
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
@@ -12269,7 +12269,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       >
                         <TooltipProvider>
                           <div
-                            className="composer-input-row flex items-center gap-2 pl-2 pr-2 py-1.5"
+                            className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
                           >
                             <ActionsDropdown
                               chatType={chatType}
