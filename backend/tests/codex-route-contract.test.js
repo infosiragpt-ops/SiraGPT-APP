@@ -320,6 +320,64 @@ test('POST /projects/:id/proactive rejects autonomous execution without isolated
   assert.equal(res.body.error, 'codex_forbidden');
 });
 
+test('DELETE business-channel pairing enforces project ownership and maps static grants', async () => {
+  const companyRegistry = require('../src/services/codex/company-registry');
+  const businessChannels = require('../src/services/codex/business-channels');
+  const originals = {
+    projectFindFirst: codexDb.codexProject.findFirst,
+    ensureCompany: companyRegistry.ensureCompanyForCodexProject,
+    revokePairing: businessChannels.revokePairing,
+  };
+  const calls = [];
+  codexDb.codexProject.findFirst = async ({ where }) => (
+    where?.id === 'p1' && where?.userId === 'u-1'
+      ? { id: 'p1', userId: 'u-1', deletedAt: null }
+      : null
+  );
+  companyRegistry.ensureCompanyForCodexProject = async () => ({
+    id: 'company-1',
+    userId: 'u-1',
+  });
+  businessChannels.revokePairing = async (args) => {
+    calls.push(args);
+    if (args.senderRef === 'static-sender') {
+      throw new Error('sender_statically_allowlisted');
+    }
+    return { id: args.channelId, companyId: args.company.id };
+  };
+
+  try {
+    const revoked = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'dynamic-sender' });
+    assert.equal(revoked.status, 200);
+    assert.equal(revoked.body.channel.id, 'channel-1');
+    assert.equal(calls[0].company.id, 'company-1');
+
+    const idempotent = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'dynamic-sender' });
+    assert.equal(idempotent.status, 200);
+
+    const staticGrant = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'static-sender' });
+    assert.equal(staticGrant.status, 409);
+    assert.equal(staticGrant.body.error, 'sender_statically_allowlisted');
+
+    authUser = { id: 'u-2', isAdmin: true, isSuperAdmin: false };
+    const foreign = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'dynamic-sender' });
+    assert.equal(foreign.status, 404);
+    assert.equal(calls.length, 3);
+  } finally {
+    codexDb.codexProject.findFirst = originals.projectFindFirst;
+    companyRegistry.ensureCompanyForCodexProject = originals.ensureCompany;
+    businessChannels.revokePairing = originals.revokePairing;
+  }
+});
+
 test('company profile routes return grounded readiness and preserve the owned project brief', async () => {
   const originals = {
     projectFindFirst: codexDb.codexProject.findFirst,

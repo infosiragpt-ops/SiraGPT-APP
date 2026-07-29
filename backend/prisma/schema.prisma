@@ -2170,6 +2170,7 @@ model BusinessChannel {
   messages         InboxMessage[]
   pairings         BusinessChannelPairing[]
 
+  @@unique([id, companyId])
   @@index([companyId, status, updatedAt])
   @@index([userId, kind, status])
   @@index([connectorAccountId])
@@ -2217,7 +2218,7 @@ model BusinessChannelPairing {
   updatedAt  DateTime  @updatedAt
 
   company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  channel BusinessChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel BusinessChannel @relation(fields: [channelId, companyId], references: [id, companyId], onDelete: Cascade)
 
   @@unique([channelId, senderRef])
   @@index([companyId, status, expiresAt])

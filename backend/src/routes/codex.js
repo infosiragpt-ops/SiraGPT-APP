@@ -1039,9 +1039,11 @@ router.post('/projects/:id/business-channels/:channelId/pair', authenticateToken
   } catch (err) {
     const status = err?.message === 'business_channel_not_found'
       ? 404
-      : err?.message === 'invalid_or_expired_pairing_code'
-        ? 400
-        : 500;
+      : err?.message === 'sender_statically_allowlisted'
+        ? 409
+        : ['invalid_or_expired_pairing_code', 'invalid_pairing_sender'].includes(err?.message)
+          ? 400
+          : 500;
     return res.status(status).json({
       error: status === 500 ? 'codex_channel_pairing_failed' : err.message,
       message: err.message,
@@ -1049,33 +1051,66 @@ router.post('/projects/:id/business-channels/:channelId/pair', authenticateToken
   }
 });
 
-router.post('/projects/:id/business-channels/:channelId/inbox', authenticateToken, async (req, res) => {
+router.delete('/projects/:id/business-channels/:channelId/pair', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProjectRecord(req, res);
     if (!project) return undefined;
     const company = await loadOwnedCompany(project);
     if (!company) return res.status(409).json({ error: 'company_association_required' });
-    const result = await require('../services/codex/business-channels').recordInboundMessage({
+    const channel = await require('../services/codex/business-channels').revokePairing({
       prisma: codexDb,
       company,
       channelId: req.params.channelId,
-      message: req.body?.message ?? req.body,
-      runService: require('../services/codex/run-service'),
-      env: process.env,
+      senderRef: req.body?.from,
     });
-    return res.status(result.authorization.allowed ? 202 : 428).json(result);
+    return res.json({ channel });
   } catch (err) {
-    const status = ['invalid_inbox_message'].includes(err?.message)
-      ? 400
-      : err?.message === 'business_channel_not_found'
-        ? 404
-        : 500;
+    const status = err?.message === 'business_channel_not_found'
+      ? 404
+      : err?.message === 'sender_statically_allowlisted'
+        ? 409
+        : err?.message === 'invalid_pairing_sender'
+          ? 400
+          : 500;
     return res.status(status).json({
-      error: status === 500 ? 'codex_channel_inbox_failed' : err.message,
+      error: status === 500 ? 'codex_channel_pairing_revoke_failed' : err.message,
       message: err.message,
     });
   }
 });
+
+router.post(
+  '/projects/:id/business-channels/:channelId/inbox',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const company = await loadOwnedCompany(project);
+      if (!company) return res.status(409).json({ error: 'company_association_required' });
+      const result = await require('../services/codex/business-channels').recordInboundMessage({
+        prisma: codexDb,
+        company,
+        channelId: req.params.channelId,
+        message: req.body?.message ?? req.body,
+        runService: require('../services/codex/run-service'),
+        env: process.env,
+      });
+      return res.status(result.authorization.allowed ? 202 : 428).json(result);
+    } catch (err) {
+      const status = ['invalid_inbox_message'].includes(err?.message)
+        ? 400
+        : err?.message === 'business_channel_not_found'
+          ? 404
+          : 500;
+      return res.status(status).json({
+        error: status === 500 ? 'codex_channel_inbox_failed' : err.message,
+        message: err.message,
+      });
+    }
+  },
+);
 
 router.get('/projects/:id/business-channels-doctor', authenticateToken, async (req, res) => {
   try {

@@ -22,6 +22,9 @@ describe('ChannelAdapter · constructor', () => {
   it('stores name on the instance', () => {
     const a = new ChannelAdapter('slack');
     assert.equal(a.name, 'slack');
+    assert.equal(a.accountId, 'default');
+    const scoped = new ChannelAdapter('slack', { accountId: 'tenant-a:channel-1' });
+    assert.equal(scoped.accountId, 'tenant-a:channel-1');
   });
 
   it('defaults dedup to a fresh DedupCache', () => {
@@ -71,15 +74,20 @@ describe('ChannelAdapter · constructor', () => {
 });
 
 describe('ChannelAdapter · isAllowed', () => {
-  it('fails closed when allowlist is empty unless open is explicit', () => {
+  it('fails closed when allowlist is empty unless open has the explicit wildcard', () => {
     const a = new ChannelAdapter('slack');
     assert.equal(a.isAllowed(undefined), false);
     assert.equal(a.isAllowed(''), false);
     assert.equal(a.isAllowed('anyone'), false);
 
     const opened = new ChannelAdapter('slack', { dmPolicy: 'open' });
-    assert.equal(opened.isAllowed(undefined), true);
-    assert.equal(opened.isAllowed('anyone'), true);
+    assert.equal(opened.isAllowed(undefined), false);
+    assert.equal(opened.isAllowed('anyone'), false);
+    const explicitlyOpened = new ChannelAdapter('slack', {
+      dmPolicy: 'open',
+      allowFrom: ['*'],
+    });
+    assert.equal(explicitlyOpened.isAllowed('anyone'), true);
   });
 
   it('rejects missing accessGroup when allowlist is non-empty', () => {
@@ -142,6 +150,16 @@ describe('ChannelAdapter · isDuplicate', () => {
     assert.equal(discord.isDuplicate({ id: 'm-1' }), true);
   });
 
+  it('namespaces dedup by channel account (no cross-tenant collision)', () => {
+    const dedup = new DedupCache();
+    const tenantA = new ChannelAdapter('slack', { accountId: 'tenant-a', dedup });
+    const tenantB = new ChannelAdapter('slack', { accountId: 'tenant-b', dedup });
+    assert.equal(tenantA.isDuplicate({ id: 'm-1' }), false);
+    assert.equal(tenantB.isDuplicate({ id: 'm-1' }), false);
+    assert.equal(tenantA.isDuplicate({ id: 'm-1' }), true);
+    assert.equal(tenantB.isDuplicate({ id: 'm-1' }), true);
+  });
+
   it('bumps the duplicate counter on each dup hit', () => {
     const m = new ChannelMetrics();
     const a = new ChannelAdapter('slack', { metrics: m });
@@ -180,5 +198,25 @@ describe('ChannelAdapter · hook abstractness', () => {
       () => a.sendOutbound({ text: 'hi' }),
       /sendOutbound\(\) not implemented for telegram/,
     );
+  });
+});
+
+describe('ChannelAdapter · verification boundary', () => {
+  it('never parses an invalid signature and exposes no skipVerify bypass', async () => {
+    let parseCalls = 0;
+    class TestAdapter extends ChannelAdapter {
+      async verify() { return false; }
+      async parseInbound() {
+        parseCalls += 1;
+        throw new Error('must not parse');
+      }
+    }
+    const adapter = new TestAdapter('test');
+    assert.equal(await adapter.receive({}), null);
+    assert.equal(
+      await adapter.receive({}, { skipVerify: true, trustedInternal: true }),
+      null,
+    );
+    assert.equal(parseCalls, 0);
   });
 });

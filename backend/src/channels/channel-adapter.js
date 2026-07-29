@@ -2,6 +2,7 @@
 
 const { DedupCache } = require('./dedup-cache');
 const { sharedMetrics, KINDS } = require('./metrics');
+const { isSenderAllowed } = require('../services/business-channels/pairing');
 
 /**
  * Normalized inbound message envelope produced by `parseInbound`.
@@ -28,11 +29,15 @@ const { sharedMetrics, KINDS } = require('./metrics');
 class ChannelAdapter {
   /**
    * @param {string} name
-   * @param {{ allowlist?: string[], allowFrom?: string[], dmPolicy?: string, dedup?: DedupCache, metrics?: object, fetchImpl?: typeof fetch }} [opts]
+   * @param {{ accountId?: string, allowlist?: string[], allowFrom?: string[], dmPolicy?: string, dedup?: DedupCache, metrics?: object, fetchImpl?: typeof fetch }} [opts]
    */
   constructor(name, opts = {}) {
     if (!name) throw new Error('ChannelAdapter requires a name');
     this.name = name;
+    this.accountId = typeof opts.accountId === 'string'
+      ? opts.accountId.trim()
+      : '';
+    if (!this.accountId) this.accountId = 'default';
     this.dmPolicy = ['pairing', 'allowlist', 'open', 'closed'].includes(opts.dmPolicy)
       ? opts.dmPolicy
       : 'pairing';
@@ -43,14 +48,15 @@ class ChannelAdapter {
   }
 
   /**
-   * Channels fail closed. An empty allowlist requires pairing unless the owner
-   * deliberately selected the explicit `open` policy.
+   * Channels fail closed. `open` requires both the policy and the explicit
+   * wildcard, matching the Prisma-backed business-channel gate.
    */
   isAllowed(accessGroup) {
-    if (this.dmPolicy === 'open') return true;
-    if (this.dmPolicy === 'closed') return false;
-    if (!accessGroup) return false;
-    return this.allowlist.has(accessGroup);
+    return isSenderAllowed({
+      senderId: accessGroup,
+      dmPolicy: this.dmPolicy,
+      allowFrom: [...this.allowlist],
+    });
   }
 
   /**
@@ -59,7 +65,7 @@ class ChannelAdapter {
    */
   isDuplicate(parsed) {
     if (!parsed || !parsed.id) return false;
-    const fresh = this.dedup.add(`${this.name}:${parsed.id}`);
+    const fresh = this.dedup.add(`${this.name}:${this.accountId}:${parsed.id}`);
     if (!fresh) {
       this.metrics.inc(this.name, KINDS.DUPLICATE);
       return true;
@@ -79,11 +85,12 @@ class ChannelAdapter {
   async sendOutbound(_msg) { throw new Error(`sendOutbound() not implemented for ${this.name}`); }
 
   /**
-   * Common interface used by the business-channel router. Verification,
-   * allowlisting and dedup happen before a message reaches a department.
+   * Legacy ingress only. New business-channel webhooks must use
+   * services/business-channels/registry with its persistent authorizer.
+   * There is deliberately no verification bypass.
    */
-  async receive(req, { skipVerify = false } = {}) {
-    if (!skipVerify && !await this.verify(req)) return null;
+  async receive(req) {
+    if (!await this.verify(req)) return null;
     const parsed = await this.parseInbound(req);
     if (!parsed || this.isDuplicate(parsed) || !this.isAllowed(parsed.accessGroup || parsed.userId)) {
       return null;

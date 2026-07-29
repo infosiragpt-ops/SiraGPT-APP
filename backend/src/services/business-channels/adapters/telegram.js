@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 /**
  * business-channels/adapters/telegram — Telegram Bot API channel adapter.
  *
@@ -15,7 +17,9 @@
  *
  * Security: the bot token comes ONLY from the injected channel config (the
  * encrypted per-channel store) — never from process.env, and it is scrubbed
- * from every error message/URL this module ever throws or returns.
+ * from every error message/URL this module ever throws or returns. Webhook
+ * ingress fails closed unless Telegram's secret-token header matches the
+ * independently configured webhookSecret.
  *
  * receive() accepts Telegram webhook updates and normalises `message` and
  * `edited_message` envelopes into the canonical InboxMessage; every other
@@ -26,6 +30,9 @@
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const MAX_TEXT_LENGTH = 4096; // Bot API sendMessage hard limit.
 const DEFAULT_TIMEOUT_MS = 10_000;
+const WEBHOOK_SECRET_MIN_LENGTH = 32;
+const WEBHOOK_SECRET_MAX_LENGTH = 256;
+const WEBHOOK_SECRET_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
 class TelegramApiError extends Error {
   constructor(message, { code = 'telegram_api_error', status = null, retryAfterMs = null } = {}) {
@@ -52,20 +59,61 @@ async function safeJson(res) {
   }
 }
 
+function singleHeaderValue(headers, name) {
+  if (!headers) return null;
+  const expectedName = String(name).toLowerCase();
+  if (typeof headers.get === 'function') {
+    const value = headers.get(name);
+    if (typeof value !== 'string' || !value || value.includes(',')) return null;
+    return value;
+  }
+  if (typeof headers !== 'object' || Array.isArray(headers)) return null;
+  const matches = Object.entries(headers)
+    .filter(([key]) => String(key).toLowerCase() === expectedName);
+  if (matches.length !== 1) return null;
+  const value = matches[0][1];
+  if (Array.isArray(value) || typeof value !== 'string' || !value) return null;
+  return value;
+}
+
+function constantTimeSecretEqual(provided, expected) {
+  const providedDigest = crypto.createHash('sha256').update(String(provided || '')).digest();
+  const expectedDigest = crypto.createHash('sha256').update(String(expected || '')).digest();
+  return crypto.timingSafeEqual(providedDigest, expectedDigest);
+}
+
 /**
  * @param {object} [deps]
- * @param {{ botToken?: string, apiBase?: string, timeoutMs?: number }} [deps.config]
+ * @param {{ botToken?: string, webhookSecret?: string }} [deps.config]
  *   Channel config, decrypted by the caller. Never logged.
  * @param {typeof fetch} [deps.fetchImpl] Injectable fetch for offline tests.
+ * @param {string} [deps.apiBase] Injectable only by trusted code/tests.
+ * @param {number} [deps.timeoutMs] Injectable only by trusted code/tests.
  */
 function createTelegramAdapter(deps = {}) {
   const config = deps.config || {};
   const fetchImpl = deps.fetchImpl || globalThis.fetch;
-  const apiBase = config.apiBase || deps.apiBase || TELEGRAM_API_BASE;
-  const timeoutMs = Number(config.timeoutMs || deps.timeoutMs) || DEFAULT_TIMEOUT_MS;
+  const apiBase = deps.apiBase || TELEGRAM_API_BASE;
+  const requestedTimeoutMs = Number(deps.timeoutMs);
+  const timeoutMs = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+    ? Math.min(requestedTimeoutMs, 30_000)
+    : DEFAULT_TIMEOUT_MS;
 
   function tokenFrom(cfg) {
     return String((cfg && cfg.botToken) || '').trim();
+  }
+
+  function webhookSecretFrom(cfg) {
+    return typeof cfg?.webhookSecret === 'string' ? cfg.webhookSecret : '';
+  }
+
+  function validWebhookSecret(cfg) {
+    const secret = webhookSecretFrom(cfg);
+    return (
+      secret.length >= WEBHOOK_SECRET_MIN_LENGTH
+      && secret.length <= WEBHOOK_SECRET_MAX_LENGTH
+      && WEBHOOK_SECRET_PATTERN.test(secret)
+    );
   }
 
   async function callApi(method, payload, cfg) {
@@ -100,15 +148,34 @@ function createTelegramAdapter(deps = {}) {
     return body.result;
   }
 
+  /**
+   * Verify Telegram's X-Telegram-Bot-Api-Secret-Token header. This method is
+   * deliberately independent from receive() so the registry can authenticate
+   * the request before parsing or exposing any provider payload.
+   */
+  function verifyInbound({ headers } = {}) {
+    const expected = webhookSecretFrom(config);
+    const provided = singleHeaderValue(headers, 'x-telegram-bot-api-secret-token');
+    if (!validWebhookSecret(config) || !provided) return false;
+    return constantTimeSecretEqual(provided, expected);
+  }
+
   /** Webhook update → canonical InboxMessage, or null for ignorable updates. */
   function receive(update) {
     if (!update || typeof update !== 'object') return null;
     const message = update.message || update.edited_message;
-    if (!message || !message.chat || message.chat.id === undefined) return null;
+    if (
+      !message
+      || !message.chat
+      || message.chat.id === undefined
+      || message.message_id === undefined
+    ) return null;
     const senderId = message.from && message.from.id !== undefined ? message.from.id : message.chat.id;
     return {
       channelKind: 'telegram',
-      externalId: String(message.message_id),
+      // message_id is only unique within one chat. The database idempotency
+      // key is {businessChannelId, externalId}, so include the chat id.
+      externalId: `${message.chat.id}:${message.message_id}`,
       from: String(senderId),
       text: String(message.text || message.caption || ''),
       ts: Number.isFinite(message.date) ? message.date * 1000 : Date.now(),
@@ -132,9 +199,14 @@ function createTelegramAdapter(deps = {}) {
 
   /** Validate the channel config against the live Bot API (getMe). */
   async function verifyConfig(cfg = config) {
-    if (!tokenFrom(cfg)) {
-      return { ok: false, errors: ['missing_bot_token'] };
+    const errors = [];
+    if (!tokenFrom(cfg)) errors.push('missing_bot_token');
+    if (!webhookSecretFrom(cfg)) {
+      errors.push('missing_webhook_secret');
+    } else if (!validWebhookSecret(cfg)) {
+      errors.push('invalid_webhook_secret');
     }
+    if (errors.length > 0) return { ok: false, errors };
     try {
       const me = await callApi('getMe', {}, cfg);
       return { ok: true, errors: [], bot: { id: me && me.id, username: me && me.username } };
@@ -143,7 +215,7 @@ function createTelegramAdapter(deps = {}) {
     }
   }
 
-  return { kind: 'telegram', receive, send, verifyConfig };
+  return { kind: 'telegram', verifyInbound, receive, send, verifyConfig };
 }
 
 module.exports = {
@@ -151,4 +223,7 @@ module.exports = {
   TelegramApiError,
   TELEGRAM_API_BASE,
   MAX_TEXT_LENGTH,
+  WEBHOOK_SECRET_MIN_LENGTH,
+  WEBHOOK_SECRET_MAX_LENGTH,
+  singleHeaderValue,
 };

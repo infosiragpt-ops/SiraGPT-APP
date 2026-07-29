@@ -14,6 +14,8 @@
  *
  * Adapter shape (validated by validateAdapter):
  *   kind:         non-empty string — canonical channel id ('telegram', …)
+ *   verifyInbound({ headers, rawBody, update })
+ *                  → boolean | Promise<boolean>
  *   receive(update)        → InboxMessage | null (null = ignore the update)
  *   send({ to, text })     → Promise (typed error on provider failure)
  *   verifyConfig(config)   → Promise<{ ok: boolean, errors: string[] }>
@@ -28,7 +30,7 @@
  *   raw:          the original provider payload, untouched
  */
 
-const REQUIRED_METHODS = ['receive', 'send', 'verifyConfig'];
+const REQUIRED_METHODS = ['verifyInbound', 'receive', 'send', 'verifyConfig'];
 const INBOX_REQUIRED_FIELDS = ['channelKind', 'externalId', 'from', 'text', 'ts', 'raw'];
 
 class AdapterContractError extends Error {
