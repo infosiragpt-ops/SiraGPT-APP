@@ -316,10 +316,12 @@ function buildDocxMarkdown(plan) {
   // box), an empty English "Table of Contents", a "Control de calidad" QC
   // table and a placeholder APA reference — all removed. Documents should
   // read like a human wrote them, not like the pipeline is grading itself.
+  // Human date, not a raw ISO stamp: "29 de julio de 2026".
+  const documentDate = new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
   const lines = [
     `% ${plan.title}`,
     '%',
-    `% ${new Date().toISOString().slice(0, 10)}`,
+    `% ${documentDate}`,
     '',
   ];
 
@@ -391,6 +393,13 @@ function buildDocxMarkdown(plan) {
             if (text) lines.push(`- ${text}`);
           }
           lines.push('');
+        }
+        // Section tables used to be dropped on the floor: the block carried
+        // {table: {headers, rows}} but this loop only wrote paragraph/
+        // bullets/notes, so a KPI or risk matrix silently vanished from the
+        // shipped document.
+        if (block.table && Array.isArray(block.table.headers) && Array.isArray(block.table.rows) && block.table.rows.length > 0) {
+          lines.push(markdownTable(block.table.headers, block.table.rows), '');
         }
         const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
         if (notes && !/no respond.* en este intento/i.test(notes)) {
@@ -1554,6 +1563,71 @@ async function createPandocReferenceDoc(referenceDocPath) {
         },
       },
       paragraphStyles: [
+        // Styles PANDOC references by id in its docx output. If any of them
+        // is missing from the reference doc, Word improvises but LibreOffice
+        // (and every soffice-based preview, including ours and Google Docs
+        // imports) DROPS the paragraph's numbering — which shipped every
+        // bullet and numbered list as flat, marker-less paragraphs. Verified
+        // empirically: defining "Compact" restores all list markers.
+        {
+          id: 'Title',
+          name: 'Title',
+          basedOn: 'Normal',
+          next: 'Normal',
+          run: { font: 'Arial', size: 56, bold: true, color: '0F172A' },
+          // Left, never justified: a justified two-line title stretches the
+          // words apart into rivers ("Informe    Ejecutivo    —    …").
+          paragraph: { spacing: { before: 0, after: 120, line: 240 }, alignment: AlignmentType.LEFT },
+        },
+        {
+          id: 'Author',
+          name: 'Author',
+          basedOn: 'Normal',
+          next: 'Normal',
+          run: { font: 'Arial', size: 22, color: '64748B' },
+          paragraph: { spacing: { before: 0, after: 60 }, alignment: AlignmentType.LEFT },
+        },
+        {
+          id: 'Date',
+          name: 'Date',
+          basedOn: 'Normal',
+          next: 'Normal',
+          run: { font: 'Arial', size: 22, color: '64748B' },
+          paragraph: { spacing: { before: 0, after: 360 }, alignment: AlignmentType.LEFT },
+        },
+        {
+          id: 'FirstParagraph',
+          name: 'First Paragraph',
+          basedOn: 'Normal',
+          next: 'Normal',
+          run: {},
+          paragraph: {},
+        },
+        {
+          id: 'Compact',
+          name: 'Compact',
+          basedOn: 'Normal',
+          next: 'Compact',
+          run: {},
+          // List items: tight rhythm and ragged-right — justified bullets
+          // stretch short lines into ugly gaps.
+          paragraph: { spacing: { before: 40, after: 40 }, alignment: AlignmentType.LEFT },
+        },
+        {
+          id: 'BlockText',
+          name: 'Block Text',
+          basedOn: 'Normal',
+          next: 'Normal',
+          run: { italics: true, color: '475569' },
+          paragraph: {
+            spacing: { before: 120, after: 160 },
+            indent: { left: 360 },
+            alignment: AlignmentType.LEFT,
+            border: {
+              left: { style: BorderStyle.SINGLE, size: 18, color: '94A3B8', space: 12 },
+            },
+          },
+        },
         {
           id: 'Heading1',
           name: 'Heading 1',
@@ -1626,7 +1700,7 @@ function buildFooterXml() {
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:p>
     <w:pPr><w:jc w:val="center"/></w:pPr>
-    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>siraGPT - Página </w:t></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve">Página </w:t></w:r>
     <w:r><w:fldChar w:fldCharType="begin"/></w:r>
     <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
     <w:r><w:fldChar w:fldCharType="separate"/></w:r>
@@ -1727,6 +1801,56 @@ function postProcessWordDocx(buffer, plan) {
       </w:tblCellMar>
     ${look}</w:tblPr>`;
   });
+
+  // Header row treatment: pandoc emits the header cells as plain body text,
+  // so a KPI table reads as five identical rows. Shade the first row, bold
+  // its runs, and mark it w:tblHeader so it repeats when the table breaks
+  // across pages. w:shd is appended just before </w:tcPr> (after w:tcW,
+  // its schema-legal slot in pandoc's minimal tcPr).
+  documentXml = documentXml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/g, (tbl) => (
+    tbl.replace(/<w:tr\b[\s\S]*?<\/w:tr>/, (headerRow) => {
+      let row = headerRow;
+      if (!/<w:trPr>/.test(row)) {
+        row = row.replace(/<w:tr\b([^>]*)>/, '<w:tr$1><w:trPr><w:tblHeader/></w:trPr>');
+      } else if (!/<w:tblHeader[\s/>]/.test(row)) {
+        row = row.replace('<w:trPr>', '<w:trPr><w:tblHeader/>');
+      }
+      const shd = '<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>';
+      // One callback for BOTH tcPr shapes — pandoc emits empty cell
+      // properties self-closed (<w:tcPr />) — and skip cells that already
+      // carry a shade so the rewrite stays idempotent (two sibling w:shd
+      // elements violate the schema and can trigger Word's repair dialog).
+      row = row.replace(/<w:tcPr\s*\/>|<w:tcPr>([\s\S]*?)<\/w:tcPr>/g, (cell, inner) => {
+        if (inner === undefined) return `<w:tcPr>${shd}</w:tcPr>`;
+        if (/<w:shd\b/.test(inner)) return cell;
+        return `<w:tcPr>${inner}${shd}</w:tcPr>`;
+      });
+      row = row.replace(/<w:r>(?!<w:rPr>)/g, '<w:r><w:rPr><w:b/></w:rPr>');
+      row = row.replace(/<w:rPr>(?!<w:b[ /1>])/g, '<w:rPr><w:b/>');
+      return row;
+    })
+  ));
+
+  // Sanitize numbering.xml: pandoc's merge with the reference doc can leave
+  // a <w:num> pointing at an abstractNum that was never defined (observed:
+  // num 1 → abstract 1 while only 990/991/99411 exist). Word flags that as
+  // unreadable content and offers "repair"; dropping the dangling reference
+  // is lossless because no document paragraph uses it.
+  const numberingFile = zip.file('word/numbering.xml');
+  if (numberingFile) {
+    const numberingXml = numberingFile.asText();
+    const definedAbstracts = new Set(
+      Array.from(numberingXml.matchAll(/<w:abstractNum w:abstractNumId="(\d+)"/g)).map((m) => m[1]),
+    );
+    const sanitized = numberingXml.replace(
+      /<w:num w:numId="\d+"[^>]*>[\s\S]*?<\/w:num>/g,
+      (numBlock) => {
+        const ref = numBlock.match(/<w:abstractNumId w:val="(\d+)"/);
+        return ref && !definedAbstracts.has(ref[1]) ? '' : numBlock;
+      },
+    );
+    if (sanitized !== numberingXml) zip.file('word/numbering.xml', sanitized);
+  }
 
   zip.file('word/document.xml', documentXml);
   zip.file('word/_rels/document.xml.rels', relsXml);
@@ -3635,5 +3759,7 @@ module.exports = {
     stripSourceContent,
     stripResearchEvidenceContract,
     parseSourceContentBlocks,
+    buildDocxMarkdown,
+    postProcessWordDocx,
   },
 };
