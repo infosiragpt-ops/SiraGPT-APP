@@ -3658,6 +3658,81 @@ const getNavbarModelSelectorChatSignature = (chat: any) => [
   chat?.project?._count?.documents,
 ].map((part) => String(part ?? "")).join("\u0001")
 
+// Reasoning-effort picker rendered at the bottom of the model dropdown.
+// The four stops mirror the backend contract exactly: reasoning-orchestrator's
+// EFFORT_ALIASES maps Bajo→low (direct pass), Medio→medium (extended),
+// Extra→high (extended+reflection) and Max→max (self-consistency ×3), so the
+// slider never offers a level the compute planner would ignore.
+const EFFORT_LEVELS = [
+  { value: "Bajo", caption: "Respuesta directa, sin razonamiento extendido. La más rápida." },
+  { value: "Medio", caption: "Razonamiento equilibrado. Ideal para el día a día." },
+  { value: "Extra", caption: "Razonamiento profundo con reflexión. Más lento." },
+  { value: "Max", caption: "Profundidad máxima de razonamiento. El mayor costo y el más lento." },
+] as const
+
+function EffortSection({ selectedEffort, setSelectedEffort }: {
+  selectedEffort: string
+  setSelectedEffort: (effort: string) => void
+}) {
+  const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((l) => l.value === selectedEffort))
+  const active = EFFORT_LEVELS[activeIndex]
+  const moveTo = (index: number) => {
+    const clamped = Math.min(EFFORT_LEVELS.length - 1, Math.max(0, index))
+    if (clamped !== activeIndex) setSelectedEffort(EFFORT_LEVELS[clamped].value)
+  }
+  return (
+    <div className="effort-section" onClick={(e) => e.stopPropagation()}>
+      <div className="effort-header">
+        <span className="effort-title">Effort</span>
+        <span className="effort-value">{active.value}</span>
+      </div>
+      <div
+        className="effort-track"
+        role="slider"
+        tabIndex={0}
+        aria-label="Nivel de esfuerzo de razonamiento"
+        aria-valuemin={0}
+        aria-valuemax={EFFORT_LEVELS.length - 1}
+        aria-valuenow={activeIndex}
+        aria-valuetext={active.value}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); moveTo(activeIndex + 1) }
+          else if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); moveTo(activeIndex - 1) }
+          else if (e.key === "Home") { e.preventDefault(); moveTo(0) }
+          else if (e.key === "End") { e.preventDefault(); moveTo(EFFORT_LEVELS.length - 1) }
+        }}
+      >
+        <div className="effort-track-line" aria-hidden />
+        <div
+          className="effort-track-fill"
+          aria-hidden
+          style={{ width: `${(activeIndex / (EFFORT_LEVELS.length - 1)) * 100}%` }}
+        />
+        {EFFORT_LEVELS.map((level, index) => (
+          <button
+            key={level.value}
+            type="button"
+            tabIndex={-1}
+            aria-hidden
+            title={level.value}
+            className={cn(
+              "effort-stop",
+              index <= activeIndex && "effort-stop-reached",
+              index === activeIndex && "effort-stop-active",
+            )}
+            onClick={() => moveTo(index)}
+          />
+        ))}
+      </div>
+      <div className="effort-ends" aria-hidden>
+        <span>Low</span>
+        <span>Max</span>
+      </div>
+      <p className="effort-caption">{active.caption}</p>
+    </div>
+  )
+}
+
 function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
   return (
     prev.selectedModel === next.selectedModel &&
@@ -3666,6 +3741,10 @@ function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
     prev.setSelectedModel === next.setSelectedModel &&
     prev.setSelectedProvider === next.setSelectedProvider &&
     prev.setCurrentChat === next.setCurrentChat &&
+    // Without these two the memo would freeze the slider: clicking a stop
+    // updates context state but the dropdown would keep rendering the old one.
+    prev.selectedEffort === next.selectedEffort &&
+    prev.setSelectedEffort === next.setSelectedEffort &&
     getNavbarModelSelectorChatSignature(prev.currentChat) === getNavbarModelSelectorChatSignature(next.currentChat)
   )
 }
@@ -3678,6 +3757,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   chatTypes,
   currentChat,
   setCurrentChat,
+  selectedEffort,
+  setSelectedEffort,
 }: any) {
   const { user } = useAuth()
   const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
@@ -4772,6 +4853,12 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             </div>
           )}
         </ScrollArea>
+        {typeof setSelectedEffort === "function" && (
+          <EffortSection
+            selectedEffort={selectedEffort}
+            setSelectedEffort={setSelectedEffort}
+          />
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -7004,6 +7091,8 @@ But first, you need to connect your Spotify account securely using the button be
           chatTypes={chatType}
           currentChat={currentChat}
           setCurrentChat={setCurrentChat}
+          selectedEffort={selectedEffort}
+          setSelectedEffort={setSelectedEffort}
         />
       </div>
     )
