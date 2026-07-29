@@ -399,9 +399,10 @@ test('profile writes update Company and the legacy brief compatibility shadow', 
     },
     company: {
       upsert: async ({ where, create, update }) => {
+        assert.equal(where.projectId, 'project-1');
         state.company = state.company
           ? { ...state.company, ...update }
-          : { ...create, id: where.id };
+          : { ...create };
         return state.company;
       },
     },
