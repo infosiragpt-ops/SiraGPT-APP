@@ -63,9 +63,10 @@ describe('TelegramAdapter · constructor', () => {
 });
 
 describe('TelegramAdapter · verify (webhook secret)', () => {
-  it('returns true when no webhook secret configured (open mode)', async () => {
+  it('fails closed when no webhook secret is configured', async () => {
     const a = makeAdapter();
-    assert.equal(await a.verify({ headers: {} }), true);
+    assert.equal(await a.verify({ headers: {} }), false);
+    assert.equal(a.metrics.get('telegram', KINDS.VERIFY_FAIL), 1);
   });
 
   it('returns true when secret matches header (lowercase)', async () => {
@@ -267,38 +268,6 @@ describe('TelegramAdapter · sendOutbound', () => {
     await a.sendOutbound({ chatId: 'C', text: 't' });
 
     assert.equal(calls, 2);
-  });
-});
-
-describe('TelegramAdapter · polling authorization', () => {
-  it('surfaces pairing_required without delivering an unknown sender to onUpdate', async () => {
-    const authorizationNotices = [];
-    let delivered = 0;
-    const adapter = makeAdapter({
-      accountId: 'company-1:user-1:channel-1',
-      authorizeInbound: async () => ({
-        allowed: false,
-        reason: 'pairing_required',
-        pairingCode: 'ABCDEFGH',
-      }),
-    });
-    const result = await adapter._dispatchPolledUpdate(
-      {
-        update_id: 10,
-        message: {
-          message_id: 42,
-          from: { id: 'unknown-sender' },
-          chat: { id: 'chat-1', type: 'private' },
-          text: 'hola',
-        },
-      },
-      async () => { delivered += 1; },
-      async (notice) => { authorizationNotices.push(notice); },
-    );
-    assert.equal(delivered, 0);
-    assert.equal(result.authorization.reason, 'pairing_required');
-    assert.equal(authorizationNotices.length, 1);
-    assert.equal(authorizationNotices[0].authorization.pairingCode, 'ABCDEFGH');
   });
 });
 

@@ -29,25 +29,19 @@ const { isSenderAllowed } = require('../services/business-channels/pairing');
 class ChannelAdapter {
   /**
    * @param {string} name
-   * @param {{ accountId?: string, allowlist?: string[], allowFrom?: string[], authorizeInbound?: Function, dmPolicy?: string, dedup?: DedupCache, metrics?: object, fetchImpl?: typeof fetch }} [opts]
+   * @param {{ accountId?: string, allowlist?: string[], allowFrom?: string[], dmPolicy?: string, dedup?: DedupCache, metrics?: object, fetchImpl?: typeof fetch }} [opts]
    */
   constructor(name, opts = {}) {
     if (!name) throw new Error('ChannelAdapter requires a name');
     this.name = name;
-    const explicitAccountId = typeof opts.accountId === 'string'
+    this.accountId = typeof opts.accountId === 'string'
       ? opts.accountId.trim()
       : '';
-    this.accountId = explicitAccountId || 'default';
+    if (!this.accountId) this.accountId = 'default';
     this.dmPolicy = ['pairing', 'allowlist', 'open', 'closed'].includes(opts.dmPolicy)
       ? opts.dmPolicy
       : 'pairing';
     this.allowlist = new Set(opts.allowFrom || opts.allowlist || []);
-    this.authorizeInbound = typeof opts.authorizeInbound === 'function'
-      ? opts.authorizeInbound
-      : null;
-    if (this.authorizeInbound && !explicitAccountId) {
-      throw new Error('ChannelAdapter requires accountId with authorizeInbound');
-    }
     this.dedup = opts.dedup || new DedupCache();
     this.metrics = opts.metrics || sharedMetrics;
     this.fetchImpl = opts.fetchImpl || globalThis.fetch;
@@ -90,46 +84,19 @@ class ChannelAdapter {
   /** @returns {Promise<object>} */
   async sendOutbound(_msg) { throw new Error(`sendOutbound() not implemented for ${this.name}`); }
 
-  async _gateParsedInbound(parsed) {
-    if (!parsed) return { message: null, authorization: { allowed: false, reason: 'invalid_payload' } };
-    if (this.isDuplicate(parsed)) {
-      return { message: null, authorization: { allowed: false, reason: 'duplicate' } };
-    }
-
-    const authorization = this.authorizeInbound
-      ? await this.authorizeInbound({
-        channel: this.name,
-        accountId: this.accountId,
-        senderId: parsed.userId,
-        accessGroup: parsed.accessGroup,
-        message: parsed,
-      })
-      : {
-        allowed: this.isAllowed(parsed.accessGroup || parsed.userId),
-        reason: 'adapter_policy',
-      };
-    if (!authorization?.allowed) {
-      return { message: null, authorization: authorization || { allowed: false } };
-    }
-    this.metrics.inc(this.name, KINDS.INBOUND);
-    return { message: parsed, authorization };
-  }
-
   /**
-   * Structured webhook ingress for routers that must surface
-   * `pairing_required`. There is deliberately no public verification bypass.
-   */
-  async receiveWithAuthorization(req) {
-    if (!await this.verify(req)) return null;
-    return this._gateParsedInbound(await this.parseInbound(req));
-  }
-
-  /**
-   * Backward-compatible interface: allowed message or null.
+   * Legacy ingress only. New business-channel webhooks must use
+   * services/business-channels/registry with its persistent authorizer.
+   * There is deliberately no verification bypass.
    */
   async receive(req) {
-    const result = await this.receiveWithAuthorization(req);
-    return result?.message || null;
+    if (!await this.verify(req)) return null;
+    const parsed = await this.parseInbound(req);
+    if (!parsed || this.isDuplicate(parsed) || !this.isAllowed(parsed.accessGroup || parsed.userId)) {
+      return null;
+    }
+    this.metrics.inc(this.name, KINDS.INBOUND);
+    return parsed;
   }
 
   async send(msg) {

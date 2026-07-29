@@ -115,9 +115,9 @@ describe('EmailAdapter', () => {
 // ── TelegramAdapter ──────────────────────────────────────────────────────────
 
 describe('TelegramAdapter', () => {
-  it('verify accepts when no secret configured', async () => {
+  it('verify fails closed when no secret is configured', async () => {
     const a = new TelegramAdapter({ botToken: 't' });
-    assert.equal(await a.verify({ headers: {} }), true);
+    assert.equal(await a.verify({ headers: {} }), false);
   });
 
   it('verify checks secret token header', async () => {

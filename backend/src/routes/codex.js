@@ -1079,33 +1079,38 @@ router.delete('/projects/:id/business-channels/:channelId/pair', authenticateTok
   }
 });
 
-router.post('/projects/:id/business-channels/:channelId/inbox', authenticateToken, async (req, res) => {
-  try {
-    const project = await loadOwnedProjectRecord(req, res);
-    if (!project) return undefined;
-    const company = await loadOwnedCompany(project);
-    if (!company) return res.status(409).json({ error: 'company_association_required' });
-    const result = await require('../services/codex/business-channels').recordInboundMessage({
-      prisma: codexDb,
-      company,
-      channelId: req.params.channelId,
-      message: req.body?.message ?? req.body,
-      runService: require('../services/codex/run-service'),
-      env: process.env,
-    });
-    return res.status(result.authorization.allowed ? 202 : 428).json(result);
-  } catch (err) {
-    const status = ['invalid_inbox_message'].includes(err?.message)
-      ? 400
-      : err?.message === 'business_channel_not_found'
-        ? 404
-        : 500;
-    return res.status(status).json({
-      error: status === 500 ? 'codex_channel_inbox_failed' : err.message,
-      message: err.message,
-    });
-  }
-});
+router.post(
+  '/projects/:id/business-channels/:channelId/inbox',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const company = await loadOwnedCompany(project);
+      if (!company) return res.status(409).json({ error: 'company_association_required' });
+      const result = await require('../services/codex/business-channels').recordInboundMessage({
+        prisma: codexDb,
+        company,
+        channelId: req.params.channelId,
+        message: req.body?.message ?? req.body,
+        runService: require('../services/codex/run-service'),
+        env: process.env,
+      });
+      return res.status(result.authorization.allowed ? 202 : 428).json(result);
+    } catch (err) {
+      const status = ['invalid_inbox_message'].includes(err?.message)
+        ? 400
+        : err?.message === 'business_channel_not_found'
+          ? 404
+          : 500;
+      return res.status(status).json({
+        error: status === 500 ? 'codex_channel_inbox_failed' : err.message,
+        message: err.message,
+      });
+    }
+  },
+);
 
 router.get('/projects/:id/business-channels-doctor', authenticateToken, async (req, res) => {
   try {

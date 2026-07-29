@@ -56,7 +56,7 @@ describe('channels/index.js · barrel exports', () => {
 describe('ChannelRegistry', () => {
   // Minimal concrete adapter for tests (overrides the abstract hooks).
   class FakeAdapter extends ChannelAdapter {
-    constructor(name, accountId) { super(name, accountId ? { accountId } : {}); }
+    constructor(name) { super(name); }
     async verify() { return true; }
     async parseInbound() { return null; }
     async sendOutbound() { return {}; }
@@ -105,17 +105,6 @@ describe('ChannelRegistry', () => {
     r.register(a2);
     assert.strictEqual(r.get('slack'), a2, 'second register call wins');
     assert.equal(r.list().length, 1, 'no duplicate entries');
-  });
-
-  it('keeps two accounts of the same channel kind registered independently', () => {
-    const r = new ChannelRegistry();
-    const accountA = new FakeAdapter('slack', 'company-a:channel-1');
-    const accountB = new FakeAdapter('slack', 'company-b:channel-2');
-    r.register(accountA);
-    r.register(accountB);
-    assert.strictEqual(r.get('slack', accountA.accountId), accountA);
-    assert.strictEqual(r.get('slack', accountB.accountId), accountB);
-    assert.equal(r.list().length, 2);
   });
 
   it('get() returns undefined for an unregistered name', () => {

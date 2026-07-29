@@ -61,15 +61,6 @@ describe('ChannelAdapter · constructor', () => {
     assert.strictEqual(a.fetchImpl, myFetch);
   });
 
-  it('requires an explicit account id for persistent authorization', () => {
-    assert.throws(
-      () => new ChannelAdapter('slack', {
-        authorizeInbound: async () => ({ allowed: true }),
-      }),
-      /requires accountId/,
-    );
-  });
-
   it('builds an allowlist Set from the option array', () => {
     const a = new ChannelAdapter('slack', { allowlist: ['team-a', 'team-b'] });
     assert.ok(a.allowlist instanceof Set);
@@ -210,59 +201,22 @@ describe('ChannelAdapter · hook abstractness', () => {
   });
 });
 
-describe('ChannelAdapter · structured authorization', () => {
-  it('surfaces pairing_required without delivering the message', async () => {
-    const authorizations = [];
-    class TestAdapter extends ChannelAdapter {
-      async verify() { return true; }
-      async parseInbound() {
-        return {
-          id: 'message-1',
-          channel: 'test',
-          userId: 'sender-1',
-          raw: {},
-          ts: Date.now(),
-        };
-      }
-    }
-    const adapter = new TestAdapter('test', {
-      accountId: 'company-1:channel-1',
-      authorizeInbound: async (context) => {
-        authorizations.push(context);
-        return {
-          allowed: false,
-          reason: 'pairing_required',
-          pairingCode: 'ABCDEFGH',
-        };
-      },
-    });
-    const result = await adapter.receiveWithAuthorization({});
-    assert.equal(result.message, null);
-    assert.equal(result.authorization.pairingCode, 'ABCDEFGH');
-    assert.equal(authorizations[0].senderId, 'sender-1');
-    assert.equal(authorizations[0].accountId, 'company-1:channel-1');
-    assert.equal(await adapter.receive({}), null);
-  });
-
-  it('never authorizes an invalid signature and exposes no skipVerify bypass', async () => {
-    let authorizationCalls = 0;
+describe('ChannelAdapter · verification boundary', () => {
+  it('never parses an invalid signature and exposes no skipVerify bypass', async () => {
+    let parseCalls = 0;
     class TestAdapter extends ChannelAdapter {
       async verify() { return false; }
-      async parseInbound() { throw new Error('must not parse'); }
+      async parseInbound() {
+        parseCalls += 1;
+        throw new Error('must not parse');
+      }
     }
-    const adapter = new TestAdapter('test', {
-      accountId: 'company-1:channel-1',
-      authorizeInbound: async () => {
-        authorizationCalls += 1;
-        return { allowed: true };
-      },
-    });
-    assert.equal(await adapter.receiveWithAuthorization({}), null);
-    assert.equal(authorizationCalls, 0);
+    const adapter = new TestAdapter('test');
+    assert.equal(await adapter.receive({}), null);
     assert.equal(
       await adapter.receive({}, { skipVerify: true, trustedInternal: true }),
       null,
     );
-    assert.equal(authorizationCalls, 0);
+    assert.equal(parseCalls, 0);
   });
 });

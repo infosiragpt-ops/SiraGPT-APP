@@ -11,24 +11,20 @@
  * instance) and again on every getAdapter, so a misbehaving factory can
  * never hand out a half-shaped adapter.
  *
- * gateAndNormalize is the single inbound door: webhook update → adapter
- * normalisation → pairing gate (./pairing) → canonical InboxMessage. An
- * unknown sender NEVER reaches the caller's agent path — they get a pairing
- * code (or are dropped, per the channel's dmPolicy).
+ * gateAndNormalize is the single inbound door: signature verification →
+ * adapter normalisation → persistent tenant-scoped authorizer → canonical
+ * InboxMessage. An unknown sender NEVER reaches the caller's agent path.
  */
 
 const { assertValidAdapter, validateInboxMessage, AdapterContractError } = require('./adapter-contract');
-const { createPairingService } = require('./pairing');
 const { createTelegramAdapter } = require('./adapters/telegram');
 
 const factories = new Map(); // kind → (deps) => adapter
 
-// Shared by gateAndNormalize calls that do not inject their own service, so
-// "same code while pending" survives across webhook deliveries in-process.
-let defaultPairingService = null;
-function getDefaultPairingService() {
-  if (!defaultPairingService) defaultPairingService = createPairingService();
-  return defaultPairingService;
+function ingressContractError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
 }
 
 /**
@@ -72,18 +68,41 @@ function listAdapterKinds() {
  * @param {object} args
  * @param {object} args.adapter        Contract-conforming adapter instance.
  * @param {object} args.update         Raw provider webhook payload.
- * @param {object} [args.channelConfig] { accountId?, dmPolicy?, allowFrom? }.
- * @param {object} [args.pairingService] Injectable (defaults to a shared
- *   in-process service from ./pairing).
+ * @param {object} [args.headers]       Provider webhook request headers.
+ * @param {Buffer|string} [args.rawBody] Original body when a provider signs it.
+ * @param {object} args.authorizer      Persistent, tenant-scoped authorizer
+ *   from createBusinessChannelAuthorizer().
  * @returns {Promise<
  *   | { status: 'ignored', message: null }
- *   | { status: 'allowed', message: object }
- *   | { status: 'pairing_required', code: string, created: boolean, message: null }
+ *   | { status: 'allowed', message: object, authorization: object }
+ *   | { status: 'pairing_required', code: string, created: boolean, expiresAt: Date|null, message: null }
  *   | { status: 'dropped', reason: string, message: null }
  * >}
  */
-async function gateAndNormalize({ adapter, update, channelConfig = {}, pairingService } = {}) {
+async function gateAndNormalize({
+  adapter,
+  update,
+  headers = {},
+  rawBody,
+  authorizer,
+} = {}) {
   assertValidAdapter(adapter);
+  if (!authorizer || typeof authorizer.authorizeInbound !== 'function') {
+    throw ingressContractError('pairing_authorizer_required');
+  }
+  const accountId = typeof authorizer.accountId === 'string'
+    ? authorizer.accountId.trim()
+    : '';
+  if (!accountId) throw ingressContractError('channel_account_id_required');
+
+  const verified = await adapter.verifyInbound({ headers, rawBody, update });
+  if (typeof verified !== 'boolean') {
+    throw ingressContractError('adapter_inbound_verification_contract_violation');
+  }
+  if (verified !== true) {
+    return { status: 'dropped', reason: 'invalid_signature', message: null };
+  }
+
   const message = adapter.receive(update);
   if (message === null || message === undefined) {
     return { status: 'ignored', message: null };
@@ -95,20 +114,44 @@ async function gateAndNormalize({ adapter, update, channelConfig = {}, pairingSe
       shape.errors,
     );
   }
-  const pairing = pairingService || getDefaultPairingService();
-  const gate = await pairing.gateInbound({
-    channel: message.channelKind,
-    accountId: channelConfig.accountId,
-    senderId: message.from,
-    dmPolicy: channelConfig.dmPolicy,
-    allowFrom: channelConfig.allowFrom,
-    meta: { externalId: message.externalId, threadId: message.threadId },
-  });
-  if (gate.status === 'allowed') return { status: 'allowed', message };
-  if (gate.status === 'pairing_required') {
-    return { status: 'pairing_required', code: gate.code, created: gate.created, message: null };
+  if (message.channelKind !== adapter.kind) {
+    throw new AdapterContractError(
+      `adapter '${adapter.kind}' emitted channelKind '${message.channelKind}'`,
+      ['channelKind must match adapter kind'],
+    );
   }
-  return { status: 'dropped', reason: gate.reason || 'not_allowlisted', message: null };
+
+  const authorization = await authorizer.authorizeInbound({
+    accountId,
+    senderId: message.from,
+    message,
+  });
+  if (!authorization || typeof authorization !== 'object') {
+    throw ingressContractError('pairing_authorizer_contract_violation');
+  }
+  if (typeof authorization.allowed !== 'boolean') {
+    throw ingressContractError('pairing_authorizer_contract_violation');
+  }
+  if (authorization.allowed === true) {
+    return { status: 'allowed', message, authorization };
+  }
+  if (authorization.reason === 'pairing_required') {
+    if (!authorization.pairingCode) {
+      throw ingressContractError('pairing_authorizer_contract_violation');
+    }
+    return {
+      status: 'pairing_required',
+      code: authorization.pairingCode,
+      created: authorization.created === true,
+      expiresAt: authorization.expiresAt || null,
+      message: null,
+    };
+  }
+  return {
+    status: 'dropped',
+    reason: authorization.reason || 'sender_not_allowed',
+    message: null,
+  };
 }
 
 registerAdapter('telegram', createTelegramAdapter);

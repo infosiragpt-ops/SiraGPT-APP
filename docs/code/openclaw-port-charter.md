@@ -25,7 +25,7 @@
 | # | Módulo OpenClaw (líneas) | Destino siraGPT | Qué se porta | Prioridad |
 |---|---|---|---|---|
 | 1 | `src/pairing` (1.5k) | `backend/src/services/business-channels/pairing.js` | Códigos de emparejamiento, allowlist store, aprobación, TTL — el modelo de seguridad de canales entero | **P0 — primero** (pequeño, autocontenido, prerequisito de canales) |
-| 2 | `src/channels` (45k) | `backend/src/channels/*` + `services/codex/business-channels.js` | Endurecer y fusionar el contrato + 5 adapters que SiraGPT ya tiene (telegram, email, whatsapp-twilio, slack, discord); no crear un segundo árbol ni portar los 25 | P0 |
+| 2 | `src/channels` (45k) | `backend/src/services/business-channels/{adapter-contract.js,registry.js,adapters/*}` + `backend/src/services/codex/business-channels.js` | Contrato canónico y 5 adapters seleccionados; firma antes de normalizar, autorización Prisma ligada a `{companyId,userId,businessChannelId}` e idempotencia DB. `backend/src/channels/*` queda legado durante la migración, sin ingreso productivo nuevo | P0 |
 | 3 | `src/cron` (28k) | `ScheduledAgentTask` + worker (cowork E4) | Modelo de job, catch-up de ejecuciones perdidas, jitter, historial | P1 |
 | 4 | `src/sessions` (7k) | ampliar `cowork/session-manager.js` | sessions_list/history/send como tools del agente + draft sessions | P1 |
 | 5 | `src/routing` | router canal→departamento | Reglas peer/account→agente aislado | P1 |
@@ -43,8 +43,11 @@ al repo — se re-clona cuando haga falta (`git clone --depth 1
 ## Orden de ejecución
 
 1. **Porte #1 (pairing)** — desbloquea la seguridad de TODOS los canales.
-2. Fusionar #1 con el contrato y los 5 adapters existentes; promover cada
-   canal solo después de pruebas de firma, deduplicación y aislamiento tenant.
+2. Fusionar #1 con el contrato y los 5 adapters seleccionados mediante una
+   única secuencia: firma inbound → normalización canónica → authorizer Prisma
+   persistente → `recordInboundMessage`. `createPairingService()` en memoria
+   se permite únicamente en tests offline explícitos. Promover cada canal solo
+   después de pruebas de firma, deduplicación y aislamiento tenant.
 3. Porte #3 cron por usuario (cowork E4 con las decisiones de OpenClaw).
 4. Portes #4/#5 (sesiones como tools + routing).
 5. En paralelo continuo: A1 worktrees → A2 cap → A3 fleet (master plan) —
