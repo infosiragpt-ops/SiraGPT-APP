@@ -71,15 +71,20 @@ describe('ChannelAdapter · constructor', () => {
 });
 
 describe('ChannelAdapter · isAllowed', () => {
-  it('fails closed when allowlist is empty unless open is explicit', () => {
+  it('fails closed when allowlist is empty unless open has the explicit wildcard', () => {
     const a = new ChannelAdapter('slack');
     assert.equal(a.isAllowed(undefined), false);
     assert.equal(a.isAllowed(''), false);
     assert.equal(a.isAllowed('anyone'), false);
 
     const opened = new ChannelAdapter('slack', { dmPolicy: 'open' });
-    assert.equal(opened.isAllowed(undefined), true);
-    assert.equal(opened.isAllowed('anyone'), true);
+    assert.equal(opened.isAllowed(undefined), false);
+    assert.equal(opened.isAllowed('anyone'), false);
+    const explicitlyOpened = new ChannelAdapter('slack', {
+      dmPolicy: 'open',
+      allowFrom: ['*'],
+    });
+    assert.equal(explicitlyOpened.isAllowed('anyone'), true);
   });
 
   it('rejects missing accessGroup when allowlist is non-empty', () => {

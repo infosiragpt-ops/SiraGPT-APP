@@ -1,6 +1,12 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const {
+  derivePairingCode,
+  isSenderAllowed,
+  PENDING_MAX_PER_ACCOUNT,
+  PENDING_TTL_MS: PAIRING_TTL_MS,
+} = require('../business-channels/pairing');
 
 const CHANNEL_KINDS = Object.freeze([
   'telegram',
@@ -13,7 +19,6 @@ const CHANNEL_KINDS = Object.freeze([
 ]);
 const DM_POLICIES = Object.freeze(['pairing', 'allowlist', 'open', 'closed']);
 const OUTBOUND_MODES = Object.freeze(['review', 'auto', 'off']);
-const PAIRING_TTL_MS = 15 * 60_000;
 const SENSITIVE_METADATA_KEY = /(?:authorization|cookie|credentials?|password|passwd|private[_-]?key|secret|token|api[_-]?key)/i;
 const UNSAFE_METADATA_KEY = /^(?:__proto__|constructor|prototype)$/i;
 
@@ -182,8 +187,67 @@ function pairingHash({ channelId, senderRef, code, env = process.env }) {
     .digest('hex');
 }
 
-function createPairingCode() {
-  return crypto.randomBytes(5).toString('hex').toUpperCase();
+function pairingCodeScope({ channelId, senderRef, expiresAt }) {
+  return `${channelId}\0${senderRef}\0${new Date(expiresAt).getTime()}`;
+}
+
+function createPairingCode({ channelId, senderRef, expiresAt, env = process.env }) {
+  return derivePairingCode({
+    secret: pairingSecret(env),
+    scope: pairingCodeScope({ channelId, senderRef, expiresAt }),
+  });
+}
+
+function pairingHashMatches({ pairing, channelId, senderRef, code, env = process.env }) {
+  const expected = pairingHash({ channelId, senderRef, code, env });
+  const actual = String(pairing?.codeHash || '');
+  return actual.length === expected.length
+    && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
+
+async function reservePendingPairingSlot({ prisma, channelId, senderRef, now }) {
+  const pairings = prisma?.businessChannelPairing;
+  if (!pairings) throw new Error('business_channel_pairing_storage_unavailable');
+
+  if (typeof pairings.updateMany === 'function') {
+    await pairings.updateMany({
+      where: {
+        channelId,
+        status: 'pending',
+        expiresAt: { lte: now },
+      },
+      data: { status: 'expired' },
+    });
+  }
+
+  if (
+    typeof pairings.findMany !== 'function'
+    || typeof pairings.updateMany !== 'function'
+  ) {
+    return;
+  }
+
+  const live = await pairings.findMany({
+    where: {
+      channelId,
+      status: 'pending',
+      expiresAt: { gt: now },
+    },
+    orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, senderRef: true },
+  });
+  const otherSenders = live.filter((pairing) => pairing.senderRef !== senderRef);
+  const overflow = Math.max(
+    0,
+    otherSenders.length - PENDING_MAX_PER_ACCOUNT + 1,
+  );
+  const evictedIds = otherSenders.slice(0, overflow).map((pairing) => pairing.id);
+  if (evictedIds.length > 0) {
+    await pairings.updateMany({
+      where: { id: { in: evictedIds } },
+      data: { status: 'expired' },
+    });
+  }
 }
 
 async function authorizeSender({
@@ -199,13 +263,61 @@ async function authorizeSender({
   }
   const policy = normalizeDmPolicy(channel.dmPolicy);
   const allowFrom = normalizeStringList(channel.allowFrom);
-  if (policy === 'open' || allowFrom.includes(sender)) {
+  if (isSenderAllowed({ senderId: sender, dmPolicy: policy, allowFrom })) {
     return { allowed: true, reason: policy === 'open' ? 'explicit_open_policy' : 'allowlist' };
   }
-  if (policy !== 'pairing') return { allowed: false, reason: 'sender_not_allowed' };
+  if (policy !== 'pairing') {
+    return {
+      allowed: false,
+      reason: policy === 'open' ? 'open_policy_requires_wildcard' : 'sender_not_allowed',
+    };
+  }
 
-  const code = createPairingCode();
+  const existing = typeof prisma?.businessChannelPairing?.findUnique === 'function'
+    ? await prisma.businessChannelPairing.findUnique({
+      where: { channelId_senderRef: { channelId: channel.id, senderRef: sender } },
+    })
+    : null;
+  if (
+    existing?.status === 'pending'
+    && existing.expiresAt > now
+  ) {
+    const stableCode = createPairingCode({
+      channelId: channel.id,
+      senderRef: sender,
+      expiresAt: existing.expiresAt,
+      env,
+    });
+    if (pairingHashMatches({
+      pairing: existing,
+      channelId: channel.id,
+      senderRef: sender,
+      code: stableCode,
+      env,
+    })) {
+      return {
+        allowed: false,
+        reason: 'pairing_required',
+        pairingCode: stableCode,
+        expiresAt: existing.expiresAt,
+        created: false,
+      };
+    }
+  }
+
   const expiresAt = new Date(now.getTime() + PAIRING_TTL_MS);
+  const code = createPairingCode({
+    channelId: channel.id,
+    senderRef: sender,
+    expiresAt,
+    env,
+  });
+  await reservePendingPairingSlot({
+    prisma,
+    channelId: channel.id,
+    senderRef: sender,
+    now,
+  });
   await prisma.businessChannelPairing.upsert({
     where: { channelId_senderRef: { channelId: channel.id, senderRef: sender } },
     create: {
@@ -228,6 +340,7 @@ async function authorizeSender({
     reason: 'pairing_required',
     pairingCode: code,
     expiresAt,
+    created: true,
   };
 }
 
@@ -248,15 +361,17 @@ async function approvePairing({
   const pairing = await prisma.businessChannelPairing.findUnique({
     where: { channelId_senderRef: { channelId, senderRef: sender } },
   });
-  const expected = pairingHash({ channelId, senderRef: sender, code, env });
-  const actual = String(pairing?.codeHash || '');
-  const validHash = actual.length === expected.length
-    && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
   if (
     !pairing
     || pairing.status !== 'pending'
     || pairing.expiresAt <= now
-    || !validHash
+    || !pairingHashMatches({
+      pairing,
+      channelId,
+      senderRef: sender,
+      code,
+      env,
+    })
   ) throw new Error('invalid_or_expired_pairing_code');
 
   await prisma.businessChannelPairing.update({
@@ -417,6 +532,7 @@ module.exports = {
   CHANNEL_KINDS,
   DM_POLICIES,
   OUTBOUND_MODES,
+  PENDING_MAX_PER_ACCOUNT,
   PAIRING_TTL_MS,
   approvePairing,
   auditChannelPolicies,

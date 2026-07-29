@@ -4,12 +4,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createPairingService,
+  derivePairingCode,
   generatePairingCode,
   PAIRING_CODE_LENGTH,
   PAIRING_CODE_ALPHABET,
   PENDING_TTL_MS,
   PENDING_MAX_PER_ACCOUNT,
 } = require('../src/services/business-channels/pairing');
+
+test('deterministic pairing codes are stable, scoped and use the safe alphabet', () => {
+  const first = derivePairingCode({ secret: 'test-secret', scope: 'channel-a\\0sender-a\\01' });
+  const repeated = derivePairingCode({ secret: 'test-secret', scope: 'channel-a\\0sender-a\\01' });
+  const other = derivePairingCode({ secret: 'test-secret', scope: 'channel-a\\0sender-b\\01' });
+  assert.equal(first, repeated);
+  assert.notEqual(first, other);
+  assert.equal(first.length, PAIRING_CODE_LENGTH);
+  for (const char of first) assert.ok(PAIRING_CODE_ALPHABET.includes(char));
+});
 
 test('pairing codes: length, alphabet, uniqueness against existing set', () => {
   const code = generatePairingCode();

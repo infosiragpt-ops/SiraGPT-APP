@@ -65,8 +65,10 @@ describe('ChannelAdapter', () => {
     const a = new A('x');
     assert.equal(a.isAllowed(undefined), false);
     assert.equal(a.isAllowed('any'), false);
-    const opened = new A('open', { dmPolicy: 'open' });
+    const opened = new A('open', { dmPolicy: 'open', allowFrom: ['*'] });
     assert.equal(opened.isAllowed('any'), true);
+    const unsafeOpen = new A('open-without-wildcard', { dmPolicy: 'open' });
+    assert.equal(unsafeOpen.isAllowed('any'), false);
   });
 
   it('allowlist enforces membership when configured', () => {

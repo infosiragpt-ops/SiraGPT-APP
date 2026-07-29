@@ -2,6 +2,7 @@
 
 const { DedupCache } = require('./dedup-cache');
 const { sharedMetrics, KINDS } = require('./metrics');
+const { isSenderAllowed } = require('../services/business-channels/pairing');
 
 /**
  * Normalized inbound message envelope produced by `parseInbound`.
@@ -43,14 +44,15 @@ class ChannelAdapter {
   }
 
   /**
-   * Channels fail closed. An empty allowlist requires pairing unless the owner
-   * deliberately selected the explicit `open` policy.
+   * Channels fail closed. `open` requires both the policy and the explicit
+   * wildcard, matching the Prisma-backed business-channel gate.
    */
   isAllowed(accessGroup) {
-    if (this.dmPolicy === 'open') return true;
-    if (this.dmPolicy === 'closed') return false;
-    if (!accessGroup) return false;
-    return this.allowlist.has(accessGroup);
+    return isSenderAllowed({
+      senderId: accessGroup,
+      dmPolicy: this.dmPolicy,
+      allowFrom: [...this.allowlist],
+    });
   }
 
   /**

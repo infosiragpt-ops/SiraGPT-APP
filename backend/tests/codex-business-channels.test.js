@@ -12,7 +12,18 @@ const ENV = {
 };
 
 function fakePairingPrisma(channel) {
-  const state = { channel: structuredClone(channel), pairing: null };
+  const state = { channel: structuredClone(channel), pairing: null, pairings: [] };
+  const findPairing = ({ channelId, senderRef }) => state.pairings.find(
+    (pairing) => pairing.channelId === channelId && pairing.senderRef === senderRef,
+  );
+  const matchesWhere = (pairing, where = {}) => {
+    if (where.id?.in && !where.id.in.includes(pairing.id)) return false;
+    if (where.channelId && pairing.channelId !== where.channelId) return false;
+    if (where.status && pairing.status !== where.status) return false;
+    if (where.expiresAt?.lte && pairing.expiresAt > where.expiresAt.lte) return false;
+    if (where.expiresAt?.gt && pairing.expiresAt <= where.expiresAt.gt) return false;
+    return true;
+  };
   return {
     state,
     businessChannel: {
@@ -23,15 +34,46 @@ function fakePairingPrisma(channel) {
       },
     },
     businessChannelPairing: {
-      upsert: async ({ create, update }) => {
-        state.pairing = state.pairing
-          ? { ...state.pairing, ...structuredClone(update), updatedAt: new Date() }
-          : { id: 'pair-1', ...structuredClone(create), createdAt: new Date(), updatedAt: new Date() };
+      upsert: async ({ where, create, update }) => {
+        const key = where.channelId_senderRef;
+        const existing = findPairing(key);
+        state.pairing = existing
+          ? { ...existing, ...structuredClone(update), updatedAt: new Date() }
+          : {
+            id: `pair-${state.pairings.length + 1}`,
+            ...structuredClone(create),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+        if (existing) {
+          state.pairings[state.pairings.indexOf(existing)] = state.pairing;
+        } else {
+          state.pairings.push(state.pairing);
+        }
         return structuredClone(state.pairing);
       },
-      findUnique: async () => structuredClone(state.pairing),
-      update: async ({ data }) => {
-        state.pairing = { ...state.pairing, ...structuredClone(data), updatedAt: new Date() };
+      findUnique: async ({ where }) => structuredClone(
+        findPairing(where.channelId_senderRef) || null,
+      ),
+      findMany: async ({ where }) => state.pairings
+        .filter((pairing) => matchesWhere(pairing, where))
+        .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id))
+        .map((pairing) => ({ id: pairing.id, senderRef: pairing.senderRef })),
+      updateMany: async ({ where, data }) => {
+        let count = 0;
+        state.pairings = state.pairings.map((pairing) => {
+          if (!matchesWhere(pairing, where)) return pairing;
+          count += 1;
+          const updated = { ...pairing, ...structuredClone(data), updatedAt: new Date() };
+          if (state.pairing?.id === updated.id) state.pairing = updated;
+          return updated;
+        });
+        return { count };
+      },
+      update: async ({ where, data }) => {
+        const existing = state.pairings.find((pairing) => pairing.id === where.id);
+        state.pairing = { ...existing, ...structuredClone(data), updatedAt: new Date() };
+        state.pairings[state.pairings.indexOf(existing)] = state.pairing;
         return structuredClone(state.pairing);
       },
     },
@@ -154,7 +196,23 @@ test('unknown senders receive a short-lived pairing code and become allowlisted 
   });
   assert.equal(authorization.allowed, false);
   assert.equal(authorization.reason, 'pairing_required');
-  assert.match(authorization.pairingCode, /^[A-F0-9]{10}$/);
+  assert.equal(authorization.created, true);
+  assert.match(authorization.pairingCode, /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/);
+  assert.equal(
+    authorization.expiresAt.getTime() - now.getTime(),
+    service.PAIRING_TTL_MS,
+  );
+
+  const repeated = await service.authorizeSender({
+    prisma,
+    channel,
+    senderRef: 'tg:42',
+    now: new Date(now.getTime() + 30_000),
+    env: ENV,
+  });
+  assert.equal(repeated.pairingCode, authorization.pairingCode);
+  assert.equal(repeated.expiresAt.getTime(), authorization.expiresAt.getTime());
+  assert.equal(repeated.created, false);
 
   const approved = await service.approvePairing({
     prisma,
@@ -167,6 +225,87 @@ test('unknown senders receive a short-lived pairing code and become allowlisted 
   });
   assert.deepEqual(approved.allowFrom, ['tg:42']);
   assert.equal(prisma.state.pairing.status, 'approved');
+});
+
+test("open policy requires '*' and closed policy ignores specific allowlist entries", async () => {
+  const base = {
+    id: 'channel-policy',
+    companyId: 'company-1',
+    userId: 'user-1',
+    kind: 'discord',
+    status: 'active',
+    outboundMode: 'review',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const blockedOpen = await service.authorizeSender({
+    prisma: fakePairingPrisma({ ...base, dmPolicy: 'open', allowFrom: [] }),
+    channel: { ...base, dmPolicy: 'open', allowFrom: [] },
+    senderRef: 'discord:7',
+    env: ENV,
+  });
+  assert.deepEqual(blockedOpen, {
+    allowed: false,
+    reason: 'open_policy_requires_wildcard',
+  });
+
+  const explicitOpen = await service.authorizeSender({
+    prisma: fakePairingPrisma({ ...base, dmPolicy: 'open', allowFrom: ['*'] }),
+    channel: { ...base, dmPolicy: 'open', allowFrom: ['*'] },
+    senderRef: 'discord:7',
+    env: ENV,
+  });
+  assert.deepEqual(explicitOpen, {
+    allowed: true,
+    reason: 'explicit_open_policy',
+  });
+
+  const closed = await service.authorizeSender({
+    prisma: fakePairingPrisma({
+      ...base,
+      dmPolicy: 'closed',
+      allowFrom: ['discord:7'],
+    }),
+    channel: { ...base, dmPolicy: 'closed', allowFrom: ['discord:7'] },
+    senderRef: 'discord:7',
+    env: ENV,
+  });
+  assert.deepEqual(closed, {
+    allowed: false,
+    reason: 'sender_not_allowed',
+  });
+});
+
+test('persistent pairing evicts the oldest live request after the per-channel cap', async () => {
+  const channel = {
+    id: 'channel-cap',
+    companyId: 'company-1',
+    userId: 'user-1',
+    kind: 'whatsapp',
+    status: 'active',
+    dmPolicy: 'pairing',
+    outboundMode: 'review',
+    allowFrom: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const prisma = fakePairingPrisma(channel);
+  const start = new Date('2026-07-28T15:00:00.000Z');
+  for (let index = 0; index < 4; index += 1) {
+    await service.authorizeSender({
+      prisma,
+      channel,
+      senderRef: `wa:${index}`,
+      now: new Date(start.getTime() + index * 1_000),
+      env: ENV,
+    });
+  }
+  const pending = prisma.state.pairings.filter((pairing) => pairing.status === 'pending');
+  assert.equal(pending.length, 3);
+  assert.equal(
+    prisma.state.pairings.find((pairing) => pairing.senderRef === 'wa:0').status,
+    'expired',
+  );
 });
 
 test('channel router maps business intent to the owning department', () => {
