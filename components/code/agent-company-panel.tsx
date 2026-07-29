@@ -98,6 +98,10 @@ import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-sl
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
+  buildCompanyAgentFileArtifacts,
+  type CompanyAgentFileArtifact,
+} from "@/lib/company-agent-file-reports"
+import {
   associatedCodexProjectIdForCompany,
   shouldAcceptCompanyAssociationResponse,
 } from "@/lib/company-association-scope"
@@ -2284,6 +2288,10 @@ export function AgentCompanyPanel() {
             codexProjectId={activeCodexProjectId}
             files={files}
             sessions={codeChatSessions}
+            runs={codexRuns}
+            workers={officeModel.workers}
+            missionEvidence={missionEvidence}
+            rootSessionId={snapshot.rootSessionId}
             departments={allDepartments}
           />
         ) : view === "resources" ? (
@@ -2772,6 +2780,10 @@ export function AgentCompanyPanel() {
           codexProjectId={activeCodexProjectId}
           files={files}
           sessions={codeChatSessions}
+          runs={codexRuns}
+          workers={officeModel.workers}
+          missionEvidence={missionEvidence}
+          rootSessionId={snapshot.rootSessionId}
           departments={allDepartments}
         />
       ) : previewView === "resources" ? (
@@ -5735,17 +5747,7 @@ function ControlView({
   )
 }
 
-type CompanyArtifact = {
-  id: string
-  name: string
-  path: string
-  content: string
-  updatedAt: number
-  departmentId: string
-  departmentName: string
-  kind: "file" | "report"
-  extension: string
-}
+type CompanyArtifact = CompanyAgentFileArtifact
 
 function artifactDepartment(
   haystack: string,
@@ -5821,6 +5823,10 @@ function FilesView({
   codexProjectId,
   files,
   sessions,
+  runs = [],
+  workers = [],
+  missionEvidence = null,
+  rootSessionId = null,
   departments,
   surface = false,
 }: {
@@ -5828,6 +5834,10 @@ function FilesView({
   codexProjectId: string | null
   files: CodeFiles
   sessions: CodeChatSession[]
+  runs?: readonly CodexRun[]
+  workers?: readonly AgentOfficeWorker[]
+  missionEvidence?: CodexMissionEvidenceLedger | null
+  rootSessionId?: string | null
   departments: readonly AgentDepartmentDefinition[]
   surface?: boolean
 }) {
@@ -5918,46 +5928,19 @@ function FilesView({
     }
   }, [codexProjectId, missionBusy, refreshMissionLedger])
 
-  const artifacts = React.useMemo<CompanyArtifact[]>(() => {
-    const workspaceFiles = Object.values(files).map((file: CodeFile) => {
-      const department = artifactDepartment(file.path, departments)
-      return {
-        id: `file:${file.path}`,
-        name: file.path.split("/").pop() || file.path,
-        path: file.path,
-        content: file.content,
-        updatedAt: file.updatedAt,
-        departmentId: department?.id || "workspace",
-        departmentName: department?.name || "Espacio de trabajo",
-        kind: "file" as const,
-        extension: artifactExtension(file.path),
-      }
-    })
-    const reports = sessions.flatMap((session) => {
-      const result = [...session.turns].reverse().find(
-        (turn) => turn.role === "assistant" && !turn.streaming && turn.content.trim(),
-      )
-      if (!result) return []
-      const department = artifactDepartment(session.title, departments)
-      const safeTitle = session.title
-        .replace(/[^\p{L}\p{N}\s._-]+/gu, "")
-        .trim()
-        .replace(/\s+/g, "-")
-        .slice(0, 70) || "reporte"
-      return [{
-        id: `report:${session.id}`,
-        name: `${safeTitle}.md`,
-        path: `Borradores locales/${department?.name || "CEO Office"}/${safeTitle}.md`,
-        content: result.content,
-        updatedAt: session.updatedAt,
-        departmentId: department?.id || "ceo-office",
-        departmentName: department?.name || "CEO Office",
-        kind: "report" as const,
-        extension: "md",
-      }]
-    })
-    return [...reports, ...workspaceFiles].sort((a, b) => b.updatedAt - a.updatedAt)
-  }, [departments, files, sessions])
+  const built = React.useMemo(() => buildCompanyAgentFileArtifacts({
+    companyName,
+    departments,
+    files,
+    sessions,
+    runs,
+    workers,
+    missionEvidence: missionLedger || missionEvidence,
+    rootSessionId,
+  }), [companyName, departments, files, missionEvidence, missionLedger, rootSessionId, runs, sessions, workers])
+
+  const artifacts = built.artifacts
+  const agentGroups = built.groups
 
   const filtered = React.useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("es")
@@ -5965,35 +5948,28 @@ function FilesView({
       if (filter === "reports" && artifact.kind !== "report") return false
       if (filter === "files" && artifact.kind !== "file") return false
       if (!needle) return true
-      return `${artifact.name} ${artifact.path} ${artifact.departmentName}`
+      return `${artifact.name} ${artifact.path} ${artifact.departmentName} ${artifact.agentName}`
         .toLocaleLowerCase("es")
         .includes(needle)
     })
   }, [artifacts, filter, query])
 
   const groups = React.useMemo(() => {
-    const map = new Map<string, { id: string; name: string; artifacts: CompanyArtifact[] }>()
-    for (const artifact of filtered) {
-      const current = map.get(artifact.departmentId) || {
-        id: artifact.departmentId,
-        name: artifact.departmentName,
-        artifacts: [],
-      }
-      current.artifacts.push(artifact)
-      map.set(artifact.departmentId, current)
-    }
-    return [...map.values()].sort((a, b) => {
-      if (a.id === "workspace") return -1
-      if (b.id === "workspace") return 1
-      return a.name.localeCompare(b.name, "es")
-    })
-  }, [filtered])
+    const allowed = new Set(filtered.map((artifact) => artifact.id))
+    return agentGroups
+      .map((group) => ({
+        ...group,
+        artifacts: group.artifacts.filter((artifact) => allowed.has(artifact.id)),
+      }))
+      .filter((group) => group.artifacts.length > 0)
+  }, [agentGroups, filtered])
+
   const selected = artifacts.find((artifact) => artifact.id === selectedId) || null
   const reportCount = artifacts.filter((artifact) => artifact.kind === "report").length
   const workspaceFileCount = artifacts.length - reportCount
   const sidebarRows = [
     { value: "all" as const, label: "Todos", count: artifacts.length, icon: FolderOpen },
-    { value: "reports" as const, label: "Memorias", count: reportCount, icon: FileText },
+    { value: "reports" as const, label: "Reportes", count: reportCount, icon: FileText },
     { value: "files" as const, label: "Archivos", count: workspaceFileCount, icon: Folder },
   ]
   const missionSummary = missionLedger?.summary
@@ -6140,7 +6116,7 @@ function FilesView({
               <div className="min-w-0 flex-1">
                 <h1 className="truncate text-[15px] font-semibold">Archivos</h1>
                 <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {filtered.length} elementos · {reportCount} memorias · {workspaceFileCount} archivos
+                  {filtered.length} elementos · {groups.length} agentes · {reportCount} reportes · {workspaceFileCount} archivos
                 </p>
               </div>
               <div className="flex h-8 items-center rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 dark:border-white/10 dark:bg-white/10" role="group" aria-label="Filtrar archivos">
@@ -6163,7 +6139,7 @@ function FilesView({
 
             <div className="px-4 py-5">
               {groups.map((group) => (
-                <section key={group.id} className="mb-8 last:mb-0">
+                <section key={group.id} className="mb-8 last:mb-0" data-testid="company-agent-files-group" data-agent-id={group.id}>
                   <div className="mb-3 flex items-center gap-2 px-1">
                     <span className="relative flex h-7 w-8 shrink-0 items-end">
                       <span className="absolute left-1 top-1 h-2.5 w-4 rounded-t-md bg-[#74c7ff]" />
@@ -6171,7 +6147,10 @@ function FilesView({
                     </span>
                     <div className="min-w-0">
                       <h2 className="truncate text-[13px] font-semibold">{group.name}</h2>
-                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">{group.artifacts.length} elementos</p>
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                        {(group as { departmentName?: string }).departmentName || "Empresa"} · {group.artifacts.length} elementos
+                        {(group as { reportCount?: number }).reportCount ? ` · ${(group as { reportCount?: number }).reportCount} reportes` : ""}
+                      </p>
                     </div>
                   </div>
 
@@ -6245,7 +6224,7 @@ function FilesView({
                     <span className="relative h-12 w-20 rounded-xl bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-lg" />
                   </span>
                   <p className="mt-4 text-sm font-semibold">No hay resultados</p>
-                  <p className="mt-1 text-xs text-zinc-500">Cambia el filtro o busca otro nombre.</p>
+                  <p className="mt-1 max-w-sm text-xs text-zinc-500">Cada agente tiene su carpeta y reporte de archivos. Cambia el filtro o busca otro nombre.</p>
                 </div>
               ) : null}
 
@@ -6412,7 +6391,8 @@ function FilesView({
                 <div className="grid grid-cols-2 gap-3 border-b border-zinc-200 py-4 text-xs dark:border-white/10">
                   <div><span className="block text-[10px] text-zinc-500">Clase</span><strong className="mt-1 block">{artifactTypeLabel(selected)}</strong></div>
                   <div><span className="block text-[10px] text-zinc-500">Tamaño</span><strong className="mt-1 block tabular-nums">{artifactSizeLabel(selected.content)}</strong></div>
-                  <div><span className="block text-[10px] text-zinc-500">Origen</span><strong className="mt-1 block truncate">{selected.departmentName}</strong></div>
+                  <div><span className="block text-[10px] text-zinc-500">Agente</span><strong className="mt-1 block truncate">{selected.agentName}</strong></div>
+                  <div><span className="block text-[10px] text-zinc-500">Departamento</span><strong className="mt-1 block truncate">{selected.departmentName}</strong></div>
                   <div><span className="block text-[10px] text-zinc-500">Actualizado</span><strong className="mt-1 block">{relativeActivity(selected.updatedAt)}</strong></div>
                 </div>
                 <pre className="mt-4 min-h-0 max-h-[320px] flex-1 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white p-3 font-mono text-[10px] leading-relaxed text-zinc-600 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300">
