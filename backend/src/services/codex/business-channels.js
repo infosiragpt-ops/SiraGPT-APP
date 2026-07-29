@@ -7,6 +7,7 @@ const {
   PENDING_MAX_PER_ACCOUNT,
   PENDING_TTL_MS: PAIRING_TTL_MS,
 } = require('../business-channels/pairing');
+const { runWithLock } = require('../agents/mutex');
 
 const CHANNEL_KINDS = Object.freeze([
   'telegram',
@@ -19,6 +20,7 @@ const CHANNEL_KINDS = Object.freeze([
 ]);
 const DM_POLICIES = Object.freeze(['pairing', 'allowlist', 'open', 'closed']);
 const OUTBOUND_MODES = Object.freeze(['review', 'auto', 'off']);
+const PAIRING_TRANSACTION_MAX_ATTEMPTS = 4;
 const SENSITIVE_METADATA_KEY = /(?:authorization|cookie|credentials?|password|passwd|private[_-]?key|secret|token|api[_-]?key)/i;
 const UNSAFE_METADATA_KEY = /^(?:__proto__|constructor|prototype)$/i;
 
@@ -171,10 +173,7 @@ async function upsertBusinessChannel({
 }
 
 function pairingSecret(env = process.env) {
-  const secret = boundedText(
-    env.CHANNEL_PAIRING_PEPPER || env.CHANNEL_CREDENTIALS_KEY || env.ENCRYPTION_KEY,
-    256,
-  );
+  const secret = boundedText(env.CHANNEL_PAIRING_PEPPER, 256);
   if (secret) return secret;
   if (env.NODE_ENV === 'production') throw new Error('channel_pairing_secret_unavailable');
   return 'sira-channel-pairing-test-secret';
@@ -205,24 +204,89 @@ function pairingHashMatches({ pairing, channelId, senderRef, code, env = process
     && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
 }
 
+function isRetryablePairingTransactionError(error) {
+  const diagnostic = [
+    error?.code,
+    error?.meta?.code,
+    error?.meta?.message,
+    error?.message,
+  ].filter(Boolean).join(' ');
+  return /P2034|40001|40P01|write conflict|deadlock/iu.test(diagnostic);
+}
+
+function pairingRetryDelay(attempt) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.min(10 * (2 ** (attempt - 1)), 80));
+  });
+}
+
+async function withChannelPairingLock({ prisma, channelId, operation }) {
+  if (
+    !prisma
+    || typeof prisma.$transaction !== 'function'
+    || typeof operation !== 'function'
+  ) {
+    throw new Error('business_channel_pairing_storage_unavailable');
+  }
+  return runWithLock(`business-channel-pairing:${channelId}`, async () => {
+    for (let attempt = 1; attempt <= PAIRING_TRANSACTION_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          if (typeof tx.$queryRaw !== 'function') {
+            throw new Error('business_channel_pairing_atomic_storage_required');
+          }
+          const lockKey = `business-channel-pairing:${channelId}`;
+          await tx.$queryRaw`
+            WITH pairing_lock AS (
+              SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
+            )
+            SELECT 1::int AS locked FROM pairing_lock
+          `;
+          return operation(tx);
+        }, {
+          isolationLevel: 'Serializable',
+          maxWait: 5_000,
+          timeout: 10_000,
+        });
+      } catch (error) {
+        if (
+          attempt === PAIRING_TRANSACTION_MAX_ATTEMPTS
+          || !isRetryablePairingTransactionError(error)
+        ) {
+          throw error;
+        }
+        await pairingRetryDelay(attempt);
+      }
+    }
+    throw new Error('business_channel_pairing_transaction_exhausted');
+  });
+}
+
 async function reservePendingPairingSlot({ prisma, channelId, senderRef, now }) {
   const pairings = prisma?.businessChannelPairing;
   if (!pairings) throw new Error('business_channel_pairing_storage_unavailable');
 
-  if (typeof pairings.updateMany === 'function') {
-    await pairings.updateMany({
+  if (typeof pairings.deleteMany === 'function') {
+    await pairings.deleteMany({
       where: {
         channelId,
         status: 'pending',
         expiresAt: { lte: now },
       },
+    });
+  } else if (typeof pairings.updateMany === 'function') {
+    await pairings.updateMany({
+      where: { channelId, status: 'pending', expiresAt: { lte: now } },
       data: { status: 'expired' },
     });
   }
 
   if (
     typeof pairings.findMany !== 'function'
-    || typeof pairings.updateMany !== 'function'
+    || (
+      typeof pairings.deleteMany !== 'function'
+      && typeof pairings.updateMany !== 'function'
+    )
   ) {
     return;
   }
@@ -243,10 +307,14 @@ async function reservePendingPairingSlot({ prisma, channelId, senderRef, now }) 
   );
   const evictedIds = otherSenders.slice(0, overflow).map((pairing) => pairing.id);
   if (evictedIds.length > 0) {
-    await pairings.updateMany({
-      where: { id: { in: evictedIds } },
-      data: { status: 'expired' },
-    });
+    if (typeof pairings.deleteMany === 'function') {
+      await pairings.deleteMany({ where: { id: { in: evictedIds } } });
+    } else {
+      await pairings.updateMany({
+        where: { id: { in: evictedIds } },
+        data: { status: 'expired' },
+      });
+    }
   }
 }
 
@@ -258,90 +326,187 @@ async function authorizeSender({
   env = process.env,
 }) {
   const sender = boundedText(senderRef, 240);
-  if (!channel || !sender || channel.status !== 'active') {
+  const channelId = boundedText(channel?.id, 100);
+  const companyId = boundedText(channel?.companyId, 100);
+  const userId = boundedText(channel?.userId, 100);
+  if (!sender || !channelId || !companyId || !userId) {
     return { allowed: false, reason: 'channel_unavailable' };
   }
-  const policy = normalizeDmPolicy(channel.dmPolicy);
-  const allowFrom = normalizeStringList(channel.allowFrom);
-  if (isSenderAllowed({ senderId: sender, dmPolicy: policy, allowFrom })) {
-    return { allowed: true, reason: policy === 'open' ? 'explicit_open_policy' : 'allowlist' };
-  }
-  if (policy !== 'pairing') {
-    return {
-      allowed: false,
-      reason: policy === 'open' ? 'open_policy_requires_wildcard' : 'sender_not_allowed',
-    };
-  }
+  return withChannelPairingLock({
+    prisma,
+    channelId,
+    operation: async (db) => {
+      if (typeof db?.businessChannel?.findFirst !== 'function') {
+        throw new Error('business_channel_storage_unavailable');
+      }
+      const activeChannel = await db.businessChannel.findFirst({
+        where: { id: channelId, companyId, userId },
+      });
+      if (!activeChannel || activeChannel.status !== 'active') {
+        return { allowed: false, reason: 'channel_unavailable' };
+      }
+      const policy = normalizeDmPolicy(activeChannel.dmPolicy);
+      const allowFrom = normalizeStringList(activeChannel.allowFrom);
+      if (isSenderAllowed({ senderId: sender, dmPolicy: policy, allowFrom })) {
+        return {
+          allowed: true,
+          reason: policy === 'open' ? 'explicit_open_policy' : 'allowlist',
+        };
+      }
+      if (policy === 'closed') {
+        return { allowed: false, reason: 'sender_not_allowed' };
+      }
 
-  const existing = typeof prisma?.businessChannelPairing?.findUnique === 'function'
-    ? await prisma.businessChannelPairing.findUnique({
-      where: { channelId_senderRef: { channelId: channel.id, senderRef: sender } },
-    })
-    : null;
-  if (
-    existing?.status === 'pending'
-    && existing.expiresAt > now
-  ) {
-    const stableCode = createPairingCode({
-      channelId: channel.id,
-      senderRef: sender,
-      expiresAt: existing.expiresAt,
-      env,
-    });
-    if (pairingHashMatches({
-      pairing: existing,
-      channelId: channel.id,
-      senderRef: sender,
-      code: stableCode,
-      env,
-    })) {
+      const existing = typeof db?.businessChannelPairing?.findUnique === 'function'
+        ? await db.businessChannelPairing.findUnique({
+          where: {
+            channelId_senderRef: {
+              channelId: activeChannel.id,
+              senderRef: sender,
+            },
+          },
+        })
+        : null;
+      if (existing && existing.companyId !== activeChannel.companyId) {
+        throw new Error('business_channel_pairing_tenant_mismatch');
+      }
+      if (existing?.status === 'approved') {
+        return { allowed: true, reason: 'approved_pairing' };
+      }
+      if (policy !== 'pairing') {
+        return {
+          allowed: false,
+          reason: policy === 'open'
+            ? 'open_policy_requires_wildcard'
+            : 'sender_not_allowed',
+        };
+      }
+
+      const existingExpiresAt = existing?.expiresAt
+        ? new Date(existing.expiresAt)
+        : null;
+      if (
+        existing?.status === 'pending'
+        && existingExpiresAt
+        && existingExpiresAt > now
+      ) {
+        const stableCode = createPairingCode({
+          channelId: activeChannel.id,
+          senderRef: sender,
+          expiresAt: existingExpiresAt,
+          env,
+        });
+        if (pairingHashMatches({
+          pairing: existing,
+          channelId: activeChannel.id,
+          senderRef: sender,
+          code: stableCode,
+          env,
+        })) {
+          return {
+            allowed: false,
+            reason: 'pairing_required',
+            pairingCode: stableCode,
+            expiresAt: existingExpiresAt,
+            created: false,
+          };
+        }
+      }
+
+      const expiresAt = new Date(now.getTime() + PAIRING_TTL_MS);
+      const code = createPairingCode({
+        channelId: activeChannel.id,
+        senderRef: sender,
+        expiresAt,
+        env,
+      });
+      await reservePendingPairingSlot({
+        prisma: db,
+        channelId: activeChannel.id,
+        senderRef: sender,
+        now,
+      });
+      await db.businessChannelPairing.upsert({
+        where: {
+          channelId_senderRef: {
+            channelId: activeChannel.id,
+            senderRef: sender,
+          },
+        },
+        create: {
+          companyId: activeChannel.companyId,
+          channelId: activeChannel.id,
+          senderRef: sender,
+          codeHash: pairingHash({
+            channelId: activeChannel.id,
+            senderRef: sender,
+            code,
+            env,
+          }),
+          status: 'pending',
+          expiresAt,
+        },
+        update: {
+          companyId: activeChannel.companyId,
+          codeHash: pairingHash({
+            channelId: activeChannel.id,
+            senderRef: sender,
+            code,
+            env,
+          }),
+          status: 'pending',
+          expiresAt,
+          approvedAt: null,
+        },
+      });
       return {
         allowed: false,
         reason: 'pairing_required',
-        pairingCode: stableCode,
-        expiresAt: existing.expiresAt,
-        created: false,
+        pairingCode: code,
+        expiresAt,
+        created: true,
+        ...(existing?.status === 'pending'
+          ? { rotated: true, rotationReason: 'legacy_or_secret_changed' }
+          : {}),
       };
-    }
-  }
+    },
+  });
+}
 
-  const expiresAt = new Date(now.getTime() + PAIRING_TTL_MS);
-  const code = createPairingCode({
-    channelId: channel.id,
-    senderRef: sender,
-    expiresAt,
-    env,
-  });
-  await reservePendingPairingSlot({
-    prisma,
-    channelId: channel.id,
-    senderRef: sender,
-    now,
-  });
-  await prisma.businessChannelPairing.upsert({
-    where: { channelId_senderRef: { channelId: channel.id, senderRef: sender } },
-    create: {
-      companyId: channel.companyId,
-      channelId: channel.id,
-      senderRef: sender,
-      codeHash: pairingHash({ channelId: channel.id, senderRef: sender, code, env }),
-      status: 'pending',
-      expiresAt,
-    },
-    update: {
-      codeHash: pairingHash({ channelId: channel.id, senderRef: sender, code, env }),
-      status: 'pending',
-      expiresAt,
-      approvedAt: null,
-    },
-  });
-  return {
-    allowed: false,
-    reason: 'pairing_required',
-    pairingCode: code,
-    expiresAt,
-    created: true,
+function createBusinessChannelAuthorizer({
+  prisma,
+  companyId,
+  userId,
+  channelId,
+  env = process.env,
+}) {
+  const scope = {
+    companyId: boundedText(companyId, 100),
+    userId: boundedText(userId, 100),
+    channelId: boundedText(channelId, 100),
   };
+  if (!scope.companyId || !scope.userId || !scope.channelId) {
+    throw new Error('business_channel_authorizer_scope_required');
+  }
+  const accountId = `${scope.companyId}:${scope.userId}:${scope.channelId}`;
+  return Object.freeze({
+    accountId,
+    authorizeInbound: async ({ accountId: inboundAccountId, senderId }) => {
+      if (inboundAccountId !== accountId) {
+        return { allowed: false, reason: 'business_channel_scope_mismatch' };
+      }
+      return authorizeSender({
+        prisma,
+        channel: {
+          id: scope.channelId,
+          companyId: scope.companyId,
+          userId: scope.userId,
+        },
+        senderRef: senderId,
+        env,
+      });
+    },
+  });
 }
 
 async function approvePairing({
@@ -354,36 +519,83 @@ async function approvePairing({
   env = process.env,
 }) {
   const sender = boundedText(senderRef, 240);
-  const channel = await prisma.businessChannel.findFirst({
-    where: { id: channelId, companyId: company.id, userId: company.userId },
-  });
-  if (!channel) throw new Error('business_channel_not_found');
-  const pairing = await prisma.businessChannelPairing.findUnique({
-    where: { channelId_senderRef: { channelId, senderRef: sender } },
-  });
-  if (
-    !pairing
-    || pairing.status !== 'pending'
-    || pairing.expiresAt <= now
-    || !pairingHashMatches({
-      pairing,
-      channelId,
-      senderRef: sender,
-      code,
-      env,
-    })
-  ) throw new Error('invalid_or_expired_pairing_code');
+  if (!sender) throw new Error('invalid_pairing_sender');
+  return withChannelPairingLock({
+    prisma,
+    channelId,
+    operation: async (db) => {
+      const channel = await db.businessChannel.findFirst({
+        where: { id: channelId, companyId: company.id, userId: company.userId },
+      });
+      if (!channel) throw new Error('business_channel_not_found');
+      if (isSenderAllowed({
+        senderId: sender,
+        dmPolicy: normalizeDmPolicy(channel.dmPolicy),
+        allowFrom: normalizeStringList(channel.allowFrom),
+      })) {
+        throw new Error('sender_statically_allowlisted');
+      }
+      const pairing = await db.businessChannelPairing.findUnique({
+        where: { channelId_senderRef: { channelId, senderRef: sender } },
+      });
+      if (
+        pairing?.companyId !== company.id
+        || pairing.status !== 'pending'
+        || pairing.expiresAt <= now
+        || !pairingHashMatches({
+          pairing,
+          channelId,
+          senderRef: sender,
+          code,
+          env,
+        })
+      ) throw new Error('invalid_or_expired_pairing_code');
 
-  await prisma.businessChannelPairing.update({
-    where: { id: pairing.id },
-    data: { status: 'approved', approvedAt: now },
+      await db.businessChannelPairing.update({
+        where: { id: pairing.id },
+        data: { status: 'approved', approvedAt: now },
+      });
+      return publicChannel(channel);
+    },
   });
-  const allowFrom = normalizeStringList([...(channel.allowFrom || []), sender]);
-  const updated = await prisma.businessChannel.update({
-    where: { id: channel.id },
-    data: { allowFrom },
+}
+
+async function revokePairing({
+  prisma,
+  company,
+  channelId,
+  senderRef,
+  now = new Date(),
+}) {
+  const sender = boundedText(senderRef, 240);
+  if (!sender) throw new Error('invalid_pairing_sender');
+  return withChannelPairingLock({
+    prisma,
+    channelId,
+    operation: async (db) => {
+      const channel = await db.businessChannel.findFirst({
+        where: { id: channelId, companyId: company.id, userId: company.userId },
+      });
+      if (!channel) throw new Error('business_channel_not_found');
+      if (isSenderAllowed({
+        senderId: sender,
+        dmPolicy: normalizeDmPolicy(channel.dmPolicy),
+        allowFrom: normalizeStringList(channel.allowFrom),
+      })) {
+        throw new Error('sender_statically_allowlisted');
+      }
+      const pairing = await db.businessChannelPairing.findUnique({
+        where: { channelId_senderRef: { channelId, senderRef: sender } },
+      });
+      if (pairing?.companyId === company.id) {
+        await db.businessChannelPairing.update({
+          where: { id: pairing.id },
+          data: { status: 'revoked', approvedAt: null, expiresAt: now },
+        });
+      }
+      return publicChannel(channel);
+    },
   });
-  return publicChannel(updated);
 }
 
 function classifyDepartment(body) {
@@ -428,33 +640,38 @@ async function recordInboundMessage({
   const sender = boundedText(message?.from, 240);
   if (!body || !externalId || !sender) throw new Error('invalid_inbox_message');
   const route = classifyDepartment(body);
-  const inboxMessage = await prisma.inboxMessage.upsert({
-    where: { channelId_externalId: { channelId, externalId } },
-    create: {
-      companyId: company.id,
-      channelId,
-      externalId,
-      threadId: boundedText(message?.threadId, 240) || null,
-      from: sender,
-      body,
-      direction: 'inbound',
-      status: 'routed',
-      departmentId: route.id,
-      intent: route.intent,
-      confidence: route.score,
-      metadata: message?.metadata && typeof message.metadata === 'object'
-        ? sanitizeChannelMetadata(message.metadata)
-        : undefined,
-      receivedAt: message?.receivedAt ? new Date(message.receivedAt) : now,
-    },
-    update: {
-      body,
-      status: 'routed',
-      departmentId: route.id,
-      intent: route.intent,
-      confidence: route.score,
-    },
-  });
+  let inboxMessage;
+  try {
+    inboxMessage = await prisma.inboxMessage.create({
+      data: {
+        companyId: company.id,
+        channelId,
+        externalId,
+        threadId: boundedText(message?.threadId, 240) || null,
+        from: sender,
+        body,
+        direction: 'inbound',
+        status: 'routed',
+        departmentId: route.id,
+        intent: route.intent,
+        confidence: route.score,
+        metadata: message?.metadata && typeof message.metadata === 'object'
+          ? sanitizeChannelMetadata(message.metadata)
+          : undefined,
+        receivedAt: message?.receivedAt ? new Date(message.receivedAt) : now,
+      },
+    });
+  } catch (error) {
+    // The database unique key on {channelId, externalId} is the cross-process
+    // idempotency gate. Only the request that creates the row may create a run.
+    if (error?.code !== 'P2002') throw error;
+    return {
+      authorization,
+      inboxMessage: null,
+      run: null,
+      duplicate: true,
+    };
+  }
   await prisma.businessChannel.update({
     where: { id: channel.id },
     data: { lastInboundAt: now },
@@ -538,12 +755,14 @@ module.exports = {
   auditChannelPolicies,
   authorizeSender,
   classifyDepartment,
+  createBusinessChannelAuthorizer,
   listBusinessChannels,
   normalizeDmPolicy,
   normalizeOutboundMode,
   openCredentials,
   publicChannel,
   recordInboundMessage,
+  revokePairing,
   sanitizeChannelMetadata,
   sealCredentials,
   upsertBusinessChannel,

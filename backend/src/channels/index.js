@@ -10,23 +10,31 @@ const { DedupCache } = require('./dedup-cache');
 const { ChannelMetrics, sharedMetrics, KINDS } = require('./metrics');
 
 /**
- * Lightweight registry for plugged-in channel adapters. Keeps adapter
- * lookup centralized so route handlers can dispatch by `channel` name.
+ * Lightweight registry for plugged-in channel adapters. Every entry is
+ * scoped by channel kind plus its business-channel/account id.
  */
 class ChannelRegistry {
   constructor() { this._adapters = new Map(); }
+
+  static key(name, accountId = 'default') {
+    return `${name}:${accountId}`;
+  }
 
   register(adapter) {
     if (!(adapter instanceof ChannelAdapter)) {
       throw new Error('ChannelRegistry.register expects a ChannelAdapter');
     }
-    this._adapters.set(adapter.name, adapter);
+    this._adapters.set(ChannelRegistry.key(adapter.name, adapter.accountId), adapter);
     return adapter;
   }
 
-  get(name) { return this._adapters.get(name); }
+  get(name, accountId = 'default') {
+    return this._adapters.get(ChannelRegistry.key(name, accountId));
+  }
   list() { return [...this._adapters.values()]; }
-  has(name) { return this._adapters.has(name); }
+  has(name, accountId = 'default') {
+    return this._adapters.has(ChannelRegistry.key(name, accountId));
+  }
 }
 
 module.exports = {

@@ -92,6 +92,19 @@
 
 ---
 
+## Business Channels
+
+| Variable | Purpose |
+|----------|---------|
+| `CHANNEL_CREDENTIALS_KEY` | Preferred dedicated 32-byte key, encoded as 64 hexadecimal characters, for channel credential encryption; legacy installations fall back to `ENCRYPTION_KEY` |
+| `CHANNEL_PAIRING_PEPPER` | Dedicated high-entropy HMAC pepper for stable, non-reversible sender pairing codes; required in production |
+
+`CHANNEL_PAIRING_PEPPER` must be generated independently and must not reuse
+`JWT_SECRET`, `ENCRYPTION_KEY`, `CHANNEL_CREDENTIALS_KEY`, or another signing
+key.
+
+---
+
 ## Multichannel (OpenClaw)
 
 | Variable | Purpose |

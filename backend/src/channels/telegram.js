@@ -108,12 +108,15 @@ class TelegramAdapter extends ChannelAdapter {
 
   // ── Long polling ──────────────────────────────────────────────────────────
 
-  startPolling(onUpdate) {
+  startPolling(onUpdate, onAuthorization = null) {
     if (this._polling) return;
     this._polling = true;
     this._lastPollAt = Date.now();
-    this._loop(onUpdate).catch(() => {});
-    this._watchdogTimer = setInterval(() => this._watchdog(onUpdate), Math.max(this.staleThresholdMs / 2, 5_000));
+    this._loop(onUpdate, onAuthorization).catch(() => {});
+    this._watchdogTimer = setInterval(
+      () => this._watchdog(onUpdate, onAuthorization),
+      Math.max(this.staleThresholdMs / 2, 5_000),
+    );
     if (this._watchdogTimer.unref) this._watchdogTimer.unref();
   }
 
@@ -129,7 +132,23 @@ class TelegramAdapter extends ChannelAdapter {
 
   get restartCount() { return this._restartCount; }
 
-  async _loop(onUpdate) {
+  async _dispatchPolledUpdate(update, onUpdate, onAuthorization = null) {
+    const parsed = this.parseInbound({ body: update });
+    const result = await this._gateParsedInbound(parsed);
+    if (!result?.message) {
+      if (result?.authorization && typeof onAuthorization === 'function') {
+        await onAuthorization({
+          message: parsed,
+          authorization: result.authorization,
+        });
+      }
+      return result;
+    }
+    await onUpdate(result.message);
+    return result;
+  }
+
+  async _loop(onUpdate, onAuthorization = null) {
     while (this._polling) {
       try {
         const url = `${this.apiBase}/bot${this.botToken}/getUpdates?timeout=25&offset=${this._offset}`;
@@ -139,11 +158,7 @@ class TelegramAdapter extends ChannelAdapter {
         if (body?.result?.length) {
           for (const update of body.result) {
             this._offset = Math.max(this._offset, (update.update_id || 0) + 1);
-            const parsed = this.parseInbound({ body: update });
-            if (!parsed) continue;
-            if (this.isDuplicate(parsed)) continue;
-            this.metrics.inc(this.name, KINDS.INBOUND);
-            try { await onUpdate(parsed); }
+            try { await this._dispatchPolledUpdate(update, onUpdate, onAuthorization); }
             catch { this.metrics.inc(this.name, KINDS.ERROR); }
           }
         }
@@ -154,7 +169,7 @@ class TelegramAdapter extends ChannelAdapter {
     }
   }
 
-  _watchdog(onUpdate) {
+  _watchdog(onUpdate, onAuthorization = null) {
     if (!this._polling) return;
     if (this.isStale()) {
       this._restartCount++;
@@ -164,7 +179,7 @@ class TelegramAdapter extends ChannelAdapter {
       setImmediate(() => {
         this._polling = true;
         this._lastPollAt = Date.now();
-        this._loop(onUpdate).catch(() => {});
+        this._loop(onUpdate, onAuthorization).catch(() => {});
       });
     }
   }

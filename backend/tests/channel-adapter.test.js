@@ -22,6 +22,9 @@ describe('ChannelAdapter · constructor', () => {
   it('stores name on the instance', () => {
     const a = new ChannelAdapter('slack');
     assert.equal(a.name, 'slack');
+    assert.equal(a.accountId, 'default');
+    const scoped = new ChannelAdapter('slack', { accountId: 'tenant-a:channel-1' });
+    assert.equal(scoped.accountId, 'tenant-a:channel-1');
   });
 
   it('defaults dedup to a fresh DedupCache', () => {
@@ -56,6 +59,15 @@ describe('ChannelAdapter · constructor', () => {
     const myFetch = () => Promise.resolve();
     const a = new ChannelAdapter('slack', { fetchImpl: myFetch });
     assert.strictEqual(a.fetchImpl, myFetch);
+  });
+
+  it('requires an explicit account id for persistent authorization', () => {
+    assert.throws(
+      () => new ChannelAdapter('slack', {
+        authorizeInbound: async () => ({ allowed: true }),
+      }),
+      /requires accountId/,
+    );
   });
 
   it('builds an allowlist Set from the option array', () => {
@@ -147,6 +159,16 @@ describe('ChannelAdapter · isDuplicate', () => {
     assert.equal(discord.isDuplicate({ id: 'm-1' }), true);
   });
 
+  it('namespaces dedup by channel account (no cross-tenant collision)', () => {
+    const dedup = new DedupCache();
+    const tenantA = new ChannelAdapter('slack', { accountId: 'tenant-a', dedup });
+    const tenantB = new ChannelAdapter('slack', { accountId: 'tenant-b', dedup });
+    assert.equal(tenantA.isDuplicate({ id: 'm-1' }), false);
+    assert.equal(tenantB.isDuplicate({ id: 'm-1' }), false);
+    assert.equal(tenantA.isDuplicate({ id: 'm-1' }), true);
+    assert.equal(tenantB.isDuplicate({ id: 'm-1' }), true);
+  });
+
   it('bumps the duplicate counter on each dup hit', () => {
     const m = new ChannelMetrics();
     const a = new ChannelAdapter('slack', { metrics: m });
@@ -185,5 +207,62 @@ describe('ChannelAdapter · hook abstractness', () => {
       () => a.sendOutbound({ text: 'hi' }),
       /sendOutbound\(\) not implemented for telegram/,
     );
+  });
+});
+
+describe('ChannelAdapter · structured authorization', () => {
+  it('surfaces pairing_required without delivering the message', async () => {
+    const authorizations = [];
+    class TestAdapter extends ChannelAdapter {
+      async verify() { return true; }
+      async parseInbound() {
+        return {
+          id: 'message-1',
+          channel: 'test',
+          userId: 'sender-1',
+          raw: {},
+          ts: Date.now(),
+        };
+      }
+    }
+    const adapter = new TestAdapter('test', {
+      accountId: 'company-1:channel-1',
+      authorizeInbound: async (context) => {
+        authorizations.push(context);
+        return {
+          allowed: false,
+          reason: 'pairing_required',
+          pairingCode: 'ABCDEFGH',
+        };
+      },
+    });
+    const result = await adapter.receiveWithAuthorization({});
+    assert.equal(result.message, null);
+    assert.equal(result.authorization.pairingCode, 'ABCDEFGH');
+    assert.equal(authorizations[0].senderId, 'sender-1');
+    assert.equal(authorizations[0].accountId, 'company-1:channel-1');
+    assert.equal(await adapter.receive({}), null);
+  });
+
+  it('never authorizes an invalid signature and exposes no skipVerify bypass', async () => {
+    let authorizationCalls = 0;
+    class TestAdapter extends ChannelAdapter {
+      async verify() { return false; }
+      async parseInbound() { throw new Error('must not parse'); }
+    }
+    const adapter = new TestAdapter('test', {
+      accountId: 'company-1:channel-1',
+      authorizeInbound: async () => {
+        authorizationCalls += 1;
+        return { allowed: true };
+      },
+    });
+    assert.equal(await adapter.receiveWithAuthorization({}), null);
+    assert.equal(authorizationCalls, 0);
+    assert.equal(
+      await adapter.receive({}, { skipVerify: true, trustedInternal: true }),
+      null,
+    );
+    assert.equal(authorizationCalls, 0);
   });
 });
