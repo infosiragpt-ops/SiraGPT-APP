@@ -1649,3 +1649,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 Platform-suffixed packages (sharp, esbuild, rollup, swc, …) are intentionally omitted from the tables above. npm only installs the variants matching the host's `os`/`cpu`, so listing them directly would make this report drift between dev (macOS) and CI/prod (Linux). They are documented in the parent package's entry instead.
 
 Currently the only family with non-permissive licensing in this group is `@img/sharp-libvips-*` (LGPL-3.0-or-later via N-API), which is allowlisted under the policy at the top of `scripts/generate-third-party-licenses.js`.
+
+---
+
+## Architecture attributions
+
+- **OpenClaw** (https://github.com/openclaw/openclaw, MIT License) — the
+  channel DM-pairing/allowlist security model in
+  `backend/src/services/business-channels/` is a clean-room native rewrite
+  derived from OpenClaw's `src/pairing` architecture (code alphabet, TTL,
+  pending-cap and create-if-missing decisions preserved by design).
