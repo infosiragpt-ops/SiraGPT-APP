@@ -169,6 +169,9 @@ import {
   CODE_SELECT_TARGET_EVENT,
   CODE_SELECTION_CANCEL_EVENT,
   CODE_SELECTION_CAPTURED_EVENT,
+  buildSelectedElementPrompt,
+  extractInstructionFromComposer,
+  selectedElementChipLabel,
   type CodePreviewSelectionCancelDetail,
   type CodePreviewSelectionDetail,
 } from "@/lib/code-preview-selection"
@@ -383,52 +386,6 @@ function buildAppsModePrompt(userText: string): string {
     "",
     "SOLICITUD DEL USUARIO:",
     userText,
-  ].join("\n")
-}
-
-function selectionValue(value: unknown, max = 240): string {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim()
-  if (!text) return "sin dato"
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text
-}
-
-function buildSelectedElementPrompt(detail: CodePreviewSelectionDetail, existingInstruction: string): string {
-  const rect = detail.rect
-    ? `${detail.rect.width}x${detail.rect.height} en x:${detail.rect.x}, y:${detail.rect.y}`
-    : "sin dato"
-  const point = detail.relativePoint
-    ? `${detail.relativePoint.percentX}% / ${detail.relativePoint.percentY}% del preview`
-    : "sin dato"
-  const parent = detail.parent
-    ? `${selectionValue(detail.parent.selector, 160)} · ${selectionValue(detail.parent.text, 180)}`
-    : "sin dato"
-  const currentInstruction = existingInstruction.trim()
-  return [
-    "Modifica el elemento que acabo de seleccionar en el preview de APPS.",
-    "",
-    "Elemento seleccionado:",
-    `- método de selección: ${selectionValue(detail.selectionMethod || "dom", 80)}`,
-    `- selector CSS: ${selectionValue(detail.selector)}`,
-    `- etiqueta: ${selectionValue(detail.tagName, 80)}`,
-    `- texto visible: ${selectionValue(detail.text)}`,
-    `- contenedor padre: ${parent}`,
-    `- clases: ${selectionValue(detail.className)}`,
-    `- id: ${selectionValue(detail.id, 120)}`,
-    `- role/aria: ${selectionValue([detail.role, detail.ariaLabel].filter(Boolean).join(" / "), 160)}`,
-    `- href/src: ${selectionValue([detail.href, detail.src].filter(Boolean).join(" / "), 180)}`,
-    `- caja visual: ${rect}`,
-    `- punto relativo: ${point}`,
-    `- preview: ${selectionValue(detail.previewKind, 80)} · ${selectionValue(detail.entry || detail.pageUrl, 180)}`,
-    `- archivo activo probable: ${selectionValue(detail.activePath, 180)}`,
-    "",
-    currentInstruction
-      ? `Cambio solicitado por el usuario:\n${currentInstruction}`
-      : "Cambio solicitado:\n",
-    "",
-    detail.selectionMethod === "region"
-      ? "Si la selección vino como región visual, usa las coordenadas, el archivo activo y el texto visible del preview para localizar el componente más probable antes de editar."
-      : "Usa el selector DOM y el contenedor padre para localizar el componente correcto antes de editar.",
-    "Aplica el cambio en los archivos correctos del workspace, conserva el resto del diseño y verifica que el preview siga funcionando.",
   ].join("\n")
 }
 
@@ -1022,6 +979,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
   const [selectingTarget, setSelectingTarget] = React.useState(false)
+  const [selectedPreviewTarget, setSelectedPreviewTarget] = React.useState<CodePreviewSelectionDetail | null>(null)
 
   // The /code chat picks its OWN model — a fast, streaming one — independent of
   // the main chat (whose default may be a slow reasoning model that times out
@@ -1267,8 +1225,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       const detail = (event as CustomEvent<CodePreviewSelectionDetail>).detail
       if (!detail) return
       setSelectingTarget(false)
+      setSelectedPreviewTarget(detail)
       setComposerMode((mode) => (mode === "plan" || mode === "ask" || mode === "image" ? "build" : mode))
-      setInput((prev) => buildSelectedElementPrompt(detail, prev))
+      // Keep the free-form instruction clean. The structured selector context
+      // rides as a chip and is merged only on submit.
+      setInput((prev) => extractInstructionFromComposer(prev))
       window.requestAnimationFrame(() => {
         const inputEl = inputRef.current
         inputEl?.focus()
@@ -1277,7 +1238,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           inputEl.setSelectionRange(end, end)
         }
       })
-      toast.success("Elemento seleccionado. Describe el cambio y envíalo.")
+      toast.success("Elemento listo. Escribe el cambio y envíalo.")
     }
     const onSelectionCancel = (event: Event) => {
       setSelectingTarget(false)
@@ -1635,6 +1596,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   React.useEffect(() => {
     setInput("")
+    setSelectedPreviewTarget(null)
+    setSelectingTarget(false)
     setBusy(false)
     abortRef.current?.abort()
     abortRef.current = null
@@ -4014,7 +3977,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   )
   const hasUploadingCodeAttachments = codeAttachments.some((file) => file.status === "uploading")
   const hasFailedCodeAttachments = codeAttachments.some((file) => file.status === "failed")
-  const canSubmitCodePrompt = (input.trim().length > 0 || readyCodeAttachments.length > 0) && !hasUploadingCodeAttachments
+  const canSubmitCodePrompt =
+    (input.trim().length > 0 || readyCodeAttachments.length > 0 || Boolean(selectedPreviewTarget)) &&
+    !hasUploadingCodeAttachments
 
   const clearSentCodeAttachments = React.useCallback((sentFiles: CodeComposerAttachment[]) => {
     if (sentFiles.length === 0) return
@@ -4042,8 +4007,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       toast("Espera a que termine la subida antes de enviar.")
       return
     }
-    if (!input.trim() && readyCodeAttachments.length === 0) {
+    if (!input.trim() && readyCodeAttachments.length === 0 && !selectedPreviewTarget) {
       if (hasFailedCodeAttachments) toast.error("Reintenta o elimina los adjuntos con error.")
+      return
+    }
+    if (selectedPreviewTarget && !input.trim() && readyCodeAttachments.length === 0) {
+      toast("Describe el cambio para el elemento seleccionado.")
+      inputRef.current?.focus()
       return
     }
     if (!user) {
@@ -4055,10 +4025,15 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       return
     }
 
-    const payload = composeCodePromptWithAttachments(input, readyCodeAttachments)
+    const instruction = extractInstructionFromComposer(input)
+    const promptWithTarget = selectedPreviewTarget
+      ? buildSelectedElementPrompt(selectedPreviewTarget, instruction)
+      : instruction
+    const payload = composeCodePromptWithAttachments(promptWithTarget, readyCodeAttachments)
     const fileIds = readyCodeAttachments.map(codeAttachmentFileId).filter((id): id is string => Boolean(id))
     if (!payload.trim()) return
     void dispatch(payload, { files: fileIds })
+    setSelectedPreviewTarget(null)
     clearSentCodeAttachments(readyCodeAttachments)
   }, [
     clearSentCodeAttachments,
@@ -4067,6 +4042,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     hasUploadingCodeAttachments,
     input,
     readyCodeAttachments,
+    selectedPreviewTarget,
     sessionId,
     user,
   ])
@@ -4258,6 +4234,26 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             onRemove={removeCodeAttachment}
             onRetry={retryCodeAttachment}
           />
+          {selectedPreviewTarget ? (
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <div
+                className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-violet-500/25 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-700 dark:text-violet-200"
+                title={selectedElementChipLabel(selectedPreviewTarget)}
+              >
+                <CodeTargetSelectIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{selectedElementChipLabel(selectedPreviewTarget)}</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPreviewTarget(null)}
+                  className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-violet-700/80 transition-colors hover:bg-violet-500/15 hover:text-violet-900 dark:text-violet-100 dark:hover:text-white"
+                  aria-label="Quitar elemento seleccionado"
+                  title="Quitar elemento seleccionado"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          ) : null}
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
@@ -4265,7 +4261,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={handleCodeTextareaPaste}
-            placeholder={COMPOSER_PLACEHOLDER[composerMode]}
+            placeholder={
+              selectedPreviewTarget
+                ? "Describe el cambio para este elemento…"
+                : COMPOSER_PLACEHOLDER[composerMode]
+            }
             rows={1}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
