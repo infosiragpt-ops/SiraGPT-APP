@@ -323,6 +323,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
       CSRF_PEPPER: ${CSRF_PEPPER:-}
+      # Business-channel secrets stay explicit at the container boundary.
+      # Existing installs may leave the credentials key empty so the backend
+      # keeps its ENCRYPTION_KEY compatibility path until re-encryption.
+      CHANNEL_CREDENTIALS_KEY: ${CHANNEL_CREDENTIALS_KEY:-}
+      CHANNEL_PAIRING_PEPPER: ${CHANNEL_PAIRING_PEPPER:-}
       CORS_ORIGINS: "${CORS_ORIGINS:-https://siragpt.com,https://www.siragpt.com,https://office.siragpt.com}"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
