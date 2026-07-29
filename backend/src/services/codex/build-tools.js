@@ -1153,6 +1153,32 @@ const TOOLS = {
   },
 };
 
+/**
+ * Run-worktree seam (CODEX_RUN_WORKTREES, default OFF): translate a
+ * workspace-relative tool path into the run's isolated worktree
+ * (`.sira-worktrees/wt-<runId>/<path>`) so N concurrent runs of one project
+ * stop sharing a working tree. Today build tools hand `args.path` straight to
+ * `ctx.runner.*(ctx.project, path)`, which the runner resolves against the
+ * workspace root — this helper is the single choke point tool executes can
+ * adopt to prefix those paths. Identity (the exact input path) whenever:
+ *   - the flag is off (default) or ctx has no run id, or
+ *   - the runner is already run-scoped (`runner.scope` — the worktree is
+ *     resolved runner-side and prefixing again would double-map it), or
+ *   - the path is absolute or contains `..` (left untouched for each tool's
+ *     own validation to reject).
+ */
+function resolveToolPath(ctx, relPath) {
+  if (relPath == null) return relPath;
+  const path = String(relPath);
+  if (!path) return path;
+  if (ctx?.runner?.scope) return path;
+  if (/^[/\\]/.test(path) || path.split(/[\\/]/).includes('..')) return path;
+  // eslint-disable-next-line global-require
+  const { resolveRunCwd } = require('./git-workflow');
+  const runCwd = resolveRunCwd({ runId: ctx?.run?.id, env: ctx?.env || process.env });
+  return runCwd ? `${runCwd}/${path}` : path;
+}
+
 /** Registry projection for prompted-tool-calling: [{ name, description, parameters }]. */
 function toolRegistry(names = Object.keys(TOOLS)) {
   return names.filter((n) => TOOLS[n]).map((name) => ({ name, description: TOOLS[name].description, parameters: TOOLS[name].parameters }));
@@ -1172,5 +1198,6 @@ module.exports = {
   formatSchema,
   normalisePlanTasks,
   normalisePackageSpecs,
+  resolveToolPath,
   PLAN_TASK_STATUSES,
 };
