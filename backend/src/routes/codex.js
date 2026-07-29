@@ -1251,6 +1251,24 @@ function boundedSwarmInteger(value, fallback, min, max) {
     : fallback;
 }
 
+/** Effective swarm research concurrency. Writers stay capped by run isolation. */
+function swarmConcurrencyDefaults(env = process.env) {
+  const hardMax = boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_CONCURRENCY_HARD, 128, 16, 128);
+  const defaultConcurrency = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_CONCURRENCY_DEFAULT,
+    64,
+    1,
+    hardMax,
+  );
+  const defaultWriters = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_WRITERS_DEFAULT,
+    4,
+    1,
+    Math.min(32, hardMax),
+  );
+  return { hardMax, defaultConcurrency, defaultWriters };
+}
+
 async function loadOwnedSwarm(req, res) {
   const swarm = await codexDb.codexSwarm.findFirst({
     where: {
@@ -1453,8 +1471,20 @@ router.post(
           message: 'Define un objetivo verificable para CEO Office.',
         });
       }
-      const logicalAgents = boundedSwarmInteger(body.logicalAgents, 128, 8, 1_000);
-      const maxConcurrency = boundedSwarmInteger(body.maxConcurrency, 16, 1, 32);
+      const concurrencyDefaults = swarmConcurrencyDefaults(process.env);
+      const logicalAgents = boundedSwarmInteger(body.logicalAgents, 256, 8, 1_000);
+      const maxConcurrency = boundedSwarmInteger(
+        body.maxConcurrency,
+        concurrencyDefaults.defaultConcurrency,
+        1,
+        concurrencyDefaults.hardMax,
+      );
+      const maxConcurrentWriters = boundedSwarmInteger(
+        body.maxConcurrentWriters,
+        concurrencyDefaults.defaultWriters,
+        1,
+        Math.min(32, maxConcurrency),
+      );
 
       // Stop the legacy ticker before installing the durable plan. This avoids
       // a race with the durable fleet while preserving its settings.
@@ -1474,9 +1504,9 @@ router.post(
         companyPlan: initial.plan,
         explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
         planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
-        logicalTasks: Math.min(logicalAgents, 64),
+        logicalTasks: Math.min(logicalAgents, 128),
         maxConcurrency,
-        maxConcurrentWriters: body.maxConcurrentWriters,
+        maxConcurrentWriters,
         qaEvery: body.qaEvery,
         model: body.model ? String(body.model).slice(0, 120) : null,
         tier: body.tier ? String(body.tier).slice(0, 80) : null,

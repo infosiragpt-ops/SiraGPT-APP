@@ -943,6 +943,7 @@ export const codexApi = {
       objective: string
       logicalAgents?: number
       maxConcurrency?: number
+      maxConcurrentWriters?: number
       model?: string
       tier?: string
     },
