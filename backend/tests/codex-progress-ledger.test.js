@@ -84,6 +84,62 @@ test('appendLedgerEntry preserves other brief fields and replaces the same run i
   assert.equal(state.project.brief.ledger[0].ts, state.project.brief.ledger[0].createdAt);
 });
 
+test('appendLedgerEntry enforces the FIFO cap: oldest entries drop, newest survive', async () => {
+  const seeded = Array.from({ length: ledger.MAX_LEDGER_ENTRIES }, (_, index) => ({
+    runId: `run-${index}`,
+    department: 'Producto',
+    outcome: 'passed',
+    title: `Tarea ${index}`,
+    ts: new Date(Date.UTC(2026, 6, 1, 0, index)).toISOString(),
+  }));
+  const state = { project: { id: 'p-cap', brief: { goal: 'Persistir la meta', ledger: seeded } } };
+  const prisma = {
+    codexProject: {
+      findUnique: async () => state.project,
+      update: async ({ data }) => {
+        state.project = { ...state.project, ...data };
+        return state.project;
+      },
+    },
+  };
+
+  const appended = await ledger.appendLedgerEntry({
+    prisma,
+    project: state.project,
+    entry: { runId: 'run-newest', department: 'Producto', outcome: 'failed', title: 'La más nueva' },
+  });
+
+  const stored = state.project.brief.ledger;
+  assert.equal(stored.length, ledger.MAX_LEDGER_ENTRIES, 'cap holds after overflow');
+  assert.equal(stored.at(-1).runId, 'run-newest', 'newest entry survives at the tail');
+  assert.equal(appended.runId, 'run-newest');
+  assert.equal(stored.some((entry) => entry.runId === 'run-0'), false, 'oldest entry dropped');
+  assert.equal(stored[0].runId, 'run-1', 'FIFO order preserved for the rest');
+  assert.equal(state.project.brief.goal, 'Persistir la meta', 'sibling brief fields intact');
+});
+
+test('formatProgressContext truncates to maxChars and honors maxEntries', () => {
+  const entries = Array.from({ length: 40 }, (_, index) => ({
+    runId: `run-${index}`,
+    department: 'Producto',
+    outcome: index % 2 === 0 ? 'passed' : 'failed',
+    title: `Iteración ${index}: ${'detalle largo del trabajo realizado '.repeat(8)}`,
+    learnings: [`Aprendizaje ${index}: ${'evidencia acumulada del ciclo '.repeat(6)}`],
+    ts: new Date(Date.UTC(2026, 6, 2, 0, index)).toISOString(),
+  }));
+  const project = { id: 'p-fmt', brief: { ledger: entries } };
+
+  const block = ledger.formatProgressContext(project, { maxEntries: 12, maxChars: 1200 });
+  assert.ok(block.length <= 1200, 'summary never exceeds the character budget');
+  assert.match(block, /LEDGER DE CORRIDAS RECIENTES:/);
+  assert.doesNotMatch(block, /run=run-27\b/, 'entries older than maxEntries are excluded');
+  assert.match(block, /run=run-28\b/, 'window starts at the last maxEntries entries');
+
+  const unbounded = ledger.formatProgressContext(project, { maxEntries: 12 });
+  assert.ok(unbounded.length > 1200, 'the cap is what truncates, not the data');
+  assert.doesNotMatch(unbounded, /run=run-15\b/, 'maxEntries window enforced without char cap too');
+});
+
 test('failed build memory stays open beyond the recent window and a later pass resolves it', () => {
   const failed = {
     runId: 'run-failed',
