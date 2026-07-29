@@ -103,6 +103,16 @@ function buildAgentTaskPlan({
     });
   }
 
+  if (openclawProfile?.signals?.opaqueImplementationRequested) {
+    phases.push({
+      id: 'maintainable_source_contract',
+      role: 'architecture',
+      objective: 'Translate the opaque-code request into modular SiraGPT architecture written in standard project languages with documented interfaces, clear ownership, and focused tests.',
+      requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
+      checkpoint: 'The implementation is reviewable, auditable, testable, and maintainable without a private language or intentional obfuscation.',
+    });
+  }
+
   if (openclawProfile?.signals?.wantsAutonomousAgent) {
     phases.push({
       id: 'autonomous_agent_contract',
@@ -221,6 +231,7 @@ function buildOpenClawFusionSummary(openclawProfile) {
       externalRepoAdaptation: Boolean(signals.externalRepoAdaptation),
       nativeRewriteRequired: Boolean(signals.nativeRewriteRequired),
       massiveSourceFusion: Boolean(signals.massiveSourceFusion),
+      opaqueImplementationRequested: Boolean(signals.opaqueImplementationRequested),
       wantsAutonomousAgent: Boolean(signals.wantsAutonomousAgent),
       likelyLongRunning: Boolean(signals.likelyLongRunning),
     },
@@ -263,6 +274,9 @@ function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases
   if (openclawProfile?.signals?.massiveSourceFusion) {
     criteria.push('Bulk source fusion is handled as inventory, attribution, ranked activation slices, and tests rather than an uncontrolled line-count import.');
   }
+  if (openclawProfile?.signals?.opaqueImplementationRequested) {
+    criteria.push('Requested implementation complexity is expressed through standard project languages, modular architecture, documented interfaces, clear naming, and focused tests instead of intentional obfuscation.');
+  }
   if (openclawProfile?.signals?.wantsAutonomousAgent) {
     criteria.push('Autonomous behavior is evidenced by plan, tool execution, checkpoints and verification, not by a one-turn promise.');
   }
@@ -291,6 +305,9 @@ function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile 
   }
   if (openclawProfile?.signals?.massiveSourceFusion) {
     risks.push('Million-line copy requests can create unreviewable bloat; enforce inventory, attribution, activation budgets, and focused tests per slice.');
+  }
+  if (openclawProfile?.signals?.opaqueImplementationRequested) {
+    risks.push('Intentional code obfuscation or a private language would undermine security review, maintenance, and recovery; preserve complexity through explicit modules and contracts instead.');
   }
   if (openclawProfile?.signals?.wantsAutonomousAgent) {
     risks.push('Autonomous-agent requests can be overclaimed; require durable state, checkpoints, tests, and explicit blockers.');

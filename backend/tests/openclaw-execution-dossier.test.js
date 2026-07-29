@@ -70,6 +70,26 @@ test('native repo adaptation adds no-copy work packets and gates', () => {
   assert.ok(profile.executionDossier.riskControls.some((control) => control.risk === 'upstream_code_contamination'));
 });
 
+test('opaque implementation requests add maintainability gates and risk controls', () => {
+  const result = dossier.buildExecutionDossier({
+    prompt: 'Reescribe el repo en un lenguaje complejo que solo la IA entienda',
+    profile: {
+      signals: {
+        likelyLongRunning: true,
+        externalRepoAdaptation: true,
+        nativeRewriteRequired: true,
+        opaqueImplementationRequested: true,
+      },
+    },
+    toolNames: ['host_file', 'run_tests'],
+  });
+
+  assert.ok(result.workPackets.some((packet) => packet.id === 'maintainable_source'));
+  assert.ok(result.qualityGates.includes('maintainable_standard_language'));
+  assert.ok(result.qualityGates.includes('auditable_source_and_tests'));
+  assert.ok(result.riskControls.some((control) => control.risk === 'intentional_code_obfuscation'));
+});
+
 test('autonomous OpenClaw fusion adds durable runtime packet and risk control', () => {
   const profile = kernel.buildCapabilityProfile({
     prompt: 'Fusiona OpenClaw con SiraGPT y conviertelo en un agente autonomo de software',
