@@ -164,9 +164,12 @@ function cacheStableTranscriptPrefix(turns) {
 }
 
 /** Prompt caching on/off. Default ON — cache_control is GA in @anthropic-ai/sdk
- * >=0.20 (no beta header needed). Env kill-switch for any deploy on a very old
- * SDK: CODEX_ANTHROPIC_CACHE=0 degrades to the plain (uncached) request shape. */
+ * >=0.20 (no beta header needed). Two env kill-switches degrade to the plain
+ * (uncached) request shape: CODEX_PROMPT_CACHE=0 (engine-wide flag, also
+ * honoured by llm-provider's Anthropic rung) or the original
+ * CODEX_ANTHROPIC_CACHE=0 (kept for back-compat with existing deploys). */
 function cacheEnabled(env = process.env) {
+  if (String(env.CODEX_PROMPT_CACHE ?? '1') === '0') return false;
   return String(env.CODEX_ANTHROPIC_CACHE ?? '1') !== '0';
 }
 
