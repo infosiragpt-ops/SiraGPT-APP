@@ -1,11 +1,11 @@
-import type { AgentDepartmentDefinition } from "@/lib/code-agent-company"
-import type { CodeChatSession } from "@/lib/code-chat-sessions"
-import type { AgentOfficeWorker } from "@/lib/agent-office-model"
+import type { AgentDepartmentDefinition } from "./code-agent-company"
+import type { CodeChatSession } from "./code-chat-sessions"
+import type { AgentOfficeWorker } from "./agent-office-model"
 import type {
   CodexMissionEvidenceLedger,
   CodexMissionEvidenceRecord,
   CodexRun,
-} from "@/lib/codex/codex-api"
+} from "./codex/codex-api"
 
 export type CompanyFileLike = {
   path: string
@@ -249,7 +249,7 @@ function buildAgentReportMarkdown({
     : "- Sin archivos de workspace atribuidos todavía."
   const missionLines = missions.length
     ? missions.map((mission) => {
-      const deliverables = mission.deliverables.map((item) => item.name).join(", ") || "sin entregables"
+      const deliverables = mission.deliverables.map((item: { name: string }) => item.name).join(", ") || "sin entregables"
       return `- **${mission.missionTitle}** · ${mission.status} · CEO: ${mission.ceoReview.status}\n  - ${compactLine(mission.summary, "Sin resumen", 220)}\n  - Entregables: ${deliverables}`
     }).join("\n")
     : "- Sin misiones cerradas todavía."
@@ -389,12 +389,12 @@ export function buildCompanyAgentFileArtifacts({
       "",
       "## Entregables",
       ...(mission.deliverables.length
-        ? mission.deliverables.map((item) => `- ${item.name}${item.ref ? ` (\`${item.ref}\`)` : ""}`)
+        ? mission.deliverables.map((item: { name: string; ref: string | null }) => `- ${item.name}${item.ref ? ` (\`${item.ref}\`)` : ""}`)
         : ["- Sin entregables"]),
       "",
       "## Evidencia",
       ...(mission.evidence.length
-        ? mission.evidence.map((item) => `- **${item.label}**: ${item.detail}`)
+        ? mission.evidence.map((item: { label: string; detail: string }) => `- **${item.label}**: ${item.detail}`)
         : ["- Sin evidencia"]),
       "",
     ].join("\n")
