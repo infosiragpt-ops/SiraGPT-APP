@@ -430,6 +430,136 @@ function expireStale() {
   return { expired };
 }
 
+// ---------------------------------------------------------------------------
+// Consolidation ("dreaming") pass — OpenClaw port #9 (docs/code/openclaw-port-charter.md).
+// A single nightly-style sweep that merges near-duplicate facts, decays stale
+// ones, applies the existing promotion/demotion rules and purges expired
+// entries. Additive: no existing function's signature or behavior changes.
+// ---------------------------------------------------------------------------
+
+// Two normalized facts are considered near-duplicates when the Jaccard
+// similarity of their token sets reaches this threshold.
+const CONSOLIDATION_SIMILARITY_THRESHOLD = 0.85;
+// Decay reuses the module's existing knobs rather than inventing new ones:
+// the window derives from MEMORY_TTL_MS (an entry untouched for half its TTL
+// counts as "not recently accessed") and the step mirrors the +0.1 strength
+// reinforcement createMemoryEntry applies on a dedupe hit.
+const CONSOLIDATION_DECAY_WINDOW_MS = Math.floor(MEMORY_TTL_MS / 2);
+const CONSOLIDATION_DECAY_STEP = 0.1;
+
+function tokenizeForSimilarity(fact) {
+  return new Set(
+    normalizeFactForDedup(fact)
+      .split(/[^a-z0-9áéíóúüñ]+/)
+      .filter(Boolean)
+  );
+}
+
+function jaccardSimilarity(aTokens, bTokens) {
+  if (aTokens.size === 0 && bTokens.size === 0) return 1;
+  if (aTokens.size === 0 || bTokens.size === 0) return 0;
+  const [small, large] = aTokens.size <= bTokens.size ? [aTokens, bTokens] : [bTokens, aTokens];
+  let intersection = 0;
+  for (const token of small) {
+    if (large.has(token)) intersection += 1;
+  }
+  const union = aTokens.size + bTokens.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// Deterministic "who survives a merge" order: strongest first ("conserva la de
+// mayor strength"), then most accessed, then oldest, then id as a stable tiebreak.
+function rankForConsolidation(a, b) {
+  if (b.strength !== a.strength) return b.strength - a.strength;
+  if (b.accessCount !== a.accessCount) return b.accessCount - a.accessCount;
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Nightly consolidation sweep for one user's memory ("dreaming job").
+ *
+ * In order: (1) merges near-duplicate entries (token Jaccard >=
+ * CONSOLIDATION_SIMILARITY_THRESHOLD over normalized content) keeping the
+ * strongest entry and summing the absorbed accessCount into it, (2) decays the
+ * strength of entries without recent access (window/step derived from the
+ * module's existing knobs), (3) applies the existing autoPromote/autoDemote
+ * rules, (4) purges expired entries.
+ *
+ * Deterministic given the store state and the injected `now` (timestamps
+ * written by the reused promotion/demotion helpers still come from the real
+ * clock, as before). Idempotent: a second pass with the same `now` reports
+ * all-zero counters.
+ *
+ * @param {{ userId: string, now?: number }} opts
+ * @returns {{ merged: number, decayed: number, promoted: number, demoted: number, purged: number }}
+ */
+function consolidateMemories({ userId, now = Date.now() } = {}) {
+  const result = { merged: 0, decayed: 0, promoted: 0, demoted: 0, purged: 0 };
+  if (!userId) return result;
+  hydrateUserMemory(userId);
+
+  const isExpired = (entry) => Boolean(entry.expiresAt && entry.expiresAt < now);
+
+  // (1) Merge near-duplicates among the user's live entries. Expired entries
+  // are left alone here — the purge step below owns them.
+  const live = [...store.values()]
+    .filter((entry) => entry.userId === userId && !isExpired(entry))
+    .sort(rankForConsolidation);
+  const tokensById = new Map(live.map((entry) => [entry.id, tokenizeForSimilarity(entry.fact)]));
+  const absorbed = new Set();
+  for (let i = 0; i < live.length; i++) {
+    const keeper = live[i];
+    if (absorbed.has(keeper.id)) continue;
+    for (let j = i + 1; j < live.length; j++) {
+      const candidate = live[j];
+      if (absorbed.has(candidate.id)) continue;
+      const similarity = jaccardSimilarity(tokensById.get(keeper.id), tokensById.get(candidate.id));
+      if (similarity < CONSOLIDATION_SIMILARITY_THRESHOLD) continue;
+      keeper.accessCount += candidate.accessCount;
+      keeper.lastAccessed = Math.max(keeper.lastAccessed || 0, candidate.lastAccessed || 0);
+      if (keeper.expiresAt && candidate.expiresAt) {
+        keeper.expiresAt = Math.max(keeper.expiresAt, candidate.expiresAt);
+      }
+      absorbed.add(candidate.id);
+      store.delete(candidate.id);
+      result.merged += 1;
+    }
+  }
+
+  // (2) Decay entries without recent access. `lastDecayedAt` records the pass
+  // so re-running with the same `now` is a no-op (idempotency), mirroring how
+  // access refreshes `lastAccessed`.
+  for (const entry of store.values()) {
+    if (entry.userId !== userId || isExpired(entry)) continue;
+    const lastTouch = Math.max(entry.lastAccessed || 0, entry.lastDecayedAt || 0);
+    if (entry.strength > 0 && now - lastTouch >= CONSOLIDATION_DECAY_WINDOW_MS) {
+      entry.strength = Math.max(0, Math.round((entry.strength - CONSOLIDATION_DECAY_STEP) * 1e4) / 1e4);
+      entry.lastDecayedAt = now;
+      result.decayed += 1;
+    }
+  }
+
+  // (3) Existing promotion/demotion rules, unchanged.
+  result.promoted = autoPromote(userId).promoted;
+  result.demoted = autoDemote(userId).demoted;
+
+  // (4) Purge expired entries for this user.
+  for (const [id, entry] of store) {
+    if (entry.userId !== userId) continue;
+    if (isExpired(entry)) {
+      store.delete(id);
+      result.purged += 1;
+    }
+  }
+
+  if (result.merged || result.decayed || result.promoted || result.demoted || result.purged) {
+    schedulePersistUserMemory(userId);
+  }
+
+  return result;
+}
+
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 let cleanupTimer = null;
 
@@ -464,6 +594,10 @@ module.exports = {
   clearUserMemory,
   getStats,
   expireStale,
+  consolidateMemories,
+  CONSOLIDATION_SIMILARITY_THRESHOLD,
+  CONSOLIDATION_DECAY_WINDOW_MS,
+  CONSOLIDATION_DECAY_STEP,
   startCleanup,
   stopCleanup,
   PROMOTION_THRESHOLD,
