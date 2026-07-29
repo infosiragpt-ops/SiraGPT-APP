@@ -1016,6 +1016,30 @@ router.get('/projects/:id/company-operations', authenticateToken, async (req, re
   }
 });
 
+// ── Estado de oficina: la fuente de verdad que la oficina visual lee ───────
+// One read-only projection with the seven signals the office renders: active
+// pools (capacity/budget/spend today), missions, runs, cost, evidence,
+// pending approvals and blockers. Same safe-projection rule as /activity:
+// no prompts, drafts, snapshots or credentials ever leave this endpoint.
+router.get('/projects/:id/office-state', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const state = await require('../services/codex/office-state').getOfficeState({
+      prisma: codexDb,
+      project,
+      take: req.query?.take,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ state });
+  } catch (err) {
+    return res.status(Number(err?.status) || 500).json({
+      error: err?.code || 'codex_office_state_failed',
+      message: String(err?.message || err || 'Office state failed').slice(0, 2_000),
+    });
+  }
+});
+
 // ── Actividad agregada de todos los departamentos ──────────────────────────
 // The per-run SSE stream remains the source of truth for a live coding turn.
 // This safe projection lets CEO Office render one project-wide timeline
