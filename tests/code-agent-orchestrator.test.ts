@@ -210,6 +210,15 @@ test("isBuildRequest / isBuildLog heuristics", () => {
   assert.equal(isBuildRequest("realiza un landing"), true)
   assert.equal(isBuildRequest("realízame una web"), true)
   assert.equal(isBuildRequest("desarrolla una tienda"), true)
+  // Games are build targets. "contruye ne juego de la culebrita" (real user
+  // message, typos included) fell through to the conversational tier: the
+  // model streamed 14 file cards into chat, nothing was applied, and the
+  // preview stayed blank.
+  assert.equal(isBuildRequest("contruye ne juego de la culebrita"), true)
+  assert.equal(isBuildRequest("construye un juego de la culebrita"), true)
+  assert.equal(isBuildRequest("crea un videojuego arcade"), true)
+  assert.equal(isBuildRequest("hazme una calculadora"), true)
+  assert.equal(isBuildRequest("costruye una app de tareas"), true)
   assert.equal(isBuildRequest("hola"), false)
   assert.equal(isQuickGreeting("hola"), true)
   assert.equal(isQuickGreeting("hola, ¿cómo estás?"), true)

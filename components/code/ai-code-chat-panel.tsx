@@ -1861,7 +1861,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 }),
               })
             }
-            if (override?.autoApply ?? (composerMode === "app" || composerMode === "build")) {
+            // Blocklist, not allowlist: any mode that is not explicitly
+            // read-only (ask/plan/image) applies the files the model wrote.
+            // The old app|build allowlist left deps/debug — and any build
+            // misrouted through another mode — streaming file cards into
+            // chat while the workspace and preview stayed empty.
+            if (override?.autoApply ?? (composerMode !== "ask" && composerMode !== "plan" && composerMode !== "image")) {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
@@ -2073,7 +2078,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           const emptyModel = /no se recibi\u00f3 respuesta del modelo|empty model stream/i.test(
             err?.message || "",
           )
-          if (emptyModel && override?.autoApply && codexAvailable && codexEngineRef.current && sessionId) {
+          // Any non-conversational turn qualifies for the degrade — the old
+          // `override?.autoApply` gate only covered explicit apply overrides,
+          // so a default-mode build whose model went silent died with a bare
+          // "No se recibió respuesta" instead of falling back to Codex.
+          if (emptyModel && (override?.autoApply ?? !conversational) && codexAvailable && codexEngineRef.current && sessionId) {
             patchAssistant({
               streaming: false,
               agentLabel: "Modelo sin respuesta — continuando con el motor Codex",
