@@ -1374,16 +1374,27 @@ export function AgentCompanyPanel() {
         companyContext?.profile?.mission ? `Misión: ${companyContext.profile.mission}` : "",
         companyContext?.profile?.vision ? `Visión: ${companyContext.profile.vision}` : "",
       ].filter(Boolean).join(" ")
-      const logicalAgents = Math.min(1_000, Math.max(128, allDepartments.length * 64))
+      // Logical agents = planning capacity across departments.
+      // Research concurrency can be high; code writers stay lower unless the
+      // server has isolated run branches attested (runCap gate).
+      const logicalAgents = Math.min(1_000, Math.max(256, allDepartments.length * 64))
+      const maxConcurrency = 64
+      const maxConcurrentWriters = 4
       const result = await codexApi.startSwarm(projectId, {
         objective: `${rootObjective} ${businessContext}`.trim(),
         logicalAgents,
-        maxConcurrency: 16,
+        maxConcurrency,
+        maxConcurrentWriters,
       })
       setCommandCenter(result.commandCenter)
       setProactiveOn(false)
       setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
-      toast.success(`${logicalAgents} agentes lógicos coordinados; 16 pueden investigar en paralelo y una sola corrida integra el código.`)
+      const liveParallel = result.commandCenter?.swarmSummary?.maxParallel
+        || result.commandCenter?.swarm?.maxConcurrency
+        || maxConcurrency
+      toast.success(
+        `${logicalAgents} agentes lógicos · hasta ${liveParallel} tareas en paralelo · hasta ${maxConcurrentWriters} writers de código (el servidor puede bajar writers si no hay aislamiento).`,
+      )
     } catch (error) {
       const status = (error as { status?: number })?.status
       toast.error(

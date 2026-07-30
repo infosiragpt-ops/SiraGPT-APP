@@ -42,9 +42,12 @@ test('swarm start hands a bounded worktree-isolated fleet to the durable queue',
     routeSource,
     /runService\.hasActiveRun\(\{ projectId: project\.id, db: codexDb \}\)/,
   );
+  assert.match(routeSource, /function swarmConcurrencyDefaults/);
   assert.match(routeSource, /const maxConcurrency = boundedSwarmInteger/);
+  assert.match(routeSource, /const maxConcurrentWriters = boundedSwarmInteger/);
   assert.match(routeSource, /createFleetSwarm\(\{/);
-  assert.match(routeSource, /maxConcurrentWriters: body\.maxConcurrentWriters/);
+  assert.match(routeSource, /maxConcurrentWriters,/);
+  assert.match(routeSource, /logicalTasks: Math\.min\(logicalAgents, 128\)/);
   assert.match(fleetSource, /const writerCap = Math\.min\(/);
   assert.match(fleetSource, /boundedInteger\(maxConcurrentWriters, runCap/);
   assert.match(fleetSource, /isolatedWriterWorktrees: true/);
