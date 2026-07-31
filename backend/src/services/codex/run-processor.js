@@ -219,6 +219,14 @@ class TimeoutError extends Error {
   constructor(ms) { super(`codex run exceeded ${ms}ms hard timeout`); this.name = 'TimeoutError'; this.isTimeout = true; }
 }
 
+class CancelledRunError extends Error {
+  constructor(phase) {
+    super(`codex run cancelled during ${phase}`);
+    this.name = 'CancelledRunError';
+    this.code = 'CODEX_RUN_CANCELLED';
+  }
+}
+
 class FleetQaTimeoutError extends Error {
   constructor(ms) {
     super(`fleet QA exceeded ${ms}ms hard timeout`);
@@ -322,163 +330,63 @@ async function processCodexRunJob({
     const current = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
     return { status: current?.status || 'not_found', skipped: true, claimLost: true };
   }
-  const run = await prisma.codexRun.findUnique({ where: { id: runId } })
+  // Register ownership immediately after the atomic claim. Cancellation can
+  // arrive while any later setup phase is waiting on IO, so abortRun(runId)
+  // must already reach this worker before reading sessions or touching Git.
+  const controller = new AbortController();
+  activeControllers.set(String(runId), controller);
+  let unregisterTranscript = null;
+  let hardTimeoutTimer = null;
+  let hardTimeout = null;
+  let adapterStarted = false;
+  const pendingSetup = new Set();
+  let run = null;
+  let project = null;
+
+  async function isCancelled() {
+    const fresh = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
+    return fresh?.status === 'cancelled';
+  }
+
+  async function finishCancelled() {
+    if (!controller.signal.aborted) controller.abort(new CancelledRunError('setup'));
+    await prisma.codexRun
+      .update({ where: { id: runId }, data: { finishedAt: new Date(nowIso(clock)) } })
+      .catch(() => {});
+    return { status: 'cancelled' };
+  }
+
+  try {
+  run = await prisma.codexRun.findUnique({ where: { id: runId } })
     .catch(() => null) || { ...queuedRun, status: 'running', startedAt };
 
-  const project = run.projectId
+  async function assertRunActive(phase) {
+    if (controller.signal.aborted) {
+      if (controller.signal.reason?.isTimeout) throw controller.signal.reason;
+      if (await isCancelled()) throw new CancelledRunError(phase);
+      throw controller.signal.reason || new Error(`codex run aborted during ${phase}`);
+    }
+    if (await isCancelled()) {
+      controller.abort(new CancelledRunError(phase));
+      throw new CancelledRunError(phase);
+    }
+  }
+
+  const runSetupPhase = async (phase, operation) => {
+    await assertRunActive(`${phase}:before`);
+    const operationPromise = Promise.resolve().then(operation);
+    pendingSetup.add(operationPromise);
+    operationPromise.finally(() => pendingSetup.delete(operationPromise)).catch(() => {});
+    const result = await Promise.race([operationPromise, hardTimeout].filter(Boolean));
+    await assertRunActive(`${phase}:after`);
+    return result;
+  };
+
+  await assertRunActive('run load');
+  project = run.projectId
     ? await prisma.codexProject.findUnique({ where: { id: run.projectId } }).catch(() => null)
     : null;
-
-  await eventStore.appendEvent(runId, 'run_status', { status: 'running' }, { prisma });
-
-  const registry = agentAdapterRegistry || getDefaultAgentAdapterRegistry();
-  let adapter;
-  try {
-    adapter = registry.resolveImplementer({ env });
-  } catch (err) {
-    const error = String(err?.message || err);
-    await prisma.codexRun.update({
-      where: { id: runId },
-      data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
-    });
-    await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma });
-    await publishTerminalSignals({
-      run,
-      project,
-      status: 'error',
-      error,
-      prisma,
-      triggers,
-      env,
-      clock,
-    });
-    return { status: 'error', error };
-  }
-  let nativeRunner = runner;
-  let nativeSessionService = sessionService;
-  let nativeResumeSnapshot = null;
-  let unregisterTranscript = null;
-
-  if (adapter === nativeCodexAdapter) {
-    nativeRunner = nativeRunner || createSandboxClient();
-    if (defaultOnFeature(env, 'CODEX_SESSION_ARTIFACTS')) {
-      nativeSessionService = nativeSessionService || createSessionService({ db: prisma, clock });
-    }
-
-    if (
-      nativeSessionService
-      && resumeSnapshot?.sessionId === run.id
-      && Number.isSafeInteger(resumeSnapshot.cursorSeq)
-    ) {
-      try {
-        const stored = await nativeSessionService.readSnapshot({
-          projectId: run.projectId,
-          sessionId: run.id,
-        });
-        if (
-          snapshotIsResumable(stored)
-          && stored.cursorSeq === resumeSnapshot.cursorSeq
-          && (!resumeSnapshot.checkpointSha || stored.checkpointSha === resumeSnapshot.checkpointSha)
-        ) {
-          nativeResumeSnapshot = stored.loopState || null;
-        }
-      } catch {
-        // The loop falls back to the latest durable context_snapshot event.
-      }
-    }
-
-    if (run.mode === 'build' && defaultOnFeature(env, 'CODEX_RUN_BRANCHES')) {
-      let branch = await checkpointService.prepareRunBranch({
-        run,
-        project,
-        deps: { runner: nativeRunner },
-      }).catch((error) => ({
-        ok: false,
-        code: 'run_branch_setup_failed',
-        detail: String(error?.message || error).slice(0, 1000),
-      }));
-      if (
-        !branch?.ok
-        && branch?.code === 'working_tree_dirty'
-        && typeof nativeRunner.recoverRunBase === 'function'
-      ) {
-        const baseBranch = checkpointService.projectBaseBranch(project);
-        const recovery = baseBranch
-          ? await nativeRunner.recoverRunBase(run.projectId, run.id, { baseBranch }).catch((error) => ({
-            ok: false,
-            code: error?.body?.error || 'run_worktree_recovery_failed',
-            detail: String(error?.body?.detail || error?.message || error).slice(0, 1000),
-          }))
-          : { ok: false, code: 'invalid_base_branch' };
-        if (recovery?.ok) {
-          branch = await checkpointService.prepareRunBranch({
-            run,
-            project,
-            deps: { runner: nativeRunner },
-          }).catch((error) => ({
-            ok: false,
-            code: 'run_branch_setup_failed',
-            detail: String(error?.message || error).slice(0, 1000),
-          }));
-          if (branch?.ok) {
-            branch.recovery = recovery;
-            await eventStore.appendEvent(run.id, 'narrative_delta', {
-              text: `Se preservó el workspace previo en ${recovery.recoveryRef || 'una referencia Git de recuperación'} antes de aislar la ejecución.`,
-            }, { prisma }).catch(() => {});
-          }
-        } else {
-          branch = recovery;
-        }
-      }
-      if (!branch?.ok) {
-        const error = `run branch setup failed (${branch?.code || 'unknown'}): ${String(branch?.detail || '').slice(0, 1000)}`;
-        await prisma.codexRun.update({
-          where: { id: runId },
-          data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
-        });
-        await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma });
-        await publishTerminalSignals({
-          run,
-          project,
-          status: 'error',
-          error,
-          prisma,
-          triggers,
-          env,
-          clock,
-        });
-        return { status: 'error', error };
-      }
-      if (branch.worktree && typeof nativeRunner.forRun === 'function') {
-        nativeRunner = nativeRunner.forRun(run.id, run.projectId);
-      }
-    }
-
-    if (
-      nativeSessionService
-      && typeof eventStore.registerTranscriptSink === 'function'
-    ) {
-      unregisterTranscript = eventStore.registerTranscriptSink(run.id, async (envelope) => {
-        const appended = await nativeSessionService.appendTranscript({
-          projectId: run.projectId,
-          sessionId: run.id,
-          entry: { ...envelope, sourceSeq: envelope.seq },
-        });
-        if (envelope.type === 'context_snapshot') {
-          await nativeSessionService.saveSnapshot({
-            projectId: run.projectId,
-            sessionId: run.id,
-            cursorSeq: appended.record.seq,
-            loopState: {
-              summary: envelope.data?.summary || '',
-              tailMessages: envelope.data?.tailMessages || [],
-              state: envelope.data?.state || {},
-            },
-          });
-        }
-      });
-    }
-  }
+  await assertRunActive('project load');
 
   const agentRun = {
     ...run,
@@ -507,23 +415,205 @@ async function processCodexRunJob({
   const timeoutMs = readTimeoutMs(runtimeEnv, runtimePolicy);
   const drainTimeoutMs = readDrainTimeoutMs(runtimeEnv);
   const maxSteps = readMaxSteps(runtimeEnv, runtimePolicy);
-  const controller = new AbortController();
-  activeControllers.set(String(runId), controller);
+  const timeoutError = new TimeoutError(timeoutMs);
+  hardTimeout = new Promise((_, reject) => {
+    hardTimeoutTimer = setTimeout(() => {
+      reject(timeoutError);
+      controller.abort(timeoutError);
+    }, timeoutMs);
+    hardTimeoutTimer.unref?.();
+  });
 
+  await assertRunActive('running event:before');
+  await eventStore.appendEvent(runId, 'run_status', { status: 'running' }, { prisma });
+  await assertRunActive('running event:after');
+
+  const registry = agentAdapterRegistry || getDefaultAgentAdapterRegistry();
+  let adapter;
   try {
+    await assertRunActive('adapter resolve');
+    adapter = registry.resolveImplementer({ env });
+  } catch (err) {
+    if (err?.code === 'CODEX_RUN_CANCELLED' || err?.isTimeout) throw err;
+    const error = String(err?.message || err);
+    await prisma.codexRun.update({
+      where: { id: runId },
+      data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
+    });
+    await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma });
+    await publishTerminalSignals({
+      run,
+      project,
+      status: 'error',
+      error,
+      prisma,
+      triggers,
+      env,
+      clock,
+    });
+    return { status: 'error', error };
+  }
+  let nativeRunner = runner;
+  let nativeSessionService = sessionService;
+  let nativeResumeSnapshot = null;
+  let nativeCheckpointService = checkpointService;
+
+  if (adapter === nativeCodexAdapter) {
+    await assertRunActive('native setup');
+    nativeRunner = nativeRunner || createSandboxClient();
+    nativeRunner = guardedRunner(nativeRunner, controller.signal);
+    nativeCheckpointService = guardedCheckpointService(checkpointService, controller.signal);
+    if (defaultOnFeature(env, 'CODEX_SESSION_ARTIFACTS')) {
+      nativeSessionService = nativeSessionService || createSessionService({ db: prisma, clock });
+    }
+
+    if (
+      nativeSessionService
+      && resumeSnapshot?.sessionId === run.id
+      && Number.isSafeInteger(resumeSnapshot.cursorSeq)
+    ) {
+      try {
+        const stored = await runSetupPhase('session read', () => nativeSessionService.readSnapshot({
+          projectId: run.projectId,
+          sessionId: run.id,
+        }));
+        if (
+          snapshotIsResumable(stored)
+          && stored.cursorSeq === resumeSnapshot.cursorSeq
+          && (!resumeSnapshot.checkpointSha || stored.checkpointSha === resumeSnapshot.checkpointSha)
+        ) {
+          nativeResumeSnapshot = stored.loopState || null;
+        }
+      } catch (error) {
+        if (error?.code === 'CODEX_RUN_CANCELLED' || error?.isTimeout) throw error;
+        // The loop falls back to the latest durable context_snapshot event.
+      }
+    }
+
+    if (run.mode === 'build' && defaultOnFeature(env, 'CODEX_RUN_BRANCHES')) {
+      let branch;
+      try {
+        branch = await runSetupPhase('branch prepare', () => nativeCheckpointService.prepareRunBranch({
+          run,
+          project,
+          deps: { runner: nativeRunner },
+        }));
+      } catch (error) {
+        if (error?.code === 'CODEX_RUN_CANCELLED' || error?.isTimeout) throw error;
+        branch = {
+          ok: false,
+          code: 'run_branch_setup_failed',
+          detail: String(error?.message || error).slice(0, 1000),
+        };
+      }
+      if (
+        !branch?.ok
+        && branch?.code === 'working_tree_dirty'
+        && typeof nativeRunner.recoverRunBase === 'function'
+      ) {
+        await assertRunActive('branch recovery decision');
+        await assertRunActive('branch recovery:before');
+        const baseBranch = nativeCheckpointService.projectBaseBranch(project);
+        const recovery = baseBranch
+          ? await runSetupPhase('branch recovery', () => nativeRunner.recoverRunBase(run.projectId, run.id, { baseBranch })).catch((error) => {
+            if (error?.code === 'CODEX_RUN_CANCELLED' || error?.isTimeout) throw error;
+            return {
+            ok: false,
+            code: error?.body?.error || 'run_worktree_recovery_failed',
+            detail: String(error?.body?.detail || error?.message || error).slice(0, 1000),
+            };
+          })
+          : { ok: false, code: 'invalid_base_branch' };
+        if (recovery?.ok) {
+          try {
+            branch = await runSetupPhase('branch prepare after recovery', () => nativeCheckpointService.prepareRunBranch({
+              run,
+              project,
+              deps: { runner: nativeRunner },
+            }));
+          } catch (error) {
+            if (error?.code === 'CODEX_RUN_CANCELLED' || error?.isTimeout) throw error;
+            branch = {
+              ok: false,
+              code: 'run_branch_setup_failed',
+              detail: String(error?.message || error).slice(0, 1000),
+            };
+          }
+          if (branch?.ok) {
+            branch.recovery = recovery;
+            await assertRunActive('branch recovery narrative');
+            await eventStore.appendEvent(run.id, 'narrative_delta', {
+              text: `Se preservó el workspace previo en ${recovery.recoveryRef || 'una referencia Git de recuperación'} antes de aislar la ejecución.`,
+            }, { prisma }).catch(() => {});
+          }
+        } else {
+          branch = recovery;
+        }
+      }
+      await assertRunActive('branch result');
+      if (!branch?.ok) {
+        const error = `run branch setup failed (${branch?.code || 'unknown'}): ${String(branch?.detail || '').slice(0, 1000)}`;
+        await prisma.codexRun.update({
+          where: { id: runId },
+          data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
+        });
+        await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma });
+        await publishTerminalSignals({
+          run,
+          project,
+          status: 'error',
+          error,
+          prisma,
+          triggers,
+          env,
+          clock,
+        });
+        return { status: 'error', error };
+      }
+      if (branch.worktree && typeof nativeRunner.forRun === 'function') {
+        await assertRunActive('scoped runner');
+        nativeRunner = nativeRunner.forRun(run.id, run.projectId);
+      }
+    }
+
+    if (
+      nativeSessionService
+      && typeof eventStore.registerTranscriptSink === 'function'
+    ) {
+      await assertRunActive('transcript setup:before');
+      unregisterTranscript = eventStore.registerTranscriptSink(run.id, async (envelope) => {
+        if (controller.signal.aborted || await isCancelled()) return;
+        const appended = await nativeSessionService.appendTranscript({
+          projectId: run.projectId,
+          sessionId: run.id,
+          entry: { ...envelope, sourceSeq: envelope.seq },
+        });
+        if (envelope.type === 'context_snapshot') {
+          if (controller.signal.aborted || await isCancelled()) return;
+          await nativeSessionService.saveSnapshot({
+            projectId: run.projectId,
+            sessionId: run.id,
+            cursorSeq: appended.record.seq,
+            loopState: {
+              summary: envelope.data?.summary || '',
+              tailMessages: envelope.data?.tailMessages || [],
+              state: envelope.data?.state || {},
+            },
+          });
+        }
+      });
+      await assertRunActive('transcript setup:after');
+    }
+  }
+  await assertRunActive('adapter execute');
   for (const runtimeEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    await assertRunActive(`runtime event ${runtimeEvent.type}`);
     await eventStore
       .appendEvent(run.id, runtimeEvent.type, runtimeEvent, { prisma })
       .catch(() => {});
   }
 
-  async function isCancelled() {
-    const fresh = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
-    return fresh?.status === 'cancelled';
-  }
-
   let outcome;
-  let timer;
   let work = null;
   try {
     const companySoul = await require('./company-registry')
@@ -559,7 +649,7 @@ async function processCodexRunJob({
         env: runtimeEnv,
         clock,
         runner: nativeRunner,
-        checkpointService,
+        checkpointService: nativeCheckpointService,
         sessionService: nativeSessionService,
         resumeSnapshot: nativeResumeSnapshot,
         openclawRuntimeProfile,
@@ -569,18 +659,9 @@ async function processCodexRunJob({
       // resolves agent-loop inside native-codex-adapter.
       runAgentLoop,
     });
+    adapterStarted = true;
     work = Promise.resolve(adapter.execute(request, context));
-    const timeout = new Promise((_, reject) => {
-      // Reject BEFORE aborting so the timeout deterministically wins the race
-      // even if the loop resolves synchronously inside its abort handler.
-      timer = setTimeout(() => {
-        const timeoutError = new TimeoutError(timeoutMs);
-        reject(timeoutError);
-        controller.abort(timeoutError);
-      }, timeoutMs);
-      if (typeof timer.unref === 'function') timer.unref();
-    });
-    outcome = assertAgentOutcome(await Promise.race([work, timeout]));
+    outcome = assertAgentOutcome(await Promise.race([work, hardTimeout]));
   } catch (err) {
     // A timeout is cooperative: abort the adapter, then give it a bounded drain
     // window before committing the terminal row. This prevents late adapter
@@ -588,8 +669,6 @@ async function processCodexRunJob({
     // from holding the worker forever. The timeout outcome always wins.
     if (err?.isTimeout) await drainExecution(work, drainTimeoutMs);
     outcome = { status: 'error', error: err?.isTimeout ? err.message : String(err?.message || err) };
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 
   // Cancellation (out-of-band) wins over a late "done". cancelRun already
@@ -786,7 +865,37 @@ async function processCodexRunJob({
     executionMode: runtimePolicy.depth,
     fleetQaResult,
   };
+  } catch (err) {
+    if (adapterStarted) throw err;
+    if (err?.isTimeout) {
+      for (const operation of [...pendingSetup]) {
+        await drainExecution(operation, drainTimeoutMs);
+      }
+    }
+    const cancelled = await isCancelled().catch(() => false);
+    if (cancelled) return finishCancelled();
+
+    const error = String(err?.message || err).slice(0, 2000);
+    const flip = await prisma.codexRun.updateMany({
+      where: { id: runId, status: 'running' },
+      data: { status: 'error', error, finishedAt: new Date(nowIso(clock)) },
+    }).catch(() => ({ count: 0 }));
+    if (flip?.count === 1) {
+      await eventStore.appendEvent(runId, 'run_status', { status: 'error' }, { prisma }).catch(() => {});
+      await publishTerminalSignals({
+        run,
+        project,
+        status: 'error',
+        error,
+        prisma,
+        triggers,
+        env,
+        clock,
+      }).catch(() => {});
+    }
+    return { status: 'error', error };
   } finally {
+    if (hardTimeoutTimer) clearTimeout(hardTimeoutTimer);
     if (unregisterTranscript) {
       try { unregisterTranscript(); } catch { /* best-effort cleanup */ }
     }
