@@ -567,9 +567,11 @@ test('timeout waits for cooperative adapter drain and ignores its late outcome',
   assert.equal(d.runRow.status, 'error');
 });
 
-test('native execution suppresses event effects after abort', async () => {
+test('native execution blocks late runner and checkpoint effects after an ignored abort', async () => {
   const controller = new AbortController();
   let writes = 0;
+  let execs = 0;
+  let checkpoints = 0;
   const context = executionContextForAdapter({
     adapter: nativeCodexAdapter,
     signal: controller.signal,
@@ -578,12 +580,25 @@ test('native execution suppresses event effects after abort', async () => {
     project: { id: 'p1', name: 'Demo' },
     deps: {
       eventStore: { async appendEvent() { writes += 1; } },
+      runner: {
+        async writeFiles() { writes += 1; },
+        async exec() { execs += 1; },
+      },
+      checkpointService: {
+        async createCheckpoint() { checkpoints += 1; },
+      },
       env: {},
     },
   });
   controller.abort(new Error('timeout'));
+  await new Promise((resolve) => setImmediate(resolve));
   await context.deps.eventStore.appendEvent('run-1', 'late', {});
-  assert.equal(writes, 0);
+  assert.throws(() => context.deps.runner.writeFiles('p1', []), /blocked after codex run abort/);
+  assert.throws(() => context.deps.runner.exec('p1', ['git', 'status']), /blocked after codex run abort/);
+  assert.throws(() => context.deps.checkpointService.createCheckpoint({}), /blocked after codex run abort/);
+  assert.equal(writes, 0, 'late event/write side effects must not reach downstream clients');
+  assert.equal(execs, 0, 'late exec must not reach the runner');
+  assert.equal(checkpoints, 0, 'late checkpoint must not reach the checkpoint service');
 });
 
 test('outer cleanup releases the controller when terminal side effects throw', async () => {
