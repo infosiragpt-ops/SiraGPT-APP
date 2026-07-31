@@ -73,7 +73,6 @@ import {
 import { codexApi } from "./codex/codex-api"
 import {
   codexProjectIdFromWorkspaceId,
-  codexWorkspaceIdForCodexProject,
   codexWorkspaceIdForProject,
   directCodexProjectIdFromWorkspaceId,
 } from "./codex-workspace-identity"
@@ -638,7 +637,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     async (target: { id: string; name: string; kind: "local-folder" | "project"; projectId?: string }) => {
       const directCodexProjectId = directCodexProjectIdFromWorkspaceId(target.id)
       if (directCodexProjectId) {
-        const workspaceId = codexWorkspaceIdForCodexProject(directCodexProjectId) || target.id
+        const workspaceId = `codex:${directCodexProjectId}`
         try {
           const project = await codexApi.getProject(directCodexProjectId)
           setActiveFolder({ id: workspaceId, name: project.name })

@@ -120,7 +120,7 @@ function ActiveFolderHydrator() {
       return
     }
     if (liveParams.get("folder") !== folderId) return
-    const routeKey = `folder:${folderId}`
+    const routeKey = folderId
     if (hydratedFolderRef.current === routeKey) return
     let cancelled = false
     ;(async () => {
@@ -136,8 +136,8 @@ function ActiveFolderHydrator() {
         setRouteIssue(null)
         hydratedFolderRef.current = routeKey
         if (resolved.kind === "codex-project") {
-          persistWorkspaceCodexProject(resolved.workspaceId, resolved.codexProjectId)
-          setActiveCodexProject(resolved.codexProjectId)
+          persistWorkspaceCodexProject(resolved.workspaceId, resolved.project.id)
+          setActiveCodexProject(resolved.project.id)
           setActiveFolder({
             id: resolved.workspaceId,
             name: resolved.project.name,
@@ -192,7 +192,7 @@ function ActiveFolderHydrator() {
     }
     const title = agentId ? titleByAgent[agentId] : null
     if (!title) return
-    if (folderId && hydratedFolderRef.current !== `folder:${folderId}`) return
+    if (folderId && hydratedFolderRef.current !== folderId) return
     const workspaceId = localId || activeFolder?.id || null
     if (!workspaceId) return
     const projectId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })

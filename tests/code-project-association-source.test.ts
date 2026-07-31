@@ -21,11 +21,11 @@ test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
   assert.match(page, /hydratedFolderRef\.current = null/)
   assert.match(page, /setHydrationAttempt\(\(attempt\) => attempt \+ 1\)/)
   assert.match(page, /resolveCodeWorkspaceFolder\(folderId/)
-  assert.match(page, /persistWorkspaceCodexProject\(resolved\.workspaceId, resolved\.codexProjectId\)/)
-  assert.match(page, /setActiveCodexProject\(resolved\.codexProjectId\)/)
+  assert.match(page, /persistWorkspaceCodexProject\(resolved\.workspaceId, resolved\.project\.id\)/)
+  assert.match(page, /setActiveCodexProject\(resolved\.project\.id\)/)
   assert.match(workspaceRoute, /codexProjectIdFromWorkspaceId\(folderId, \{ assumeProject: true \}\)/)
   assert.match(workspaceRoute, /codexWorkspaceIdForProject\(project\.id\)/)
-  assert.match(workspaceRoute, /getProject\(projectId\)[\s\S]*if \(!isNotFound\(error\)\) throw error[\s\S]*loadDirectCodexProject/)
+  assert.match(workspaceRoute, /getProject\(projectId\)[\s\S]*candidate\?\.status !== 404[\s\S]*getCodexProject/)
   assert.match(sidebar, /codexProjectIdFromWorkspaceId\(opts\.folderId, \{ assumeProject: true \}\)/)
   assert.match(sidebar, /codexWorkspaceIdForProject\(projectId\)/)
   assert.match(company, /codexProjectIdFromWorkspaceId\(activeFolder\?\.id, \{ assumeProject: true \}\)/)
@@ -33,7 +33,7 @@ test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
 })
 
 test("direct CodexProject routes are hydrated before launching an agent", () => {
-  assert.match(page, /hydratedFolderRef\.current !== `folder:\$\{folderId\}`/)
+  assert.match(page, /hydratedFolderRef\.current !== folderId/)
   assert.match(page, /const workspaceId = localId \|\| activeFolder\?\.id \|\| null/)
   assert.match(page, /workspaceId\.replace\(\/\^project:\|\^codex:\|\^local:\//)
   const directSwitch = workspaceContext.indexOf(
