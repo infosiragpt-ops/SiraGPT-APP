@@ -14,7 +14,7 @@ describe("chat accessibility source contracts", () => {
     const sheet = source("components/ui/sheet.tsx")
     const sidebar = source("components/ui/sidebar.tsx")
 
-    assert.match(sheet, /closeLabel\?: string/)
+    assert.match(sheet, /closeLabel: string/)
     assert.doesNotMatch(sheet, /Panel lateral/)
     assert.match(sidebar, /<SheetTitle className="sr-only">\{t\("sidebarMenu"\)\}<\/SheetTitle>/)
     assert.match(sidebar, /<SheetDescription className="sr-only">\{t\("sidebarMenuDescription"\)\}<\/SheetDescription>/)
@@ -46,6 +46,9 @@ describe("chat accessibility source contracts", () => {
     assert.match(messageSource, /aria-label=\{tMessageActions\("downloadChart"\)\}/)
     assert.match(messageSource, /aria-label=\{isCopied \? tMessageActions\("copied"\) : tMessageActions\("copy"\)\}/)
     assert.match(messageSource, /aria-label=\{tCommon\("edit"\)\}/)
+    assert.match(messageSource, /title=\{tMessageActions\("downloadChart"\)\}/)
+    assert.match(messageSource, /title=\{isCopied \? tMessageActions\("copied"\) : tMessageActions\("copy"\)\}/)
+    assert.match(messageSource, /title=\{tCommon\("edit"\)\}/)
     assert.equal(es.messageActions.userMessage, "Mensaje del usuario")
     assert.equal(es.messageActions.assistantResponse, "Respuesta del asistente")
     assert.equal(es.messageActions.downloadChart, "Descargar gráfico")
