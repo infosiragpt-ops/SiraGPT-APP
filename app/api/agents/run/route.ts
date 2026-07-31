@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server"
+import { validateSession, type AuthUser } from "@/lib/auth"
 import { getAgent } from "@/server/agents/registry"
 import { streamLlmCall, estimateCost, getToolDefsForAgent } from "@/server/agents/llm"
 import { spawnSubagents } from "@/lib/code-agent/subagent"
@@ -6,8 +7,10 @@ import {
   createWorkspace,
   executeTool,
   listWorkspaceFiles,
+  getEffectiveToolAllowSet,
   type AgentWorkspace,
 } from "@/server/agents/tools"
+import { readResponseCapped, safeFetch, validateSafeUrl } from "@/server/agents/safe-network"
 import type { LlmMessage } from "@/server/agents/llm"
 
 export const runtime = "nodejs"
@@ -37,8 +40,23 @@ function heartbeat(controller: ReadableStreamDefaultController, interval: number
   }, interval)
 }
 
+async function getRequestUser(request: NextRequest): Promise<AuthUser | null> {
+  const authorization = request.headers.get("authorization") || ""
+  const bearer = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim()
+  const token = bearer || request.cookies.get("auth-token")?.value?.trim()
+  return token ? validateSession(token) : null
+}
+
 export async function POST(request: NextRequest) {
-  const body: AgentRunBody = await request.json().catch(() => ({} as AgentRunBody))
+  const user = await getRequestUser(request)
+  if (!user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
+  const body = (await request.json().catch(() => ({}))) as AgentRunBody
   const { agent: agentId, prompt, mode = "auto", webhook_url, session_id } = body
 
   if (!agentId || !prompt) {
@@ -57,16 +75,25 @@ export async function POST(request: NextRequest) {
   }
 
   if (webhook_url) {
+    try {
+      await validateSafeUrl(webhook_url)
+    } catch {
+      return new Response(JSON.stringify({ error: "invalid_webhook_url" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
     const resultPromise = runAgentLoop(def, prompt, mode, session_id).catch((e) => ({
       error: String(e),
     }))
     resultPromise.then(async (result) => {
       try {
-        await fetch(webhook_url, {
+        const { response } = await safeFetch(webhook_url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ agent: agentId, result }),
-        })
+        }, { maxRedirects: 3, timeoutMs: 10_000 })
+        await readResponseCapped(response, 8 * 1024)
       } catch {
         /* webhook delivery failure */
       }
@@ -137,6 +164,7 @@ async function runAgentLoop(
   send?: (event: string, data: unknown) => void,
 ) {
   const workspace: AgentWorkspace = createWorkspace(sessionId)
+  const allowedTools = getEffectiveToolAllowSet(def.tools as unknown as Record<string, boolean>)
   const tools = getToolDefsForAgent(def.tools as unknown as Record<string, boolean>)
   const files = listWorkspaceFiles(workspace, 40)
   const systemExtra = [
@@ -237,7 +265,11 @@ async function runAgentLoop(
       let ok = true
       let summary = ""
       try {
-        if (tc.function.name === "spawn_subagent" && def.tools.spawn_subagent) {
+        if (!allowedTools.has(tc.function.name)) {
+          ok = false
+          toolResult = `Error: herramienta no permitida para este agent role: "${tc.function.name}".`
+          summary = "tool denied"
+        } else if (tc.function.name === "spawn_subagent" && def.tools.spawn_subagent) {
           let args: { name?: string; prompt?: string } = {}
           try {
             args = JSON.parse(tc.function.arguments || "{}")
@@ -252,7 +284,7 @@ async function runAgentLoop(
           ok = !subs[0]?.error
           send?.("subagent_result", { name: args.name, result: toolResult })
         } else {
-          const exec = await executeTool(tc.function.name, tc.function.arguments, workspace)
+          const exec = await executeTool(tc.function.name, tc.function.arguments, workspace, allowedTools)
           toolResult = exec.observation
           ok = exec.ok
           summary = (exec.summary || exec.observation).slice(0, 160)
