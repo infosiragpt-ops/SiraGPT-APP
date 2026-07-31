@@ -30,6 +30,9 @@ test('db backup workflow reads the resolved runtime database URL without sourcin
 
 test('db backup workflow skips S3 upload when backup secrets are absent', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/db-backup.yml'), 'utf8');
+  assert.match(workflow, /gzip -t "\$\{LATEST\}"/);
+  assert.match(workflow, /sha256sum "\$\{LATEST\}" > "\$\{LATEST\}\.sha256"/);
+  assert.match(workflow, /s3 cp "\$\{LATEST\}\.sha256"/);
   assert.match(workflow, /BACKUP_BUCKET \/ BACKUP_ACCESS_KEY_ID \/ BACKUP_SECRET_ACCESS_KEY are not fully configured/);
   assert.match(workflow, /exit 0/);
 });

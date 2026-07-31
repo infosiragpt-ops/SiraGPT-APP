@@ -93,10 +93,16 @@ jobs:
               echo "::error::No backup file produced — aborting upload." >&2
               exit 1
             fi
+            if ! gzip -t "${LATEST}"; then
+              echo "::error::Backup gzip integrity check failed: ${LATEST}" >&2
+              exit 1
+            fi
+            sha256sum "${LATEST}" > "${LATEST}.sha256"
+            test -s "${LATEST}.sha256"
 
             if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
               echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
-              echo "Backup retained locally: ${LATEST}"
+              echo "Backup and checksum retained locally: ${LATEST}"
               exit 0
             fi
 
@@ -122,8 +128,10 @@ jobs:
 
             aws "${AWS_ARGS[@]}" s3 cp "${LATEST}" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}")" \
               --only-show-errors
+            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}.sha256" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}.sha256")" \
+              --only-show-errors
 
-            echo "Backup uploaded: $(basename "${LATEST}")"
+            echo "Backup and checksum uploaded: $(basename "${LATEST}")"
         env:
           # These are passed THROUGH to the remote shell via the `envs:`
           # field above. They never appear in logs.
