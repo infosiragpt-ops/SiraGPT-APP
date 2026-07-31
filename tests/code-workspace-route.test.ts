@@ -44,7 +44,7 @@ test("falls back from a bare Project 404 to the matching CodexProject", async ()
   assert.equal(resolved.kind, "codex-project")
   assert.equal(resolved.workspaceId, `codex:${codexProject.id}`)
   if (resolved.kind === "codex-project") {
-    assert.equal(resolved.codexProjectId, codexProject.id)
+    assert.equal(resolved.project.id, codexProject.id)
   }
 })
 

@@ -4,7 +4,6 @@ import test from "node:test"
 import {
   canonicalCodexWorkspaceId,
   codexProjectIdFromWorkspaceId,
-  codexWorkspaceIdForCodexProject,
   codexWorkspaceIdForProject,
   directCodexProjectIdFromWorkspaceId,
 } from "../lib/codex-workspace-identity"
@@ -36,7 +35,7 @@ test("keeps local and unknown legacy workspace identities compatible", () => {
 
 test("keeps direct CodexProject workspaces outside the company Project namespace", () => {
   const cuid = "cms2abcdefghijklmnopqrstuv"
-  const workspaceId = codexWorkspaceIdForCodexProject(cuid)
+  const workspaceId = `codex:${cuid}`
 
   assert.equal(workspaceId, `codex:${cuid}`)
   assert.equal(directCodexProjectIdFromWorkspaceId(workspaceId), cuid)

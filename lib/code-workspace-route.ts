@@ -1,6 +1,5 @@
 import {
   codexProjectIdFromWorkspaceId,
-  codexWorkspaceIdForCodexProject,
   codexWorkspaceIdForProject,
   directCodexProjectIdFromWorkspaceId,
 } from "./codex-workspace-identity"
@@ -21,44 +20,17 @@ export type CodeWorkspaceFolderResolution =
   | {
       kind: "project"
       workspaceId: string
-      projectId: string
       project: ProjectWorkspace
     }
   | {
       kind: "codex-project"
       workspaceId: string
-      codexProjectId: string
       project: DirectCodexWorkspace
     }
 
 type CodeWorkspaceFolderLoaders = {
   getProject: (id: string) => Promise<ProjectWorkspace>
   getCodexProject: (id: string) => Promise<DirectCodexWorkspace>
-}
-
-function isNotFound(error: unknown): boolean {
-  const candidate = error as {
-    code?: unknown
-    status?: unknown
-    body?: { code?: unknown; error?: unknown }
-  } | null
-  return candidate?.status === 404
-    || candidate?.code === "project_not_found"
-    || candidate?.body?.code === "project_not_found"
-    || candidate?.body?.error === "project_not_found"
-}
-
-async function loadDirectCodexProject(
-  projectId: string,
-  getCodexProject: CodeWorkspaceFolderLoaders["getCodexProject"],
-): Promise<CodeWorkspaceFolderResolution> {
-  const project = await getCodexProject(projectId)
-  return {
-    kind: "codex-project",
-    workspaceId: codexWorkspaceIdForCodexProject(project.id) || `codex:${project.id}`,
-    codexProjectId: project.id,
-    project,
-  }
 }
 
 /**
@@ -72,22 +44,34 @@ export async function resolveCodeWorkspaceFolder(
   loaders: CodeWorkspaceFolderLoaders,
 ): Promise<CodeWorkspaceFolderResolution> {
   const directCodexProjectId = directCodexProjectIdFromWorkspaceId(folderId)
-  if (directCodexProjectId) {
-    return loadDirectCodexProject(directCodexProjectId, loaders.getCodexProject)
-  }
-
   const projectId = codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
-  try {
-    const project = await loaders.getProject(projectId)
-    return {
-      kind: "project",
-      workspaceId: codexWorkspaceIdForProject(project.id) || `project:${project.id}`,
-      projectId: project.id,
-      project,
+  if (!directCodexProjectId) {
+    try {
+      const project = await loaders.getProject(projectId)
+      return {
+        kind: "project",
+        workspaceId: codexWorkspaceIdForProject(project.id) || `project:${project.id}`,
+        project,
+      }
+    } catch (error) {
+      const candidate = error as {
+        code?: unknown
+        status?: unknown
+        body?: { code?: unknown; error?: unknown }
+      } | null
+      if (
+        candidate?.status !== 404
+        && candidate?.code !== "project_not_found"
+        && candidate?.body?.code !== "project_not_found"
+        && candidate?.body?.error !== "project_not_found"
+      ) throw error
     }
-  } catch (error) {
-    if (!isNotFound(error)) throw error
   }
 
-  return loadDirectCodexProject(projectId, loaders.getCodexProject)
+  const project = await loaders.getCodexProject(directCodexProjectId || projectId)
+  return {
+    kind: "codex-project",
+    workspaceId: `codex:${project.id}`,
+    project,
+  }
 }
