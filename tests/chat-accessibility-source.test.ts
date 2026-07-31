@@ -4,19 +4,28 @@ import path from "node:path"
 import { describe, it } from "node:test"
 
 const source = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8")
+const messages = (locale: "en" | "es") => JSON.parse(source(`messages/${locale}.json`)) as {
+  common: Record<string, string>
+  messageActions: Record<string, string>
+}
 
 describe("chat accessibility source contracts", () => {
-  it("gives the shared Sheet and its close action accessible names", () => {
+  it("uses a real localized SheetTitle in the mobile sidebar", () => {
     const sheet = source("components/ui/sheet.tsx")
+    const sidebar = source("components/ui/sidebar.tsx")
 
-    assert.match(sheet, /aria-label=\{ariaLabel \?\? "Panel lateral"\}/)
-    assert.match(sheet, /aria-label="Cerrar panel lateral"/)
+    assert.match(sheet, /closeLabel\?: string/)
+    assert.doesNotMatch(sheet, /Panel lateral/)
+    assert.match(sidebar, /<SheetTitle className="sr-only">\{t\("sidebarMenu"\)\}<\/SheetTitle>/)
+    assert.match(sidebar, /<SheetDescription className="sr-only">\{t\("sidebarMenuDescription"\)\}<\/SheetDescription>/)
+    assert.match(sidebar, /closeLabel=\{t\("close"\)\}/)
   })
 
   it("labels each rendered message article by sender", () => {
-    const messages = source("components/message-component.tsx")
+    const messageSource = source("components/message-component.tsx")
 
-    assert.match(messages, /<article[\s\S]*aria-label=\{message\.role === 'USER' \? 'Mensaje del usuario' : 'Respuesta del asistente'\}/)
+    assert.match(messageSource, /useTranslations\("messageActions"\)/)
+    assert.match(messageSource, /<article[\s\S]*aria-label=\{message\.role === 'USER' \? tMessageActions\("userMessage"\) : tMessageActions\("assistantResponse"\)\}/)
   })
 
   it("guards IME composition before the Enter submit handler", () => {
@@ -30,10 +39,18 @@ describe("chat accessibility source contracts", () => {
   })
 
   it("labels icon-only message actions", () => {
-    const messages = source("components/message-component.tsx")
+    const messageSource = source("components/message-component.tsx")
+    const es = messages("es")
+    const en = messages("en")
 
-    assert.match(messages, /aria-label="Descargar gráfico"/)
-    assert.match(messages, /aria-label=\{isCopied \? "Copiado" : "Copiar mensaje"\}/)
-    assert.match(messages, /aria-label="Editar mensaje"/)
+    assert.match(messageSource, /aria-label=\{tMessageActions\("downloadChart"\)\}/)
+    assert.match(messageSource, /aria-label=\{isCopied \? tMessageActions\("copied"\) : tMessageActions\("copy"\)\}/)
+    assert.match(messageSource, /aria-label=\{tCommon\("edit"\)\}/)
+    assert.equal(es.messageActions.userMessage, "Mensaje del usuario")
+    assert.equal(es.messageActions.assistantResponse, "Respuesta del asistente")
+    assert.equal(es.messageActions.downloadChart, "Descargar gráfico")
+    assert.equal(en.messageActions.userMessage, "User message")
+    assert.equal(en.messageActions.assistantResponse, "Assistant response")
+    assert.equal(en.messageActions.downloadChart, "Download chart")
   })
 })

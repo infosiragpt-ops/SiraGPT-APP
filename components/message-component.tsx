@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
+import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
@@ -459,6 +460,7 @@ function buildPresentationPreviewHtml(entry: any, filename: string) {
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], fullResponse?: any[], onImageClick?: (imageUrl: string) => void }) => {
+    const tMessageActions = useTranslations("messageActions")
     const chartFile = files.find(f => f.type === 'chart');
     if (!chartFile) return null;
 
@@ -504,7 +506,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
                             e.stopPropagation();
                             handleDownloadChart();
                         }}
-                        aria-label="Descargar gráfico"
+                        aria-label={tMessageActions("downloadChart")}
                         className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
                         title="Download Chart"
                     >
@@ -828,6 +830,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     onOpenSources?: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void;
     children?: React.ReactNode;
 }) => {
+    const tCommon = useTranslations("common")
+    const tMessageActions = useTranslations("messageActions")
     // Performance monitoring disabled to prevent overhead
     // const renderStartTime = performance.now()
     // const performanceOptimizer = PerformanceOptimizer.getInstance()
@@ -3040,7 +3044,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         <article
             className="flex"
             data-message-id={message.id}
-            aria-label={message.role === 'USER' ? 'Mensaje del usuario' : 'Respuesta del asistente'}
+            aria-label={message.role === 'USER' ? tMessageActions("userMessage") : tMessageActions("assistantResponse")}
         >
             {/* {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
@@ -3122,7 +3126,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
-                                    aria-label={isCopied ? "Copiado" : "Copiar mensaje"}
+                                    aria-label={isCopied ? tMessageActions("copied") : tMessageActions("copy")}
                                     onClick={() => {
                                         copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
                                             .then(() => {
@@ -3144,7 +3148,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
-                                    aria-label="Editar mensaje"
+                                    aria-label={tCommon("edit")}
                                     onClick={() => setIsEditing(true)}
                                     title="Editar"
                                 >
