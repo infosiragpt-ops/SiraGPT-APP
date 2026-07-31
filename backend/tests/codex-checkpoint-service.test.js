@@ -92,6 +92,17 @@ test('rollback does not restart dev when it was not running', async () => {
   assert.equal(runner.calls.includes('startDev'), false);
 });
 
+test('rollback is blocked before touching the workspace while a run is active', async () => {
+  const runner = makeRunner({ devStatus: { running: true } });
+  const db = makeDb([{ id: 'cp-1', commitSha: 'abc1234', projectId: 'p1', _userId: 'u1' }]);
+  db.codexRun = {
+    async count() { return 1; },
+  };
+  const out = await cp.rollbackCheckpoint({ checkpointId: 'cp-1', userId: 'u1', deps: { runner, prisma: db } });
+  assert.deepEqual(out, { error: 'run_in_progress', status: 409 });
+  assert.equal(runner.calls.length, 0);
+});
+
 test('rollback 404s a foreign checkpoint and 500s on reset failure', async () => {
   const db = makeDb([{ id: 'cp-1', commitSha: 'abc1234', projectId: 'p1', _userId: 'u1' }]);
   const foreign = await cp.rollbackCheckpoint({ checkpointId: 'cp-1', userId: 'someone', deps: { runner: makeRunner(), prisma: db } });

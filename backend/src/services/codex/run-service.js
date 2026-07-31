@@ -370,6 +370,7 @@ async function cancelRun({
   queue = runQueue,
   eventStore = eventStoreDefault,
   triggers = null,
+  abortRun = null,
   env = process.env,
 }) {
   const prisma = requireDb(db);
@@ -389,6 +390,13 @@ async function cancelRun({
     data: { status: 'cancelled', finishedAt: new Date() },
   });
   if (flip && flip.count > 0) {
+    // The database transition is authoritative, but cancellation must also
+    // reach the in-process worker immediately; polling alone leaves a live
+    // adapter running until its next step.
+    try {
+      const abort = abortRun || require('./run-processor').abortRun;
+      if (typeof abort === 'function') abort(runId, new Error('codex run cancelled'));
+    } catch { /* worker may live in another process; the DB guard still wins */ }
     await eventStore.appendEvent(runId, 'run_status', { status: 'cancelled' }, { prisma }).catch(() => {});
     await require('./run-completion').publishRunCompletion({
       run,

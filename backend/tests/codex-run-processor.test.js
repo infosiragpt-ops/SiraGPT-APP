@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { processCodexRunJob } = require('../src/services/codex/run-processor');
+const { processCodexRunJob, abortRun } = require('../src/services/codex/run-processor');
 
 // Fake prisma: one run + one project, mutable status.
 function makeDeps({
@@ -517,6 +517,49 @@ test('hard timeout aborts a hung loop into error', async () => {
   });
   assert.equal(res.status, 'error');
   assert.match(res.error, /timeout/i);
+});
+
+test('abortRun reaches the live adapter by runId and finalizes cancellation', async () => {
+  const d = makeDeps();
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: ({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ status: 'cancelled' }), { once: true });
+    }),
+    clock: d.clock,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(abortRun('run-1'), true);
+  const res = await processing;
+  assert.equal(res.status, 'cancelled');
+  assert.equal(d.runRow.status, 'cancelled');
+});
+
+test('timeout waits for cooperative adapter drain and ignores its late outcome', async () => {
+  const d = makeDeps();
+  let drained = false;
+  const startedAt = Date.now();
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: ({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => {
+        setTimeout(() => {
+          drained = true;
+          resolve({ status: 'done' });
+        }, 25);
+      }, { once: true });
+    }),
+    clock: d.clock,
+    env: { CODEX_RUN_TIMEOUT_MS: '10', CODEX_RUN_DRAIN_TIMEOUT_MS: '100' },
+  });
+  assert.equal(res.status, 'error');
+  assert.equal(drained, true);
+  assert.ok(Date.now() - startedAt >= 20);
+  assert.equal(d.runRow.status, 'error');
 });
 
 test('non-queued run is skipped (idempotency)', async () => {

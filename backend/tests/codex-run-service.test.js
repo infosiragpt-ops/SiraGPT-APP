@@ -393,9 +393,18 @@ test('cancelRun flips to cancelled, removes the job, and emits one terminal even
   const db = makeDb({ projects: [PROJECT], runs: [{ id: 'r1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running' }] });
   const calls = [];
   const events = [];
-  const run = await cancelRun({ userId: 'u1', runId: 'r1', db, queue: fakeQueue(calls), eventStore: fakeEventStore(events) });
+  const aborts = [];
+  const run = await cancelRun({
+    userId: 'u1',
+    runId: 'r1',
+    db,
+    queue: fakeQueue(calls),
+    eventStore: fakeEventStore(events),
+    abortRun: (runId) => { aborts.push(runId); return true; },
+  });
   assert.equal(run.status, 'cancelled');
   assert.ok(run.finishedAt);
+  assert.deepEqual(aborts, ['r1']);
   assert.deepEqual(calls.find((c) => c[0] === 'cancelQueued'), ['cancelQueued', 'r1']);
   assert.deepEqual(events, [{ runId: 'r1', type: 'run_status', data: { status: 'cancelled' } }]);
 });

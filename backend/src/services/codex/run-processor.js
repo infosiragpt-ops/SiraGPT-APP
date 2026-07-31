@@ -40,9 +40,12 @@ const usageLedger = require('./usage-ledger');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
+const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
+const MAX_DRAIN_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_FLEET_QA_TIMEOUT_MS = 5 * 60_000;
 const MAX_FLEET_QA_TIMEOUT_MS = 30 * 60_000;
+const activeControllers = new Map();
 
 function nowIso(clock) {
   return (clock ? clock() : new Date()).toISOString();
@@ -52,6 +55,45 @@ function readTimeoutMs(env, policy = null) {
   if (policy?.timeoutMs) return policy.timeoutMs;
   const v = Number.parseInt((env || process.env).CODEX_RUN_TIMEOUT_MS || '', 10);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_TIMEOUT_MS;
+}
+
+function readDrainTimeoutMs(env = process.env, override = null) {
+  const explicit = Number(override);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.min(MAX_DRAIN_TIMEOUT_MS, Math.trunc(explicit));
+  }
+  const parsed = Number.parseInt(env.CODEX_RUN_DRAIN_TIMEOUT_MS || '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DRAIN_TIMEOUT_MS;
+  return Math.min(MAX_DRAIN_TIMEOUT_MS, parsed);
+}
+
+/** Abort the in-process execution for a run, when this worker owns it. */
+function abortCodexRun(runId, reason = new Error('codex run cancelled')) {
+  const controller = activeControllers.get(String(runId));
+  if (!controller) return false;
+  if (!controller.signal.aborted) controller.abort(reason);
+  return true;
+}
+
+function releaseCodexRun(runId, controller) {
+  if (activeControllers.get(String(runId)) === controller) activeControllers.delete(String(runId));
+}
+
+async function drainExecution(work, timeoutMs) {
+  if (!work || typeof work.then !== 'function') return false;
+  let timer;
+  let drained = false;
+  try {
+    await Promise.race([
+      Promise.resolve(work).then(() => { drained = true; }, () => { drained = true; }),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+    return drained;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function readMaxSteps(env, policy = null) {
@@ -401,8 +443,10 @@ async function processCodexRunJob({
   });
   const runtimeEnv = autonomousRunPolicy.buildAutonomousRunEnv(env, runtimePolicy);
   const timeoutMs = readTimeoutMs(runtimeEnv, runtimePolicy);
+  const drainTimeoutMs = readDrainTimeoutMs(runtimeEnv);
   const maxSteps = readMaxSteps(runtimeEnv, runtimePolicy);
   const controller = new AbortController();
+  activeControllers.set(String(runId), controller);
 
   for (const runtimeEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
     await eventStore
@@ -417,6 +461,7 @@ async function processCodexRunJob({
 
   let outcome;
   let timer;
+  let work = null;
   try {
     const companySoul = await require('./company-registry')
       .loadCompanySoul({ prisma, codexProject: project })
@@ -460,15 +505,24 @@ async function processCodexRunJob({
       // resolves agent-loop inside native-codex-adapter.
       runAgentLoop,
     });
-    const work = Promise.resolve(adapter.execute(request, context));
+    work = Promise.resolve(adapter.execute(request, context));
     const timeout = new Promise((_, reject) => {
       // Reject BEFORE aborting so the timeout deterministically wins the race
       // even if the loop resolves synchronously inside its abort handler.
-      timer = setTimeout(() => { reject(new TimeoutError(timeoutMs)); controller.abort(); }, timeoutMs);
+      timer = setTimeout(() => {
+        const timeoutError = new TimeoutError(timeoutMs);
+        reject(timeoutError);
+        controller.abort(timeoutError);
+      }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
     outcome = assertAgentOutcome(await Promise.race([work, timeout]));
   } catch (err) {
+    // A timeout is cooperative: abort the adapter, then give it a bounded drain
+    // window before committing the terminal row. This prevents late adapter
+    // completion from racing the lifecycle write while keeping a hung adapter
+    // from holding the worker forever. The timeout outcome always wins.
+    if (err?.isTimeout) await drainExecution(work, drainTimeoutMs);
     outcome = { status: 'error', error: err?.isTimeout ? err.message : String(err?.message || err) };
   } finally {
     if (timer) clearTimeout(timer);
@@ -484,6 +538,7 @@ async function processCodexRunJob({
     // cancelRun owns the terminal event, webhook, metric and fallback ledger.
     // Re-publishing here would double-count the same cancellation.
     if (unregisterTranscript) unregisterTranscript();
+    releaseCodexRun(runId, controller);
     return { status: 'cancelled' };
   }
 
@@ -508,6 +563,7 @@ async function processCodexRunJob({
     // The concurrent owner that won the conditional transition is responsible
     // for its terminal side effects. This processor must only observe the race.
     if (unregisterTranscript) unregisterTranscript();
+    releaseCodexRun(runId, controller);
     return { status: fresh?.status || status, raced: true };
   }
   await eventStore.appendEvent(runId, 'run_status', { status }, { prisma });
@@ -663,6 +719,7 @@ async function processCodexRunJob({
     try { eventStore.forgetRun(runId); } catch { /* best-effort */ }
   }
   if (unregisterTranscript) unregisterTranscript();
+  releaseCodexRun(runId, controller);
 
   return {
     status,
@@ -676,9 +733,12 @@ async function processCodexRunJob({
 
 module.exports = {
   processCodexRunJob,
+  abortCodexRun,
+  abortRun: abortCodexRun,
   TimeoutError,
   FleetQaTimeoutError,
   readTimeoutMs,
+  readDrainTimeoutMs,
   readFleetQaTimeoutMs,
   readMaxSteps,
   persistFleetQaUsage,
