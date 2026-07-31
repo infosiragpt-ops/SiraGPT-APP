@@ -4,7 +4,9 @@ import test from "node:test"
 import {
   canonicalCodexWorkspaceId,
   codexProjectIdFromWorkspaceId,
+  codexWorkspaceIdForCodexProject,
   codexWorkspaceIdForProject,
+  directCodexProjectIdFromWorkspaceId,
 } from "../lib/codex-workspace-identity"
 
 test("canonicalizes folder, project:<id>, and Prisma CUID references to one cloud key", () => {
@@ -30,4 +32,14 @@ test("keeps local and unknown legacy workspace identities compatible", () => {
   assert.equal(codexProjectIdFromWorkspaceId("local:demo"), null)
   assert.equal(canonicalCodexWorkspaceId("legacy-workspace"), "legacy-workspace")
   assert.equal(canonicalCodexWorkspaceId("legacy-workspace", { kind: "project" }), "project:legacy-workspace")
+})
+
+test("keeps direct CodexProject workspaces outside the company Project namespace", () => {
+  const cuid = "cms2abcdefghijklmnopqrstuv"
+  const workspaceId = codexWorkspaceIdForCodexProject(cuid)
+
+  assert.equal(workspaceId, `codex:${cuid}`)
+  assert.equal(directCodexProjectIdFromWorkspaceId(workspaceId), cuid)
+  assert.equal(codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true }), null)
+  assert.equal(canonicalCodexWorkspaceId(workspaceId), workspaceId)
 })

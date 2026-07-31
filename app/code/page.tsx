@@ -25,14 +25,15 @@ import {
   CODE_NEW_CODE_CHAT_EVENT,
   CODE_OPEN_TOOL_EVENT,
   CodeWorkspaceProvider,
+  setActiveCodexProject,
   type CodeNewChatDetail,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import { listCodexProjects } from "@/lib/codex-projects"
-import {
-  codexProjectIdFromWorkspaceId,
-  codexWorkspaceIdForProject,
-} from "@/lib/codex-workspace-identity"
+import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
+import { resolveCodeWorkspaceFolder } from "@/lib/code-workspace-route"
+import { codexApi } from "@/lib/codex/codex-api"
+import { persistWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
 import { projectsService, projectsServiceErrorCode } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 
@@ -119,25 +120,37 @@ function ActiveFolderHydrator() {
       return
     }
     if (liveParams.get("folder") !== folderId) return
-    const projectId = codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
-    const workspaceId = codexWorkspaceIdForProject(projectId) || `project:${projectId}`
-    if (hydratedFolderRef.current === workspaceId) return
+    const routeKey = `folder:${folderId}`
+    if (hydratedFolderRef.current === routeKey) return
     let cancelled = false
     ;(async () => {
       try {
-        const project = await projectsService.get(projectId)
+        const resolved = await resolveCodeWorkspaceFolder(folderId, {
+          getProject: (projectId) => projectsService.get(projectId),
+          getCodexProject: (projectId) => codexApi.getProject(projectId),
+        })
         if (
           cancelled
           || new URLSearchParams(window.location.search).get("folder") !== folderId
         ) return
         setRouteIssue(null)
-        hydratedFolderRef.current = workspaceId
-        setActiveFolder({
-          id: codexWorkspaceIdForProject(project.id) || workspaceId,
-          name: project.name,
-          description: project.description,
-          instructions: project.instructions,
-        })
+        hydratedFolderRef.current = routeKey
+        if (resolved.kind === "codex-project") {
+          persistWorkspaceCodexProject(resolved.workspaceId, resolved.codexProjectId)
+          setActiveCodexProject(resolved.codexProjectId)
+          setActiveFolder({
+            id: resolved.workspaceId,
+            name: resolved.project.name,
+          })
+        } else {
+          setActiveCodexProject(null)
+          setActiveFolder({
+            id: resolved.workspaceId,
+            name: resolved.project.name,
+            description: resolved.project.description,
+            instructions: resolved.project.instructions,
+          })
+        }
       } catch (error) {
         if (
           cancelled
@@ -146,12 +159,12 @@ function ActiveFolderHydrator() {
         const code = projectsServiceErrorCode(error)
         if (code === "project_not_found") {
           setRouteIssue("project_not_found")
-          hydratedFolderRef.current = workspaceId
+          hydratedFolderRef.current = routeKey
+          setActiveCodexProject(null)
           setActiveFolder(null)
           return
         }
         setRouteIssue("project_load_failed")
-        setActiveFolder({ id: workspaceId, name: projectId })
       }
     })()
     return () => {
@@ -179,18 +192,17 @@ function ActiveFolderHydrator() {
     }
     const title = agentId ? titleByAgent[agentId] : null
     if (!title) return
-    const projectId = folderId
-      ? codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
-      : null
-    const workspaceId = localId || (projectId ? codexWorkspaceIdForProject(projectId) : null)
+    if (folderId && hydratedFolderRef.current !== `folder:${folderId}`) return
+    const workspaceId = localId || activeFolder?.id || null
     if (!workspaceId) return
+    const projectId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })
     const signature = `${workspaceId}:${agentId}`
     if (firedAgentRef.current === signature) return
     firedAgentRef.current = signature
 
     const detail: CodeNewChatDetail = {
       workspaceId,
-      name: activeFolder?.name || workspaceId.replace(/^project:|^local:/, "") || "Workspace",
+      name: activeFolder?.name || workspaceId.replace(/^project:|^codex:|^local:/, "") || "Workspace",
       kind: localId ? "local-folder" : "project",
       projectId: projectId || undefined,
       title,
@@ -200,7 +212,7 @@ function ActiveFolderHydrator() {
     }
     window.setTimeout(openAgent, 220)
     window.setTimeout(openAgent, 900)
-  }, [activeFolder?.name, agentId, folderId, localId])
+  }, [activeFolder?.id, activeFolder?.name, agentId, folderId, localId])
 
   if (!routeIssue) return null
   return (
@@ -211,8 +223,8 @@ function ActiveFolderHydrator() {
     >
       <span>
         {routeIssue === "project_not_found"
-          ? "No se encontró este Project. Puede haber sido eliminado o ya no tienes acceso."
-          : "No se pudo cargar este Project. Reintenta o vuelve a seleccionar un workspace."}
+          ? "No se encontró este workspace. Puede haber sido eliminado o ya no tienes acceso."
+          : "No se pudo cargar este workspace. Reintenta o vuelve a seleccionar otro."}
       </span>
       <button
         type="button"
