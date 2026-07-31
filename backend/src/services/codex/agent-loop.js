@@ -1140,6 +1140,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const metrics = deps.metrics || runMetrics.createAccumulator({ run, clock });
   const baseLlmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
   const runner = deps.runner || createSandboxClient();
+  const checkpointServiceForRun = deps.checkpointService || checkpointService;
   const actionStore = deps.actionStore || actionStoreDefault;
   const webSearch = deps.webSearch || defaultWebSearch;
   const projectId = project?.id || run.projectId;
@@ -1467,7 +1468,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   };
 
   if (runBranchesEnabled) {
-    const branch = await checkpointService.prepareRunBranch({
+    const branch = await checkpointServiceForRun.prepareRunBranch({
       run,
       project,
       deps: { runner },
@@ -1933,6 +1934,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         metrics,
         sourcePrompt,
         webSearch,
+        checkpointService: checkpointServiceForRun,
         sessionService: deps.sessionService,
         backgroundTaskService: deps.backgroundTaskService,
         backgroundWatchers,
@@ -1952,6 +1954,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const groupId = `g${++groupCounter}`;
 
     const executeCall = async (call) => {
+      if (signal?.aborted || (typeof deps.executionGuard === 'function' && !deps.executionGuard())) {
+        const error = new Error('codex execution aborted; tool side effect blocked');
+        error.code = 'CODEX_RUN_ABORTED';
+        throw error;
+      }
       const tool = buildTools.getTool(call.name) || dynamicTools.get(call.name) || null;
       const actionId = `a${++actionCounter}`;
       const policyDecision = projectSettingsModule.toolDecision(projectSettings, call.name);
@@ -2127,6 +2134,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           };
         },
       });
+      if (signal?.aborted || (typeof deps.executionGuard === 'function' && !deps.executionGuard())) {
+        const error = new Error('codex execution aborted; post-tool side effect blocked');
+        error.code = 'CODEX_RUN_ABORTED';
+        throw error;
+      }
       result = projectHooks.applyPostHooks(hookState?.hooks, call.name, result);
       const durationMs = Math.max(0, clock().getTime() - t0);
       const status = result.isError ? 'error' : 'done';
@@ -2309,6 +2321,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     metrics,
     sourcePrompt,
     webSearch,
+    checkpointService: checkpointServiceForRun,
     sessionService: deps.sessionService,
     backgroundTaskService: deps.backgroundTaskService,
     backgroundWatchers,
@@ -2665,6 +2678,7 @@ async function closeBuild({
   metrics,
   sourcePrompt,
   webSearch,
+  checkpointService: checkpointServiceForClose = checkpointService,
   sessionService,
   backgroundTaskService,
   backgroundWatchers = null,
@@ -2790,7 +2804,7 @@ async function closeBuild({
   const closeRunBranchesEnabled = productionFeatureEnabled(env, 'CODEX_RUN_BRANCHES');
   if (closeRunBranchesEnabled && projectGatesPassed && (!proactiveMeta || verification?.ok)) {
     try {
-      verifiedTreeSha = await checkpointService.captureWorkspaceTree({ runner, projectId });
+      verifiedTreeSha = await checkpointServiceForClose.captureWorkspaceTree({ runner, projectId });
     } catch (error) {
       projectGatesPassed = false;
       projectGateVerification = {
@@ -2817,7 +2831,7 @@ async function closeBuild({
       if (closeRunBranchesEnabled) {
         const repository = project?.brief?.kind === 'repo' ? project.brief.repository : null;
         if (repository?.url) {
-          checkpoint = await checkpointService.createCheckpoint({
+          checkpoint = await checkpointServiceForClose.createCheckpoint({
             run,
             project,
             deps: checkpointDeps,
@@ -2833,7 +2847,7 @@ async function closeBuild({
           });
           branchFinalization = { ...pullRequest, checkpoint };
         } else {
-          branchFinalization = await checkpointService.finalizeRunCheckpoint({
+          branchFinalization = await checkpointServiceForClose.finalizeRunCheckpoint({
             run,
             project,
             verification: {
@@ -2846,7 +2860,7 @@ async function closeBuild({
           checkpoint = branchFinalization?.checkpoint || null;
         }
       } else {
-        checkpoint = await checkpointService.createCheckpoint({
+        checkpoint = await checkpointServiceForClose.createCheckpoint({
           run,
           project,
           deps: checkpointDeps,

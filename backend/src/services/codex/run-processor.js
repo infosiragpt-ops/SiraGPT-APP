@@ -200,6 +200,8 @@ function executionContextForAdapter({ adapter, signal, isCancelled, run, project
       : {
         ...deps,
         eventStore: guardedEventStore(deps.eventStore, signal),
+        runner: guardedRunner(deps.runner, signal),
+        checkpointService: guardedCheckpointService(deps.checkpointService, signal),
         executionGuard: () => !signal?.aborted,
       };
     context.nativeRun = run;
@@ -234,6 +236,50 @@ function guardedEventStore(eventStore, signal) {
     return eventStore.appendEvent(...args);
   };
   return guarded;
+}
+
+function executionAborted(operation) {
+  const error = new Error(`${operation} blocked after codex run abort`);
+  error.code = 'CODEX_RUN_ABORTED';
+  return error;
+}
+
+function guardedMethods(target, signal, label, nestedMethods = new Set()) {
+  if (!target || (typeof target !== 'object' && typeof target !== 'function')) return target;
+  const guarded = Object.create(target);
+  const names = new Set();
+  let current = target;
+  while (current && current !== Object.prototype) {
+    for (const name of Object.getOwnPropertyNames(current)) {
+      if (name !== 'constructor') names.add(name);
+    }
+    current = Object.getPrototypeOf(current);
+  }
+  for (const name of names) {
+    const method = target[name];
+    if (typeof method !== 'function') continue;
+    guarded[name] = (...args) => {
+      if (signal?.aborted) throw executionAborted(`${label}.${name}`);
+      const result = Reflect.apply(method, target, args);
+      return nestedMethods.has(name) ? guardedMethods(result, signal, label) : result;
+    };
+  }
+  return guarded;
+}
+
+// Native agents may ignore AbortSignal and continue their callback after the
+// bounded drain. Every runner method is therefore checked at invocation time;
+// an operation already in flight cannot be undone, but no later filesystem,
+// process, preview, or Git operation can start through this boundary.
+function guardedRunner(runner, signal) {
+  return guardedMethods(runner, signal, 'runner', new Set(['forRun', 'unscoped']));
+}
+
+// Keep checkpoint calls behind the same abort fence as their runner calls. The
+// agent loop receives this dependency in production; direct module imports are
+// not used for the native execution path after this injection.
+function guardedCheckpointService(service, signal) {
+  return guardedMethods(service, signal, 'checkpointService');
 }
 
 /**
@@ -513,6 +559,7 @@ async function processCodexRunJob({
         env: runtimeEnv,
         clock,
         runner: nativeRunner,
+        checkpointService,
         sessionService: nativeSessionService,
         resumeSnapshot: nativeResumeSnapshot,
         openclawRuntimeProfile,
@@ -761,4 +808,6 @@ module.exports = {
   publishTerminalSignals,
   defaultOnFeature,
   executionContextForAdapter,
+  guardedRunner,
+  guardedCheckpointService,
 };
