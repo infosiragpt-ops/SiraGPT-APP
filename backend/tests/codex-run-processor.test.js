@@ -330,10 +330,74 @@ test('build processor provisions a run worktree before handing the scoped runner
 
   assert.equal(result.status, 'done');
   assert.equal(calls[0][0], 'branch');
-  assert.equal(calls[0][1], runner);
+  assert.notEqual(calls[0][1], runner, 'branch setup receives an abort-guarded runner');
   assert.deepEqual(calls[1], ['create', 'p1', 'run-1', 'main']);
   assert.deepEqual(calls[2], ['scope', 'run-1', 'p1']);
-  assert.equal(loopRunner, scopedRunner);
+  assert.deepEqual(loopRunner.runScope, scopedRunner.runScope);
+});
+
+test('cancellation during branch setup prevents recovery, second preparation, adapter, and effects', async () => {
+  const d = makeDeps();
+  let releasePrepare;
+  let enteredPrepare;
+  const prepareEntered = new Promise((resolve) => { enteredPrepare = resolve; });
+  let prepareCalls = 0;
+  let recoverCalls = 0;
+  let adapterCalls = 0;
+  let runnerEffects = 0;
+  const runner = {
+    async recoverRunBase() {
+      recoverCalls += 1;
+      runnerEffects += 1;
+      return { ok: true, recoveryRef: 'recovery-ref' };
+    },
+    async exec() {
+      runnerEffects += 1;
+      return { exitCode: 0 };
+    },
+  };
+  const checkpointService = {
+    projectBaseBranch: () => 'main',
+    async prepareRunBranch() {
+      prepareCalls += 1;
+      if (prepareCalls === 1) {
+        enteredPrepare();
+        return new Promise((resolve) => { releasePrepare = resolve; });
+      }
+      return { ok: true, worktree: true };
+    },
+    async createCheckpoint() {
+      runnerEffects += 1;
+      return null;
+    },
+  };
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner,
+    checkpointService,
+    runAgentLoop: async () => {
+      adapterCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_RUN_BRANCHES: '1', CODEX_RUN_DRAIN_TIMEOUT_MS: '50' },
+  });
+
+  await prepareEntered;
+  d.runRow.status = 'cancelled';
+  assert.equal(abortRun('run-1'), true);
+  releasePrepare({ ok: false, code: 'working_tree_dirty' });
+
+  const result = await processing;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(d.runRow.status, 'cancelled');
+  assert.equal(prepareCalls, 1);
+  assert.equal(recoverCalls, 0);
+  assert.equal(adapterCalls, 0);
+  assert.equal(runnerEffects, 0);
+  assert.equal(abortRun('run-1'), false);
 });
 
 test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
@@ -461,7 +525,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued' };
   const events = [];
   let cancelFlips = 0;
-  let runningReads = 0;
+  let loopCalled = false;
   const prisma = {
     codexRun: {
       async findUnique({ where }) {
@@ -470,12 +534,9 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
         // pre-cancel `running` value (returns false), then cancelRun lands: the
         // row is `cancelled` by the time the guarded terminal write runs.
         const snapshot = { ...runRow };
-        if (runRow.status === 'running') {
-          runningReads += 1;
-          if (runningReads === 2) {
-            cancelFlips += 1;
-            runRow.status = 'cancelled'; // flips just AFTER the cancellation check
-          }
+        if (runRow.status === 'running' && loopCalled) {
+          cancelFlips += 1;
+          runRow.status = 'cancelled'; // flips just AFTER the cancellation check
         }
         return snapshot;
       },
@@ -490,7 +551,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
     codexProject: { async findUnique() { return { id: 'p1', name: 'Demo' }; } },
   };
   const eventStore = { async appendEvent(runId, type, data) { events.push({ runId, type, data }); } };
-  const loop = async () => ({ status: 'done' });
+  const loop = async () => { loopCalled = true; return { status: 'done' }; };
   let terminalPublishes = 0;
   const res = await processCodexRunJob({
     runId: 'run-1',
