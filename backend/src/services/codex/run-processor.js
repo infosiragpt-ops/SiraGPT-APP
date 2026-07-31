@@ -287,7 +287,7 @@ async function processCodexRunJob({
       let branch = await checkpointService.prepareRunBranch({
         run,
         project,
-        deps: { runner: nativeRunner },
+        deps: { runner: nativeRunner, prisma },
       }).catch((error) => ({
         ok: false,
         code: 'run_branch_setup_failed',
@@ -310,7 +310,7 @@ async function processCodexRunJob({
           branch = await checkpointService.prepareRunBranch({
             run,
             project,
-            deps: { runner: nativeRunner },
+            deps: { runner: nativeRunner, prisma },
           }).catch((error) => ({
             ok: false,
             code: 'run_branch_setup_failed',

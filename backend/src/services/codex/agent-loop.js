@@ -1470,7 +1470,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const branch = await checkpointService.prepareRunBranch({
       run,
       project,
-      deps: { runner },
+      deps: { runner, prisma },
     }).catch((error) => ({
       ok: false,
       code: 'run_branch_setup_failed',
