@@ -39,8 +39,9 @@ function requireDb(db) {
   return db;
 }
 
-// Fixed advisory-lock namespace for "codex active run per project" so the
-// per-project objId can't collide with other advisory-lock users.
+// Fixed advisory-lock namespace for "codex project mutation per project" so
+// createRun shares the lock with checkpoint rollback/restore and the objId
+// cannot collide with other advisory-lock users.
 const CODEX_RUN_LOCK_CLASS = 0x0c0de; // 49374
 
 /** Stable signed-int32 hash of a string (FNV-1a) for the advisory-lock objId. */
