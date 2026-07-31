@@ -636,11 +636,6 @@ jobs:
               echo "[deploy-workflow] Database migration failed; aborting deploy"
               exit "${MIGRATION_STATUS}"
             fi
-            echo "[deploy-workflow] Ensuring production admin account"
-            # Intentionally conditional: the reset script hard-fails unless
-            # RESET_ADMIN_PASSWORD is explicitly configured in the VPS .env.
-            ${COMPOSE} run -T --rm backend node scripts/reset-prod-admin-password.js </dev/null \
-              || echo "[deploy-workflow] WARNING: admin reset skipped (RESET_ADMIN_PASSWORD not configured) — continuing"
             ${COMPOSE} build frontend
             echo "[deploy-workflow] Recreating runner before the API"
             ${COMPOSE} up -d --no-deps --force-recreate runner
