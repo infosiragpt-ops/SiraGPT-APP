@@ -74,7 +74,6 @@ import { codexApi } from "./codex/codex-api"
 import {
   codexProjectIdFromWorkspaceId,
   codexWorkspaceIdForProject,
-  directCodexProjectIdFromWorkspaceId,
 } from "./codex-workspace-identity"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
@@ -635,17 +634,16 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
 
   const switchCodexWorkspace = React.useCallback(
     async (target: { id: string; name: string; kind: "local-folder" | "project"; projectId?: string }) => {
-      const directCodexProjectId = directCodexProjectIdFromWorkspaceId(target.id)
-      if (directCodexProjectId) {
+      if (target.id.startsWith("codex:")) {
         try {
-          const project = await codexApi.getProject(directCodexProjectId)
+          const project = await codexApi.getProject(target.id.slice(6))
           const workspaceId = `codex:${project.id}`
           setActiveFolder({ id: workspaceId, name: project.name })
           persistWorkspaceCodexProject(workspaceId, project.id)
           setActiveCodexProject(project.id)
           setWorkspaceSource({ kind: "browser", name: project.name, linked: false })
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : "No se pudo cargar el proyecto Codex.")
+          toast.error(error instanceof Error ? error.message : "Proyecto no disponible.")
         }
         return
       }

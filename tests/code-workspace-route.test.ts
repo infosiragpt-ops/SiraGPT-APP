@@ -47,6 +47,21 @@ test("falls back from a bare Project 404 to the matching CodexProject", async ()
   assert.equal(resolved[1].id, codexProject.id)
 })
 
+test("preserves the final 404 when neither Project domain contains the folder", async () => {
+  await assert.rejects(
+    resolveCodeWorkspaceFolder(
+      codexProject.id,
+      async () => {
+        throw notFound()
+      },
+      async () => {
+        throw notFound()
+      },
+    ),
+    { status: 404 },
+  )
+})
+
 test("an explicit codex workspace never probes the regular Project endpoint", async () => {
   let projectCalls = 0
   const resolved = await resolveCodeWorkspaceFolder(
