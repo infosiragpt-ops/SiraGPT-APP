@@ -34,14 +34,14 @@ import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import { resolveCodeWorkspaceFolder } from "@/lib/code-workspace-route"
 import { codexApi } from "@/lib/codex/codex-api"
 import { persistWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
-import { projectsService, projectsServiceErrorCode } from "@/lib/projects-service"
+import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
   {
     ssr: false,
-    loading: () => <CodeWorkspaceSkeleton />,
+    loading: CodeWorkspaceSkeleton,
   },
 )
 
@@ -96,16 +96,14 @@ function ActiveFolderHydrator() {
   const { activeFolder, setActiveFolder, switchCodexWorkspace } = useCodeWorkspace()
   const firedAgentRef = React.useRef<string | null>(null)
   const hydratedFolderRef = React.useRef<string | null>(null)
-  const [routeIssue, setRouteIssue] = React.useState<string | null>(null)
+  const [routeIssue, setRouteIssue] = React.useState<0 | 1 | 2>(0)
   const [hydrationAttempt, setHydrationAttempt] = React.useState(0)
 
   React.useEffect(() => {
-    const liveParams = new URLSearchParams(window.location.search)
     if (localId) {
-      if (liveParams.get("local") !== localId) return
-      setRouteIssue(null)
+      setRouteIssue(0)
+      if (hydratedFolderRef.current === localId) return
       hydratedFolderRef.current = localId
-      if (activeFolder?.id === localId) return
       const entry = listCodexProjects().find((row) => row.id === localId)
       void switchCodexWorkspace({
         id: localId,
@@ -116,10 +114,9 @@ function ActiveFolderHydrator() {
     }
     if (!folderId) {
       hydratedFolderRef.current = null
-      setRouteIssue(null)
+      setRouteIssue(0)
       return
     }
-    if (liveParams.get("folder") !== folderId) return
     if (hydratedFolderRef.current === folderId) return
     let cancelled = false
     ;(async () => {
@@ -129,48 +126,38 @@ function ActiveFolderHydrator() {
           projectsService.get,
           codexApi.getProject,
         )
-        if (
-          cancelled
-          || new URLSearchParams(window.location.search).get("folder") !== folderId
-        ) return
+        if (cancelled) return
         const workspaceId = `${directCodexProject ? "codex" : "project"}:${project.id}`
-        setRouteIssue(null)
+        setRouteIssue(0)
         hydratedFolderRef.current = folderId
         if (directCodexProject) {
           persistWorkspaceCodexProject(workspaceId, project.id)
-          setActiveCodexProject(project.id)
-          setActiveFolder({
-            id: workspaceId,
-            name: project.name,
-          })
-        } else {
-          setActiveCodexProject(null)
-          setActiveFolder({
-            id: workspaceId,
-            name: project.name,
-            description: project.description,
-            instructions: project.instructions,
-          })
         }
+        setActiveCodexProject(directCodexProject ? project.id : null)
+        setActiveFolder(directCodexProject
+          ? { id: workspaceId, name: project.name }
+          : {
+              id: workspaceId,
+              name: project.name,
+              description: project.description,
+              instructions: project.instructions,
+            })
       } catch (error) {
-        if (
-          cancelled
-          || new URLSearchParams(window.location.search).get("folder") !== folderId
-        ) return
-        if (projectsServiceErrorCode(error) === "project_not_found") {
-          setRouteIssue("project_not_found")
+        if (cancelled) return
+        if ((error as { status?: unknown } | null)?.status === 404) {
+          setRouteIssue(1)
           hydratedFolderRef.current = folderId
           setActiveCodexProject(null)
           setActiveFolder(null)
-          return
+        } else {
+          setRouteIssue(2)
         }
-        setRouteIssue("project_load_failed")
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [folderId, localId, activeFolder?.id, hydrationAttempt, setActiveFolder, switchCodexWorkspace])
+  }, [folderId, localId, hydrationAttempt, setActiveFolder, switchCodexWorkspace])
 
   React.useEffect(() => {
     if (!toolId) return
@@ -202,7 +189,7 @@ function ActiveFolderHydrator() {
 
     const detail: CodeNewChatDetail = {
       workspaceId,
-      name: activeFolder?.name || workspaceId.replace(/^project:|^codex:|^local:/, "") || "Workspace",
+      name: activeFolder?.name || workspaceId.replace(/^(?:project|codex|local):/, "") || "Workspace",
       kind: localId ? "local-folder" : "project",
       projectId: projectId || undefined,
       title,
@@ -222,26 +209,25 @@ function ActiveFolderHydrator() {
       data-testid="code-workspace-route-error"
     >
       <span>
-        {routeIssue === "project_not_found"
-          ? "No se encontró el workspace o no tienes acceso."
-          : "No se pudo cargar el workspace. Reintenta o elige otro."}
+        {routeIssue === 1
+          ? "Workspace no disponible"
+          : "No se pudo cargar"}
       </span>
       <button
         type="button"
         className="shrink-0 rounded-md border border-current px-2.5 py-1 text-xs font-semibold hover:bg-amber-100 dark:hover:bg-amber-900"
         onClick={() => {
-          if (routeIssue === "project_load_failed") {
+          if (routeIssue === 2) {
             hydratedFolderRef.current = null
-            setRouteIssue(null)
+            setRouteIssue(0)
             setHydrationAttempt((attempt) => attempt + 1)
             return
           }
-          setRouteIssue(null)
-          setActiveFolder(null)
+          setRouteIssue(0)
           router.replace("/code")
         }}
       >
-        {routeIssue === "project_load_failed" ? "Reintentar" : "Abrir workspaces"}
+        {routeIssue === 2 ? "Reintentar" : "Abrir workspaces"}
       </button>
     </div>
   )

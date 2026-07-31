@@ -17,13 +17,6 @@ export function isLocalCodexWorkspaceId(value: string | null | undefined): boole
   return String(value || "").trim().startsWith("local:")
 }
 
-export function directCodexProjectIdFromWorkspaceId(
-  value: string | null | undefined,
-): string | null {
-  const raw = String(value || "").trim()
-  return raw.startsWith("codex:") ? raw.slice(6).trim() || null : null
-}
-
 export function codexProjectIdFromWorkspaceId(
   value: string | null | undefined,
   options?: { assumeProject?: boolean },
