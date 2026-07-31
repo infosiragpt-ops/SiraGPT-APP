@@ -1203,6 +1203,9 @@ app.use('/api/free-ia', freeIaRoutes);
 // AI proxy for GENERATED apps (SiraGPT Apps): public by design (preview apps
 // carry no auth), free-tier model only, strict per-IP rate limit inside.
 app.use('/api/apps-ai', require('./src/routes/apps-ai').buildAppsAiRouter());
+// Follow-up question suggestions after each assistant reply (Open WebUI-style
+// task, own implementation): auth + per-user rate limit inside, free-tier model.
+app.use('/api/follow-ups', require('./src/routes/followups').buildFollowUpsRouter());
 // Persistent key-value store for GENERATED apps (journals/trackers/leaderboards):
 // public by design, per-IP rate-limited + size/count-capped inside. Its own
 // json parser so the mount stands alone regardless of global body-parser order.
