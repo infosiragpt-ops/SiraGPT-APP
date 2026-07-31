@@ -504,6 +504,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
                             e.stopPropagation();
                             handleDownloadChart();
                         }}
+                        aria-label="Descargar gráfico"
                         className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
                         title="Download Chart"
                     >
@@ -3036,7 +3037,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
 
     return (
-        <div className="flex  " data-message-id={message.id}>
+        <article
+            className="flex"
+            data-message-id={message.id}
+            aria-label={message.role === 'USER' ? 'Mensaje del usuario' : 'Respuesta del asistente'}
+        >
             {/* {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
@@ -3117,6 +3122,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
+                                    aria-label={isCopied ? "Copiado" : "Copiar mensaje"}
                                     onClick={() => {
                                         copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
                                             .then(() => {
@@ -3138,6 +3144,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
+                                    aria-label="Editar mensaje"
                                     onClick={() => setIsEditing(true)}
                                     title="Editar"
                                 >
@@ -3406,7 +3413,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     </div>
                 </div>
             )}
-        </div>
+        </article>
     );
 };
 const areMessagePropsEqual = (prev: any, next: any) => {
