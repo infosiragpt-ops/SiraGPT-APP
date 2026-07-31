@@ -637,20 +637,15 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     async (target: { id: string; name: string; kind: "local-folder" | "project"; projectId?: string }) => {
       const directCodexProjectId = directCodexProjectIdFromWorkspaceId(target.id)
       if (directCodexProjectId) {
-        const workspaceId = `codex:${directCodexProjectId}`
         try {
           const project = await codexApi.getProject(directCodexProjectId)
+          const workspaceId = `codex:${project.id}`
           setActiveFolder({ id: workspaceId, name: project.name })
           persistWorkspaceCodexProject(workspaceId, project.id)
           setActiveCodexProject(project.id)
           setWorkspaceSource({ kind: "browser", name: project.name, linked: false })
         } catch (error) {
-          setActiveFolder({ id: workspaceId, name: target.name })
-          setActiveCodexProject(null)
           toast.error(error instanceof Error ? error.message : "No se pudo cargar el proyecto Codex.")
-        }
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
         }
         return
       }

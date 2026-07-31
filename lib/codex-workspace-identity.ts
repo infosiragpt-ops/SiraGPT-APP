@@ -21,7 +21,7 @@ export function directCodexProjectIdFromWorkspaceId(
   value: string | null | undefined,
 ): string | null {
   const raw = String(value || "").trim()
-  return raw.startsWith("codex:") ? raw.slice("codex:".length).trim() || null : null
+  return raw.startsWith("codex:") ? raw.slice(6).trim() || null : null
 }
 
 export function codexProjectIdFromWorkspaceId(
@@ -47,8 +47,7 @@ export function canonicalCodexWorkspaceId(
   const raw = String(value || "").trim()
   if (!raw) return "__default__"
   if (options?.kind === "local-folder" || isLocalCodexWorkspaceId(raw)) return raw
-  const directId = directCodexProjectIdFromWorkspaceId(raw)
-  if (directId) return `codex:${directId}`
+  if (raw.startsWith("codex:")) return raw
   if (options?.kind === "project") return codexWorkspaceIdForProject(raw) || "__default__"
   const projectId = codexProjectIdFromWorkspaceId(raw)
   return projectId ? `project:${projectId}` : raw

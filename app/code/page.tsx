@@ -120,35 +120,36 @@ function ActiveFolderHydrator() {
       return
     }
     if (liveParams.get("folder") !== folderId) return
-    const routeKey = folderId
-    if (hydratedFolderRef.current === routeKey) return
+    if (hydratedFolderRef.current === folderId) return
     let cancelled = false
     ;(async () => {
       try {
-        const resolved = await resolveCodeWorkspaceFolder(folderId, {
-          getProject: (projectId) => projectsService.get(projectId),
-          getCodexProject: (projectId) => codexApi.getProject(projectId),
-        })
+        const [directCodexProject, project] = await resolveCodeWorkspaceFolder(
+          folderId,
+          projectsService.get,
+          codexApi.getProject,
+        )
         if (
           cancelled
           || new URLSearchParams(window.location.search).get("folder") !== folderId
         ) return
+        const workspaceId = `${directCodexProject ? "codex" : "project"}:${project.id}`
         setRouteIssue(null)
-        hydratedFolderRef.current = routeKey
-        if (resolved.kind === "codex-project") {
-          persistWorkspaceCodexProject(resolved.workspaceId, resolved.project.id)
-          setActiveCodexProject(resolved.project.id)
+        hydratedFolderRef.current = folderId
+        if (directCodexProject) {
+          persistWorkspaceCodexProject(workspaceId, project.id)
+          setActiveCodexProject(project.id)
           setActiveFolder({
-            id: resolved.workspaceId,
-            name: resolved.project.name,
+            id: workspaceId,
+            name: project.name,
           })
         } else {
           setActiveCodexProject(null)
           setActiveFolder({
-            id: resolved.workspaceId,
-            name: resolved.project.name,
-            description: resolved.project.description,
-            instructions: resolved.project.instructions,
+            id: workspaceId,
+            name: project.name,
+            description: project.description,
+            instructions: project.instructions,
           })
         }
       } catch (error) {
@@ -156,10 +157,9 @@ function ActiveFolderHydrator() {
           cancelled
           || new URLSearchParams(window.location.search).get("folder") !== folderId
         ) return
-        const code = projectsServiceErrorCode(error)
-        if (code === "project_not_found") {
+        if (projectsServiceErrorCode(error) === "project_not_found") {
           setRouteIssue("project_not_found")
-          hydratedFolderRef.current = routeKey
+          hydratedFolderRef.current = folderId
           setActiveCodexProject(null)
           setActiveFolder(null)
           return
@@ -223,8 +223,8 @@ function ActiveFolderHydrator() {
     >
       <span>
         {routeIssue === "project_not_found"
-          ? "No se encontró este workspace. Puede haber sido eliminado o ya no tienes acceso."
-          : "No se pudo cargar este workspace. Reintenta o vuelve a seleccionar otro."}
+          ? "No se encontró el workspace o no tienes acceso."
+          : "No se pudo cargar el workspace. Reintenta o elige otro."}
       </span>
       <button
         type="button"
