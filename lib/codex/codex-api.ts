@@ -63,6 +63,29 @@ async function req<T>(path: string, init?: CodexRequestInit): Promise<T> {
   return body as T
 }
 
+export function codexErrorCode(error: unknown): string | null {
+  const candidate = error as {
+    code?: unknown
+    body?: { error?: unknown; code?: unknown }
+    status?: unknown
+    message?: unknown
+  } | null
+  if (typeof candidate?.code === "string" && candidate.code.trim()) return candidate.code.trim()
+  if (typeof candidate?.body?.error === "string" && candidate.body.error.trim()) return candidate.body.error.trim()
+  if (typeof candidate?.body?.code === "string" && candidate.body.code.trim()) return candidate.body.code.trim()
+  if (candidate?.status === 404 || /\b404\b|not found|no encontrado/i.test(String(candidate?.message || ""))) {
+    return "project_not_found"
+  }
+  return null
+}
+
+export function codexErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message.trim() : ""
+  return message && !/^(company_project_not_found|project_not_found|codex_project_not_found)$/i.test(message)
+    ? message
+    : fallback
+}
+
 export interface CodexHealth { ok: boolean; enabled: boolean; previewOrigin?: string | null }
 export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
 export interface CodexProject { id: string; name: string; status: string; organizationId?: string | null; workspacePath: string | null; previewUrl: string | null; error: string | null }

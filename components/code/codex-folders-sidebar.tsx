@@ -21,6 +21,9 @@ import {
   upsertCodexProject,
 } from "@/lib/codex-projects"
 import {
+  codexProjectIdFromWorkspaceId,
+} from "@/lib/codex-workspace-identity"
+import {
   SWITCH_CODEX_WORKSPACE_EVENT,
   useCodeWorkspace,
   type CodeNewChatDetail,
@@ -337,7 +340,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
   const pickerSelectEntry = React.useCallback(
     (entry: CodexProjectEntry) => {
       if (entry.kind === "project") {
-        const projectId = entry.id.replace(/^project:/, "")
+        const projectId = codexProjectIdFromWorkspaceId(entry.id, { assumeProject: true }) || entry.id
         const project = projects.find((p) => p.id === projectId)
         if (project) {
           handleOpenWorkspace({

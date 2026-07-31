@@ -138,7 +138,7 @@ import {
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
-import { codexApi } from "@/lib/codex/codex-api"
+import { codexApi, codexErrorCode, codexErrorMessage } from "@/lib/codex/codex-api"
 import { runWhenCodexProjectIdle } from "@/lib/codex/run-slot"
 import {
   clearSessionCodexProject,
@@ -149,6 +149,7 @@ import {
   persistWorkspaceCodexProject,
   readSessionCodexSyncedRun,
 } from "@/lib/codex/codex-project-link"
+import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import {
   codexContinuityStreamTerminalStatuses,
   selectCodexContinuityAssistantTurn,
@@ -1146,14 +1147,15 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const [companyAssociationResolved, setCompanyAssociationResolved] = React.useState(false)
   React.useEffect(() => {
     const workspaceId = String(activeFolder?.id || "")
-    if (!workspaceId || workspaceId.startsWith("local:")) {
+    const companyProjectId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })
+    if (!companyProjectId) {
       setDurableCompanyCodexProjectId(null)
       setCompanyAssociationResolved(true)
       return
     }
     let cancelled = false
     setCompanyAssociationResolved(false)
-    codexApi.getCompanyAssociation(workspaceId.replace(/^project:/, ""))
+    codexApi.getCompanyAssociation(companyProjectId)
       .then((state) => {
         if (!cancelled) {
           setDurableCompanyCodexProjectId(state.association?.codexProject.id || null)
@@ -1163,7 +1165,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       .catch(() => {
         if (!cancelled) {
           setDurableCompanyCodexProjectId(null)
-          setCompanyAssociationResolved(true)
+          // Keep the current Codex identity visible until the user can act on
+          // the association error; do not turn a 404 into a silent clear.
+          setCompanyAssociationResolved(false)
         }
       })
     return () => {
@@ -1187,13 +1191,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setActiveCodexProject(null)
       return
     }
-    const companyWorkspace = Boolean(activeFolder?.id && !activeFolder.id.startsWith("local:"))
+    const companyWorkspace = Boolean(codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }))
     const projectId = companyWorkspace
       ? durableCompanyCodexProjectId
       : (
         linkedCodexProject({ sessionId, workspaceId: activeFolder?.id })
         ?? codexProjectRef.current[sessionId]
       )
+    if (companyWorkspace && !companyAssociationResolved) return
     if (projectId && codexAvailable) codexProjectRef.current[sessionId] = projectId
     setActiveCodexProject(codexAvailable && companyAssociationResolved ? projectId : null)
   }, [
@@ -3190,9 +3195,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       try {
         // 1) Ensure ONE Codex project. Empresas resolve through the durable
         //    backend association; only local folders may reuse browser links.
-        const companyWorkspaceId = activeFolder?.id && !activeFolder.id.startsWith("local:")
-          ? activeFolder.id.replace(/^project:/, "")
-          : null
+        const companyWorkspaceId = codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true })
         let projectId: string | undefined
         let companyOrganizationId: string | null = null
         if (companyWorkspaceId) {
@@ -3217,7 +3220,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             try {
               const existing = await codexApi.getProject(persisted)
               if (existing?.id) projectId = existing.id
-            } catch {
+            } catch (error) {
+              if (codexErrorCode(error) === "project_not_found") {
+                throw Object.assign(
+                  new Error("El proyecto Codex asociado ya no existe."),
+                  { code: "project_not_found", status: 404 },
+                )
+              }
               clearSessionCodexProject(sid)
               if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
             }
@@ -3504,6 +3513,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               generate: { status: "done", detail: "Detenida" },
             }),
           })
+        } else if (codexErrorCode(err) === "company_project_not_found" || codexErrorCode(err) === "project_not_found") {
+          const code = codexErrorCode(err) || "project_not_found"
+          const message = codexErrorMessage(
+            err,
+            code === "company_project_not_found"
+              ? "No se encontró el Project de esta empresa o ya no tienes acceso."
+              : "El proyecto Codex asociado ya no existe.",
+          )
+          // A missing association/project is an actionable identity problem,
+          // not a code-generation failure. Keep the active mapping intact so
+          // the user can inspect/reassociate it instead of losing it silently.
+          finish(`⚠️ ${code}: ${message}`, {
+            label: "Entorno no disponible",
+            phases: buildCodeAgentPhases("context", {
+              context: { status: "error", detail: message },
+            }),
+          })
+          toast.error(`${code}: ${message}`)
         } else if (!opts?.iterate && !opts?.resume) {
           // Project provisioning / plan-run error during a BUILD → still deliver
           // via the deterministic builder in the same turn.
@@ -3577,7 +3604,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   React.useEffect(() => {
     if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
-    const companyWorkspace = Boolean(activeFolder?.id && !activeFolder.id.startsWith("local:"))
+    const companyWorkspace = Boolean(codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }))
     const projectId = companyWorkspace
       ? durableCompanyCodexProjectId
       : linkedCodexProject({

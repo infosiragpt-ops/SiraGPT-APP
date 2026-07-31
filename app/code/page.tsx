@@ -29,7 +29,11 @@ import {
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import { listCodexProjects } from "@/lib/codex-projects"
-import { projectsService } from "@/lib/projects-service"
+import {
+  codexProjectIdFromWorkspaceId,
+  codexWorkspaceIdForProject,
+} from "@/lib/codex-workspace-identity"
+import { projectsService, projectsServiceErrorCode } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 
 const CodeWorkspace = dynamic(
@@ -83,17 +87,22 @@ function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
  */
 function ActiveFolderHydrator() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const folderId = searchParams?.get("folder") || null
   const localId = searchParams?.get("local") || null
   const toolId = searchParams?.get("tool") || null
   const agentId = searchParams?.get("agent") || null
   const { activeFolder, setActiveFolder, switchCodexWorkspace } = useCodeWorkspace()
   const firedAgentRef = React.useRef<string | null>(null)
+  const hydratedFolderRef = React.useRef<string | null>(null)
+  const [routeIssue, setRouteIssue] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     const liveParams = new URLSearchParams(window.location.search)
     if (localId) {
       if (liveParams.get("local") !== localId) return
+      setRouteIssue(null)
+      hydratedFolderRef.current = localId
       if (activeFolder?.id === localId) return
       const entry = listCodexProjects().find((row) => row.id === localId)
       void switchCodexWorkspace({
@@ -103,29 +112,44 @@ function ActiveFolderHydrator() {
       })
       return
     }
-    if (!folderId) return
+    if (!folderId) {
+      hydratedFolderRef.current = null
+      setRouteIssue(null)
+      return
+    }
     if (liveParams.get("folder") !== folderId) return
-    if (activeFolder?.id === folderId) return
+    const projectId = codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
+    const workspaceId = codexWorkspaceIdForProject(projectId) || `project:${projectId}`
+    if (hydratedFolderRef.current === workspaceId) return
+    hydratedFolderRef.current = workspaceId
     let cancelled = false
     ;(async () => {
       try {
-        const project = await projectsService.get(folderId)
+        const project = await projectsService.get(projectId)
         if (
           cancelled
           || new URLSearchParams(window.location.search).get("folder") !== folderId
         ) return
+        setRouteIssue(null)
         setActiveFolder({
-          id: project.id,
+          id: codexWorkspaceIdForProject(project.id) || workspaceId,
           name: project.name,
           description: project.description,
           instructions: project.instructions,
         })
-      } catch {
+      } catch (error) {
         if (
           cancelled
           || new URLSearchParams(window.location.search).get("folder") !== folderId
         ) return
-        setActiveFolder({ id: folderId, name: folderId })
+        const code = projectsServiceErrorCode(error)
+        if (code === "project_not_found") {
+          setRouteIssue("project_not_found")
+          setActiveFolder(null)
+          return
+        }
+        setRouteIssue("project_load_failed")
+        setActiveFolder({ id: workspaceId, name: projectId })
       }
     })()
     return () => {
@@ -173,7 +197,31 @@ function ActiveFolderHydrator() {
     window.setTimeout(openAgent, 900)
   }, [activeFolder?.name, agentId, folderId, localId])
 
-  return null
+  if (!routeIssue) return null
+  return (
+    <div
+      className="absolute left-1/2 top-3 z-50 flex w-[min(680px,calc(100vw-24px))] -translate-x-1/2 items-center justify-between gap-3 rounded-lg border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-lg dark:border-amber-800 dark:bg-amber-950/90 dark:text-amber-100"
+      role="alert"
+      data-testid="code-workspace-route-error"
+    >
+      <span>
+        {routeIssue === "project_not_found"
+          ? "No se encontró este Project. Puede haber sido eliminado o ya no tienes acceso."
+          : "No se pudo cargar este Project. Reintenta o vuelve a seleccionar un workspace."}
+      </span>
+      <button
+        type="button"
+        className="shrink-0 rounded-md border border-current px-2.5 py-1 text-xs font-semibold hover:bg-amber-100 dark:hover:bg-amber-900"
+        onClick={() => {
+          setRouteIssue(null)
+          setActiveFolder(null)
+          router.replace("/code")
+        }}
+      >
+        Abrir workspaces
+      </button>
+    </div>
+  )
 }
 
 function CodeWorkspaceSkeleton() {
