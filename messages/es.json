@@ -425,6 +425,9 @@
   "messageActions": {
     "copy": "Copiar",
     "copied": "Copiado",
+    "userMessage": "Mensaje del usuario",
+    "assistantResponse": "Respuesta del asistente",
+    "downloadChart": "Descargar gráfico",
     "speak": "Leer en voz alta",
     "stopSpeak": "Detener lectura",
     "regenerate": "Regenerar",
@@ -468,6 +471,8 @@
     "yes": "Sí",
     "no": "No",
     "all": "Todos",
+    "sidebarMenu": "Menú lateral",
+    "sidebarMenuDescription": "Navegación principal",
     "none": "Ninguno",
     "select": "Seleccionar",
     "upload": "Subir archivo",

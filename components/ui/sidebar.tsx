@@ -10,9 +10,10 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import { Sheet, SheetContent } from "@/components/ui/sheet"
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { useTranslations } from "next-intl"
 
 const SIDEBAR_COOKIE_NAME = "sidebar:state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
@@ -139,6 +140,7 @@ const Sidebar = React.forwardRef<
   }
 >(({ side = "left", variant = "sidebar", collapsible = "offcanvas", className, children, ...props }, ref) => {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const t = useTranslations("common")
 
   if (collapsible === "none") {
     return (
@@ -165,7 +167,10 @@ const Sidebar = React.forwardRef<
             } as React.CSSProperties
           }
           side={side}
+          closeLabel={t("close")}
         >
+          <SheetTitle className="sr-only">{t("sidebarMenu")}</SheetTitle>
+          <SheetDescription className="sr-only">{t("sidebarMenuDescription")}</SheetDescription>
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
       </Sheet>
