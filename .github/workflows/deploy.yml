@@ -229,10 +229,15 @@ jobs:
             DEPLOY_BUNDLE_CHECKSUM="${DEPLOY_TRANSFER_DIR}/deploy.bundle.sha256"
             COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env"
             READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
-            VERSION_URL="${VERSION_URL:-https://api.siragpt.com/api/version}"
+            # Same origin as READY_URL. api.siragpt.com can lag or route
+            # differently and caused false rollbacks after healthy deploys
+            # (2026-07-31: image metadata verified, health OK, version check
+            # against api.* failed and rolled back the 10k-agents release).
+            VERSION_URL="${VERSION_URL:-https://siragpt.com/api/version}"
             FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com}"
             READY_WAIT_SECONDS="${READY_WAIT_SECONDS:-180}"
             RUNNER_WAIT_SECONDS="${RUNNER_WAIT_SECONDS:-120}"
+            VERSION_WAIT_SECONDS="${VERSION_WAIT_SECONDS:-120}"
 
             dump_runner_diagnostics() {
               echo "[deploy-workflow] Runner container state"
@@ -310,9 +315,12 @@ jobs:
 
             wait_version() {
               local expected_commit="$1" expected_version="$2" deadline payload
-              deadline=$(( $(date +%s) + 60 ))
+              # Cache-bust so intermediate proxies never serve a stale probe.
+              local version_probe="${VERSION_URL}?deploy_probe=$(date +%s)"
+              deadline=$(( $(date +%s) + VERSION_WAIT_SECONDS ))
               while [[ $(date +%s) -lt "${deadline}" ]]; do
-                payload="$(curl -fsS --max-time 5 "${VERSION_URL}" || true)"
+                version_probe="${VERSION_URL}?deploy_probe=$(date +%s%N)"
+                payload="$(curl -fsS --max-time 5 -H 'Cache-Control: no-cache' "${version_probe}" || true)"
                 if [[ "${payload}" == *"\"commit\":\"${expected_commit}\""* ]] &&
                    [[ "${payload}" == *"\"version\":\"${expected_version}\""* ]]; then
                   return 0
@@ -320,6 +328,7 @@ jobs:
                 sleep 3
               done
               echo "[deploy-workflow] Version check failed: ${VERSION_URL} did not report commit=${expected_commit} version=${expected_version}"
+              echo "[deploy-workflow] Last version payload: ${payload:-<empty>}"
               return 1
             }
 

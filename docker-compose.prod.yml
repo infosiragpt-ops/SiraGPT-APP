@@ -211,6 +211,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
+      # Runtime provenance (must match deploy-time build args so /api/version
+      # can prove the live container after recreate even if image layers cache).
+      GIT_COMMIT: "${GIT_COMMIT:-unknown}"
+      SIRAGPT_VERSION: "${SIRAGPT_VERSION:-unknown}"
       RBAC_ENFORCEMENT_MODE: "${RBAC_ENFORCEMENT_MODE:-enforce}"
       RBAC_CACHE_TTL_MS: "${RBAC_CACHE_TTL_MS:-60000}"
       RBAC_MUTATION_LOCK_TIMEOUT_MS: "${RBAC_MUTATION_LOCK_TIMEOUT_MS:-500}"
