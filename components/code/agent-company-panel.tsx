@@ -96,6 +96,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
+import {
+  codexErrorCode,
+  codexErrorMessage,
+} from "@/lib/codex/codex-api"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
   buildCompanyAgentFileArtifacts,
@@ -105,6 +109,7 @@ import {
   associatedCodexProjectIdForCompany,
   shouldAcceptCompanyAssociationResponse,
 } from "@/lib/company-association-scope"
+import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import {
   companySocialApi,
   type CompanySocialOperations,
@@ -683,6 +688,7 @@ export function AgentCompanyPanel() {
   const [companyContext, setCompanyContext] = React.useState<CodexCompanyContext | null>(null)
   const [commandCenter, setCommandCenter] = React.useState<CodexEnterpriseCommandCenter | null>(null)
   const [associationState, setAssociationState] = React.useState<CodexCompanyAssociationState | null>(null)
+  const [associationError, setAssociationError] = React.useState<{ code: string; message: string } | null>(null)
   const [associationLoading, setAssociationLoading] = React.useState(false)
   const [associationWizardOpen, setAssociationWizardOpen] = React.useState(false)
   const [associationBusy, setAssociationBusy] = React.useState(false)
@@ -696,8 +702,7 @@ export function AgentCompanyPanel() {
   const proactiveMutationVersionRef = React.useRef(0)
   const companyProjectId = React.useMemo(() => {
     const value = String(activeFolder?.id || "").trim()
-    if (!value || value.startsWith("local:")) return null
-    return value.replace(/^project:/, "")
+    return codexProjectIdFromWorkspaceId(value, { assumeProject: true })
   }, [activeFolder?.id])
   const associationLoadGenerationRef = React.useRef(0)
   const associationRequestCompanyRef = React.useRef<string | null>(null)
@@ -834,11 +839,13 @@ export function AgentCompanyPanel() {
     associationRequestCompanyRef.current = requestedCompanyId
     if (companyChanged) {
       setAssociationState(null)
+      setAssociationError(null)
       setAssociationCandidateId("")
       setAssociationConnectorIds([])
     }
     if (!requestedCompanyId) {
       setAssociationState(null)
+      setAssociationError(null)
       setAssociationLoading(false)
       setActiveCodexProject(null)
       return null
@@ -854,6 +861,7 @@ export function AgentCompanyPanel() {
         state,
       })) return null
       setAssociationState(state)
+      setAssociationError(null)
       if (state.association) {
         const codexProjectId = state.association.codexProject.id
         setAssociationCandidateId(codexProjectId)
@@ -868,13 +876,22 @@ export function AgentCompanyPanel() {
         setActiveCodexProject(null)
       }
       return state
-    } catch {
+    } catch (error) {
       if (
         generation !== associationLoadGenerationRef.current
         || companyProjectIdRef.current !== requestedCompanyId
       ) return null
+      const code = codexErrorCode(error) || "company_association_unavailable"
+      const message = codexErrorMessage(
+        error,
+        code === "company_project_not_found"
+          ? "No se encontró el Project de esta empresa o ya no tienes acceso."
+          : code === "project_not_found"
+            ? "El proyecto Codex asociado ya no existe."
+            : "No se pudo comprobar la asociación persistente.",
+      )
+      setAssociationError({ code, message })
       setAssociationState(null)
-      setActiveCodexProject(null)
       return null
     } finally {
       if (
@@ -1017,7 +1034,9 @@ export function AgentCompanyPanel() {
     const current: CompanyOption | null = activeFolder
       ? (() => {
           const kind = activeFolder.id.startsWith("local:") ? "local-folder" : "project"
-          const projectId = kind === "project" ? activeFolder.id.replace(/^project:/, "") : undefined
+          const projectId = kind === "project"
+            ? codexProjectIdFromWorkspaceId(activeFolder.id, { assumeProject: true }) || undefined
+            : undefined
           const registryId = projectId ? codexIdForProject(projectId) : activeFolder.id
           return {
             id: projectId || activeFolder.id,
@@ -1122,8 +1141,8 @@ export function AgentCompanyPanel() {
           )
         }
 
-        const durableCompanyId = workspaceId.replace(/^project:/, "")
-        if (workspaceId.startsWith("local:")) {
+        const durableCompanyId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true }) || workspaceId
+        if (!codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })) {
           throw new Error("Los workspaces locales no pueden administrar una empresa persistente.")
         }
         const durableState = workspaceId === activeFolder?.id && associationState
@@ -1675,7 +1694,7 @@ export function AgentCompanyPanel() {
       }
 
       const isCurrent = option.projectId
-        ? activeFolder?.id?.replace(/^project:/, "") === option.projectId
+        ? (codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || "") === option.projectId
         : activeFolder?.id === option.id
       if (isCurrent) {
         await switchCodexWorkspace({
@@ -1716,7 +1735,8 @@ export function AgentCompanyPanel() {
       removeCodexProject(registryId)
 
       const workspaceId = option.projectId || option.id
-      const isCurrent = activeFolder?.id?.replace(/^project:/, "") === workspaceId.replace(/^project:/, "")
+      const isCurrent = (codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || activeFolder?.id)
+        === (codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true }) || workspaceId)
       const fallback = companyOptions.find((candidate) => candidate.id !== option.id)
       if (isCurrent) replaceCompanyWorkspaceUrl(fallback || null)
       forgetWorkspace(workspaceId)
@@ -2010,7 +2030,7 @@ export function AgentCompanyPanel() {
     selectedDepartmentId,
   ])
 
-  const currentProjectId = activeFolder?.id?.replace(/^project:/, "") || null
+  const currentProjectId = codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || null
   const associationOptions = associationState?.association
     ? [associationState.association.codexProject]
     : associationState?.candidates || []
@@ -2093,7 +2113,9 @@ export function AgentCompanyPanel() {
                     const optionSnapshot = buildAgentCompanySnapshot(optionSessions, {})
                     const active = optionSnapshot.activeAgents
                     const isCurrent = Boolean(
-                      currentProjectId && companyWorkspaceCandidates(option).some((candidate) => candidate.replace(/^project:/, "") === currentProjectId),
+                      currentProjectId && companyWorkspaceCandidates(option).some(
+                        (candidate) => (codexProjectIdFromWorkspaceId(candidate, { assumeProject: true }) || candidate) === currentProjectId,
+                      ),
                     )
                     return (
                       <div
@@ -2236,6 +2258,27 @@ export function AgentCompanyPanel() {
             </Button>
           ) : null}
         </header>
+
+        {associationError ? (
+          <div
+            className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+            role="alert"
+            data-testid="company-association-error"
+          >
+            <span>
+              {associationError.code}: {associationError.message}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 border-current bg-transparent text-xs"
+              onClick={() => void refreshCompanyAssociation()}
+            >
+              Reintentar
+            </Button>
+          </div>
+        ) : null}
 
         {view === "home" ? (
           <CompanyHome

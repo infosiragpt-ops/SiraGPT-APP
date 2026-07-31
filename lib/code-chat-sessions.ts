@@ -2,9 +2,9 @@
  * Parallel code-agent chat sessions per workspace (localStorage).
  */
 
-import { codexIdForProject } from "./codex-projects"
 import type { AgentState } from "./code-agent/types"
 import { defaultAgentState } from "./code-agent/types"
+import { canonicalCodexWorkspaceId } from "./codex-workspace-identity"
 
 export type CodeChatTurn = {
   id: string
@@ -60,19 +60,9 @@ const MAX_SESSIONS_PER_WORKSPACE = 12
 
 export const CODE_CHAT_SESSIONS_UPDATED_EVENT = "siragpt:code-chat-sessions-updated"
 
-// Version/variant-agnostic on purpose: legacy stores may hold ids whose
-// version nibble isn't 1-5 (e.g. UUIDv7) — any 8-4-4-4-12 hex shape is a
-// bare project id that must migrate to the canonical `project:` key.
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /** Canonical workspace id for agent sessions (matches Codex tree node ids). */
 export function codexWorkspaceSessionKey(folderId: string | null | undefined): string {
-  const raw = folderId?.trim() || ""
-  if (!raw) return "__default__"
-  if (raw.startsWith("local:") || raw.startsWith("project:")) return raw
-  if (UUID_RE.test(raw)) return codexIdForProject(raw)
-  return raw
+  return canonicalCodexWorkspaceId(folderId)
 }
 
 /** @deprecated Use codexWorkspaceSessionKey — kept for call-site compatibility. */
