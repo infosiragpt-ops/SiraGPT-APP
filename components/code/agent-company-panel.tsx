@@ -97,8 +97,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
-  codexErrorCode,
-  codexErrorMessage,
+  codexIdentityIssue,
 } from "@/lib/codex/codex-api"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
@@ -882,16 +881,7 @@ export function AgentCompanyPanel() {
         generation !== associationLoadGenerationRef.current
         || companyProjectIdRef.current !== requestedCompanyId
       ) return null
-      const code = codexErrorCode(error) || "company_association_unavailable"
-      const message = codexErrorMessage(
-        error,
-        code === "company_project_not_found"
-          ? "No se encontró el Project de esta empresa o ya no tienes acceso."
-          : code === "project_not_found"
-            ? "El proyecto Codex asociado ya no existe."
-            : "No se pudo comprobar la asociación persistente.",
-      )
-      setAssociationError({ code, message })
+      setAssociationError(codexIdentityIssue(error))
       setAssociationState(null)
       return null
     } finally {
