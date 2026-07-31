@@ -1374,16 +1374,23 @@ export function AgentCompanyPanel() {
         companyContext?.profile?.mission ? `Misión: ${companyContext.profile.mission}` : "",
         companyContext?.profile?.vision ? `Visión: ${companyContext.profile.vision}` : "",
       ].filter(Boolean).join(" ")
-      const logicalAgents = Math.min(1_000, Math.max(128, allDepartments.length * 64))
+      const logicalFromDepartments = allDepartments.reduce(
+        (sum, department) => sum + Math.max(1, Number(department.desiredAgents) || 1),
+        0,
+      )
+      const logicalAgents = Math.min(1_000, Math.max(128, logicalFromDepartments, allDepartments.length * 64))
+      // Scale parallel investigators with capacity, but keep a hard ceiling so
+      // one company cannot saturate the shared runner.
+      const maxConcurrency = Math.min(128, Math.max(32, Math.ceil(logicalAgents / 8)))
       const result = await codexApi.startSwarm(projectId, {
         objective: `${rootObjective} ${businessContext}`.trim(),
         logicalAgents,
-        maxConcurrency: 16,
+        maxConcurrency,
       })
       setCommandCenter(result.commandCenter)
       setProactiveOn(false)
       setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
-      toast.success(`${logicalAgents} agentes lógicos coordinados; 16 pueden investigar en paralelo y una sola corrida integra el código.`)
+      toast.success(`${logicalAgents} agentes lógicos coordinados; hasta ${maxConcurrency} pueden investigar en paralelo y una sola corrida integra el código.`)
     } catch (error) {
       const status = (error as { status?: number })?.status
       toast.error(

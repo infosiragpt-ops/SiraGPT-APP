@@ -9,7 +9,9 @@ const { configuredRunCap } = require('./run-service');
 const { listDepartmentPools } = require('./department-pools');
 
 const DEFAULT_PLANNER_TASKS = 8;
-const MAX_PLANNER_TASKS = 64;
+// Keep aligned with enterprise-swarm-plan MAX_LOGICAL_TASKS so "100+ agents"
+// requests are not silently truncated back to a 64-task fleet.
+const MAX_PLANNER_TASKS = 1000;
 const DEFAULT_QA_EVERY = 5;
 
 function boundedInteger(value, fallback, min, max) {
@@ -338,7 +340,7 @@ async function createFleetSwarm({
   const writerCap = Math.min(
     maxConcurrency,
     runCap,
-    boundedInteger(maxConcurrentWriters, runCap, 1, 32),
+    boundedInteger(maxConcurrentWriters, runCap, 1, 128),
   );
   const orchestrator = new CodexSwarmOrchestrator({ prisma });
   const swarm = await orchestrator.createSwarm({

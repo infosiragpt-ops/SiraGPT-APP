@@ -3,8 +3,10 @@
 const { mutateProjectBrief } = require('./project-brief-store');
 const projectBudget = require('./project-budget');
 
-const MAX_DEPARTMENT_POOL_SIZE = 64;
-const MAX_PROJECT_POOL_CAPACITY = 64;
+// Physical writer seats. Logical desiredAgents can still go higher (up to 1000),
+// but pools must support more than 100 concurrent department workers when asked.
+const MAX_DEPARTMENT_POOL_SIZE = 256;
+const MAX_PROJECT_POOL_CAPACITY = 256;
 
 function boundedSize(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);

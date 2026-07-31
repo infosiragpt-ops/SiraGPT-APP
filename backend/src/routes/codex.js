@@ -1489,7 +1489,9 @@ router.post(
         });
       }
       const logicalAgents = boundedSwarmInteger(body.logicalAgents, 128, 8, 1_000);
-      const maxConcurrency = boundedSwarmInteger(body.maxConcurrency, 16, 1, 32);
+      // Parallel investigators can scale with requested logical agents, but stay
+      // well below one-process-per-agent to protect the shared runner/VPS.
+      const maxConcurrency = boundedSwarmInteger(body.maxConcurrency, 32, 1, 128);
 
       // Stop the legacy ticker before installing the durable plan. This avoids
       // a race with the durable fleet while preserving its settings.
@@ -1500,7 +1502,10 @@ router.post(
         enabled: false,
       });
 
-      const { createFleetSwarm } = require('../services/codex/fleet-orchestrator');
+      const {
+        createFleetSwarm,
+        MAX_PLANNER_TASKS,
+      } = require('../services/codex/fleet-orchestrator');
       const fleet = await createFleetSwarm({
         prisma: codexDb,
         userId: req.user.id,
@@ -1509,7 +1514,7 @@ router.post(
         companyPlan: initial.plan,
         explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
         planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
-        logicalTasks: Math.min(logicalAgents, 64),
+        logicalTasks: Math.min(logicalAgents, MAX_PLANNER_TASKS),
         maxConcurrency,
         maxConcurrentWriters: body.maxConcurrentWriters,
         qaEvery: body.qaEvery,

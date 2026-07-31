@@ -23,7 +23,9 @@ const ACTIVE_STATUSES = ['queued', 'running', 'waiting_approval'];
 const TERMINAL_STATUSES = ['done', 'error', 'cancelled'];
 const APPROVABLE_PLAN_STATUSES = ['waiting_approval', 'done'];
 const DEFAULT_MAX_CONCURRENT_RUNS = 1;
-const MAX_CONCURRENT_RUNS_HARD_CAP = 32;
+// Hard ceiling when isolation + operator flags are attested. Logical fleets can
+// queue far more tasks; this only bounds simultaneous writer processes.
+const MAX_CONCURRENT_RUNS_HARD_CAP = 128;
 
 class RunServiceError extends Error {
   constructor(code, message, status = 400) {
