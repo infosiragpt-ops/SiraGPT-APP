@@ -95,6 +95,10 @@ import {
 } from "@/lib/projects-service"
 import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import { cn } from "@/lib/utils"
+import {
+  codexProjectIdFromWorkspaceId,
+  codexWorkspaceIdForProject,
+} from "@/lib/codex-workspace-identity"
 
 const STORAGE_EXPANDED = "code-workspace:expanded-workspaces"
 const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
@@ -320,12 +324,13 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const handleOpenInCode = React.useCallback(
     (opts: { folderId?: string; localId?: string }) => {
       if (opts.folderId) {
-        const codexId = codexIdForProject(opts.folderId)
-        const folder = folders.find((f) => f.id === opts.folderId)
+        const projectId = codexProjectIdFromWorkspaceId(opts.folderId, { assumeProject: true }) || opts.folderId
+        const codexId = codexWorkspaceIdForProject(projectId) || codexIdForProject(projectId)
+        const folder = folders.find((f) => f.id === projectId)
         try {
           window.localStorage.setItem(
             STORAGE_ACTIVE_FOLDER,
-            JSON.stringify({ id: codexId, name: folder?.name || opts.folderId }),
+            JSON.stringify({ id: codexId, name: folder?.name || projectId }),
           )
         } catch {
           /* ignore */
@@ -348,7 +353,10 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         window.dispatchEvent(new CustomEvent("siragpt:collapse-sidebar"))
       }
       const params = new URLSearchParams()
-      if (opts.folderId) params.set("folder", opts.folderId)
+      if (opts.folderId) {
+        const projectId = codexProjectIdFromWorkspaceId(opts.folderId, { assumeProject: true }) || opts.folderId
+        params.set("folder", projectId)
+      }
       if (opts.localId) params.set("local", opts.localId)
       const query = params.toString()
       const target = query ? `/code?${query}` : "/code"
@@ -794,7 +802,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const pickerSelectEntry = React.useCallback(
     (entry: CodexProjectEntry) => {
       if (entry.kind === "project") {
-        const projectId = entry.id.replace(/^project:/, "")
+        const projectId = codexProjectIdFromWorkspaceId(entry.id, { assumeProject: true }) || entry.id
         const folder = folders.find((f) => f.id === projectId)
         if (folder) {
           handleOpenWorkspace({

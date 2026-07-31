@@ -86,6 +86,10 @@ describe("code-chat-sessions", () => {
       codexWorkspaceSessionKey("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
       "project:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
     )
+    assert.equal(
+      codexWorkspaceSessionKey("cmj5q0v7x0001l2abc3def456"),
+      "project:cmj5q0v7x0001l2abc3def456",
+    )
     assert.equal(codexWorkspaceSessionKey(key), key)
     assert.equal(codexWorkspaceSessionKey("local:siragpt"), "local:siragpt")
     assert.equal(codexWorkspaceSessionKey("not-a-uuid"), "not-a-uuid")

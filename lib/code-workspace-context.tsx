@@ -67,6 +67,10 @@ import {
 } from "./code-chat-sessions"
 import type { AgentState } from "./code-agent/types"
 import { readWorkspaceCodexProject } from "./codex/codex-project-link"
+import {
+  codexProjectIdFromWorkspaceId,
+  codexWorkspaceIdForProject,
+} from "./codex-workspace-identity"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
 /** Fired (with detail {id}) when a workspace is deleted elsewhere (e.g. the app
@@ -626,11 +630,14 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   const switchCodexWorkspace = React.useCallback(
     async (target: { id: string; name: string; kind: "local-folder" | "project"; projectId?: string }) => {
       if (target.kind === "project") {
-        const projectId = target.projectId || target.id.replace(/^project:/, "")
+        const projectId = target.projectId
+          || codexProjectIdFromWorkspaceId(target.id, { assumeProject: true })
+          || target.id
+        const workspaceId = codexWorkspaceIdForProject(projectId) || `project:${projectId}`
         try {
           const project = await projectsService.get(projectId)
           setActiveFolder({
-            id: project.id,
+            id: codexWorkspaceIdForProject(project.id) || workspaceId,
             name: project.name,
             description: project.description,
             instructions: project.instructions,
@@ -641,7 +648,10 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
             kind: "project",
           })
         } catch {
-          setActiveFolder({ id: projectId, name: target.name })
+          // Keep the same canonical identity even when hydration is a 404 so
+          // the route/error surface can explain the stale Project without
+          // silently changing the chat/sidebar key.
+          setActiveFolder({ id: workspaceId, name: target.name })
         }
         setWorkspaceSource({ kind: "browser", name: target.name, linked: false })
         // Company workspaces must be activated only after the backend confirms
@@ -915,7 +925,9 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
               id: entry.id,
               name: entry.name,
               kind: entry.kind,
-              projectId: entry.kind === "project" ? entry.id.replace(/^project:/, "") : undefined,
+              projectId: entry.kind === "project"
+                ? codexProjectIdFromWorkspaceId(entry.id, { assumeProject: true }) || undefined
+                : undefined,
             })
           }
         }
