@@ -37,17 +37,21 @@ jobs:
             set -euo pipefail
             cd /opt/siragpt
 
-            # Source the prod env so $DATABASE_URL / $PRISMA_DATABASE_URL is available.
-            if [[ -f .env ]]; then
-              # shellcheck disable=SC1091
-              set -a; . .env; set +a
-            elif [[ -f backend/.env ]]; then
-              # shellcheck disable=SC1091
-              set -a; . backend/.env; set +a
+            # Read the already-resolved runtime value without executing .env as shell.
+            # Production env files may contain application values that are not valid
+            # Bash assignments, and sourcing them can abort before pg_dump starts.
+            BACKEND_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=backend' --format '{{.Names}}' | head -n 1 || true)"
+            if [[ -z "${BACKEND_CONTAINER}" ]]; then
+              BACKEND_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])backend([-_]|$)' | head -n 1 || true)"
             fi
-            export DATABASE_URL="${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"
-            if [[ -z "${DATABASE_URL:-}" && -n "${POSTGRES_PASSWORD:-}" ]]; then
-              export DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB:-siragpt}"
+            if [[ -z "${BACKEND_CONTAINER}" ]]; then
+              echo "::error::No running backend container was found; refusing to guess database credentials." >&2
+              exit 1
+            fi
+            DATABASE_URL="$(docker exec "${BACKEND_CONTAINER}" sh -lc 'printf "%s" "${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"')"
+            if [[ -z "${DATABASE_URL:-}" ]]; then
+              echo "::error::The running backend has no DATABASE_URL/PRISMA_DATABASE_URL." >&2
+              exit 1
             fi
             DATABASE_URL="${DATABASE_URL//@db:5432/@127.0.0.1:5432}"
             export DATABASE_URL
