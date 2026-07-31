@@ -176,3 +176,24 @@ test('failed writers are requeued with prior-attempt context until maxAttempts',
   assert.equal(update.data.result.retrying, true);
   assert.match(update.data.result.error, /merge_conflict/);
 });
+
+test('assignDepartmentPools tolerates tasks whose department has no pool row', () => {
+  const { assignDepartmentPools } = require('../src/services/codex/fleet-orchestrator');
+  // A fresh project has ZERO department pools. This exact shape crashed with
+  // "Cannot read properties of undefined (reading 'id')" and killed every
+  // fleet launch from the swarm route (observed live on production).
+  const tasks = [
+    { key: 't1', role: 'writer', input: { departmentId: 'engineering' } },
+    { key: 't2', role: 'research', input: { departmentId: 'marketing' } },
+  ];
+  const out = assignDepartmentPools(tasks, []);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].input.departmentPoolId, undefined);
+  // Mixed case: one department has a pool, the other does not.
+  const pooled = assignDepartmentPools(tasks, [
+    { id: 'poolE', departmentId: 'engineering', enabled: true, dailyBudgetUsd: 4 },
+  ]);
+  assert.equal(pooled[0].input.departmentPoolId, 'poolE');
+  assert.equal(pooled[0].input.poolBudgetReservationUsd, 4);
+  assert.equal(pooled[1].input.departmentPoolId, undefined);
+});

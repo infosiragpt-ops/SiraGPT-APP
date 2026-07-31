@@ -345,7 +345,11 @@ function assignDepartmentPools(tasks, pools) {
   for (const task of tasks) {
     const departmentId = poolDepartmentId(String(task?.input?.departmentId || ''));
     const pool = byDepartment.get(departmentId);
-    if (pool?.enabled !== false) counts.set(pool.id, (counts.get(pool.id) || 0) + 1);
+    // `pool?.enabled !== false` passed for MISSING pools too (undefined !==
+    // false) and then crashed on pool.id — which killed every fleet launch on
+    // a project that had never opened a department. No pool → no reservation
+    // to count; the mapper below already passes those tasks through unchanged.
+    if (pool && pool.enabled !== false) counts.set(pool.id, (counts.get(pool.id) || 0) + 1);
   }
   return tasks.map((task) => {
     const input = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
