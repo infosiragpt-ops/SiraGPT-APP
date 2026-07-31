@@ -35,10 +35,12 @@ const {
 } = require('../utils/proxy-headers');
 const {
   applyPreviewFrameHeaders,
+  applyPreviewCorsHeaders,
   attachCodeRunnerPreviewWebSocketProxy,
   buildPreviewConsoleBridge,
   filterPreviewResponseHeaders,
   previewNonceFromRequest,
+  readPreviewBody,
   stripPreviewNonce,
 } = require('../services/code/preview-proxy');
 
@@ -454,13 +456,7 @@ function proxyApp(req, res) {
         delete headers['content-encoding'];
       }
 
-      const reqOrigin = req.headers.origin;
-      if (reqOrigin) {
-        headers['access-control-allow-origin'] = reqOrigin;
-        headers.vary = headers.vary ? `${headers.vary}, Origin` : 'Origin';
-      } else {
-        headers['access-control-allow-origin'] = '*';
-      }
+      applyPreviewCorsHeaders(headers, req.headers.origin);
       headers['referrer-policy'] = 'no-referrer';
       if (injectSelector) {
         if (req.method === 'HEAD') {
@@ -468,18 +464,17 @@ function proxyApp(req, res) {
           up.resume();
           return res.end();
         }
-        const chunks = [];
-        up.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        up.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
-          const injected = injectPreviewSelector(body, nonce);
+        readPreviewBody(up).then((body) => {
+          const injected = injectPreviewSelector(body.toString('utf8'), nonce);
           headers['content-length'] = String(Buffer.byteLength(injected));
           res.writeHead(up.statusCode || 502, headers);
           res.end(injected);
-        });
-        up.on('error', () => {
+        }).catch((err) => {
+          upstream.destroy();
           if (!res.headersSent) {
-            res.status(502).json({ error: 'runner_stream_failed', message: 'El dev server interrumpió la respuesta.' });
+            const status = err?.code === 'preview_html_too_large' ? 413 : 502;
+            const error = err?.code === 'preview_html_too_large' ? 'preview_html_too_large' : 'runner_stream_failed';
+            res.status(status).json({ error, message: status === 413 ? 'Preview HTML exceeds the injection limit.' : 'El dev server interrumpió la respuesta.' });
           } else {
             try { res.end(); } catch (_) { /* already closed */ }
           }

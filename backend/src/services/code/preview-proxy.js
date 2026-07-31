@@ -9,10 +9,21 @@ const {
 } = require('../codex/preview-websocket-proxy');
 const { redactPreviewUrl } = require('../../utils/preview-url-redaction');
 
-const DEFAULT_PREVIEW_TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
-const MAX_PREVIEW_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+// Preview URLs are bearer credentials; keep the browser window short-lived and
+// require a fresh start/reuse decision instead of carrying a six-hour token.
+const DEFAULT_PREVIEW_TOKEN_TTL_MS = 15 * 60 * 1000;
+const MAX_PREVIEW_TOKEN_TTL_MS = 60 * 60 * 1000;
+const MIN_PREVIEW_TOKEN_SECRET_BYTES = 32;
+const MAX_PREVIEW_HTML_BYTES = 2 * 1024 * 1024;
 const PREVIEW_NONCE_PARAM = '__sgpt_preview_nonce';
 const PREVIEW_TOKEN_SECRET_KEYS = ['CODE_RUNNER_PREVIEW_TOKEN_SECRET', 'CODEX_PREVIEW_TOKEN_SECRET'];
+const PREVIEW_PARENT_ORIGIN_KEYS = ['CORS_ORIGINS', 'FRONTEND_URL', 'PUBLIC_FRONTEND_URL', 'NEXT_PUBLIC_URL'];
+const DEV_PARENT_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+];
 
 function isProduction(env = process.env) {
   return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
@@ -27,7 +38,9 @@ function previewTokenTtlMs(env = process.env) {
 function previewTokenSecret(env = process.env) {
   for (const key of PREVIEW_TOKEN_SECRET_KEYS) {
     const value = String(env[key] || '').trim();
-    if (value) return value;
+    if (!value) continue;
+    if (isProduction(env) && Buffer.byteLength(value, 'utf8') < MIN_PREVIEW_TOKEN_SECRET_BYTES) return null;
+    return value;
   }
   // A production process must never silently fall back to a shared/dev secret.
   if (isProduction(env)) return null;
@@ -65,9 +78,10 @@ function verifyPreviewToken(token, env = process.env) {
     if (!claims || typeof claims !== 'object' || Array.isArray(claims)) return null;
     const exp = Number(claims.exp);
     if (!Number.isFinite(exp) || exp <= Date.now()) return null;
-    const iat = claims.iat == null ? null : Number(claims.iat);
-    if (iat != null && (!Number.isFinite(iat) || iat > Date.now() + 30_000 || exp <= iat)) return null;
-    if (exp - Date.now() > previewTokenTtlMs(env) + 30_000) return null;
+    const iat = Number(claims.iat);
+    const now = Date.now();
+    if (!Number.isFinite(iat) || iat > now + 30_000 || exp <= iat) return null;
+    if (exp - now > previewTokenTtlMs(env)) return null;
     return claims;
   } catch {
     return null;
@@ -95,14 +109,52 @@ function siblingPreviewOrigin(env = process.env) {
   }
 }
 
+function normalizeOrigin(raw) {
+  try {
+    const url = new URL(String(raw || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function configuredOrigins(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && entry !== '*')
+    .map(normalizeOrigin)
+    .filter(Boolean);
+}
+
+// CODEX_PREVIEW_ORIGIN is the child origin (the Vite/Caddy host), never a
+// frame ancestor. Parents come from the already-approved frontend/CORS
+// configuration, so CSP and WebSocket checks share the same explicit policy.
+function previewParentOrigins(env = process.env) {
+  const configured = PREVIEW_PARENT_ORIGIN_KEYS.flatMap((key) => configuredOrigins(env[key]));
+  return [...new Set(configured)];
+}
+
+function previewAllowedOrigins(env = process.env) {
+  const child = siblingPreviewOrigin(env);
+  const parents = previewParentOrigins(env);
+  const devFallback = parents.length || isProduction(env) ? [] : DEV_PARENT_ORIGINS;
+  return new Set([...parents, ...devFallback, ...(child ? [child] : [])]);
+}
+
+function previewOriginAllowed(origin, env = process.env) {
+  const normalized = normalizeOrigin(origin);
+  return Boolean(normalized && previewAllowedOrigins(env).has(normalized));
+}
+
 function previewFrameAncestors(env = process.env) {
-  const sibling = siblingPreviewOrigin(env);
-  return sibling ? `'self' ${sibling}` : "'self'";
+  const parents = previewParentOrigins(env);
+  return parents.length ? `'self' ${parents.join(' ')}` : "'self'";
 }
 
 function applyPreviewFrameHeaders(res, env = process.env) {
-  const sibling = siblingPreviewOrigin(env);
-  if (sibling) res.removeHeader('X-Frame-Options');
+  if (previewParentOrigins(env).length) res.removeHeader('X-Frame-Options');
   else res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Content-Security-Policy', `frame-ancestors ${previewFrameAncestors(env)}`);
 }
@@ -115,6 +167,52 @@ function previewNonceFromRequest(request) {
   } catch {
     return '';
   }
+}
+
+function applyPreviewCorsHeaders(headers, origin, env = process.env) {
+  const value = String(origin || '').trim();
+  if (!value) return headers;
+  if (value === 'null') {
+    headers['access-control-allow-origin'] = '*';
+    return headers;
+  }
+  const normalized = normalizeOrigin(value);
+  if (!normalized || !previewAllowedOrigins(env).has(normalized)) return headers;
+  headers['access-control-allow-origin'] = normalized;
+  headers.vary = headers.vary ? `${headers.vary}, Origin` : 'Origin';
+  return headers;
+}
+
+function readPreviewBody(stream, maxBytes = MAX_PREVIEW_HTML_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    stream.on('data', (chunk) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.length;
+      if (total > maxBytes) {
+        const error = new Error('preview_html_too_large');
+        error.code = 'preview_html_too_large';
+        try { stream.destroy(); } catch (_) {}
+        fail(error);
+        return;
+      }
+      chunks.push(buffer);
+    });
+    stream.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks, total));
+    });
+    stream.on('error', fail);
+  });
 }
 
 function stripPreviewNonce(rawUrl) {
@@ -160,8 +258,7 @@ function filterPreviewResponseHeaders(headers, env = process.env) {
     out[key] = value;
   }
   out['cache-control'] = 'no-store';
-  const sibling = siblingPreviewOrigin(env);
-  if (!sibling) out['x-frame-options'] = 'SAMEORIGIN';
+  if (!previewParentOrigins(env).length) out['x-frame-options'] = 'SAMEORIGIN';
   out['content-security-policy'] = `frame-ancestors ${previewFrameAncestors(env)}`;
   out['referrer-policy'] = 'no-referrer';
   return out;
@@ -175,6 +272,7 @@ function attachCodeRunnerPreviewWebSocketProxy(server, { resolveTarget, WebSocke
     const path = String(request?.url || '').split('?')[0];
     if (!/^\/api\/code-runner\/[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+\/app(?:\/|$)/.test(path)) return;
     socket.on('error', () => {});
+    if (!previewOriginAllowed(request.headers?.origin)) return rejectUpgrade(socket, 403);
     Promise.resolve(resolveTarget(request))
       .then((target) => {
         if (!target?.url || socket.destroyed) return rejectUpgrade(socket, target?.statusCode || 403);
@@ -196,18 +294,24 @@ function attachCodeRunnerPreviewWebSocketProxy(server, { resolveTarget, WebSocke
 module.exports = {
   DEFAULT_PREVIEW_TOKEN_TTL_MS,
   MAX_PREVIEW_TOKEN_TTL_MS,
+  MAX_PREVIEW_HTML_BYTES,
+  MIN_PREVIEW_TOKEN_SECRET_BYTES,
   PREVIEW_NONCE_PARAM,
   applyPreviewFrameHeaders,
+  applyPreviewCorsHeaders,
   attachCodeRunnerPreviewWebSocketProxy,
   buildPreviewConsoleBridge,
   filterPreviewResponseHeaders,
   injectPreviewConsoleBridge,
   previewFrameAncestors,
+  previewOriginAllowed,
+  previewParentOrigins,
   previewNonceFromRequest,
   previewTokenFor,
   previewTokenSecret,
   previewTokenTtlMs,
   redactPreviewUrl,
+  readPreviewBody,
   siblingPreviewOrigin,
   signPreviewToken,
   stripPreviewNonce,
