@@ -1,6 +1,5 @@
 import {
   codexProjectIdFromWorkspaceId,
-  codexWorkspaceIdForProject,
   directCodexProjectIdFromWorkspaceId,
 } from "./codex-workspace-identity"
 
@@ -17,21 +16,8 @@ type DirectCodexWorkspace = {
 }
 
 export type CodeWorkspaceFolderResolution =
-  | {
-      kind: "project"
-      workspaceId: string
-      project: ProjectWorkspace
-    }
-  | {
-      kind: "codex-project"
-      workspaceId: string
-      project: DirectCodexWorkspace
-    }
-
-type CodeWorkspaceFolderLoaders = {
-  getProject: (id: string) => Promise<ProjectWorkspace>
-  getCodexProject: (id: string) => Promise<DirectCodexWorkspace>
-}
+  | readonly [false, ProjectWorkspace]
+  | readonly [true, DirectCodexWorkspace]
 
 /**
  * Resolves the historically ambiguous `?folder=<cuid>` route. Project remains
@@ -41,37 +27,25 @@ type CodeWorkspaceFolderLoaders = {
  */
 export async function resolveCodeWorkspaceFolder(
   folderId: string,
-  loaders: CodeWorkspaceFolderLoaders,
+  getProject: (id: string) => Promise<ProjectWorkspace>,
+  getCodexProject: (id: string) => Promise<DirectCodexWorkspace>,
 ): Promise<CodeWorkspaceFolderResolution> {
   const directCodexProjectId = directCodexProjectIdFromWorkspaceId(folderId)
   const projectId = codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
   if (!directCodexProjectId) {
     try {
-      const project = await loaders.getProject(projectId)
-      return {
-        kind: "project",
-        workspaceId: codexWorkspaceIdForProject(project.id) || `project:${project.id}`,
-        project,
-      }
+      return [false, await getProject(projectId)]
     } catch (error) {
       const candidate = error as {
         code?: unknown
         status?: unknown
-        body?: { code?: unknown; error?: unknown }
       } | null
       if (
         candidate?.status !== 404
         && candidate?.code !== "project_not_found"
-        && candidate?.body?.code !== "project_not_found"
-        && candidate?.body?.error !== "project_not_found"
       ) throw error
     }
   }
 
-  const project = await loaders.getCodexProject(directCodexProjectId || projectId)
-  return {
-    kind: "codex-project",
-    workspaceId: `codex:${project.id}`,
-    project,
-  }
+  return [true, await getCodexProject(directCodexProjectId || projectId)]
 }
