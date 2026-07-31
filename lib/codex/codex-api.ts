@@ -943,13 +943,15 @@ export const codexApi = {
       objective: string
       logicalAgents?: number
       maxConcurrency?: number
+      maxConcurrentWriters?: number
       model?: string
       tier?: string
     },
   ) =>
     req<{ swarm: CodexSwarmSummary; commandCenter: CodexEnterpriseCommandCenter }>(
       `/projects/${id}/swarms`,
-      { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000 },
+      // Large logical fleets (up to 10k tasks) can take >60s to plan + persist.
+      { method: "POST", body: JSON.stringify(body), timeoutMs: 180_000 },
     ),
   pauseSwarm: (projectId: string, swarmId: string) =>
     req<{ swarm: CodexSwarmSummary }>(

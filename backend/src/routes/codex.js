@@ -1286,6 +1286,32 @@ function boundedSwarmInteger(value, fallback, min, max) {
     : fallback;
 }
 
+/** Effective swarm research concurrency. Writers stay capped by run isolation. */
+function swarmConcurrencyDefaults(env = process.env) {
+  const hardMax = boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_CONCURRENCY_HARD, 256, 32, 256);
+  const defaultConcurrency = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_CONCURRENCY_DEFAULT,
+    128,
+    1,
+    hardMax,
+  );
+  const defaultWriters = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_WRITERS_DEFAULT,
+    4,
+    1,
+    Math.min(32, hardMax),
+  );
+  // Logical agent capacity (10k) — research shards + writers + QA, not 10k concurrent LLMs.
+  const hardLogical = boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_LOGICAL_HARD, 10_000, 1_000, 10_000);
+  const defaultLogical = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_LOGICAL_DEFAULT,
+    256,
+    8,
+    hardLogical,
+  );
+  return { hardMax, defaultConcurrency, defaultWriters, hardLogical, defaultLogical };
+}
+
 async function loadOwnedSwarm(req, res) {
   const swarm = await codexDb.codexSwarm.findFirst({
     where: {
@@ -1488,8 +1514,25 @@ router.post(
           message: 'Define un objetivo verificable para CEO Office.',
         });
       }
-      const logicalAgents = boundedSwarmInteger(body.logicalAgents, 128, 8, 1_000);
-      const maxConcurrency = boundedSwarmInteger(body.maxConcurrency, 16, 1, 32);
+      const concurrencyDefaults = swarmConcurrencyDefaults(process.env);
+      const logicalAgents = boundedSwarmInteger(
+        body.logicalAgents,
+        concurrencyDefaults.defaultLogical,
+        8,
+        concurrencyDefaults.hardLogical,
+      );
+      const maxConcurrency = boundedSwarmInteger(
+        body.maxConcurrency,
+        concurrencyDefaults.defaultConcurrency,
+        1,
+        concurrencyDefaults.hardMax,
+      );
+      const maxConcurrentWriters = boundedSwarmInteger(
+        body.maxConcurrentWriters,
+        concurrencyDefaults.defaultWriters,
+        1,
+        Math.min(32, maxConcurrency),
+      );
 
       // Stop the legacy ticker before installing the durable plan. This avoids
       // a race with the durable fleet while preserving its settings.
@@ -1509,9 +1552,11 @@ router.post(
         companyPlan: initial.plan,
         explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
         planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
-        logicalTasks: Math.min(logicalAgents, 64),
+        // Full logical capacity (up to 10k). Research shards run in parallel;
+        // writers remain isolation-capped via maxConcurrentWriters / runCap.
+        logicalTasks: logicalAgents,
         maxConcurrency,
-        maxConcurrentWriters: body.maxConcurrentWriters,
+        maxConcurrentWriters,
         qaEvery: body.qaEvery,
         model: body.model ? String(body.model).slice(0, 120) : null,
         tier: body.tier ? String(body.tier).slice(0, 80) : null,

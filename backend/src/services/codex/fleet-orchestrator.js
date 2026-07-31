@@ -8,8 +8,9 @@ const { buildEnterpriseSwarmTasks } = require('./enterprise-swarm-plan');
 const { configuredRunCap } = require('./run-service');
 const { listDepartmentPools } = require('./department-pools');
 
-const DEFAULT_PLANNER_TASKS = 8;
-const MAX_PLANNER_TASKS = 64;
+const DEFAULT_PLANNER_TASKS = 64;
+// Matches swarm-orchestrator / enterprise-swarm-plan logical capacity (10k).
+const MAX_PLANNER_TASKS = 10_000;
 const DEFAULT_QA_EVERY = 5;
 
 function boundedInteger(value, fallback, min, max) {
@@ -197,6 +198,66 @@ function fallbackFleetTasks({ companyPlan, objective, logicalTasks }) {
   });
 }
 
+/**
+ * When the LLM planner returns a small DAG but the CEO Office requested
+ * hundreds/thousands of logical agents, pad with independent read-only
+ * research shards so activation of 100–10_000 agents is real, not cosmetic.
+ * Writers / integrators stay untouched; shards never write the workspace.
+ */
+function padFleetToLogicalCapacity(tasks, { objective, targetCount } = {}) {
+  const current = Array.isArray(tasks) ? tasks.slice() : [];
+  const target = boundedInteger(targetCount, current.length, 1, MAX_PLANNER_TASKS);
+  if (current.length >= target) return current;
+
+  const used = new Set(current.map((task) => task.key));
+  const normalizedObjective = String(objective || '').trim().slice(0, 4_000)
+    || 'Cumplir el objetivo de la empresa de agentes.';
+  let shard = 0;
+  while (current.length < target) {
+    shard += 1;
+    let key = `parallel-audit-${String(shard).padStart(4, '0')}`;
+    while (used.has(key)) {
+      shard += 1;
+      key = `parallel-audit-${String(shard).padStart(4, '0')}`;
+    }
+    used.add(key);
+    const perspective = [
+      'arquitectura y límites de módulos',
+      'correctitud funcional y casos borde',
+      'experiencia de usuario y accesibilidad',
+      'rendimiento de frontend y backend',
+      'seguridad, permisos y secretos',
+      'datos, migraciones e integridad',
+      'observabilidad y recuperación de errores',
+      'pruebas, fixtures y regresiones',
+      'API, contratos e integraciones',
+      'producto, conversión y propuesta de valor',
+    ][(shard - 1) % 10];
+    current.push({
+      key,
+      title: `Auditoría paralela: ${perspective}`,
+      role: TASK_ROLES.READ_ONLY,
+      stage: 'map',
+      priority: 20,
+      dependsOn: [],
+      maxAttempts: 2,
+      input: {
+        agent: 'explorer',
+        departmentId: 'product-engineering',
+        objective: normalizedObjective,
+        perspective,
+        instruction: [
+          `Analiza el workspace de forma independiente desde la perspectiva de ${perspective}.`,
+          `Objetivo global: ${normalizedObjective}`,
+          'Devuelve hallazgos priorizados, rutas o fuentes concretas, riesgos y recomendaciones. No modifiques archivos.',
+        ].join('\n'),
+        acceptance: ['Hallazgos con evidencia', 'Sin modificar archivos'],
+      },
+    });
+  }
+  return current;
+}
+
 async function planFleetTasks({
   objective,
   companyPlan,
@@ -255,6 +316,15 @@ async function planFleetTasks({
       logicalTasks: Math.max(maxTasks, 8),
     });
     source = 'fallback';
+  }
+  // Scale logical agents honestly: planner DAGs are small; pad research capacity
+  // so "activar 100 / 10_000 agentes" actually queues that many tasks.
+  if (source !== 'fallback' && normalized.length < maxTasks) {
+    normalized = padFleetToLogicalCapacity(normalized, {
+      objective,
+      targetCount: maxTasks,
+    });
+    source = source === 'planner' ? 'planner+scale' : source;
   }
   return {
     tasks: addQaCheckpoints(normalized, { every: qaEvery }),
@@ -316,7 +386,7 @@ async function createFleetSwarm({
   planner = null,
   enqueue,
   logicalTasks = DEFAULT_PLANNER_TASKS,
-  maxConcurrency = 16,
+  maxConcurrency = 64,
   maxConcurrentWriters = null,
   qaEvery = DEFAULT_QA_EVERY,
   model = null,
@@ -377,6 +447,7 @@ module.exports = {
   DEFAULT_PLANNER_TASKS,
   DEFAULT_QA_EVERY,
   MAX_PLANNER_TASKS,
+  padFleetToLogicalCapacity,
   addQaCheckpoints,
   assignDepartmentPools,
   createFleetSwarm,

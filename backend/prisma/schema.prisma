@@ -3083,8 +3083,8 @@ model CodexProactiveLease {
 }
 
 // Durable control plane for large coding swarms. A swarm may contain up to
-// 1,000 logical tasks while maxConcurrency and maxConcurrentWriters keep the
-// effective execution fan-out bounded.
+// 10,000 logical tasks while maxConcurrency and maxConcurrentWriters keep the
+// effective execution fan-out bounded (research up to 256; writers isolation-capped).
 model CodexSwarm {
   id                   String    @id @default(cuid())
   userId               String
@@ -3092,8 +3092,8 @@ model CodexSwarm {
   name                 String
   strategy             String    @default("dag") // dag | map_reduce
   status               String    @default("queued") // queued | running | paused | cancelling | completed | completed_with_errors | failed | cancelled
-  taskLimit            Int       @default(1000)
-  maxConcurrency       Int       @default(16)
+  taskLimit            Int       @default(10000)
+  maxConcurrency       Int       @default(64)
   maxConcurrentWriters Int       @default(4)
   metadata             Json?
   cancellationReason   String?   @db.Text
