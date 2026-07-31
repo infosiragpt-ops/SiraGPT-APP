@@ -143,7 +143,7 @@ import {
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
-import { codexApi, codexErrorCode, codexErrorMessage } from "@/lib/codex/codex-api"
+import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
 import { runWhenCodexProjectIdle } from "@/lib/codex/run-slot"
 import {
   clearSessionCodexProject,
@@ -1171,19 +1171,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       })
       .catch((error) => {
         if (!cancelled) {
-          const code = codexErrorCode(error) || "company_association_unavailable"
           setDurableCompanyCodexProjectId(null)
-          setIdentityIssue({
-            code,
-            message: codexErrorMessage(
-              error,
-              code === "company_project_not_found"
-                ? "No se encontró el Project de esta empresa o ya no tienes acceso."
-                : code === "project_not_found"
-                  ? "El proyecto Codex asociado ya no existe."
-                  : "No se pudo comprobar la asociación persistente.",
-            ),
-          })
+          setIdentityIssue(codexIdentityIssue(error))
           // Keep the current Codex identity visible until the user can act on
           // the association error; do not turn a 404 into a silent clear.
           setCompanyAssociationResolved(false)
@@ -3521,6 +3510,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
         finish(narrative || "_(el agente no devolvió cambios)_", { voiceText: executiveVoice })
       } catch (err: any) {
+        const errorCode = codexErrorCode(err)
         const aborted =
           cancelledTurn() ||
           err?.name === "AbortError" ||
@@ -3532,14 +3522,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               generate: { status: "done", detail: "Detenida" },
             }),
           })
-        } else if (codexErrorCode(err) === "company_project_not_found" || codexErrorCode(err) === "project_not_found") {
-          const code = codexErrorCode(err) || "project_not_found"
-          const message = codexErrorMessage(
-            err,
-            code === "company_project_not_found"
-              ? "No se encontró el Project de esta empresa o ya no tienes acceso."
-              : "El proyecto Codex asociado ya no existe.",
-          )
+        } else if (errorCode === "company_project_not_found" || errorCode === "project_not_found") {
+          const { code, message } = codexIdentityIssue(err, "project_not_found")
           setIdentityIssue({ code, message })
           // A missing association/project is an actionable identity problem,
           // not a code-generation failure. Keep the active mapping intact so
@@ -3551,7 +3535,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }),
           })
           toast.error(`${code}: ${message}`)
-        } else if (codexErrorCode(err) === "company_association_required") {
+        } else if (errorCode === "company_association_required") {
           const code = "company_association_required"
           const message = "Confirma qué entorno Codex pertenece a esta empresa antes de ejecutar agentes."
           setIdentityIssue({ code, message })

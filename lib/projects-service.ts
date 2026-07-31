@@ -133,26 +133,10 @@ export interface ProjectFilters {
 const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const baseUrl = `${apiRoot}/projects`
 
-export class ProjectsServiceError extends Error {
-  readonly status: number
-  readonly code: string | null
-
-  constructor(message: string, status: number, code: string | null = null) {
-    super(message)
-    this.name = "ProjectsServiceError"
-    this.status = status
-    this.code = code
-  }
-}
-
 export function projectsServiceErrorCode(error: unknown): string | null {
-  const candidate = error as { code?: unknown; status?: unknown; message?: unknown } | null
+  const candidate = error as { code?: unknown; status?: unknown } | null
   if (candidate?.status === 404) return "project_not_found"
-  if (error instanceof ProjectsServiceError && error.code) return error.code
   if (typeof candidate?.code === "string" && candidate.code.trim()) return candidate.code.trim()
-  if (/\b404\b|not found|no encontrado/i.test(String(candidate?.message || ""))) {
-    return "project_not_found"
-  }
   return null
 }
 
@@ -172,19 +156,14 @@ async function handle<T>(res: Response): Promise<T> {
       const body = await res.json()
       message = body.error || body.message || message
       const rawCode = typeof body.code === "string" ? body.code : typeof body.error === "string" ? body.error : null
-      code = res.status === 404
-        ? "project_not_found"
-        : rawCode && /^[a-z0-9_]+$/i.test(rawCode)
-          ? rawCode
-          : null
+      code = rawCode && /^[a-z0-9_]+$/i.test(rawCode) ? rawCode : null
     } catch {
       // response body wasn't JSON — use the status line
     }
-    throw new ProjectsServiceError(
-      message,
-      res.status,
-      code || (res.status === 404 ? "project_not_found" : null),
-    )
+    throw Object.assign(new Error(message), {
+      status: res.status,
+      code: res.status === 404 ? "project_not_found" : code,
+    })
   }
   return res.json() as Promise<T>
 }
