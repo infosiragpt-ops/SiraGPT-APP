@@ -3664,10 +3664,10 @@ const getNavbarModelSelectorChatSignature = (chat: any) => [
 // Extra→high (extended+reflection) and Max→max (self-consistency ×3), so the
 // slider never offers a level the compute planner would ignore.
 const EFFORT_LEVELS = [
-  { value: "Bajo", caption: "Respuesta directa, sin razonamiento extendido. La más rápida." },
-  { value: "Medio", caption: "Razonamiento equilibrado. Ideal para el día a día." },
-  { value: "Extra", caption: "Razonamiento profundo con reflexión. Más lento." },
-  { value: "Max", caption: "Profundidad máxima de razonamiento. El mayor costo y el más lento." },
+  { value: "Bajo", caption: "Rápido y directo. Menos profundidad." },
+  { value: "Medio", caption: "Equilibrado. Ideal para el día a día." },
+  { value: "Extra", caption: "Más profundidad y reflexión. Más lento." },
+  { value: "Max", caption: "Máxima profundidad. Mayor costo y latencia." },
 ] as const
 
 function EffortSection({ selectedEffort, setSelectedEffort }: {
@@ -3756,8 +3756,8 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
         ))}
       </div>
       <div className="effort-ends" aria-hidden>
-        <span>Low</span>
-        <span>Max</span>
+        <span>Bajo</span>
+        <span>Máx</span>
       </div>
       <p className="effort-caption">{active.caption}</p>
     </div>
