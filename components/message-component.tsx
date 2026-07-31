@@ -508,7 +508,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
                         }}
                         aria-label={tMessageActions("downloadChart")}
                         className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
-                        title="Download Chart"
+                        title={tMessageActions("downloadChart")}
                     >
                         <Download className="h-4 w-4" />
                     </Button>
@@ -3138,7 +3138,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                 toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`)
                                             })
                                     }}
-                                    title={isCopied ? "Copiado" : "Copiar"}
+                                    title={isCopied ? tMessageActions("copied") : tMessageActions("copy")}
                                 >
                                     {isCopied
                                         ? <Check size={14} strokeWidth={2.5} className="text-emerald-500 animate-in zoom-in-50 duration-200" />
@@ -3150,7 +3150,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     className="h-6 w-6"
                                     aria-label={tCommon("edit")}
                                     onClick={() => setIsEditing(true)}
-                                    title="Editar"
+                                    title={tCommon("edit")}
                                 >
                                     <Pencil size={14} />
                                 </Button>
