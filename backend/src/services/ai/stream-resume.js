@@ -150,16 +150,20 @@ function _memorySet(streamId, record, ttlSeconds) {
   }
 }
 
-async function _redisGet(streamId) {
+async function _redisLookup(streamId) {
   const redis = _getRedis();
-  if (!redis) return null;
+  if (!redis) return { record: null, storeError: false };
   try {
     const raw = await redis.get(`${KEY_PREFIX}${streamId}`);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    if (!raw) return { record: null, storeError: false };
+    return { record: JSON.parse(raw), storeError: false };
   } catch {
-    return null;
+    return { record: null, storeError: true };
   }
+}
+
+async function _redisGet(streamId) {
+  return (await _redisLookup(streamId)).record;
 }
 
 async function _redisSet(streamId, record, ttlSeconds) {
@@ -225,10 +229,10 @@ function generateStreamId() {
  */
 async function open({ streamId = null, ttlSeconds = DEFAULT_TTL_SECONDS } = {}) {
   if (streamId) {
-    const fromRedis = await _redisGet(streamId);
-    if (fromRedis) return { streamId, record: fromRedis, isResume: true };
     const fromMem = _memoryGet(streamId);
     if (fromMem) return { streamId, record: fromMem, isResume: true };
+    const fromRedis = await _redisGet(streamId);
+    if (fromRedis) return { streamId, record: fromRedis, isResume: true };
   }
   const id = streamId || generateStreamId();
   const record = { chunks: [], complete: false, error: null, ttlSeconds };
@@ -236,6 +240,29 @@ async function open({ streamId = null, ttlSeconds = DEFAULT_TTL_SECONDS } = {}) 
   _memorySet(id, record, ttlSeconds);
   await _redisSet(id, record, ttlSeconds);
   return { streamId: id, record, isResume: false };
+}
+
+/**
+ * Look up an existing session without creating one.
+ *
+ * Memory is checked first because the active owner updates it synchronously
+ * before its best-effort Redis write settles. A Redis read is only a fallback
+ * for another process; its failure is surfaced to explicit resume callers so
+ * they cannot accidentally fall through into a new generation.
+ *
+ * @returns {Promise<{streamId, record: object|null, found: boolean, storeError: boolean}>}
+ */
+async function openExisting({ streamId } = {}) {
+  if (!streamId) return { streamId: null, record: null, found: false, storeError: false, isResume: true };
+  const fromMem = _memoryGet(streamId);
+  if (fromMem) {
+    return { streamId, record: fromMem, found: true, storeError: false, isResume: true };
+  }
+  const fromRedis = await _redisLookup(streamId);
+  if (fromRedis.record) {
+    return { streamId, record: fromRedis.record, found: true, storeError: false, isResume: true };
+  }
+  return { streamId, record: null, found: false, storeError: fromRedis.storeError, isResume: true };
 }
 
 /**
@@ -322,6 +349,7 @@ async function load(streamId) {
 
 module.exports = {
   open,
+  openExisting,
   append,
   complete,
   fail,

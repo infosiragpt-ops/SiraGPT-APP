@@ -2272,8 +2272,19 @@ router.post(
               message: 'This stream cursor does not belong to the current user and chat.',
             });
           }
-          resumeSession = await streamResume.open({ streamId: parsed.streamId });
-          resumeReplayPosition = Math.min(parsed.position, resumeSession.record.chunks.length);
+          const existingResume = await streamResume.openExisting({ streamId: parsed.streamId });
+          if (!existingResume.found || !existingResume.record) {
+            return res.status(existingResume.storeError ? 503 : 410).json({
+              error: existingResume.storeError
+                ? 'stream_resume_unavailable'
+                : 'stream_resume_expired',
+            });
+          }
+          resumeSession = existingResume;
+          // Keep the client-requested high-water mark. It may be ahead of the
+          // durable snapshot while an active owner's append is waiting on
+          // Redis; activeResume.frames below fills that exact gap.
+          resumeReplayPosition = parsed.position;
         } else {
           const rawStreamId = streamResume.generateStreamId();
           const ownedStreamId = encodeStreamResumeCursor(rawStreamId, userId, chatId);
@@ -2306,11 +2317,23 @@ router.post(
             res.setHeader('X-Accel-Buffering', 'no');
             if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-            const replay = record.chunks.slice(resumeReplayPosition);
+            const durableReplayStart = Math.min(resumeReplayPosition, record.chunks.length);
+            const replay = record.chunks.slice(durableReplayStart);
             for (let i = 0; i < replay.length; i += 1) {
-              const position = resumeReplayPosition + i + 1;
+              const position = durableReplayStart + i + 1;
               res.write(`id: ${resumeSession.streamId}:${position}\n`);
               res.write(`data: ${JSON.stringify({ content: replay[i], _resumed: true })}\n\n`);
+            }
+
+            // The owner increments its high-water mark and broadcasts before
+            // the fire-and-forget Redis append settles. Replay those frames
+            // before subscribing so a reconnect cannot miss that tail.
+            if (activeResume && Array.isArray(activeResume.frames)) {
+              for (const frame of activeResume.frames) {
+                if (frame.position <= resumeReplayPosition || frame.position <= record.chunks.length) continue;
+                res.write(frame.idFrame);
+                res.write(frame.payload);
+              }
             }
 
             streamResumeFollower = true;
@@ -2339,11 +2362,16 @@ router.post(
           // arrives during the slow pre-token phase attaches to this run.
           activeResumeStreams.set(resumeSession.streamId, {
             subscribers: new Set(),
+            frames: [],
+            resumeDegraded: false,
             nextPosition: resumeSession.record.chunks.length,
           });
         }
       } catch (resumeErr) {
         try { console.warn('[ai/generate] stream-resume open failed:', resumeErr && resumeErr.message); } catch (_) {}
+        if (__hasResumeRequest) {
+          return res.status(503).json({ error: 'stream_resume_unavailable' });
+        }
         resumeSession = null;
       }
 
@@ -5767,6 +5795,8 @@ router.post(
         const sid = resumeSession.streamId;
         const activeResume = activeResumeStreams.get(sid) || {
           subscribers: new Set(),
+          frames: [],
+          resumeDegraded: false,
           nextPosition: resumeSession.record.chunks.length,
         };
         activeResumeStreams.set(sid, activeResume);
@@ -5805,10 +5835,36 @@ router.post(
                 // resume buffer is append-only, so storing them makes a reconnect
                 // re-append every full snapshot, duplicating/garbling the answer.
                 if (obj && typeof obj.content === 'string' && !obj._resumed && !obj.replace) {
-                  activeResume.nextPosition += 1;
-                  contentFrameId = `${sid}:${activeResume.nextPosition}`;
-                  // fire-and-forget — never block the write path
-                  streamResume.append(sid, obj.content).catch(() => {});
+                  const nextPosition = activeResume.nextPosition + 1;
+                  if (nextPosition <= streamResume.DEFAULT_MAX_CHUNKS) {
+                    activeResume.nextPosition = nextPosition;
+                    contentFrameId = `${sid}:${activeResume.nextPosition}`;
+                    const idFrame = `id: ${contentFrameId}\n`;
+                    const payloadFrame = payload;
+                    activeResume.frames.push({
+                      position: activeResume.nextPosition,
+                      idFrame,
+                      payload: payloadFrame.endsWith('\n\n') ? payloadFrame : `${payloadFrame}\n\n`,
+                    });
+                    if (activeResume.frames.length > streamResume.DEFAULT_MAX_CHUNKS) {
+                      activeResume.frames.shift();
+                    }
+                    // fire-and-forget — never block the write path. Memory is
+                    // updated before the Redis write, so active reconnects see
+                    // this high-water frame even while Redis is behind.
+                    streamResume.append(sid, obj.content).catch(() => {});
+                  } else if (!activeResume.resumeDegraded) {
+                    // Do not emit an id beyond the durable chunk cap. The
+                    // explicit frame tells clients that later tail content is
+                    // live-only and cannot be replayed by this cursor.
+                    activeResume.resumeDegraded = true;
+                    const degradationFrame = `data: ${JSON.stringify({
+                      type: 'stream_resume_degraded',
+                      reason: 'chunk_cap',
+                    })}\n\n`;
+                    broadcast(degradationFrame);
+                    prevWrite(degradationFrame);
+                  }
                 }
               }
             } catch { /* non-JSON SSE frame — ignore */ }

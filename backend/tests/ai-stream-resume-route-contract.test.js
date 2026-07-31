@@ -36,6 +36,32 @@ test('a valid but incomplete cursor never falls through to a second generation',
   );
 });
 
+test('explicit resume is fail-closed when the record is absent or the store fails', () => {
+  const preflightStart = source.indexOf('// ─── SSE resumption preflight');
+  const preflightEnd = source.indexOf('// ─── Language policy', preflightStart);
+  const preflight = source.slice(preflightStart, preflightEnd);
+  assert.match(preflight, /streamResume\.openExisting\(\{ streamId: parsed\.streamId \}\)/);
+  assert.doesNotMatch(preflight, /streamResume\.open\(\{ streamId: parsed\.streamId \}\)/);
+  assert.match(preflight, /if \(!existingResume\.found \|\| !existingResume\.record\) \{[\s\S]*return res\.status\(existingResume\.storeError \? 503 : 410\)/);
+  assert.match(preflight, /if \(__hasResumeRequest\) \{[\s\S]*return res\.status\(503\)/);
+  assert.ok(preflightEnd > preflightStart);
+});
+
+test('active high-water frames replay before follower subscription without advancing durable cursor', () => {
+  const captureStart = source.indexOf('// ─── SSE resume capture + replay');
+  const capture = source.slice(captureStart);
+  assert.match(capture, /frames: \[\]/);
+  assert.match(capture, /activeResume\.frames\.push\(\{[\s\S]*position:/);
+  assert.match(capture, /nextPosition <= streamResume\.DEFAULT_MAX_CHUNKS/);
+  assert.match(capture, /type: 'stream_resume_degraded'/);
+  assert.match(source, /activeResume && Array\.isArray\(activeResume\.frames\)/);
+  assert.ok(
+    source.indexOf('activeResume && Array.isArray(activeResume.frames)')
+      < source.indexOf('activeResume.subscribers.add(res)'),
+  );
+  assert.match(source, /X-Stream-Cursor', `\$\{resumeSession\.streamId\}:\$\{resumeSession\.record\.chunks\.length\}`/);
+});
+
 function makeCursor(streamId, userId, chatId, secret) {
   const payload = Buffer.from(streamId).toString('base64url');
   const signature = crypto.createHmac('sha256', secret)
