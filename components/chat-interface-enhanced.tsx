@@ -10294,6 +10294,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // IME candidates may emit an Enter keydown while the character is still
+    // composing. Never submit or prevent that event until composition ends.
+    if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+      return
+    }
     // El textarea queda libre durante el streaming (paridad Claude); Enter
     // no dispara un segundo turno mientras el actual sigue en curso.
     if (e.key === "Enter" && !e.shiftKey) {
