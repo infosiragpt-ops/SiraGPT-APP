@@ -168,36 +168,16 @@ async function defaultLlmTurn({
   // (tests + explicit Cerebras callers) and behaves identically.
   const ecoDirectCerebras = !claudeDegraded && getCerebrasConfig({ env }).enabled;
 
-  if (createClient || ecoDirectCerebras) {
-    // Direct Cerebras (free tier) path: OpenAI-style client, max_tokens 2048.
-    const cfg = getCerebrasConfig({ env });
-    if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
-    const client = createClient ? createClient({ env }) : cerebrasClientModule.createCerebrasClient({ env });
-    if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
-    const out = await llmProvider.callOpenAICompatible({
-      messages: effective,
-      temperature,
-      maxTokens: maxTokens || 2048,
-      signal,
-      model: llmProvider.modelFor('cerebras', env, model) || cfg.model,
-      client,
-      providerLabel: 'Cerebras',
-      onTextDelta,
-      onReasoningDelta,
-      effort,
-    });
-    content = out.content;
-    reasoningText = out.reasoning || '';
-    usage = out.usage;
-  } else {
-    // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
-    // quarantine-based failover. Reached when (a) a paid tier degraded from
-    // native Claude, or (b) it's an eco run but Cerebras isn't configured — in
-    // which case "something over nothing" wins, warned once so ops can see the
-    // eco tier is not actually running free.
+  // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
+  // quarantine-based failover. Reached when (a) a paid tier degraded from
+  // native Claude, (b) an eco run but Cerebras isn't configured, or (c) the
+  // direct Cerebras call failed (402 payment_required, invalid key, …) — in
+  // which case "something over nothing" wins, warned once so ops can see the
+  // eco tier is not actually running free.
+  const runLadder = async () => {
     if (!claudeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
       _warnedEcoLadderFallback = true;
-      console.warn('[codex llm-turn] tier eco sin Cerebras configurado — usando el ladder (puede cobrar un proveedor de pago)');
+      console.warn('[codex llm-turn] tier eco sin Cerebras utilizable — usando el ladder (puede cobrar un proveedor de pago)');
     }
     const out = await llmProvider.chatComplete({
       messages: effective,
@@ -213,6 +193,43 @@ async function defaultLlmTurn({
     content = out.content;
     reasoningText = out.reasoning || '';
     usage = out.usage;
+  };
+
+  if (createClient || ecoDirectCerebras) {
+    // Direct Cerebras (free tier) path: OpenAI-style client, max_tokens 2048.
+    const cfg = getCerebrasConfig({ env });
+    if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
+    const client = createClient ? createClient({ env }) : cerebrasClientModule.createCerebrasClient({ env });
+    if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
+    try {
+      const out = await llmProvider.callOpenAICompatible({
+        messages: effective,
+        temperature,
+        maxTokens: maxTokens || 2048,
+        signal,
+        model: llmProvider.modelFor('cerebras', env, model) || cfg.model,
+        client,
+        providerLabel: 'Cerebras',
+        onTextDelta,
+        onReasoningDelta,
+        effort,
+      });
+      content = out.content;
+      reasoningText = out.reasoning || '';
+      usage = out.usage;
+    } catch (err) {
+      // An aborted run must stay aborted — don't burn another call on it.
+      if (signal?.aborted) throw err;
+      // An injected createClient (tests / explicit Cerebras callers) is a hard
+      // requirement — never silently replace the caller's chosen provider.
+      if (createClient) throw err;
+      if (env?.NODE_ENV !== 'test') {
+        console.warn(`[codex llm-turn] tier eco degradando al ladder — Cerebras falló (${String(err?.message || err).slice(0, 200)}); revisa CEREBRAS_API_KEY/billing (402 payment_required sin recargar revienta todos los runs eco)`);
+      }
+      await runLadder();
+    }
+  } else {
+    await runLadder();
   }
 
   const names = new Set((tools || []).map((t) => t.name));
