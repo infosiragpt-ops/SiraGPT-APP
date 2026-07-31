@@ -10040,12 +10040,10 @@ But first, you need to connect your Gmail account securely using the button belo
   - Filter by labels (INBOX, SENT, DRAFTS, SPAM, TRASH)
   - Get email details including body, attachments, headers
 
-2. Sending & Drafting
-  - Compose and send new emails
-  - Create drafts for later editing
-  - Reply to existing emails
-  - Forward emails
-  - Send emails with formatting (bold, lists, links)
+2. Drafting (human review required)
+  - Compose drafts for later editing and approval
+  - Prepare reply or forward drafts without sending them
+  - Never claim that an email was sent, replied to, or forwarded
 
 3. Analysis & Reports
   - Summarize email threads
@@ -10066,6 +10064,9 @@ Important Guidelines:
 - Be helpful and proactive, ask clarifying questions only when essential
 - Provide clear, formatted responses with emoji icons and include Gmail links
 - Handle errors gracefully and respect user privacy
+- Gmail reads and summaries may run normally. Any send, reply, forward, delete,
+  archive, label, or other mutating Gmail operation must remain pending review;
+  do not call a mutating tool and do not present it as completed.
 - Prefer concise lists. When listing emails, also include a machine-readable JSON block at the end using this exact wrapper:
   <EMAILS_JSON>{
    "emails": [
@@ -10079,7 +10080,7 @@ Current Context:
 - Current Date: ${new Date().toISOString().split('T')[0]}
 - User Request: "${prompt}"
 
-Process the user's request naturally and perform the necessary Gmail operations. Be conversational yet professional. If this is a follow-up question, reference your previous responses.`;
+Process the user's request naturally. Read and summarize when asked; for any outgoing email, return a draft marked pending human review. If this is a follow-up question, reference your previous responses.`;
 
       // ✅ Build the request with optional previous_response_id for context
       const requestPayload = {
@@ -10090,7 +10091,9 @@ Process the user's request naturally and perform the necessary Gmail operations.
             server_label: "google_gmail",
             connector_id: "connector_gmail",
             authorization: decryptedTokens.accessToken,
-            require_approval: "never",
+            // Read-only Gmail tools remain available. Every mutating Gmail
+            // tool requires an approval event; this route never auto-approves.
+            require_approval: { always: { read_only: false } },
           },
         ],
         input: `${systemPrompt}\n\n**User:** ${prompt}`,
@@ -10111,9 +10114,10 @@ Process the user's request naturally and perform the necessary Gmail operations.
       });
 
       // Extract the text response and MCP calls
-      const finalResponse = resp.output_text || "I couldn't process your Gmail request.";
+      let finalResponse = resp.output_text || "I couldn't process your Gmail request.";
       const mcpCalls = resp.mcp_calls || [];
       const responseId = resp.id; // ✅ Store this for next request
+      const gmailMutationRequested = /\b(send|reply|repl(?:y|ies)|forward|draft|enviar|responder|reenviar|borrador)\b/i.test(prompt || '');
 
       // Parse Gmail results from MCP calls
       let gmailResult = null;
@@ -10170,27 +10174,15 @@ Process the user's request naturally and perform the necessary Gmail operations.
                 break;
 
               case 'send_message':
-                if (output.success || output.message_id) {
-                  gmailResult = {
-                    action: 'send',
-                    result: {
-                      success: true,
-                      messageId: output.message_id
-                    }
-                  };
-                }
-                break;
-
               case 'create_draft':
-                if (output.success || output.draft_id) {
-                  gmailResult = {
-                    action: 'draft',
-                    result: {
-                      success: true,
-                      draftId: output.draft_id
-                    }
-                  };
-                }
+              case 'reply_to_message':
+              case 'forward_message':
+                gmailResult = {
+                  action: 'pending_review',
+                  status: 'pending_review',
+                  reason: 'human_review_required',
+                  requestedTool: call.name,
+                };
                 break;
 
               default:
@@ -10269,6 +10261,15 @@ Process the user's request naturally and perform the necessary Gmail operations.
             }
           ]);
         }
+      }
+
+      if (gmailMutationRequested && gmailResult?.action !== 'read') {
+        gmailResult = {
+          action: 'pending_review',
+          status: 'pending_review',
+          reason: 'human_review_required',
+        };
+        finalResponse = `${finalResponse.trim()}\n\n⚠️ Borrador pendiente de aprobación humana. No se envió ningún correo.`;
       }
 
       // Save messages to chat

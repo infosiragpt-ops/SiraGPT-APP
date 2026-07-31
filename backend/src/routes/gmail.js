@@ -1,6 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const { loadGmailClientForUser } = require('../services/gmail-user-client');
+const { requireHumanApproval } = require('../services/codex/company-operations/external-actions');
 const prisma = require('../config/database');
 
 const router = express.Router();
@@ -17,6 +18,16 @@ function clampMaxResults(raw, def = 10, max = 100) {
 async function getUserGmailClient(userId) {
   const loaded = await loadGmailClientForUser({ prisma, userId });
   return loaded.client;
+}
+
+function rejectDirectGmailMutation(req, res, kind) {
+  const gate = requireHumanApproval({ kind, actorId: req.user?.id || null });
+  return res.status(403).json({
+    success: false,
+    code: gate.reason,
+    status: 'pending_review',
+    message: 'Email output requires a persisted action and explicit human approval.',
+  });
 }
 
 // Check Gmail connection status
@@ -61,27 +72,7 @@ router.get('/status', authenticateToken, async (req, res) => {
 
 // Send email
 router.post('/send', authenticateToken, async (req, res) => {
-  try {
-    const { to, subject, body } = req.body;
-
-    if (!to || !subject || !body) {
-      return res.status(400).json({ error: 'Missing required fields: to, subject, body' });
-    }
-
-    const gmailService = await getUserGmailClient(req.user.id);
-
-    const result = await gmailService.sendEmail({ to, subject, body });
-
-    res.json({
-      success: true,
-      message: `Email sent successfully to ${to}`,
-      messageId: result.messageId,
-      threadId: result.threadId
-    });
-  } catch (error) {
-    console.error('Send email error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  return rejectDirectGmailMutation(req, res, 'email_send');
 });
 
 // Get emails
@@ -129,28 +120,15 @@ router.delete('/email/:messageId', authenticateToken, async (req, res) => {
 
 // Reply to email
 router.post('/reply', authenticateToken, async (req, res) => {
-  try {
-    const { threadId, messageId, body } = req.body;
-
-    if (!threadId || !messageId || !body) {
-      return res.status(400).json({ error: 'Missing required fields: threadId, messageId, body' });
-    }
-
-    const gmailService = await getUserGmailClient(req.user.id);
-
-    const result = await gmailService.replyToEmail({ threadId, messageId, body });
-
-    res.json({
-      success: true,
-      message: `Reply sent successfully`,
-      messageId: result.messageId,
-      threadId: result.threadId
-    });
-  } catch (error) {
-    console.error('Reply email error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  return rejectDirectGmailMutation(req, res, 'email_reply');
 });
+
+// Forwarding was never allowed to bypass the company action gate. Keep the
+// legacy route shape so clients receive a deterministic block instead of
+// falling through to a provider call.
+router.post('/forward', authenticateToken, async (req, res) => (
+  rejectDirectGmailMutation(req, res, 'email_forward')
+));
 
 // Search emails
 router.get('/search', authenticateToken, async (req, res) => {

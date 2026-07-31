@@ -147,6 +147,12 @@ test('review mode creates one Gmail draft and one idempotent action', async () =
       prisma.state.drafts += 1;
       return { draftId: 'draft-1', messageId: 'draft-message-1' };
     },
+    sendDraft: async () => {
+      throw new Error('triage must not send');
+    },
+    replyToEmail: async () => {
+      throw new Error('triage must not reply');
+    },
   };
   const args = {
     prisma,
@@ -155,7 +161,7 @@ test('review mode creates one Gmail draft and one idempotent action', async () =
       profile: {
         companyName: 'SiraGPT',
         offer: 'Software empresarial',
-        autonomy: { emailReplies: 'review' },
+        autonomy: { emailReplies: 'auto' },
       },
       readiness: { evidence: { gmailConnected: true } },
     },
@@ -179,6 +185,10 @@ test('review mode creates one Gmail draft and one idempotent action', async () =
   assert.equal(first.action, 'triaged_review');
   assert.equal(first.items[0].category, 'support');
   assert.equal(first.actions[0].status, 'pending_review');
+  assert.equal(first.policy.reason, 'human_review_required');
+  assert.equal(first.actions[0].payload._approval.mode, 'pending_review');
+  assert.equal(first.actions[0].payload._approval.version, 1);
+  assert.match(first.actions[0].payload._approval.actionHash, /^[a-f0-9]{64}$/);
   assert.equal(second.actions[0].id, first.actions[0].id);
   assert.equal(prisma.state.drafts, 1);
   assert.equal(prisma.state.items.length, 1);
