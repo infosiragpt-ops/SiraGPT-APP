@@ -16,7 +16,10 @@
 
 const MAX_CUSTOM_DEPARTMENTS = 40;
 const MAX_AGENTS_PER_DEPARTMENT = 1000;
-const { mutateProjectBrief } = require('./project-brief-store');
+const {
+  coerceBriefRecord,
+  mutateProjectBrief,
+} = require('./project-brief-store');
 const departmentPools = require('./department-pools');
 
 const BUILT_IN_DEPARTMENTS = Object.freeze([
@@ -260,7 +263,7 @@ function applyOverride(base, override) {
 }
 
 function readDepartments(project) {
-  const brief = asRecord(project?.brief);
+  const brief = coerceBriefRecord(project?.brief);
   const custom = normalizeCustomDepartments(brief.companyDepartments);
   const overrides = normalizeOverrides(brief.companyDepartmentOverrides);
   const hidden = new Set(normalizeHidden(brief.companyDepartmentHidden));
@@ -315,7 +318,7 @@ async function writeDepartments({ prisma, project, departments }) {
   if (!prisma?.codexProject?.update || !project?.id) return [];
   const custom = normalizeCustomDepartments(departments);
   let source = project;
-  let nextBrief = asRecord(project.brief);
+  let nextBrief = coerceBriefRecord(project.brief);
   await mutateProjectBrief({
     prisma,
     projectId: project.id,
@@ -332,7 +335,7 @@ async function writeDepartments({ prisma, project, departments }) {
 async function mutateDepartmentMeta({ prisma, project, mutate }) {
   if (!prisma?.codexProject?.update || !project?.id) return readDepartments(project);
   let source = project;
-  let nextBrief = asRecord(project.brief);
+  let nextBrief = coerceBriefRecord(project.brief);
   await mutateProjectBrief({
     prisma,
     projectId: project.id,
@@ -399,7 +402,7 @@ async function upsertDepartment({ prisma, project, department }) {
     return rows;
   }
 
-  const current = normalizeCustomDepartments(asRecord(source.brief).companyDepartments);
+  const current = normalizeCustomDepartments(coerceBriefRecord(source.brief).companyDepartments);
   const normalized = normalizeDepartment(department, { custom: true, index: current.length });
   if (!normalized) throw new Error('department_name_required');
   const next = [
@@ -447,7 +450,7 @@ async function deleteDepartment({ prisma, project, departmentId }) {
     return rows;
   }
 
-  const current = normalizeCustomDepartments(asRecord(source.brief).companyDepartments);
+  const current = normalizeCustomDepartments(coerceBriefRecord(source.brief).companyDepartments);
   if (!current.some((item) => item.id === id)) throw new Error('department_not_found');
   const next = current.filter((item) => item.id !== id);
   const rows = await writeDepartments({ prisma, project: source, departments: next });

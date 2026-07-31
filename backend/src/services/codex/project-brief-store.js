@@ -7,6 +7,32 @@ function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+/**
+ * CodexProject.brief is Json, but older rows (and some create paths) stored a
+ * plain string mission. Treat those as a companyProfile mission instead of
+ * wiping them to {} and losing context on the next department mutation.
+ */
+function coerceBriefRecord(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return { ...value };
+  if (typeof value === 'string') {
+    const textValue = value.trim().slice(0, 4_000);
+    if (!textValue) return {};
+    try {
+      const parsed = JSON.parse(textValue);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return { ...parsed };
+      }
+    } catch {
+      // plain prose mission
+    }
+    return {
+      legacyBriefText: textValue,
+      companyProfile: { mission: textValue },
+    };
+  }
+  return {};
+}
+
 function hashInt32(value) {
   let hash = 2166136261;
   const text = String(value);
@@ -47,8 +73,8 @@ async function mutateProjectBrief({
         ? await client.codexProject.findFirst({ where })
         : await client.codexProject.findUnique({ where: { id: projectId } });
       if (!project || (userId && project.userId !== userId)) return null;
-      const current = asRecord(project.brief);
-      const next = asRecord(await mutate({ ...current }, project));
+      const current = coerceBriefRecord(project.brief);
+      const next = coerceBriefRecord(await mutate({ ...current }, project));
       await client.codexProject.update({
         where: { id: projectId },
         data: { brief: next },
@@ -73,6 +99,7 @@ async function mutateProjectBrief({
 module.exports = {
   BRIEF_LOCK_CLASS,
   asRecord,
+  coerceBriefRecord,
   hashInt32,
   mutateProjectBrief,
 };
