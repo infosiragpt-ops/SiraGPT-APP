@@ -3,8 +3,10 @@
  *
  * Cloud Project ids are Prisma CUIDs (and older data can contain UUIDs), while
  * the sidebar and chat-session store use `project:<id>`. Local folders keep
- * their `local:` namespace. Unknown legacy workspace keys are preserved so a
- * migration never strands existing browser sessions.
+ * their `local:` namespace. Direct CodexProject workspaces use `codex:<id>` so
+ * they cannot be mistaken for the separate Project model. Unknown legacy
+ * workspace keys are preserved so a migration never strands existing browser
+ * sessions.
  */
 
 const UUID_RE =
@@ -15,12 +17,24 @@ export function isLocalCodexWorkspaceId(value: string | null | undefined): boole
   return String(value || "").trim().startsWith("local:")
 }
 
+export function isDirectCodexWorkspaceId(value: string | null | undefined): boolean {
+  return String(value || "").trim().startsWith("codex:")
+}
+
+export function directCodexProjectIdFromWorkspaceId(
+  value: string | null | undefined,
+): string | null {
+  const raw = String(value || "").trim()
+  if (!isDirectCodexWorkspaceId(raw)) return null
+  return raw.slice("codex:".length).trim() || null
+}
+
 export function codexProjectIdFromWorkspaceId(
   value: string | null | undefined,
   options?: { assumeProject?: boolean },
 ): string | null {
   const raw = String(value || "").trim()
-  if (!raw || isLocalCodexWorkspaceId(raw)) return null
+  if (!raw || isLocalCodexWorkspaceId(raw) || isDirectCodexWorkspaceId(raw)) return null
   if (raw.startsWith("project:")) return raw.slice("project:".length).trim() || null
   if (options?.assumeProject || UUID_RE.test(raw) || CUID_RE.test(raw)) return raw
   return null
@@ -31,6 +45,15 @@ export function codexWorkspaceIdForProject(projectId: string | null | undefined)
   return id ? `project:${id}` : null
 }
 
+export function codexWorkspaceIdForCodexProject(
+  projectId: string | null | undefined,
+): string | null {
+  const directId = directCodexProjectIdFromWorkspaceId(projectId)
+  const raw = directId || String(projectId || "").trim()
+  if (!raw || isLocalCodexWorkspaceId(raw) || raw.startsWith("project:")) return null
+  return `codex:${raw}`
+}
+
 export function canonicalCodexWorkspaceId(
   value: string | null | undefined,
   options?: { kind?: "local-folder" | "project" },
@@ -38,6 +61,7 @@ export function canonicalCodexWorkspaceId(
   const raw = String(value || "").trim()
   if (!raw) return "__default__"
   if (options?.kind === "local-folder" || isLocalCodexWorkspaceId(raw)) return raw
+  if (isDirectCodexWorkspaceId(raw)) return codexWorkspaceIdForCodexProject(raw) || raw
   if (options?.kind === "project") return codexWorkspaceIdForProject(raw) || "__default__"
   const projectId = codexProjectIdFromWorkspaceId(raw)
   return projectId ? `project:${projectId}` : raw
