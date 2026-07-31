@@ -26,6 +26,8 @@ function coerceBriefRecord(value) {
       // plain prose mission
     }
     return {
+      // Keep parity with company-operating-profile asBriefRecord().
+      objective: textValue,
       legacyBriefText: textValue,
       companyProfile: { mission: textValue },
     };

@@ -7,6 +7,7 @@ const departments = require('../src/services/codex/company-departments');
 
 test('string briefs coerce into companyProfile mission records', () => {
   const brief = coerceBriefRecord('Misión legada de prueba');
+  assert.equal(brief.objective, 'Misión legada de prueba');
   assert.equal(brief.legacyBriefText, 'Misión legada de prueba');
   assert.equal(brief.companyProfile.mission, 'Misión legada de prueba');
 });
