@@ -6,6 +6,7 @@ const { randomUUID } = require('crypto');
 // is disabled.
 const { context: otelContext, trace: otelTrace } = require('@opentelemetry/api');
 const { REDACTION_CENSOR, redactPayloadDeep } = require('../utils/log-redaction');
+const { redactPreviewUrl } = require('../utils/preview-url-redaction');
 const { normalizeRequestId } = require('./request-id');
 
 // Paths the logger MUST never emit in cleartext. fast-redact (pino's
@@ -161,7 +162,7 @@ function redactUrlSecrets(rawUrl) {
       return pair;
     })
     .join('&');
-  return `${path}?${redacted}`;
+  return redactPreviewUrl(`${path}?${redacted}`);
 }
 
 const httpLogger = pinoHttp({

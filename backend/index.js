@@ -324,6 +324,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const { redactPreviewUrl } = require('./src/utils/preview-url-redaction');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
@@ -963,7 +964,8 @@ maintenanceMode.setPrisma(prisma);
 app.use(maintenanceMode.maintenanceMiddleware({ prisma }));
 
 if (process.env.NODE_ENV !== 'production') {
-    app.use(morgan('dev'));
+    morgan.token('safe-url', (req) => redactPreviewUrl(req.originalUrl || req.url));
+    app.use(morgan(':method :safe-url :status :res[content-length] - :response-time ms'));
 }
 
 // Static files + hardened presentation downloads
@@ -1638,6 +1640,11 @@ async function startServer() {
 
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
+
+    // Token-authenticated Vite HMR tunnel for the legacy /code host runner.
+    // HTTP preview requests are handled by code-runner.js; upgrades must be
+    // attached to the underlying Node server because Express never sees them.
+    codeRunnerRoutes.attachPreviewWebSocketProxy(server);
 
     // Token-authenticated Vite HMR tunnel for cross-origin Codex previews.
     // Caddy forwards the upgrade to this HTTP server; the route resolves the

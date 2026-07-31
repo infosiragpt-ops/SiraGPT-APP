@@ -16,6 +16,7 @@
 
 const crypto = require('node:crypto');
 const { normalizeRequestId } = require('./request-id');
+const { redactPreviewUrl } = require('../utils/preview-url-redaction');
 
 function _safeUuid() {
   try {
@@ -105,7 +106,7 @@ function buildRequestLogger(opts = {}) {
         ts: new Date().toISOString(),
         level: 'info',
         method: req.method || '',
-        path: (req.originalUrl || req.url || '').split('?')[0],
+        path: redactPreviewUrl((req.originalUrl || req.url || '').split('?')[0]),
         status: res.statusCode,
         durMs,
         userId: _userId(req),

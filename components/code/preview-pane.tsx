@@ -61,6 +61,8 @@ import {
   type CodePreviewSelectionDetail,
 } from "@/lib/code-preview-selection"
 
+const PREVIEW_NONCE_PARAM = "__sgpt_preview_nonce"
+
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error" | "stuck"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
 
@@ -198,6 +200,17 @@ export function PreviewPane() {
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
   const previewFrameRef = React.useRef<HTMLIFrameElement | null>(null)
+  const previewNonceRef = React.useRef("")
+  if (!previewNonceRef.current) {
+    try {
+      previewNonceRef.current = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    } catch {
+      previewNonceRef.current = `preview-${Date.now().toString(36)}`
+    }
+  }
+  const previewNonce = previewNonceRef.current
   const [selectionMode, setSelectionMode] = React.useState(false)
   const [selectionFallback, setSelectionFallback] = React.useState(false)
   const selectionReadyRef = React.useRef(false)
@@ -824,8 +837,8 @@ export function PreviewPane() {
   }, [files, activePath, auto])
 
   const result = React.useMemo(
-    () => buildPreviewDocument(snapshot.files, snapshot.activePath),
-    [snapshot],
+    () => buildPreviewDocument(snapshot.files, snapshot.activePath, { nonce: previewNonce }),
+    [previewNonce, snapshot],
   )
   const staticPreviewKey = React.useMemo(() => {
     let hash = 0
@@ -844,6 +857,7 @@ export function PreviewPane() {
     const onMsg = (e: MessageEvent) => {
       const m = e.data
       if (!m || typeof m !== "object") return
+      if (e.source !== previewFrameRef.current?.contentWindow || m.nonce !== previewNonce) return
       if (m.type === "sgpt-preview-console") {
         logSeq.current += 1
         const entry: LogEntry = { level: String(m.level || "log"), text: String(m.text ?? ""), id: logSeq.current }
@@ -888,7 +902,7 @@ export function PreviewPane() {
     }
     window.addEventListener("message", onMsg)
     return () => window.removeEventListener("message", onMsg)
-  }, [clearSelectionTimers])
+  }, [clearSelectionTimers, previewNonce])
 
   const refresh = React.useCallback(() => {
     setSnapshot({ files, activePath })
@@ -917,8 +931,9 @@ export function PreviewPane() {
   const liveSrc = React.useMemo(() => {
     if (!liveRun.devUrl) return liveRun.devUrl
     const clean = `/${(navPath || "/").replace(/^\/+/, "")}`
-    return liveRun.devUrl.replace(/\/+$/, "") + clean
-  }, [liveRun.devUrl, navPath])
+    const base = liveRun.devUrl.replace(/\/+$/, "") + clean
+    return `${base}${base.includes("?") ? "&" : "?"}${PREVIEW_NONCE_PARAM}=${encodeURIComponent(previewNonce)}`
+  }, [liveRun.devUrl, navPath, previewNonce])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -989,9 +1004,9 @@ export function PreviewPane() {
   const postSelectionMessage = React.useCallback((type: "sgpt-preview-select-start" | "sgpt-preview-select-cancel") => {
     const frame = previewFrameRef.current
     if (!frame?.contentWindow) return false
-    frame.contentWindow.postMessage({ type }, "*")
+    frame.contentWindow.postMessage({ type, nonce: previewNonce }, "*")
     return true
-  }, [])
+  }, [previewNonce])
 
   React.useEffect(() => {
     return () => clearSelectionTimers()

@@ -1,5 +1,7 @@
 'use strict';
 
+const { redactPreviewUrl } = require('../utils/preview-url-redaction');
+
 /**
  * pino-logger — structured JSON logger factory backed by pino.
  *
@@ -59,7 +61,7 @@ function reqSerializer(req) {
   return {
     id: req.id,
     method: req.method,
-    url: req.originalUrl || req.url,
+    url: redactPreviewUrl(req.originalUrl || req.url),
     headers: redactSerializer({
       host: req.headers?.host,
       'user-agent': req.headers?.['user-agent'],
