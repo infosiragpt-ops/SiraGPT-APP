@@ -2927,13 +2927,17 @@ model CodexExternalAction {
   id             String    @id @default(cuid())
   projectId      String
   userId         String
-  kind           String // email_reply | lead_outreach | social_reply
+  kind           String // email_reply | email_send | email_forward | lead_outreach | social_reply
   targetRef      String
   idempotencyKey String    @unique
-  status         String    @default("pending_review") // pending_review | approved | executing | completed | rejected | error
+  status         String    @default("pending_review") // pending_review | approved | executing | completed | rejected | error | expired | delivery_uncertain
   payload        Json
   result         Json?
   approvedAt     DateTime?
+  expiresAt      DateTime?
+  consumedAt     DateTime?
+  attemptId      String?
+  revokedAt      DateTime?
   executedAt     DateTime?
   error          String?   @db.Text
   createdAt      DateTime  @default(now())
@@ -2944,6 +2948,7 @@ model CodexExternalAction {
 
   @@index([userId, projectId, status, createdAt])
   @@index([projectId, kind, createdAt])
+  @@index([projectId, status, expiresAt])
   @@map("codex_external_actions")
 }
 
