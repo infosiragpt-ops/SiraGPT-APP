@@ -123,6 +123,7 @@ test('a terminal migration retires the legacy bootstrap identity', () => {
   assert.match(migration, /DELETE FROM "user_roles"/);
   assert.match(migration, /"isAdmin" = FALSE/);
   assert.match(migration, /"isSuperAdmin" = FALSE/);
+  assert.match(migration, /column_name = 'isSuperAdmin'/);
   assert.match(migration, /"deletedAt" = COALESCE/);
   assert.match(migration, /"id" = 'prod_admin_admin_gmail_com'/);
   assert.match(migration, /"email" = 'admin@gmail\.com'/);

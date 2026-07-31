@@ -23,10 +23,28 @@ WHERE "userId" IN (
 UPDATE "users"
 SET
   "isAdmin" = FALSE,
-  "isSuperAdmin" = FALSE,
   "deletedAt" = COALESCE("deletedAt", CURRENT_TIMESTAMP),
   "updatedAt" = CURRENT_TIMESTAMP
 WHERE "id" = 'prod_admin_admin_gmail_com'
   AND "email" = 'admin@gmail.com';
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+      AND column_name = 'isSuperAdmin'
+  ) THEN
+    UPDATE "users"
+    SET
+      "isSuperAdmin" = FALSE,
+      "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = 'prod_admin_admin_gmail_com'
+      AND "email" = 'admin@gmail.com';
+  END IF;
+END
+$$;
 
 COMMIT;
