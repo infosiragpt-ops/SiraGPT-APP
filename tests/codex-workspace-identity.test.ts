@@ -18,6 +18,13 @@ test("canonicalizes folder, project:<id>, and Prisma CUID references to one clou
   assert.equal(canonicalCodexWorkspaceId(`project:${cuid}`), `project:${cuid}`)
 })
 
+test("agent launch keeps a project:<cuid> URL canonical and sends the bare id", () => {
+  const folder = "project:cms2abcdefghijklmnopqrstuv"
+  const projectId = codexProjectIdFromWorkspaceId(folder, { assumeProject: true })
+  assert.equal(projectId, "cms2abcdefghijklmnopqrstuv")
+  assert.equal(codexWorkspaceIdForProject(projectId), folder)
+})
+
 test("keeps local and unknown legacy workspace identities compatible", () => {
   assert.equal(canonicalCodexWorkspaceId("local:demo"), "local:demo")
   assert.equal(codexProjectIdFromWorkspaceId("local:demo"), null)

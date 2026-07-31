@@ -154,6 +154,7 @@ import {
 import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
+  CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
   CODE_NEW_CODE_CHAT_EVENT,
   getActiveCodexProject,
   setActiveCodexProject,
@@ -904,6 +905,16 @@ export function AgentCompanyPanel() {
   React.useEffect(() => {
     void refreshCompanyAssociation()
   }, [refreshCompanyAssociation])
+
+  React.useEffect(() => {
+    const openAssociation = () => {
+      if (!companyProjectId) return
+      setAssociationWizardOpen(true)
+      void refreshCompanyAssociation()
+    }
+    window.addEventListener(CODE_OPEN_COMPANY_ASSOCIATION_EVENT, openAssociation)
+    return () => window.removeEventListener(CODE_OPEN_COMPANY_ASSOCIATION_EVENT, openAssociation)
+  }, [companyProjectId, refreshCompanyAssociation])
 
   const confirmCompanyAssociation = React.useCallback(async () => {
     if (!companyProjectId || !associationCandidateId || associationBusy) return

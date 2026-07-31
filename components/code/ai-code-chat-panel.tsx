@@ -97,7 +97,12 @@ import {
   getProactiveCompanyState,
   setProactiveCompanyObjective,
 } from "@/lib/code-agent-company-proactive"
-import { CODE_OPEN_TOOL_LAUNCHER_EVENT, setActiveCodexProject, useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  CODE_OPEN_TOOL_LAUNCHER_EVENT,
+  setActiveCodexProject,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
 import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
@@ -968,6 +973,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const [input, setInput] = React.useState("")
   const [codeAttachments, setCodeAttachments] = React.useState<CodeComposerAttachment[]>([])
   const [codeUploadProgress, setCodeUploadProgress] = React.useState<Record<string, number>>({})
+  const [identityIssue, setIdentityIssue] = React.useState<{ code: string; message: string } | null>(null)
   const [codeDraggingFiles, setCodeDraggingFiles] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [buildingApp, setBuildingApp] = React.useState(false)
@@ -1160,11 +1166,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         if (!cancelled) {
           setDurableCompanyCodexProjectId(state.association?.codexProject.id || null)
           setCompanyAssociationResolved(true)
+          setIdentityIssue(null)
         }
       })
-      .catch(() => {
+      .catch((error) => {
         if (!cancelled) {
+          const code = codexErrorCode(error) || "company_association_unavailable"
           setDurableCompanyCodexProjectId(null)
+          setIdentityIssue({
+            code,
+            message: codexErrorMessage(
+              error,
+              code === "company_project_not_found"
+                ? "No se encontró el Project de esta empresa o ya no tienes acceso."
+                : code === "project_not_found"
+                  ? "El proyecto Codex asociado ya no existe."
+                  : "No se pudo comprobar la asociación persistente.",
+            ),
+          })
           // Keep the current Codex identity visible until the user can act on
           // the association error; do not turn a 404 into a silent clear.
           setCompanyAssociationResolved(false)
@@ -3521,11 +3540,23 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               ? "No se encontró el Project de esta empresa o ya no tienes acceso."
               : "El proyecto Codex asociado ya no existe.",
           )
+          setIdentityIssue({ code, message })
           // A missing association/project is an actionable identity problem,
           // not a code-generation failure. Keep the active mapping intact so
           // the user can inspect/reassociate it instead of losing it silently.
           finish(`⚠️ ${code}: ${message}`, {
             label: "Entorno no disponible",
+            phases: buildCodeAgentPhases("context", {
+              context: { status: "error", detail: message },
+            }),
+          })
+          toast.error(`${code}: ${message}`)
+        } else if (codexErrorCode(err) === "company_association_required") {
+          const code = "company_association_required"
+          const message = "Confirma qué entorno Codex pertenece a esta empresa antes de ejecutar agentes."
+          setIdentityIssue({ code, message })
+          finish(`⚠️ ${code}: ${message}`, {
+            label: "Asociación requerida",
             phases: buildCodeAgentPhases("context", {
               context: { status: "error", detail: message },
             }),
@@ -4250,6 +4281,30 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           <Plus className="h-3.5 w-3.5" />
         </Button> : null}
       </div>
+
+      {identityIssue ? (
+        <div
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+          role="alert"
+          data-testid="code-identity-error"
+        >
+          <span>
+            {identityIssue.code}: {identityIssue.message}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 border-current bg-transparent text-xs"
+            onClick={() => {
+              setIdentityIssue(null)
+              window.dispatchEvent(new CustomEvent(CODE_OPEN_COMPANY_ASSOCIATION_EVENT))
+            }}
+          >
+            {identityIssue.code === "company_association_required" ? "Asociar entorno" : "Revisar asociación"}
+          </Button>
+        </div>
+      ) : null}
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
