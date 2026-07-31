@@ -195,7 +195,13 @@ function executionContextForAdapter({ adapter, signal, isCancelled, run, project
   // current loop. External adapters must operate on the path-free request and
   // their own bounded clients.
   if (adapter === nativeCodexAdapter) {
-    context.deps = deps;
+    context.deps = runAgentLoop
+      ? deps
+      : {
+        ...deps,
+        eventStore: guardedEventStore(deps.eventStore, signal),
+        executionGuard: () => !signal?.aborted,
+      };
     context.nativeRun = run;
     context.nativeProject = project;
     if (runAgentLoop) context.runAgentLoop = runAgentLoop;
@@ -218,6 +224,16 @@ class FleetQaTimeoutError extends Error {
     this.code = 'fleet_qa_timeout';
     this.isTimeout = true;
   }
+}
+
+function guardedEventStore(eventStore, signal) {
+  if (!eventStore || typeof eventStore.appendEvent !== 'function') return eventStore;
+  const guarded = Object.create(eventStore);
+  guarded.appendEvent = (...args) => {
+    if (signal?.aborted) return Promise.resolve(null);
+    return eventStore.appendEvent(...args);
+  };
+  return guarded;
 }
 
 /**
@@ -448,6 +464,7 @@ async function processCodexRunJob({
   const controller = new AbortController();
   activeControllers.set(String(runId), controller);
 
+  try {
   for (const runtimeEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
     await eventStore
       .appendEvent(run.id, runtimeEvent.type, runtimeEvent, { prisma })
@@ -537,8 +554,6 @@ async function processCodexRunJob({
       .catch(() => {});
     // cancelRun owns the terminal event, webhook, metric and fallback ledger.
     // Re-publishing here would double-count the same cancellation.
-    if (unregisterTranscript) unregisterTranscript();
-    releaseCodexRun(runId, controller);
     return { status: 'cancelled' };
   }
 
@@ -562,8 +577,6 @@ async function processCodexRunJob({
     const fresh = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
     // The concurrent owner that won the conditional transition is responsible
     // for its terminal side effects. This processor must only observe the race.
-    if (unregisterTranscript) unregisterTranscript();
-    releaseCodexRun(runId, controller);
     return { status: fresh?.status || status, raced: true };
   }
   await eventStore.appendEvent(runId, 'run_status', { status }, { prisma });
@@ -718,9 +731,6 @@ async function processCodexRunJob({
   if (status !== 'waiting_approval' && typeof eventStore.forgetRun === 'function') {
     try { eventStore.forgetRun(runId); } catch { /* best-effort */ }
   }
-  if (unregisterTranscript) unregisterTranscript();
-  releaseCodexRun(runId, controller);
-
   return {
     status,
     error: errorMsg,
@@ -729,6 +739,12 @@ async function processCodexRunJob({
     executionMode: runtimePolicy.depth,
     fleetQaResult,
   };
+  } finally {
+    if (unregisterTranscript) {
+      try { unregisterTranscript(); } catch { /* best-effort cleanup */ }
+    }
+    releaseCodexRun(runId, controller);
+  }
 }
 
 module.exports = {

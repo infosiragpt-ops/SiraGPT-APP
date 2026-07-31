@@ -3,7 +3,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { processCodexRunJob, abortRun } = require('../src/services/codex/run-processor');
+const {
+  processCodexRunJob,
+  abortRun,
+  executionContextForAdapter,
+} = require('../src/services/codex/run-processor');
+const { nativeCodexAdapter } = require('../src/services/codex/agent-adapters/native-codex-adapter');
 
 // Fake prisma: one run + one project, mutable status.
 function makeDeps({
@@ -560,6 +565,47 @@ test('timeout waits for cooperative adapter drain and ignores its late outcome',
   assert.equal(drained, true);
   assert.ok(Date.now() - startedAt >= 20);
   assert.equal(d.runRow.status, 'error');
+});
+
+test('native execution suppresses event effects after abort', async () => {
+  const controller = new AbortController();
+  let writes = 0;
+  const context = executionContextForAdapter({
+    adapter: nativeCodexAdapter,
+    signal: controller.signal,
+    isCancelled: async () => false,
+    run: { id: 'run-1', mode: 'build' },
+    project: { id: 'p1', name: 'Demo' },
+    deps: {
+      eventStore: { async appendEvent() { writes += 1; } },
+      env: {},
+    },
+  });
+  controller.abort(new Error('timeout'));
+  await context.deps.eventStore.appendEvent('run-1', 'late', {});
+  assert.equal(writes, 0);
+});
+
+test('outer cleanup releases the controller when terminal side effects throw', async () => {
+  const d = makeDeps();
+  const eventStore = {
+    ...d.eventStore,
+    async appendEvent(runId, type, data, options) {
+      if (type === 'run_status' && data.status === 'done') throw new Error('terminal event failed');
+      return d.eventStore.appendEvent(runId, type, data, options);
+    },
+  };
+  await assert.rejects(
+    () => processCodexRunJob({
+      runId: 'run-1',
+      prisma: d.prisma,
+      eventStore,
+      runAgentLoop: async () => ({ status: 'done' }),
+      clock: d.clock,
+    }),
+    /terminal event failed/,
+  );
+  assert.equal(abortRun('run-1'), false);
 });
 
 test('non-queued run is skipped (idempotency)', async () => {

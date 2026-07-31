@@ -103,6 +103,74 @@ test('rollback is blocked before touching the workspace while a run is active', 
   assert.equal(runner.calls.length, 0);
 });
 
+test('rollback holds the project mutation lock through the recheck and reset', async () => {
+  const runs = [];
+  let lockTail = Promise.resolve();
+  let resetEntered;
+  const resetStarted = new Promise((resolve) => { resetEntered = resolve; });
+  let releaseReset;
+  const resetGate = new Promise((resolve) => { releaseReset = resolve; });
+  const db = makeDb([{ id: 'cp-1', commitSha: 'abc1234', projectId: 'p1', _userId: 'u1' }]);
+  db.codexRun = {
+    async count() { return runs.length; },
+  };
+  db.$queryRawUnsafe = async () => [];
+  db.$transaction = async (work) => {
+    const previous = lockTail;
+    let release;
+    lockTail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try { return await work(db); } finally { release(); }
+  };
+  const runner = {
+    calls: [],
+    async exec(projectId, command) {
+      this.calls.push(command.join(' '));
+      if (command[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+      if (command[1] === 'rev-parse') return { exitCode: 0, stdout: 'abc1234\n', stderr: '' };
+      if (command[1] === 'reset') {
+        resetEntered();
+        await resetGate;
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    async devStatus() { return { running: false }; },
+  };
+
+  const rollback = cp.rollbackCheckpoint({
+    checkpointId: 'cp-1',
+    userId: 'u1',
+    deps: { runner, prisma: db },
+  });
+  await resetStarted;
+
+  let competingEntered = false;
+  const competingMutation = cp.withProjectMutationLock(db, 'p1', async () => {
+    competingEntered = true;
+    return 'created-run-under-lock';
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(competingEntered, false, 'a concurrent create/mutation cannot pass the lock during reset');
+
+  releaseReset();
+  assert.equal((await rollback).ok, true);
+  assert.equal(await competingMutation, 'created-run-under-lock');
+  assert.equal(competingEntered, true);
+});
+
+test('restoreWorkspaceSha is also blocked by an active run inside the project lock', async () => {
+  const runner = makeRunner();
+  const db = makeDb();
+  db.codexRun = { async count() { return 1; } };
+  const out = await cp.restoreWorkspaceSha({
+    projectId: 'p1',
+    commitSha: 'abc1234',
+    deps: { runner, prisma: db },
+  });
+  assert.deepEqual(out, { ok: false, error: 'run_in_progress', status: 409 });
+  assert.equal(runner.calls.length, 0);
+});
+
 test('rollback 404s a foreign checkpoint and 500s on reset failure', async () => {
   const db = makeDb([{ id: 'cp-1', commitSha: 'abc1234', projectId: 'p1', _userId: 'u1' }]);
   const foreign = await cp.rollbackCheckpoint({ checkpointId: 'cp-1', userId: 'someone', deps: { runner: makeRunner(), prisma: db } });
