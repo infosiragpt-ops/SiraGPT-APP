@@ -7,7 +7,6 @@
  * the agent loop can self-correct (Claude Code style).
  */
 
-import { spawn } from "child_process"
 import {
   existsSync,
   mkdirSync,
@@ -26,8 +25,6 @@ import { readResponseCapped, safeFetch } from "./safe-network"
 
 const MAX_READ_BYTES = 256 * 1024
 const MAX_WRITE_BYTES = 512 * 1024
-const MAX_BASH_MS = 20_000
-const MAX_BASH_OUTPUT = 64 * 1024
 const MAX_GREP_HITS = 80
 const MAX_GLOB_HITS = 200
 const MAX_FETCH_BYTES = 120_000
@@ -46,9 +43,6 @@ export const AGENT_TOOL_NAMES = [
 ] as const
 
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number]
-
-const BASH_BLOCKLIST =
-  /\b(rm\s+-rf\s+\/|mkfs|dd\s+if=|shutdown|reboot|halt|poweroff|useradd|userdel|passwd|chown\s+-R\s+\/|chmod\s+-R\s+777\s+\/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh|:\(\)\s*\{\s*:\|:&\s*\})/i
 
 export interface ToolResult {
   ok: boolean
@@ -69,26 +63,48 @@ function safeId(raw?: string): string {
   return randomBytes(8).toString("hex")
 }
 
-export function createWorkspace(sessionId?: string): AgentWorkspace {
+export function createWorkspace(sessionId?: string, ownerId?: string): AgentWorkspace {
+  const normalizedOwnerId = String(ownerId || "").trim()
+  if (!normalizedOwnerId) throw new Error("workspace owner required")
+  const ownerNamespace = createHash("sha256")
+    .update("siragpt-agent-owner:v1\0")
+    .update(normalizedOwnerId)
+    .digest("hex")
+    .slice(0, 32)
   let effectiveId = safeId(sessionId)
   const base = join(tmpdir(), "siragpt-agent-sessions")
   mkdirSync(base, { recursive: true })
-  let root = join(base, effectiveId)
+  const ownerRoot = join(base, ownerNamespace)
+  if (existsSync(ownerRoot) && (lstatSync(ownerRoot).isSymbolicLink() || !lstatSync(ownerRoot).isDirectory())) {
+    throw new Error("unsafe workspace owner root")
+  }
+  mkdirSync(ownerRoot, { recursive: true })
+  const baseReal = realpathSync(base)
+  const ownerReal = realpathSync(ownerRoot)
+  const expectedOwnerReal = join(baseReal, ownerNamespace)
+  if (ownerReal !== expectedOwnerReal || (ownerReal !== baseReal && !ownerReal.startsWith(baseReal + sep))) {
+    throw new Error("unsafe workspace owner root")
+  }
+  let root = join(ownerRoot, effectiveId)
   try {
     if (existsSync(root) && (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory())) {
       throw new Error("unsafe workspace root")
     }
     mkdirSync(root, { recursive: true })
-    const baseReal = realpathSync(base)
     const rootReal = realpathSync(root)
+    if (rootReal !== ownerReal && !rootReal.startsWith(ownerReal + sep)) throw new Error("workspace escaped owner")
     if (rootReal !== baseReal && !rootReal.startsWith(baseReal + sep)) throw new Error("workspace escaped base")
     root = rootReal
   } catch {
     // A user-controlled session id must never reuse a planted symlink or file.
     const fallbackId = randomBytes(12).toString("hex")
     effectiveId = fallbackId
-    root = join(base, fallbackId)
-    mkdirSync(root, { recursive: true })
+    const fallbackRoot = join(ownerRoot, fallbackId)
+    mkdirSync(fallbackRoot, { recursive: true })
+    const fallbackReal = realpathSync(fallbackRoot)
+    if (fallbackReal !== ownerReal && !fallbackReal.startsWith(ownerReal + sep)) throw new Error("workspace escaped owner")
+    if (fallbackReal !== baseReal && !fallbackReal.startsWith(baseReal + sep)) throw new Error("workspace escaped base")
+    root = fallbackReal
   }
   // Seed a tiny README so list/glob always have something.
   const readme = join(root, "README.md")
@@ -203,84 +219,6 @@ function matchGlob(relPath: string, pattern: string): boolean {
   } catch {
     return relPath.includes(pattern.replace(/\*/g, ""))
   }
-}
-
-async function runBash(command: string, cwd: string): Promise<ToolResult> {
-  if (!command || !command.trim()) {
-    return { ok: false, observation: "Error: command vacío.", summary: "empty command" }
-  }
-  if (BASH_BLOCKLIST.test(command)) {
-    return {
-      ok: false,
-      observation: "Error: comando bloqueado por política de seguridad del sandbox.",
-      summary: "blocked",
-    }
-  }
-
-  return new Promise((resolvePromise) => {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
-      HOME: cwd,
-      LANG: "C.UTF-8",
-      LC_ALL: "C.UTF-8",
-      NODE_OPTIONS: "--max-old-space-size=512",
-      PYTHONDONTWRITEBYTECODE: "1",
-    }
-    // Drop secrets from the sandboxed shell.
-    for (const key of Object.keys(env)) {
-      if (/KEY|SECRET|TOKEN|PASSWORD|DATABASE_URL|PRIVATE/i.test(key) && key !== "PATH") {
-        delete env[key]
-      }
-    }
-
-    const child = spawn("/bin/bash", ["-lc", command], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"] as const,
-    })
-
-    let stdout = ""
-    let stderr = ""
-    let killed = false
-    const timer = setTimeout(() => {
-      killed = true
-      try {
-        child.kill("SIGKILL")
-      } catch {
-        /* ignore */
-      }
-    }, MAX_BASH_MS)
-
-    const onChunk = (buf: Buffer, which: "out" | "err") => {
-      const s = buf.toString("utf8")
-      if (which === "out") stdout = truncate(stdout + s, MAX_BASH_OUTPUT)
-      else stderr = truncate(stderr + s, MAX_BASH_OUTPUT)
-    }
-    child.stdout?.on("data", (b: Buffer) => onChunk(b, "out"))
-    child.stderr?.on("data", (b: Buffer) => onChunk(b, "err"))
-
-    child.on("close", (code: number | null) => {
-      clearTimeout(timer)
-      const body = [stdout, stderr].filter(Boolean).join("\n")
-      const ok = !killed && code === 0
-      resolvePromise({
-        ok,
-        summary: killed ? "timeout" : `exit ${code}`,
-        observation: killed
-          ? `Timeout (${MAX_BASH_MS}ms).\n${body}`
-          : `exitCode=${code}\n${body || "(sin salida)"}`,
-      })
-    })
-    child.on("error", (err: Error) => {
-      clearTimeout(timer)
-      resolvePromise({
-        ok: false,
-        summary: "spawn error",
-        observation: `Error ejecutando bash: ${err.message}`,
-      })
-    })
-  })
 }
 
 async function webSearch(query: string): Promise<ToolResult> {
@@ -504,7 +442,7 @@ export async function executeTool(
     }
 
     case "bash": {
-      return runBash(String(args.command || ""), workspace.root)
+      return { ok: false, observation: "Error: bash deshabilitado; no existe un boundary aislado atestado.", summary: "bash denied" }
     }
 
     case "glob": {
@@ -568,11 +506,10 @@ export async function executeTool(
       return webFetch(String(args.url || ""))
 
     case "spawn_subagent": {
-      // Handled by the run loop (subagent.ts). Should not reach here.
       return {
         ok: false,
-        observation: "spawn_subagent se gestiona en el loop principal.",
-        summary: "delegated",
+        observation: "Error: spawn_subagent deshabilitado; no existe un boundary aislado atestado.",
+        summary: "subagent denied",
       }
     }
 
@@ -592,7 +529,9 @@ export function workspaceFingerprint(workspace: AgentWorkspace): string {
 }
 
 export function getEffectiveToolAllowSet(toolConfig: Record<string, boolean>): ReadonlySet<string> {
-  return new Set(AGENT_TOOL_NAMES.filter((name) => toolConfig[name] === true))
+  return new Set(AGENT_TOOL_NAMES.filter((name) =>
+    name !== "bash" && name !== "spawn_subagent" && toolConfig[name] === true,
+  ))
 }
 
 function sha256(value: Buffer): string {

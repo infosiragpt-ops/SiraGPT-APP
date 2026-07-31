@@ -1,14 +1,23 @@
 import { lookup } from "node:dns/promises"
+import { request as httpRequest } from "node:http"
+import { request as httpsRequest } from "node:https"
 import { isIP } from "node:net"
 
 const DEFAULT_MAX_REDIRECTS = 4
 
 export type HostResolver = (hostname: string) => Promise<ReadonlyArray<string>>
+export type PinnedRequest = (
+  url: URL,
+  init: RequestInit,
+  approvedAddresses: ReadonlyArray<string>,
+  timeoutMs: number,
+) => Promise<Response>
 
 export interface SafeFetchOptions {
   maxRedirects?: number
   timeoutMs?: number
   resolveHost?: HostResolver
+  requestImpl?: PinnedRequest
 }
 
 export interface CappedBody {
@@ -102,6 +111,13 @@ function hostnameIsBlocked(hostname: string): boolean {
 }
 
 export async function validateSafeUrl(rawUrl: string, resolveHost: HostResolver = defaultResolveHost): Promise<URL> {
+  return (await validateSafeUrlWithAddresses(rawUrl, resolveHost)).url
+}
+
+async function validateSafeUrlWithAddresses(
+  rawUrl: string,
+  resolveHost: HostResolver,
+): Promise<{ url: URL; addresses: ReadonlyArray<string> }> {
   let url: URL
   try {
     url = new URL(rawUrl)
@@ -120,7 +136,7 @@ export async function validateSafeUrl(rawUrl: string, resolveHost: HostResolver 
   if (!addresses.length || addresses.some((address) => isBlockedAddress(address))) {
     throw new Error("Destino de red bloqueado")
   }
-  return url
+  return { url, addresses }
 }
 
 async function defaultResolveHost(hostname: string): Promise<ReadonlyArray<string>> {
@@ -132,6 +148,83 @@ function redirectStatus(status: number): boolean {
   return status >= 300 && status < 400 && status !== 304
 }
 
+function bodyBytes(body: unknown): Uint8Array | null {
+  if (body == null) return null
+  if (typeof body === "string") return Buffer.from(body, "utf8")
+  if (body instanceof ArrayBuffer) return new Uint8Array(body)
+  if (ArrayBuffer.isView(body)) {
+    const view = body as Uint8Array
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  }
+  throw new Error("Body no soportado para conexión segura")
+}
+
+function responseFromIncomingMessage(
+  response: import("node:http").IncomingMessage,
+  request: import("node:http").ClientRequest,
+): Response {
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (value == null) continue
+    headers.set(name, Array.isArray(value) ? value.join(", ") : value)
+  }
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      response.on("data", (chunk: Buffer | string) => controller.enqueue(typeof chunk === "string" ? Buffer.from(chunk) : new Uint8Array(chunk)))
+      response.once("end", () => controller.close())
+      response.once("error", (error) => controller.error(error))
+      response.once("aborted", () => controller.error(new Error("Respuesta abortada")))
+    },
+    cancel() {
+      request.destroy()
+      response.destroy()
+    },
+  })
+  return new Response(body, {
+    status: response.statusCode || 502,
+    statusText: response.statusMessage || "",
+    headers,
+  })
+}
+
+async function pinnedRequest(
+  url: URL,
+  init: RequestInit,
+  approvedAddresses: ReadonlyArray<string>,
+  timeoutMs: number,
+): Promise<Response> {
+  const address = approvedAddresses[0]
+  if (!address || isBlockedAddress(address)) throw new Error("Destino de conexión bloqueado")
+  const transport = url.protocol === "https:" ? httpsRequest : httpRequest
+  const headers = new Headers(init.headers)
+  // Never let caller-supplied headers diverge from the validated origin.
+  // The socket is pinned below while Host and TLS SNI remain the URL host.
+  headers.set("host", url.host)
+  const body = bodyBytes(init.body)
+  if (body && !headers.has("content-length")) headers.set("content-length", String(body.byteLength))
+  const headerRecord: Record<string, string> = {}
+  headers.forEach((value, name) => { headerRecord[name] = value })
+
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = transport({
+      hostname: url.hostname,
+      port: url.port ? Number(url.port) : undefined,
+      path: `${url.pathname}${url.search}`,
+      method: String(init.method || "GET").toUpperCase(),
+      headers: headerRecord,
+      // The callback never performs DNS. It returns only the preflight-approved
+      // address, closing the validate-then-resolve rebinding window.
+      lookup: (_hostname, _options, callback) => callback(null, address, isIP(address)),
+      ...(url.protocol === "https:" ? { servername: url.hostname } : {}),
+      signal: init.signal || undefined,
+    }, (response) => resolvePromise(responseFromIncomingMessage(response, request)))
+    request.setTimeout(timeoutMs, () => request.destroy(new Error("fetch timeout")))
+    request.once("error", rejectPromise)
+    if (body) request.write(body)
+    request.end()
+  })
+}
+
 export async function safeFetch(
   rawUrl: string,
   init: RequestInit = {},
@@ -139,13 +232,16 @@ export async function safeFetch(
 ): Promise<{ response: Response; finalUrl: string; redirects: number }> {
   const maxRedirects = Math.max(0, Math.min(options.maxRedirects ?? DEFAULT_MAX_REDIRECTS, 8))
   const resolveHost = options.resolveHost || defaultResolveHost
-  let current = await validateSafeUrl(rawUrl, resolveHost)
+  const requestImpl = options.requestImpl || pinnedRequest
+  let validated = await validateSafeUrlWithAddresses(rawUrl, resolveHost)
+  let current = validated.url
+  let approvedAddresses = validated.addresses
   let redirects = 0
   let requestInit: RequestInit = { ...init, redirect: "manual" }
 
   while (true) {
     const timeout = AbortSignal.timeout(options.timeoutMs ?? 12_000)
-    const response = await fetch(current, { ...requestInit, signal: timeout })
+    const response = await requestImpl(current, { ...requestInit, signal: timeout }, approvedAddresses, options.timeoutMs ?? 12_000)
     if (!redirectStatus(response.status)) return { response, finalUrl: current.toString(), redirects }
 
     const location = response.headers.get("location")
@@ -159,7 +255,9 @@ export async function safeFetch(
     requestInit = becomesGet
       ? { ...requestInit, method: "GET", body: undefined, headers: (() => { const headers = new Headers(requestInit.headers); headers.delete("content-length"); return headers })() }
       : requestInit
-    current = await validateSafeUrl(next.toString(), resolveHost)
+    validated = await validateSafeUrlWithAddresses(next.toString(), resolveHost)
+    current = validated.url
+    approvedAddresses = validated.addresses
     redirects += 1
   }
 }
