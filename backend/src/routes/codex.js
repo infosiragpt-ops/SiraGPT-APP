@@ -53,6 +53,16 @@ const {
 const {
   attachWebSocketProxy,
 } = require('../services/codex/preview-websocket-proxy');
+const {
+  applyPreviewFrameHeaders: applyPreviewFramePolicy,
+  injectPreviewConsoleBridge,
+  previewTokenFor: mintPreviewToken,
+  previewNonceFromRequest,
+  previewFrameAncestors,
+  siblingPreviewOrigin,
+  stripPreviewNonce,
+  verifyPreviewToken: verifySignedPreviewToken,
+} = require('../services/code/preview-proxy');
 
 const router = express.Router();
 let sessionRunner = null;
@@ -85,41 +95,12 @@ function mapSessionError(error, res) {
   return res.status(502).json({ error: 'codex_session_failed', message: String(error?.message || error) });
 }
 
-function base64urlJson(value) {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
-
-function signPreviewPayload(payload, env = process.env) {
-  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
-  const body = base64urlJson(payload);
-  const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  return `${body}.${sig}`;
-}
-
 function verifyPreviewToken(token, env = process.env) {
-  const [body, sig] = String(token || '').split('.');
-  if (!body || !sig) return null;
-  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
-  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (!payload || typeof payload !== 'object') return null;
-    if (payload.exp && Date.now() > Number(payload.exp)) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+  return verifySignedPreviewToken(token, env);
 }
 
 function previewTokenFor({ projectId, userId }, env = process.env) {
-  return signPreviewPayload({
-    projectId,
-    userId,
-    exp: Date.now() + (Number(env.CODEX_PREVIEW_TOKEN_TTL_MS) || 6 * 60 * 60 * 1000),
-  }, env);
+  return mintPreviewToken({ projectId, userId }, env);
 }
 
 function codexPreviewBasePath(projectId, token) {
@@ -209,7 +190,7 @@ async function previewWebSocketTarget(request, env = process.env) {
   }
   if (!['http:', 'https:'].includes(upstreamBase.protocol)) throw previewUpgradeError(503);
 
-  const target = new URL(String(request.url || '/'), upstreamBase);
+  const target = new URL(stripPreviewNonce(String(request.url || '/')), upstreamBase);
   target.protocol = upstreamBase.protocol === 'https:' ? 'wss:' : 'ws:';
   return {
     url: target.toString(),
@@ -230,8 +211,7 @@ function requireCodexAgentAccess(req, res, next) {
 }
 
 function applyPreviewFrameHeaders(_req, res, next) {
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  applyPreviewFramePolicy(res);
   next();
 }
 
@@ -1901,22 +1881,36 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
       hostname: upstreamBase.hostname,
       port: upstreamBase.port || (upstreamBase.protocol === 'https:' ? 443 : 80),
       method: req.method,
-      path: req.originalUrl || req.url || '/',
+      path: stripPreviewNonce(req.originalUrl || req.url || '/'),
       headers: fwdHeaders,
     },
     (up) => {
+      const nonce = previewNonceFromRequest(req);
+      const injectConsole = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
       const headers = {};
       for (const [k, v] of Object.entries(up.headers)) {
         const lk = k.toLowerCase();
         if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
         if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
         if (lk.startsWith('access-control-')) continue;
+        if (injectConsole && lk === 'content-length') continue;
         headers[k] = v;
       }
       headers['cache-control'] = 'no-store';
-      headers['x-frame-options'] = 'SAMEORIGIN';
-      headers['content-security-policy'] = "frame-ancestors 'self'";
+      if (!siblingPreviewOrigin()) headers['x-frame-options'] = 'SAMEORIGIN';
+      headers['content-security-policy'] = `frame-ancestors ${previewFrameAncestors()}`;
       headers['referrer-policy'] = 'no-referrer';
+      if (injectConsole) {
+        const chunks = [];
+        up.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        up.on('end', () => {
+          const injected = injectPreviewConsoleBridge(Buffer.concat(chunks).toString('utf8'), nonce);
+          headers['content-length'] = String(Buffer.byteLength(injected));
+          res.writeHead(up.statusCode || 502, headers);
+          res.end(injected);
+        });
+        return;
+      }
       res.writeHead(up.statusCode || 502, headers);
       up.pipe(res);
     },

@@ -23,6 +23,7 @@
  */
 
 const crypto = require('crypto');
+const { redactPreviewUrl } = require('./preview-url-redaction');
 
 let _otelApi = null;
 let _otelLoaded = false;
@@ -242,7 +243,7 @@ function httpSpanMiddleware(opts = {}) {
 
     const baseAttrs = {
       'http.method': method,
-      'http.target': req && req.originalUrl ? String(req.originalUrl).slice(0, 500) : '',
+      'http.target': req && req.originalUrl ? redactPreviewUrl(String(req.originalUrl)).slice(0, 500) : '',
       'http.route': routePath,
     };
     try {

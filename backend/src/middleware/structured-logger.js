@@ -3,6 +3,7 @@
 let _pino = null;
 let _pinoHttp = null;
 let _logger = null;
+const { redactPreviewUrl } = require('../utils/preview-url-redaction');
 
 function initPino(opts = {}) {
   if (_logger) return _logger;
@@ -48,7 +49,7 @@ function createPinoMiddleware(opts = {}) {
     serializers: {
       req: (req) => ({
         method: req.method,
-        url: req.url,
+        url: redactPreviewUrl(req.url),
         path: req.route?.path || req.path,
         parameters: req.params,
         headers: { 'user-agent': req.headers?.['user-agent'], 'x-forwarded-for': req.headers?.['x-forwarded-for'] },
@@ -72,7 +73,7 @@ function sentryCaptureError(err, req, context = {}) {
       Sentry.withScope(scope => {
         if (req) {
           scope.setTag('method', req.method);
-          scope.setTag('path', req.path || req.url);
+          scope.setTag('path', redactPreviewUrl(req.path || req.url));
         }
         if (context.userId) scope.setUser({ id: String(context.userId) });
         scope.setExtras(context);

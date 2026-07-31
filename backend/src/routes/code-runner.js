@@ -33,14 +33,23 @@ const {
   buildUpstreamRequestHeaders,
   isForwardableResponseHeader,
 } = require('../utils/proxy-headers');
+const {
+  applyPreviewFrameHeaders,
+  attachCodeRunnerPreviewWebSocketProxy,
+  buildPreviewConsoleBridge,
+  filterPreviewResponseHeaders,
+  previewNonceFromRequest,
+  stripPreviewNonce,
+} = require('../services/code/preview-proxy');
 
 function safeRunId(runId) {
   return String(runId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
 }
 
-// The preview token is hex (crypto.randomBytes → hex). Strip anything else.
+// Preview tokens are signed base64url claims in production; strip anything
+// outside the URL-safe token alphabet before it reaches the run registry.
 function safeToken(token) {
-  return String(token || '').replace(/[^a-f0-9]/gi, '').slice(0, 128);
+  return String(token || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 2048);
 }
 
 const PREVIEW_SELECTOR_BRIDGE = `<script>
@@ -54,7 +63,7 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
   var pendingTarget = null;
   var frame = 0;
   var style = null;
-  function send(type, extra){try{var payload=extra||{};payload.type=type;parent.postMessage(payload,'*')}catch(e){}}
+  function send(type, extra){try{var payload=extra||{};payload.type=type;payload.nonce=window.__sgptPreviewNonce||'';parent.postMessage(payload,'*')}catch(e){}}
   function norm(value, limit){ return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit || 220); }
   function escIdent(value){
     if (!value) return '';
@@ -255,6 +264,7 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
   }
   window.addEventListener('message', function(event){
     var msg = event.data || {};
+    if (msg.nonce !== (window.__sgptPreviewNonce || '')) return;
     if (msg.type === 'sgpt-preview-select-start') start();
     if (msg.type === 'sgpt-preview-select-cancel') cleanup('Selección cancelada.');
   });
@@ -268,11 +278,12 @@ function shouldInjectPreviewSelector(req, upstreamHeaders) {
   return /text\/html|application\/xhtml\+xml/i.test(contentType) && !contentEncoding;
 }
 
-function injectPreviewSelector(html) {
+function injectPreviewSelector(html, nonce) {
   if (!html || html.includes('__sgptPreviewSelectorBridge')) return html;
-  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${PREVIEW_SELECTOR_BRIDGE}</head>`);
-  if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (m) => `${m}${PREVIEW_SELECTOR_BRIDGE}`);
-  return `${PREVIEW_SELECTOR_BRIDGE}${html}`;
+  const bridges = `${buildPreviewConsoleBridge(nonce)}${PREVIEW_SELECTOR_BRIDGE}`;
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${bridges}</head>`);
+  if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (m) => `${m}${bridges}`);
+  return `${bridges}${html}`;
 }
 
 // Public: lets the UI know whether the host runner is available here.
@@ -381,9 +392,8 @@ router.post('/:runId/exec', authenticateToken, async (req, res) => {
   }
 });
 
-function applyPreviewFrameHeaders(_req, res, next) {
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+function setPreviewFrameHeaders(_req, res, next) {
+  applyPreviewFrameHeaders(res);
   next();
 }
 
@@ -393,7 +403,7 @@ function proxiedPath(req) {
   const idx = raw.indexOf(marker);
   if (idx === -1) return '/';
   const rest = raw.slice(idx + marker.length);
-  return rest ? rest : '/';
+  return stripPreviewNonce(rest ? rest : '/');
 }
 
 function tokenAppPath(req) {
@@ -401,10 +411,10 @@ function tokenAppPath(req) {
   // Forward that full browser path upstream; stripping it to / would make Vite
   // redirect back to the base URL, which traps the iframe in a 302 loop.
   const raw = req.originalUrl || req.url || '/';
-  if (raw.startsWith('/api/code-runner/')) return raw;
+  if (raw.startsWith('/api/code-runner/')) return stripPreviewNonce(raw);
   const base = req.baseUrl || '/api/code-runner';
   const url = req.url || '/';
-  return `${base}${url.startsWith('/') ? url : `/${url}`}`;
+  return stripPreviewNonce(`${base}${url.startsWith('/') ? url : `/${url}`}`);
 }
 
 /**
@@ -437,18 +447,12 @@ function proxyApp(req, res) {
     },
     (up) => {
       const injectSelector = shouldInjectPreviewSelector(req, up.headers);
-      const headers = {};
-      for (const [k, v] of Object.entries(up.headers)) {
-        const lk = k.toLowerCase();
-        if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
-        if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
-        if (lk.startsWith('access-control-')) continue;
-        if (injectSelector && (lk === 'content-length' || lk === 'content-encoding')) continue;
-        headers[k] = v;
+      const nonce = previewNonceFromRequest(req);
+      const headers = filterPreviewResponseHeaders(up.headers);
+      if (injectSelector && (up.headers['content-length'] || up.headers['content-encoding'])) {
+        delete headers['content-length'];
+        delete headers['content-encoding'];
       }
-      headers['cache-control'] = 'no-store';
-      headers['x-frame-options'] = 'SAMEORIGIN';
-      headers['content-security-policy'] = "frame-ancestors 'self'";
 
       const reqOrigin = req.headers.origin;
       if (reqOrigin) {
@@ -468,7 +472,7 @@ function proxyApp(req, res) {
         up.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         up.on('end', () => {
           const body = Buffer.concat(chunks).toString('utf8');
-          const injected = injectPreviewSelector(body);
+          const injected = injectPreviewSelector(body, nonce);
           headers['content-length'] = String(Buffer.byteLength(injected));
           res.writeHead(up.statusCode || 502, headers);
           res.end(injected);
@@ -498,12 +502,12 @@ function proxyApp(req, res) {
   else req.pipe(upstream);
 }
 
-router.use('/:runId/:token/app', applyPreviewFrameHeaders, proxyApp);
+router.use('/:runId/:token/app', setPreviewFrameHeaders, proxyApp);
 
 // Authenticated preview proxy. In production the browser cannot iframe the
 // backend container's localhost port, so the runner exposes each dev server
 // through this same-origin path instead of opening dynamic public ports.
-router.use('/:runId/proxy', applyPreviewFrameHeaders, authenticateToken, async (req, res) => {
+router.use('/:runId/proxy', setPreviewFrameHeaders, authenticateToken, async (req, res) => {
   if (!['GET', 'HEAD'].includes(req.method)) {
     return res.status(405).json({ error: 'method_not_allowed' });
   }
@@ -542,3 +546,24 @@ router.use('/:runId/proxy', applyPreviewFrameHeaders, authenticateToken, async (
 });
 
 module.exports = router;
+
+router.attachPreviewWebSocketProxy = (server) => attachCodeRunnerPreviewWebSocketProxy(server, {
+  resolveTarget: (request) => {
+    const match = /^\/api\/code-runner\/([^/]+)\/([^/]+)\/app(?:\/|$)/.exec(String(request?.url || '').split('?')[0]);
+    if (!match) return { statusCode: 404 };
+    let runId;
+    let token;
+    try {
+      runId = safeRunId(decodeURIComponent(match[1]));
+      token = safeToken(decodeURIComponent(match[2]));
+    } catch {
+      return { statusCode: 403 };
+    }
+    const target = hostRunner.getRunForProxy(runId, token);
+    if (!target) return { statusCode: 403 };
+    return {
+      url: `ws://127.0.0.1:${target.port}${stripPreviewNonce(request.url || '/')}`,
+      host: `127.0.0.1:${target.port}`,
+    };
+  },
+});
