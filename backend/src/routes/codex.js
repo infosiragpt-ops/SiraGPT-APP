@@ -1577,12 +1577,41 @@ router.post(
     try {
       const project = await loadOwnedProjectRecord(req, res);
       if (!project) return undefined;
+      const actionHash = req.body?.actionHash;
+      const actionVersion = req.body?.actionVersion;
+      const actionRecord = await codexDb.codexExternalAction.findFirst({
+        where: {
+          id: req.params.actionId,
+          projectId: project.id,
+          userId: project.userId,
+        },
+        select: { kind: true },
+      });
+      const requiresApprovalBinding = ['email_reply', 'email_send', 'email_forward', 'lead_outreach']
+        .includes(actionRecord?.kind);
+      if (requiresApprovalBinding && (!/^[a-f0-9]{64}$/i.test(String(actionHash || ''))
+        || typeof actionVersion !== 'number'
+        || !Number.isInteger(actionVersion)
+        || actionVersion !== 1)) {
+        return res.status(400).json({
+          error: 'approval_invalid',
+          message: 'actionHash and actionVersion are required for email/lead approval.',
+        });
+      }
       const result = await require('../services/codex/company-operations').approveExternalAction({
         prisma: codexDb,
         project,
         actionId: req.params.actionId,
+        actionHash: /^[a-f0-9]{64}$/i.test(String(actionHash || '')) ? String(actionHash).toLowerCase() : null,
+        actionVersion: typeof actionVersion === 'number' && Number.isInteger(actionVersion) ? actionVersion : null,
+        actorId: req.user.id,
       });
-      return res.status(result.action === 'not_found' ? 404 : 200).json({ result });
+      const status = result.action === 'not_found'
+        ? 404
+        : ['approval_stale', 'approval_expired', 'approval_consumed', 'delivery_uncertain'].includes(result.action)
+          ? 409
+          : 200;
+      return res.status(status).json({ result });
     } catch (err) {
       return sendCompanyOperationsError(res, err);
     }

@@ -521,9 +521,13 @@ export interface CodexCompanyInboxItem {
 }
 export interface CodexExternalAction {
   id: string
-  kind: "email_reply" | "lead_outreach" | "social_reply"
+  kind: "email_reply" | "email_send" | "email_forward" | "lead_outreach" | "social_reply"
   targetRef: string
   status: string
+  expiresAt?: string | null
+  consumedAt?: string | null
+  attemptId?: string | null
+  revokedAt?: string | null
   payload: {
     body?: string
     subject?: string
@@ -534,6 +538,14 @@ export interface CodexExternalAction {
     connectionId?: string
     authorId?: string
     metadata?: Record<string, string | null>
+    providerDraftId?: string | null
+    _approval?: {
+      actionHash?: string | null
+      version?: number | null
+      expiresAt?: string | null
+      attemptId?: string | null
+      mode?: string | null
+    }
   }
   error: string | null
   createdAt: string
@@ -907,10 +919,14 @@ export const codexApi = {
       `/projects/${id}/company-operations/leads/${leadId}/outreach`,
       { method: "POST" },
     ).then((result) => result.result),
-  approveCompanyAction: (id: string, actionId: string) =>
+  approveCompanyAction: (
+    id: string,
+    actionId: string,
+    approval: { actionHash: string; actionVersion: number },
+  ) =>
     req<{ result: { action: string; record: CodexExternalAction | null } }>(
       `/projects/${id}/company-operations/actions/${actionId}/approve`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(approval) },
     ).then((result) => result.result),
   rejectCompanyAction: (id: string, actionId: string) =>
     req<{ result: { action: string } }>(

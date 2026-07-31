@@ -100,22 +100,7 @@ router.get('/emails', authenticateToken, async (req, res) => {
 
 // Delete email
 router.delete('/email/:messageId', authenticateToken, async (req, res) => {
-  try {
-    const { messageId } = req.params;
-
-    const gmailService = await getUserGmailClient(req.user.id);
-
-    const result = await gmailService.deleteEmail({ messageId });
-
-    res.json({
-      success: true,
-      message: `Email deleted successfully`,
-      messageId: result.messageId
-    });
-  } catch (error) {
-    console.error('Delete email error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  return rejectDirectGmailMutation(req, res, 'email_delete');
 });
 
 // Reply to email
@@ -160,66 +145,17 @@ router.get('/search', authenticateToken, async (req, res) => {
 
 // Mark email as read/unread
 router.patch('/email/:messageId/mark', authenticateToken, async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    const { read = true } = req.body;
-
-    // Get user's Gmail tokens
-    const gmailService = await getUserGmailClient(req.user.id);
-
-    const result = await gmailService.markEmail({ messageId, read });
-
-    res.json({
-      success: true,
-      message: `Email marked as ${read ? 'read' : 'unread'}`,
-      messageId: result.messageId
-    });
-  } catch (error) {
-    console.error('Mark email error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  return rejectDirectGmailMutation(req, res, 'email_mark');
 });
 
 // Star/Unstar email
 router.patch('/email/:messageId/star', authenticateToken, async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    const { starred = true } = req.body;
-
-    const gmailService = await getUserGmailClient(req.user.id);
-
-    const result = await gmailService.starEmail({ messageId, starred });
-
-    res.json({
-      success: true,
-      message: `Email ${starred ? 'starred' : 'unstarred'} successfully`,
-      messageId: result.messageId
-    });
-  } catch (error) {
-    console.error('Star email error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  return rejectDirectGmailMutation(req, res, 'email_star');
 });
 
 // Archive/Unarchive email
 router.patch('/email/:messageId/archive', authenticateToken, async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    const { archive = true } = req.body;
-
-    const gmailService = await getUserGmailClient(req.user.id);
-
-    const result = await gmailService.archiveEmail({ messageId, archive });
-
-    res.json({
-      success: true,
-      message: `Email ${archive ? 'archived' : 'moved to inbox'} successfully`,
-      messageId: result.messageId
-    });
-  } catch (error) {
-    console.error('Archive email error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  return rejectDirectGmailMutation(req, res, 'email_archive');
 });
 
 // Get email thread

@@ -14,6 +14,7 @@ const EMAIL_MUTATION_KINDS = new Set([
   'lead_outreach',
 ]);
 const ACTION_VERSION = 1;
+const APPROVAL_TTL_MS = 15 * 60 * 1000;
 const localLocks = new Map();
 
 function hashInt32(value) {
@@ -41,9 +42,17 @@ async function withLocalLock(key, operation) {
   }
 }
 
-function actionKey({ projectId, kind, targetRef }) {
+function actionKey({ projectId, kind, targetRef, payload = null, attemptId = null }) {
+  const fingerprint = isEmailMutationKind(kind)
+    ? actionHash({
+      kind,
+      targetRef,
+      payload: actionPayloadForIdempotency(payload),
+      attemptId,
+    })
+    : '';
   return createHash('sha256')
-    .update(`${projectId}:${kind}:${targetRef}`)
+    .update(`${projectId}:${kind}:${targetRef}:${fingerprint}:${attemptId || ''}`)
     .digest('hex');
 }
 
@@ -61,19 +70,29 @@ function stableValue(value) {
 function actionPayloadForHash(payload) {
   if (!payload || typeof payload !== 'object') return {};
   return Object.keys(payload).sort().reduce((result, key) => {
-    // Approval/audit state and provider draft ids are mutable bookkeeping,
-    // not the outbound action the human approved.
+    // Approval state is mutable bookkeeping. Provider draft identity remains
+    // bound to the review record even though execution uses approved fields.
+    if (key === '_approval' || key === 'providerDraftError') return result;
+    result[key] = payload[key];
+    return result;
+  }, {});
+}
+
+function actionPayloadForIdempotency(payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  return Object.keys(payload).sort().reduce((result, key) => {
     if (key === '_approval' || key === 'providerDraftId' || key === 'providerDraftError') return result;
     result[key] = payload[key];
     return result;
   }, {});
 }
 
-function actionHash({ kind, targetRef, payload }) {
+function actionHash({ kind, targetRef, payload, attemptId = null }) {
   return createHash('sha256')
     .update(JSON.stringify(stableValue({
       kind,
       targetRef,
+      attemptId: attemptId || null,
       payload: actionPayloadForHash(payload),
     })))
     .digest('hex');
@@ -95,7 +114,12 @@ function humanApprovalForAction({
   const approval = payload._approval && typeof payload._approval === 'object'
     ? payload._approval
     : {};
-  const currentHash = actionHash({ kind, targetRef: action?.targetRef, payload });
+  const currentHash = actionHash({
+    kind,
+    targetRef: action?.targetRef,
+    payload,
+    attemptId: action?.attemptId || approval.attemptId || null,
+  });
   const version = Number(approval.version);
   const hashMatches = approval.actionHash === currentHash
     && (!expectedHash || expectedHash === currentHash);
@@ -134,6 +158,8 @@ function pendingApprovalPayload(payload, metadata = {}) {
       actionHash: metadata.actionHash,
       mode: 'pending_review',
       actorId: null,
+      expiresAt: metadata.expiresAt || null,
+      attemptId: metadata.attemptId || null,
     },
   };
 }
@@ -161,15 +187,23 @@ async function ensureExternalAction({
   targetRef,
   payload,
   status = 'pending_review',
+  attemptId = null,
+  now = () => new Date(),
 }) {
-  const idempotencyKey = actionKey({ projectId: project.id, kind, targetRef });
+  const stableAttemptId = String(attemptId || payload?.attemptId || 'attempt-1');
+  const idempotencyKey = actionKey({
+    projectId: project.id, kind, targetRef, payload, attemptId: stableAttemptId,
+  });
   const existing = await prisma.codexExternalAction.findUnique({
     where: { idempotencyKey },
   });
   if (existing) return { record: existing, created: false };
+  const expiresAt = new Date(new Date(now()).getTime() + APPROVAL_TTL_MS);
   const normalizedPayload = isEmailMutationKind(kind)
     ? pendingApprovalPayload(payload, {
-      actionHash: actionHash({ kind, targetRef, payload }),
+      actionHash: actionHash({ kind, targetRef, payload, attemptId: stableAttemptId }),
+      expiresAt: expiresAt.toISOString(),
+      attemptId: stableAttemptId,
     })
     : payload;
   const safeStatus = isEmailMutationKind(kind) ? 'pending_review' : status;
@@ -183,6 +217,10 @@ async function ensureExternalAction({
         idempotencyKey,
         status: safeStatus,
         payload: normalizedPayload,
+        expiresAt: isEmailMutationKind(kind) ? expiresAt : null,
+        consumedAt: null,
+        attemptId: isEmailMutationKind(kind) ? stableAttemptId : null,
+        revokedAt: null,
         approvedAt: null,
       },
     });
@@ -210,7 +248,12 @@ async function updateExternalActionPayload({ prisma, project, actionId, patch })
   const payload = { ...(existing.payload || {}), ...(patch || {}) };
   const data = { payload };
   if (isEmailMutationKind(existing.kind)) {
-    const nextHash = actionHash({ kind: existing.kind, targetRef: existing.targetRef, payload });
+    const nextHash = actionHash({
+      kind: existing.kind,
+      targetRef: existing.targetRef,
+      payload,
+      attemptId: existing.attemptId || null,
+    });
     const currentApproval = existing.payload?._approval && typeof existing.payload._approval === 'object'
       ? existing.payload._approval
       : {};
@@ -222,11 +265,15 @@ async function updateExternalActionPayload({ prisma, project, actionId, patch })
         actionHash: nextHash,
         mode: changed ? 'pending_review' : (currentApproval.mode || 'pending_review'),
         actorId: changed ? null : (currentApproval.actorId || null),
+        expiresAt: existing.expiresAt?.toISOString?.() || currentApproval.expiresAt || null,
+        attemptId: existing.attemptId || currentApproval.attemptId || null,
       },
     };
-    if (changed && existing.status !== 'completed') {
+    if (changed && !['completed', 'delivery_uncertain'].includes(existing.status)) {
       data.status = 'pending_review';
       data.approvedAt = null;
+      data.consumedAt = null;
+      data.revokedAt = null;
     }
   }
   return prisma.codexExternalAction.update({
@@ -235,8 +282,22 @@ async function updateExternalActionPayload({ prisma, project, actionId, patch })
   });
 }
 
-async function findExternalAction({ prisma, project, kind, targetRef }) {
-  const idempotencyKey = actionKey({ projectId: project.id, kind, targetRef });
+async function findExternalAction({ prisma, project, kind, targetRef, payload = null, attemptId = null }) {
+  const idempotencyKey = actionKey({
+    projectId: project.id, kind, targetRef, payload, attemptId,
+  });
+  if (!payload && isEmailMutationKind(kind)) {
+    return prisma.codexExternalAction.findFirst({
+      where: {
+        projectId: project.id,
+        userId: project.userId,
+        kind,
+        targetRef,
+        status: { in: ['pending_review', 'approved', 'executing', 'delivery_uncertain'] },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
   return prisma.codexExternalAction.findFirst({
     where: {
       idempotencyKey,
@@ -257,6 +318,7 @@ async function executeExternalAction({
   companyContext = null,
   fetchImpl = globalThis.fetch,
   vault = null,
+  claimedAttemptId = null,
 }) {
   const key = String(project.id);
   const claim = await withLocalLock(key, async () => {
@@ -270,8 +332,14 @@ async function executeExternalAction({
       });
       if (!action) return { action: 'not_found', record: null };
       if (action.status === 'completed') return { action: 'already_completed', record: action };
-      if (action.status === 'executing') return { action: 'already_executing', record: action };
-      if (action.status !== 'approved') return { action: 'approval_required', record: action };
+      if (action.status === 'delivery_uncertain') return { action: 'delivery_uncertain', record: action };
+      const claimedEmailAction = isEmailMutationKind(action.kind)
+        && action.status === 'executing'
+        && action.consumedAt
+        && claimedAttemptId
+        && action.attemptId === claimedAttemptId;
+      if (!claimedEmailAction && action.status === 'executing') return { action: 'already_executing', record: action };
+      if (!claimedEmailAction && action.status !== 'approved') return { action: 'approval_required', record: action };
 
       let authorized;
       try {
@@ -292,7 +360,7 @@ async function executeExternalAction({
 
       const start = new Date(now());
       start.setUTCHours(0, 0, 0, 0);
-      const sentToday = await client.codexExternalAction.count({
+      const countedToday = await client.codexExternalAction.count({
         where: {
           projectId: project.id,
           kind: action.kind,
@@ -303,6 +371,7 @@ async function executeExternalAction({
           ],
         },
       });
+      const sentToday = Math.max(0, countedToday - (claimedEmailAction ? 1 : 0));
       const freshProject = authorized.project;
       const user = authorized.user || null;
       const socialConnection = authorized.socialConnection || null;
@@ -350,6 +419,8 @@ async function executeExternalAction({
         return { action: reason, record, policy: decision };
       }
 
+      if (claimedEmailAction) return { action: 'claimed', record: action, policy: decision };
+
       const record = await client.codexExternalAction.update({
         where: { id: action.id },
         data: { status: 'executing', error: null },
@@ -371,6 +442,7 @@ async function executeExternalAction({
   });
   if (claim.action !== 'claimed') return claim;
   let action = claim.record;
+  let providerInvoked = false;
 
   try {
     let result;
@@ -391,9 +463,8 @@ async function executeExternalAction({
         kind: action.kind,
         payload: action.payload,
       });
-      result = action.payload.providerDraftId
-        ? await client.sendDraft({ draftId: action.payload.providerDraftId })
-        : await client.replyToEmail({
+      providerInvoked = true;
+      result = await client.replyToEmail({
           threadId: action.payload.threadId,
           messageId: action.payload.messageId,
           body: action.payload.body,
@@ -426,15 +497,15 @@ async function executeExternalAction({
         kind: action.kind,
         payload: action.payload,
       });
-      if (action.payload.providerDraftId) {
-        result = await client.sendDraft({ draftId: action.payload.providerDraftId });
-      } else if (action.kind === 'email_send') {
+      if (action.kind === 'email_send') {
+        providerInvoked = true;
         result = await client.sendEmail({
           to: action.payload.to,
           subject: action.payload.subject,
           body: action.payload.body,
         });
       } else if (typeof client.forwardEmail === 'function') {
+        providerInvoked = true;
         result = await client.forwardEmail({
           threadId: action.payload.threadId,
           messageId: action.payload.messageId,
@@ -461,9 +532,8 @@ async function executeExternalAction({
         kind: action.kind,
         payload: action.payload,
       });
-      result = action.payload.providerDraftId
-        ? await client.sendDraft({ draftId: action.payload.providerDraftId })
-        : await client.sendEmail({
+      providerInvoked = true;
+      result = await client.sendEmail({
           to: action.payload.to,
           subject: action.payload.subject,
           body: action.payload.body,
@@ -543,84 +613,153 @@ async function executeExternalAction({
     return { action: 'completed', record };
   } catch (error) {
     const accessDenied = error instanceof resourceAccess.CompanyResourceAccessError;
-    const record = await prisma.codexExternalAction.update({
-      where: { id: action.id },
-      data: {
-        status: accessDenied ? 'pending_review' : 'error',
-        error: accessDenied
-          ? error.code
-          : String(error?.message || error).slice(0, 2000),
-      },
-    });
-    return { action: accessDenied ? error.code : 'error', record };
+    const deliveryUncertain = providerInvoked && isEmailMutationKind(action.kind);
+    const nextStatus = deliveryUncertain ? 'delivery_uncertain' : (accessDenied ? 'pending_review' : 'error');
+    const message = accessDenied
+      ? error.code
+      : String(error?.message || error).slice(0, 2000);
+    let record;
+    try {
+      record = await prisma.codexExternalAction.update({
+        where: { id: action.id },
+        data: {
+          status: nextStatus,
+          error: message,
+          ...(deliveryUncertain ? {} : { consumedAt: null }),
+        },
+      });
+    } catch (persistenceError) {
+      record = { ...action, status: nextStatus, error: message };
+    }
+    return {
+      action: deliveryUncertain ? 'delivery_uncertain' : (accessDenied ? error.code : 'error'),
+      record,
+    };
   }
 }
 
 async function approveExternalAction({ prisma, project, actionId, ...deps }) {
-  const existing = await prisma.codexExternalAction.findFirst({
-    where: {
-      id: actionId,
-      projectId: project.id,
-      userId: project.userId,
-    },
-  });
-  if (!existing) return { action: 'not_found', record: null };
-  if (existing.status === 'completed') return { action: 'already_completed', record: existing };
-  if (!['pending_review', 'error', 'approved'].includes(existing.status)) {
-    return { action: 'not_approvable', record: existing };
-  }
-  try {
-    await resourceAccess.requireExternalActionResourceAccess({
-      prisma,
-      project,
-      kind: existing.kind,
-      payload: existing.payload,
+  const expectedHash = deps.actionHash;
+  const expectedVersion = deps.actionVersion;
+  const actorId = deps.actorId;
+  const now = new Date(deps.now ? deps.now() : Date.now());
+  const key = String(project.id);
+  let claimedAttemptId = null;
+  let existing;
+
+  const outcome = await withLocalLock(key, async () => {
+    const action = await prisma.codexExternalAction.findFirst({
+      where: { id: actionId, projectId: project.id, userId: project.userId },
     });
-  } catch (error) {
-    if (!(error instanceof resourceAccess.CompanyResourceAccessError)) throw error;
-    return { action: error.code, record: existing };
-  }
-  const expectedHash = deps.actionHash || null;
-  const expectedVersion = deps.actionVersion || null;
-  const actorId = deps.actorId || project.userId;
-  const currentApproval = humanApprovalForAction({
-    kind: existing.kind,
-    action: existing,
-    actorId,
-    actionHash: expectedHash,
-    actionVersion: expectedVersion,
-  });
-  if (isEmailMutationKind(existing.kind) && (
-    (expectedHash && expectedHash !== currentApproval.actionHash)
-    || (expectedVersion && Number(expectedVersion) !== currentApproval.actionVersion)
-  )) {
-    return { action: 'approval_stale', record: existing };
-  }
-  const nextHash = currentApproval.actionHash || actionHash({
-    kind: existing.kind,
-    targetRef: existing.targetRef,
-    payload: existing.payload,
-  });
-  if (existing.status !== 'approved' || !currentApproval.allowed) {
-    await prisma.codexExternalAction.update({
-      where: { id: existing.id },
-      data: {
-        payload: {
-          ...(existing.payload || {}),
-          _approval: {
-            version: ACTION_VERSION,
-            actionHash: nextHash,
-            mode: 'human',
-            actorId,
-          },
+    existing = action;
+    if (!action) return { action: 'not_found', record: null };
+    if (action.status === 'completed') return { action: 'already_completed', record: action };
+    if (action.status === 'delivery_uncertain') return { action: 'delivery_uncertain', record: action };
+    if (action.consumedAt) return { action: 'approval_consumed', record: action };
+    if (action.revokedAt || action.status === 'rejected') return { action: 'approval_revoked', record: action };
+    if (!['pending_review', 'error'].includes(action.status)) {
+      return { action: 'not_approvable', record: action };
+    }
+
+    if (isEmailMutationKind(action.kind)) {
+      if (typeof actorId !== 'string' || actorId.length === 0
+        || !/^[a-f0-9]{64}$/i.test(String(expectedHash || ''))
+        || typeof expectedVersion !== 'number'
+        || !Number.isInteger(expectedVersion)
+        || expectedVersion !== ACTION_VERSION) {
+        return { action: 'approval_invalid', record: action };
+      }
+      const expiresAt = action.expiresAt ? new Date(action.expiresAt) : null;
+      if (!expiresAt || !Number.isFinite(expiresAt.getTime()) || expiresAt <= now) {
+        const record = await prisma.codexExternalAction.update({
+          where: { id: action.id },
+          data: { status: 'expired', error: 'approval_expired' },
+        });
+        return { action: 'approval_expired', record };
+      }
+      const currentHash = actionHash({
+        kind: action.kind,
+        targetRef: action.targetRef,
+        payload: action.payload,
+        attemptId: action.attemptId || action.payload?._approval?.attemptId || null,
+      });
+      const currentVersion = Number(action.payload?._approval?.version);
+      if (String(expectedHash).toLowerCase() !== currentHash
+        || expectedVersion !== currentVersion) {
+        return { action: 'approval_stale', record: action };
+      }
+      try {
+        await resourceAccess.requireExternalActionResourceAccess({
+          prisma,
+          project,
+          kind: action.kind,
+          payload: action.payload,
+        });
+      } catch (error) {
+        if (!(error instanceof resourceAccess.CompanyResourceAccessError)) throw error;
+        return { action: error.code, record: action };
+      }
+      const attemptId = String(action.attemptId || action.payload?._approval?.attemptId || 'attempt-1');
+      const payload = {
+        ...(action.payload || {}),
+        _approval: {
+          ...(action.payload?._approval || {}),
+          version: ACTION_VERSION,
+          actionHash: currentHash,
+          mode: 'human',
+          actorId,
+          approvedAt: now.toISOString(),
         },
-        status: 'approved',
-        approvedAt: new Date(),
-        error: null,
-      },
+      };
+      const claimWhere = {
+        id: action.id,
+        projectId: project.id,
+        userId: project.userId,
+        status: { in: ['pending_review', 'error'] },
+        consumedAt: null,
+        expiresAt: { gt: now },
+        payload: { equals: action.payload },
+      };
+      const claimed = typeof prisma.codexExternalAction.updateMany === 'function'
+        ? await prisma.codexExternalAction.updateMany({
+          where: claimWhere,
+          data: {
+            payload,
+            status: 'executing',
+            consumedAt: now,
+            attemptId,
+            approvedAt: now,
+            error: null,
+          },
+        })
+        : { count: 0 };
+      if (!claimed?.count) {
+        const current = await prisma.codexExternalAction.findFirst({
+          where: { id: action.id, projectId: project.id, userId: project.userId },
+        });
+        return {
+          action: current?.consumedAt ? 'approval_consumed' : 'approval_stale',
+          record: current || action,
+        };
+      }
+      claimedAttemptId = attemptId;
+      return { action: 'claimed', record: { ...action, ...payload, payload, status: 'executing', consumedAt: now, attemptId } };
+    }
+
+    const currentApproval = humanApprovalForAction({ kind: action.kind, action, actorId });
+    if (!currentApproval.allowed) return { action: 'human_review_required', record: action };
+    await prisma.codexExternalAction.update({
+      where: { id: action.id },
+      data: { status: 'approved', approvedAt: now, error: null },
     });
+    return { action: 'approved', record: action };
+  });
+
+  if (outcome.action !== 'claimed' && !isEmailMutationKind(existing?.kind)) {
+    if (outcome.action !== 'approved') return outcome;
   }
-  return executeExternalAction({ prisma, project, actionId, ...deps });
+  if (outcome.action !== 'claimed' && isEmailMutationKind(existing?.kind)) return outcome;
+  return executeExternalAction({ prisma, project, actionId, ...deps, claimedAttemptId });
 }
 
 async function markExternalActionError({ prisma, project, actionId, error }) {
@@ -646,7 +785,7 @@ async function rejectExternalAction({ prisma, project, actionId }) {
       userId: project.userId,
       status: { in: ['pending_review', 'approved', 'error'] },
     },
-    data: { status: 'rejected', error: null },
+    data: { status: 'rejected', revokedAt: new Date(), error: null },
   });
   return { action: result?.count ? 'rejected' : 'not_rejectable' };
 }

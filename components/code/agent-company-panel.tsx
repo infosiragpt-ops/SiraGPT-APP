@@ -3620,7 +3620,15 @@ function ResourcesView({
       if (
         socialScopeRef.current === operationScope
         && socialLoadGenerationRef.current === generation
-      ) toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
+      ) {
+        const code = (error as { body?: { error?: string } })?.body?.error
+        if (code === "approval_stale" || code === "approval_expired" || code === "approval_invalid") {
+          toast.error("La aprobación quedó obsoleta. Revisa la acción actualizada antes de enviarla.")
+          void refreshCompanyOps()
+        } else {
+          toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
+        }
+      }
     } finally {
       if (
         socialScopeRef.current === operationScope
@@ -3687,9 +3695,17 @@ function ResourcesView({
   ) => {
     await runCompanyOperation(
       `action:${action.id}`,
-      (projectId) => decision === "approve"
-        ? codexApi.approveCompanyAction(projectId, action.id)
-        : codexApi.rejectCompanyAction(projectId, action.id),
+      (projectId) => {
+        if (decision === "reject") return codexApi.rejectCompanyAction(projectId, action.id)
+        const approval = action.payload._approval
+        if (!approval?.actionHash || approval.version !== 1) {
+          throw new Error("La acción no tiene una aprobación vigente. Actualiza la vista antes de enviar.")
+        }
+        return codexApi.approveCompanyAction(projectId, action.id, {
+          actionHash: approval.actionHash,
+          actionVersion: approval.version,
+        })
+      },
       decision === "approve" ? "Acción aprobada y ejecutada." : "Acción rechazada.",
     )
   }, [runCompanyOperation])
@@ -4839,6 +4855,12 @@ function CompanyOperationsPanel({
                     <span className="font-semibold">Asunto:</span>{" "}
                     <span className="text-muted-foreground">{action.payload.subject || "Respuesta al hilo original"}</span>
                   </p>
+                  {action.kind !== "social_reply" && action.payload._approval ? (
+                    <p className="break-all text-[9px] text-muted-foreground">
+                      <span className="font-semibold">Aprobación:</span>{" "}
+                      v{action.payload._approval.version || "?"} · {action.payload._approval.actionHash || "hash ausente"}
+                    </p>
+                  ) : null}
                   <details className="border-y border-border/45 py-2">
                     <summary className="cursor-pointer font-semibold">Revisar mensaje completo</summary>
                     <p className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words leading-relaxed text-muted-foreground">

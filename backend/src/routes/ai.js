@@ -9596,6 +9596,33 @@ async function resolveAnonQuota(req, res) {
   return { anonId, used: record.usedQueries, remaining, limit: DEFAULT_LIMIT };
 }
 
+const GMAIL_READ_ONLY_MCP_TOOLS = new Set([
+  'list_messages', 'search_messages', 'get_message', 'get_thread', 'list_threads',
+  'search', 'fetch', 'read_message', 'read_thread', 'list_labels', 'get_label',
+]);
+
+function gmailMcpToolName(call) {
+  return String(call?.name || call?.tool_name || call?.toolName || '').toLowerCase();
+}
+
+function isGmailMutationToolCall(call) {
+  if (!call || typeof call !== 'object') return false;
+  const type = String(call.type || '').toLowerCase();
+  if (type.includes('approval_request') || type.includes('approval')) return true;
+  const name = gmailMcpToolName(call);
+  if (!name) return false;
+  return !GMAIL_READ_ONLY_MCP_TOOLS.has(name);
+}
+
+function findGmailMutationToolCall(response) {
+  const candidates = [];
+  if (Array.isArray(response?.mcp_calls)) candidates.push(...response.mcp_calls);
+  if (Array.isArray(response?.mcp_approval_requests)) candidates.push(...response.mcp_approval_requests);
+  if (response?.mcp_approval_request) candidates.push(response.mcp_approval_request);
+  if (Array.isArray(response?.output)) candidates.push(...response.output);
+  return candidates.find(isGmailMutationToolCall) || null;
+}
+
 // ADD new route (before module.exports)
 router.get('/anon-quota', optionalAuth, async (req, res) => {
   if (req.user) {
@@ -10117,13 +10144,19 @@ Process the user's request naturally. Read and summarize when asked; for any out
       let finalResponse = resp.output_text || "I couldn't process your Gmail request.";
       const mcpCalls = resp.mcp_calls || [];
       const responseId = resp.id; // ✅ Store this for next request
-      const gmailMutationRequested = /\b(send|reply|repl(?:y|ies)|forward|draft|enviar|responder|reenviar|borrador)\b/i.test(prompt || '');
+      const mutationToolCall = findGmailMutationToolCall(resp);
+      const gmailMutationRequested = /\b(send|reply|repl(?:y|ies)|forward|draft|delete|archive|label|mark|star|enviar|responder|reenviar|borrador|eliminar|archivar|etiquet|marcar)\b/i.test(prompt || '');
 
       // Parse Gmail results from MCP calls
-      let gmailResult = null;
+      let gmailResult = mutationToolCall ? {
+        action: 'pending_review',
+        status: 'pending_review',
+        reason: 'human_review_required',
+        requestedTool: gmailMcpToolName(mutationToolCall) || mutationToolCall.type,
+      } : null;
       let assistantFiles = null;
 
-      if (mcpCalls.length > 0) {
+      if (!mutationToolCall && mcpCalls.length > 0) {
         // Process the MCP calls to extract Gmail data
         for (const call of mcpCalls) {
           if (call.error) {
