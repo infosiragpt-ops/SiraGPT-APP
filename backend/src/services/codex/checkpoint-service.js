@@ -316,6 +316,23 @@ function requireDb(db) {
   return db;
 }
 
+/** Never mutate a shared project workspace while a Codex run can edit it. */
+async function activeRunGuard(prisma, projectId) {
+  if (typeof prisma?.codexRun?.count !== 'function') return null;
+  try {
+    const active = await prisma.codexRun.count({
+      where: { projectId, status: { in: ['queued', 'running', 'waiting_approval'] } },
+    });
+    return active > 0 ? { error: 'run_in_progress', status: 409 } : null;
+  } catch (error) {
+    return {
+      error: 'run_state_unavailable',
+      status: 503,
+      detail: String(error?.message || error).slice(0, 200),
+    };
+  }
+}
+
 function parseShortstat(text) {
   const out = { additions: 0, deletions: 0, filesChanged: 0 };
   const s = String(text || '');
@@ -563,6 +580,8 @@ async function rollbackCheckpoint({
   if (!cp) return { error: 'not_found', status: 404 };
   if (!isValidSha(cp.commitSha)) return { error: 'invalid_sha', status: 400 };
   const projectId = cp.projectId;
+  const active = await activeRunGuard(db, projectId);
+  if (active) return active;
 
   const previous = await runner.exec(projectId, ['git', 'rev-parse', 'HEAD']).catch(() => null);
   const previousSha = isValidSha(String(previous?.stdout || '').trim())
@@ -621,6 +640,8 @@ async function rollbackCheckpoint({
 
 async function restoreWorkspaceSha({ projectId, commitSha, deps = {} }) {
   if (!isValidSha(commitSha)) return { ok: false, error: 'invalid_sha' };
+  const active = await activeRunGuard(deps.prisma || null, projectId);
+  if (active) return { ok: false, ...active };
   let preservation;
   try {
     preservation = await preserveWorkspaceChanges({ runner: deps.runner, projectId });
