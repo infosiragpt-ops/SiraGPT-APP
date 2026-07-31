@@ -31,12 +31,14 @@ export function useCodexRun(runId: string | null) {
     dispatch({ kind: "reset" })
     setStatus(null)
     if (!runId) return
-    setConnected(true)
+    setConnected(false)
     const handle = openRunStream({
       runId,
       afterSeq: 0,
       onEvent: (event) => dispatch({ kind: "event", event }),
       onStatus: (s) => setStatus(s),
+      onOpen: () => setConnected(true),
+      onReconnect: () => setConnected(false),
       onError: () => setConnected(false),
     })
     handleRef.current = handle
