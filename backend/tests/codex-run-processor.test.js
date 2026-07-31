@@ -400,6 +400,60 @@ test('cancellation during branch setup prevents recovery, second preparation, ad
   assert.equal(abortRun('run-1'), false);
 });
 
+test('setup hard timeout drains safely, preserves timeout error, and cleans transcript/controller', async () => {
+  const d = makeDeps();
+  let prepareStarted;
+  const prepareWait = new Promise((resolve) => { prepareStarted = resolve; });
+  let releasePrepare;
+  let prepareCalls = 0;
+  let registerCalls = 0;
+  let unregisterCalls = 0;
+  let adapterCalls = 0;
+  const eventStore = {
+    appendEvent: d.eventStore.appendEvent,
+    registerTranscriptSink() {
+      registerCalls += 1;
+      return () => { unregisterCalls += 1; };
+    },
+  };
+  const checkpointService = {
+    async prepareRunBranch() {
+      prepareCalls += 1;
+      prepareStarted();
+      return new Promise((resolve) => { releasePrepare = resolve; });
+    },
+  };
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore,
+    checkpointService,
+    runAgentLoop: async () => {
+      adapterCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: {
+      NODE_ENV: 'test',
+      CODEX_RUN_BRANCHES: '1',
+      CODEX_RUN_TIMEOUT_MS: '10',
+      CODEX_RUN_DRAIN_TIMEOUT_MS: '15',
+    },
+  });
+
+  await prepareWait;
+  const result = await processing;
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /timeout/i);
+  assert.equal(d.runRow.status, 'error');
+  assert.equal(prepareCalls, 1);
+  assert.equal(registerCalls, 0, 'transcript setup must not begin after a setup timeout');
+  assert.equal(unregisterCalls, 0, 'no transcript cleanup is needed when setup never registered it');
+  assert.equal(adapterCalls, 0);
+  assert.equal(abortRun('run-1'), false);
+  releasePrepare({ ok: false, code: 'working_tree_dirty' });
+});
+
 test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
   const d = makeDeps();
   let nativeInput;

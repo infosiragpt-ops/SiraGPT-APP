@@ -339,6 +339,9 @@ async function processCodexRunJob({
   let hardTimeoutTimer = null;
   let hardTimeout = null;
   let adapterStarted = false;
+  // Keep a safe fallback visible to the outer catch; setup can time out before
+  // runtimeEnv is computed and must still drain without masking the timeout.
+  let drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS;
   const pendingSetup = new Set();
   let run = null;
   let project = null;
@@ -413,7 +416,7 @@ async function processCodexRunJob({
   });
   const runtimeEnv = autonomousRunPolicy.buildAutonomousRunEnv(env, runtimePolicy);
   const timeoutMs = readTimeoutMs(runtimeEnv, runtimePolicy);
-  const drainTimeoutMs = readDrainTimeoutMs(runtimeEnv);
+  drainTimeoutMs = readDrainTimeoutMs(runtimeEnv);
   const maxSteps = readMaxSteps(runtimeEnv, runtimePolicy);
   const timeoutError = new TimeoutError(timeoutMs);
   hardTimeout = new Promise((_, reject) => {
@@ -608,9 +611,11 @@ async function processCodexRunJob({
   await assertRunActive('adapter execute');
   for (const runtimeEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
     await assertRunActive(`runtime event ${runtimeEvent.type}`);
-    await eventStore
-      .appendEvent(run.id, runtimeEvent.type, runtimeEvent, { prisma })
-      .catch(() => {});
+    await runSetupPhase(`runtime event ${runtimeEvent.type}`, async () => {
+      await eventStore
+        .appendEvent(run.id, runtimeEvent.type, runtimeEvent, { prisma })
+        .catch(() => {});
+    });
   }
 
   let outcome;
