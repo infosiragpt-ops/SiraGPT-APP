@@ -42,13 +42,18 @@ test('swarm start hands a bounded worktree-isolated fleet to the durable queue',
     routeSource,
     /runService\.hasActiveRun\(\{ projectId: project\.id, db: codexDb \}\)/,
   );
+  assert.match(routeSource, /function swarmConcurrencyDefaults/);
   assert.match(routeSource, /const maxConcurrency = boundedSwarmInteger/);
   assert.match(routeSource, /createFleetSwarm\(\{/);
-  assert.match(routeSource, /maxConcurrentWriters: body\.maxConcurrentWriters/);
+  // Full logical capacity (up to 10k) — no artificial min(…, 64) choke.
+  assert.match(routeSource, /logicalTasks:\s*logicalAgents/);
+  assert.doesNotMatch(routeSource, /logicalTasks:\s*Math\.min\(logicalAgents,\s*64\)/);
+  assert.match(routeSource, /maxConcurrentWriters,/);
   assert.match(fleetSource, /const writerCap = Math\.min\(/);
   assert.match(fleetSource, /boundedInteger\(maxConcurrentWriters, runCap/);
   assert.match(fleetSource, /isolatedWriterWorktrees: true/);
   assert.match(fleetSource, /serializedBaseMerges: true/);
+  assert.match(fleetSource, /MAX_PLANNER_TASKS = 10_000/);
   assert.match(routeSource, /enqueueSwarm\(\{\s*swarmId: swarm\.id/);
   assert.match(routeSource, /swarm_queue_unavailable/);
 });

@@ -3,9 +3,11 @@
 const crypto = require('node:crypto');
 const projectBudget = require('./project-budget');
 
-const MAX_LOGICAL_TASKS = 1000;
-const DEFAULT_EFFECTIVE_CONCURRENCY = 16;
-const MAX_EFFECTIVE_CONCURRENCY = 128;
+// Logical capacity for enterprise swarms (research shards + writers + QA).
+// Runtime parallelism is still capped by maxConcurrency / isolation.
+const MAX_LOGICAL_TASKS = 10_000;
+const DEFAULT_EFFECTIVE_CONCURRENCY = 64;
+const MAX_EFFECTIVE_CONCURRENCY = 256;
 const DEFAULT_WRITER_CONCURRENCY = 4;
 const MAX_WRITER_CONCURRENCY = 32;
 const DEFAULT_LEASE_MS = 60_000;

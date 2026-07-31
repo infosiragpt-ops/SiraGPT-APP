@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   addQaCheckpoints,
   normalizePlannerTasks,
+  padFleetToLogicalCapacity,
   planFleetTasks,
 } = require('../src/services/codex/fleet-orchestrator');
 const {
@@ -41,6 +42,40 @@ test('planner DAG with five writer tasks produces five code runs plus a QA check
     'module-4',
     'module-5',
   ]);
+});
+
+test('pads a small planner DAG up to the requested logical agent capacity', async () => {
+  const result = await planFleetTasks({
+    objective: 'Activar flota de 256 agentes',
+    desiredTasks: 256,
+    planner: async () => ({
+      content: JSON.stringify({
+        tasks: [
+          {
+            id: 'core-module',
+            title: 'Módulo núcleo',
+            role: 'writer',
+            departmentId: 'engineering',
+            acceptance: ['typecheck ok'],
+          },
+        ],
+      }),
+    }),
+  });
+  assert.equal(result.source, 'planner+scale');
+  assert.equal(result.tasks.filter((task) => task.role === 'writer').length, 1);
+  assert.ok(result.tasks.filter((task) => task.role === 'read-only').length >= 250);
+  assert.ok(result.tasks.length >= 256);
+});
+
+test('padFleetToLogicalCapacity never invents writers', () => {
+  const padded = padFleetToLogicalCapacity(
+    [{ key: 'w1', title: 'Write', role: 'writer', stage: 'work', priority: 1, dependsOn: [], input: {} }],
+    { objective: 'Entregar producto funcional', targetCount: 100 },
+  );
+  assert.equal(padded.length, 100);
+  assert.equal(padded.filter((task) => task.role === 'writer').length, 1);
+  assert.equal(padded.filter((task) => task.role === 'read-only').length, 99);
 });
 
 test('QA checkpoints gate the next batch of writers', () => {

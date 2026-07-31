@@ -3,8 +3,9 @@
 const { mutateProjectBrief } = require('./project-brief-store');
 const projectBudget = require('./project-budget');
 
-const MAX_DEPARTMENT_POOL_SIZE = 64;
-const MAX_PROJECT_POOL_CAPACITY = 64;
+// Physical pool seats per department / project (writers still isolation-capped).
+const MAX_DEPARTMENT_POOL_SIZE = 512;
+const MAX_PROJECT_POOL_CAPACITY = 512;
 
 function boundedSize(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);

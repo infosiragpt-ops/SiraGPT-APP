@@ -215,6 +215,14 @@ const PINNED_DEPARTMENTS_KEY = "code-workspace:agent-company-pinned-departments:
 const HIDDEN_DEPARTMENTS_KEY = "code-workspace:agent-company-hidden-departments:v1"
 const DEPARTMENT_OVERRIDES_KEY = "code-workspace:agent-company-department-overrides:v1"
 
+/** Logical agent capacity (research shards + writers + QA). Runtime parallelism is separate. */
+const MAX_LOGICAL_AGENTS = 10_000
+const MIN_SWARM_LOGICAL_AGENTS = 256
+/** Default research concurrency when activating CEO Office swarm. */
+const DEFAULT_SWARM_MAX_CONCURRENCY = 128
+/** Default concurrent code writers (server still clamps by isolation runCap). */
+const DEFAULT_SWARM_MAX_WRITERS = 4
+
 /** IDs managed by backend/src/services/codex/company-departments.js */
 const SERVER_BUILTIN_DEPARTMENT_IDS = new Set([
   "ceo-office",
@@ -306,7 +314,7 @@ function readCustomDepartments(workspaceId: string | null | undefined): CustomDe
         keywords: Array.isArray(row.keywords) ? row.keywords.filter((value: unknown) => typeof value === "string") : [],
         mission: typeof row.mission === "string" ? row.mission.slice(0, 800) : undefined,
         kind: ["coordination", "engineering", "research", "external"].includes(row.kind) ? row.kind : "research",
-        desiredAgents: Math.max(1, Math.min(1000, Number(row.desiredAgents) || 4)),
+        desiredAgents: Math.max(1, Math.min(MAX_LOGICAL_AGENTS, Number(row.desiredAgents) || 4)),
         enabled: row.enabled !== false,
         custom: true as const,
       }))
@@ -397,7 +405,7 @@ function readDepartmentOverrides(
       if (typeof row.mission === "string") patch.mission = row.mission.trim().slice(0, 800)
       if (row.desiredAgents != null) {
         const agents = Number(row.desiredAgents)
-        if (Number.isFinite(agents)) patch.desiredAgents = Math.max(1, Math.min(1000, Math.round(agents)))
+        if (Number.isFinite(agents)) patch.desiredAgents = Math.max(1, Math.min(MAX_LOGICAL_AGENTS, Math.round(agents)))
       }
       if (Object.keys(patch).length > 0) out[id] = patch
     }
@@ -1374,16 +1382,39 @@ export function AgentCompanyPanel() {
         companyContext?.profile?.mission ? `Misión: ${companyContext.profile.mission}` : "",
         companyContext?.profile?.vision ? `Visión: ${companyContext.profile.vision}` : "",
       ].filter(Boolean).join(" ")
-      const logicalAgents = Math.min(1_000, Math.max(128, allDepartments.length * 64))
+      // Prefer explicit department capacity. If seats are still the small default
+      // skeleton, activate the full 10k logical fleet so "activar agentes"
+      // actually scales past the old 64/1000 caps.
+      const capacityFromDepts = allDepartments.reduce(
+        (sum, department) => sum + Math.max(1, Number(department.desiredAgents) || 1),
+        0,
+      )
+      const looksLikeDefaultSkeleton = capacityFromDepts <= Math.max(32, allDepartments.length * 8)
+      const logicalAgents = Math.min(
+        MAX_LOGICAL_AGENTS,
+        Math.max(
+          MIN_SWARM_LOGICAL_AGENTS,
+          looksLikeDefaultSkeleton ? MAX_LOGICAL_AGENTS : capacityFromDepts,
+        ),
+      )
+      const maxConcurrency = DEFAULT_SWARM_MAX_CONCURRENCY
+      const maxConcurrentWriters = DEFAULT_SWARM_MAX_WRITERS
       const result = await codexApi.startSwarm(projectId, {
         objective: `${rootObjective} ${businessContext}`.trim(),
         logicalAgents,
-        maxConcurrency: 16,
+        maxConcurrency,
+        maxConcurrentWriters,
       })
       setCommandCenter(result.commandCenter)
       setProactiveOn(false)
       setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
-      toast.success(`${logicalAgents} agentes lógicos coordinados; 16 pueden investigar en paralelo y una sola corrida integra el código.`)
+      const liveParallel =
+        result.commandCenter?.swarm?.maxConcurrency
+        || result.swarm?.maxConcurrency
+        || maxConcurrency
+      toast.success(
+        `${logicalAgents.toLocaleString("es")} agentes lógicos · hasta ${liveParallel} en paralelo · hasta ${maxConcurrentWriters} writers de código (el servidor puede bajar writers si no hay aislamiento).`,
+      )
     } catch (error) {
       const status = (error as { status?: number })?.status
       toast.error(
@@ -1830,7 +1861,7 @@ export function AgentCompanyPanel() {
     setEditDepartmentName(department.name)
     setEditDepartmentDescription(department.description || "")
     setEditDepartmentMission(department.mission || department.description || "")
-    setEditDepartmentAgents(Math.max(1, Math.min(1000, Number(department.desiredAgents) || 8)))
+    setEditDepartmentAgents(Math.max(1, Math.min(MAX_LOGICAL_AGENTS, Number(department.desiredAgents) || 8)))
     setEditDepartmentOpen(true)
   }, [])
 
@@ -1853,7 +1884,7 @@ export function AgentCompanyPanel() {
 
     const description = editDepartmentDescription.trim() || current.description || "Departamento operativo."
     const mission = editDepartmentMission.trim() || description
-    const desiredAgents = Math.max(1, Math.min(1000, editDepartmentAgents || 1))
+    const desiredAgents = Math.max(1, Math.min(MAX_LOGICAL_AGENTS, editDepartmentAgents || 1))
     const isCustom = Boolean(current.custom) || departmentId.startsWith("custom-")
     const serverManaged = isCustom || SERVER_BUILTIN_DEPARTMENT_IDS.has(departmentId)
 
@@ -2561,18 +2592,18 @@ export function AgentCompanyPanel() {
               id="agent-department-capacity"
               type="number"
               min={1}
-              max={1000}
+              max={MAX_LOGICAL_AGENTS}
               step={1}
               value={newDepartmentAgents}
               onChange={(event) => {
                 const value = Number.parseInt(event.target.value, 10)
                 setNewDepartmentAgents(
-                  Number.isFinite(value) ? Math.max(1, Math.min(1000, value)) : 1,
+                  Number.isFinite(value) ? Math.max(1, Math.min(MAX_LOGICAL_AGENTS, value)) : 1,
                 )
               }}
             />
             <p className="text-xs text-muted-foreground">
-              Capacidad lógica en cola; las escrituras al workspace se serializan.
+              Capacidad lógica en cola (hasta {MAX_LOGICAL_AGENTS.toLocaleString("es")}); las escrituras al workspace se aíslan por worktree.
             </p>
           </div>
           <DialogFooter>
@@ -2640,13 +2671,13 @@ export function AgentCompanyPanel() {
                 id="edit-department-capacity"
                 type="number"
                 min={1}
-                max={1000}
+                max={MAX_LOGICAL_AGENTS}
                 step={1}
                 value={editDepartmentAgents}
                 onChange={(event) => {
                   const value = Number.parseInt(event.target.value, 10)
                   setEditDepartmentAgents(
-                    Number.isFinite(value) ? Math.max(1, Math.min(1000, value)) : 1,
+                    Number.isFinite(value) ? Math.max(1, Math.min(MAX_LOGICAL_AGENTS, value)) : 1,
                   )
                 }}
               />

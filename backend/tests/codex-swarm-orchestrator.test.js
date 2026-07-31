@@ -580,18 +580,31 @@ test('schema and additive migration define durable CodexSwarm relations and cons
     ),
     'utf8',
   );
+  const scaleMigration = fs.readFileSync(
+    path.join(
+      __dirname,
+      '../prisma/migrations/20260730210000_raise_codex_swarm_logical_capacity_10k/migration.sql',
+    ),
+    'utf8',
+  );
   assert.match(schema, /model CodexSwarm \{/);
   assert.match(schema, /model CodexSwarmTask \{/);
   assert.match(schema, /codexSwarms\s+CodexSwarm\[\]/);
   assert.match(schema, /swarms\s+CodexSwarm\[\]/);
+  assert.match(schema, /taskLimit\s+Int\s+@default\(10000\)/);
+  // Original bootstrap constraints (historical).
   assert.match(migration, /CHECK \("ordinal" BETWEEN 0 AND 999\)/);
   assert.match(migration, /"maxConcurrency" BETWEEN 1 AND 128/);
   assert.match(migration, /"maxConcurrentWriters" BETWEEN 1 AND 32/);
   assert.match(migration, /codex_swarms_project_active_key/);
   assert.doesNotMatch(migration, /\b(?:DROP|TRUNCATE|DELETE FROM)\b/i);
+  // Scale-up migration: 10k logical agents + 256 research concurrency.
+  assert.match(scaleMigration, /BETWEEN 1 AND 10000/);
+  assert.match(scaleMigration, /BETWEEN 1 AND 256/);
+  assert.match(scaleMigration, /BETWEEN 0 AND 9999/);
 });
 
-test('creates exactly 1000 logical tasks with durable initial counters', async () => {
+test('creates exactly MAX_LOGICAL_TASKS (10k) with durable initial counters', async () => {
   const { orchestrator } = createHarness();
   const tasks = Array.from({ length: MAX_LOGICAL_TASKS }, (_, index) => ({
     key: `task-${index}`,
@@ -599,11 +612,12 @@ test('creates exactly 1000 logical tasks with durable initial counters', async (
     role: TASK_ROLES.READ_ONLY,
   }));
   const swarm = await createBasicSwarm(orchestrator, { tasks });
-  assert.equal(swarm.tasks.length, 1000);
-  assert.equal(swarm.totalTaskCount, 1000);
-  assert.equal(swarm.queuedTaskCount, 1000);
+  assert.equal(MAX_LOGICAL_TASKS, 10_000);
+  assert.equal(swarm.tasks.length, MAX_LOGICAL_TASKS);
+  assert.equal(swarm.totalTaskCount, MAX_LOGICAL_TASKS);
+  assert.equal(swarm.queuedTaskCount, MAX_LOGICAL_TASKS);
   assert.equal(swarm.blockedTaskCount, 0);
-  assert.equal(swarm.maxConcurrency, 16);
+  assert.equal(swarm.maxConcurrency, 64);
   assert.equal(swarm.maxConcurrentWriters, 4);
 });
 
@@ -680,7 +694,7 @@ test('rejects appended tasks that would reference a missing DAG dependency', asy
   assert.equal(progress.progress.counts.total, 1);
 });
 
-test('rejects more than 1000 logical tasks before persistence', async () => {
+test('rejects more than MAX_LOGICAL_TASKS before persistence', async () => {
   const { orchestrator, repository } = createHarness();
   const tasks = Array.from({ length: MAX_LOGICAL_TASKS + 1 }, (_, index) => ({
     key: `task-${index}`,
