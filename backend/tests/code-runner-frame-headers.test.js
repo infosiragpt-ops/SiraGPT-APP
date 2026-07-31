@@ -9,27 +9,41 @@ const request = require('supertest');
 const { buildRouteTestApp, mockResolvedModule, reloadModule } = require('./http-test-utils');
 
 test('code runner proxy allows same-origin iframe even when auth rejects', async () => {
-  const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+  const keys = ['CORS_ORIGINS', 'FRONTEND_URL', 'PUBLIC_FRONTEND_URL', 'NEXT_PUBLIC_URL'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  keys.forEach((key) => delete process.env[key]);
+  try {
+    const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+    const res = await request(app).get('/api/code-runner/run-1/proxy/');
 
-  const res = await request(app).get('/api/code-runner/run-1/proxy/');
-
-  assert.equal(res.status, 401);
-  assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
-  assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
+    assert.equal(res.status, 401);
+    assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
+    assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
-test('code runner frame policy allowlists the configured sibling origin', async () => {
-  const previous = process.env.CODEX_PREVIEW_ORIGIN;
+test('code runner frame policy allows the approved parent, not the child or an evil origin', async () => {
+  const previousChild = process.env.CODEX_PREVIEW_ORIGIN;
+  const previousParents = process.env.CORS_ORIGINS;
   process.env.CODEX_PREVIEW_ORIGIN = 'https://preview.example.com/';
+  process.env.CORS_ORIGINS = 'https://app.example.com';
   try {
     const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
     const res = await request(app).get('/api/code-runner/run-1/proxy/');
     assert.equal(res.status, 401);
     assert.equal(res.headers['x-frame-options'], undefined);
-    assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self' https://preview.example.com");
+    assert.match(res.headers['content-security-policy'], /https:\/\/app\.example\.com/);
+    assert.doesNotMatch(res.headers['content-security-policy'], /preview\.example\.com|evil\.example\.com/);
   } finally {
-    if (previous === undefined) delete process.env.CODEX_PREVIEW_ORIGIN;
-    else process.env.CODEX_PREVIEW_ORIGIN = previous;
+    if (previousChild === undefined) delete process.env.CODEX_PREVIEW_ORIGIN;
+    else process.env.CODEX_PREVIEW_ORIGIN = previousChild;
+    if (previousParents === undefined) delete process.env.CORS_ORIGINS;
+    else process.env.CORS_ORIGINS = previousParents;
   }
 });
 

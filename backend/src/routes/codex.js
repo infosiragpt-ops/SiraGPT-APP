@@ -55,11 +55,12 @@ const {
 } = require('../services/codex/preview-websocket-proxy');
 const {
   applyPreviewFrameHeaders: applyPreviewFramePolicy,
+  filterPreviewResponseHeaders,
   injectPreviewConsoleBridge,
   previewTokenFor: mintPreviewToken,
   previewNonceFromRequest,
-  previewFrameAncestors,
-  siblingPreviewOrigin,
+  previewOriginAllowed,
+  readPreviewBody,
   stripPreviewNonce,
   verifyPreviewToken: verifySignedPreviewToken,
 } = require('../services/code/preview-proxy');
@@ -201,6 +202,7 @@ async function previewWebSocketTarget(request, env = process.env) {
 function attachPreviewWebSocketProxy(server, env = process.env) {
   return attachWebSocketProxy(server, {
     shouldHandle: (request) => Boolean(previewUpgradeParts(request)),
+    isOriginAllowed: (request) => previewOriginAllowed(request.headers?.origin, env),
     resolveTarget: (request) => previewWebSocketTarget(request, env),
   });
 }
@@ -1887,27 +1889,23 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
     (up) => {
       const nonce = previewNonceFromRequest(req);
       const injectConsole = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
-      const headers = {};
-      for (const [k, v] of Object.entries(up.headers)) {
-        const lk = k.toLowerCase();
-        if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
-        if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
-        if (lk.startsWith('access-control-')) continue;
-        if (injectConsole && lk === 'content-length') continue;
-        headers[k] = v;
-      }
-      headers['cache-control'] = 'no-store';
-      if (!siblingPreviewOrigin()) headers['x-frame-options'] = 'SAMEORIGIN';
-      headers['content-security-policy'] = `frame-ancestors ${previewFrameAncestors()}`;
-      headers['referrer-policy'] = 'no-referrer';
+      const headers = filterPreviewResponseHeaders(up.headers);
+      if (injectConsole) delete headers['content-length'];
       if (injectConsole) {
-        const chunks = [];
-        up.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        up.on('end', () => {
-          const injected = injectPreviewConsoleBridge(Buffer.concat(chunks).toString('utf8'), nonce);
+        readPreviewBody(up).then((body) => {
+          const injected = injectPreviewConsoleBridge(body.toString('utf8'), nonce);
           headers['content-length'] = String(Buffer.byteLength(injected));
           res.writeHead(up.statusCode || 502, headers);
           res.end(injected);
+        }).catch((err) => {
+          upstream.destroy();
+          if (!res.headersSent) {
+            const status = err?.code === 'preview_html_too_large' ? 413 : 502;
+            const error = err?.code === 'preview_html_too_large' ? 'preview_html_too_large' : 'runner_stream_failed';
+            res.status(status).json({ error, message: status === 413 ? 'Preview HTML exceeds the injection limit.' : 'El dev server interrumpió la respuesta.' });
+          } else {
+            try { res.end(); } catch (_) { /* already closed */ }
+          }
         });
         return;
       }

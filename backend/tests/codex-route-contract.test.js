@@ -113,6 +113,7 @@ after(() => {
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
   delete process.env.CODEX_PREVIEW_TOKEN_SECRET;
+  delete process.env.CORS_ORIGINS;
 });
 beforeEach(() => {
   authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
@@ -140,7 +141,8 @@ test('Codex router exposes the tokenized preview WebSocket attachment', () => {
 });
 
 test('tokenized preview WebSocket reaches only its runner project', async (t) => {
-  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-preview-websocket-test-secret';
+  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-preview-websocket-test-secret-32-bytes!!';
+  process.env.CORS_ORIGINS = 'http://localhost:3000';
   const upstream = http.createServer();
   const upstreamWss = new WebSocket.Server({ server: upstream });
   upstreamWss.on('connection', (socket) => {
@@ -157,6 +159,7 @@ test('tokenized preview WebSocket reaches only its runner project', async (t) =>
   const payload = Buffer.from(JSON.stringify({
     projectId: 'p1',
     userId: 'u-1',
+    iat: Date.now(),
     exp: Date.now() + 60_000,
   })).toString('base64url');
   const signature = crypto
@@ -167,6 +170,7 @@ test('tokenized preview WebSocket reaches only its runner project', async (t) =>
   const client = new WebSocket(
     `ws://127.0.0.1:${proxy.address().port}/api/codex/projects/p1/preview/${token}/app/`,
     'vite-hmr',
+    { origin: 'http://localhost:3000' },
   );
 
   t.after(async () => {
@@ -752,6 +756,9 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
+  const parentKeys = ['CORS_ORIGINS', 'FRONTEND_URL', 'PUBLIC_FRONTEND_URL', 'NEXT_PUBLIC_URL'];
+  const previousParents = Object.fromEntries(parentKeys.map((key) => [key, process.env[key]]));
+  parentKeys.forEach((key) => delete process.env[key]);
   process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
   runnerMockPort = port; // proxy targets the project's runner-assigned port
   try {
@@ -769,6 +776,10 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
     assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
     assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
   } finally {
+    for (const [key, value] of Object.entries(previousParents)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
     await new Promise((resolve) => server.close(resolve));
   }

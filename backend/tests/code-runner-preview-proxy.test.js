@@ -11,10 +11,14 @@ const hostRunner = require('../src/services/code/host-runner');
 const codeRunnerRouter = require('../src/routes/code-runner');
 const {
   attachCodeRunnerPreviewWebSocketProxy,
+  applyPreviewCorsHeaders,
   buildPreviewConsoleBridge,
   injectPreviewConsoleBridge,
+  MAX_PREVIEW_HTML_BYTES,
   previewFrameAncestors,
+  previewOriginAllowed,
   previewTokenFor,
+  readPreviewBody,
   redactPreviewUrl,
   signPreviewToken,
   verifyPreviewToken,
@@ -55,8 +59,10 @@ test('preview token verification is fail-closed in production and requires exp',
     assert.throws(() => signPreviewToken({ runId: 'run' }), /secret_required|exp is required/);
   });
 
-  const secret = 'preview-test-secret';
+  const secret = 'preview-test-secret-with-at-least-32-bytes!!';
   withEnv({ NODE_ENV: 'production', CODE_RUNNER_PREVIEW_TOKEN_SECRET: secret }, () => {
+    const future = signPreviewToken({ runId: 'run', iat: Date.now(), exp: Date.now() + 61 * 60 * 1000 });
+    assert.equal(verifyPreviewToken(future), null);
     const valid = previewTokenFor({ runId: 'run', userId: 'user' });
     const claims = verifyPreviewToken(valid);
     assert.equal(claims.runId, 'run');
@@ -68,13 +74,36 @@ test('preview token verification is fail-closed in production and requires exp',
     const signature = crypto.createHmac('sha256', secret).update(body).digest('base64url');
     assert.equal(verifyPreviewToken(`${body}.${signature}`), null);
   });
+
+  withEnv({ NODE_ENV: 'production', CODE_RUNNER_PREVIEW_TOKEN_SECRET: 'weak-secret' }, () => {
+    assert.throws(() => previewTokenFor({ runId: 'run' }), /secret_required/);
+  });
 });
 
 test('preview URL redaction removes bearer path segments and nonce query values', () => {
   const redacted = redactPreviewUrl('/api/code-runner/run-1/signed.token/app/index.js?__sgpt_preview_nonce=nonce-value');
   assert.equal(redacted, '/api/code-runner/run-1/[REDACTED]/app/index.js?__sgpt_preview_nonce=[REDACTED]');
   assert.equal(redactPreviewUrl('/api/codex/projects/p1/preview/signed.token/app/'), '/api/codex/projects/p1/preview/[REDACTED]/app/');
-  assert.equal(previewFrameAncestors({ CODEX_PREVIEW_ORIGIN: 'https://preview.example.com/' }), "'self' https://preview.example.com");
+  assert.equal(previewFrameAncestors({ CODEX_PREVIEW_ORIGIN: 'https://preview.example.com/', CORS_ORIGINS: 'https://app.example.com' }), "'self' https://app.example.com");
+  assert.doesNotMatch(previewFrameAncestors({ CODEX_PREVIEW_ORIGIN: 'https://preview.example.com/', CORS_ORIGINS: 'https://app.example.com' }), /preview\.example\.com/);
+});
+
+test('preview CORS never reflects an arbitrary Origin', () => {
+  const allowed = {};
+  applyPreviewCorsHeaders(allowed, 'https://app.example.com', { CORS_ORIGINS: 'https://app.example.com' });
+  assert.equal(allowed['access-control-allow-origin'], 'https://app.example.com');
+  const evil = {};
+  applyPreviewCorsHeaders(evil, 'https://evil.example.com', { CORS_ORIGINS: 'https://app.example.com' });
+  assert.equal(evil['access-control-allow-origin'], undefined);
+  assert.equal(previewOriginAllowed('https://app.example.com', { CORS_ORIGINS: 'https://app.example.com' }), true);
+  assert.equal(previewOriginAllowed('https://evil.example.com', { CORS_ORIGINS: 'https://app.example.com' }), false);
+});
+
+test('preview body reader hard-stops before buffering beyond the injection cap', async () => {
+  const stream = new (require('node:stream').PassThrough)();
+  const promise = readPreviewBody(stream);
+  stream.end(Buffer.alloc(MAX_PREVIEW_HTML_BYTES + 1, 65));
+  await assert.rejects(promise, (error) => error.code === 'preview_html_too_large');
 });
 
 test('console bridge carries nonce and is injected into live HTML', () => {
@@ -97,9 +126,11 @@ test('code runner preview WebSocket upgrade reaches only the token-bound run', a
   const previous = {
     NODE_ENV: process.env.NODE_ENV,
     CODE_RUNNER_PREVIEW_TOKEN_SECRET: process.env.CODE_RUNNER_PREVIEW_TOKEN_SECRET,
+    CORS_ORIGINS: process.env.CORS_ORIGINS,
   };
   process.env.NODE_ENV = 'test';
-  process.env.CODE_RUNNER_PREVIEW_TOKEN_SECRET = 'preview-ws-test-secret';
+  process.env.CODE_RUNNER_PREVIEW_TOKEN_SECRET = 'preview-ws-test-secret-with-at-least-32-bytes!!';
+  process.env.CORS_ORIGINS = 'http://localhost:3000';
   const token = previewTokenFor({ runId: 'ws-run', userId: 'u1' });
   hostRunner._resetRunsForTest();
   hostRunner._seedRunForTest({ runId: 'ws-run', userId: 'u1', port: upstreamAddress.port, phase: 'ready', previewToken: token });
@@ -115,7 +146,7 @@ test('code runner preview WebSocket upgrade reaches only the token-bound run', a
     },
   });
   const proxyAddress = await listen(proxy);
-  const client = new WebSocket(`ws://127.0.0.1:${proxyAddress.port}/api/code-runner/ws-run/${token}/app/`, 'vite-hmr');
+  const client = new WebSocket(`ws://127.0.0.1:${proxyAddress.port}/api/code-runner/ws-run/${token}/app/`, 'vite-hmr', { origin: 'http://localhost:3000' });
 
   t.after(async () => {
     client.terminate();
@@ -128,6 +159,8 @@ test('code runner preview WebSocket upgrade reaches only the token-bound run', a
     else process.env.NODE_ENV = previous.NODE_ENV;
     if (previous.CODE_RUNNER_PREVIEW_TOKEN_SECRET === undefined) delete process.env.CODE_RUNNER_PREVIEW_TOKEN_SECRET;
     else process.env.CODE_RUNNER_PREVIEW_TOKEN_SECRET = previous.CODE_RUNNER_PREVIEW_TOKEN_SECRET;
+    if (previous.CORS_ORIGINS === undefined) delete process.env.CORS_ORIGINS;
+    else process.env.CORS_ORIGINS = previous.CORS_ORIGINS;
   });
 
   await new Promise((resolve, reject) => {
