@@ -1382,6 +1382,49 @@ async function findRecentCompletedDuplicateTurnForUser(userId, chatId, content, 
 
 const activeGenerateTurns = new Map();
 
+// SSE resume cursors are bearer credentials. Keep the opaque stream key in
+// the signed payload so Redis and the in-process fallback use the same key,
+// while the signature binds it to the authenticated user + chat. In
+// production JWT_SECRET is mandatory; when no signing secret is available we
+// disable resume rather than accepting a globally reusable cursor.
+const activeResumeStreams = new Map();
+
+function streamResumeSigningSecret() {
+  return process.env.SIRAGPT_STREAM_RESUME_SECRET
+    || process.env.JWT_SECRET
+    || process.env.SESSION_SECRET
+    || '';
+}
+
+function encodeStreamResumeCursor(streamId, userId, chatId) {
+  const secret = streamResumeSigningSecret();
+  if (!secret || !streamId || !userId) return null;
+  const payload = Buffer.from(String(streamId)).toString('base64url');
+  const binding = `${payload}\n${String(userId)}\n${chatId == null ? '' : String(chatId)}`;
+  const signature = crypto.createHmac('sha256', secret).update(binding).digest('base64url');
+  return `sr1.${payload}.${signature}`;
+}
+
+function decodeOwnedStreamResumeCursor(cursor, userId, chatId) {
+  const secret = streamResumeSigningSecret();
+  if (!secret || typeof cursor !== 'string') return null;
+  const parts = cursor.split('.');
+  if (parts.length !== 3 || parts[0] !== 'sr1' || !parts[1] || !parts[2]) return null;
+  const binding = `${parts[1]}\n${String(userId)}\n${chatId == null ? '' : String(chatId)}`;
+  const expected = crypto.createHmac('sha256', secret).update(binding).digest('base64url');
+  const actualBytes = Buffer.from(parts[2]);
+  const expectedBytes = Buffer.from(expected);
+  if (actualBytes.length !== expectedBytes.length
+    || !crypto.timingSafeEqual(actualBytes, expectedBytes)) return null;
+  try {
+    const streamId = Buffer.from(parts[1], 'base64url').toString('utf8');
+    if (!streamId) return null;
+    return { sid: streamId, uid: String(userId), cid: chatId == null ? null : String(chatId) };
+  } catch {
+    return null;
+  }
+}
+
 function makeActiveGenerateTurnKey(userId, chatId, content, files) {
   const normalized = normalizeDuplicateTurnContent(content);
   if (!userId || !chatId || !normalized) return null;
@@ -1784,6 +1827,8 @@ router.post(
     const controller = new AbortController();
     const signal = controller.signal;
     const { streamId } = req.body;
+    const __lastEventIdHeader = req.get && req.get('Last-Event-ID');
+    const __hasResumeRequest = typeof __lastEventIdHeader === 'string' && __lastEventIdHeader.trim().length > 0;
     // Wall-clock anchor for the end-to-end streaming duration metric
     // (siragpt_ai_request_duration_seconds). Sampled at handler entry
     // so retries, preflight, model dispatch and the actual stream are
@@ -1805,10 +1850,16 @@ router.post(
     // signal that suggested empty completions where there were none.
     let fullResponseContent = '';
     let resumeSession = null;
+    let streamCompleted = false;
+    let streamFailureMessage = null;
+    let streamResumeFollower = false;
     let __streamControllerKey = null;
     let __ownsStreamController = false;
 
-    if (streamId) {
+    // A reconnect must never replace the original owner's stop controller.
+    // The follower is attached to the in-process stream fanout below after
+    // its signed cursor has been authenticated.
+    if (streamId && !__hasResumeRequest) {
       __streamControllerKey = `${req.user.id}:${streamId}`;
       const publicWebReconnect = req.body.enableWebGrounding === true
         && streamControllers.has(__streamControllerKey);
@@ -2206,15 +2257,91 @@ router.post(
       resumeSession = null;
       let resumeReplayPosition = 0;
       try {
-        const lastEventHeader = req.get && req.get('Last-Event-ID');
-        const parsed = lastEventHeader ? streamResume.parseLastEventId(lastEventHeader) : null;
+        const parsed = __hasResumeRequest
+          ? streamResume.parseLastEventId(__lastEventIdHeader)
+          : null;
+        if (__hasResumeRequest && (!parsed || !parsed.streamId)) {
+          return res.status(403).json({ error: 'stream_resume_forbidden' });
+        }
         if (parsed && parsed.streamId) {
+          // The cursor is a bearer credential. Reject malformed, forged, or
+          // cross-user/cross-chat cursors before opening the global store.
+          if (!decodeOwnedStreamResumeCursor(parsed.streamId, userId, chatId)) {
+            return res.status(403).json({
+              error: 'stream_resume_forbidden',
+              message: 'This stream cursor does not belong to the current user and chat.',
+            });
+          }
           resumeSession = await streamResume.open({ streamId: parsed.streamId });
           resumeReplayPosition = Math.min(parsed.position, resumeSession.record.chunks.length);
         } else {
-          resumeSession = await streamResume.open({});
+          const rawStreamId = streamResume.generateStreamId();
+          const ownedStreamId = encodeStreamResumeCursor(rawStreamId, userId, chatId);
+          if (ownedStreamId) {
+            resumeSession = await streamResume.open({ streamId: ownedStreamId });
+          } else {
+            // Startup validation requires a signing secret in production. A
+            // local/test process without one keeps chat working but does not
+            // advertise or accept a resumable bearer cursor.
+            try { console.warn('[ai/generate] stream resume disabled: signing secret is not configured'); } catch (_) {}
+          }
         }
-        try { res.setHeader('X-Stream-Id', resumeSession.streamId); } catch { /* noop */ }
+
+        if (resumeSession && resumeSession.streamId) {
+          try {
+            res.setHeader('X-Stream-Id', resumeSession.streamId);
+            res.setHeader('X-Stream-Cursor', `${resumeSession.streamId}:${resumeSession.record.chunks.length}`);
+          } catch { /* noop */ }
+
+          const activeResume = activeResumeStreams.get(resumeSession.streamId);
+          const record = resumeSession.record || { chunks: [], complete: false, error: null };
+          // A valid resume cursor is never a permission to start a fresh
+          // generation. This remains true when the process-local owner map
+          // was lost during a restart and the durable record is incomplete.
+          const shouldAttachToExisting = resumeSession.isResume;
+          if (shouldAttachToExisting) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+            const replay = record.chunks.slice(resumeReplayPosition);
+            for (let i = 0; i < replay.length; i += 1) {
+              const position = resumeReplayPosition + i + 1;
+              res.write(`id: ${resumeSession.streamId}:${position}\n`);
+              res.write(`data: ${JSON.stringify({ content: replay[i], _resumed: true })}\n\n`);
+            }
+
+            streamResumeFollower = true;
+            if (activeResume) {
+              activeResume.subscribers.add(res);
+              res.once('close', () => activeResume.subscribers.delete(res));
+            } else if (record.error) {
+              res.write(`data: ${JSON.stringify({ type: 'error', error: record.error })}\n\n`);
+              res.write('event: close\ndata: end\n\n');
+              res.end();
+            } else if (record.complete) {
+              res.write('data: [DONE]\n\n');
+              res.end();
+            } else {
+              res.write(`data: ${JSON.stringify({
+                type: 'error',
+                error: 'stream_resume_pending',
+              })}\n\n`);
+              res.write('event: close\ndata: end\n\n');
+              res.end();
+            }
+            return;
+          }
+
+          // Register before enrichment/model dispatch so a reconnect that
+          // arrives during the slow pre-token phase attaches to this run.
+          activeResumeStreams.set(resumeSession.streamId, {
+            subscribers: new Set(),
+            nextPosition: resumeSession.record.chunks.length,
+          });
+        }
       } catch (resumeErr) {
         try { console.warn('[ai/generate] stream-resume open failed:', resumeErr && resumeErr.message); } catch (_) {}
         resumeSession = null;
@@ -5638,13 +5765,28 @@ router.post(
       // sees the missing tail of the prior stream before new tokens.
       if (resumeSession && resumeSession.streamId) {
         const sid = resumeSession.streamId;
+        const activeResume = activeResumeStreams.get(sid) || {
+          subscribers: new Set(),
+          nextPosition: resumeSession.record.chunks.length,
+        };
+        activeResumeStreams.set(sid, activeResume);
+        const broadcast = (payload) => {
+          for (const subscriber of activeResume.subscribers) {
+            try {
+              if (!subscriber.writableEnded) subscriber.write(payload);
+            } catch {
+              activeResume.subscribers.delete(subscriber);
+            }
+          }
+        };
         // Replay missing chunks
         try {
           const missing = resumeSession.record.chunks.slice(resumeReplayPosition);
           for (let i = 0; i < missing.length; i += 1) {
             const chunk = missing[i];
+            const frame = `data: ${JSON.stringify({ content: chunk, _resumed: true })}\n\n`;
             res.write(`id: ${sid}:${resumeReplayPosition + i + 1}\n`);
-            res.write(`data: ${JSON.stringify({ content: chunk, _resumed: true })}\n\n`);
+            res.write(frame);
           }
         } catch (replayErr) {
           try { console.warn('[ai/generate] resume replay failed:', replayErr && replayErr.message); } catch (_) {}
@@ -5652,6 +5794,7 @@ router.post(
         // Wrap res.write to capture future content frames into resume store
         const prevWrite = res.write.bind(res);
         res.write = (payload, ...rest) => {
+          let contentFrameId = null;
           if (typeof payload === 'string' && payload.startsWith('data:')) {
             try {
               const raw = payload.slice(5).trim();
@@ -5662,12 +5805,20 @@ router.post(
                 // resume buffer is append-only, so storing them makes a reconnect
                 // re-append every full snapshot, duplicating/garbling the answer.
                 if (obj && typeof obj.content === 'string' && !obj._resumed && !obj.replace) {
+                  activeResume.nextPosition += 1;
+                  contentFrameId = `${sid}:${activeResume.nextPosition}`;
                   // fire-and-forget — never block the write path
                   streamResume.append(sid, obj.content).catch(() => {});
                 }
               }
             } catch { /* non-JSON SSE frame — ignore */ }
           }
+          if (contentFrameId) {
+            const idFrame = `id: ${contentFrameId}\n`;
+            broadcast(idFrame);
+            prevWrite(idFrame);
+          }
+          broadcast(payload);
           return prevWrite(payload, ...rest);
         };
       }
@@ -7036,6 +7187,7 @@ router.post(
       // completes, the API returns a chat without the new assistant
       // message and the merge overwrites the locally streamed content.
       // Moving [DONE] after saveChatAndTrackUsage eliminates the race.
+      streamCompleted = true;
       if (!res.writableEnded) {
         try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
       }
@@ -7044,6 +7196,7 @@ router.post(
       console.error('AI generation error:', error);
 
       const sanitizedError = sanitizeErrorForUser(error);
+      streamFailureMessage = sanitizedError;
 
       if (!res.headersSent) {
         res.status(500).json({ error: sanitizedError });
@@ -7058,6 +7211,11 @@ router.post(
       }
     }
     finally {
+      // A follower response is owned by the original generation. It must stay
+      // open until that owner broadcasts the terminal frame, and it must not
+      // mark the shared resume record complete/failed a second time.
+      if (streamResumeFollower) return;
+
       if (keepAlive) {
         clearInterval(keepAlive);
         keepAlive = null;
@@ -7123,13 +7281,27 @@ router.post(
       }
 
       // ─── Mark resume session terminal ─────────────────────────────
-      // Fire-and-forget — never block the response. If the stream ended
-      // gracefully, mark complete so reconnects don't reopen new
-      // upstream calls. If we hit a fatal error before [DONE], leave
-      // chunks intact for one TTL window so the client can recover.
+      // Serialize the terminal state after all content appends. A failed
+      // stream remains resumable/pending; never overwrite that failure with
+      // complete=true in finally.
       try {
         if (resumeSession && resumeSession.streamId) {
-          streamResume.complete(resumeSession.streamId).catch(() => {});
+          if (streamCompleted) {
+            await streamResume.complete(resumeSession.streamId).catch(() => {});
+          } else if (streamFailureMessage) {
+            await streamResume.fail(resumeSession.streamId, streamFailureMessage).catch(() => {});
+          }
+
+          const activeResume = activeResumeStreams.get(resumeSession.streamId);
+          if (activeResume) {
+            activeResumeStreams.delete(resumeSession.streamId);
+            for (const subscriber of activeResume.subscribers) {
+              try {
+                if (!subscriber.writableEnded) subscriber.end();
+              } catch { /* subscriber already gone */ }
+            }
+            activeResume.subscribers.clear();
+          }
         }
       } catch (_) { /* never throw from finally */ }
 

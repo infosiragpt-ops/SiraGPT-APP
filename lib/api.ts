@@ -1505,11 +1505,10 @@ class ApiClient {
 
 
   // Stream chat completions from /ai/generate. Resilient by design:
-  // automatically reconnects at the transport layer BEFORE the user sees
-  // any tokens (HTTP 429, 5xx, network errors), while never duplicating
-  // content that has already been rendered. Mid-stream interruptions
-  // surface to the caller so the UI can show the per-message error +
-  // retry affordance without losing the user's message.
+  // automatically reconnects at the transport layer before the user sees
+  // any tokens (HTTP 429, 5xx, network errors), and resumes mid-stream from
+  // the server cursor when content was already rendered. Mid-stream
+  // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
     data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, reasoningEffort?: string, idempotencyKey?: string },
     onData: (chunk: string) => void,
@@ -1536,7 +1535,8 @@ class ApiClient {
     //    "no se recibió respuesta" (the model stream ended dry — usually
     //    a provider-side hiccup that resolves on retry)
     //  - Honor Retry-After header on 429 if provided
-    //  - Never retry after content has reached the user (no duplicates)
+    //  - Never retry after content without a cursor; cursor retries replay
+    //    only the missing tail and therefore do not duplicate rendered text
     //  - Never retry on AbortError (user clicked stop)
     //  - Per-attempt timing is logged so we can audit recovery cost
     const MAX_CONNECT_ATTEMPTS = 5;
@@ -1544,6 +1544,15 @@ class ApiClient {
     const MAX_RECONNECT_DELAY_MS = 20000;
     let hasDeliveredAnyContent = false;
     let lastError: any = null;
+    let lastEventId: string | null = null;
+    let terminalErrorDelivered = false;
+    let streamFinished = false;
+
+    const deliverStreamError = (error: Error) => {
+      if (terminalErrorDelivered || streamFinished) return;
+      terminalErrorDelivered = true;
+      onError(error);
+    };
 
     const computeBackoff = (attempt: number, retryAfterSeconds?: number) => {
       if (typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0) {
@@ -1557,10 +1566,14 @@ class ApiClient {
 
     for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
       if (signal?.aborted) { onError(new Error('Request aborted')); return; }
-      if (hasDeliveredAnyContent) break;
 
       try {
-        const response = await this.authenticatedFetch(url, baseConfig);
+        const requestHeaders = new Headers(baseConfig.headers);
+        if (lastEventId) requestHeaders.set('Last-Event-ID', lastEventId);
+        const response = await this.authenticatedFetch(url, {
+          ...baseConfig,
+          headers: requestHeaders,
+        });
         if (signal?.aborted) { onError(new Error('Request aborted')); return; }
 
         if (!response.ok) {
@@ -1608,6 +1621,14 @@ class ApiClient {
         // backend chargeCredits middleware) before we start streaming tokens.
         notifyFreeIaFallback(response);
 
+        const responseStreamId = getResponseHeader(response, 'x-stream-id');
+        const responseCursor = getResponseHeader(response, 'x-stream-cursor');
+        if (responseCursor && !lastEventId) {
+          lastEventId = responseCursor;
+        } else if (responseStreamId && !lastEventId) {
+          lastEventId = `${responseStreamId}:0`;
+        }
+
         const reader = response.body?.getReader();
         if (!reader) throw new Error('Response body is not readable');
 
@@ -1624,6 +1645,7 @@ class ApiClient {
         // Armed by a contentless [DONE]: break out of the read loop so the
         // outer attempt loop reconnects (mirrors the abrupt-close retry).
         let retryEmptyStream = false;
+        let doneMessageSeen = false;
         let processedChunks = 0;
         const batchProcessingDelay = 20;
         let lastProcessTime = Date.now();
@@ -1643,6 +1665,17 @@ class ApiClient {
           const { done, value } = await reader.read();
           if (done) {
             flushBatch();
+            if (!doneMessageSeen && lastEventId && attempt < MAX_CONNECT_ATTEMPTS) {
+              const delay = computeBackoff(attempt);
+              console.warn(`[ai-stream] stream ended before [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — resuming in ${delay}ms`);
+              await new Promise(r => setTimeout(r, delay));
+              lastError = new Error('Stream ended before completion');
+              break;
+            }
+            if (!doneMessageSeen) {
+              deliverStreamError(new Error('El stream terminó antes de completar la respuesta.'));
+              return;
+            }
             if (!hasDeliveredAnyContent) {
               // The stream ended before producing any token. Treat as
               // retriable transport failure if we still have attempts
@@ -1655,9 +1688,10 @@ class ApiClient {
                 lastError = new Error('Empty model stream');
                 break; // jump to outer `for` to retry
               }
-              onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+              deliverStreamError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
               return;
             }
+            streamFinished = true;
             onClose();
             return;
           }
@@ -1670,14 +1704,26 @@ class ApiClient {
           const lines = consumable.split('\n\n');
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const payload = line.substring(6);
+            const eventLines = line.split(/\r?\n/);
+            let eventId: string | null = null;
+            let dataLine: string | null = null;
+            for (const eventLine of eventLines) {
+              if (eventLine.startsWith('id:')) {
+                eventId = eventLine.substring(3).trim();
+              } else if (eventLine.startsWith('data: ')) {
+                dataLine = eventLine.substring(6);
+              }
+            }
+            if (eventId) lastEventId = eventId;
+            if (dataLine == null) continue;
+            const payload = dataLine;
             // Sentinel the backend emits at the very end of every stream,
             // including error / recovered cases. Flush pending buffer,
             // close, and return — anything after is a leftover from a
             // broken proxy or a retransmit.
             if (payload === '[DONE]') {
               flushBatch();
+              doneMessageSeen = true;
               if (!hasDeliveredAnyContent) {
                 // A clean [DONE] with zero tokens means the PROVIDER produced
                 // nothing (transient provider error the backend closed over).
@@ -1696,9 +1742,10 @@ class ApiClient {
                   retryEmptyStream = true;
                   break;
                 }
-                onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+                deliverStreamError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
                 return;
               }
+              streamFinished = true;
               onClose();
               return;
             }
@@ -1786,7 +1833,13 @@ class ApiClient {
                 if (jsonData.recovered) {
                   console.warn('[ai-stream] recovered from provider error:', jsonData.error);
                 } else {
-                  onError(new Error(sanitizeStreamError(jsonData.error)));
+                  // Preserve the already-buffered tail before surfacing the
+                  // terminal error. Returning here is essential: a later
+                  // [DONE]/reader close must not turn fail into complete.
+                  flushBatch();
+                  deliverStreamError(new Error(sanitizeStreamError(jsonData.error)));
+                  try { await reader.cancel('stream error'); } catch { /* already closed */ }
+                  return;
                 }
               }
             } catch (e) {
@@ -1798,7 +1851,7 @@ class ApiClient {
       } catch (error: any) {
         lastError = error;
         if (error?.name === 'AbortError' || signal?.aborted) {
-          onError(error);
+          deliverStreamError(error);
           return;
         }
 
@@ -1809,9 +1862,10 @@ class ApiClient {
         // hiccups, or a reverse proxy returns nothing.
         const isNetworkError = error?.name === 'TypeError'
           || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream/i.test(error?.message || '');
-        if (!hasDeliveredAnyContent && isNetworkError && attempt < MAX_CONNECT_ATTEMPTS) {
+        const canResume = Boolean(lastEventId);
+        if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
           const delay = computeBackoff(attempt);
-          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — auto-reconnecting in ${delay}ms`);
+          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — ${canResume ? 'resuming' : 'reconnecting'} in ${delay}ms`);
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
@@ -1821,10 +1875,10 @@ class ApiClient {
         // The model wasn't able to reply after every retry — surface
         // an actionable hint instead of a meaningless browser error.
         if (isNetworkError && !hasDeliveredAnyContent) {
-          onError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
+          deliverStreamError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
           return;
         }
-        onError(error);
+        deliverStreamError(error);
         return;
       }
     }
@@ -1839,7 +1893,7 @@ class ApiClient {
       const friendly = isQuota
         ? 'El servidor está procesando muchas solicitudes. Reintenta en unos segundos.'
         : `No se pudo completar la respuesta después de ${MAX_CONNECT_ATTEMPTS} intentos. ${msg}`;
-      onError(new Error(friendly));
+      deliverStreamError(new Error(friendly));
     }
   }
   async generateImage(

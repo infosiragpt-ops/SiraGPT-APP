@@ -1164,7 +1164,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
         const userMessage: Message = {
-          id: `msg-user-${Date.now()}`,
+          id: `msg-user-${safeUUID()}`,
           chatId: activeChat.id,
           role: 'USER',
           content,
@@ -1827,7 +1827,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                         }
                         return {
                           ...msg,
-                          content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                          content: msg.content?.trim()
+                            ? msg.content
+                            : `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
                           error: "Monthly API limit exceeded"
                         };
                       }
@@ -1856,7 +1858,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     if (!prevChat) return prevChat;
                     const newMessages = prevChat.messages.map((msg) => {
                       if (msg.id === aiMessagePlaceholder.id) {
-                        return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred.") };
+                        return { ...msg, error: normalizeChatError(error.message || "An error occurred.") };
                       }
                       return msg;
                     });
@@ -1993,7 +1995,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 }
                 return {
                   ...msg,
-                  content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                  content: msg.content?.trim()
+                    ? msg.content
+                    : `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
                   error: "Monthly API limit exceeded"
                 };
               }
@@ -2007,9 +2011,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
-                const existing = typeof msg.content === 'string' ? msg.content.trim() : '';
-                if (existing.length > 10) return msg; // Keep streamed content
-                return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred.") };
+                return { ...msg, error: normalizeChatError(error.message || "An error occurred.") };
               }
               return msg;
             });
@@ -2107,7 +2109,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       ? uploadedFiles.filter(Boolean).map(normalizeMessageAttachment)
       : [];
     const userMessage = {
-      id: `msg-user-${Date.now()}`,
+      id: `msg-user-${safeUUID()}`,
       chatId: newChat.id,
       role: 'USER' as const,
       content: initialContent,
@@ -2504,7 +2506,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // STEP 2: Update UI state and start regeneration
 
     const aiMessagePlaceholder: Message = {
-      id: `ai-regen-${Date.now()}`,
+      id: `ai-regen-${safeUUID()}`,
       chatId: currentChat.id,
       role: 'ASSISTANT',
       content: "",
@@ -2660,7 +2662,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     }
                     return {
                       ...msg,
-                      content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                      content: msg.content?.trim()
+                        ? msg.content
+                        : `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
                       error: "Monthly API limit exceeded"
                     };
                   }
@@ -2673,7 +2677,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred during regeneration.") };
+                    return { ...msg, error: normalizeChatError(error.message || "An error occurred during regeneration.") };
                   }
                   return msg;
                 });
@@ -2766,7 +2770,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
 
     const aiMessagePlaceholder: Message = {
-      id: `ai-regen-${Date.now()}`,
+      id: `ai-regen-${safeUUID()}`,
       chatId: currentChat.id,
       role: 'ASSISTANT',
       content: "",
@@ -3019,7 +3023,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred during regeneration.") };
+                    return { ...msg, error: normalizeChatError(error.message || "An error occurred during regeneration.") };
                   }
                   return msg;
                 });
