@@ -18,6 +18,7 @@ const {
   currentBranch,
   isSafeBranchName,
   mergeRunBranch,
+  removeRunWorktree,
   runBranchName,
   startRunBranch,
 } = require('./git-workflow');
@@ -442,16 +443,74 @@ async function createCheckpoint({ run, project, deps = {} }) {
  * files; existing checkpoint callers keep their historical single-branch
  * behavior until the run orchestrator adopts this service.
  */
+const TERMINAL_RUN_STATUSES_FOR_WORKTREES = new Set(['done', 'error', 'cancelled']);
+
+/**
+ * Self-heal stale sibling worktrees before giving up on isolation.
+ *
+ * The runner rejects a new run worktree while ANY sibling run worktree is
+ * registered — with no liveness check. A run that crashed between worktree
+ * creation and cleanup left its worktree behind forever, and that single
+ * zombie bricked every future writer on the project (observed live: a
+ * 300-agent fleet whose 6 writers all failed against one dead sibling).
+ * When every sibling is terminal in the DB (or unknown — an orphan with no
+ * run row), remove those worktrees and retry once. A genuinely ACTIVE
+ * sibling keeps the rejection: that is real isolation, not debris.
+ */
+async function healStaleSiblingWorktrees({ prisma, runner, projectId, detail }) {
+  const siblingList = String(detail || '').match(/active sibling worktree\(s\):\s*(.+)$/)?.[1];
+  if (!siblingList) return { healed: false };
+  const siblings = siblingList
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => /^[a-zA-Z0-9_-]{6,64}$/.test(value))
+    .slice(0, 20);
+  if (!siblings.length) return { healed: false };
+  const rows = await prisma.codexRun.findMany({
+    where: { id: { in: siblings }, projectId },
+    select: { id: true, status: true },
+  });
+  const statusById = new Map(rows.map((row) => [row.id, row.status]));
+  const live = siblings.filter((id) => (
+    statusById.has(id) && !TERMINAL_RUN_STATUSES_FOR_WORKTREES.has(statusById.get(id))
+  ));
+  if (live.length) return { healed: false, live };
+  for (const id of siblings) {
+    // Idempotent by contract: a missing worktree/branch is a no-op.
+    await removeRunWorktree({ runner, projectId, runId: id }).catch(() => {});
+  }
+  return { healed: true, removed: siblings };
+}
+
 async function prepareRunBranch({ run, project, deps = {} }) {
   const projectId = project?.id || run?.projectId;
   const baseBranch = projectBaseBranch(project, deps.baseBranch);
   if (!baseBranch) return { ok: false, status: 'rejected', code: 'invalid_base_branch' };
-  return startRunBranch({
+  const attempt = () => startRunBranch({
     runner: deps.runner,
     projectId,
     runId: run?.id,
     baseBranch,
   });
+  let branch = await attempt();
+  if (
+    branch?.ok !== true
+    && branch?.code === 'run_concurrency_isolation_unavailable'
+    && deps.prisma?.codexRun?.findMany
+    && deps.runner
+  ) {
+    const heal = await healStaleSiblingWorktrees({
+      prisma: deps.prisma,
+      runner: deps.runner,
+      projectId,
+      detail: branch.detail,
+    }).catch(() => ({ healed: false }));
+    if (heal.healed) {
+      branch = await attempt();
+      if (branch?.ok) branch.selfHealedWorktrees = heal.removed;
+    }
+  }
+  return branch;
 }
 
 /**

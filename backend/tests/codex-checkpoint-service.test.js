@@ -134,3 +134,75 @@ test('isValidSha guards the sha format', () => {
   assert.equal(cp.isValidSha('xyz; rm -rf /'), false);
   assert.equal(cp.isValidSha('abc'), false);
 });
+
+test('prepareRunBranch self-heals stale sibling worktrees of terminal runs', async () => {
+  process.env.CODEX_RUN_WORKTREES = '1';
+  const checkpointService = require('../src/services/codex/checkpoint-service');
+  const removed = [];
+  let attempts = 0;
+  const runner = {
+    createWorktree: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = new Error('blocked');
+        error.status = 409;
+        error.body = {
+          error: 'run_concurrency_isolation_unavailable',
+          detail: 'active sibling worktree(s): deadrun0001',
+        };
+        throw error;
+      }
+      return { dir: '.sira-worktrees/wt-newrun0001', resumed: false };
+    },
+    exec: async (_projectId, args) => {
+      if (args.includes('remove')) removed.push(args[args.length - 1]);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  };
+  const prisma = {
+    codexRun: {
+      // The zombie run finished in `error` — exactly the live incident: one
+      // crashed run's worktree bricked all six writers of a 300-agent fleet.
+      findMany: async () => [{ id: 'deadrun0001', status: 'error' }],
+    },
+  };
+  const branch = await checkpointService.prepareRunBranch({
+    run: { id: 'newrun0001', projectId: 'proj1' },
+    project: { id: 'proj1' },
+    deps: { runner, prisma },
+  });
+  assert.equal(branch.ok, true);
+  assert.equal(attempts, 2, 'must retry once after healing');
+  assert.deepEqual(branch.selfHealedWorktrees, ['deadrun0001']);
+  assert.equal(removed.length, 1, 'the stale worktree must be removed');
+});
+
+test('prepareRunBranch keeps the rejection when a sibling run is genuinely active', async () => {
+  process.env.CODEX_RUN_WORKTREES = '1';
+  const checkpointService = require('../src/services/codex/checkpoint-service');
+  let attempts = 0;
+  const runner = {
+    createWorktree: async () => {
+      attempts += 1;
+      const error = new Error('blocked');
+      error.status = 409;
+      error.body = {
+        error: 'run_concurrency_isolation_unavailable',
+        detail: 'active sibling worktree(s): liverun0001',
+      };
+      throw error;
+    },
+    exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+  };
+  const prisma = {
+    codexRun: { findMany: async () => [{ id: 'liverun0001', status: 'running' }] },
+  };
+  const branch = await checkpointService.prepareRunBranch({
+    run: { id: 'newrun0002', projectId: 'proj1' },
+    project: { id: 'proj1' },
+    deps: { runner, prisma },
+  });
+  assert.equal(branch.ok, false);
+  assert.equal(branch.code, 'run_concurrency_isolation_unavailable');
+  assert.equal(attempts, 1, 'a live sibling must NOT trigger removal or retry');
+});
