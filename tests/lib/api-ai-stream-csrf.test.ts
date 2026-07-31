@@ -56,6 +56,17 @@ function sseEvents(events: Array<Record<string, unknown>>) {
   }
 }
 
+function rawSseResponse(payload: string, headers: Headers = new Headers()) {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload))
+      controller.close()
+    },
+  })
+  return { ok: true, status: 200, headers, body }
+}
+
 function jsonError(status: number, payload: Record<string, unknown>) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -138,6 +149,68 @@ describe('generateAIStream cookie session CSRF transport', () => {
     expect(replacements).toEqual(['respuesta saneada'])
     expect(onClose).toHaveBeenCalledOnce()
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('flushes the buffered tail and does not close after a terminal SSE error', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-error')
+    mockFetch.mockResolvedValueOnce(rawSseResponse(
+      `data: ${JSON.stringify({ content: 'tail before failure' })}\n\n`
+        + `data: ${JSON.stringify({ type: 'error', error: 'upstream failed' })}\n\n`
+        + 'data: [DONE]\n\n',
+    ))
+
+    const { chunks, onClose, onError } = await runStream()
+
+    expect(chunks.join('')).toBe('tail before failure')
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0][0].message).toContain('upstream failed')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('captures the stream cursor and resumes after a mid-stream drop without duplicating content', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-resume')
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'X-Stream-Id': 'owned-cursor' }),
+        body: {
+          getReader: () => {
+            let readCount = 0
+            return {
+              read: async () => {
+                readCount += 1
+                if (readCount === 1) {
+                  return {
+                    done: false,
+                    value: new TextEncoder().encode('id: owned-cursor:1\ndata: {"content":"first\\n"}\n\n'),
+                  }
+                }
+                throw new TypeError('socket dropped')
+              },
+              cancel: vi.fn(),
+            }
+          },
+        },
+      })
+      .mockResolvedValueOnce(rawSseResponse(
+        'id: owned-cursor:2\ndata: {"content":"second\\n"}\n\ndata: [DONE]\n\n',
+        new Headers({ 'X-Stream-Id': 'owned-cursor' }),
+      ))
+
+    const streamPromise = runStream()
+    await vi.runAllTimersAsync()
+    const { chunks, onClose, onError } = await streamPromise
+
+    expect(chunks).toEqual(['first\n', 'second\n'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const firstHeaders = new Headers(mockFetch.mock.calls[0][1].headers)
+    const secondHeaders = new Headers(mockFetch.mock.calls[1][1].headers)
+    expect(firstHeaders.has('Last-Event-ID')).toBe(false)
+    expect(secondHeaders.get('Last-Event-ID')).toBe('owned-cursor:1')
   })
 
   it('prepares cookie credentials and CSRF again before a transport reconnect', async () => {

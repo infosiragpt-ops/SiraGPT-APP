@@ -38,5 +38,10 @@ describe("chat stream id source contract", () => {
       streamIdCalls.length >= 3,
       `expected all chat generation paths to create stream ids through safeUUID(), found ${streamIdCalls.length}`,
     )
+
+    assert.doesNotMatch(source, /msg-user-\$\{Date\.now\(\)\}/,
+      "optimistic user ids must not be millisecond-only values")
+    assert.doesNotMatch(source, /ai-regen-\$\{Date\.now\(\)\}/,
+      "regeneration placeholder ids must not be millisecond-only values")
   })
 })
