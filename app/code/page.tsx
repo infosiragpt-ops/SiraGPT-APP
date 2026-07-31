@@ -96,6 +96,7 @@ function ActiveFolderHydrator() {
   const firedAgentRef = React.useRef<string | null>(null)
   const hydratedFolderRef = React.useRef<string | null>(null)
   const [routeIssue, setRouteIssue] = React.useState<string | null>(null)
+  const [hydrationAttempt, setHydrationAttempt] = React.useState(0)
 
   React.useEffect(() => {
     const liveParams = new URLSearchParams(window.location.search)
@@ -121,7 +122,6 @@ function ActiveFolderHydrator() {
     const projectId = codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
     const workspaceId = codexWorkspaceIdForProject(projectId) || `project:${projectId}`
     if (hydratedFolderRef.current === workspaceId) return
-    hydratedFolderRef.current = workspaceId
     let cancelled = false
     ;(async () => {
       try {
@@ -131,6 +131,7 @@ function ActiveFolderHydrator() {
           || new URLSearchParams(window.location.search).get("folder") !== folderId
         ) return
         setRouteIssue(null)
+        hydratedFolderRef.current = workspaceId
         setActiveFolder({
           id: codexWorkspaceIdForProject(project.id) || workspaceId,
           name: project.name,
@@ -145,6 +146,7 @@ function ActiveFolderHydrator() {
         const code = projectsServiceErrorCode(error)
         if (code === "project_not_found") {
           setRouteIssue("project_not_found")
+          hydratedFolderRef.current = workspaceId
           setActiveFolder(null)
           return
         }
@@ -155,7 +157,7 @@ function ActiveFolderHydrator() {
     return () => {
       cancelled = true
     }
-  }, [folderId, localId, activeFolder?.id, setActiveFolder, switchCodexWorkspace])
+  }, [folderId, localId, activeFolder?.id, hydrationAttempt, setActiveFolder, switchCodexWorkspace])
 
   React.useEffect(() => {
     if (!toolId) return
@@ -177,7 +179,10 @@ function ActiveFolderHydrator() {
     }
     const title = agentId ? titleByAgent[agentId] : null
     if (!title) return
-    const workspaceId = localId || (folderId ? `project:${folderId}` : null)
+    const projectId = folderId
+      ? codexProjectIdFromWorkspaceId(folderId, { assumeProject: true }) || folderId
+      : null
+    const workspaceId = localId || (projectId ? codexWorkspaceIdForProject(projectId) : null)
     if (!workspaceId) return
     const signature = `${workspaceId}:${agentId}`
     if (firedAgentRef.current === signature) return
@@ -187,7 +192,7 @@ function ActiveFolderHydrator() {
       workspaceId,
       name: activeFolder?.name || workspaceId.replace(/^project:|^local:/, "") || "Workspace",
       kind: localId ? "local-folder" : "project",
-      projectId: folderId || undefined,
+      projectId: projectId || undefined,
       title,
     }
     const openAgent = () => {
@@ -213,12 +218,18 @@ function ActiveFolderHydrator() {
         type="button"
         className="shrink-0 rounded-md border border-current px-2.5 py-1 text-xs font-semibold hover:bg-amber-100 dark:hover:bg-amber-900"
         onClick={() => {
+          if (routeIssue === "project_load_failed") {
+            hydratedFolderRef.current = null
+            setRouteIssue(null)
+            setHydrationAttempt((attempt) => attempt + 1)
+            return
+          }
           setRouteIssue(null)
           setActiveFolder(null)
           router.replace("/code")
         }}
       >
-        Abrir workspaces
+        {routeIssue === "project_load_failed" ? "Reintentar" : "Abrir workspaces"}
       </button>
     </div>
   )
