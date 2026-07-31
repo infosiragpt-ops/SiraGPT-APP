@@ -2,11 +2,13 @@
 'use strict';
 
 /**
- * Reset / create the production admin account (admin@gmail.com).
+ * Rotate an existing production admin credential.
  * Run on the VPS where DATABASE_URL is configured:
  *
  *   cd /opt/siragpt/backend
- *   RESET_ADMIN_PASSWORD='YourNewPassword' node scripts/reset-prod-admin-password.js
+ *   RESET_ADMIN_EMAIL='admin@example.com' \
+ *     RESET_ADMIN_PASSWORD='<strong-random-secret>' \
+ *     node scripts/reset-prod-admin-password.js
  *
  * Or inside the backend container:
  *
@@ -17,55 +19,72 @@
 const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
 
-const ADMIN_EMAIL = (process.env.RESET_ADMIN_EMAIL || 'admin@gmail.com').trim().toLowerCase();
-const ADMIN_PASSWORD = process.env.RESET_ADMIN_PASSWORD || 'Admin@SiraGPT2024';
-const ADMIN_ID = 'prod_admin_admin_gmail_com';
+const MIN_ADMIN_PASSWORD_LENGTH = 24;
 
-async function main() {
-  if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 8) {
-    console.error('[reset-prod-admin] RESET_ADMIN_PASSWORD must be at least 8 characters');
-    process.exit(1);
-  }
-
-  const prisma = new PrismaClient();
-  const hash = await bcrypt.hash(ADMIN_PASSWORD, 12);
-
-  const user = await prisma.user.upsert({
-    where: { email: ADMIN_EMAIL },
-    create: {
-      id: ADMIN_ID,
-      email: ADMIN_EMAIL,
-      name: 'Administrador',
-      password: hash,
-      plan: 'ENTERPRISE',
-      isAdmin: true,
-      isSuperAdmin: true,
-      apiUsage: 0,
-      monthlyCallLimit: 999999,
-      monthlyLimit: 999999,
-      emailVerifiedAt: new Date(),
-      twoFactorEnabled: false,
-      totpEnabled: false,
-    },
-    update: {
-      password: hash,
-      plan: 'ENTERPRISE',
-      isAdmin: true,
-      isSuperAdmin: true,
-      deletedAt: null,
-      emailVerifiedAt: new Date(),
-      twoFactorEnabled: false,
-      totpEnabled: false,
-      updatedAt: new Date(),
-    },
-  });
-
-  console.log(`[reset-prod-admin] OK — ${user.email} (id=${user.id})`);
-  console.log('[reset-prod-admin] Use the password from RESET_ADMIN_PASSWORD (default: Admin@SiraGPT2024)');
-  await prisma.$disconnect();
+function readResetConfig(env = process.env) {
+  return {
+    email: String(env.RESET_ADMIN_EMAIL || '').trim().toLowerCase(),
+    password: String(env.RESET_ADMIN_PASSWORD || ''),
+  };
 }
 
-main().catch((err) => {
-  console.error('[reset-prod-admin] FAILED:', err?.message || err);
-  process.exit(1);
-});
+function validateResetConfig({ email, password }) {
+  if (!email || !email.includes('@')) {
+    throw new Error('RESET_ADMIN_EMAIL is required');
+  }
+  if (!password || password.length < MIN_ADMIN_PASSWORD_LENGTH) {
+    throw new Error(
+      `RESET_ADMIN_PASSWORD is required and must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters`,
+    );
+  }
+}
+
+async function rotateAdminCredential({ prisma, config, hashPassword = bcrypt.hash }) {
+  validateResetConfig(config);
+  const hash = await hashPassword(config.password, 12);
+
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.update({
+      where: { email: config.email },
+      data: {
+        password: hash,
+        updatedAt: new Date(),
+      },
+      select: { id: true },
+    });
+    const revoked = await tx.session.deleteMany({
+      where: { userId: user.id },
+    });
+    return {
+      rotated: 1,
+      sessionsRevoked: revoked.count,
+    };
+  });
+}
+
+async function main() {
+  const config = readResetConfig();
+  validateResetConfig(config);
+  const prisma = new PrismaClient();
+  try {
+    const result = await rotateAdminCredential({ prisma, config });
+    console.log(JSON.stringify({ ok: true, ...result }));
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    const code = typeof err?.code === 'string' ? err.code : 'RESET_FAILED';
+    console.error(`[reset-prod-admin] FAILED (${code})`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  MIN_ADMIN_PASSWORD_LENGTH,
+  readResetConfig,
+  validateResetConfig,
+  rotateAdminCredential,
+};
