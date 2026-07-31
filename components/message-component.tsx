@@ -460,7 +460,7 @@ function buildPresentationPreviewHtml(entry: any, filename: string) {
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], fullResponse?: any[], onImageClick?: (imageUrl: string) => void }) => {
-    const tMessageActions = useTranslations("messageActions")
+    const tDocuments = useTranslations("documents")
     const chartFile = files.find(f => f.type === 'chart');
     if (!chartFile) return null;
 
@@ -506,9 +506,9 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
                             e.stopPropagation();
                             handleDownloadChart();
                         }}
-                        aria-label={tMessageActions("downloadChart")}
+                        aria-label={tDocuments("download")}
                         className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
-                        title={tMessageActions("downloadChart")}
+                        title={tDocuments("download")}
                     >
                         <Download className="h-4 w-4" />
                     </Button>

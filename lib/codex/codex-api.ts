@@ -68,22 +68,24 @@ export function codexErrorCode(error: unknown): string | null {
     code?: unknown
     body?: { error?: unknown; code?: unknown }
     status?: unknown
-    message?: unknown
   } | null
   if (typeof candidate?.code === "string" && candidate.code.trim()) return candidate.code.trim()
   if (typeof candidate?.body?.error === "string" && candidate.body.error.trim()) return candidate.body.error.trim()
   if (typeof candidate?.body?.code === "string" && candidate.body.code.trim()) return candidate.body.code.trim()
-  if (candidate?.status === 404 || /\b404\b|not found|no encontrado/i.test(String(candidate?.message || ""))) {
-    return "project_not_found"
-  }
-  return null
+  return candidate?.status === 404 ? "project_not_found" : null
 }
 
-export function codexErrorMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message.trim() : ""
-  return message && !/^(company_project_not_found|project_not_found|codex_project_not_found)$/i.test(message)
-    ? message
-    : fallback
+export function codexIdentityIssue(
+  error: unknown,
+  fallbackCode = "company_association_unavailable",
+): { code: string; message: string } {
+  const code = codexErrorCode(error) || fallbackCode
+  const message = code === "company_project_not_found"
+    ? "No se encontró el Project de esta empresa o ya no tienes acceso."
+    : code === "project_not_found"
+      ? "El proyecto Codex asociado ya no existe."
+      : "No se pudo comprobar la asociación persistente."
+  return { code, message }
 }
 
 export interface CodexHealth { ok: boolean; enabled: boolean; previewOrigin?: string | null }
