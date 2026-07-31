@@ -5109,23 +5109,23 @@ type ModelOption = { name: string; provider?: string; displayName?: string }
 const COMPOSER_EFFORT_LEVELS = [
   {
     value: "Bajo",
-    label: "Low",
-    description: "Faster replies. Lower reasoning depth and cost.",
+    label: "Bajo",
+    description: "Rápido y directo. Menos profundidad.",
   },
   {
     value: "Medio",
-    label: "Medium",
-    description: "Balanced reasoning depth for most tasks.",
+    label: "Medio",
+    description: "Equilibrado. Ideal para el día a día.",
   },
   {
     value: "Extra",
-    label: "High",
-    description: "Deeper reasoning. Higher cost and slower.",
+    label: "Extra",
+    description: "Más profundidad y reflexión. Más lento.",
   },
   {
     value: "Max",
-    label: "Max",
-    description: "Maximum reasoning depth. Highest cost and slowest.",
+    label: "Máx",
+    description: "Máxima profundidad. Mayor costo y latencia.",
   },
 ] as const
 
@@ -5324,8 +5324,8 @@ function ModelPickerInline({
           </div>
 
           <div className="model-picker-effort-ends">
-            <span>Low</span>
-            <span>Max</span>
+            <span>Bajo</span>
+            <span>Máx</span>
           </div>
           <p className="model-picker-effort-description">{effortLevel.description}</p>
         </div>
