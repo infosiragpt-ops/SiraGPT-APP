@@ -54,18 +54,23 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-composer-dock::before\s*\{[\s\S]{0,260}linear-gradient\([\s\S]{0,200}hsl\(var\(--background\)/,
-      "the dock should paint a soft liquid edge so text meets the bar cleanly"
+      /\.chat-composer-dock::before\s*\{\s*content: none;\s*display: none;/,
+      "the dock must not fade or hide the transcript above the composer"
     )
     assert.match(
       chatInterface,
-      /data-testid="chat-scroll-to-bottom"[\s\S]{0,500}max-h-0 opacity-0[\s\S]{0,120}max-h-10 opacity-100/,
-      "the scroll-to-bottom pill must collapse in-flow instead of overlaying messages"
+      /data-testid="chat-scroll-to-bottom"[\s\S]{0,260}absolute left-1\/2 -top-11 z-20[\s\S]{0,260}translate-y-2 opacity-0[\s\S]{0,120}translate-y-0 opacity-100/,
+      "the scroll-to-bottom pill should float without reserving a blank row"
     )
-    assert.doesNotMatch(
+    assert.match(
       chatInterface,
-      /absolute left-1\/2 -top-12 z-20 -translate-x-1\/2/,
-      "the scroll-to-bottom pill must not float over message text"
+      /absolute left-1\/2 -top-11 z-20 flex -translate-x-1\/2/,
+      "the scroll-to-bottom pill should stay centered immediately above the composer"
+    )
+    assert.match(
+      chatInterface,
+      /className="chat-composer-frame relative flex flex-col gap-2"/,
+      "the dock frame should use flex gap so an absolute pill cannot create phantom spacing"
     )
     assert.match(
       globals,
@@ -123,8 +128,13 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+0\.5rem;/,
+      /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+0\.25rem;/,
       "the normal scroll area should end flush against the composer's top edge"
+    )
+    assert.match(
+      globals,
+      /\.chat-composer-dock\s*\{[\s\S]{0,180}padding: 0\.125rem 1rem/,
+      "the dock should leave only a two-pixel breathing edge above the composer"
     )
     assert.match(
       globals,

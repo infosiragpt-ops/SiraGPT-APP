@@ -12357,7 +12357,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="chat-composer-frame relative space-y-2">
+                    <div className="chat-composer-frame relative flex flex-col gap-2">
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
@@ -12374,19 +12374,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         </div>
                       )}
                       {/* Scroll-to-bottom pill — only shown when the user has
-                          scrolled up. Lives in normal flow above the composer
-                          surface (never absolute-over-messages) so it cannot
-                          cover the last lines of text. Collapses to zero
-                          height when at bottom. */}
+                          scrolled up. It floats like ChatGPT's affordance so it
+                          does not reserve a full-width blank row above the
+                          composer or fade the final lines of the transcript. */}
                       <div
                         aria-live="polite"
                         data-testid="chat-scroll-to-bottom"
                         className={cn(
-                          "flex justify-center overflow-hidden",
-                          "transition-[max-height,opacity,margin] duration-base ease-smooth",
+                          "absolute left-1/2 -top-11 z-20 flex -translate-x-1/2 justify-center",
+                          "transition-[opacity,transform] duration-base ease-smooth",
                           isAtBottom
-                            ? "pointer-events-none mb-0 max-h-0 opacity-0"
-                            : "mb-1.5 max-h-10 opacity-100",
+                            ? "pointer-events-none translate-y-2 opacity-0"
+                            : "translate-y-0 opacity-100",
                         )}
                       >
                         <button
