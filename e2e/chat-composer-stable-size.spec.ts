@@ -115,6 +115,42 @@ async function composerMetrics(page: Page) {
   })
 }
 
+async function conversationAlignmentMetrics(page: Page) {
+  const transcript = page.locator(".chat-conversation-column")
+  const composer = page.getByTestId("chat-composer-surface")
+
+  await expect(transcript).toBeVisible()
+  await expect(composer).toBeVisible()
+
+  return page.evaluate(() => {
+    const transcriptElement = document.querySelector<HTMLElement>(".chat-conversation-column")
+    const composerElement = document.querySelector<HTMLElement>('[data-testid="chat-composer-surface"]')
+    if (!transcriptElement || !composerElement) {
+      throw new Error("Chat alignment elements are missing")
+    }
+
+    const transcriptRect = transcriptElement.getBoundingClientRect()
+    const transcriptStyle = getComputedStyle(transcriptElement)
+    const composerRect = composerElement.getBoundingClientRect()
+    const contentLeft = transcriptRect.left + Number.parseFloat(transcriptStyle.paddingLeft)
+    const contentRight = transcriptRect.right - Number.parseFloat(transcriptStyle.paddingRight)
+
+    return {
+      leftDelta: Math.abs(contentLeft - composerRect.left),
+      rightDelta: Math.abs(contentRight - composerRect.right),
+      widthDelta: Math.abs((contentRight - contentLeft) - composerRect.width),
+      composerWidth: composerRect.width,
+    }
+  })
+}
+
+async function expectConversationAlignedWithComposer(page: Page) {
+  await expect.poll(async () => {
+    const metrics = await conversationAlignmentMetrics(page)
+    return Math.max(metrics.leftDelta, metrics.rightDelta, metrics.widthDelta)
+  }).toBeLessThanOrEqual(1)
+}
+
 function expectSameComposerSize(
   actual: { width: number; height: number },
   expected: { width: number; height: number },
@@ -123,7 +159,11 @@ function expectSameComposerSize(
   expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(1)
 }
 
-test("desktop composer keeps the approved size across text, attachment, tool, and chat states", async ({ page }) => {
+function expectSameComposerWidth(actual: { width: number }, expected: { width: number }) {
+  expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1)
+}
+
+test("desktop composer keeps the approved width across text, attachment, tool, and chat states", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const state = { hasConversation: false }
   await mockChatApi(page, state)
@@ -134,8 +174,8 @@ test("desktop composer keeps the approved size across text, attachment, tool, an
   const approved = await composerMetrics(page)
   expect(approved.width).toBeGreaterThan(820)
   expect(approved.width).toBeLessThan(835)
-  expect(approved.height).toBeGreaterThan(100)
-  expect(approved.height).toBeLessThan(106)
+  expect(approved.height).toBeGreaterThan(92)
+  expect(approved.height).toBeLessThan(97)
 
   const textarea = page.getByTestId("chat-composer-surface").locator("textarea")
   await textarea.fill([
@@ -169,12 +209,14 @@ test("desktop composer keeps the approved size across text, attachment, tool, an
   })
   await expect(page.getByLabel("Archivos adjuntos")).toBeVisible()
   const withAttachment = await composerMetrics(page)
-  expectSameComposerSize(withAttachment, approved)
+  expectSameComposerWidth(withAttachment, approved)
+  expect(withAttachment.height).toBeGreaterThan(approved.height)
+  expect(withAttachment.height - approved.height).toBeLessThan(120)
 
   await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
   await page.getByRole("menuitem", { name: /Web Search|Búsqueda web/i }).click()
   const withActiveTool = await composerMetrics(page)
-  expectSameComposerSize(withActiveTool, approved)
+  expectSameComposerSize(withActiveTool, withAttachment)
 
   state.hasConversation = true
   await page.evaluate(() => {
@@ -209,4 +251,25 @@ test("mobile composer keeps its size while a long prompt scrolls internally", as
   expectSameComposerSize(multiline, approved)
   expect(multiline.textareaScrollHeight).toBeGreaterThan(multiline.textareaClientHeight)
   expect(multiline.textareaOverflowY).toBe("auto")
+})
+
+test("conversation content rail aligns with the composer on desktop, narrow panes, and mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const state = { hasConversation: true }
+  await mockChatApi(page, state)
+
+  await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
+
+  const desktop = await conversationAlignmentMetrics(page)
+  expect(desktop.composerWidth).toBeGreaterThan(820)
+  expect(desktop.composerWidth).toBeLessThan(835)
+  await expectConversationAlignedWithComposer(page)
+
+  // Sidebar/panel width changes must recenter the shared rail in its pane.
+  await page.setViewportSize({ width: 900, height: 900 })
+  await expectConversationAlignedWithComposer(page)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectConversationAlignedWithComposer(page)
 })

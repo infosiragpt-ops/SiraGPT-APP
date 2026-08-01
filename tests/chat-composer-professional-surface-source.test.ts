@@ -118,6 +118,11 @@ describe("professional chat composer surface source contract", () => {
   it("preserves the approved width and height across chat states", () => {
     assert.match(
       globals,
+      /\.chat-viewport\s*\{[^}]{0,1600}--chat-content-max-width: 51\.75rem;/,
+      "the chat viewport should own one 828px width token for messages and composer"
+    )
+    assert.match(
+      globals,
       /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+0\.5rem;/,
       "the normal scroll area should end flush against the composer's top edge"
     )
@@ -128,13 +133,23 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), 51\.75rem\);[\s\S]{0,80}margin-inline: auto;/,
+      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), var\(--chat-content-max-width\)\);[\s\S]{0,80}margin-inline: auto;/,
       "the empty composer should retain its approved 828px content width"
     )
     assert.match(
       globals,
-      /\.chat-composer-dock \.chat-composer-frame\s*\{[\s\S]{0,100}width: min\(100%, 51\.75rem\);/,
+      /\.chat-composer-dock \.chat-composer-frame\s*\{[\s\S]{0,100}width: min\(100%, var\(--chat-content-max-width\)\);/,
       "the in-chat composer should use the same approved width"
+    )
+    assert.match(
+      globals,
+      /\.chat-conversation-column\s*\{[\s\S]{0,520}box-sizing: border-box;[\s\S]{0,100}width: 100%;[\s\S]{0,80}min-width: 0;[\s\S]{0,240}var\(--chat-content-max-width\) \+ var\(--chat-mobile-gutter\) \+ var\(--chat-mobile-gutter\)[\s\S]{0,100}margin-inline: auto;/,
+      "the transcript content box should share the composer rail after accounting for both gutters"
+    )
+    assert.doesNotMatch(
+      globals,
+      /\.chat-conversation-column\s*\{[^}]*64rem/,
+      "the transcript must not regress to the old 1024px rail"
     )
     assert.match(
       globals,
