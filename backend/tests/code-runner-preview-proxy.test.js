@@ -2,7 +2,9 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
+const path = require('node:path');
 const test = require('node:test');
 const express = require('express');
 const WebSocket = require('ws');
@@ -52,6 +54,12 @@ function withEnv(patch, fn) {
     }
   }
 }
+
+test('production compose passes dedicated preview secrets into the backend', () => {
+  const compose = fs.readFileSync(path.resolve(__dirname, '../../docker-compose.prod.yml'), 'utf8');
+  assert.match(compose, /CODE_RUNNER_PREVIEW_TOKEN_SECRET:\s*\$\{CODE_RUNNER_PREVIEW_TOKEN_SECRET:-\}/);
+  assert.match(compose, /CODEX_PREVIEW_TOKEN_SECRET:\s*\$\{CODEX_PREVIEW_TOKEN_SECRET:-\}/);
+});
 
 test('preview token verification is fail-closed in production and requires exp', () => {
   withEnv({ NODE_ENV: 'production', CODE_RUNNER_PREVIEW_TOKEN_SECRET: undefined, CODEX_PREVIEW_TOKEN_SECRET: undefined }, () => {
