@@ -21,11 +21,13 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { workspacePersistenceStatus } from "@/lib/code-folder-utils"
 import { projectsService } from "@/lib/projects-service"
 import { CODEX_UPDATED_EVENT } from "@/lib/codex-projects"
 
 export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
-  const { activeFolder, setActiveFolder } = useCodeWorkspace()
+  const { activeFolder, setActiveFolder, workspaceSource } = useCodeWorkspace()
+  const persistence = workspacePersistenceStatus(activeFolder ? workspaceSource : null)
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState("")
   const [saving, setSaving] = React.useState(false)
@@ -150,15 +152,24 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56 rounded-xl border-border/70 p-1.5">
-          <DropdownMenuLabel className="px-2 py-1 text-[11px] font-normal text-muted-foreground">
-            {activeFolder ? (
-              <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/80" />
-                Sincronizado en la nube
-              </span>
-            ) : (
-              "Sin proyecto activo"
-            )}
+          <DropdownMenuLabel
+            className="px-2 py-1 text-[11px] font-normal text-muted-foreground"
+            title={persistence.detail}
+          >
+            <span className="flex items-center gap-1.5">
+              <span
+                className={
+                  persistence.tone === "local"
+                    ? "h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500/80"
+                    : persistence.tone === "server"
+                      ? "h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500/80"
+                      : persistence.tone === "project"
+                        ? "h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80"
+                        : "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50"
+                }
+              />
+              {persistence.label}
+            </span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="gap-2.5 rounded-lg text-sm" onClick={startEdit}>

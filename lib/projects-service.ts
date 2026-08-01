@@ -133,7 +133,72 @@ export interface ProjectFilters {
 const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const baseUrl = `${apiRoot}/projects`
 
+/** /code editor FS snapshot stored on Project.codeWorkspace (not knowledge files). */
+export interface ProjectCodeWorkspaceFile {
+  content: string
+  language?: string
+  updatedAt?: number
+}
+
+export interface ProjectCodeWorkspaceSnapshot {
+  v: number
+  files: Record<string, ProjectCodeWorkspaceFile>
+  openTabs?: string[]
+  activePath?: string | null
+  updatedAt?: string | null
+}
+
+export interface ProjectCodeWorkspaceResponse {
+  projectId: string
+  workspace: ProjectCodeWorkspaceSnapshot
+  fileCount: number
+  projectUpdatedAt: string
+}
+
+export type ProjectErrorKind =
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "client"
+  | "server"
+  | "network"
+  | "unknown"
+
+export class ProjectServiceError extends Error {
+  readonly status: number | undefined
+  readonly kind: ProjectErrorKind
+  readonly code: string | undefined
+
+  constructor(
+    message: string,
+    options: { status?: number; kind?: ProjectErrorKind; code?: string; cause?: unknown } = {},
+  ) {
+    super(message)
+    this.name = "ProjectServiceError"
+    this.status = options.status
+    this.kind = options.kind ?? classifyStatus(options.status)
+    this.code = options.code
+    if (options.cause !== undefined) {
+      ;(this as Error & { cause?: unknown }).cause = options.cause
+    }
+  }
+}
+
+function classifyStatus(status: number | undefined): ProjectErrorKind {
+  if (typeof status !== "number") return "unknown"
+  if (status === 401) return "unauthorized"
+  if (status === 403) return "forbidden"
+  if (status === 404) return "not_found"
+  if (status >= 500) return "server"
+  return "client"
+}
+
 export function projectsServiceErrorCode(error: unknown): string | null {
+  if (error instanceof ProjectServiceError) {
+    if (error.status === 404 || error.kind === "not_found") return "project_not_found"
+    if (typeof error.code === "string" && error.code.trim()) return error.code.trim()
+    return null
+  }
   const candidate = error as { code?: unknown; status?: unknown } | null
   if (candidate?.status === 404) return "project_not_found"
   if (typeof candidate?.code === "string" && candidate.code.trim()) return candidate.code.trim()
@@ -160,12 +225,24 @@ async function handle<T>(res: Response): Promise<T> {
     } catch {
       // response body wasn't JSON — use the status line
     }
-    throw Object.assign(new Error(message), {
+    throw new ProjectServiceError(message, {
       status: res.status,
-      code: res.status === 404 ? "project_not_found" : code,
+      code: res.status === 404 ? "project_not_found" : code || undefined,
     })
   }
   return res.json() as Promise<T>
+}
+
+async function guardNetwork<T>(perform: () => Promise<T>): Promise<T> {
+  try {
+    return await perform()
+  } catch (err) {
+    if (err instanceof ProjectServiceError) throw err
+    throw new ProjectServiceError(
+      err instanceof Error ? err.message : "Network error",
+      { kind: "network", cause: err },
+    )
+  }
 }
 
 export const projectsService = {
@@ -196,12 +273,14 @@ export const projectsService = {
   },
 
   async get(id: string): Promise<ProjectDetail> {
-    const res = await authenticatedFetch(`${baseUrl}/${id}`, {
-      credentials: "include",
-      headers: authHeaders(),
+    return guardNetwork(async () => {
+      const res = await authenticatedFetch(`${baseUrl}/${id}`, {
+        credentials: "include",
+        headers: authHeaders(),
+      })
+      const json = await handle<{ project: ProjectDetail }>(res)
+      return json.project
     })
-    const json = await handle<{ project: ProjectDetail }>(res)
-    return json.project
   },
 
   async context(id: string): Promise<ProjectContextManifest> {
@@ -338,5 +417,37 @@ export const projectsService = {
     const res = await fetch(`${baseUrl}/share/${shareId}`)
     const json = await handle<{ project: SharedProjectSnapshot }>(res)
     return json.project
+  },
+
+  /**
+   * /code editor FS snapshot for a Project (Slice C).
+   * Distinct from knowledge File attachments on Project.files.
+   */
+  async getCodeWorkspace(projectId: string): Promise<ProjectCodeWorkspaceResponse> {
+    return guardNetwork(async () => {
+      const res = await authenticatedFetch(`${baseUrl}/${projectId}/code-workspace`, {
+        credentials: "include",
+        headers: authHeaders(),
+      })
+      return handle<ProjectCodeWorkspaceResponse>(res)
+    })
+  },
+
+  /**
+   * Replace the /code editor FS snapshot for a Project (owner only).
+   */
+  async putCodeWorkspace(
+    projectId: string,
+    workspace: ProjectCodeWorkspaceSnapshot,
+  ): Promise<ProjectCodeWorkspaceResponse> {
+    return guardNetwork(async () => {
+      const res = await authenticatedFetch(`${baseUrl}/${projectId}/code-workspace`, {
+        method: "PUT",
+        credentials: "include",
+        headers: authHeaders(),
+        body: JSON.stringify({ workspace }),
+      })
+      return handle<ProjectCodeWorkspaceResponse>(res)
+    })
   },
 }

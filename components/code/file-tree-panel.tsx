@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { workspaceSourceLabel } from "@/lib/code-folder-utils"
 
 // Cursor / VS-Code-style file-type icons + accent colors. Keeps the tree
 // scannable: JSON in amber braces, shell in green, code in blue/yellow,
@@ -263,6 +264,7 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
 export function FileTreePanel() {
   const { files, activePath, openFile, deleteFile, openLocalFolderWorkspace, workspaceSource } =
     useCodeWorkspace()
+  const sourceFooter = workspaceSourceLabel(workspaceSource)
 
   const [query, setQuery] = React.useState("")
   const [collapsed, setCollapsed] = React.useState<Set<string>>(() => new Set())
@@ -396,8 +398,15 @@ export function FileTreePanel() {
           />
         )}
       </div>
-      <footer className="shrink-0 border-t border-border/60 px-2 py-1 text-[10px] text-muted-foreground">
-        {workspaceSource.linked ? "Sincronizado con carpeta local" : "Solo en este navegador"}
+      <footer
+        className="shrink-0 border-t border-border/60 px-2 py-1 text-[10px] text-muted-foreground"
+        title={
+          workspaceSource.kind === "project"
+            ? "El código del editor se guarda en Project.codeWorkspace (servidor) y/o localStorage. Los adjuntos de conocimiento no son el árbol."
+            : undefined
+        }
+      >
+        {sourceFooter}
       </footer>
     </div>
   )

@@ -2092,6 +2092,11 @@ model Project {
   chats                Chat[]
   memories             ProjectMemory[]
   documents            ProjectDocument[]
+
+  // /code editor virtual FS snapshot (Slice C). Not knowledge File rows.
+  // Owner-only via projects.userId; never returned on public share routes.
+  codeWorkspace Json?
+
   codexLink            CompanyCodexProjectLink?
   connectorAssignments ProjectConnectorAssignment[]
   company              Company?
