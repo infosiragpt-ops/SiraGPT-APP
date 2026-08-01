@@ -41,7 +41,10 @@ const chat = {
       id: "composer-size-assistant-message",
       chatId: "composer-size-chat",
       role: "ASSISTANT",
-      content: "Hola, lista para ayudarte.",
+      content: Array.from(
+        { length: 28 },
+        (_, index) => `Párrafo ${index + 1}. Contenido de lectura suficiente para comprobar el borde inferior del chat sin ocultar ni desvanecer las últimas líneas.`
+      ).join("\n\n"),
       timestamp: "2026-07-22T00:00:01.000Z",
     },
   ],
@@ -272,4 +275,45 @@ test("conversation content rail aligns with the composer on desktop, narrow pane
 
   await page.setViewportSize({ width: 390, height: 844 })
   await expectConversationAlignedWithComposer(page)
+})
+
+test("conversation reaches the composer edge and the return pill reserves no row", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const state = { hasConversation: true }
+  await mockChatApi(page, state)
+
+  await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
+
+  const viewport = page.locator(".chat-message-scroll [data-radix-scroll-area-viewport]")
+  await expect.poll(async () => viewport.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(160)
+
+  const geometry = await page.evaluate(() => {
+    const messageScroll = document.querySelector<HTMLElement>(".chat-message-scroll")
+    const messageContent = document.querySelector<HTMLElement>(".chat-message-scroll-content")
+    const composer = document.querySelector<HTMLElement>('[data-testid="chat-composer-surface"]')
+    const dock = document.querySelector<HTMLElement>(".chat-composer-dock")
+    const pill = document.querySelector<HTMLElement>('[data-testid="chat-scroll-to-bottom"]')
+    if (!messageScroll || !messageContent || !composer || !dock || !pill) {
+      throw new Error("Chat edge geometry elements are missing")
+    }
+
+    return {
+      composerGap: composer.getBoundingClientRect().top - messageScroll.getBoundingClientRect().bottom,
+      contentPaddingBottom: Number.parseFloat(getComputedStyle(messageContent).paddingBottom),
+      dockPaddingTop: Number.parseFloat(getComputedStyle(dock).paddingTop),
+      pillPosition: getComputedStyle(pill).position,
+      pillBottom: pill.getBoundingClientRect().bottom,
+      composerTop: composer.getBoundingClientRect().top,
+    }
+  })
+
+  expect(geometry.composerGap).toBeGreaterThanOrEqual(0)
+  expect(geometry.composerGap).toBeLessThanOrEqual(4)
+  expect(geometry.contentPaddingBottom).toBeLessThanOrEqual(4)
+  expect(geometry.dockPaddingTop).toBeLessThanOrEqual(2)
+  expect(geometry.pillPosition).toBe("absolute")
+  // The hidden state eases down by 8px before fading. It may touch, but must
+  // never overlap, the composer; its visible state sits above this boundary.
+  expect(geometry.pillBottom).toBeLessThanOrEqual(geometry.composerTop)
 })
