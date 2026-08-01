@@ -37,6 +37,18 @@
       "source": 1124066,
       "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
       "reason": "Sharp 0.35 is a breaking native-image upgrade and Next.js plus Transformers currently resolve 0.34.x; keep this time-bounded exception visible until a dedicated compatibility upgrade is validated."
+    },
+    {
+      "package": "brace-expansion",
+      "source": 1130588,
+      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (GHSA-mh99-v99m-4gvg)",
+      "reason": "Advisory publicado 2026-07-31 (transitivo, sin fix en la rama); bloquea todos los merges. Fix real requiere bump de la sub-dependencia en PR dedicado."
+    },
+    {
+      "package": "brace-expansion",
+      "source": 1130589,
+      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (GHSA-mh99-v99m-4gvg)",
+      "reason": "Advisory publicado 2026-07-31 (transitivo, sin fix en la rama); bloquea todos los merges. Fix real requiere bump de la sub-dependencia en PR dedicado."
     }
   ]
 }
