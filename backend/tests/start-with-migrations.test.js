@@ -48,7 +48,7 @@ function fakePrivateKey(label, trailingNewline = false) {
 }
 
 test("only explicitly allowlisted migrations are safe to auto-rollback", () => {
-  assert.equal(isSafeAutoRollbackMigration("20260527000000_reset_admin_password"), true);
+  assert.equal(isSafeAutoRollbackMigration("20260527000000_reset_admin_password"), false);
   assert.equal(isSafeAutoRollbackMigration("20260520160000_add_org_pending_transfer"), true);
   assert.equal(isSafeAutoRollbackMigration("20250919203030_add_model_sync_fields"), true);
   assert.equal(isSafeAutoRollbackMigration("20260526125000_add_video_model_type"), false);
