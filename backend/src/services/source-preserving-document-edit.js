@@ -1921,11 +1921,235 @@ function replaceNeedleText(text = '', needle = '', replacement = '') {
   if (!exact) return source;
   const exactRe = new RegExp(escapeRegExp(exact), 'gi');
   if (exactRe.test(source)) return source.replace(exactRe, String(replacement || ''));
-  const normalizedNeedle = normalizeText(exact);
-  if (normalizedNeedle && normalizeText(source).includes(normalizedNeedle)) {
-    return String(replacement || '');
+  // Accent/spacing-tolerant match: only swap the matched span, never the whole
+  // paragraph (the old behaviour wiped mixed formatting when a soft match hit).
+  const range = findFoldedTextRange(source, exact);
+  if (range) {
+    return `${source.slice(0, range.start)}${String(replacement || '')}${source.slice(range.end)}`;
   }
   return source;
+}
+
+// ── Surgical OOXML run-level text edit ──────────────────────────────────────
+// Word often splits a sentence across several <w:t> runs (bold mid-word, spell
+// check, track-changes leftovers). Rebuilding the whole <w:p> from a template
+// destroys mixed bold/italic/hyperlinks. These helpers edit ONLY the text
+// inside existing <w:t> nodes so rPr, hyperlinks, drawings and pPr stay byte-
+// identical for everything the user did not ask to change.
+
+function foldTextForMatch(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+/**
+ * Map a folded-needle hit back to an original-string [start, end) range.
+ * Walks code units so combining marks in the source keep 1:1 alignment with
+ * the folded stream used for matching.
+ */
+function findFoldedTextRange(haystack = '', needle = '') {
+  const source = String(haystack || '');
+  const target = foldTextForMatch(needle);
+  if (!source || !target) return null;
+
+  const foldedChars = [];
+  const origIndexForFolded = [];
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    const folded = foldTextForMatch(ch);
+    if (!folded) continue; // combining mark already stripped by fold of previous base
+    for (let j = 0; j < folded.length; j += 1) {
+      foldedChars.push(folded[j]);
+      origIndexForFolded.push(i);
+    }
+  }
+  const foldedHay = foldedChars.join('');
+  const at = foldedHay.indexOf(target);
+  if (at < 0) return null;
+  const start = origIndexForFolded[at];
+  const lastFolded = at + target.length - 1;
+  const end = origIndexForFolded[lastFolded] + 1;
+  return { start, end };
+}
+
+function findAllCaseInsensitiveRanges(haystack = '', needle = '') {
+  const source = String(haystack || '');
+  const exact = String(needle || '');
+  if (!source || !exact) return [];
+  const ranges = [];
+  const re = new RegExp(escapeRegExp(exact), 'gi');
+  let match;
+  while ((match = re.exec(source))) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+    if (match[0].length === 0) re.lastIndex += 1;
+  }
+  return ranges;
+}
+
+function extractWtNodes(paragraphXml = '') {
+  const nodes = [];
+  const re = /<w:t\b([^>]*)>([\s\S]*?)<\/w:t>/g;
+  let match;
+  while ((match = re.exec(String(paragraphXml || '')))) {
+    nodes.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      attributes: match[1] || '',
+      text: xmlUnescape(match[2]),
+      textStart: 0,
+      textEnd: 0,
+    });
+  }
+  let offset = 0;
+  for (const node of nodes) {
+    node.textStart = offset;
+    node.textEnd = offset + node.text.length;
+    offset = node.textEnd;
+  }
+  return nodes;
+}
+
+function wtAttributesWithSpace(attributes = '', text = '') {
+  let attrs = String(attributes || '');
+  const needsPreserve = /^\s|\s$|\n|\t/.test(String(text || ''));
+  if (needsPreserve) {
+    if (/\bxml:space\s*=/.test(attrs)) {
+      attrs = attrs.replace(/\bxml:space\s*=\s*["'][^"']*["']/, 'xml:space="preserve"');
+    } else {
+      attrs = `${attrs} xml:space="preserve"`;
+    }
+  }
+  return attrs;
+}
+
+function buildWtNodeXml(attributes = '', text = '') {
+  return `<w:t${wtAttributesWithSpace(attributes, text)}>${xmlEscape(text)}</w:t>`;
+}
+
+/**
+ * Mutate node.text values so the concatenated character range [start, end)
+ * becomes `replacement`. Only the overlapping <w:t> nodes change; runs, rPr
+ * and everything outside those text nodes stay untouched.
+ */
+function applyTextRangeToWtNodes(nodes, start, end, replacement = '') {
+  if (!Array.isArray(nodes) || !nodes.length) return false;
+  if (!(end > start) && replacement === '') return false;
+  const firstIdx = nodes.findIndex((n) => n.textEnd > start && n.textStart < end);
+  if (firstIdx < 0) return false;
+  let lastIdx = firstIdx;
+  for (let i = firstIdx; i < nodes.length; i += 1) {
+    if (nodes[i].textStart < end) lastIdx = i;
+    else break;
+  }
+  const first = nodes[firstIdx];
+  const last = nodes[lastIdx];
+  const localStart = Math.max(0, start - first.textStart);
+  const localEnd = Math.max(0, end - last.textStart);
+  if (firstIdx === lastIdx) {
+    first.text = `${first.text.slice(0, localStart)}${replacement}${first.text.slice(localEnd)}`;
+  } else {
+    first.text = `${first.text.slice(0, localStart)}${replacement}`;
+    for (let i = firstIdx + 1; i < lastIdx; i += 1) nodes[i].text = '';
+    last.text = last.text.slice(localEnd);
+  }
+  // Recompute concatenated offsets for subsequent right-to-left replacements.
+  let offset = 0;
+  for (const node of nodes) {
+    node.textStart = offset;
+    node.textEnd = offset + node.text.length;
+    offset = node.textEnd;
+  }
+  return true;
+}
+
+function rebuildParagraphXmlFromWtNodes(paragraphXml = '', nodes = []) {
+  if (!nodes.length) return String(paragraphXml || '');
+  // Replace from the end so earlier offsets stay valid.
+  let xml = String(paragraphXml || '');
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const node = nodes[i];
+    xml = `${xml.slice(0, node.start)}${buildWtNodeXml(node.attributes, node.text)}${xml.slice(node.end)}`;
+  }
+  return xml;
+}
+
+/**
+ * Apply absolute character ranges (against concatenated <w:t> text) surgically.
+ * Each range: { start, end, replacement }. Processed right-to-left.
+ *
+ * @returns {{ xml: string, changed: boolean, count: number, mode: string }}
+ */
+function applySurgicalRangesToParagraphXml(paragraphXml = '', ranges = []) {
+  const sourceXml = String(paragraphXml || '');
+  const list = Array.isArray(ranges) ? ranges.filter((r) => r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end >= r.start) : [];
+  if (!sourceXml || !list.length) {
+    return { xml: sourceXml, changed: false, count: 0, mode: 'noop' };
+  }
+  const nodes = extractWtNodes(sourceXml);
+  if (!nodes.length) {
+    return { xml: sourceXml, changed: false, count: 0, mode: 'no_wt' };
+  }
+  const ordered = [...list].sort((a, b) => b.start - a.start);
+  let count = 0;
+  for (const range of ordered) {
+    if (applyTextRangeToWtNodes(nodes, range.start, range.end, String(range.replacement ?? ''))) {
+      count += 1;
+    }
+  }
+  if (!count) {
+    return { xml: sourceXml, changed: false, count: 0, mode: 'not_applied' };
+  }
+  return {
+    xml: rebuildParagraphXmlFromWtNodes(sourceXml, nodes),
+    changed: true,
+    count,
+    mode: 'ranges',
+  };
+}
+
+/**
+ * Surgical in-paragraph replace. Preserves mixed run formatting, hyperlinks
+ * and drawings. Falls back to first-run dump only when the paragraph has no
+ * <w:t> nodes at all (should not happen for real text paragraphs).
+ *
+ * @returns {{ xml: string, changed: boolean, count: number, mode: string }}
+ */
+function replaceTextInParagraphXmlSurgical(paragraphXml = '', needle = '', replacement = '', { all = true } = {}) {
+  const sourceXml = String(paragraphXml || '');
+  const exact = String(needle || '');
+  if (!sourceXml || !exact) {
+    return { xml: sourceXml, changed: false, count: 0, mode: 'noop' };
+  }
+
+  const nodes = extractWtNodes(sourceXml);
+  if (!nodes.length) {
+    // No text nodes — nothing surgical to do.
+    return { xml: sourceXml, changed: false, count: 0, mode: 'no_wt' };
+  }
+
+  const fullText = nodes.map((n) => n.text).join('');
+  let ranges = findAllCaseInsensitiveRanges(fullText, exact);
+  let mode = 'exact_ci';
+  if (!ranges.length) {
+    const folded = findFoldedTextRange(fullText, exact);
+    if (folded) {
+      ranges = [folded];
+      mode = 'folded';
+    }
+  }
+  if (!ranges.length) {
+    return { xml: sourceXml, changed: false, count: 0, mode: 'not_found' };
+  }
+  if (!all) ranges = ranges.slice(0, 1);
+
+  const applied = applySurgicalRangesToParagraphXml(
+    sourceXml,
+    ranges.map((range) => ({ ...range, replacement: String(replacement || '') })),
+  );
+  if (!applied.changed) return applied;
+  return { ...applied, mode };
 }
 
 function replaceTextInDocxBuffer(buffer, needle, replacement) {
@@ -1945,11 +2169,25 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
 
   let changedCount = 0;
   for (const paragraph of matches) {
+    const surgical = replaceTextInParagraphXmlSurgical(
+      paragraph.xml,
+      needle,
+      replacement,
+      { all: true },
+    );
+    if (surgical.changed) {
+      documentXml = `${documentXml.slice(0, paragraph.start)}${surgical.xml}${documentXml.slice(paragraph.end)}`;
+      changedCount += surgical.count;
+      continue;
+    }
+    // Last-resort fallback: whole-paragraph text rewrite into the first run,
+    // still preserving pPr / non-text structure better than a full rebuild.
     const updatedText = replaceNeedleText(paragraph.text, needle, replacement);
-    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
-    const updatedParagraph = paragraphXml({ kind: 'normal', text: updatedText }, template);
-    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
-    changedCount += 1;
+    if (updatedText !== paragraph.text) {
+      const updatedParagraph = replaceParagraphTextPreservingFormatting(paragraph.xml, updatedText);
+      documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+      changedCount += 1;
+    }
   }
 
   if (changedCount === 0) {
@@ -1978,9 +2216,9 @@ function replaceParagraphTextPreservingFormatting(paragraphXmlValue = '', replac
   return String(paragraphXmlValue || '').replace(
     /<w:t\b([^>]*)>[\s\S]*?<\/w:t>/g,
     (_full, attributes = '') => {
-      const value = wroteReplacement ? '' : xmlEscape(replacement);
+      const value = wroteReplacement ? '' : String(replacement ?? '');
       wroteReplacement = true;
-      return `<w:t${attributes}>${value}</w:t>`;
+      return buildWtNodeXml(attributes, value);
     },
   );
 }
@@ -2111,14 +2349,55 @@ function proofreadMinimalDocxBuffer(buffer) {
   const expectedReplacements = [];
 
   for (const paragraph of paragraphs) {
-    const proofread = applyMinimalProofreadingToText(paragraph.text);
-    if (!proofread.changed) continue;
-    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
-    const updatedParagraph = paragraphXml({ kind: 'normal', text: proofread.text }, template);
-    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    // Apply each mechanical rule surgically inside existing <w:t> runs so
+    // bold/italic/links survive. Never rebuild the whole paragraph.
+    let updatedXml = paragraph.xml;
+    let paragraphChanged = false;
+    const paragraphCorrections = [];
+
+    for (const rule of MINIMAL_PROOFREAD_RULES) {
+      // Re-scan concatenated text after each rule so chained fixes see the
+      // post-edit surface (e.g. two independent typos in the same paragraph).
+      const currentText = paragraphText(updatedXml);
+      const samples = [];
+      const ranges = [];
+      const pattern = new RegExp(
+        rule.pattern.source,
+        rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`,
+      );
+      let match;
+      while ((match = pattern.exec(currentText))) {
+        const full = match[0];
+        const replacement = typeof rule.replacement === 'function'
+          ? rule.replacement(full)
+          : String(rule.replacement || '');
+        if (replacement === full) continue;
+        ranges.push({
+          start: match.index,
+          end: match.index + full.length,
+          replacement,
+        });
+        if (samples.length < 5) samples.push({ needle: full, replacement });
+        expectedReplacements.push({ needle: full, replacement });
+      }
+      if (!ranges.length) continue;
+      const surgical = applySurgicalRangesToParagraphXml(updatedXml, ranges);
+      if (!surgical.changed) continue;
+      updatedXml = surgical.xml;
+      paragraphChanged = true;
+      paragraphCorrections.push({
+        id: rule.id,
+        label: rule.label,
+        count: surgical.count,
+        samples,
+      });
+    }
+
+    if (!paragraphChanged) continue;
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedXml}${documentXml.slice(paragraph.end)}`;
     changedParagraphs += 1;
 
-    for (const correction of proofread.corrections) {
+    for (const correction of paragraphCorrections) {
       const previous = correctionMap.get(correction.id) || {
         id: correction.id,
         label: correction.label,
@@ -2128,7 +2407,6 @@ function proofreadMinimalDocxBuffer(buffer) {
       previous.count += correction.count;
       for (const sample of correction.samples || []) {
         if (previous.samples.length < 5) previous.samples.push(sample);
-        expectedReplacements.push(sample);
       }
       correctionMap.set(correction.id, previous);
       changedCount += correction.count;
@@ -2515,8 +2793,27 @@ function deleteTextFromDocxBuffer(buffer, needle) {
 
   let removedCount = 0;
   for (const paragraph of paragraphs) {
-    documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
-    removedCount += 1;
+    const paragraphNorm = normalizeText(paragraph.text);
+    // Whole-paragraph target → drop the <w:p>. Partial needle → surgical
+    // blanking of the matched span so the rest of the paragraph (and its
+    // formatting) survives.
+    if (paragraphNorm === normalizedNeedle || paragraphNorm.replace(/\s+/g, ' ') === normalizedNeedle) {
+      documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+      removedCount += 1;
+      continue;
+    }
+    const surgical = replaceTextInParagraphXmlSurgical(paragraph.xml, needle, '', { all: true });
+    if (surgical.changed) {
+      // If the paragraph is now empty of visible text, drop it entirely so we
+      // do not leave blank shells behind.
+      const remaining = paragraphText(surgical.xml).trim();
+      if (!remaining) {
+        documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+      } else {
+        documentXml = `${documentXml.slice(0, paragraph.start)}${surgical.xml}${documentXml.slice(paragraph.end)}`;
+      }
+      removedCount += surgical.count;
+    }
   }
 
   if (removedCount === 0) {
@@ -4347,8 +4644,37 @@ function extractQuotedValues(text = '') {
   return values.filter(Boolean);
 }
 
+/**
+ * Extract EVERY quoted replace pair from the ORIGINAL prompt, preserving the
+ * user's casing/accents. Compound instructions like:
+ *   reemplaza "Introducción original" por "Introducción mejorada" y cambia
+ *   "BORRADOR" por "APROBADO"
+ * used to lose the 2nd pair's casing because clause-splitting runs on
+ * normalizeText() (lowercased). Scanning the raw prompt keeps surgical
+ * replacements byte-faithful to what the user typed.
+ */
+function extractAllQuotedReplacementPairs(text = '') {
+  const raw = String(text || '');
+  if (!raw) return [];
+  const pairs = [];
+  const re = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]\s+(?:por|con|a)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/giu;
+  let match;
+  while ((match = re.exec(raw))) {
+    const needle = String(match[1] || '').trim();
+    const replacement = String(match[2] || '').trim();
+    if (needle.length >= 2 && replacement.length >= 1) {
+      pairs.push({ needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) });
+    }
+  }
+  return pairs;
+}
+
 function extractReplacementPair(text = '') {
   const raw = String(text || '');
+  // Prefer the first quoted pair from the RAW text so casing survives even when
+  // callers pass a normalized clause.
+  const allQuoted = extractAllQuotedReplacementPairs(raw);
+  if (allQuoted.length) return allQuoted[0];
   const quoted = extractQuotedValues(raw);
   if (quoted.length >= 2 && /\b(reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i.test(raw)) {
     return { needle: quoted[0], replacement: quoted[1] };
@@ -4608,8 +4934,16 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   if (rawTitleChange) add({ kind: 'set_document_title', ...rawTitleChange });
   const rawNamedSection = extractNamedSectionAppend(requestText);
   if (rawNamedSection) add({ kind: 'append_section', ...rawNamedSection });
-  const rawReplacement = extractReplacementPair(requestText);
-  if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
+  // All quoted replace pairs from the ORIGINAL prompt (casing preserved).
+  // Doing this before the normalized-clause loop means compound prompts keep
+  // "APROBADO" instead of collapsing to "aprobado".
+  const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  if (quotedPairs.length && !rawTitleChange) {
+    for (const pair of quotedPairs) add({ kind: 'replace_text', ...pair });
+  } else {
+    const rawReplacement = extractReplacementPair(requestText);
+    if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
+  }
   const norm = normalizeText(requestText);
   if (requestWantsMinimalProofreading(norm) && !requestWantsProfessionalEditing(norm)) {
     add({ kind: 'proofread_minimal' });
@@ -6301,11 +6635,20 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
   };
   const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
   if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
-  const rawReplacement = extractReplacementPair(requestText);
   const pptxSlideMatch = format === 'pptx' ? SLIDE_NOUN_RE.exec(normalizeText(requestText)) : null;
   const pptxSlideNumber = pptxSlideMatch ? Number(pptxSlideMatch[1]) : null;
-  if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
-    add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+  const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  if (quotedPairs.length) {
+    for (const pair of quotedPairs) {
+      if (!(format === 'xlsx' && replacementTargetsXlsxCell(pair))) {
+        add({ kind: 'replace_text', ...pair, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+      }
+    }
+  } else {
+    const rawReplacement = extractReplacementPair(requestText);
+    if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
+      add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+    }
   }
   for (const clause of clauses) {
     if (format === 'xlsx') {
@@ -7062,13 +7405,18 @@ module.exports = {
     extractReferenceCount,
     formatReferenceApa,
     applyMinimalProofreadingToText,
+    applySurgicalRangesToParagraphXml,
+    extractAllQuotedReplacementPairs,
     chunkProfessionalEditCandidates,
     professionalEditCandidates,
     professionalEditDocxBuffer,
     proofreadMinimalDocxBuffer,
     runAppendReferencesOperation,
     describeStep,
+    deleteTextFromDocxBuffer,
+    extractWtNodes,
     replaceTextInDocxBuffer,
+    replaceTextInParagraphXmlSurgical,
     replaceTextInPptxBuffer,
     replaceTextInXlsxBuffer,
     requestMentionsGeneralDocument,
