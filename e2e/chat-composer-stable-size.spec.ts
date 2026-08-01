@@ -115,6 +115,42 @@ async function composerMetrics(page: Page) {
   })
 }
 
+async function conversationAlignmentMetrics(page: Page) {
+  const transcript = page.locator(".chat-conversation-column")
+  const composer = page.getByTestId("chat-composer-surface")
+
+  await expect(transcript).toBeVisible()
+  await expect(composer).toBeVisible()
+
+  return page.evaluate(() => {
+    const transcriptElement = document.querySelector<HTMLElement>(".chat-conversation-column")
+    const composerElement = document.querySelector<HTMLElement>('[data-testid="chat-composer-surface"]')
+    if (!transcriptElement || !composerElement) {
+      throw new Error("Chat alignment elements are missing")
+    }
+
+    const transcriptRect = transcriptElement.getBoundingClientRect()
+    const transcriptStyle = getComputedStyle(transcriptElement)
+    const composerRect = composerElement.getBoundingClientRect()
+    const contentLeft = transcriptRect.left + Number.parseFloat(transcriptStyle.paddingLeft)
+    const contentRight = transcriptRect.right - Number.parseFloat(transcriptStyle.paddingRight)
+
+    return {
+      leftDelta: Math.abs(contentLeft - composerRect.left),
+      rightDelta: Math.abs(contentRight - composerRect.right),
+      widthDelta: Math.abs((contentRight - contentLeft) - composerRect.width),
+      composerWidth: composerRect.width,
+    }
+  })
+}
+
+async function expectConversationAlignedWithComposer(page: Page) {
+  await expect.poll(async () => {
+    const metrics = await conversationAlignmentMetrics(page)
+    return Math.max(metrics.leftDelta, metrics.rightDelta, metrics.widthDelta)
+  }).toBeLessThanOrEqual(1)
+}
+
 function expectSameComposerSize(
   actual: { width: number; height: number },
   expected: { width: number; height: number },
@@ -209,4 +245,25 @@ test("mobile composer keeps its size while a long prompt scrolls internally", as
   expectSameComposerSize(multiline, approved)
   expect(multiline.textareaScrollHeight).toBeGreaterThan(multiline.textareaClientHeight)
   expect(multiline.textareaOverflowY).toBe("auto")
+})
+
+test("conversation content rail aligns with the composer on desktop, narrow panes, and mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const state = { hasConversation: true }
+  await mockChatApi(page, state)
+
+  await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
+
+  const desktop = await conversationAlignmentMetrics(page)
+  expect(desktop.composerWidth).toBeGreaterThan(820)
+  expect(desktop.composerWidth).toBeLessThan(835)
+  await expectConversationAlignedWithComposer(page)
+
+  // Sidebar/panel width changes must recenter the shared rail in its pane.
+  await page.setViewportSize({ width: 900, height: 900 })
+  await expectConversationAlignedWithComposer(page)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectConversationAlignedWithComposer(page)
 })

@@ -402,6 +402,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 14px);
   --chat-textarea-max-height: 200px;
   --chat-mobile-gutter: 1rem;
+  /* Single source of truth for the readable conversation rail and composer.
+     Keeping this token on the chat viewport makes it survive sidebar, split
+     panel and mobile layout changes without letting both widths drift apart. */
+  --chat-content-max-width: 51.75rem;
   width: 100%;
   height: 100vh;
   height: var(--chat-viewport-height);
@@ -728,16 +732,30 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
    every lifecycle state. The dock already supplies the mobile gutters, while
    the empty stage needs its own 1rem gutter on either side. */
 .chat-composer-frame {
-  width: min(calc(100% - 2rem), 51.75rem);
+  width: min(calc(100% - 2rem), var(--chat-content-max-width));
   margin-inline: auto;
 }
 
 .chat-composer-dock .chat-composer-frame {
-  width: min(100%, 51.75rem);
+  width: min(100%, var(--chat-content-max-width));
 }
 
 .chat-conversation-column {
-  max-width: min(100%, 64rem);
+  /* The element owns the transcript's inline gutters. Add those gutters to
+     the shared rail width so its CONTENT box (assistant text on the left,
+     user bubbles on the right) lands exactly on the composer's outer edges.
+     At narrow widths the 100% cap produces the same pane-minus-gutters width
+     as the dock, with no breakpoint-specific arithmetic. */
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: min(
+    100%,
+    calc(
+      var(--chat-content-max-width) + var(--chat-mobile-gutter) + var(--chat-mobile-gutter)
+    )
+  );
+  margin-inline: auto;
 }
 
 .chat-user-bubble {
