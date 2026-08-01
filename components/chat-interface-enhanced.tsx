@@ -44,7 +44,6 @@ import {
   Flag,
   Settings,
   PenSquare,
-  GraduationCap,
   MessageSquare,
   Star,
   Disc3,
@@ -1804,35 +1803,7 @@ const ActionsDropdown = ({
             </div>
           </DropdownMenuItem>
 
-          {/* Thesis Generation */}
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onClick={() => {
-              setChatType('thesis');
-              setIsOpen(false);
-            }}
-            disabled={isPremiumPreviewSwitchDisabled}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
-                <GraduationCap className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">
-                  {chatType === 'thesis' ? 'Generador de tesis activo' : 'Generador de tesis'}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de tesis académica' : 'Genera tesis académicas completas'}
-                </div>
-              </div>
-              {chatType === 'thesis' && (
-                <div className="w-2 h-2 shrink-0 bg-purple-500 rounded-full" />
-              )}
-              {isFreePlan && (
-                <Badge variant="secondary" className="text-xs">Pro</Badge>
-              )}
-            </div>
-          </DropdownMenuItem>      </DropdownMenuContent>
+        </DropdownMenuContent>
       </DropdownMenu>
     </TooltipProvider>
   );
