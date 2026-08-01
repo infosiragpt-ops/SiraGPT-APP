@@ -1921,11 +1921,187 @@ function replaceNeedleText(text = '', needle = '', replacement = '') {
   if (!exact) return source;
   const exactRe = new RegExp(escapeRegExp(exact), 'gi');
   if (exactRe.test(source)) return source.replace(exactRe, String(replacement || ''));
-  const normalizedNeedle = normalizeText(exact);
-  if (normalizedNeedle && normalizeText(source).includes(normalizedNeedle)) {
-    return String(replacement || '');
+  // Normalized fallback must replace ONLY the matched span — never wipe the
+  // whole paragraph when the needle is a substring (that used to turn surgical
+  // edits into full-paragraph rewrites).
+  const span = findNeedleSpanInText(source, exact);
+  if (!span) return source;
+  return `${source.slice(0, span.start)}${String(replacement || '')}${source.slice(span.end)}`;
+}
+
+/**
+ * Build a map from normalized-text indices back to original character offsets.
+ * Mirrors normalizeText: lower-case, strip diacritics, collapse whitespace.
+ */
+function buildNormalizedCharMap(text = '') {
+  const source = String(text || '');
+  const chars = [];
+  const map = [];
+  let prevSpace = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const stripped = source[i]
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (!stripped) continue;
+    for (const ch of stripped) {
+      if (/\s/.test(ch)) {
+        if (prevSpace || chars.length === 0) continue;
+        chars.push(' ');
+        map.push(i);
+        prevSpace = true;
+        continue;
+      }
+      prevSpace = false;
+      chars.push(ch);
+      map.push(i);
+    }
   }
-  return source;
+  while (chars.length && chars[chars.length - 1] === ' ') {
+    chars.pop();
+    map.pop();
+  }
+  return { normalized: chars.join(''), map };
+}
+
+/**
+ * Locate needle inside source as an exclusive [start, end) span.
+ * Prefers case-insensitive exact match; falls back to accent/whitespace-normalized.
+ */
+function findNeedleSpanInText(source = '', needle = '') {
+  const hay = String(source || '');
+  const exact = String(needle || '').trim();
+  if (!exact || !hay) return null;
+  const lowerHay = hay.toLowerCase();
+  const lowerNeedle = exact.toLowerCase();
+  const exactIdx = lowerHay.indexOf(lowerNeedle);
+  if (exactIdx >= 0) {
+    return { start: exactIdx, end: exactIdx + exact.length };
+  }
+  const { normalized, map } = buildNormalizedCharMap(hay);
+  const normNeedle = normalizeText(exact);
+  if (!normNeedle || !normalized) return null;
+  const normIdx = normalized.indexOf(normNeedle);
+  if (normIdx < 0 || !map.length) return null;
+  const start = map[normIdx];
+  const endNorm = normIdx + normNeedle.length - 1;
+  if (endNorm < 0 || endNorm >= map.length) return null;
+  // Exclusive end: one past the last original character that mapped into the needle.
+  const end = map[endNorm] + 1;
+  if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) return null;
+  return { start, end };
+}
+
+/**
+ * Enumerate every <w:t> node in a paragraph, with char offsets into the
+ * concatenated visible text (same order as paragraphText()).
+ */
+function extractWtNodes(paragraphXml = '') {
+  const nodes = [];
+  const re = /<w:t\b([^>]*)>([\s\S]*?)<\/w:t>/g;
+  let match;
+  let offset = 0;
+  while ((match = re.exec(String(paragraphXml || '')))) {
+    const text = xmlUnescape(match[2]);
+    nodes.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      attrs: match[1] || '',
+      text,
+      charStart: offset,
+      charEnd: offset + text.length,
+    });
+    offset += text.length;
+  }
+  return nodes;
+}
+
+function wtNodeXml(attrs = '', text = '') {
+  const value = String(text || '');
+  // Preserve xml:space="preserve" when the run needs leading/trailing spaces,
+  // otherwise keep the original attribute string as-is.
+  let finalAttrs = String(attrs || '');
+  if ((/^\s|\s$/.test(value) || value.includes('  ')) && !/\bxml:space=/.test(finalAttrs)) {
+    finalAttrs = `${finalAttrs} xml:space="preserve"`;
+  }
+  return `<w:t${finalAttrs}>${xmlEscape(value)}</w:t>`;
+}
+
+/**
+ * Surgical in-paragraph mutation: replace the first occurrence of `needle` with
+ * `replacement` (empty string = delete) while keeping pPr, rPr, drawings,
+ * hyperlinks, and non-text XML byte-identical. Only <w:t> payloads change.
+ *
+ * Needle split across runs is handled by writing the replacement into the first
+ * affected run and emptying intermediate runs (same contract as the sandbox
+ * docx skill / Claude-style surgical edit).
+ *
+ * Returns { xml, changed } or null when the needle is absent.
+ */
+function mutateParagraphTextSurgical(paragraphXml = '', needle = '', replacement = '') {
+  const sourceXml = String(paragraphXml || '');
+  const exact = String(needle || '').trim();
+  if (!exact || !sourceXml) return null;
+  const nodes = extractWtNodes(sourceXml);
+  if (!nodes.length) return null;
+  const fullText = nodes.map((node) => node.text).join('');
+  const span = findNeedleSpanInText(fullText, exact);
+  if (!span) return null;
+
+  const newText = String(replacement ?? '');
+  // Identify affected w:t nodes (character ranges that overlap the span).
+  const firstIdx = nodes.findIndex((node) => node.charEnd > span.start && node.charStart < span.end);
+  if (firstIdx < 0) return null;
+  let lastIdx = firstIdx;
+  for (let i = firstIdx; i < nodes.length; i += 1) {
+    if (nodes[i].charStart < span.end) lastIdx = i;
+    else break;
+  }
+
+  const first = nodes[firstIdx];
+  const last = nodes[lastIdx];
+  const prefix = first.text.slice(0, Math.max(0, span.start - first.charStart));
+  const suffix = last.text.slice(Math.max(0, span.end - last.charStart));
+
+  // Rewrite from the end so earlier offsets stay valid.
+  let updated = sourceXml;
+  for (let i = lastIdx; i >= firstIdx; i -= 1) {
+    const node = nodes[i];
+    let nextText;
+    if (i === firstIdx && i === lastIdx) {
+      nextText = `${prefix}${newText}${suffix}`;
+    } else if (i === firstIdx) {
+      nextText = `${prefix}${newText}`;
+    } else if (i === lastIdx) {
+      nextText = suffix;
+    } else {
+      nextText = '';
+    }
+    updated = `${updated.slice(0, node.start)}${wtNodeXml(node.attrs, nextText)}${updated.slice(node.end)}`;
+  }
+  if (updated === sourceXml) return null;
+  return { xml: updated, changed: true };
+}
+
+/**
+ * Apply an arbitrary full-paragraph text rewrite while preserving the first
+ * run's formatting (and emptying subsequent text runs). Used by proofreading
+ * when the whole paragraph body changes but structure must stay intact.
+ */
+function applyFullParagraphTextSurgical(paragraphXml = '', newText = '') {
+  const sourceXml = String(paragraphXml || '');
+  const nodes = extractWtNodes(sourceXml);
+  if (!nodes.length) {
+    // No text nodes — fall back to the simpler first-w:t rewrite helper.
+    return replaceParagraphTextPreservingFormatting(sourceXml, newText);
+  }
+  let updated = sourceXml;
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const node = nodes[i];
+    const nextText = i === 0 ? String(newText ?? '') : '';
+    updated = `${updated.slice(0, node.start)}${wtNodeXml(node.attrs, nextText)}${updated.slice(node.end)}`;
+  }
+  return updated;
 }
 
 function replaceTextInDocxBuffer(buffer, needle, replacement) {
@@ -1945,16 +2121,20 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
 
   let changedCount = 0;
   for (const paragraph of matches) {
-    const updatedText = replaceNeedleText(paragraph.text, needle, replacement);
-    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
-    const updatedParagraph = paragraphXml({ kind: 'normal', text: updatedText }, template);
-    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    // Surgical path: mutate only the matching span inside existing <w:t>
+    // nodes. Never rebuild the paragraph — that used to drop bold/italic mid-
+    // sentence, bookmarks, hyperlinks and list numbering.
+    const mutated = mutateParagraphTextSurgical(paragraph.xml, needle, replacement);
+    if (!mutated) continue;
+    documentXml = `${documentXml.slice(0, paragraph.start)}${mutated.xml}${documentXml.slice(paragraph.end)}`;
     changedCount += 1;
   }
 
   if (changedCount === 0) {
+    // Last-resort: needle appears as a contiguous escaped fragment inside the
+    // raw XML (single run). Still avoids rebuilding the paragraph structure.
     const escapedNeedle = xmlEscape(needle);
-    if (documentXml.includes(escapedNeedle)) {
+    if (escapedNeedle && documentXml.includes(escapedNeedle)) {
       documentXml = documentXml.split(escapedNeedle).join(xmlEscape(replacement));
       changedCount = 1;
     }
@@ -2113,9 +2293,24 @@ function proofreadMinimalDocxBuffer(buffer) {
   for (const paragraph of paragraphs) {
     const proofread = applyMinimalProofreadingToText(paragraph.text);
     if (!proofread.changed) continue;
-    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
-    const updatedParagraph = paragraphXml({ kind: 'normal', text: proofread.text }, template);
-    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    // Surgical proofreading: keep pPr/rPr/runs; only rewrite text payloads.
+    // Prefer per-sample needle swaps so mixed-format paragraphs stay intact.
+    let updatedXml = paragraph.xml;
+    let appliedAny = false;
+    for (const correction of proofread.corrections) {
+      for (const sample of correction.samples || []) {
+        const mutated = mutateParagraphTextSurgical(updatedXml, sample.needle, sample.replacement);
+        if (mutated) {
+          updatedXml = mutated.xml;
+          appliedAny = true;
+        }
+      }
+    }
+    if (!appliedAny) {
+      updatedXml = applyFullParagraphTextSurgical(paragraph.xml, proofread.text);
+      if (updatedXml === paragraph.xml) continue;
+    }
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedXml}${documentXml.slice(paragraph.end)}`;
     changedParagraphs += 1;
 
     for (const correction of proofread.corrections) {
@@ -2515,7 +2710,16 @@ function deleteTextFromDocxBuffer(buffer, needle) {
 
   let removedCount = 0;
   for (const paragraph of paragraphs) {
-    documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+    // Surgical delete: remove only the needle span. Drop the whole paragraph
+    // only when nothing visible remains (true "borra este párrafo" case).
+    const mutated = mutateParagraphTextSurgical(paragraph.xml, needle, '');
+    if (!mutated) continue;
+    const remaining = paragraphText(mutated.xml).replace(/\s+/g, ' ').trim();
+    if (!remaining) {
+      documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+    } else {
+      documentXml = `${documentXml.slice(0, paragraph.start)}${mutated.xml}${documentXml.slice(paragraph.end)}`;
+    }
     removedCount += 1;
   }
 
@@ -7068,9 +7272,13 @@ module.exports = {
     proofreadMinimalDocxBuffer,
     runAppendReferencesOperation,
     describeStep,
+    applyFullParagraphTextSurgical,
+    findNeedleSpanInText,
+    mutateParagraphTextSurgical,
     replaceTextInDocxBuffer,
     replaceTextInPptxBuffer,
     replaceTextInXlsxBuffer,
+    deleteTextFromDocxBuffer,
     requestMentionsGeneralDocument,
     requestExplicitlyUsesCurrentUploadAsBase,
     requestWantsMinimalProofreading,
