@@ -265,7 +265,10 @@ test("375px mobile chat keeps header, messages, composer, tools, and chips withi
   expect(metrics.headerRight).toBeLessThanOrEqual(metrics.chatRight + 1)
   expect(metrics.composerBottom).toBeLessThanOrEqual(metrics.chatBottom + 1)
   expect(metrics.composerTop).toBeGreaterThan(metrics.headerBottom)
-  expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(metrics.composerHeight - 1)
+  // Composer is in normal flow when the keyboard is closed, so the message
+  // list only needs a tight breathing gap — not a full second composer slot.
+  expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(4)
+  expect(metrics.scrollPaddingBottom).toBeLessThan(metrics.composerHeight * 0.5)
   expect(metrics.viewportHeightVar).toMatch(/px$/)
   expect(metrics.keyboardHeightVar).toMatch(/px$/)
 })
@@ -323,7 +326,10 @@ test("390px mobile chat stays pinned when visualViewport is reduced by a simulat
   expect(metrics.keyboardState).toBe("open")
   expect(metrics.composerBottom).toBeLessThanOrEqual(metrics.chatBottom + 1)
   expect(metrics.composerSurfaceBottomGap).toBeLessThanOrEqual(30)
-  expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(metrics.composerHeight - 1)
+  // Chromium keeps the dock in normal flow even with a simulated keyboard, so
+  // the tight breathing gap still applies. iOS fixed-dock padding is covered
+  // by the source contract test.
+  expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(4)
   expect(metrics.htmlScrollWidth).toBeLessThanOrEqual(metrics.htmlClientWidth + 1)
 })
 

@@ -677,7 +677,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-message-scroll-content {
   padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
-    1rem;
+    0.5rem;
   /* Conversación anclada a la línea superior del composer: cuando el
      contenido es corto, baja hasta tocar la barra en lugar de flotar arriba
      con un hueco vacío. Con contenido largo el scroll se comporta igual. */
@@ -688,11 +688,40 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-composer-dock {
-  padding: 1rem 1rem calc(1rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
-  /* Floating composer: no fading "band" above the input pill. The pill carries
-     its own solid background, so messages scroll cleanly up to the composer line
-     instead of dissolving into a white gradient strip. */
+  /* Keep sticky/fixed from utility classes — do not force position here. */
+  padding: 0.375rem 1rem calc(1rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
+  /* Liquid edge: soft veil so message text meets the top of the composer bar
+     flush and professional, instead of a hard clip or empty white band. */
   background: transparent;
+  isolation: isolate;
+}
+
+.chat-composer-dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 1.5rem;
+  pointer-events: none;
+  z-index: 15;
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--background) / 0) 0%,
+    hsl(var(--background) / 0.55) 48%,
+    hsl(var(--background) / 0.92) 78%,
+    hsl(var(--background)) 100%
+  );
+}
+
+.dark .chat-composer-dock::before {
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--background) / 0) 0%,
+    hsl(var(--background) / 0.5) 48%,
+    hsl(var(--background) / 0.88) 78%,
+    hsl(var(--background)) 100%
+  );
 }
 
 /* The composer keeps the exact width of the approved empty-chat state in
@@ -2803,12 +2832,16 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
   .chat-message-scroll-content {
     padding-top: calc(var(--chat-header-height, 56px) + 0.875rem);
-    padding-bottom: 0.875rem;
+    padding-bottom: 0.375rem;
   }
 
   .chat-composer-dock {
-    padding: 0.5rem var(--chat-mobile-gutter)
+    padding: 0.25rem var(--chat-mobile-gutter)
       calc(0.625rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
+  }
+
+  .chat-composer-dock::before {
+    height: 1.25rem;
   }
 
   .chat-user-bubble {
@@ -5517,10 +5550,30 @@ footer {
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
 
 /* ─── Composer — premium liquid surface ──────────────────────────── */
-.composer-liquid-surface {
+.composer-surface {
+  isolation: isolate;
+  border: 0.5px solid hsl(220 13% 86% / 0.86);
+  border-radius: 1.5rem;
+  /* Fallback only when liquid class is absent. Liquid glass overrides this
+     with a translucent fill — a solid background-color here used to win on
+     equal specificity and kill the glass effect on production. */
+  background-color: hsl(0 0% 100%);
+  box-shadow:
+    0 1px 2px hsl(220 28% 14% / 0.045),
+    0 14px 34px -24px hsl(220 30% 18% / 0.28);
+  transition:
+    border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.composer-liquid-surface,
+.composer-surface.composer-liquid-surface {
   isolation: isolate;
   /* Liquid glass: superficie semitransparente con blur saturado — la barra
      flota sobre el contenido con look profesional (estilo Linear/ChatGPT). */
+  background-color: transparent;
   background: hsl(0 0% 100% / 0.78);
   backdrop-filter: blur(20px) saturate(1.7);
   -webkit-backdrop-filter: blur(20px) saturate(1.7);
@@ -5548,20 +5601,6 @@ footer {
 .composer-liquid-surface > * {
   position: relative;
   z-index: 1;
-}
-
-.composer-surface {
-  isolation: isolate;
-  border: 0.5px solid hsl(220 13% 86% / 0.86);
-  border-radius: 1.5rem;
-  background-color: hsl(0 0% 100%);
-  box-shadow:
-    0 1px 2px hsl(220 28% 14% / 0.045),
-    0 14px 34px -24px hsl(220 30% 18% / 0.28);
-  transition:
-    border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .composer-surface:hover {
@@ -5908,7 +5947,9 @@ button.anti-bribery-context-chip:not(:disabled):active {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dark .composer-liquid-surface {
+.dark .composer-liquid-surface,
+.dark .composer-surface.composer-liquid-surface {
+  background-color: transparent;
   background: hsl(220 16% 9% / 0.66);
   backdrop-filter: blur(20px) saturate(1.5);
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
@@ -6006,7 +6047,16 @@ button.anti-bribery-context-chip:not(:disabled):active {
     0 16px 36px -24px rgba(0, 0, 0, 0.86);
   transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+              background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              background 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Re-assert liquid glass after the solid dark surface fallback so the
+   translucent fill is not overwritten by equal-specificity rules above. */
+.dark .composer-surface.composer-liquid-surface {
+  background-color: transparent;
+  background: hsl(220 16% 9% / 0.66);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
 }
 .dark .composer-surface:focus-within {
   border-color: hsl(var(--accent-violet) / 0.8);
