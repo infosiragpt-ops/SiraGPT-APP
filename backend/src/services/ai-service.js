@@ -481,7 +481,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -690,6 +690,15 @@ class AIService {
                 if (!reasoningStreamEnabled() && currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
                     extraPayload.reasoning = { exclude: true };
                 }
+                // Custom GPTs / long-form trained deliverables may pass a higher
+                // maxOutputTokens so the model can finish a full chapter in one
+                // turn instead of stopping mid-outline. Still hard-capped by the
+                // model completion limit.
+                const requestedMax = Number(maxOutputTokens);
+                const modelCap = getCompletionLimit(currentRuntimeModel);
+                const effectiveMaxOutput = Number.isFinite(requestedMax) && requestedMax > 0
+                    ? Math.min(modelCap, Math.max(1024, Math.floor(requestedMax)))
+                    : Math.min(modelCap, 16384);
                 const providerPayload = buildProviderChatPayload({
                     provider: currentProvider,
                     model: currentRuntimeModel,
@@ -697,7 +706,7 @@ class AIService {
                     stream: true,
                     thinkingLevel: currentThinkingLevel(),
                     extra: extraPayload,
-                    maxOutputTokens: Math.min(getCompletionLimit(currentRuntimeModel), 16384),
+                    maxOutputTokens: effectiveMaxOutput,
                 });
                 const payload = providerPayload.payload;
 
