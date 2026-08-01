@@ -2290,6 +2290,78 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.ok(text);
   });
 
+  it('surgical DOCX replace keeps mixed run formatting and paragraph properties', () => {
+    const {
+      mutateParagraphTextSurgical,
+      findNeedleSpanInText,
+      deleteTextFromDocxBuffer,
+    } = sourcePreservingInternals;
+
+    // Needle split across three runs (bold + normal + italic).
+    const mixed = [
+      '<w:p>',
+      '<w:pPr><w:jc w:val="both"/></w:pPr>',
+      '<w:r><w:rPr><w:b/></w:rPr><w:t>Intro</w:t></w:r>',
+      '<w:r><w:t>ducción ori</w:t></w:r>',
+      '<w:r><w:rPr><w:i/></w:rPr><w:t>ginal del capítulo</w:t></w:r>',
+      '</w:p>',
+    ].join('');
+    const mutated = mutateParagraphTextSurgical(mixed, 'Introducción original', 'Introducción revisada');
+    assert.ok(mutated && mutated.changed);
+    assert.match(mutated.xml, /Introducción revisada/);
+    assert.match(mutated.xml, /<w:jc w:val="both"\/>/);
+    assert.match(mutated.xml, /<w:b\/>/);
+    assert.match(mutated.xml, /del capítulo/);
+    // First run keeps bold formatting; intermediate run is emptied, not rebuilt.
+    assert.match(mutated.xml, /<w:rPr><w:b\/><\/w:rPr><w:t>Introducción revisada<\/w:t>/);
+
+    // Partial delete must not wipe the rest of the paragraph.
+    const partial = mutateParagraphTextSurgical(
+      '<w:p><w:r><w:t>Alpha beta gamma delta</w:t></w:r></w:p>',
+      'beta gamma',
+      '',
+    );
+    assert.ok(partial);
+    assert.match(partial.xml, /Alpha/);
+    assert.match(partial.xml, /delta/);
+    assert.doesNotMatch(partial.xml, /beta gamma/);
+
+    // Accent-insensitive span maps back to the original characters.
+    const span = findNeedleSpanInText('Evaluación final del proyecto', 'evaluacion final');
+    assert.deepEqual(span, { start: 0, end: 'Evaluación final'.length });
+
+    // Full-buffer path preserves heading style + mixed runs outside the needle.
+    const documentXml = [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+      '<w:body>',
+      '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Portada UPN</w:t></w:r></w:p>',
+      '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Texto </w:t></w:r><w:r><w:t>clave a corregir</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t> y más</w:t></w:r></w:p>',
+      '<w:sectPr/></w:body></w:document>',
+    ].join('');
+    const zip = new PizZip();
+    zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+    zip.file('word/document.xml', documentXml);
+    zip.file('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+    const sourceBuffer = zip.generate({ type: 'nodebuffer' });
+
+    const replaced = replaceTextInDocxBuffer(sourceBuffer, 'clave a corregir', 'clave corregida');
+    const replacedXml = new PizZip(replaced.buffer).file('word/document.xml').asText();
+    assert.match(replacedXml, /clave corregida/);
+    assert.match(replacedXml, /Portada UPN/);
+    assert.match(replacedXml, /Heading1/);
+    assert.match(replacedXml, /<w:b\/>/);
+    assert.match(replacedXml, /<w:i\/>/);
+    assert.match(replacedXml, / y más/);
+
+    const deleted = deleteTextFromDocxBuffer(replaced.buffer, 'clave corregida');
+    const deletedXml = new PizZip(deleted.buffer).file('word/document.xml').asText();
+    assert.doesNotMatch(deletedXml, /clave corregida/);
+    assert.match(deletedXml, /Texto /);
+    assert.match(deletedXml, / y más/);
+    assert.match(deletedXml, /Portada UPN/);
+  });
+
   it('appends a real PPTX slide and preserves existing slides', async () => {
     const source = await makePptxBuffer();
     const edited = appendToPptxBuffer(source, [
