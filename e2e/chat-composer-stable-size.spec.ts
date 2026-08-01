@@ -322,7 +322,7 @@ for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ]) {
-  test(`plus menu omits the unavailable thesis generator on ${viewport.name}`, async ({ page }) => {
+  test(`plus menu omits retired actions on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
     const state = { hasConversation: true }
     await mockChatApi(page, state)
@@ -332,10 +332,18 @@ for (const viewport of [
 
     await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).press("Enter")
 
+    const toolsMenu = page.getByRole("menu", { name: "Adjuntar archivos y herramientas" })
     for (const label of ["Subir archivos", "Imágenes", "Voz", "Video", "Música"]) {
-      await expect(page.getByText(label, { exact: true })).toBeVisible()
+      await expect(toolsMenu.getByText(label, { exact: true })).toBeVisible()
     }
-    await expect(page.getByText("Generador de tesis", { exact: true })).toHaveCount(0)
-    await expect(page.getByText("Vista previa de tesis académica", { exact: true })).toHaveCount(0)
+    for (const retiredLabel of [
+      "Trabajo",
+      "Trabajo activo",
+      "Planifica, ejecuta y entrega archivos",
+      "Generador de tesis",
+      "Vista previa de tesis académica",
+    ]) {
+      await expect(toolsMenu.getByText(retiredLabel, { exact: true })).toHaveCount(0)
+    }
   })
 }
