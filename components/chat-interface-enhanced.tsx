@@ -1565,30 +1565,6 @@ const ActionsDropdown = ({
             accept="image/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
             onChange={handleFilesSelected}
           />
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onSelect={(event) => {
-              event.preventDefault();
-              setChatType('text');
-              setIsWorkModeActive(!isWorkModeActive);
-              setIsOpen(false);
-            }}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-950/40">
-                <BriefcaseBusiness className="h-4 w-4 text-[#FF0000]" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">
-                  {isWorkModeActive ? 'Trabajo activo' : 'Trabajo'}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  Planifica, ejecuta y entrega archivos
-                </div>
-              </div>
-              {isWorkModeActive && <div className="h-2 w-2 shrink-0 rounded-full bg-[#FF0000]" />}
-            </div>
-          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
