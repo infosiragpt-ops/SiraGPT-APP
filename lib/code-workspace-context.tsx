@@ -744,8 +744,49 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     const file = state.files[targetPath]
     if (!file) return false
 
+    // Project-scoped workspace: persist full snapshot to Project.codeWorkspace.
+    // IDs look like "project:<cuid>" or plain cuid from older hydrators.
+    const rawFolderId = activeFolder?.id || ""
+    const projectId = rawFolderId.startsWith("project:")
+      ? rawFolderId.slice("project:".length)
+      : rawFolderId.startsWith("codex:") || rawFolderId.startsWith("local:")
+        ? ""
+        : rawFolderId
+
+    if (projectId && (!hasLinkedLocalFolder() || workspaceSource.kind !== "local-folder")) {
+      try {
+        const filesMap: Record<string, { content: string; language?: string; updatedAt?: number }> =
+          {}
+        for (const f of Object.values(state.files)) {
+          filesMap[f.path] = {
+            content: f.content,
+            language: f.language,
+            updatedAt: f.updatedAt,
+          }
+        }
+        filesMap[file.path] = {
+          content: file.content,
+          language: file.language,
+          updatedAt: file.updatedAt,
+        }
+        await projectsService.putCodeWorkspace(projectId, {
+          v: 1,
+          files: filesMap,
+          openTabs: state.openTabs,
+          activePath: state.activePath,
+        })
+        toast.success(`${file.path} guardado en el proyecto (servidor).`)
+        return true
+      } catch (error) {
+        // Fall through to browser toast so the user still has a local copy.
+        console.warn("[code-workspace] server save failed, keeping browser cache", error)
+        toast.success("Guardado solo en este navegador (sin persistencia en el servidor).")
+        return true
+      }
+    }
+
     if (workspaceSource.kind !== "local-folder" || !hasLinkedLocalFolder()) {
-      toast.success("Guardado en el workspace del navegador.")
+      toast.success("Guardado solo en este navegador (sin persistencia en el servidor).")
       return true
     }
 
@@ -758,7 +799,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       toast.error((error as Error)?.message || "No se pudo guardar en la carpeta local.")
       return false
     }
-  }, [state.activePath, state.files, workspaceSource.kind, workspaceSource.name])
+  }, [state.activePath, state.files, state.openTabs, workspaceSource.kind, workspaceSource.name, activeFolder?.id])
 
   const applyBlock = React.useCallback((path: string, content: string) => {
     const cleaned = normalizePath(path)

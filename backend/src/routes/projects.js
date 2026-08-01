@@ -17,6 +17,8 @@
  *   POST   /:id/chat            — start a new chat within this project
  *   POST   /:id/files/:fileId   — attach a previously-uploaded file
  *   DELETE /:id/files/:fileId   — detach a file (does not delete the file row)
+ *   GET    /:id/code-workspace  — /code editor FS snapshot (not knowledge files)
+ *   PUT    /:id/code-workspace  — replace /code editor FS snapshot (owner only)
  *
  * All endpoints require JWT auth and are scoped to req.user.id. No
  * cross-user access — a direct id-guess returns 404, not 403, so we
@@ -32,6 +34,11 @@ const { hasOrganizationAccess } = require('../services/codex/company-association
 const { buildProjectContextManifest } = require('../services/project-context');
 const { buildChatListWhere, parsePositiveInt } = require('../services/chat-scope');
 const { softDeleteWhere } = require('../utils/prisma-soft-delete');
+const {
+  normalizeCodeWorkspaceSnapshot,
+  readStoredCodeWorkspace,
+  fileCount: codeWorkspaceFileCount,
+} = require('../services/code/project-code-workspace');
 const crypto = require('crypto');
 
 const router = express.Router();
@@ -645,5 +652,67 @@ router.delete('/:id/share', param('id').isString(), async (req, res) => {
     res.status(500).json({ error: 'Failed to revoke sharing' });
   }
 });
+
+// ─── GET /:id/code-workspace — /code editor FS snapshot ───────────────────
+// Distinct from Project.files (knowledge attachments). Owner-scoped soft-delete.
+
+router.get('/:id/code-workspace', param('id').isString(), async (req, res) => {
+  try {
+    if (validationFail(req, res)) return;
+    const project = await prisma.project.findFirst({
+      where: softDeleteWhere({ id: req.params.id, userId: req.user.id }),
+      select: { id: true, codeWorkspace: true, updatedAt: true },
+    });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const workspace = readStoredCodeWorkspace(project.codeWorkspace);
+    res.json({
+      projectId: project.id,
+      workspace,
+      fileCount: codeWorkspaceFileCount(workspace),
+      projectUpdatedAt: project.updatedAt,
+    });
+  } catch (err) {
+    console.error('[projects] code-workspace get error:', err);
+    res.status(500).json({ error: 'Failed to fetch code workspace' });
+  }
+});
+
+// ─── PUT /:id/code-workspace — replace /code editor FS snapshot ───────────
+
+router.put(
+  '/:id/code-workspace',
+  [param('id').isString(), body('workspace').exists()],
+  async (req, res) => {
+    try {
+      if (validationFail(req, res)) return;
+      const owned = await ownProject(req.user.id, req.params.id);
+      if (!owned) return res.status(404).json({ error: 'Project not found' });
+
+      let workspace;
+      try {
+        workspace = normalizeCodeWorkspaceSnapshot(req.body.workspace);
+      } catch (err) {
+        const status = err && err.status ? err.status : 400;
+        return res.status(status).json({ error: err.message || 'Invalid code workspace' });
+      }
+
+      const updated = await prisma.project.update({
+        where: { id: owned.id },
+        data: { codeWorkspace: workspace },
+        select: { id: true, updatedAt: true },
+      });
+
+      res.json({
+        projectId: updated.id,
+        workspace,
+        fileCount: codeWorkspaceFileCount(workspace),
+        projectUpdatedAt: updated.updatedAt,
+      });
+    } catch (err) {
+      console.error('[projects] code-workspace put error:', err);
+      res.status(500).json({ error: 'Failed to save code workspace' });
+    }
+  },
+);
 
 module.exports = router;
