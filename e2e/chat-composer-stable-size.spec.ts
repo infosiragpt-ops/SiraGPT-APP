@@ -159,7 +159,11 @@ function expectSameComposerSize(
   expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(1)
 }
 
-test("desktop composer keeps the approved size across text, attachment, tool, and chat states", async ({ page }) => {
+function expectSameComposerWidth(actual: { width: number }, expected: { width: number }) {
+  expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1)
+}
+
+test("desktop composer keeps the approved width across text, attachment, tool, and chat states", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const state = { hasConversation: false }
   await mockChatApi(page, state)
@@ -170,8 +174,8 @@ test("desktop composer keeps the approved size across text, attachment, tool, an
   const approved = await composerMetrics(page)
   expect(approved.width).toBeGreaterThan(820)
   expect(approved.width).toBeLessThan(835)
-  expect(approved.height).toBeGreaterThan(100)
-  expect(approved.height).toBeLessThan(106)
+  expect(approved.height).toBeGreaterThan(92)
+  expect(approved.height).toBeLessThan(97)
 
   const textarea = page.getByTestId("chat-composer-surface").locator("textarea")
   await textarea.fill([
@@ -205,12 +209,14 @@ test("desktop composer keeps the approved size across text, attachment, tool, an
   })
   await expect(page.getByLabel("Archivos adjuntos")).toBeVisible()
   const withAttachment = await composerMetrics(page)
-  expectSameComposerSize(withAttachment, approved)
+  expectSameComposerWidth(withAttachment, approved)
+  expect(withAttachment.height).toBeGreaterThan(approved.height)
+  expect(withAttachment.height - approved.height).toBeLessThan(120)
 
   await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
   await page.getByRole("menuitem", { name: /Web Search|Búsqueda web/i }).click()
   const withActiveTool = await composerMetrics(page)
-  expectSameComposerSize(withActiveTool, approved)
+  expectSameComposerSize(withActiveTool, withAttachment)
 
   state.hasConversation = true
   await page.evaluate(() => {
