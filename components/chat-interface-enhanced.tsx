@@ -3755,10 +3755,6 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
           />
         ))}
       </div>
-      <div className="effort-ends" aria-hidden>
-        <span>Bajo</span>
-        <span>Máx</span>
-      </div>
       <p className="effort-caption">{active.caption}</p>
     </div>
   )

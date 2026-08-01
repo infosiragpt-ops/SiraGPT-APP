@@ -5323,10 +5323,6 @@ function ModelPickerInline({
             </div>
           </div>
 
-          <div className="model-picker-effort-ends">
-            <span>Bajo</span>
-            <span>Máx</span>
-          </div>
           <p className="model-picker-effort-description">{effortLevel.description}</p>
         </div>
       </DropdownMenuContent>
