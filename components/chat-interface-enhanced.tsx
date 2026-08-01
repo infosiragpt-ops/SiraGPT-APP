@@ -11953,7 +11953,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       className={cn(
                         "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                        "bg-background",
                         "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
                         "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
                         "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
@@ -12358,7 +12357,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="chat-composer-frame relative space-y-2 bg-background">
+                    <div className="chat-composer-frame relative space-y-2">
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
@@ -12435,7 +12434,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           className={cn(
                             "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                            "bg-background",
                             "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
                             "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
                             "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
