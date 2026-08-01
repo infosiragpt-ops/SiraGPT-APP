@@ -12373,28 +12373,30 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </span>
                         </div>
                       )}
-                      {/* Scroll-to-bottom pill — only shown when the
-                          user has scrolled up. Floats just above the
-                          composer surface so the click target sits in
-                          the same zone the user's hand is already
-                          near. Aria-live so assistive tech announces
-                          "new messages below" as the pill appears. */}
+                      {/* Scroll-to-bottom pill — only shown when the user has
+                          scrolled up. Lives in normal flow above the composer
+                          surface (never absolute-over-messages) so it cannot
+                          cover the last lines of text. Collapses to zero
+                          height when at bottom. */}
                       <div
                         aria-live="polite"
+                        data-testid="chat-scroll-to-bottom"
                         className={cn(
-                          "pointer-events-none absolute left-1/2 -top-12 z-20 -translate-x-1/2",
-                          "transition-all duration-base ease-smooth",
+                          "flex justify-center overflow-hidden",
+                          "transition-[max-height,opacity,margin] duration-base ease-smooth",
                           isAtBottom
-                            ? "opacity-0 translate-y-1"
-                            : "opacity-100 translate-y-0",
+                            ? "pointer-events-none mb-0 max-h-0 opacity-0"
+                            : "mb-1.5 max-h-10 opacity-100",
                         )}
                       >
                         <button
                           type="button"
                           onClick={scrollToBottom}
+                          tabIndex={isAtBottom ? -1 : 0}
+                          aria-hidden={isAtBottom ? true : undefined}
                           aria-label={isCurrentChatStreaming ? "Nuevos mensajes, ir al final" : "Ir al final de la conversación"}
                           className={cn(
-                            "pointer-events-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
+                            "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
                             "border bg-background/95 backdrop-blur-md",
                             "text-[12.5px] font-medium",
                             "shadow-[0_4px_14px_-4px_rgba(15,23,42,0.18),0_1px_2px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",

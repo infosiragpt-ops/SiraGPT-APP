@@ -49,8 +49,23 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-liquid-surface\s*\{[\s\S]{0,280}background: hsl\(0 0% 100% \/ 0\.78\);[\s\S]{0,180}backdrop-filter: blur\(20px\) saturate\(1\.7\);/,
-      "the light composer should use a translucent liquid-glass surface"
+      /\.composer-surface\.composer-liquid-surface\s*\{[\s\S]{0,280}background: hsl\(0 0% 100% \/ 0\.78\);[\s\S]{0,180}backdrop-filter: blur\(20px\) saturate\(1\.7\);/,
+      "the light composer should use a translucent liquid-glass surface that beats the solid fallback"
+    )
+    assert.match(
+      globals,
+      /\.chat-composer-dock::before\s*\{[\s\S]{0,260}linear-gradient\([\s\S]{0,200}hsl\(var\(--background\)/,
+      "the dock should paint a soft liquid edge so text meets the bar cleanly"
+    )
+    assert.match(
+      chatInterface,
+      /data-testid="chat-scroll-to-bottom"[\s\S]{0,500}max-h-0 opacity-0[\s\S]{0,120}max-h-10 opacity-100/,
+      "the scroll-to-bottom pill must collapse in-flow instead of overlaying messages"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /absolute left-1\/2 -top-12 z-20 -translate-x-1\/2/,
+      "the scroll-to-bottom pill must not float over message text"
     )
     assert.match(
       globals,
@@ -93,8 +108,8 @@ describe("professional chat composer surface source contract", () => {
   it("preserves the approved width and height across chat states", () => {
     assert.match(
       globals,
-      /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+1rem;/,
-      "the normal scroll area should end at the composer's top edge"
+      /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+0\.5rem;/,
+      "the normal scroll area should end flush against the composer's top edge"
     )
     assert.match(
       globals,
