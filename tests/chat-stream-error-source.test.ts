@@ -10,18 +10,39 @@ const source = fs.readFileSync(
 
 describe("chat stream error preservation contract", () => {
   it("keeps the pending draft and streamed assistant tail visible after failure", () => {
-    const start = source.indexOf('console.error("Streaming failed:", error)')
-    const end = source.indexOf('      } finally {', start)
-    assert.ok(start >= 0 && end > start, "default chat stream error block must exist")
-    const block = source.slice(start, end)
+    const errorStart = source.indexOf('(error) => {\n              streamFailed = true')
+    const errorEnd = source.indexOf('            controller.signal,', errorStart)
+    assert.ok(
+      errorStart >= 0 && errorEnd > errorStart,
+      "default chat stream error callback must exist",
+    )
+    const errorBlock = source.slice(errorStart, errorEnd)
 
-    assert.match(block, /fgBuffer\.flush\(\)/)
-    assert.match(block, /bg\.fail\(activeChat\.id/)
-    assert.doesNotMatch(block, /clearPending\(/,
-      "failed sends must remain in pending storage for retry")
-    assert.doesNotMatch(block, /content:\s*["']{2}/,
+    assert.match(errorBlock, /fgBuffer\.flush\(\)/)
+    assert.match(errorBlock, /bg\.fail\(activeChat\.id/)
+    assert.match(errorBlock, /streamFailed = true/,
+      "the error callback must mark the turn failed before returning")
+    assert.doesNotMatch(errorBlock, /content:\s*["']{2}/,
       "the error path must not erase the streamed assistant tail")
-    assert.match(block, /markChatIdle\(activeChat\.id, streamId\)/,
-      "a failed stream must release the active-stream guard without clearing pending")
+    assert.doesNotMatch(errorBlock, /clearPending\(/,
+      "the error callback must retain pending storage for retry")
+    assert.doesNotMatch(errorBlock, /bg\.complete\(/,
+      "the error callback must not mark the background stream done")
+
+    const successStart = source.indexOf('// Clear pending on successful completion')
+    const successEnd = source.indexOf('      } catch (error: any) {', successStart)
+    assert.ok(successStart >= 0 && successEnd > successStart)
+    const successBlock = source.slice(successStart, successEnd)
+    assert.match(successBlock, /if \(!streamFailed\) \{\s*clearPending\(activeChat\.id\)/,
+      "pending storage may only clear after a successful turn")
+
+    const finallyStart = source.indexOf('      } finally {', successEnd)
+    const finallyEnd = source.indexOf('      }\n    },', finallyStart)
+    assert.ok(finallyStart >= 0 && finallyEnd > finallyStart)
+    const finallyBlock = source.slice(finallyStart, finallyEnd)
+    assert.match(finallyBlock, /markChatIdle\(activeChat\.id, streamId\)/,
+      "a failed stream must release the active-stream guard")
+    assert.match(finallyBlock, /if \(!streamFailed\) \{\s*bg\.complete\(activeChat\.id\)/,
+      "finally must not convert a failed background stream into done")
   })
 })

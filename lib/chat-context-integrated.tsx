@@ -1219,6 +1219,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       markChatStreaming(activeChat.id, streamId);
       // Reset pending stop state for THIS chat only (per-chat tracking)
       setPendingStopSynced(false, activeChat.id);
+      let streamFailed = false;
       try {
         const intent = intentOverride || await aiService.classifyIntent(content, conversationForRouting);
         const professionalPrompt = buildProfessionalCapabilityPrompt(intent, content);
@@ -1792,6 +1793,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
             },
             (error) => {
+              streamFailed = true;
               console.error("Streaming failed:", error);
               // Flush whatever made it through before the error so the
               // partial answer is visible, then dispose.
@@ -1946,8 +1948,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           );
         }
         // Clear pending on successful completion (sync intents like chart/figma)
-        clearPending(activeChat.id);
+        if (!streamFailed) {
+          clearPending(activeChat.id);
+        }
       } catch (error: any) {
+        streamFailed = true;
         console.error("Failed to start AI stream:", error);
 
         // If the stream already completed successfully (onClose was called),
@@ -2027,7 +2032,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         pendingStopsRef.current.delete(activeChat.id);
         // Mark the background stream as done for non-default intents
         // (the default branch already calls bg.complete in onClose).
-        bg.complete(activeChat.id);
+        if (!streamFailed) {
+          bg.complete(activeChat.id);
+        }
       }
     },
     // bg / pendingStop / selectChat / selectProvider are intentionally
