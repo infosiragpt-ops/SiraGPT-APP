@@ -39,6 +39,17 @@ import {
   upsertCodexProject,
 } from "./codex-projects"
 import { projectsService } from "./projects-service"
+import {
+  pickCodeWorkspaceHydration,
+  resolveLocalFolderFileSource,
+  resolveProjectFileSource,
+  resolveWorkspaceSaveMode,
+  workspaceSaveCapability,
+  workspaceSaveMessage,
+  type ResolvedWorkspaceFileSource,
+  type WorkspaceSaveResult,
+} from "./code-folder-utils"
+import { codexProjectIdFromWorkspaceId, codexWorkspaceIdForProject } from "./codex-workspace-identity"
 import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed } from "./code-git-mirror"
 import {
   canOpenLocalDirectory,
@@ -71,10 +82,6 @@ import {
   readWorkspaceCodexProject,
 } from "./codex/codex-project-link"
 import { codexApi } from "./codex/codex-api"
-import {
-  codexProjectIdFromWorkspaceId,
-  codexWorkspaceIdForProject,
-} from "./codex-workspace-identity"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
 /** Fired (with detail {id}) when a workspace is deleted elsewhere (e.g. the app
@@ -162,11 +169,22 @@ export type ActiveFolder = {
 }
 
 export type WorkspaceSource = {
-  kind: "starter" | "browser" | "local-folder"
+  kind: "starter" | "browser" | "local-folder" | "project"
   name: string
   linked: boolean
   fileCount?: number
   skippedCount?: number
+  persistence?: "browser" | "local-disk" | "server" | "none"
+  knowledgeFileCount?: number
+  browserOnly?: boolean
+}
+
+export type BindProjectWorkspaceInput = {
+  id: string
+  name: string
+  description?: string | null
+  instructions?: string | null
+  knowledgeFileCount?: number
 }
 
 type Listener = () => void
@@ -205,9 +223,20 @@ export type CodeWorkspaceContextValue = {
    *  picker and replace the in-memory workspace with compatible files. */
   openLocalFolderWorkspace: () => Promise<void>
 
-  /** Persist a file back to the selected local folder when a folder is
-   *  linked. Falls back to browser-local persistence when not linked. */
-  saveFileToWorkspace: (path?: string) => Promise<boolean>
+  /**
+   * Persist per save contract (Slice C): server Project.codeWorkspace,
+   * local-disk when linked, or browser localStorage (honest toast).
+   */
+  saveFileToWorkspace: (path?: string) => Promise<WorkspaceSaveResult | boolean>
+
+  saveCapability: {
+    mode: "server" | "local-disk" | "browser"
+    remote: boolean
+    label: string
+    description: string
+  }
+
+  bindProjectWorkspace: (project: BindProjectWorkspaceInput) => Promise<void>
 
   /** Apply a code block from the AI chat to a target path. Creates
    *  the file if it does not exist; otherwise overwrites it. Returns
@@ -340,6 +369,8 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     kind: "browser",
     name: "Workspace del navegador",
     linked: false,
+    persistence: "browser",
+    browserOnly: true,
   })
   const chatFocusListeners = React.useRef<Set<Listener>>(new Set())
   const paletteListeners = React.useRef<Set<Listener>>(new Set())
@@ -392,6 +423,106 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       /* fail soft */
     }
   }, [])
+
+
+  /**
+   * Bind a server Project: metadata + hydrate editor from Project.codeWorkspace
+   * when local cache is empty (local-first). Knowledge Project.files never enter the tree.
+   */
+  const bindProjectWorkspace = React.useCallback(
+    async (project: BindProjectWorkspaceInput) => {
+      const rawId = codexProjectIdFromWorkspaceId(project.id, { assumeProject: true }) || project.id
+      const workspaceId = codexWorkspaceIdForProject(rawId) || `project:${rawId}`
+      const folder: ActiveFolder = {
+        id: workspaceId,
+        name: project.name,
+        description: project.description,
+        instructions: project.instructions,
+      }
+      setActiveFolder(folder)
+
+      let editorFileCount = 0
+      let serverAvailable = true
+      const localPersisted = readPersisted(workspaceId) || readPersisted(rawId)
+      const localFileCount = localPersisted ? Object.keys(localPersisted.files).length : 0
+
+      try {
+        const remote = await projectsService.getCodeWorkspace(rawId)
+        const remoteMap = remote.workspace?.files || {}
+        const remotePaths = Object.keys(remoteMap)
+        const serverFileCount = remotePaths.length
+        const pick = pickCodeWorkspaceHydration({ localFileCount, serverFileCount })
+
+        if (pick === "server" && serverFileCount > 0) {
+          const files: CodeFiles = {}
+          for (const path of remotePaths) {
+            const entry = remoteMap[path]
+            if (!entry || typeof entry.content !== "string") continue
+            files[path] = {
+              path,
+              content: entry.content,
+              language:
+                (typeof entry.language === "string" && entry.language) ||
+                languageForPath(path),
+              updatedAt:
+                typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
+                  ? entry.updatedAt
+                  : Date.now(),
+            }
+          }
+          const openTabs = (remote.workspace.openTabs || []).filter((p) => Boolean(files[p]))
+          let activePath =
+            remote.workspace.activePath && files[remote.workspace.activePath]
+              ? remote.workspace.activePath
+              : openTabs[0] || Object.keys(files).sort()[0] || null
+          if (activePath && !openTabs.includes(activePath)) openTabs.unshift(activePath)
+          const nextState: PersistedState = { files, openTabs, activePath }
+          setState(nextState)
+          writePersisted(workspaceId, nextState)
+          editorFileCount = Object.keys(files).length
+        } else if (pick === "local" && localPersisted && localFileCount > 0) {
+          editorFileCount = localFileCount
+          if (serverFileCount === 0) {
+            void projectsService
+              .putCodeWorkspace(rawId, {
+                v: 1,
+                files: Object.fromEntries(
+                  Object.values(localPersisted.files).map((f) => [
+                    f.path,
+                    { content: f.content, language: f.language, updatedAt: f.updatedAt },
+                  ]),
+                ),
+                openTabs: localPersisted.openTabs,
+                activePath: localPersisted.activePath,
+              })
+              .catch(() => {})
+          }
+        } else {
+          editorFileCount = localFileCount
+        }
+      } catch {
+        serverAvailable = false
+        editorFileCount = localFileCount
+      }
+
+      const source: ResolvedWorkspaceFileSource = resolveProjectFileSource({
+        name: project.name,
+        knowledgeFileCount: project.knowledgeFileCount,
+        editorFileCount,
+        serverAvailable,
+      })
+      setWorkspaceSource({
+        kind: source.kind,
+        name: source.name,
+        linked: source.linked,
+        fileCount: source.fileCount,
+        persistence: source.persistence,
+        knowledgeFileCount: source.knowledgeFileCount,
+        browserOnly: source.browserOnly,
+      })
+    },
+    [setActiveFolder],
+  )
 
   // Persist on every change. Cheap because the tree is small and
   // localStorage writes are sync but very fast for sub-MB payloads.
@@ -738,27 +869,111 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     }
   }, [openLocalFolderWorkspace, switchCodexWorkspace, forgetWorkspace])
 
-  const saveFileToWorkspace = React.useCallback(async (path?: string) => {
-    const targetPath = path || state.activePath
-    if (!targetPath) return false
-    const file = state.files[targetPath]
-    if (!file) return false
+  const saveCapability = React.useMemo(
+    () => workspaceSaveCapability(workspaceSource, hasLinkedLocalFolder()),
+    [workspaceSource],
+  )
 
-    if (workspaceSource.kind !== "local-folder" || !hasLinkedLocalFolder()) {
-      toast.success("Guardado en el workspace del navegador.")
-      return true
+  const saveFileToWorkspace = React.useCallback(async (path?: string): Promise<WorkspaceSaveResult> => {
+    const targetPath = path || state.activePath
+    if (!targetPath) {
+      const result: WorkspaceSaveResult = {
+        ok: false,
+        mode: "noop",
+        remote: false,
+        message: workspaceSaveMessage("noop"),
+      }
+      toast.info(result.message)
+      return result
+    }
+    const file = state.files[targetPath]
+    if (!file) {
+      const result: WorkspaceSaveResult = {
+        ok: false,
+        mode: "noop",
+        remote: false,
+        path: targetPath,
+        message: workspaceSaveMessage("noop"),
+      }
+      toast.info(result.message)
+      return result
+    }
+
+    const mode = resolveWorkspaceSaveMode(workspaceSource, hasLinkedLocalFolder())
+    const rawProjectId = codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true })
+
+    if (mode === "server" && rawProjectId) {
+      try {
+        const filesMap: Record<string, { content: string; language?: string; updatedAt?: number }> = {}
+        for (const f of Object.values(state.files)) {
+          filesMap[f.path] = {
+            content: f.content,
+            language: f.language,
+            updatedAt: f.updatedAt,
+          }
+        }
+        filesMap[file.path] = {
+          content: file.content,
+          language: file.language,
+          updatedAt: file.updatedAt,
+        }
+        await projectsService.putCodeWorkspace(rawProjectId, {
+          v: 1,
+          files: filesMap,
+          openTabs: state.openTabs,
+          activePath: state.activePath,
+        })
+        writePersisted(activeFolder?.id ?? null, state)
+        const result: WorkspaceSaveResult = {
+          ok: true,
+          mode: "server",
+          remote: true,
+          path: file.path,
+          message: workspaceSaveMessage("server", { path: file.path }),
+        }
+        toast.success(result.message)
+        return result
+      } catch (error) {
+        const message =
+          (error as Error)?.message || "No se pudo guardar el código en el proyecto."
+        toast.error(message)
+        return { ok: false, mode: "server", remote: false, path: file.path, message }
+      }
+    }
+
+    if (mode === "browser") {
+      const result: WorkspaceSaveResult = {
+        ok: true,
+        mode: "browser",
+        remote: false,
+        path: file.path,
+        message: workspaceSaveMessage("browser", { path: file.path }),
+      }
+      toast.success(result.message)
+      return result
     }
 
     try {
       await saveLinkedWorkspaceFile(file.path, file.content)
       const folderName = getLinkedLocalFolderName() || workspaceSource.name
-      toast.success(`${file.path} guardado en ${folderName}.`)
-      return true
+      const result: WorkspaceSaveResult = {
+        ok: true,
+        mode: "local-disk",
+        remote: false,
+        path: file.path,
+        message: workspaceSaveMessage("local-disk", {
+          path: file.path,
+          folderName: folderName || undefined,
+        }),
+      }
+      toast.success(result.message)
+      return result
     } catch (error) {
-      toast.error((error as Error)?.message || "No se pudo guardar en la carpeta local.")
-      return false
+      const message = (error as Error)?.message || "No se pudo guardar en la carpeta local."
+      toast.error(message)
+      return { ok: false, mode: "local-disk", remote: false, path: file.path, message }
     }
-  }, [state.activePath, state.files, workspaceSource.kind, workspaceSource.name])
+  }, [state.activePath, state.files, state.openTabs, workspaceSource, activeFolder?.id])
 
   const applyBlock = React.useCallback((path: string, content: string) => {
     const cleaned = normalizePath(path)
@@ -980,6 +1195,8 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       forgetWorkspace,
       openLocalFolderWorkspace,
       saveFileToWorkspace,
+      saveCapability,
+      bindProjectWorkspace,
       applyBlock,
       hydrateFiles,
       registerChatFocusHandler,
@@ -1015,6 +1232,8 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       forgetWorkspace,
       openLocalFolderWorkspace,
       saveFileToWorkspace,
+      saveCapability,
+      bindProjectWorkspace,
       applyBlock,
       hydrateFiles,
       registerChatFocusHandler,

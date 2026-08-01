@@ -23,6 +23,7 @@ export function EditorPanel() {
     focusChat,
     createFile,
     saveFileToWorkspace,
+    saveCapability,
   } = useCodeWorkspace()
 
   const activeFile = activePath ? files[activePath] : null
@@ -82,6 +83,8 @@ export function EditorPanel() {
               language={activeFile.language}
               onChange={handleChange}
               path={activeFile.path}
+              saveLabel={saveCapability?.label}
+              saveDescription={saveCapability?.description}
             />
           )}
         </div>
@@ -95,15 +98,24 @@ type CodeAreaProps = {
   language: string
   onChange: (value: string) => void
   path: string
+  saveLabel?: string
+  saveDescription?: string
 }
 
 // Plain-textarea editor — first paint surface AND fallback when the
 // Monaco bundle fails to load (offline build, slow network, library
 // regression). Keeps the page interactive without shipping the ~2 MB
 // Monaco chunk on the critical path.
-function TextareaCodeArea({ value, onChange }: CodeAreaProps) {
+function TextareaCodeArea({ value, onChange, path, saveLabel, saveDescription }: CodeAreaProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div
+        className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 py-1 text-[10px] text-muted-foreground"
+        title={saveDescription || undefined}
+      >
+        <span className="truncate font-mono text-muted-foreground/80">{path}</span>
+        <span className="shrink-0">⌘S · {saveLabel || "Guardar"}</span>
+      </div>
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}

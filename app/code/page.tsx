@@ -37,6 +37,12 @@ import { persistWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
+import {
+  buildCodeLoginNext,
+  classifyFolderLoadError,
+  encodeLoginNext,
+  type FolderLoadError,
+} from "@/lib/code-folder-utils"
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -90,11 +96,15 @@ export default function CodeWorkspacePage() {
 function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   if (isLoading) return <CodeWorkspaceSkeleton />
 
   if (!user) {
-    if (typeof window !== "undefined") router.replace("/auth/login?next=/code")
+    if (typeof window !== "undefined") {
+      // Preserve folder/local/tool/agent so login returns to the exact workspace.
+      router.replace(`/auth/login?next=${encodeLoginNext(buildCodeLoginNext(searchParams))}`)
+    }
     return <CodeWorkspaceSkeleton />
   }
 
@@ -114,7 +124,7 @@ function ActiveFolderHydrator() {
   const localId = searchParams?.get("local") || null
   const toolId = searchParams?.get("tool") || null
   const agentId = searchParams?.get("agent") || null
-  const { activeFolder, setActiveFolder, switchCodexWorkspace } = useCodeWorkspace()
+  const { activeFolder, setActiveFolder, switchCodexWorkspace, bindProjectWorkspace } = useCodeWorkspace()
   const firedAgentRef = React.useRef<string | null>(null)
   const hydratedFolderRef = React.useRef<string | null>(null)
   const [routeIssue, setRouteIssue] = React.useState<0 | 1 | 2>(0)
@@ -155,30 +165,39 @@ function ActiveFolderHydrator() {
           persistWorkspaceCodexProject(workspaceId, project.id)
         }
         setActiveCodexProject(directCodexProject ? project.id : null)
-        setActiveFolder(directCodexProject
-          ? { id: workspaceId, name: project.name }
-          : {
-              id: workspaceId,
-              name: project.name,
-              description: project.description,
-              instructions: project.instructions,
-            })
+        if (directCodexProject) {
+          setActiveFolder({ id: workspaceId, name: project.name })
+        } else {
+          // Server Project: hydrate editor from Project.codeWorkspace (Slice C)
+          await bindProjectWorkspace({
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            instructions: project.instructions,
+            knowledgeFileCount: Array.isArray((project as { files?: unknown[] }).files)
+              ? (project as { files: unknown[] }).files.length
+              : 0,
+          })
+        }
       } catch (error) {
         if (cancelled) return
-        if ((error as { status?: unknown } | null)?.status === 404) {
+        const classified = classifyFolderLoadError(error)
+        if (classified.kind === "not_found" || classified.status === 404) {
           setRouteIssue(1)
           hydratedFolderRef.current = folderId
           setActiveCodexProject(null)
           setActiveFolder(null)
         } else {
+          // auth / network / server — keep workspace empty and surface retry banner
           setRouteIssue(2)
+          setActiveCodexProject(null)
         }
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [folderId, localId, hydrationAttempt, setActiveFolder, switchCodexWorkspace])
+  }, [folderId, localId, hydrationAttempt, setActiveFolder, switchCodexWorkspace, bindProjectWorkspace])
 
   React.useEffect(() => {
     if (!toolId) return
@@ -231,8 +250,8 @@ function ActiveFolderHydrator() {
     >
       <span>
         {routeIssue === 1
-          ? "Workspace no disponible"
-          : "No se pudo cargar"}
+          ? "Proyecto no encontrado o sin acceso"
+          : "No se pudo cargar el proyecto (red o servidor). Reintenta o vuelve a iniciar sesión."}
       </span>
       <button
         type="button"
