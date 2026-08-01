@@ -317,3 +317,25 @@ test("conversation reaches the composer edge and the return pill reserves no row
   // never overlap, the composer; its visible state sits above this boundary.
   expect(geometry.pillBottom).toBeLessThanOrEqual(geometry.composerTop)
 })
+
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`plus menu omits the unavailable thesis generator on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    const state = { hasConversation: true }
+    await mockChatApi(page, state)
+
+    await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+    await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
+
+    await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).press("Enter")
+
+    for (const label of ["Subir archivos", "Imágenes", "Voz", "Video", "Música"]) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible()
+    }
+    await expect(page.getByText("Generador de tesis", { exact: true })).toHaveCount(0)
+    await expect(page.getByText("Vista previa de tesis académica", { exact: true })).toHaveCount(0)
+  })
+}
