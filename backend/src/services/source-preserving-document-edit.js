@@ -4644,8 +4644,37 @@ function extractQuotedValues(text = '') {
   return values.filter(Boolean);
 }
 
+/**
+ * Extract EVERY quoted replace pair from the ORIGINAL prompt, preserving the
+ * user's casing/accents. Compound instructions like:
+ *   reemplaza "Introducción original" por "Introducción mejorada" y cambia
+ *   "BORRADOR" por "APROBADO"
+ * used to lose the 2nd pair's casing because clause-splitting runs on
+ * normalizeText() (lowercased). Scanning the raw prompt keeps surgical
+ * replacements byte-faithful to what the user typed.
+ */
+function extractAllQuotedReplacementPairs(text = '') {
+  const raw = String(text || '');
+  if (!raw) return [];
+  const pairs = [];
+  const re = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]\s+(?:por|con|a)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/giu;
+  let match;
+  while ((match = re.exec(raw))) {
+    const needle = String(match[1] || '').trim();
+    const replacement = String(match[2] || '').trim();
+    if (needle.length >= 2 && replacement.length >= 1) {
+      pairs.push({ needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) });
+    }
+  }
+  return pairs;
+}
+
 function extractReplacementPair(text = '') {
   const raw = String(text || '');
+  // Prefer the first quoted pair from the RAW text so casing survives even when
+  // callers pass a normalized clause.
+  const allQuoted = extractAllQuotedReplacementPairs(raw);
+  if (allQuoted.length) return allQuoted[0];
   const quoted = extractQuotedValues(raw);
   if (quoted.length >= 2 && /\b(reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i.test(raw)) {
     return { needle: quoted[0], replacement: quoted[1] };
@@ -4905,8 +4934,16 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   if (rawTitleChange) add({ kind: 'set_document_title', ...rawTitleChange });
   const rawNamedSection = extractNamedSectionAppend(requestText);
   if (rawNamedSection) add({ kind: 'append_section', ...rawNamedSection });
-  const rawReplacement = extractReplacementPair(requestText);
-  if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
+  // All quoted replace pairs from the ORIGINAL prompt (casing preserved).
+  // Doing this before the normalized-clause loop means compound prompts keep
+  // "APROBADO" instead of collapsing to "aprobado".
+  const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  if (quotedPairs.length && !rawTitleChange) {
+    for (const pair of quotedPairs) add({ kind: 'replace_text', ...pair });
+  } else {
+    const rawReplacement = extractReplacementPair(requestText);
+    if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
+  }
   const norm = normalizeText(requestText);
   if (requestWantsMinimalProofreading(norm) && !requestWantsProfessionalEditing(norm)) {
     add({ kind: 'proofread_minimal' });
@@ -6598,11 +6635,20 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
   };
   const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
   if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
-  const rawReplacement = extractReplacementPair(requestText);
   const pptxSlideMatch = format === 'pptx' ? SLIDE_NOUN_RE.exec(normalizeText(requestText)) : null;
   const pptxSlideNumber = pptxSlideMatch ? Number(pptxSlideMatch[1]) : null;
-  if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
-    add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+  const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  if (quotedPairs.length) {
+    for (const pair of quotedPairs) {
+      if (!(format === 'xlsx' && replacementTargetsXlsxCell(pair))) {
+        add({ kind: 'replace_text', ...pair, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+      }
+    }
+  } else {
+    const rawReplacement = extractReplacementPair(requestText);
+    if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
+      add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+    }
   }
   for (const clause of clauses) {
     if (format === 'xlsx') {
@@ -7360,6 +7406,7 @@ module.exports = {
     formatReferenceApa,
     applyMinimalProofreadingToText,
     applySurgicalRangesToParagraphXml,
+    extractAllQuotedReplacementPairs,
     chunkProfessionalEditCandidates,
     professionalEditCandidates,
     professionalEditDocxBuffer,

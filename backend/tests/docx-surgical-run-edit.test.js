@@ -17,9 +17,13 @@ const { Document, Packer, Paragraph, TextRun } = require('docx');
 const PizZip = require('pizzip');
 
 const {
+  generateSourcePreservingDocumentEdit,
   INTERNAL: {
     deleteTextFromDocxBuffer,
+    extractAllQuotedReplacementPairs,
     extractWtNodes,
+    planGenericOfficeOperations,
+    planSourcePreservingOperations,
     proofreadMinimalDocxBuffer,
     replaceTextInDocxBuffer,
     replaceTextInParagraphXmlSurgical,
@@ -215,5 +219,59 @@ describe('docx surgical run-level edit', () => {
     const afterXml = documentXmlFromBuffer(result.buffer);
     assert.doesNotMatch(afterXml, /UPN-42/);
     assert.match(paragraphText(afterXml), /Introducción original|informe de/);
+  });
+
+  it('plans EVERY quoted replace pair with the user\'s original casing', () => {
+    const prompt = 'reemplaza "Introducción original" por "Introducción mejorada" y cambia "BORRADOR" por "APROBADO"';
+    const pairs = extractAllQuotedReplacementPairs(prompt);
+    assert.equal(pairs.length, 2);
+    assert.equal(pairs[0].needle, 'Introducción original');
+    assert.equal(pairs[0].replacement, 'Introducción mejorada');
+    assert.equal(pairs[1].needle, 'BORRADOR');
+    assert.equal(pairs[1].replacement, 'APROBADO');
+
+    const ops = planSourcePreservingOperations({ requestText: prompt, format: 'docx' });
+    const replaces = ops.filter((op) => op.kind === 'replace_text');
+    assert.equal(replaces.length, 2);
+    assert.equal(replaces[1].replacement, 'APROBADO');
+
+    const generic = planGenericOfficeOperations({ requestText: prompt, format: 'docx' });
+    assert.equal(generic.filter((op) => op.kind === 'replace_text').length, 2);
+    assert.equal(generic[1].replacement, 'APROBADO');
+  });
+
+  it('applies a compound quoted replace end-to-end with casing preserved', async () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'surgical-compound-'));
+    const sourcePath = path.join(tmp, 'informe.docx');
+    fs.writeFileSync(sourcePath, await makeSplitRunDocx());
+
+    // Seed a mixed-format intro paragraph too.
+    const mixed = await makeMixedFormattingDocx();
+    // Use split-run doc only — BORRADOR is the critical casing case.
+    const prompt = 'cambia "BORRADOR" por "APROBADO" sin tocar el resto del documento';
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-compound',
+        path: sourcePath,
+        originalName: 'informe.docx',
+        filename: 'informe.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Estado: BORRADOR del comité.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-surgical',
+      chatId: 'chat-surgical',
+    });
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true);
+    const text = paragraphText(documentXmlFromBuffer(fs.readFileSync(result.artifact.path)));
+    assert.match(text, /APROBADO/);
+    assert.doesNotMatch(text, /BORRADOR/);
+    assert.doesNotMatch(text, /aprobado/); // must keep uppercase, not normalized lowercase
+    void mixed;
   });
 });
