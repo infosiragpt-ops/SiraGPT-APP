@@ -646,12 +646,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
     // attached a document and asked to edit it, run the surgical
     // source-preserving editor BEFORE the LLM loop. Without this, weak models
-    // answer in prose / call create_document and the user never gets an edited
-    // copy of THEIR file. Fail-open: any error falls through to the agentic
-    // loop (which still forces document_edit as initialToolChoice below).
+    // answer in prose / call create_document / docintel and the user never gets
+    // an edited copy of THEIR file.
+    // Fail-open ONLY for unexpected errors. Known "needle not found" errors
+    // surface a clear Spanish message so the user can rephrase — never route
+    // a clear edit request into docintel analysis.
     const preloopFileIds = Array.isArray(toolContext.fileIds)
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
+    let documentEditPreloopAttempted = false;
     if (
       preloopFileIds.length > 0
       && toolContext.prisma
@@ -665,6 +668,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           tryGenerateSourcePreservingDocumentEdit,
         } = require('./source-preserving-document-edit');
         if (isSourcePreservingEditRequest(userQuery, preloopFileIds)) {
+          documentEditPreloopAttempted = true;
           await writeSse(res, { type: 'stage', label: 'Editando documento original', tool: 'document_edit' });
           const preserved = await tryGenerateSourcePreservingDocumentEdit({
             prisma: toolContext.prisma,
@@ -708,9 +712,29 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           }
         }
       } catch (preErr) {
+        const code = preErr && preErr.code;
+        const message = String(preErr && preErr.message || preErr || '').slice(0, 500);
         try {
-          console.warn('[agentic-chat] source-preserving pre-loop failed (falling through to agent):', preErr && preErr.message);
+          console.warn('[agentic-chat] source-preserving pre-loop failed:', code || message);
         } catch (_) { /* noop */ }
+        // Surgical not-found / ambiguous edit: tell the user instead of letting
+        // a weak model call docintel_analyze and "analyze" the attachment.
+        if (
+          code === 'REPLACE_TEXT_NOT_FOUND'
+          || code === 'REPLACE_TEXT_UNSPECIFIED'
+          || code === 'DOCUMENT_TITLE_NOT_FOUND'
+          || code === 'DOCUMENT_TITLE_UNSPECIFIED'
+          || code === 'DELETE_TEXT_NOT_FOUND'
+        ) {
+          const answer = message
+            || 'No pude aplicar el cambio en el documento adjunto. Indica el texto exacto a reemplazar (entre comillas) y lo edito de forma quirúrgica.';
+          await writeSse(res, { replace: true, content: answer });
+          return {
+            finalAnswer: answer,
+            stoppedReason: 'source_preserving_document_edit_failed',
+            artifacts: [],
+          };
+        }
       }
     }
 
@@ -977,10 +1001,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       } catch (_) { /* best-effort */ }
     }
     // When the user is editing an attached document, create_document would
-    // regenerate a NEW file from scratch — the opposite of what they asked.
-    // Drop it from the effective tool set so the model can't take that path.
-    if ((documentEditIntent || documentMergeIntent) && Array.isArray(tools)) {
-      tools = tools.filter((t) => t && t.name !== 'create_document');
+    // regenerate a NEW file from scratch and docintel_* would only *read* the
+    // attachment (live bug: DeepSeek called docintel_analyze instead of
+    // returning an edited DOCX). Drop both so the model can only take
+    // document_edit (or answer) for edit intents.
+    if ((documentEditIntent || documentMergeIntent || documentEditPreloopAttempted) && Array.isArray(tools)) {
+      const blockedOnEdit = new Set([
+        'create_document',
+        'docintel_analyze',
+        'docintel_retrieve',
+        'docintel_extract_tables',
+        'docintel_compare',
+      ]);
+      tools = tools.filter((t) => t && t.name && !blockedOnEdit.has(t.name));
     }
     // A strong specialized-skill intent gets one deterministic first call. The
     // model still selects the concrete id/args and can chain further skills

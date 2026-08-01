@@ -1113,6 +1113,18 @@ test('runAgenticChat forces document_edit and drops create_document on attachmen
           },
           execute: async () => ({ ok: true }),
         },
+        {
+          name: 'docintel_analyze',
+          description: 'analyze attached docs',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => ({ ok: true }),
+        },
+        {
+          name: 'docintel_retrieve',
+          description: 'retrieve doc evidence',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => ({ ok: true }),
+        },
       ],
     });
     assert.ok(firstArgs, 'the model must be called at least once when pre-loop no-ops');
@@ -1126,6 +1138,10 @@ test('runAgenticChat forces document_edit and drops create_document on attachmen
     assert.ok(
       !toolNames.includes('create_document'),
       'create_document must be dropped so the model cannot regenerate a new file',
+    );
+    assert.ok(
+      !toolNames.includes('docintel_analyze') && !toolNames.includes('docintel_retrieve'),
+      'docintel must be dropped so weak models cannot "analyze" instead of editing',
     );
     const system = firstArgs.messages.find((m) => m.role === 'system')?.content || '';
     assert.match(system, /EDITAR el documento que ADJUNTO/);

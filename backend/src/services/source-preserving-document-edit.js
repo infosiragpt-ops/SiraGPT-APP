@@ -4567,14 +4567,47 @@ function extractAllQuotedReplacementPairs(text = '') {
   const re = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]\s+(?:por|con|a)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/giu;
   let match;
   while ((match = re.exec(raw))) {
-    const needle = String(match[1] || '').trim();
-    const replacement = String(match[2] || '').trim();
+    const needle = cleanReplacementNeedle(match[1]);
+    const replacement = cleanReplacementValue(match[2]);
     if (needle.length >= 2 && replacement.length >= 1) {
       pairs.push({ needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) });
     }
   }
   return pairs;
 }
+
+// Spanish "cambia DE X por Y" leaves a residual "de " in the capture group.
+// Also strip role noise that sometimes leaks in ("título del word …").
+function cleanReplacementNeedle(needle = '') {
+  let value = String(needle || '').trim();
+  if (!value) return '';
+  value = value
+    // Leading Spanish prepositions from "cambia de / del / de la X"
+    .replace(/^(?:de|del|de\s+la|de\s+el|el|la|los|las|un|una)\s+/i, '')
+    // "en el título del word/documento" noise before the real needle
+    .replace(/^(?:en\s+el\s+|el\s+)?(?:t[ií]tulo|title)(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:de|del)?\s*/i, '')
+    .replace(/^(?:texto|frase|palabra|contenido|que\s+dice|donde\s+dice)\s+/i, '')
+    .replace(/^(?:de|del|de\s+la|de\s+el|el|la)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return value;
+}
+
+function cleanReplacementValue(value = '') {
+  let text = String(value || '')
+    .replace(/[.;!?]+$/g, '')
+    .replace(/\s+(?:por\s+favor|gracias|sin\s+tocar.*|conserva\w*.*|devu[eé]lv\w*.*)$/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Typo: "Judicial de de Cajamarca" → "Judicial de Cajamarca"
+  text = text.replace(/\bde\s+de\b/gi, 'de');
+  return text;
+}
+
+const REPLACE_VERB_RE = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i;
+// Optional "de/del/de la" after the verb so "cambia de X por Y" does not glue
+// the preposition onto the needle (live bug: needle became "de judicial de ayacucho").
+const REPLACE_PAIR_CAPTURE_RE = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(?:de(?:\s+la|\s+el)?|del)?\s*(.{3,160}?)\s+(?:por|con|a)\s+(.{3,220})$/iu;
 
 function extractReplacementPair(text = '') {
   const raw = String(text || '');
@@ -4583,31 +4616,35 @@ function extractReplacementPair(text = '') {
   const allQuoted = extractAllQuotedReplacementPairs(raw);
   if (allQuoted.length) return allQuoted[0];
   const quoted = extractQuotedValues(raw);
-  if (quoted.length >= 2 && /\b(reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i.test(raw)) {
-    return { needle: quoted[0], replacement: quoted[1] };
-  }
-  const normalized = normalizeText(raw);
-  const match = normalized.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/);
-  if (!match) return null;
-  const needle = match[1]
-    .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  let replacement = match[2].replace(/[.;!?]+$/g, '').trim();
-  // Preserve the user's original casing/accents for the REPLACEMENT. The match
-  // above runs on normalizeText() output (lowercased, accents stripped), which
-  // would emit "introduccion" instead of "Introducción". Re-run the same
-  // pattern on the raw text and trust the raw capture only when it normalizes
-  // to the same span (guards against the raw regex matching a different range).
-  // The needle stays normalized — downstream replaceNeedleText matches it
-  // case-insensitively, so only the replacement's casing reaches the output.
-  const rawMatch = raw.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/iu);
-  if (rawMatch && rawMatch[2]) {
-    const rawReplacement = rawMatch[2].replace(/[.;!?]+$/g, '').trim();
-    if (rawReplacement && normalizeText(rawReplacement) === normalizeText(replacement)) {
-      replacement = rawReplacement;
+  if (quoted.length >= 2 && REPLACE_VERB_RE.test(raw)) {
+    const needle = cleanReplacementNeedle(quoted[0]);
+    const replacement = cleanReplacementValue(quoted[1]);
+    if (needle.length >= 2 && replacement.length >= 1) {
+      return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
     }
   }
+
+  // Prefer the RAW capture (casing/accents intact), then fall back to the
+  // normalized form for typo-tolerant matching.
+  const rawMatch = raw.match(REPLACE_PAIR_CAPTURE_RE);
+  if (rawMatch) {
+    const needle = cleanReplacementNeedle(rawMatch[1]);
+    const replacement = cleanReplacementValue(rawMatch[2]);
+    if (needle.length >= 3 && replacement.length >= 1) {
+      return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
+    }
+  }
+
+  const normalized = normalizeText(raw);
+  const match = normalized.match(
+    /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(?:de(?:\s+la|\s+el)?|del)?\s*(.{3,160}?)\s+(?:por|con|a)\s+(.{3,220})$/,
+  );
+  if (!match) return null;
+  const needle = cleanReplacementNeedle(match[1]
+    .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+  const replacement = cleanReplacementValue(match[2]);
   if (needle.length < 3 || replacement.length < 1) return null;
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
@@ -4615,15 +4652,24 @@ function extractReplacementPair(text = '') {
 function extractDocxTitleChange(text = '') {
   const raw = String(text || '').trim();
   if (!/\b(?:cambi\w*|modific\w*|reemplaz\w*|actualiz\w*|corrig\w*)\b/iu.test(raw)) return null;
-  const match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
+  // Full title assignment: "cambia el título a / por / : Nuevo Título"
+  // (NOT "cambia de A por B" — that is a surgical span replace, even when the
+  // user says "en el título").
+  const dePor = /\bcambia\w*\s+de\b.+\bpor\b/iu.test(raw)
+    || /\breemplaz\w*\s+.+\bpor\b/iu.test(raw);
+  if (dePor && /\b(?:t[ií]tulo|title)\b/iu.test(raw)) {
+    // Title-scoped partial replace is handled as replace_text, not a full title rewrite.
+    return null;
+  }
+  const match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
   if (!match) return null;
   const nextAction = /\s+(?:y|e)\s+(?=(?:agreg\w*|a[nñ]ad\w*|inclu\w*|incorpor\w*|conserv\w*|mant\w*|devu[eé]lv\w*|entreg\w*|quit\w*|elimin\w*|borr\w*|revis\w*|verific\w*)\b)/iu;
-  const newTitle = match[1]
+  const newTitle = cleanReplacementValue(match[1]
     .split(nextAction)[0]
     .split(/[.;\n]/)[0]
     .replace(/^['"“”‘’`]+|['"“”‘’`]+$/g, '')
     .replace(/\s+(?:y|e)$/iu, '')
-    .trim();
+    .trim());
   if (newTitle.length < 2) return null;
   return { newTitle: newTitle.slice(0, 180) };
 }
@@ -7293,6 +7339,9 @@ module.exports = {
     extractRunProperties,
     extractDocxTitleChange,
     extractAllQuotedReplacementPairs,
+    extractReplacementPair,
+    cleanReplacementNeedle,
+    cleanReplacementValue,
     extractNamedSectionAppend,
     extractTextFromPptxBuffer,
     paragraphXml,

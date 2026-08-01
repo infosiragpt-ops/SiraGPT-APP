@@ -2215,6 +2215,53 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(generic.filter((op) => op.kind === 'replace_text')[1].replacement, 'APROBADO');
   });
 
+  it('parses natural "cambia de X por Y" without gluing the Spanish "de" onto the needle', () => {
+    const {
+      extractReplacementPair,
+      planSourcePreservingOperations,
+      replaceTextInDocxBuffer,
+    } = sourcePreservingInternals;
+    // Live prod bug (2026-08-01): user said this exact phrasing and the planner
+    // produced needle "de judicial de ayacucho", which never matched the Word.
+    const livePrompt = 'En el titulo del word cambia de Judicial de Ayacucho por Judicial de de Cajamarca';
+    const pair = extractReplacementPair(livePrompt);
+    assert.ok(pair, 'pair extracted');
+    assert.equal(pair.needle, 'Judicial de Ayacucho');
+    assert.equal(pair.replacement, 'Judicial de Cajamarca', 'collapses typo "de de"');
+
+    const ops = planSourcePreservingOperations({ requestText: livePrompt, format: 'docx' });
+    const replaces = ops.filter((op) => op.kind === 'replace_text');
+    assert.equal(replaces.length, 1);
+    assert.equal(replaces[0].needle, 'Judicial de Ayacucho');
+    assert.equal(replaces[0].replacement, 'Judicial de Cajamarca');
+    // Must NOT full-rewrite the title — this is a partial span replace.
+    assert.equal(ops.some((op) => op.kind === 'set_document_title'), false);
+
+    // End-to-end: the cleaned needle must hit a real title-like paragraph.
+    const PizZip = require('pizzip');
+    const { Document, Packer, Paragraph, TextRun, AlignmentType } = require('docx');
+    return (async () => {
+      const source = Buffer.from(await Packer.toBuffer(new Document({
+        sections: [{
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'Poder Judicial de Ayacucho — Aspectos administrativos', bold: true })],
+            }),
+            new Paragraph('Cuerpo del informe que no debe mutar.'),
+          ],
+        }],
+      })));
+      const edited = replaceTextInDocxBuffer(source, pair.needle, pair.replacement);
+      assert.ok(edited.changedCount >= 1);
+      const xml = new PizZip(edited.buffer).file('word/document.xml').asText();
+      assert.match(xml, /Judicial de Cajamarca/);
+      assert.doesNotMatch(xml, /Judicial de Ayacucho/);
+      assert.match(xml, /Cuerpo del informe que no debe mutar/);
+      assert.match(xml, /Poder /); // prefix of title preserved
+    })();
+  });
+
   it('plans natural Excel cell changes as cell writes, not text replacements', () => {
     const ops = planGenericOfficeOperations({
       requestText: 'Edita este Excel: cambia la celda B2 a 999 y devuelveme el Excel completo.',
