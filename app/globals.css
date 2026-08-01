@@ -737,7 +737,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-conversation-column {
-  max-width: min(100%, 64rem);
+  /* Composer frame width (51.75rem) + this container's own 1rem side
+     gutters, so the text column's inner edges land exactly on the composer
+     surface's rails — output and input share the same width. */
+  max-width: min(100%, 53.75rem);
 }
 
 .chat-user-bubble {
@@ -2999,10 +3002,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      * catching up with visualViewport updates. On iOS Safari, fixed elements
      * are positioned relative to the visual viewport as long as no transformed
      * ancestor captures them, so `bottom:0` keeps the bar pinned right above
-     * the keyboard regardless of any document-level scroll. The existing
-     * `padding-bottom` on
-     * `.chat-message-scroll-content` already reserves the right amount of
-     * space so messages never slide under the bar.
+     * the keyboard regardless of any document-level scroll. The rule after
+     * this one restores the composer-height `padding-bottom` on
+     * `.chat-message-scroll-content` so messages never slide under the bar
+     * while it is fixed.
      *
      * We gate on `@supports (-webkit-touch-callout: none)` so this rule
      * only fires on iOS/iPadOS Safari; Android Chrome and desktop are
