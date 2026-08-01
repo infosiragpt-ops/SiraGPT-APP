@@ -64,7 +64,13 @@ function describeSchema(parameters) {
  * @param {Array<{name:string,description:string,parameters:object}>} registry
  */
 function buildPromptedToolsBlock(registry) {
-  const tools = (Array.isArray(registry) ? registry : []).filter((t) => t && t.name);
+  // Sorted by name so the block is byte-identical across turns regardless of
+  // registry assembly order — keeps provider prompt caches hitting on long
+  // agent conversations (OpenClaw cache-stability pattern).
+  const tools = (Array.isArray(registry) ? registry : [])
+    .filter((t) => t && t.name)
+    .slice()
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const lines = tools.map((t) => `- ${t.name}: ${truncate(t.description, MAX_TOOL_DESC_CHARS)}\n  args: ${describeSchema(t.parameters)}`);
   return [
     'TOOL-CALL PROTOCOL (this runtime has no native function calling — follow this EXACTLY):',
