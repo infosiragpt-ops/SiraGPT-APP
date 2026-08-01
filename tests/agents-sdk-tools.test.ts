@@ -23,7 +23,9 @@ describe("Agents SDK tools surface", () => {
     assert.match(tools, /case "web_search"/)
     assert.match(tools, /case "web_fetch"/)
     assert.match(tools, /resolveInRoot/)
-    assert.match(tools, /BASH_BLOCKLIST/)
+    assert.match(tools, /getEffectiveToolAllowSet/)
+    assert.match(tools, /bash deshabilitado/)
+    assert.doesNotMatch(tools, /(?:node:)?child_process/)
     assert.doesNotMatch(tools, /result placeholder/)
   })
 
