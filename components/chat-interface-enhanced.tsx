@@ -4253,11 +4253,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
-                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="gpt-model-submenu model-picker-content w-[min(calc(100vw-1.25rem),20rem)] max-h-[min(70dvh,28rem)] overflow-hidden rounded-2xl p-1.5">
+                  <div className="gpt-model-submenu-title relative z-10 px-2.5 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-neutral-500 dark:text-muted-foreground">
                     Modelos disponibles para este proyecto
                   </div>
-                  <ScrollArea className="relative z-10 h-[420px] pr-1">
+                  <ScrollArea className="gpt-model-submenu-scroll relative z-10 h-[min(58dvh,22rem)] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
@@ -4283,12 +4283,12 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-1.5">
-                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5 text-neutral-900 dark:text-foreground">{label}</div>
                                         {isComingSoon && (
                                           <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
                                         )}
                                       </div>
-                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-neutral-500 dark:text-muted-foreground">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -4432,7 +4432,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/gpt:rotate-180" />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[292px] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border-border/70 bg-background/95 p-1.5 shadow-xl backdrop-blur">
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="gpt-context-menu w-[min(calc(100vw-1rem),18.25rem)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border border-neutral-200 bg-white p-1.5 text-neutral-900 shadow-xl dark:border-border/70 dark:bg-background/95 dark:text-foreground dark:backdrop-blur">
             <div className="mb-1 flex items-center gap-2.5 rounded-xl px-2.5 py-2">
               <GptIcon />
               <div className="min-w-0 flex-1">
@@ -4449,11 +4449,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
-                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="gpt-model-submenu model-picker-content w-[min(calc(100vw-1.25rem),20rem)] max-h-[min(70dvh,28rem)] overflow-hidden rounded-2xl p-1.5">
+                  <div className="gpt-model-submenu-title relative z-10 px-2.5 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-neutral-500 dark:text-muted-foreground">
                     Todos los modelos disponibles
                   </div>
-                  <ScrollArea className="relative z-10 h-[420px] pr-1">
+                  <ScrollArea className="gpt-model-submenu-scroll relative z-10 h-[min(58dvh,22rem)] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
@@ -4479,12 +4479,12 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-1.5">
-                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5 text-neutral-900 dark:text-foreground">{label}</div>
                                         {isComingSoon && (
                                           <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
                                         )}
                                       </div>
-                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-neutral-500 dark:text-muted-foreground">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
