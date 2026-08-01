@@ -61,8 +61,6 @@ import {
   type CodePreviewSelectionDetail,
 } from "@/lib/code-preview-selection"
 
-const PREVIEW_NONCE_PARAM = "__sgpt_preview_nonce"
-
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error" | "stuck"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
 
@@ -201,16 +199,7 @@ export function PreviewPane() {
   const logSeq = React.useRef(0)
   const previewFrameRef = React.useRef<HTMLIFrameElement | null>(null)
   const previewNonceRef = React.useRef("")
-  if (!previewNonceRef.current) {
-    try {
-      previewNonceRef.current = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-    } catch {
-      previewNonceRef.current = `preview-${Date.now().toString(36)}`
-    }
-  }
-  const previewNonce = previewNonceRef.current
+  const previewNonce = previewNonceRef.current ||= crypto.randomUUID()
   const [selectionMode, setSelectionMode] = React.useState(false)
   const [selectionFallback, setSelectionFallback] = React.useState(false)
   const selectionReadyRef = React.useRef(false)
@@ -837,7 +826,7 @@ export function PreviewPane() {
   }, [files, activePath, auto])
 
   const result = React.useMemo(
-    () => buildPreviewDocument(snapshot.files, snapshot.activePath, { nonce: previewNonce }),
+    () => buildPreviewDocument(snapshot.files, snapshot.activePath, previewNonce),
     [previewNonce, snapshot],
   )
   const staticPreviewKey = React.useMemo(() => {
@@ -932,7 +921,7 @@ export function PreviewPane() {
     if (!liveRun.devUrl) return liveRun.devUrl
     const clean = `/${(navPath || "/").replace(/^\/+/, "")}`
     const base = liveRun.devUrl.replace(/\/+$/, "") + clean
-    return `${base}${base.includes("?") ? "&" : "?"}${PREVIEW_NONCE_PARAM}=${encodeURIComponent(previewNonce)}`
+    return `${base}${base.includes("?") ? "&" : "?"}__sgpt_preview_nonce=${previewNonce}`
   }, [liveRun.devUrl, navPath, previewNonce])
 
   React.useEffect(() => {
