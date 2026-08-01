@@ -2557,6 +2557,9 @@ router.post(
       let project = null;
       let actualModel = model;
       let actualTemperature = 0.55;
+      // Default completion budget. Custom GPTs raise this so trained long-form
+      // deliverables (thesis chapters, full templates) finish in one turn.
+      let actualMaxOutputTokens = 16384;
 
       // ── Public web read-only turn: isolated early-return path ────────────
       //
@@ -2754,7 +2757,13 @@ router.post(
         actualModel = _chatPrefetch.model || customGpt.modelName || model;
         actualTemperature = customGpt.temperature ?? actualTemperature;
         actualProvider = inferProviderFromModelId(actualModel);
-        console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider}`);
+        // Prefer the GPT's configured maxTokens when set; otherwise use a
+        // higher default so complete trained deliverables are not cut short.
+        const gptMax = Number(customGpt.maxTokens);
+        actualMaxOutputTokens = Number.isFinite(gptMax) && gptMax > 0
+          ? Math.min(32768, Math.max(4096, Math.floor(gptMax)))
+          : 24576;
+        console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider} maxOut=${actualMaxOutputTokens}`);
       }
 
       // Unpack org settings result
@@ -5637,7 +5646,11 @@ router.post(
       });
 
       const fittedContext = contextWindow.fitMessagesToContext(messages, actualModel, {
-        reservedCompletionTokens: Math.min(8192, contextWindow.getCompletionLimit(actualModel)),
+        // Reserve enough completion room for trained-GPT full deliverables.
+        reservedCompletionTokens: Math.min(
+          actualMaxOutputTokens || 16384,
+          contextWindow.getCompletionLimit(actualModel),
+        ),
       });
       messages = fittedContext.messages;
       if (fittedContext.droppedCount > 0) {
@@ -6359,6 +6372,7 @@ router.post(
               qualityGuard: true,
               skipDoneSentinel: true,
               reasoningSink: __reasoningSink,
+              maxOutputTokens: actualMaxOutputTokens,
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't
