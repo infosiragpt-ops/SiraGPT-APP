@@ -16,7 +16,6 @@ import {
   statSync,
   lstatSync,
   realpathSync,
-  unlinkSync,
 } from "fs"
 import { join, resolve, relative, dirname, sep } from "path"
 import { tmpdir } from "os"
@@ -115,7 +114,7 @@ export function createWorkspace(sessionId?: string, ownerId?: string): AgentWork
         "# SiraGPT Agent Workspace",
         "",
         "Sandbox aislado para el Agents SDK empresarial.",
-        "El agente puede leer, escribir, editar y ejecutar comandos aquí.",
+        "El agente solo puede usar las herramientas autorizadas dentro de este workspace.",
         "",
       ].join("\n"),
       "utf8",

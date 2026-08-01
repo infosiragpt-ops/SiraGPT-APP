@@ -76,11 +76,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     required: true,
   },
   {
-    file: "app/api/agents/run/route.ts",
-    reason: "Server-side delivery to the caller-provided external webhook.",
-    accepts: (text) => text.startsWith("fetch(webhook_url,"),
-  },
-  {
     file: "app/demo/page.tsx",
     reason: "Public cached demo POST explicitly requires no account or session.",
     accepts: (text) =>
@@ -212,6 +207,12 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     file: "lib/authenticated-fetch.ts",
     reason: "Canonical transport dispatch resolves the instrumented global fetch at call time.",
     accepts: (text) => text === "globalThis.fetch(input, init)",
+  },
+  {
+    file: "lib/auth.ts",
+    reason: "Server-side active-session check against the configured SiraGPT backend authority.",
+    accepts: (text) => text === "globalThis.fetch(input, init)",
+    required: true,
   },
   {
     file: "lib/code-runner/host-runner-service.ts",

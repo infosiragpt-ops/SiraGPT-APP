@@ -46,6 +46,34 @@ describe("agent tools security boundaries", () => {
     assert.deepEqual(requestedAddresses, [["93.184.216.34"]])
   })
 
+  it("strips credentials before following a cross-origin redirect", async () => {
+    const seenHeaders: Headers[] = []
+    const requestImpl = async (url: URL, init: RequestInit) => {
+      seenHeaders.push(new Headers(init.headers))
+      if (url.hostname === "public.test") {
+        return new Response(null, { status: 302, headers: { location: "https://other.test/final" } })
+      }
+      return new Response("ok", { status: 200 })
+    }
+    await safeFetch("https://public.test/start", {
+      headers: {
+        Authorization: "Bearer sentinel",
+        Cookie: "session=sentinel",
+        "Proxy-Authorization": "Basic sentinel",
+        Accept: "text/plain",
+      },
+    }, {
+      resolveHost: async () => ["93.184.216.34"],
+      requestImpl,
+    })
+    assert.equal(seenHeaders.length, 2)
+    assert.equal(seenHeaders[0].has("authorization"), true)
+    assert.equal(seenHeaders[1].has("authorization"), false)
+    assert.equal(seenHeaders[1].has("cookie"), false)
+    assert.equal(seenHeaders[1].has("proxy-authorization"), false)
+    assert.equal(seenHeaders[1].get("accept"), "text/plain")
+  })
+
   it("pins the approved public address at the connection boundary", async () => {
     const seen: Array<{ host: string; approved: string[] }> = []
     let resolverCalls = 0
@@ -174,6 +202,7 @@ describe("agents run route security contract", () => {
     assert.match(route, /status: 401/)
     assert.match(route, /webhook_pending_review/)
     assert.doesNotMatch(route, /accepted:\s*true/)
+    assert.doesNotMatch(route, /Access-Control-Allow-Origin/)
     assert.doesNotMatch(route, /spawnSubagents/)
     assert.match(route, /createWorkspace\(sessionId, ownerId\)/)
     assert.match(route, /allowedTools\.has\(tc\.function\.name\)/)

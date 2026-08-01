@@ -256,6 +256,13 @@ export async function safeFetch(
       ? { ...requestInit, method: "GET", body: undefined, headers: (() => { const headers = new Headers(requestInit.headers); headers.delete("content-length"); return headers })() }
       : requestInit
     validated = await validateSafeUrlWithAddresses(next.toString(), resolveHost)
+    if (validated.url.origin !== current.origin) {
+      const headers = new Headers(requestInit.headers)
+      headers.delete("authorization")
+      headers.delete("cookie")
+      headers.delete("proxy-authorization")
+      requestInit = { ...requestInit, headers }
+    }
     current = validated.url
     approvedAddresses = validated.addresses
     redirects += 1
