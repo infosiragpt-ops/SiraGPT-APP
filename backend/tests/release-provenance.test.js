@@ -87,6 +87,11 @@ test('production deploy accepts only a green production-main commit', () => {
 
   assert.ok(sshScript, 'expected to extract the VPS deployment script');
   assert.match(workflow, /actions:\s+read/);
+  assert.match(workflow, /workflow_run:\s*\n\s+workflows:\s+\['CI'\]\s*\n\s+types:\s+\[completed\]\s*\n\s+branches:\s+\[production-main\]/);
+  assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
+  assert.match(workflow, /github\.event\.workflow_run\.event == 'push'/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'production-main'/);
+  assert.match(workflow, /WORKFLOW_RUN_SHA:\s+\$\{\{ github\.event\.workflow_run\.head_sha \|\| '' \}\}/);
   assert.match(workflow, /git merge-base --is-ancestor "\$\{TARGET_SHA\}" origin\/production-main/);
   assert.match(workflow, /gh run list --workflow CI --branch production-main --commit "\$\{TARGET_SHA\}"/);
   assert.match(workflow, /envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR/);
@@ -95,19 +100,41 @@ test('production deploy accepts only a green production-main commit', () => {
   assert.doesNotMatch(sshScript[1], /\$\{\{\s*inputs\.target_sha/);
 });
 
-test('production deploy supports an explicit release tag without enabling branch auto-deploys', () => {
+test('production deploy supports explicit releases and CI-gated production auto-deploys', () => {
   const workflow = read('.github/workflows/deploy.yml');
   const triggerBlock = workflow.match(/^on:\n([\s\S]*?)\n# Production deploys/m);
 
   assert.ok(triggerBlock, 'expected to extract workflow trigger block');
   assert.match(triggerBlock[1], /workflow_dispatch:/);
+  assert.match(triggerBlock[1], /workflow_run:\s*\n\s+workflows:\s+\['CI'\]\s*\n\s+types:\s+\[completed\]\s*\n\s+branches:\s+\[production-main\]/);
   assert.match(triggerBlock[1], /push:\s*\n\s+tags:\s*\n\s+- 'deploy-production-\*'/);
-  assert.doesNotMatch(triggerBlock[1], /branches:/);
+  assert.doesNotMatch(triggerBlock[1], /push:\s*\n\s+branches:/);
   assert.match(workflow, /FALLBACK_SHA:\s+\$\{\{ github\.sha \}\}/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /github\.event_name == 'workflow_run'/);
   assert.match(workflow, /github\.event\.created == true/);
   assert.match(workflow, /github\.event\.deleted == false/);
   assert.match(workflow, /github\.event\.forced == false/);
+});
+
+test('main auto-promotion is fast-forward only and CI gated', () => {
+  const workflow = read('.github/workflows/promote-main-to-production.yml');
+
+  assert.match(workflow, /name:\s+Promote main to production/);
+  assert.match(workflow, /workflow_run:\s*\n\s+workflows:\s+\['CI'\]\s*\n\s+types:\s+\[completed\]\s*\n\s+branches:\s+\[main\]/);
+  assert.match(workflow, /permissions:\s*\n\s+actions:\s+read\s*\n\s+contents:\s+write/);
+  assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
+  assert.match(workflow, /github\.event\.workflow_run\.event == 'push'/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
+  assert.match(workflow, /WORKFLOW_RUN_SHA:\s+\$\{\{ github\.event\.workflow_run\.head_sha \|\| '' \}\}/);
+  assert.match(workflow, /gh run list --workflow CI --branch main --commit "\$\{TARGET_SHA\}"/);
+  assert.match(workflow, /git merge-base --is-ancestor origin\/production-main "\$\{TARGET_SHA\}"/);
+  assert.match(workflow, /git push origin "\$\{TARGET_SHA\}:refs\/heads\/production-main"/);
+  assert.match(workflow, /Refusing stale promotion/);
+  assert.match(workflow, /main and production-main have diverged/);
+  assert.doesNotMatch(workflow, /--force/);
+  assert.doesNotMatch(workflow, /git reset --hard/);
+  assert.doesNotMatch(workflow, /git merge --no-ff/);
 });
 
 test('U0 migration baseline is explicit per release tag and never global', () => {
