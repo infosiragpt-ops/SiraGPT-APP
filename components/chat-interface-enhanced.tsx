@@ -12096,7 +12096,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             }
                             className={cn(
                               "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
-                              "py-1.5 px-1",
+                              "p-0",
                               "text-[15px] leading-[1.45] tracking-normal text-foreground",
                               "placeholder:text-muted-foreground/65 placeholder:font-normal",
                               "dark:placeholder:text-[hsl(var(--text-tertiary))]",
@@ -12573,7 +12573,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 }
                                 className={cn(
                                   "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
-                                  "py-1.5 px-1",
+                                  "p-0",
                                   "text-[15px] leading-[1.45] tracking-normal text-foreground",
                                   "placeholder:text-muted-foreground/65 placeholder:font-normal",
                                   "dark:placeholder:text-[hsl(var(--text-tertiary))]",

@@ -12,13 +12,13 @@ describe("professional chat composer surface source contract", () => {
   it("uses one hairline focus treatment instead of stacked rings", () => {
     assert.match(
       globals,
-      /\.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(220 13% 86% \/ 0\.86\)/,
-      "the light composer should use a half-pixel hairline border"
+      /\.composer-surface\s*\{[\s\S]{0,280}border: 0\.5px solid hsl\(220 14% 78% \/ 0\.96\)/,
+      "the light composer should use a hardened half-pixel hairline border"
     )
     assert.match(
       globals,
-      /\.dark \.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(var\(--composer-border\) \/ 0\.88\)/,
-      "the dark composer should use the same half-pixel hairline border"
+      /\.dark \.composer-surface\s*\{[\s\S]{0,200}border: 0\.5px solid hsl\(var\(--composer-border\) \/ 0\.96\)/,
+      "the dark composer should use the same hardened half-pixel hairline border"
     )
     assert.doesNotMatch(
       globals,
@@ -70,13 +70,34 @@ describe("professional chat composer surface source contract", () => {
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
-      /\.composer-input-row\s*\{[\s\S]{0,420}min-height: 5\.5rem;[\s\S]{0,100}padding: 0\.625rem 0\.75rem 0\.5rem !important;/,
-      "the idle composer should not reserve oversized vertical space"
+      /\.composer-input-row\s*\{[\s\S]{0,480}align-items: start;[\s\S]{0,120}min-height: 5\.35rem;[\s\S]{0,120}padding: 0\.4rem 0\.75rem 0\.4rem !important;/,
+      "the idle composer should pin text to the upper bar line without oversized vertical space"
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 5\.5rem;/,
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 5\.35rem;/,
       "phones should keep the same compact hierarchy without oversized rounding"
+    )
+  })
+
+  it("pins composer text to the upper hairline of the bar", () => {
+    assert.match(
+      globals,
+      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}display: block !important;[\s\S]{0,220}padding: 0\.05rem 0\.15rem 0\.05rem !important;/,
+      "the textarea first line must sit flush against the top of the shell"
+    )
+    assert.match(
+      globals,
+      /\.composer-input-row \.composer-textarea-shell\s*\{[\s\S]{0,160}align-self: start;/
+    )
+    assert.match(
+      globals,
+      /\.composer-textarea-highlights\s*\{[\s\S]{0,260}padding: 0\.05rem 0\.15rem 0\.05rem;/
+    )
+    assert.equal(
+      (chatInterface.match(/"p-0"/g) || []).length >= 2,
+      true,
+      "both composer textareas should defer vertical padding to CSS"
     )
   })
 
