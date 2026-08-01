@@ -175,7 +175,7 @@ jobs:
 
       - name: Reserve remote transfer directory
         id: reserve
-        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           DEPLOY_TRANSFER_DIR: ${{ steps.bundle.outputs.transfer_dir }}
         with:
@@ -219,7 +219,7 @@ jobs:
           version: 1.8.0
 
       - name: Deploy via SSH (with auto-rollback)
-        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           TARGET_SHA: ${{ needs.pre-check.outputs.target_sha }}
           ALLOW_MIGRATION_BASELINE: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'deploy-production-baseline-') && '1' || '0' }}
@@ -678,7 +678,7 @@ jobs:
       - name: Cleanup transferred bundle
         if: always() && steps.bundle.outputs.transfer_dir != '' && steps.reserve.outcome == 'success'
         continue-on-error: true
-        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           DEPLOY_TRANSFER_DIR: ${{ steps.bundle.outputs.transfer_dir }}
         with:
