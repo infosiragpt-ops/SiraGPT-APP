@@ -37,6 +37,11 @@ import { persistWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
+import {
+  buildCodeLoginNext,
+  classifyFolderLoadError,
+  encodeLoginNext,
+} from "@/lib/code-folder-utils"
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -94,7 +99,13 @@ function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
   if (isLoading) return <CodeWorkspaceSkeleton />
 
   if (!user) {
-    if (typeof window !== "undefined") router.replace("/auth/login?next=/code")
+    if (typeof window !== "undefined") {
+      // Preserve ?folder= / ?local= / ?tool= / ?agent= through login.
+      // Use location.search (not useSearchParams) so the gate stays outside Suspense.
+      router.replace(
+        `/auth/login?next=${encodeLoginNext(buildCodeLoginNext(window.location.search))}`,
+      )
+    }
     return <CodeWorkspaceSkeleton />
   }
 
@@ -114,7 +125,7 @@ function ActiveFolderHydrator() {
   const localId = searchParams?.get("local") || null
   const toolId = searchParams?.get("tool") || null
   const agentId = searchParams?.get("agent") || null
-  const { activeFolder, setActiveFolder, switchCodexWorkspace } = useCodeWorkspace()
+  const { activeFolder, setActiveFolder, switchCodexWorkspace, hydrateFiles } = useCodeWorkspace()
   const firedAgentRef = React.useRef<string | null>(null)
   const hydratedFolderRef = React.useRef<string | null>(null)
   const [routeIssue, setRouteIssue] = React.useState<0 | 1 | 2>(0)
@@ -163,9 +174,28 @@ function ActiveFolderHydrator() {
               description: project.description,
               instructions: project.instructions,
             })
+        // Hydrate editor FS from Project.codeWorkspace when present (not knowledge files).
+        if (!directCodexProject) {
+          try {
+            const remote = await projectsService.getCodeWorkspace(project.id)
+            const entries = Object.entries(remote.workspace?.files || {})
+            if (entries.length > 0) {
+              hydrateFiles(
+                entries.map(([path, entry]) => ({
+                  path,
+                  content: typeof entry?.content === "string" ? entry.content : "",
+                })),
+              )
+            }
+          } catch {
+            /* fail soft — browser localStorage remains */
+          }
+        }
       } catch (error) {
         if (cancelled) return
-        if ((error as { status?: unknown } | null)?.status === 404) {
+        // Differentiated kinds for UI copy (not-found vs auth vs network/server).
+        const classified = classifyFolderLoadError(error)
+        if (classified.kind === "not_found" || classified.kind === "forbidden") {
           setRouteIssue(1)
           hydratedFolderRef.current = folderId
           setActiveCodexProject(null)
@@ -178,7 +208,7 @@ function ActiveFolderHydrator() {
     return () => {
       cancelled = true
     }
-  }, [folderId, localId, hydrationAttempt, setActiveFolder, switchCodexWorkspace])
+  }, [folderId, localId, hydrationAttempt, setActiveFolder, switchCodexWorkspace, hydrateFiles])
 
   React.useEffect(() => {
     if (!toolId) return

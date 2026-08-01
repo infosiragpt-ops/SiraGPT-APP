@@ -2096,6 +2096,10 @@ model Project {
   connectorAssignments ProjectConnectorAssignment[]
   company              Company?
 
+  // /code editor virtual FS snapshot (not knowledge File attachments).
+  // Owner-only via projects.userId; never exposed on public share routes.
+  codeWorkspace Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
