@@ -677,7 +677,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-message-scroll-content {
   padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
-    calc(var(--chat-composer-height, 112px) + 1rem);
+    1rem;
   /* Conversación anclada a la línea superior del composer: cuando el
      contenido es corto, baja hasta tocar la barra en lugar de flotar arriba
      con un hueco vacío. Con contenido largo el scroll se comporta igual. */
@@ -2803,7 +2803,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
   .chat-message-scroll-content {
     padding-top: calc(var(--chat-header-height, 56px) + 0.875rem);
-    padding-bottom: calc(var(--chat-composer-height, 112px) + 0.875rem);
+    padding-bottom: 0.875rem;
   }
 
   .chat-composer-dock {
@@ -2982,6 +2982,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
       left: 0;
       right: 0;
       z-index: 40;
+    }
+
+    /* The normal sticky dock participates in layout, so reserving its full
+       height here creates a blank band above the composer. Only the iOS
+       fixed-keyboard state needs extra room to keep the last message clear. */
+    .chat-viewport[data-chat-keyboard="open"] .chat-message-scroll-content,
+    .chat-viewport[data-chat-input-focused="true"] .chat-message-scroll-content {
+      padding-bottom: calc(
+        var(--chat-composer-height, 112px) +
+          var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)) +
+          0.875rem
+      );
     }
 
     /* Reduce bottom clearance as soon as typing starts. The focused state

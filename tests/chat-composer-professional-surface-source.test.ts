@@ -93,6 +93,16 @@ describe("professional chat composer surface source contract", () => {
   it("preserves the approved width and height across chat states", () => {
     assert.match(
       globals,
+      /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+1rem;/,
+      "the normal scroll area should end at the composer's top edge"
+    )
+    assert.match(
+      globals,
+      /\.chat-viewport\[data-chat-keyboard="open"\] \.chat-message-scroll-content,[\s\S]{0,180}padding-bottom: calc\([\s\S]{0,180}var\(--chat-composer-height, 112px\)/,
+      "only the iOS fixed-keyboard state should reserve composer height"
+    )
+    assert.match(
+      globals,
       /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), 51\.75rem\);[\s\S]{0,80}margin-inline: auto;/,
       "the empty composer should retain its approved 828px content width"
     )
