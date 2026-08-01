@@ -2195,6 +2195,26 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(cellOps[0].value, 'Validado por comité');
   });
 
+  it('plans EVERY quoted replace pair with the user original casing', () => {
+    const {
+      extractAllQuotedReplacementPairs,
+      planSourcePreservingOperations,
+    } = sourcePreservingInternals;
+    const prompt = 'reemplaza "Introducción original" por "Introducción mejorada" y cambia "BORRADOR" por "APROBADO"';
+    const pairs = extractAllQuotedReplacementPairs(prompt);
+    assert.equal(pairs.length, 2);
+    assert.equal(pairs[1].needle, 'BORRADOR');
+    assert.equal(pairs[1].replacement, 'APROBADO');
+
+    const ops = planSourcePreservingOperations({ requestText: prompt, format: 'docx' });
+    const replaces = ops.filter((op) => op.kind === 'replace_text');
+    assert.equal(replaces.length, 2);
+    assert.equal(replaces[1].replacement, 'APROBADO', 'must not collapse to lowercase via normalizeText');
+
+    const generic = planGenericOfficeOperations({ requestText: prompt, format: 'docx' });
+    assert.equal(generic.filter((op) => op.kind === 'replace_text')[1].replacement, 'APROBADO');
+  });
+
   it('plans natural Excel cell changes as cell writes, not text replacements', () => {
     const ops = planGenericOfficeOperations({
       requestText: 'Edita este Excel: cambia la celda B2 a 999 y devuelveme el Excel completo.',
