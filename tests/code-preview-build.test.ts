@@ -31,7 +31,7 @@ describe("buildPreviewDocument", () => {
   })
 
   it("binds preview bridge messages to the caller-provided nonce", () => {
-    const r = buildPreviewDocument(files({ "index.html": "<html><head></head><body>hola</body></html>" }), null, { nonce: "nonce-for-test-1234" })
+    const r = buildPreviewDocument(files({ "index.html": "<html><head></head><body>hola</body></html>" }), null, "nonce-for-test-1234")
     assert.match(r.html, /nonce-for-test-1234/)
     assert.match(r.html, /payload\.nonce=window\.__sgptPreviewNonce/)
   })

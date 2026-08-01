@@ -641,8 +641,7 @@ export function projectNeedsDevServer(files: CodeFiles): boolean {
 }
 
 /** Pick the best entry + kind given the active file and the whole project. */
-export function buildPreviewDocument(files: CodeFiles, activePath: string | null, options: { nonce?: string } = {}): PreviewResult {
-  const nonce = String(options.nonce || "")
+export function buildPreviewDocument(files: CodeFiles, activePath: string | null, nonce = ""): PreviewResult {
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 
