@@ -5552,15 +5552,18 @@ footer {
 /* ─── Composer — premium liquid surface ──────────────────────────── */
 .composer-surface {
   isolation: isolate;
-  border: 0.5px solid hsl(220 13% 86% / 0.86);
+  /* Hardened hairline: still 0.5px, higher contrast so the top edge reads as
+     a real professional bar boundary instead of a soft floating pill. */
+  border: 0.5px solid hsl(220 14% 78% / 0.94);
   border-radius: 1.5rem;
   /* Fallback only when liquid class is absent. Liquid glass overrides this
      with a translucent fill — a solid background-color here used to win on
      equal specificity and kill the glass effect on production. */
   background-color: hsl(0 0% 100%);
   box-shadow:
-    0 1px 2px hsl(220 28% 14% / 0.045),
-    0 14px 34px -24px hsl(220 30% 18% / 0.28);
+    inset 0 0.5px 0 hsl(0 0% 100% / 0.95),
+    0 1px 2px hsl(220 28% 14% / 0.055),
+    0 18px 40px -26px hsl(220 30% 18% / 0.34);
   transition:
     border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -5571,15 +5574,15 @@ footer {
 .composer-liquid-surface,
 .composer-surface.composer-liquid-surface {
   isolation: isolate;
-  /* Liquid glass: superficie semitransparente con blur saturado — la barra
-     flota sobre el contenido con look profesional (estilo Linear/ChatGPT). */
+  /* Premium liquid glass: clearer translucency + deeper blur/saturation so
+     the bar floats over conversation content with a professional finish. */
   background-color: transparent;
-  background: hsl(0 0% 100% / 0.78);
-  backdrop-filter: blur(20px) saturate(1.7);
-  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  background:
+    linear-gradient(180deg, hsl(0 0% 100% / 0.88) 0%, hsl(0 0% 100% / 0.72) 100%);
+  backdrop-filter: blur(28px) saturate(1.85);
+  -webkit-backdrop-filter: blur(28px) saturate(1.85);
 }
-/* Glare superior sutil: el brillo que vende el efecto vidrio. Se mantiene
-   ligero (una sola capa, sin mix-blend-mode) para no pagar coste de paint. */
+/* Single restrained top-glare layer: sells the glass without a second paint. */
 .composer-liquid-surface::before {
   content: "";
   position: absolute;
@@ -5587,8 +5590,9 @@ footer {
   border-radius: inherit;
   z-index: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, hsl(0 0% 100% / 0.55), transparent 46%);
-  opacity: 0.75;
+  background:
+    linear-gradient(180deg, hsl(0 0% 100% / 0.72) 0%, hsl(0 0% 100% / 0.18) 34%, transparent 58%);
+  opacity: 0.9;
 }
 .composer-liquid-surface::after {
   content: none;
@@ -5604,14 +5608,15 @@ footer {
 }
 
 .composer-surface:hover {
-  border-color: hsl(220 13% 81% / 0.92);
+  border-color: hsl(220 14% 72% / 0.98);
 }
 
 .composer-surface:focus-within {
   border-color: hsl(var(--accent-violet));
   box-shadow:
-    0 1px 2px hsl(220 28% 14% / 0.045),
-    0 16px 38px -24px hsl(220 30% 18% / 0.32);
+    inset 0 0.5px 0 hsl(0 0% 100% / 0.95),
+    0 1px 2px hsl(220 28% 14% / 0.055),
+    0 18px 42px -26px hsl(220 30% 18% / 0.36);
 }
 
 /* Keyboard-only focus indicator. The textarea carries inline `outline: none`
@@ -5636,18 +5641,18 @@ footer {
   }
 }
 
-/* Two-row composer (ChatGPT-style): the text field takes the full top band,
-   and the controls — + button, model picker, mic, send — sit on their own
-   row underneath. */
+/* Two-row composer (ChatGPT-style): text pinned to the upper hairline of the
+   bar; controls (+, model, mic, send) sit on their own row underneath. */
 .composer-input-row {
   display: grid !important;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: 2.2rem auto;
-  align-items: end;
+  align-items: start;
   column-gap: 0.625rem;
-  row-gap: 0.25rem;
-  min-height: 5.5rem;
-  padding: 0.625rem 0.75rem 0.5rem !important;
+  row-gap: 0.15rem;
+  min-height: 5.25rem;
+  /* Near-zero top padding keeps placeholder/input flush with the bar edge. */
+  padding: 0.28rem 0.75rem 0.4rem !important;
 }
 
 /* Attachments and connector controls remain fully available without changing
@@ -5690,6 +5695,7 @@ footer {
   grid-row: 1;
   width: 100%;
   min-width: 0;
+  align-self: start;
 }
 
 .composer-input-row .composer-toolbar-actions {
@@ -5800,13 +5806,18 @@ footer {
 .composer-textarea-shell .composer-textarea {
   position: relative;
   z-index: 2;
+  /* Kill base Textarea `flex` so the first line sits on the top of the shell
+     instead of optically floating mid-band with a white gap above. */
+  display: block !important;
   height: 2.2rem !important;
   min-height: 2.2rem !important;
   max-height: 2.2rem !important;
   overflow-y: auto !important;
-  padding: 0.18rem 0.2rem 0.1rem !important;
+  /* Pin text/placeholder to the upper hairline of the chat bar. */
+  padding: 0.02rem 0.15rem 0.05rem !important;
   font-size: 1rem;
-  line-height: 1.5;
+  line-height: 1.45;
+  vertical-align: top;
 }
 
 .composer-textarea-highlights {
@@ -5818,12 +5829,13 @@ footer {
   height: 2.2rem;
   max-height: 2.2rem;
   overflow: hidden;
-  padding: 0.375rem 0.25rem;
+  /* Must match .composer-textarea padding so caret/highlights stay locked. */
+  padding: 0.02rem 0.15rem 0.05rem;
   color: hsl(var(--foreground));
   font-size: 1rem;
   font-weight: 400;
   letter-spacing: 0;
-  line-height: 1.5;
+  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -5950,13 +5962,15 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-liquid-surface,
 .dark .composer-surface.composer-liquid-surface {
   background-color: transparent;
-  background: hsl(220 16% 9% / 0.66);
-  backdrop-filter: blur(20px) saturate(1.5);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  background:
+    linear-gradient(180deg, hsl(220 18% 12% / 0.78) 0%, hsl(220 16% 8% / 0.62) 100%);
+  backdrop-filter: blur(28px) saturate(1.65);
+  -webkit-backdrop-filter: blur(28px) saturate(1.65);
 }
 .dark .composer-liquid-surface::before {
-  background: linear-gradient(180deg, hsl(0 0% 100% / 0.09), transparent 42%);
-  opacity: 0.9;
+  background:
+    linear-gradient(180deg, hsl(0 0% 100% / 0.12) 0%, hsl(0 0% 100% / 0.03) 36%, transparent 58%);
+  opacity: 0.95;
 }
 .dark .composer-plus-liquid-button {
   border: none !important;
@@ -5997,8 +6011,8 @@ button.anti-bribery-context-chip:not(:disabled):active {
   }
   .composer-input-row {
     column-gap: 0.5rem;
-    min-height: 5.5rem;
-    padding: 0.625rem 0.625rem 0.5rem !important;
+    min-height: 5.25rem;
+    padding: 0.28rem 0.625rem 0.4rem !important;
   }
   .composer-input-row .composer-toolbar-actions {
     gap: 0.25rem !important;
@@ -6011,8 +6025,9 @@ button.anti-bribery-context-chip:not(:disabled):active {
     height: 2.35rem !important;
     min-height: 2.35rem !important;
     max-height: 2.35rem !important;
+    padding: 0.02rem 0.15rem 0.05rem !important;
     font-size: 1rem;
-    line-height: 1.5;
+    line-height: 1.45;
   }
   .composer-textarea-shell,
   .composer-textarea-highlights {
@@ -6020,8 +6035,9 @@ button.anti-bribery-context-chip:not(:disabled):active {
     max-height: 2.35rem;
   }
   .composer-textarea-highlights {
+    padding: 0.02rem 0.15rem 0.05rem;
     font-size: 1rem;
-    line-height: 1.5;
+    line-height: 1.45;
   }
   .composer-context-field[data-context-chip="true"] :is(input, textarea) {
     padding-left: 6.85rem !important;
@@ -6041,10 +6057,11 @@ button.anti-bribery-context-chip:not(:disabled):active {
 /* ─── Composer — premium dark surface ────────────────────────────── */
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
-  border: 0.5px solid hsl(var(--composer-border) / 0.88);
+  border: 0.5px solid hsl(var(--composer-border) / 0.96);
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.32),
-    0 16px 36px -24px rgba(0, 0, 0, 0.86);
+    inset 0 0.5px 0 hsl(0 0% 100% / 0.07),
+    0 1px 2px rgba(0, 0, 0, 0.36),
+    0 18px 40px -26px rgba(0, 0, 0, 0.9);
   transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -6054,13 +6071,15 @@ button.anti-bribery-context-chip:not(:disabled):active {
    translucent fill is not overwritten by equal-specificity rules above. */
 .dark .composer-surface.composer-liquid-surface {
   background-color: transparent;
-  background: hsl(220 16% 9% / 0.66);
-  backdrop-filter: blur(20px) saturate(1.5);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  background:
+    linear-gradient(180deg, hsl(220 18% 12% / 0.78) 0%, hsl(220 16% 8% / 0.62) 100%);
+  backdrop-filter: blur(28px) saturate(1.65);
+  -webkit-backdrop-filter: blur(28px) saturate(1.65);
 }
 .dark .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.8);
+  border-color: hsl(var(--accent-violet) / 0.88);
   box-shadow:
+    inset 0 0.5px 0 hsl(0 0% 100% / 0.07),
     0 18px 42px -24px rgba(0, 0, 0, 0.92);
 }
 

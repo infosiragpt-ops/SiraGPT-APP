@@ -12,12 +12,12 @@ describe("professional chat composer surface source contract", () => {
   it("uses one hairline focus treatment instead of stacked rings", () => {
     assert.match(
       globals,
-      /\.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(220 13% 86% \/ 0\.86\)/,
+      /\.composer-surface\s*\{[\s\S]{0,220}border: 0\.5px solid hsl\(220 14% 78% \/ 0\.94\)/,
       "the light composer should use a half-pixel hairline border"
     )
     assert.match(
       globals,
-      /\.dark \.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(var\(--composer-border\) \/ 0\.88\)/,
+      /\.dark \.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(var\(--composer-border\) \/ 0\.96\)/,
       "the dark composer should use the same half-pixel hairline border"
     )
     assert.doesNotMatch(
@@ -49,7 +49,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-surface\.composer-liquid-surface\s*\{[\s\S]{0,280}background: hsl\(0 0% 100% \/ 0\.78\);[\s\S]{0,180}backdrop-filter: blur\(20px\) saturate\(1\.7\);/,
+      /\.composer-surface\.composer-liquid-surface\s*\{[\s\S]{0,360}linear-gradient\(180deg, hsl\(0 0% 100% \/ 0\.88\)[\s\S]{0,220}backdrop-filter: blur\(28px\) saturate\(1\.85\);/,
       "the light composer should use a translucent liquid-glass surface that beats the solid fallback"
     )
     assert.match(
@@ -69,7 +69,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-liquid-surface::before\s*\{\s*content: \"\";[\s\S]{0,260}background: linear-gradient\(180deg,/,
+      /\.composer-liquid-surface::before\s*\{\s*content: \"\";[\s\S]{0,260}background:[\s\S]{0,80}linear-gradient\(180deg,/,
       "the composer should keep one restrained top-glare layer"
     )
     assert.match(
@@ -95,13 +95,23 @@ describe("professional chat composer surface source contract", () => {
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
-      /\.composer-input-row\s*\{[\s\S]{0,420}min-height: 5\.5rem;[\s\S]{0,100}padding: 0\.625rem 0\.75rem 0\.5rem !important;/,
-      "the idle composer should not reserve oversized vertical space"
+      /\.composer-input-row\s*\{[\s\S]{0,420}align-items: start;[\s\S]{0,120}min-height: 5\.25rem;[\s\S]{0,100}padding: 0\.28rem 0\.75rem 0\.4rem !important;/,
+      "the idle composer should pin text to the top hairline without oversized vertical space"
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 5\.5rem;/,
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 5\.25rem;/,
       "phones should keep the same compact hierarchy without oversized rounding"
+    )
+    assert.match(
+      globals,
+      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}display: block !important;[\s\S]{0,220}padding: 0\.02rem 0\.15rem 0\.05rem !important;/,
+      "placeholder/input must sit flush against the upper bar hairline"
+    )
+    assert.equal(
+      (chatInterface.match(/"composer-textarea textarea-scrollbar[^"]*",\s*"p-0"/g) || []).length,
+      2,
+      "both textareas should drop utility padding so CSS can pin the first line"
     )
   })
 
@@ -133,7 +143,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,220}height: 2\.2rem !important;[\s\S]{0,100}max-height: 2\.2rem !important;[\s\S]{0,100}overflow-y: auto !important;/,
+      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}height: 2\.2rem !important;[\s\S]{0,100}max-height: 2\.2rem !important;[\s\S]{0,100}overflow-y: auto !important;/,
       "the textarea height must remain fixed in every text state"
     )
     assert.doesNotMatch(
