@@ -239,6 +239,7 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isSourcePreservingEditRequest('borra el jurado evaluador', docx), true);
   assert.equal(isSourcePreservingEditRequest('agrega una conclusión', docx), true);
   assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', docx), true);
+  assert.equal(isSourcePreservingEditRequest('edita estos documentos y devuélvemelos en el mismo formato', docx), true);
   assert.equal(isSourcePreservingEditRequest('¿qué dice el documento?', docx), false);
   assert.equal(isSourcePreservingEditRequest('resume esto', docx), false);
 
@@ -359,6 +360,35 @@ test('in-process fast path runs before the sandbox 20MB blob cap', async () => {
   assert.equal(out.edited[0].downloadUrl, '/api/agent/artifact/art-large-docx');
   assert.ok(events.some((event) => event.type === 'file_artifact' && event.artifact.id === 'art-large-docx'));
   fs.rmSync(inputPath, { force: true });
+});
+
+test('source-preserving target failures do not fall through to document regeneration', async () => {
+  let sandboxCalled = false;
+  const targetError = new Error('No se encontró el texto exacto "ANEXO 01" en el documento original.');
+  targetError.code = 'REPLACE_TEXT_NOT_FOUND';
+
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: '/no/read/needed.docx', originalName: 'tesis.docx', filename: 'tesis.docx' }]),
+    sourcePreservingEdit: {
+      isSourcePreservingEditRequest: () => true,
+      tryGenerateSourcePreservingDocumentEdit: async () => { throw targetError; },
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return { outputs: [{ name: 'regenerado.docx', buffer: Buffer.from('nope'), valid: true }] };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'reemplaza ANEXO 01 por ANEXO I y devuélveme el mismo Word editado' },
+    baseCtx(),
+  );
+
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'source_preserving_edit_failed');
+  assert.equal(out.code, 'REPLACE_TEXT_NOT_FOUND');
+  assert.equal(sandboxCalled, false, 'target-not-located failures must not regenerate a different document');
+  assert.match(out.hint, /No generé un documento nuevo/);
 });
 
 test('in-process fast path falls through to the sandbox when the editor returns null or throws', async () => {
