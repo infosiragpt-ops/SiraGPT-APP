@@ -36,6 +36,28 @@ const MIME_BY_EXT = {
   md: 'text/markdown',
 };
 
+const SOURCE_PRESERVING_NO_FALLBACK_CODES = new Set([
+  'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+  'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+  'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+  'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+  'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+]);
+
+function isSourcePreservingNoFallbackError(err) {
+  return Boolean(err && SOURCE_PRESERVING_NO_FALLBACK_CODES.has(err.code));
+}
+
+function sourcePreservingNoFallbackResult(err) {
+  return {
+    ok: false,
+    error: 'source_preserving_edit_failed',
+    code: err?.code || null,
+    message: String(err?.message || 'No se pudo ubicar con precisión el fragmento, sección o tabla solicitada.').slice(0, 800),
+    hint: 'No generé un documento nuevo. Indica el texto exacto, página, encabezado, tabla o sección donde debo aplicar el cambio para conservar el archivo original.',
+  };
+}
+
 const inputSchema = z.object({
   instruction: z.string().min(4).max(8000)
     .describe('Complete, self-contained editing instruction in the user\'s language (include EVERY requested change — the document agent sees only this text plus the files)'),
@@ -195,8 +217,16 @@ function buildDocumentEditTool(deps = {}) {
       // sandbox is installed. It returns null when it can't handle the request
       // (e.g. needs a different source format) — in that case we fall straight
       // through to the sandbox doc-agent below, so nothing is ever lost.
+      let requestedSourcePreservingEdit = false;
       try {
         const sp = deps.sourcePreservingEdit || require('../../source-preserving-document-edit');
+        try {
+          if (typeof sp.isSourcePreservingEditRequest === 'function') {
+            requestedSourcePreservingEdit = Boolean(sp.isSourcePreservingEditRequest(args.instruction, rows));
+          }
+        } catch (_) {
+          requestedSourcePreservingEdit = false;
+        }
         const inproc = await sp.tryGenerateSourcePreservingDocumentEdit({
           prisma,
           userId: ctx.userId || null,
@@ -254,10 +284,17 @@ function buildDocumentEditTool(deps = {}) {
         }
         // inproc === null → not a source-preserving edit / unsupported source.
         // Fall through to the sandbox doc-agent below.
-      } catch (_) {
-        // The in-process editor throws when it needs a different/compatible
+      } catch (err) {
+        if (isSourcePreservingNoFallbackError(err)) {
+          return sourcePreservingNoFallbackResult(err);
+        }
+        if (requestedSourcePreservingEdit && err?.validationOnlyFailure) {
+          return sourcePreservingNoFallbackResult(err);
+        }
+        // The in-process editor can throw when it needs a different/compatible
         // source (e.g. a section edit on a non-DOCX). The sandbox doc-agent is
-        // more capable for those cases — fall through to it rather than failing.
+        // more capable for those cases. Known target-not-located failures above
+        // fail closed so we never replace a same-document edit with a new file.
       }
 
       const files = [];

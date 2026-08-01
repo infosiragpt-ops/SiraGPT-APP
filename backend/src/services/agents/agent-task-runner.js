@@ -1572,6 +1572,27 @@ function shouldRunSourcePreservingEdit({
     || isSourcePreservingEditRequest(request, fileIds);
 }
 
+const SOURCE_PRESERVING_TARGET_NOT_LOCATED_CODES = new Set([
+  'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+  'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+  'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+  'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+  'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+]);
+
+function isSourcePreservingTargetNotLocatedError(err) {
+  return Boolean(err && SOURCE_PRESERVING_TARGET_NOT_LOCATED_CODES.has(err.code));
+}
+
+function buildSourcePreservingFailureMarkdown(err) {
+  const detail = err?.message || 'no se pudo ubicar con precisión el fragmento, sección o tabla solicitada';
+  return [
+    `No pude editar el archivo original sin cambiarlo: ${detail}.`,
+    'No generé un documento nuevo para evitar entregarte contenido que no conserve tu archivo.',
+    'Indica el texto exacto, página, encabezado, tabla o sección donde debo aplicar el cambio y lo reintento sobre el mismo documento.',
+  ].join(' ');
+}
+
 function runAgentTaskJob(payload = {}, job = null) {
   const taskId = payload && payload.taskId;
   if (!taskId) return _runAgentTaskJobImpl(payload, job);
@@ -2353,21 +2374,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
       } catch (err) {
-        // "Target-not-located" failures (the literal editor couldn't find the
-        // exact string/section to delete/replace) are NOT terminal: the request
-        // is well-formed, the deterministic literal matcher just can't resolve
-        // natural language ("borra el jurado evaluador"). Fall through to the
-        // generative path (grounded in the file's text) instead of dead-ending
-        // with "No pude editar…". The semantic document_edit tool on the inline
-        // /api/ai/generate path is the primary handler; this keeps the queued
-        // surface from giving the user an error on a perfectly valid edit.
-        const TARGET_NOT_LOCATED = new Set([
-          'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
-          'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
-          'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
-          'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
-          'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
-        ]);
         if (err && err.__fallthroughFreshDocument) {
           // Sin archivo base que conservar: cerramos el paso de edición y
           // dejamos que el flujo genere un documento nuevo más abajo en lugar
@@ -2375,16 +2381,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           wantsSourcePreservingEdit = false;
           emit({ type: 'step_done', id: currentStepId, ok: true });
           currentStepId = null;
-        } else if (err && TARGET_NOT_LOCATED.has(err.code)) {
-          wantsSourcePreservingEdit = false;
-          emit({ type: 'step_done', id: currentStepId, ok: true });
+        } else if (isSourcePreservingTargetNotLocatedError(err)) {
+          emit({ type: 'step_done', id: currentStepId, ok: false });
           currentStepId = null;
           emit({
             type: 'quality_gate',
             gate: 'source_preserving_document_edit',
-            label: 'Reintentando la edición de forma semántica',
-            passed: true,
-            summary: 'El editor literal no ubicó el fragmento exacto; el agente reintenta la edición sobre el documento.',
+            label: 'Edición preservadora necesita una referencia exacta',
+            passed: false,
+            summary: err?.message || 'No se ubicó el fragmento exacto dentro del archivo original.',
+          });
+          return finishDeterministicTask({
+            finalMarkdown: buildSourcePreservingFailureMarkdown(err),
+            stoppedReason: 'source_preserving_document_target_not_found',
+            steps: stepIdCounter,
+            artifactsList: [],
+            metadata: {
+              sourcePreservingEdit: true,
+              sourcePreservingError: err?.message || 'target_not_found',
+              sourcePreservingErrorCode: err?.code || null,
+              sourceFileIds: files,
+            },
           });
         } else {
           emit({ type: 'step_done', id: currentStepId, ok: false });
@@ -2397,13 +2414,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             summary: err?.message || 'No se pudo editar el archivo original.',
           });
           return finishDeterministicTask({
-            finalMarkdown: `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`,
+            finalMarkdown: buildSourcePreservingFailureMarkdown(err),
             stoppedReason: 'source_preserving_document_edit_failed',
             steps: stepIdCounter,
             artifactsList: [],
             metadata: {
               sourcePreservingEdit: true,
               sourcePreservingError: err?.message || 'unknown_error',
+              sourcePreservingErrorCode: err?.code || null,
               sourceFileIds: files,
             },
           });
@@ -3277,25 +3295,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             wantsSourcePreservingEdit = false;
           }
         } catch (err) {
-          // A "target-not-located" literal failure is not terminal — fall
-          // through to the generative path (grounded in the file's text)
-          // instead of returning an apology, mirroring the BEFORE-loop catch.
-          const TARGET_NOT_LOCATED_POST = new Set([
-            'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
-            'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
-            'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
-            'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
-            'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
-          ]);
-          if (err && TARGET_NOT_LOCATED_POST.has(err.code)) {
+          if (isSourcePreservingTargetNotLocatedError(err)) {
             emit({
               type: 'quality_gate',
               gate: 'source_preserving_document_edit',
-              label: 'Reintentando la edición de forma semántica',
-              passed: true,
-              summary: 'El editor literal no ubicó el fragmento exacto; se genera el documento editado sobre el contenido del archivo.',
+              label: 'Edición preservadora necesita una referencia exacta',
+              passed: false,
+              summary: err?.message || 'No se ubicó el fragmento exacto dentro del archivo original.',
             });
-            wantsSourcePreservingEdit = false;
+            finalMarkdown = buildSourcePreservingFailureMarkdown(err);
           } else {
             emit({
               type: 'quality_gate',
@@ -3304,7 +3312,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
               passed: false,
               summary: err?.message || 'No se pudo editar el archivo original.',
             });
-            finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+            finalMarkdown = buildSourcePreservingFailureMarkdown(err);
           }
         }
       }
