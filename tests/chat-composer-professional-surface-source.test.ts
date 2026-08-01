@@ -49,8 +49,18 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-surface\.composer-liquid-surface::before\s*\{\s*content: none;\s*display: none !important;/,
-      "the glare removal should stay scoped to chat composers"
+      /\.composer-liquid-surface\s*\{[\s\S]{0,280}background: hsl\(0 0% 100% \/ 0\.78\);[\s\S]{0,180}backdrop-filter: blur\(20px\) saturate\(1\.7\);/,
+      "the light composer should use a translucent liquid-glass surface"
+    )
+    assert.match(
+      globals,
+      /\.composer-liquid-surface::before\s*\{\s*content: \"\";[\s\S]{0,260}background: linear-gradient\(180deg,/,
+      "the composer should keep one restrained top-glare layer"
+    )
+    assert.match(
+      globals,
+      /\.composer-surface\.composer-liquid-surface::after\s*\{\s*content: none;\s*display: none !important;/,
+      "the composer should avoid a second decorative pseudo-layer"
     )
   })
 
@@ -81,6 +91,16 @@ describe("professional chat composer surface source contract", () => {
   })
 
   it("preserves the approved width and height across chat states", () => {
+    assert.match(
+      globals,
+      /\.chat-message-scroll-content\s*\{[\s\S]{0,180}padding: calc\(var\(--chat-header-height, 64px\) \+ 1rem\) var\(--chat-mobile-gutter\)\s+1rem;/,
+      "the normal scroll area should end at the composer's top edge"
+    )
+    assert.match(
+      globals,
+      /\.chat-viewport\[data-chat-keyboard="open"\] \.chat-message-scroll-content,[\s\S]{0,180}padding-bottom: calc\([\s\S]{0,180}var\(--chat-composer-height, 112px\)/,
+      "only the iOS fixed-keyboard state should reserve composer height"
+    )
     assert.match(
       globals,
       /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), 51\.75rem\);[\s\S]{0,80}margin-inline: auto;/,

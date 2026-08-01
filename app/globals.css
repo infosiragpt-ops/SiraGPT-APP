@@ -677,7 +677,14 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-message-scroll-content {
   padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
-    calc(var(--chat-composer-height, 112px) + 1rem);
+    1rem;
+  /* Conversación anclada a la línea superior del composer: cuando el
+     contenido es corto, baja hasta tocar la barra en lugar de flotar arriba
+     con un hueco vacío. Con contenido largo el scroll se comporta igual. */
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .chat-composer-dock {
@@ -2796,7 +2803,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
   .chat-message-scroll-content {
     padding-top: calc(var(--chat-header-height, 56px) + 0.875rem);
-    padding-bottom: calc(var(--chat-composer-height, 112px) + 0.875rem);
+    padding-bottom: 0.875rem;
   }
 
   .chat-composer-dock {
@@ -2975,6 +2982,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
       left: 0;
       right: 0;
       z-index: 40;
+    }
+
+    /* The normal sticky dock participates in layout, so reserving its full
+       height here creates a blank band above the composer. Only the iOS
+       fixed-keyboard state needs extra room to keep the last message clear. */
+    .chat-viewport[data-chat-keyboard="open"] .chat-message-scroll-content,
+    .chat-viewport[data-chat-input-focused="true"] .chat-message-scroll-content {
+      padding-bottom: calc(
+        var(--chat-composer-height, 112px) +
+          var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)) +
+          0.875rem
+      );
     }
 
     /* Reduce bottom clearance as soon as typing starts. The focused state
@@ -5500,19 +5519,29 @@ footer {
 /* ─── Composer — premium liquid surface ──────────────────────────── */
 .composer-liquid-surface {
   isolation: isolate;
-  background: hsl(0 0% 100%);
+  /* Liquid glass: superficie semitransparente con blur saturado — la barra
+     flota sobre el contenido con look profesional (estilo Linear/ChatGPT). */
+  background: hsl(0 0% 100% / 0.78);
+  backdrop-filter: blur(20px) saturate(1.7);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
 }
-/* The decorative glare/bloom pseudo-elements this class used to paint were
-   retired: the `content: none` rule below kills both. The visual declarations
-   that used to follow (gradients, mix-blend-mode, a 22px blur) never rendered
-   again but the browser still had to parse and match them on every composer
-   paint, so they were removed. Only the live rules remain. */
-.composer-liquid-surface::before,
+/* Glare superior sutil: el brillo que vende el efecto vidrio. Se mantiene
+   ligero (una sola capa, sin mix-blend-mode) para no pagar coste de paint. */
+.composer-liquid-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, hsl(0 0% 100% / 0.55), transparent 46%);
+  opacity: 0.75;
+}
 .composer-liquid-surface::after {
   content: none;
   display: none !important;
 }
-.composer-surface.composer-liquid-surface::before {
+.composer-surface.composer-liquid-surface::after {
   content: none;
   display: none !important;
 }
@@ -5880,16 +5909,13 @@ button.anti-bribery-context-chip:not(:disabled):active {
   text-overflow: ellipsis;
 }
 .dark .composer-liquid-surface {
-  background: hsl(220 16% 9%);
+  background: hsl(220 16% 9% / 0.66);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
 }
 .dark .composer-liquid-surface::before {
-  background:
-    linear-gradient(120deg, transparent 16%, hsl(0 0% 100% / 0.055) 44%, transparent 68%),
-    radial-gradient(ellipse 58% 36% at 18% 0%, hsl(0 0% 100% / 0.09), transparent 70%);
-  opacity: 0.95;
-}
-.dark .composer-liquid-surface::after {
-  background: radial-gradient(circle, hsl(var(--accent-violet) / 0.12), transparent 70%);
+  background: linear-gradient(180deg, hsl(0 0% 100% / 0.09), transparent 42%);
+  opacity: 0.9;
 }
 .dark .composer-plus-liquid-button {
   border: none !important;
