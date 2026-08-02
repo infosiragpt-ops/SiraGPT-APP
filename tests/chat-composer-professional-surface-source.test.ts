@@ -9,25 +9,51 @@ const chatInterfacePath = path.join(process.cwd(), "components", "chat-interface
 const chatInterface = fs.readFileSync(chatInterfacePath, "utf8")
 
 describe("professional chat composer surface source contract", () => {
-  it("uses one hairline focus treatment instead of stacked rings", () => {
+  it("uses one neutral solid surface without stacked rings or glass", () => {
     assert.match(
       globals,
-      /\.composer-surface\s*\{[\s\S]{0,220}border: 0\.5px solid hsl\(220 14% 78% \/ 0\.94\)/,
-      "the light composer should use a half-pixel hairline border"
+      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(220 10% 86% \/ 0\.96\)/,
+      "the light composer should use a crisp neutral one-pixel outline"
     )
     assert.match(
       globals,
-      /\.dark \.composer-surface\s*\{[\s\S]{0,160}border: 0\.5px solid hsl\(var\(--composer-border\) \/ 0\.96\)/,
-      "the dark composer should use the same half-pixel hairline border"
+      /\.dark \.composer-surface\s*\{[\s\S]{0,160}border: 1px solid hsl\(var\(--composer-border\) \/ 0\.96\)/,
+      "the dark composer should use the same one-pixel outline"
+    )
+    const surfaceRule = globals.match(/\.composer-surface\s*\{([^}]*)\}/)?.[1]
+    assert.ok(surfaceRule, "the composer surface rule should exist")
+    assert.match(surfaceRule, /background-color: hsl\(0 0% 100%\);/)
+    assert.match(surfaceRule, /0 8px 24px -20px hsl\(220 24% 14% \/ 0\.24\)/)
+    assert.doesNotMatch(
+      surfaceRule,
+      /linear-gradient|backdrop-filter|inset/,
+      "the chat surface should stay solid and use only restrained elevation"
+    )
+    const focusRule = globals.match(/\.composer-surface:focus-within\s*\{([^}]*)\}/)?.[1]
+    assert.ok(focusRule, "the composer focus rule should exist")
+    assert.doesNotMatch(
+      focusRule,
+      /(?:^|\n)\s*0 0 0 [\d.]+px/,
+      "focus should strengthen the contour instead of adding a thick outer halo"
+    )
+    assert.match(
+      globals,
+      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(220 9% 72% \/ 0\.22\)/,
+      "focused text should strengthen the complete neutral contour"
+    )
+    assert.match(
+      globals,
+      /\.composer-textarea:focus-visible\s*\{\s*outline: none !important;/,
+      "textarea focus must not leave clipped accent fragments at the rounded corners"
     )
     assert.doesNotMatch(
       globals,
-      /\.composer-surface:focus-within\s*\{[\s\S]{0,320}0 0 0 [\d.]+px/,
-      "focus should recolor the hairline instead of adding a thick outer halo"
+      /\.composer-surface:focus-within\s*\{[^}]*accent-violet/,
+      "focus should remain neutral instead of turning into a branded glow"
     )
     const composerClassBlocks = [
       ...chatInterface.matchAll(
-        /className=\{cn\(\s*"composer-surface composer-liquid-surface composer-focus-glow group\/composer relative rounded-3xl",([\s\S]*?)\n\s*\)\}/g
+        /className=\{cn\(\s*"composer-surface group\/composer relative",([\s\S]*?)\n\s*\)\}/g
       ),
     ]
     assert.equal(
@@ -38,19 +64,19 @@ describe("professional chat composer surface source contract", () => {
     for (const [, classBlock] of composerClassBlocks) {
       assert.doesNotMatch(
         classBlock,
-        /(?:^|:|\s)ring(?:-\d|-\[)/,
-        "composer class utilities should not stack another ring over the hairline border"
+        /(?:^|:|\s)(?:ring|shadow)(?:-\d|-\[)/,
+        "composer utilities should not stack a ring or second shadow"
       )
     }
+    assert.doesNotMatch(
+      chatInterface,
+      /composer-surface composer-liquid-surface/,
+      "the chat composer should not opt back into the decorative liquid treatment"
+    )
     assert.match(
       globals,
       /\.composer-focus-glow::before\s*\{\s*content: none;\s*display: none;/,
       "the old animated conic focus ring should stay disabled"
-    )
-    assert.match(
-      globals,
-      /\.composer-surface\.composer-liquid-surface\s*\{[\s\S]{0,360}linear-gradient\(180deg, hsl\(0 0% 100% \/ 0\.88\)[\s\S]{0,220}backdrop-filter: blur\(28px\) saturate\(1\.85\);/,
-      "the light composer should use a translucent liquid-glass surface that beats the solid fallback"
     )
     assert.match(
       globals,
@@ -74,13 +100,18 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-liquid-surface::before\s*\{\s*content: \"\";[\s\S]{0,260}background:[\s\S]{0,80}linear-gradient\(180deg,/,
-      "the composer should keep one restrained top-glare layer"
+      /\.composer-input-row \.composer-model-inline \.chat-model-trigger\s*\{[\s\S]{0,220}background-color: transparent;[\s\S]{0,80}box-shadow: none;/,
+      "the model selector should read as an inline control, not a nested capsule"
     )
     assert.match(
       globals,
-      /\.composer-surface\.composer-liquid-surface::after\s*\{\s*content: none;\s*display: none !important;/,
-      "the composer should avoid a second decorative pseudo-layer"
+      /\.composer-input-row \.composer-model-inline \.chat-model-trigger:hover,[\s\S]{0,180}background-color: hsl\(220 10% 94% \/ 0\.82\);/,
+      "the inline model selector should reveal a quiet hover state"
+    )
+    assert.doesNotMatch(
+      globals,
+      /\.dark \.composer-input-row \.composer-model-inline \.chat-model-trigger\s*\{[^}]*border-color:/,
+      "dark mode should not put the model selector back inside a bordered capsule"
     )
   })
 
@@ -97,16 +128,16 @@ describe("professional chat composer surface source contract", () => {
     )
   })
 
-  it("separates writing from the professional command rail without losing controls", () => {
-    assert.match(
+  it("keeps one uninterrupted surface while preserving accessible controls", () => {
+    assert.doesNotMatch(
       globals,
-      /\.composer-input-row::before\s*\{[\s\S]{0,320}height: 3\.25rem;[\s\S]{0,180}border-top: 1px solid[\s\S]{0,120}background: hsl\(220 20% 98% \/ 0\.68\);/,
-      "the lower command rail should have a restrained neutral boundary"
+      /\.composer-input-row::before\s*\{/,
+      "the composer should not split into a separate lower command rail"
     )
     assert.match(
       globals,
-      /\.composer-plus-liquid-button\s*\{[\s\S]{0,260}border: 1px solid hsl\(220 13% 88% \/ 0\.82\) !important;[\s\S]{0,140}background: hsl\(0 0% 100% \/ 0\.78\);/,
-      "the attachment button should read as a deliberate control"
+      /\.composer-plus-liquid-button\s*\{[\s\S]{0,260}border: none !important;[\s\S]{0,140}background: transparent;[\s\S]{0,80}box-shadow: none;/,
+      "the attachment action should remain a plain icon inside the shared surface"
     )
     assert.doesNotMatch(
       chatInterface,
@@ -133,7 +164,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.5rem;[\s\S]{0,180}min-height: 5\.25rem;/,
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.75rem;[\s\S]{0,180}min-height: 5\.25rem;/,
       "phones should keep the same compact hierarchy without oversized rounding"
     )
     assert.match(

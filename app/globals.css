@@ -5540,26 +5540,19 @@ footer {
 }
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
 
-/* ─── Composer — premium liquid surface ──────────────────────────── */
+/* ─── Composer — quiet, minimal surface ──────────────────────────── */
 .composer-surface {
   isolation: isolate;
-  /* Hardened hairline: still 0.5px, higher contrast so the top edge reads as
-     a real professional bar boundary instead of a soft floating pill. */
-  border: 0.5px solid hsl(220 14% 78% / 0.94);
-  border-radius: 1.5rem;
-  /* Fallback only when liquid class is absent. Liquid glass overrides this
-     with a translucent fill — a solid background-color here used to win on
-     equal specificity and kill the glass effect on production. */
+  border: 1px solid hsl(220 10% 86% / 0.96);
+  border-radius: 1.75rem;
   background-color: hsl(0 0% 100%);
   box-shadow:
-    inset 0 0.5px 0 hsl(0 0% 100% / 0.95),
-    0 1px 2px hsl(220 28% 14% / 0.06),
-    0 14px 34px -24px hsl(220 30% 18% / 0.3);
+    0 1px 2px hsl(220 20% 12% / 0.035),
+    0 8px 24px -20px hsl(220 24% 14% / 0.24);
   transition:
-    border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .composer-liquid-surface,
@@ -5599,27 +5592,22 @@ footer {
 }
 
 .composer-surface:hover {
-  border-color: hsl(220 14% 72% / 0.98);
+  border-color: hsl(220 10% 82% / 0.98);
 }
 
 .composer-surface:focus-within {
-  border-color: hsl(var(--ring) / 0.78);
+  border-color: hsl(220 9% 72% / 0.98);
   box-shadow:
-    inset 0 0.5px 0 hsl(0 0% 100% / 0.95),
-    0 1px 2px hsl(220 28% 14% / 0.07),
-    0 16px 38px -24px hsl(220 30% 18% / 0.34);
+    inset 0 0 0 1px hsl(220 9% 72% / 0.22),
+    0 1px 2px hsl(220 20% 12% / 0.04),
+    0 10px 28px -20px hsl(220 24% 14% / 0.28);
 }
 
-/* Keyboard-only focus indicator. The textarea carries inline `outline: none`
-   for the mouse path, which leaves keyboard users with nothing but the 0.5px
-   hairline — below what WCAG 2.4.11 expects. `:focus-visible` only matches
-   keyboard navigation, so pointer users keep the hairline-only design while
-   keyboard users get a real, high-contrast ring. `!important` is required to
-   beat the element's inline `outline: none`. */
+/* Keep focus on the complete composer boundary. A textarea-local outline is
+   clipped by the rounded surface and leaves four violet corner fragments;
+   the neutral border + inset line above forms one continuous focus contour. */
 .composer-textarea:focus-visible {
-  outline: 2px solid hsl(var(--ring) / 0.58) !important;
-  outline-offset: -2px;
-  border-radius: 0.625rem;
+  outline: none !important;
 }
 
 /* The "mic is hot" halo pulses forever while dictation records. For users who
@@ -5635,7 +5623,6 @@ footer {
 /* Two-row composer (ChatGPT-style): text pinned to the upper hairline of the
    bar; controls (+, model, mic, send) sit on their own row underneath. */
 .composer-input-row {
-  position: relative;
   display: grid !important;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: 2.2rem auto;
@@ -5645,25 +5632,6 @@ footer {
   min-height: 5.25rem;
   /* Near-zero top padding keeps placeholder/input flush with the bar edge. */
   padding: 0.28rem 0.75rem 0.4rem !important;
-}
-
-/* A restrained command rail separates writing from execution controls while
-   preserving the approved 112px composer footprint. */
-.composer-input-row::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  inset-inline: 0;
-  bottom: 0;
-  height: 3.25rem;
-  border-top: 1px solid hsl(220 14% 90% / 0.72);
-  background: hsl(220 20% 98% / 0.68);
-  pointer-events: none;
-}
-
-.composer-input-row > * {
-  position: relative;
-  z-index: 1;
 }
 
 /* Attachments and connector controls remain fully available without changing
@@ -5729,17 +5697,17 @@ footer {
 
 .composer-input-row .composer-model-inline .chat-model-trigger {
   min-height: 2.75rem;
-  border-radius: 0.875rem;
-  padding-inline: 0.625rem;
-  border-color: hsl(220 13% 88% / 0.82);
-  background-color: hsl(0 0% 100% / 0.78);
-  box-shadow: inset 0 0.5px 0 hsl(0 0% 100% / 0.9);
+  border-color: transparent;
+  border-radius: 0.75rem;
+  padding-inline: 0.5rem;
+  background-color: transparent;
+  box-shadow: none;
 }
 
 .composer-input-row .composer-model-inline .chat-model-trigger:hover,
 .composer-input-row .composer-model-inline .chat-model-trigger[data-state="open"] {
-  border-color: hsl(220 13% 86% / 0.76);
-  background-color: hsl(220 14% 96% / 0.96);
+  border-color: transparent;
+  background-color: hsl(220 10% 94% / 0.82);
 }
 
 .composer-inline-active-tools {
@@ -5766,17 +5734,17 @@ footer {
   display: none;
 }
 
-/* Compact attachment control with the same 44px geometry as every action. */
+/* Plain attachment glyph with the same 44px hit area as every action. */
 .composer-plus-liquid-button {
   position: relative;
   width: 2.75rem !important;
   min-width: 2.75rem;
   height: 2.75rem !important;
   min-height: 2.75rem;
-  border: 1px solid hsl(220 13% 88% / 0.82) !important;
+  border: none !important;
   color: hsl(220 10% 40%);
-  background: hsl(0 0% 100% / 0.78);
-  box-shadow: inset 0 0.5px 0 hsl(0 0% 100% / 0.9);
+  background: transparent;
+  box-shadow: none;
   transition:
     color 160ms ease-out,
     background-color 160ms ease-out,
@@ -5787,8 +5755,7 @@ footer {
 .composer-plus-liquid-button:focus-visible,
 .composer-plus-liquid-button[data-state="open"] {
   color: hsl(220 20% 10%);
-  border-color: hsl(220 13% 82% / 0.92) !important;
-  background: hsl(220 14% 95% / 0.98);
+  background: hsl(220 10% 94% / 0.82);
 }
 
 .composer-plus-liquid-button:focus-visible,
@@ -5993,18 +5960,17 @@ button.anti-bribery-context-chip:not(:disabled):active {
   opacity: 0.95;
 }
 .dark .composer-plus-liquid-button {
-  border: 1px solid hsl(216 18% 28% / 0.9) !important;
+  border: none !important;
   color: hsl(216 20% 80%);
-  background: hsl(220 15% 15% / 0.78);
-  box-shadow: inset 0 0.5px 0 hsl(0 0% 100% / 0.08);
+  background: transparent;
+  box-shadow: none;
 }
 .dark .composer-plus-liquid-button:hover,
 .dark .composer-plus-liquid-button:focus-visible,
 .dark .composer-plus-liquid-button[data-state="open"] {
   color: hsl(216 29% 98%);
-  border-color: hsl(216 18% 38% / 0.92) !important;
-  background: hsl(216 16% 20% / 0.9);
-  box-shadow: inset 0 0.5px 0 hsl(0 0% 100% / 0.1);
+  background: hsl(0 0% 100% / 0.08);
+  box-shadow: none;
 }
 .dark .anti-bribery-context-chip {
   border-color: hsl(0 0% 100% / 0.11);
@@ -6028,7 +5994,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
 }
 @media (max-width: 640px) {
   .composer-surface {
-    border-radius: 1.5rem;
+    border-radius: 1.75rem;
   }
   .composer-input-row {
     column-gap: 0.5rem;
@@ -6075,18 +6041,17 @@ button.anti-bribery-context-chip:not(:disabled):active {
   box-shadow: none;
 }
 
-/* ─── Composer — premium dark surface ────────────────────────────── */
+/* ─── Composer — quiet dark surface ──────────────────────────────── */
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
-  border: 0.5px solid hsl(var(--composer-border) / 0.96);
+  border: 1px solid hsl(var(--composer-border) / 0.96);
   box-shadow:
-    inset 0 0.5px 0 hsl(0 0% 100% / 0.07),
-    0 1px 2px rgba(0, 0, 0, 0.36),
-    0 18px 40px -26px rgba(0, 0, 0, 0.9);
-  transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              background 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    0 10px 28px -20px rgba(0, 0, 0, 0.86);
+  transition:
+    border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 /* Re-assert liquid glass after the solid dark surface fallback so the
    translucent fill is not overwritten by equal-specificity rules above. */
@@ -6098,23 +6063,22 @@ button.anti-bribery-context-chip:not(:disabled):active {
   -webkit-backdrop-filter: blur(28px) saturate(1.65);
 }
 .dark .composer-surface:focus-within {
-  border-color: hsl(var(--ring) / 0.82);
+  border-color: hsl(216 12% 38% / 0.98);
   box-shadow:
-    inset 0 0.5px 0 hsl(0 0% 100% / 0.07),
-    0 18px 42px -24px rgba(0, 0, 0, 0.92);
+    inset 0 0 0 1px hsl(216 12% 46% / 0.24),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 12px 30px -20px rgba(0, 0, 0, 0.92);
 }
 
-.dark .composer-input-row::before {
-  border-top-color: hsl(216 18% 24% / 0.78);
-  background: hsl(220 16% 10% / 0.58);
+.dark .composer-surface:hover {
+  border-color: hsl(216 12% 31% / 0.98);
 }
 
-.dark .composer-input-row .composer-model-inline .chat-model-trigger {
-  border-color: hsl(216 18% 28% / 0.9);
-  background-color: hsl(220 15% 15% / 0.78);
-  box-shadow: inset 0 0.5px 0 hsl(0 0% 100% / 0.08);
+.dark .composer-input-row .composer-model-inline .chat-model-trigger:hover,
+.dark .composer-input-row .composer-model-inline .chat-model-trigger[data-state="open"] {
+  border-color: transparent;
+  background-color: hsl(0 0% 100% / 0.08);
 }
-
 
 /* ────────────────────────────────────────────────────────────
  * Accessibility toggles applied on <html> via SettingsProvider.

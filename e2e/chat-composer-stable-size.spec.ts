@@ -103,10 +103,15 @@ async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
 }
 
 async function composerMetrics(page: Page) {
-  return page.getByTestId("chat-composer-surface").evaluate((surface) => {
+  const visibleSurface = page.locator('[data-testid="chat-composer-surface"]:visible').last()
+  await expect(visibleSurface).toBeVisible()
+
+  return visibleSurface.evaluate((surface) => {
     const textarea = surface.querySelector("textarea")
+    const modelTrigger = surface.querySelector<HTMLElement>(".chat-model-trigger")
     const rect = surface.getBoundingClientRect()
-    if (!textarea) throw new Error("Composer textarea is missing")
+    if (!textarea || !modelTrigger) throw new Error("Composer controls are missing")
+    const style = getComputedStyle(surface)
 
     return {
       width: rect.width,
@@ -114,20 +119,29 @@ async function composerMetrics(page: Page) {
       textareaClientHeight: textarea.clientHeight,
       textareaScrollHeight: textarea.scrollHeight,
       textareaOverflowY: getComputedStyle(textarea).overflowY,
+      borderTopWidth: style.borderTopWidth,
+      borderRadius: style.borderRadius,
+      backgroundColor: style.backgroundColor,
+      backdropFilter: style.backdropFilter,
+      beforeContent: getComputedStyle(surface, "::before").content,
+      modelBackgroundColor: getComputedStyle(modelTrigger).backgroundColor,
+      textareaOutlineStyle: getComputedStyle(textarea).outlineStyle,
     }
   })
 }
 
 async function conversationAlignmentMetrics(page: Page) {
   const transcript = page.locator(".chat-conversation-column")
-  const composer = page.getByTestId("chat-composer-surface")
+  const composer = page.locator('[data-testid="chat-composer-surface"]:visible').last()
 
   await expect(transcript).toBeVisible()
   await expect(composer).toBeVisible()
 
   return page.evaluate(() => {
     const transcriptElement = document.querySelector<HTMLElement>(".chat-conversation-column")
-    const composerElement = document.querySelector<HTMLElement>('[data-testid="chat-composer-surface"]')
+    const composerElement = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="chat-composer-surface"]')
+    ).find((element) => element.getClientRects().length > 0)
     if (!transcriptElement || !composerElement) {
       throw new Error("Chat alignment elements are missing")
     }
@@ -179,6 +193,13 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.width).toBeLessThan(835)
   expect(approved.height).toBeGreaterThan(92)
   expect(approved.height).toBeLessThan(97)
+  expect(approved.borderTopWidth).toBe("1px")
+  expect(approved.borderRadius).toBe("28px")
+  expect(approved.backgroundColor).toBe("rgb(255, 255, 255)")
+  expect(approved.backdropFilter).toBe("none")
+  expect(approved.beforeContent).toBe("none")
+  expect(approved.modelBackgroundColor).toBe("rgba(0, 0, 0, 0)")
+  expect(approved.textareaOutlineStyle).toBe("none")
 
   const textarea = page.getByTestId("chat-composer-surface").locator("textarea")
   await textarea.fill([
