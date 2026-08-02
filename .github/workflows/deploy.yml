@@ -625,6 +625,11 @@ jobs:
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
             verify_backend_image_metadata siragpt-backend:latest
+            echo "[deploy-workflow] Creating and restoring the mandatory pre-migration database checkpoint"
+            RELEASE_SHA="${TARGET_SHA}" \
+              BACKUP_DIR="${APP_DIR}/backups/releases" \
+              bash backend/scripts/pre-deploy-db-backup.sh
+            echo "[deploy-workflow] Pre-migration database restore proof passed"
             if [[ "${ALLOW_MIGRATION_BASELINE}" == "1" ]]; then
               echo "[deploy-workflow] U0 reviewed migration-history baseline (sync residual schema, then mark applied)"
               # 1) prisma db push WITHOUT --accept-data-loss aligns residual

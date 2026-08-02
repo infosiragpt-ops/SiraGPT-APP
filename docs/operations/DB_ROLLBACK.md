@@ -5,12 +5,12 @@
 
 ## Context
 
-Every Prisma migration in `backend/prisma/migrations/` is written as
-**strictly additive** SQL (no DROP TABLE / DROP COLUMN / ALTER TYPE
-/ unconstrained SET NOT NULL). The CI workflow
-`scripts/check-migration-safety.js` rejects destructive operations
+Prisma migrations are classified before release. The CI workflow
+`scripts/check-migration-safety.js` rejects known destructive operations
 unless they carry an explicit `-- migration-safety: allow-destructive`
-marker. This means:
+marker. DML, backfills, index construction, and security changes still require
+their own review because a clean static scan does not make them reversible.
+This means:
 
 - The vast majority of migrations are **reversible by data alone**,
   not by schema rollback. If a migration introduces a new table or
@@ -21,14 +21,18 @@ marker. This means:
 ## Step-by-step (additive migration gone wrong)
 
 1. **Identify the migration** by name from `backend/prisma/migrations/`.
-2. **Code rollback first.** Revert the application commit so the new
+2. **Verify the release checkpoint.** Every deploy must have a
+   `backups/releases/siragpt_release_<sha>_*.sql.gz` file, checksum, and
+   `.manifest` showing `restore_network=none` and a successful isolated
+   restore before migration execution.
+3. **Code rollback first.** Revert the application commit so the new
    schema bits are no longer queried. Deploy normally — production
    uses the previous binary that does not need the new schema.
-3. **Leave the schema in place.** Additive tables / columns are
+4. **Leave the schema in place.** Additive tables / columns are
    harmless when unused; they cost storage but no logic depends on
    them. Schedule cleanup for a deliberate later migration.
 
-> 95% of production rollbacks should stop at step 3. Anything beyond
+> Most production rollbacks should stop at step 4. Anything beyond
 > is paying ACID-rollback complexity for an additive migration that
 > doesn't need it.
 
@@ -38,7 +42,8 @@ For migrations carrying `-- migration-safety: allow-destructive`:
 
 1. **Stop traffic** on the affected service. PM2 `pause` the backend
    or scale the docker-compose service to zero.
-2. **Snapshot pg.** `pg_dump --format=custom siragpt > rollback_$(date +%s).dump`.
+2. **Select the verified pre-migration checkpoint.** Re-run its
+   `sha256sum --check --strict` manifest and preserve the release manifest.
 3. **Manually reverse** the migration in a `psql --single-transaction`
    session using the rollback steps captured in the migration's
    header comment. Every `-- migration-safety: allow-destructive`
@@ -68,7 +73,14 @@ verbatim in the description.
 
 ## Backup retention
 
-Production runs `pg_dump --format=custom` nightly into
-`/root/siragpt-backups/postgres/` (kept 14 days locally + uploaded to
-Cloudflare R2 with a 90-day retention). Recovery from the daily dump
-is the absolute last resort — every step above tries to avoid it.
+The scheduled backup workflow writes compressed SQL plus a checksum under
+`/opt/siragpt/backups/`. Every deployment additionally writes a release-scoped
+checkpoint under `/opt/siragpt/backups/releases/` and restores it into a
+temporary PostgreSQL container with networking disabled. Migration execution
+must not start if dump, checksum, restore, public-table count, or Prisma-history
+validation fails.
+
+Release checkpoints on the VPS are not an off-host disaster-recovery system.
+Production must configure and monitor the approved external backup target; a
+host-loss recovery claim requires a separately retained object and a periodic
+restore drill from that object.

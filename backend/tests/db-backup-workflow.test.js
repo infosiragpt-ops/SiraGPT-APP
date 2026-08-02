@@ -36,3 +36,17 @@ test('db backup workflow skips S3 upload when backup secrets are absent', () => 
   assert.match(workflow, /BACKUP_BUCKET \/ BACKUP_ACCESS_KEY_ID \/ BACKUP_SECRET_ACCESS_KEY are not fully configured/);
   assert.match(workflow, /exit 0/);
 });
+
+test('production deploy proves a release backup restore before baseline or migrations', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/deploy.yml'), 'utf8');
+  const checkpoint = workflow.indexOf('bash backend/scripts/pre-deploy-db-backup.sh');
+  const baseline = workflow.indexOf('backend node scripts/baseline-migration-history.js');
+  const migration = workflow.indexOf('backend node scripts/start-with-migrations.js --migrate-only');
+
+  assert.ok(checkpoint > 0, 'expected the mandatory release checkpoint');
+  assert.ok(checkpoint < baseline, 'checkpoint must precede the optional baseline');
+  assert.ok(checkpoint < migration, 'checkpoint must precede migrate-only');
+  assert.match(workflow, /RELEASE_SHA="\$\{TARGET_SHA\}"/);
+  assert.match(workflow, /BACKUP_DIR="\$\{APP_DIR\}\/backups\/releases"/);
+  assert.match(workflow, /Pre-migration database restore proof passed/);
+});
