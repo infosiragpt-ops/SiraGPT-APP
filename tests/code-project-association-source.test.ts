@@ -2,10 +2,6 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import {
-  projectsServiceErrorCode,
-} from "../lib/projects-service"
-
 const page = readFileSync("app/code/page.tsx", "utf8")
 const workspaceContext = readFileSync("lib/code-workspace-context.tsx", "utf8")
 const sidebar = readFileSync("components/sidebar/sidebar-folders-dropdown.tsx", "utf8")
@@ -19,11 +15,11 @@ test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
   assert.doesNotMatch(page, /const workspaceId = localId \|\| \(folderId \? `project:\$\{folderId\}`/)
   assert.match(page, /hydratedFolderRef\.current = null/)
   assert.match(page, /setHydrationAttempt\(\(attempt\) => attempt \+ 1\)/)
-  assert.match(page, /resolveCodeWorkspaceFolder\([\s\S]*projectsService\.get,[\s\S]*codexApi\.getProject/)
+  assert.match(page, /resolveCodeWorkspaceFolder\([\s\S]*codexApi\.resolveWorkspace/)
   assert.match(page, /persistWorkspaceCodexProject\(workspaceId, project\.id\)/)
   assert.match(page, /setActiveCodexProject\(directCodexProject \? project\.id : null\)/)
-  assert.match(workspaceRoute, /folderId\.replace\(\/\^\\w\+:\//)
-  assert.match(workspaceRoute, /getProject\(projectId\)[\s\S]*status\?[\s\S]*getCodexProject/)
+  assert.match(workspaceRoute, /const resolution = await resolveWorkspace\(folderId\)/)
+  assert.match(workspaceRoute, /workspace_identity_mismatch/)
   assert.match(page, /status\?[\s\S]*setRouteIssue\(1\)/)
   assert.match(sidebar, /codexProjectIdFromWorkspaceId\(opts\.folderId, \{ assumeProject: true \}\)/)
   assert.match(sidebar, /codexWorkspaceIdForProject\(projectId\)/)
@@ -43,8 +39,6 @@ test("direct CodexProject routes are hydrated before launching an agent", () => 
 })
 
 test("404s stay actionable and do not silently become a deterministic build", () => {
-  const error = Object.assign(new Error("Project not found"), { status: 404 })
-  assert.equal(projectsServiceErrorCode(error), "project_not_found")
   assert.match(page, /setRouteIssue\(1\)/)
   assert.match(company, /data-testid="company-association-error"/)
   assert.match(company, /codexIdentityIssue\(error\)/)

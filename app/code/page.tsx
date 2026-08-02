@@ -34,7 +34,6 @@ import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import { resolveCodeWorkspaceFolder } from "@/lib/code-workspace-route"
 import { codexApi } from "@/lib/codex/codex-api"
 import { persistWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
-import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 
 const CodeWorkspace = dynamic(
@@ -123,8 +122,7 @@ function ActiveFolderHydrator() {
       try {
         const [directCodexProject, project] = await resolveCodeWorkspaceFolder(
           folderId,
-          projectsService.get,
-          codexApi.getProject,
+          codexApi.resolveWorkspace,
         )
         if (cancelled) return
         const workspaceId = `${directCodexProject ? "codex" : "project"}:${project.id}`

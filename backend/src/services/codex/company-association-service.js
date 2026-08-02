@@ -26,6 +26,12 @@ const PROJECT_SELECT = Object.freeze({
   updatedAt: true,
 });
 
+const WORKSPACE_PROJECT_SELECT = Object.freeze({
+  ...PROJECT_SELECT,
+  description: true,
+  instructions: true,
+});
+
 const CODEX_PROJECT_SELECT = Object.freeze({
   id: true,
   userId: true,
@@ -61,6 +67,17 @@ function requireDb(prisma) {
     throw new CompanyAssociationError(
       'company_association_unavailable',
       'Company association storage is unavailable.',
+      503,
+    );
+  }
+  return prisma;
+}
+
+function requireWorkspaceDb(prisma) {
+  if (!prisma?.project || !prisma?.codexProject) {
+    throw new CompanyAssociationError(
+      'workspace_resolution_unavailable',
+      'Workspace resolution storage is unavailable.',
       503,
     );
   }
@@ -103,10 +120,10 @@ async function hasOrganizationAccess(prisma, { userId, organizationId }) {
   return Boolean(membership || organization);
 }
 
-async function loadOwnedCompany(prisma, { userId, projectId }) {
+async function loadOwnedCompany(prisma, { userId, projectId, includeWorkspace = false }) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: PROJECT_SELECT,
+    select: includeWorkspace ? WORKSPACE_PROJECT_SELECT : PROJECT_SELECT,
   });
   if (!project || project.deletedAt || project.userId !== userId) {
     throw new CompanyAssociationError(
@@ -274,6 +291,76 @@ function publicProject(project) {
     ...(project.type ? { type: project.type } : {}),
     ...(project.status ? { status: project.status } : {}),
     updatedAt: project.updatedAt || null,
+  };
+}
+
+function publicWorkspaceProject(project, kind) {
+  if (kind === 'codex') {
+    return {
+      id: project.id,
+      name: project.name,
+      organizationId: project.organizationId || null,
+      status: project.status,
+      updatedAt: project.updatedAt || null,
+    };
+  }
+  return {
+    id: project.id,
+    name: project.name,
+    description: project.description || null,
+    instructions: project.instructions || null,
+    organizationId: project.organizationId || null,
+    type: project.type,
+    updatedAt: project.updatedAt || null,
+  };
+}
+
+/**
+ * Resolve an incoming /code folder through one backend authority. A bare or
+ * project-prefixed id prefers the Empresas Project only when the caller also
+ * satisfies the company organization boundary; a missing/inaccessible Project
+ * may fall back to an independently owned CodexProject with the same id.
+ * Nothing is linked or created here.
+ */
+async function resolveWorkspace(prisma, { userId, folderId }) {
+  const db = requireWorkspaceDb(prisma);
+  const ownerId = cleanId(userId, 'userId');
+  const rawFolderId = cleanId(folderId, 'folderId');
+  const explicitCodex = rawFolderId.startsWith('codex:');
+  const resourceId = cleanId(
+    explicitCodex
+      ? rawFolderId.slice('codex:'.length)
+      : rawFolderId.replace(/^\w+:/, ''),
+    'folderId',
+  );
+
+  if (!explicitCodex) {
+    try {
+      const company = await loadOwnedCompany(db, {
+        userId: ownerId,
+        projectId: resourceId,
+        includeWorkspace: true,
+      });
+      return {
+        kind: 'project',
+        workspaceId: `project:${company.id}`,
+        project: publicWorkspaceProject(company, 'project'),
+      };
+    } catch (error) {
+      if (!(error instanceof CompanyAssociationError) || error.code !== 'company_project_not_found') {
+        throw error;
+      }
+    }
+  }
+
+  const codexProject = await loadOwnedCodexProject(db, {
+    userId: ownerId,
+    codexProjectId: resourceId,
+  });
+  return {
+    kind: 'codex',
+    workspaceId: `codex:${codexProject.id}`,
+    project: publicWorkspaceProject(codexProject, 'codex'),
   };
 }
 
@@ -592,4 +679,5 @@ module.exports = {
   listOrphans,
   hasOrganizationAccess,
   removeCompanyConnector,
+  resolveWorkspace,
 };

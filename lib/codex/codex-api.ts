@@ -126,6 +126,20 @@ export interface CodexCompanyAssociationState {
   connectors: CodexCompanyConnectorAssignment[]
   requiresAssociation: boolean
 }
+export interface CodexWorkspaceResolution {
+  kind: "project" | "codex"
+  workspaceId: string
+  project: {
+    id: string
+    name: string
+    description?: string | null
+    instructions?: string | null
+    organizationId?: string | null
+    type?: string
+    status?: string
+    updatedAt?: string | null
+  }
+}
 export interface CodexRun {
   id: string
   projectId: string
@@ -706,6 +720,12 @@ export const codexApi = {
   // the UI on the old /code flow even after the flag is turned on.
   health: getPublicHealth,
   access: () => req<CodexAccess>("/access", { cache: "no-store" }),
+
+  resolveWorkspace: (folderId: string) =>
+    req<CodexWorkspaceResolution>(
+      `/workspace-resolution?folderId=${encodeURIComponent(folderId)}`,
+      { cache: "no-store" },
+    ),
 
   getCompanyAssociation: (projectId: string) =>
     req<CodexCompanyAssociationState>(
