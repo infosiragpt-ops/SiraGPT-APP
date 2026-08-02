@@ -11864,14 +11864,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="chat-composer-frame">
                   <div className="space-y-3">
-                  {/*
-                    Composer — premium production UI.
-                    Light and dark modes inherit `composer-surface` from
-                    globals.css, which owns the half-pixel border, background,
-                    and layered shadow. Focus recolors that same hairline
-                    violet without adding another ring, so its thickness stays
-                    fixed. Idle never glows.
-                  */}
+                  {/* Composer — quiet production UI. The shared surface owns
+                      the solid fill, neutral outline and restrained elevation
+                      in both themes; controls keep their existing behavior. */}
                   {/* The input surface keeps one approved size. Attachments and
                       connector context use the independent tray above it. */}
                   <div className="relative">
@@ -11898,9 +11893,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <div
                       data-testid="chat-composer-surface"
                       className={cn(
-                        "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
+                        "composer-surface group/composer relative",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                        "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
                     )}
                   >
                     {/* Attachments live INSIDE the composer border (Claude-style):
@@ -12380,9 +12374,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         <div
                           data-testid="chat-composer-surface"
                           className={cn(
-                            "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
+                            "composer-surface group/composer relative",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                            "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
                         )}
                       >
                         {/* Attachments live INSIDE the composer border (Claude-style):
