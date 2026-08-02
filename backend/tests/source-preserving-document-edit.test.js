@@ -1969,6 +1969,47 @@ describe('source-preserving DOCX title edits', () => {
     }]);
     assert.equal(validation.passed, true);
   });
+
+  it('delivers a validated edited DOCX for a natural title replacement request', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-delivery-'));
+    const originalPath = path.join(tmp, 'aspectos-administrativos.docx');
+    const source = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          style: 'Title',
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'Distrito Judicial de Ayacucho', bold: true })],
+        }),
+        new Paragraph('Antecedente institucional desarrollado en Ayacucho.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, source);
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'title-delivery-docx',
+        path: originalPath,
+        originalName: 'aspectos-administrativos.docx',
+        filename: 'aspectos-administrativos.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Distrito Judicial de Ayacucho. Antecedente institucional desarrollado en Ayacucho.',
+      },
+      prompt: 'el titulo cambialo de ayacucho a cajamarca en mi mismo word',
+      displayPrompt: 'el titulo cambialo de ayacucho a cajamarca en mi mismo word',
+      userId: 'user-title-delivery',
+      chatId: 'chat-title-delivery',
+    });
+
+    assert.equal(result.clarification, undefined);
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.operation_criteria, true);
+    assert.equal(result.orchestration.operations[0].scope, 'title');
+    assert.equal(result.orchestration.operations[0].changedCount, 1);
+    const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(xml, /Distrito Judicial de Cajamarca/);
+    assert.match(xml, /desarrollado en Ayacucho/);
+  });
 });
 
 describe('source-preserving professional DOCX editing', () => {
@@ -2234,6 +2275,7 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(replaces.length, 1);
     assert.equal(replaces[0].needle, 'Judicial de Ayacucho');
     assert.equal(replaces[0].replacement, 'Judicial de Cajamarca');
+    assert.equal(replaces[0].scope, 'title');
     // Must NOT full-rewrite the title — this is a partial span replace.
     assert.equal(ops.some((op) => op.kind === 'set_document_title'), false);
 
@@ -2260,6 +2302,64 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
       assert.match(xml, /Cuerpo del informe que no debe mutar/);
       assert.match(xml, /Poder /); // prefix of title preserved
     })();
+  });
+
+  it('returns the same DOCX with only the requested title span changed', async () => {
+    const {
+      extractReplacementPair,
+      planSourcePreservingOperations,
+      replaceTextInDocxBuffer,
+      validateDocxOperationCriteria,
+    } = sourcePreservingInternals;
+    const prompt = 'el titulo cambialo de ayacucho a cajamarca en mi mismo word';
+    assert.deepEqual(extractReplacementPair(prompt), {
+      needle: 'ayacucho',
+      replacement: 'cajamarca',
+    });
+
+    const operations = planSourcePreservingOperations({ requestText: prompt, format: 'docx' });
+    const replaceOperation = operations.find((op) => op.kind === 'replace_text');
+    assert.ok(replaceOperation);
+    assert.deepEqual(replaceOperation, {
+      kind: 'replace_text',
+      needle: 'ayacucho',
+      replacement: 'cajamarca',
+      scope: 'title',
+    });
+
+    const source = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{
+        children: [
+          new Paragraph({
+            style: 'Title',
+            alignment: AlignmentType.CENTER,
+            children: [
+              new TextRun({ text: 'Distrito Judicial de ', bold: true, color: '1F2937' }),
+              new TextRun({ text: 'Ayacucho', bold: true, color: '1F2937' }),
+            ],
+          }),
+          new Paragraph('El expediente fue remitido desde Ayacucho y esta referencia debe conservarse.'),
+        ],
+      }],
+    })));
+    const edited = replaceTextInDocxBuffer(
+      source,
+      replaceOperation.needle,
+      replaceOperation.replacement,
+      { scope: replaceOperation.scope },
+    );
+    replaceOperation.changedCount = edited.changedCount;
+    replaceOperation.remainingMatchCount = edited.remainingMatchCount;
+
+    assert.equal(edited.changedCount, 1);
+    assert.equal(edited.remainingMatchCount, 1, 'the unrelated body reference remains');
+    const xml = new PizZip(edited.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Distrito Judicial de /);
+    assert.match(xml, /Cajamarca/);
+    assert.match(xml, /desde Ayacucho y esta referencia debe conservarse/);
+    assert.match(xml, /<w:b\/>/);
+    assert.match(xml, /w:color w:val="1F2937"/);
+    assert.equal(validateDocxOperationCriteria(edited.buffer, operations).passed, true);
   });
 
   it('plans natural Excel cell changes as cell writes, not text replacements', () => {

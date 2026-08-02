@@ -97,6 +97,34 @@ describe("professional chat composer surface source contract", () => {
     )
   })
 
+  it("separates writing from the professional command rail without losing controls", () => {
+    assert.match(
+      globals,
+      /\.composer-input-row::before\s*\{[\s\S]{0,320}height: 3\.25rem;[\s\S]{0,180}border-top: 1px solid[\s\S]{0,120}background: hsl\(220 20% 98% \/ 0\.68\);/,
+      "the lower command rail should have a restrained neutral boundary"
+    )
+    assert.match(
+      globals,
+      /\.composer-plus-liquid-button\s*\{[\s\S]{0,260}border: 1px solid hsl\(220 13% 88% \/ 0\.82\) !important;[\s\S]{0,140}background: hsl\(0 0% 100% \/ 0\.78\);/,
+      "the attachment button should read as a deliberate control"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /rgba\(109,40,217/,
+      "the composer should not carry the old decorative purple focus shadow"
+    )
+    assert.equal(
+      (chatInterface.match(/aria-label="Mensaje para SiraGPT"/g) || []).length,
+      2,
+      "both composer paths should expose the same accessible message label"
+    )
+    assert.equal(
+      (chatInterface.match(/enterKeyHint="send"/g) || []).length,
+      2,
+      "mobile keyboards should expose the send action consistently"
+    )
+  })
+
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
