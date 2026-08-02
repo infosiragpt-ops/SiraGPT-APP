@@ -10,24 +10,40 @@ type DirectCodexWorkspace = {
   name: string
 }
 
+type WorkspaceResolution = {
+  kind: "project" | "codex"
+  workspaceId: string
+  project: {
+    id: string
+    name: string
+    description?: string | null
+    instructions?: string | null
+  }
+}
+
 export type CodeWorkspaceFolderResolution =
   | [directCodexProject: false, project: ProjectWorkspace]
   | [directCodexProject: true, project: DirectCodexWorkspace]
 
 export async function resolveCodeWorkspaceFolder(
   folderId: string,
-  getProject: (id: string) => Promise<ProjectWorkspace>,
-  getCodexProject: (id: string) => Promise<DirectCodexWorkspace>,
+  resolveWorkspace: (id: string) => Promise<WorkspaceResolution>,
 ): Promise<CodeWorkspaceFolderResolution> {
-  const directCodexProjectId = folderId.startsWith("codex:")
-  const projectId = folderId.replace(/^\w+:/, "")
-  if (!directCodexProjectId) {
-    try {
-      return [false, await getProject(projectId)]
-    } catch (error) {
-      if ((error as { status?: unknown } | null)?.status !== 404) throw error
-    }
+  const resolution = await resolveWorkspace(folderId)
+  const directCodexProject = resolution.kind === "codex"
+  const expectedWorkspaceId = `${directCodexProject ? "codex" : "project"}:${resolution.project.id}`
+  if (resolution.workspaceId !== expectedWorkspaceId) {
+    throw Object.assign(new Error("Workspace resolution returned an inconsistent identity."), {
+      status: 502,
+      code: "workspace_identity_mismatch",
+    })
   }
-
-  return [true, await getCodexProject(projectId)]
+  return directCodexProject
+    ? [true, { id: resolution.project.id, name: resolution.project.name }]
+    : [false, {
+        id: resolution.project.id,
+        name: resolution.project.name,
+        description: resolution.project.description || null,
+        instructions: resolution.project.instructions || null,
+      }]
 }

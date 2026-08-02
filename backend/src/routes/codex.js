@@ -311,6 +311,28 @@ router.get('/agents', authenticateToken, (_req, res) => {
 // Existing localStorage mappings are never trusted or backfilled. The
 // association wizard reads these endpoints and the owner confirms each link.
 router.get(
+  '/workspace-resolution',
+  authenticateToken,
+  [query('folderId').isString().trim().isLength({ min: 1, max: 160 })],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const resolution = await companyAssociationService.resolveWorkspace(codexDb, {
+        userId: req.user.id,
+        folderId: req.query.folderId,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(resolution);
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.get(
   '/company-associations',
   authenticateToken,
   [query('projectId').isString().trim().isLength({ min: 1, max: 160 })],

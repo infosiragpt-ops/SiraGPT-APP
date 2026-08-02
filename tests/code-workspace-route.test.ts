@@ -14,85 +14,62 @@ const codexProject = {
   name: "Prueba gates 02 · Empresa",
 }
 
-function notFound(): Error {
-  return Object.assign(new Error("not found"), { status: 404, code: "project_not_found" })
-}
-
-test("prefers a regular Project when the bare id exists in both domains", async () => {
-  let codexCalls = 0
-  const resolved = await resolveCodeWorkspaceFolder(
-    project.id,
-    async () => project,
-    async () => {
-      codexCalls += 1
-      return codexProject
-    },
-  )
+test("uses the backend Project resolution without another browser-side probe", async () => {
+  let calls = 0
+  const resolved = await resolveCodeWorkspaceFolder(project.id, async (folderId) => {
+    calls += 1
+    assert.equal(folderId, project.id)
+    return {
+      kind: "project" as const,
+      workspaceId: `project:${project.id}`,
+      project,
+    }
+  })
 
   assert.equal(resolved[0], false)
   assert.equal(resolved[1].id, project.id)
-  assert.equal(codexCalls, 0)
+  assert.equal(calls, 1)
 })
 
-test("falls back from a bare Project 404 to the matching CodexProject", async () => {
-  const resolved = await resolveCodeWorkspaceFolder(
-    codexProject.id,
-    async () => {
-      throw notFound()
-    },
-    async (id) => ({ ...codexProject, id }),
-  )
+test("uses the authoritative CodexProject fallback returned for a bare id", async () => {
+  const resolved = await resolveCodeWorkspaceFolder(codexProject.id, async () => ({
+    kind: "codex" as const,
+    workspaceId: `codex:${codexProject.id}`,
+    project: codexProject,
+  }))
 
   assert.equal(resolved[0], true)
   assert.equal(resolved[1].id, codexProject.id)
 })
 
-test("preserves the final 404 when neither Project domain contains the folder", async () => {
+test("preserves backend 404 and transient failures", async () => {
+  const notFound = Object.assign(new Error("not found"), { status: 404 })
   await assert.rejects(
-    resolveCodeWorkspaceFolder(
-      codexProject.id,
-      async () => {
-        throw notFound()
-      },
-      async () => {
-        throw notFound()
-      },
-    ),
-    { status: 404 },
-  )
-})
-
-test("an explicit codex workspace never probes the regular Project endpoint", async () => {
-  let projectCalls = 0
-  const resolved = await resolveCodeWorkspaceFolder(
-    `codex:${codexProject.id}`,
-    async () => {
-      projectCalls += 1
-      return project
-    },
-    async () => codexProject,
+    resolveCodeWorkspaceFolder(project.id, async () => {
+      throw notFound
+    }),
+    notFound,
   )
 
-  assert.equal(resolved[0], true)
-  assert.equal(projectCalls, 0)
-})
-
-test("does not hide a transient regular Project failure behind Codex fallback", async () => {
-  let codexCalls = 0
   const outage = Object.assign(new Error("temporarily unavailable"), { status: 503 })
-
   await assert.rejects(
-    resolveCodeWorkspaceFolder(
-      project.id,
-      async () => {
-        throw outage
-      },
-      async () => {
-        codexCalls += 1
-        return codexProject
-      },
-    ),
+    resolveCodeWorkspaceFolder(project.id, async () => {
+      throw outage
+    }),
     outage,
   )
-  assert.equal(codexCalls, 0)
+})
+
+test("fails closed when the backend identity and project payload disagree", async () => {
+  await assert.rejects(
+    resolveCodeWorkspaceFolder(project.id, async () => ({
+      kind: "project" as const,
+      workspaceId: `project:${codexProject.id}`,
+      project,
+    })),
+    (error: unknown) => (
+      (error as { status?: number; code?: string }).status === 502
+      && (error as { code?: string }).code === "workspace_identity_mismatch"
+    ),
+  )
 })

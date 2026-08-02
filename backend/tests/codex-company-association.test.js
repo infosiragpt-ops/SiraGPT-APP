@@ -202,6 +202,73 @@ function baseSeed() {
   };
 }
 
+test('resolves a company workspace through the same organization boundary as association', async () => {
+  const seed = baseSeed();
+  seed.projects[0].description = 'Contexto durable';
+  seed.projects[0].instructions = 'Opera con revisión';
+  const db = createMemoryDb(seed);
+
+  const resolved = await service.resolveWorkspace(db, {
+    userId: 'user-a',
+    folderId: 'project:company-a',
+  });
+
+  assert.equal(resolved.kind, 'project');
+  assert.equal(resolved.workspaceId, 'project:company-a');
+  assert.equal(resolved.project.description, 'Contexto durable');
+  assert.equal(resolved.project.instructions, 'Opera con revisión');
+  assert.equal(db._state.links.length, 0);
+});
+
+test('falls back to an owned CodexProject when a colliding company id is not accessible', async () => {
+  const seed = baseSeed();
+  seed.projects[0].id = 'shared-a';
+  seed.projects[0].organizationId = 'org-without-membership';
+  seed.codexProjects[0].id = 'shared-a';
+  const db = createMemoryDb(seed);
+
+  const resolved = await service.resolveWorkspace(db, {
+    userId: 'user-a',
+    folderId: 'shared-a',
+  });
+
+  assert.equal(resolved.kind, 'codex');
+  assert.equal(resolved.workspaceId, 'codex:shared-a');
+  assert.equal(resolved.project.name, 'Runtime A');
+  assert.equal(db._state.links.length, 0);
+});
+
+test('an explicit Codex workspace never becomes a same-id company workspace', async () => {
+  const seed = baseSeed();
+  seed.projects[0].id = 'shared-a';
+  seed.codexProjects[0].id = 'shared-a';
+  const db = createMemoryDb(seed);
+
+  const resolved = await service.resolveWorkspace(db, {
+    userId: 'user-a',
+    folderId: 'codex:shared-a',
+  });
+
+  assert.equal(resolved.kind, 'codex');
+  assert.equal(resolved.project.name, 'Runtime A');
+});
+
+test('workspace resolution never exposes a foreign company or CodexProject', async () => {
+  const seed = baseSeed();
+  seed.projects[1].id = 'foreign-shared';
+  seed.codexProjects[1].id = 'foreign-shared';
+  const db = createMemoryDb(seed);
+
+  await assert.rejects(
+    service.resolveWorkspace(db, {
+      userId: 'user-a',
+      folderId: 'foreign-shared',
+    }),
+    (error) => error.code === 'codex_project_not_found' && error.status === 404,
+  );
+  assert.equal(db._state.links.length, 0);
+});
+
 test('keeps legacy projects orphaned until the owner explicitly associates them', async () => {
   const db = createMemoryDb(baseSeed());
   const before = await service.listOrphans(db, { userId: 'user-a' });
