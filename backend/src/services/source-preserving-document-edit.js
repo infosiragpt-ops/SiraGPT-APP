@@ -2104,7 +2104,35 @@ function applyFullParagraphTextSurgical(paragraphXml = '', newText = '') {
   return updated;
 }
 
-function replaceTextInDocxBuffer(buffer, needle, replacement) {
+const DOCX_TITLE_STYLE_RE = /<w:pStyle\b[^>]*w:val=["'](?:title|titulo|t[ií]tulo|heading\s*1|heading1|titulo\s*1|t[ií]tulo\s*1)["']/iu;
+
+function isDocxTitleParagraph(paragraph = {}) {
+  return DOCX_TITLE_STYLE_RE.test(String(paragraph.xml || ''));
+}
+
+function selectDocxReplacementParagraphs(paragraphs = [], needle = '', scope = 'document') {
+  const normalizedNeedle = normalizeText(needle);
+  const matches = paragraphs
+    .map((paragraph, index) => ({ ...paragraph, documentIndex: index }))
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle));
+  if (scope !== 'title') return matches;
+
+  // A title can be explicitly styled, centered on a cover, or simply be the
+  // first matching paragraph in older academic templates. Select exactly one
+  // target so references to the same city/institution in the body stay intact.
+  const earlyLimit = Math.max(24, Math.ceil(paragraphs.length * 0.15));
+  const titleParagraph = matches.find(isDocxTitleParagraph)
+    || matches.find((paragraph) => (
+      !paragraph.inTable
+      && paragraph.documentIndex <= earlyLimit
+      && /<w:jc\b[^>]*w:val=["']center["']/iu.test(paragraph.xml)
+    ))
+    || matches.find((paragraph) => !paragraph.inTable && paragraph.documentIndex <= earlyLimit)
+    || matches.find((paragraph) => paragraph.documentIndex <= earlyLimit);
+  return titleParagraph ? [titleParagraph] : [];
+}
+
+function replaceTextInDocxBuffer(buffer, needle, replacement, { scope = 'document' } = {}) {
   const normalizedNeedle = normalizeText(needle);
   if (!normalizedNeedle || normalizedNeedle.length < 3) {
     const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del DOCX.');
@@ -2115,8 +2143,8 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   let documentXml = documentFile.asText();
-  const matches = extractDocxParagraphs(documentXml)
-    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const matches = selectDocxReplacementParagraphs(paragraphs, normalizedNeedle, scope)
     .sort((a, b) => b.start - a.start);
 
   let changedCount = 0;
@@ -2124,13 +2152,20 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
     // Surgical path: mutate only the matching span inside existing <w:t>
     // nodes. Never rebuild the paragraph — that used to drop bold/italic mid-
     // sentence, bookmarks, hyperlinks and list numbering.
-    const mutated = mutateParagraphTextSurgical(paragraph.xml, needle, replacement);
+    const matchedSpan = findNeedleSpanInText(paragraph.text, needle);
+    const matchedText = matchedSpan
+      ? paragraph.text.slice(matchedSpan.start, matchedSpan.end)
+      : String(needle || '');
+    const scopedReplacement = scope === 'title'
+      ? preserveCaseReplacement(matchedText, replacement)
+      : replacement;
+    const mutated = mutateParagraphTextSurgical(paragraph.xml, needle, scopedReplacement);
     if (!mutated) continue;
     documentXml = `${documentXml.slice(0, paragraph.start)}${mutated.xml}${documentXml.slice(paragraph.end)}`;
     changedCount += 1;
   }
 
-  if (changedCount === 0) {
+  if (changedCount === 0 && scope !== 'title') {
     // Last-resort: needle appears as a contiguous escaped fragment inside the
     // raw XML (single run). Still avoids rebuilding the paragraph structure.
     const escapedNeedle = xmlEscape(needle);
@@ -2147,9 +2182,14 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   }
 
   zip.file('word/document.xml', documentXml);
+  const remainingMatchCount = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+    .length;
   return {
     buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
     changedCount,
+    remainingMatchCount,
+    scope,
   };
 }
 
@@ -2178,9 +2218,7 @@ function setDocxDocumentTitleBuffer(buffer, newTitle) {
   let documentXml = documentFile.asText();
   const visibleParagraphs = extractDocxParagraphs(documentXml)
     .filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
-  const styledTitle = visibleParagraphs.find((paragraph) => (
-    /<w:pStyle\b[^>]*w:val=["'](?:title|titulo|t[ií]tulo|heading\s*1|heading1|titulo\s*1|t[ií]tulo\s*1)["']/iu.test(paragraph.xml)
-  ));
+  const styledTitle = visibleParagraphs.find(isDocxTitleParagraph);
   const titleParagraph = styledTitle || visibleParagraphs[0];
   if (!titleParagraph) {
     const err = new Error('No encontré un título visible dentro del DOCX.');
@@ -4152,12 +4190,30 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       continue;
     }
     if (op.kind === 'replace_text') {
-      const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
+      const scope = op.scope || 'document';
+      const executionChanged = op.changedCount == null || Number(op.changedCount) > 0;
+      const replacementPresent = scope === 'title'
+        ? selectDocxReplacementParagraphs(
+          extractDocxParagraphs(readDocxDocumentXml(buffer)),
+          op.replacement,
+          'title',
+        ).length > 0
+        : normalizedTextIncludes(text, op.replacement);
+      // A title-only edit may legitimately leave the same place/name in the
+      // body. Global replacements still require the old value to disappear.
+      const needleCriterion = scope === 'title' || !normalizedTextIncludes(text, op.needle);
+      const passed = executionChanged && replacementPresent && needleCriterion;
       checks.push({
         id: 'specific_text_replaced',
-        label: 'Texto específico reemplazado',
+        label: scope === 'title' ? 'Texto del título reemplazado' : 'Texto específico reemplazado',
         passed,
-        details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
+        details: {
+          needle: compact(op.needle, 120),
+          replacement: compact(op.replacement, 120),
+          scope,
+          changedCount: Number(op.changedCount || 0),
+          remainingMatchCount: Number(op.remainingMatchCount || 0),
+        },
       });
     }
   }
@@ -4597,11 +4653,21 @@ function cleanReplacementValue(value = '') {
   let text = String(value || '')
     .replace(/[.;!?]+$/g, '')
     .replace(/\s+(?:por\s+favor|gracias|sin\s+tocar.*|conserva\w*.*|devu[eé]lv\w*.*)$/iu, '')
+    // Delivery/scope language is not part of the replacement itself. Live
+    // example: "cajamarca en mi mismo word" must write only "cajamarca".
+    .replace(/\s+(?:en|sobre|dentro\s+de)\s+(?:(?:mi|el|la|este|esta|ese|esa)\s+)?(?:(?:mismo|misma)\s+)?(?:word|docx|documento|archivo)(?:\s+(?:original|adjunto|completo|editado))?\s*$/iu, '')
+    .replace(/[.;!?]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   // Typo: "Judicial de de Cajamarca" → "Judicial de Cajamarca"
   text = text.replace(/\bde\s+de\b/gi, 'de');
   return text;
+}
+
+function extractReplacementScope(text = '') {
+  const normalized = normalizeText(text);
+  if (/\b(?:titulo|title)\b/.test(normalized)) return 'title';
+  return 'document';
 }
 
 const REPLACE_VERB_RE = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i;
@@ -4798,7 +4864,8 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   }
 
   if (replacement) {
-    return { kind: 'replace_text', ...replacement };
+    const scope = extractReplacementScope(clauseNorm);
+    return { kind: 'replace_text', ...replacement, ...(scope === 'title' ? { scope } : {}) };
   }
 
   if (requestWantsMinimalOnlyProofreading(clauseNorm)) {
@@ -4866,7 +4933,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}:${op.slideNumber || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.scope || ''}:${op.address || ''}:${op.slideNumber || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -4891,11 +4958,20 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   // Doing this before the normalized-clause loop means compound prompts keep
   // "APROBADO" instead of collapsing to "aprobado".
   const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  const replacementScope = extractReplacementScope(requestText);
   if (quotedPairs.length && !rawTitleChange) {
-    for (const pair of quotedPairs) add({ kind: 'replace_text', ...pair });
+    for (const pair of quotedPairs) add({
+      kind: 'replace_text',
+      ...pair,
+      ...(replacementScope === 'title' ? { scope: replacementScope } : {}),
+    });
   } else {
     const rawReplacement = extractReplacementPair(requestText);
-    if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
+    if (rawReplacement && !rawTitleChange) add({
+      kind: 'replace_text',
+      ...rawReplacement,
+      ...(replacementScope === 'title' ? { scope: replacementScope } : {}),
+    });
   }
   const norm = normalizeText(requestText);
   if (requestWantsMinimalProofreading(norm) && !requestWantsProfessionalEditing(norm)) {
@@ -5541,15 +5617,19 @@ function runDeleteSectionOperation({ buffer, op }) {
 }
 
 function runReplaceTextOperation({ buffer, op }) {
-  const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement);
+  const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement, { scope: op.scope || 'document' });
+  op.changedCount = result.changedCount;
+  op.remainingMatchCount = result.remainingMatchCount;
   return {
     buffer: result.buffer,
     validationBlocks: [block('normal', op.replacement)],
     step: {
       kind: 'replace_text',
-      label: 'Texto específico',
-      mode: 'safe_replace',
+      label: op.scope === 'title' ? 'Título del documento' : 'Texto específico',
+      mode: op.scope === 'title' ? 'title_scoped_safe_replace' : 'safe_replace',
       changedCount: result.changedCount,
+      remainingMatchCount: result.remainingMatchCount,
+      scope: op.scope || 'document',
       needle: op.needle,
       replacement: op.replacement,
     },
@@ -6743,6 +6823,9 @@ function describeStep(step) {
   if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado${step.slideNumber ? ` en la diapositiva ${step.slideNumber}` : ''} (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'set_document_title') return `actualicé el título del documento a «${step.newTitle}» conservando su formato`;
+  if (step.kind === 'replace_text' && step.scope === 'title') {
+    return `reemplacé el texto solicitado únicamente en el título (${step.changedCount || 0} coincidencia)`;
+  }
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado${step.slideNumber ? ` en la diapositiva ${step.slideNumber}` : ''} (${step.changedCount || 0} coincidencia(s))`;
   if (step.kind === 'proofread_minimal') {
     const count = Number(step.changedCount || 0);
@@ -6821,6 +6904,9 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
       tableKind: op.kind === 'insert_table' ? (op.tableKind || 'table') : undefined,
       needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
       replacement: op.kind === 'replace_text' ? compact(op.replacement, 80) : undefined,
+      scope: op.kind === 'replace_text' ? (op.scope || 'document') : undefined,
+      changedCount: op.kind === 'replace_text' ? Number(op.changedCount || 0) : undefined,
+      remainingMatchCount: op.kind === 'replace_text' ? Number(op.remainingMatchCount || 0) : undefined,
       address: op.kind === 'set_cell' ? op.address : undefined,
       value: op.kind === 'set_cell' ? compact(op.value, 80) : undefined,
       changedParagraphs: op.kind === 'professional_edit' ? Number(op.changedParagraphs || 0) : undefined,
@@ -7340,6 +7426,7 @@ module.exports = {
     extractDocxTitleChange,
     extractAllQuotedReplacementPairs,
     extractReplacementPair,
+    extractReplacementScope,
     cleanReplacementNeedle,
     cleanReplacementValue,
     extractNamedSectionAppend,

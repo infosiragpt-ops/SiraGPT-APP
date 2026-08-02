@@ -11900,9 +11900,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       className={cn(
                         "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                        "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
                         "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
-                        "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                     )}
                   >
                     {/* Attachments live INSIDE the composer border (Claude-style):
@@ -12014,6 +12012,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             onScroll={handleComposerTextareaScroll}
                             onCompositionStart={() => { isComposingRef.current = true }}
                             onCompositionEnd={() => { isComposingRef.current = false }}
+                            aria-label="Mensaje para SiraGPT"
+                            enterKeyHint="send"
                             data-link-highlights={hasDetectedLinks ? "true" : undefined}
                             placeholder={
                               isImageGenerationActive
@@ -12382,9 +12382,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           className={cn(
                             "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                            "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
                             "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
-                            "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
                         )}
                       >
                         {/* Attachments live INSIDE the composer border (Claude-style):
@@ -12491,6 +12489,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 onScroll={handleComposerTextareaScroll}
                                 onCompositionStart={() => { isComposingRef.current = true }}
                                 onCompositionEnd={() => { isComposingRef.current = false }}
+                                aria-label="Mensaje para SiraGPT"
+                                enterKeyHint="send"
                                 data-link-highlights={hasDetectedLinks ? "true" : undefined}
                                 placeholder={
                                   isImageGenerationActive
