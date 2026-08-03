@@ -94,7 +94,18 @@ export type AgentOfficeDepartment = {
   workers: AgentOfficeWorker[]
   activeCount: number
   pool: AgentOfficePoolTruth
-  commandStatus: "active" | "queued" | "paused" | "blocked" | "completed" | "idle"
+  commandStatus:
+    | "planned"
+    | "active"
+    | "queued"
+    | "waiting_approval"
+    | "paused"
+    | "cancelling"
+    | "blocked"
+    | "failed"
+    | "completed"
+    | "cancelled"
+    | "idle"
   currentWork: string | null
   tasksActive: number
   tasksQueued: number
@@ -123,8 +134,11 @@ export type AgentOfficeTruth = {
   readinessStatus: "ready" | "attention" | "blocked" | "unknown"
   readinessScore: number | null
   swarmActive: number
+  swarmPlanned: number
   swarmQueued: number
+  swarmBlocked: number
   swarmFailed: number
+  swarmCancelled: number
   latestBlockers: Array<{ id: string; label: string; departmentId: string | null; source: string }>
 }
 
@@ -254,8 +268,11 @@ function emptyTruth(): AgentOfficeTruth {
     readinessStatus: "unknown",
     readinessScore: null,
     swarmActive: 0,
+    swarmPlanned: 0,
     swarmQueued: 0,
+    swarmBlocked: 0,
     swarmFailed: 0,
+    swarmCancelled: 0,
     latestBlockers: [],
   }
 }
@@ -494,10 +511,14 @@ export function buildAgentOfficeModel({
         source: "mission",
       })
     }
-    if (command?.status === "blocked") {
+    if (command?.status === "blocked" || command?.status === "failed") {
       blockers.push({
         id: `command:${department.id}`,
-        label: compactLine(command.currentWork || command.objective || "Departamento bloqueado", "Bloqueado", 160),
+        label: compactLine(
+          command.currentWork || command.objective || (command.status === "failed" ? "Departamento fallido" : "Departamento bloqueado"),
+          command.status === "failed" ? "Fallido" : "Bloqueado",
+          160,
+        ),
         source: "command",
       })
     }
@@ -591,8 +612,11 @@ export function buildAgentOfficeModel({
     readinessStatus: commandCenter?.readiness?.status || "unknown",
     readinessScore: commandCenter?.readiness ? Number(commandCenter.readiness.score) || 0 : null,
     swarmActive: Number(commandCenter?.swarmSummary?.active) || 0,
+    swarmPlanned: Number(commandCenter?.swarmSummary?.planned) || 0,
     swarmQueued: Number(commandCenter?.swarmSummary?.queued) || 0,
+    swarmBlocked: Number(commandCenter?.swarmSummary?.blocked) || 0,
     swarmFailed: Number(commandCenter?.swarmSummary?.failed) || 0,
+    swarmCancelled: Number(commandCenter?.swarmSummary?.cancelled) || 0,
     latestBlockers,
   }
 

@@ -6,6 +6,7 @@ import {
   FolderGit2,
   GitBranch,
   Globe,
+  MoreHorizontal,
   Monitor,
   PanelLeft,
   Plus,
@@ -17,6 +18,13 @@ import {
 
 import UpgradeModal from "@/components/UpgradeModal"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 import { ProjectChip } from "./project-chip"
@@ -56,6 +64,7 @@ export type WorkspaceTopBarProps = {
   newTabOpen?: boolean
   onCloseNewTab?: () => void
   toolsMenu?: React.ReactNode
+  onOpenTools?: () => void
   onOpenSearch: () => void
   onOpenInvite: () => void
   inviteOpen?: boolean
@@ -84,6 +93,7 @@ export function WorkspaceTopBar({
   newTabOpen,
   onCloseNewTab,
   toolsMenu,
+  onOpenTools,
   onOpenSearch,
   onOpenInvite,
   inviteOpen,
@@ -100,25 +110,25 @@ export function WorkspaceTopBar({
   const showUpgrade = Boolean(user && isFreePlan(user.plan))
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2.5">
+    <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-1.5 sm:gap-2 sm:px-2.5">
       <ProjectChip onOpenCode={onOpenCode} />
       {showUpgrade ? (
         <button
           type="button"
-          className="flex h-6 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+          className="hidden h-6 shrink-0 items-center justify-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 sm:flex"
           title="Ver planes y precios"
           aria-label="Ver planes y precios"
           aria-haspopup="dialog"
           onClick={() => setUpgradeOpen(true)}
         >
           <Plus className="h-3 w-3" strokeWidth={2.5} />
-          Upgrade
+          <span>Upgrade</span>
         </button>
       ) : null}
 
       {/* Panel tabs — sit in the header itself (Publicar height), roughly
           above where the main pane begins. */}
-      <div className="workspace-tab-strip ml-[6%] flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div className="workspace-tab-strip ml-[6%] hidden min-w-0 items-center gap-1 overflow-x-auto sm:flex">
         {visible.map((panel) => {
           const Icon = panel.icon
           const active = activePanel === panel.id
@@ -209,11 +219,57 @@ export function WorkspaceTopBar({
 
       <span className="min-w-0 flex-1" />
 
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-md text-muted-foreground hover:text-foreground sm:hidden"
+            aria-label="Más acciones del workspace"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-60 rounded-lg border-border/70 p-1.5 sm:hidden">
+          <DropdownMenuItem className="min-h-11 gap-3 rounded-md px-3" onSelect={onOpenSearch}>
+            <Search className="h-4 w-4 text-muted-foreground" />
+            Buscar
+          </DropdownMenuItem>
+          <DropdownMenuItem className="min-h-11 gap-3 rounded-md px-3" onSelect={onOpenCode}>
+            <FolderGit2 className="h-4 w-4 text-muted-foreground" />
+            Código del proyecto
+          </DropdownMenuItem>
+          {onOpenTools ? (
+            <DropdownMenuItem className="min-h-11 gap-3 rounded-md px-3" onSelect={onOpenTools}>
+              <Plus className="h-4 w-4 text-muted-foreground" />
+              Herramientas
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem className="min-h-11 gap-3 rounded-md px-3" onSelect={onOpenInvite}>
+            <UserPlus className="h-4 w-4 text-muted-foreground" />
+            Invitar
+          </DropdownMenuItem>
+          {showUpgrade ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="min-h-11 gap-3 rounded-md px-3 font-medium text-[#0878e8] focus:text-[#0878e8]"
+                onSelect={() => setUpgradeOpen(true)}
+              >
+                <Plus className="h-4 w-4" />
+                Ver planes y precios
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+        className="hidden h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground sm:inline-flex"
         aria-label="Buscar"
         onClick={onOpenSearch}
       >
@@ -228,7 +284,7 @@ export function WorkspaceTopBar({
         aria-pressed={codeOpen}
         onClick={onOpenCode}
         className={cn(
-          "h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground",
+          "hidden h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground sm:inline-flex",
           codeOpen && "bg-muted/70 text-foreground",
         )}
       >
@@ -237,43 +293,44 @@ export function WorkspaceTopBar({
       <Button
         type="button"
         variant="ghost"
-        size="sm"
+        size="icon"
         aria-label="Invitar miembro al workspace"
         aria-pressed={inviteOpen}
         onClick={onOpenInvite}
         className={cn(
-          "h-7 shrink-0 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+          "hidden h-7 shrink-0 rounded-md px-2.5 text-[11px] font-medium transition-colors sm:inline-flex",
           inviteOpen
             ? "bg-muted/70 text-foreground"
             : "text-muted-foreground hover:text-foreground",
         )}
       >
         <UserPlus className="mr-1 h-3 w-3" />
-        Invitar
+        <span>Invitar</span>
       </Button>
       <button
         type="button"
         aria-label="Publicar el proyecto"
+        title="Publicar el proyecto"
         aria-pressed={publishingOpen}
         onClick={onOpenPublishing}
         className={cn(
-          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold transition-colors",
+          "flex h-10 w-10 shrink-0 items-center justify-center gap-1.5 rounded-md px-0 text-[11px] font-semibold transition-colors sm:h-7 sm:w-auto sm:px-3",
           "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
         )}
       >
-        <Globe className="h-3 w-3" />
-        Publicar
+        <Globe className="h-4 w-4 sm:h-3 sm:w-3" />
+        <span className="hidden sm:inline">Publicar</span>
       </button>
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+        className="h-10 w-10 shrink-0 rounded-md text-muted-foreground hover:text-foreground sm:h-7 sm:w-7"
         aria-label="Mostrar u ocultar el chat del agente"
         title="Mostrar u ocultar el chat"
         onClick={onToggleChat}
       >
-        <PanelLeft className="h-3.5 w-3.5" />
+        <PanelLeft className="h-5 w-5 sm:h-3.5 sm:w-3.5" />
       </Button>
       {showUpgrade ? (
         <UpgradeModal

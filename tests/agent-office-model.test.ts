@@ -118,6 +118,67 @@ test("buildAgentOfficeModel keeps empty departments without inventing workers", 
   assert.equal(model.truth.pendingApprovals, 0)
 })
 
+test("a failed command-center department remains visible as an office blocker", () => {
+  const commandCenter: CodexEnterpriseCommandCenter = {
+    readiness: {
+      status: "attention",
+      score: 50,
+      runState: "failed",
+      checks: [],
+    },
+    mission: "",
+    vision: "",
+    swarmSummary: {
+      logicalAgents: 1,
+      planned: 0,
+      active: 0,
+      queued: 0,
+      blocked: 0,
+      completed: 0,
+      failed: 1,
+      cancelled: 0,
+      maxParallel: 1,
+    },
+    departments: [{
+      id: "product-engineering",
+      name: "Producto e Ingeniería",
+      objective: "Verificar el producto",
+      status: "failed",
+      logicalAgents: 1,
+      plannedTasks: 0,
+      activeAgents: 0,
+      queuedTasks: 0,
+      blockedTasks: 0,
+      failedTasks: 1,
+      cancelledTasks: 0,
+      completedTasks: 0,
+      progress: 0,
+      currentWork: "El build no superó la validación",
+    }],
+    liveEvents: [],
+    executiveSummary: { title: "Estado", summary: "Requiere atención" },
+    swarm: null,
+    governance: {},
+  }
+
+  const model = buildAgentOfficeModel({
+    departments: AGENT_COMPANY_DEPARTMENTS,
+    sessions: [],
+    runs: [],
+    rootSessionId: null,
+    commandCenter,
+  })
+  const engineering = model.departments.find((department) => department.id === "product-engineering")
+
+  assert.ok(engineering)
+  assert.equal(engineering.commandStatus, "failed")
+  assert.deepEqual(
+    engineering.blockers.map((blocker) => blocker.label),
+    ["El build no superó la validación"],
+  )
+  assert.equal(engineering.blockers[0]?.source, "command")
+})
+
 test("officeWorkerStance seats running agents and paces blocked ones", () => {
   // Work has to be visible: a running agent sits at its desk and types, a
   // blocked one paces, everyone else waits. Before this, every worker walked
@@ -274,10 +335,13 @@ test("office truth binds pools, cost, evidence, approvals and blockers", () => {
     vision: "Escalar",
     swarmSummary: {
       logicalAgents: 3,
+      planned: 2,
       active: 1,
       queued: 1,
+      blocked: 1,
       completed: 0,
       failed: 1,
+      cancelled: 1,
       maxParallel: 2,
     },
     departments: [
@@ -287,8 +351,12 @@ test("office truth binds pools, cost, evidence, approvals and blockers", () => {
         objective: "Billing",
         status: "blocked",
         logicalAgents: 2,
+        plannedTasks: 0,
         activeAgents: 1,
         queuedTasks: 1,
+        blockedTasks: 1,
+        failedTasks: 1,
+        cancelledTasks: 0,
         completedTasks: 0,
         progress: 40,
         currentWork: "Implementar billing",
@@ -412,5 +480,8 @@ test("office truth binds pools, cost, evidence, approvals and blockers", () => {
   assert.equal(model.truth.activeObjectives, 1)
   assert.equal(model.truth.readinessStatus, "attention")
   assert.equal(model.truth.swarmFailed, 1)
+  assert.equal(model.truth.swarmPlanned, 2)
+  assert.equal(model.truth.swarmBlocked, 1)
+  assert.equal(model.truth.swarmCancelled, 1)
   assert.ok(model.truth.latestBlockers.length >= 1)
 })

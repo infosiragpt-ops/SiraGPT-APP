@@ -7,6 +7,10 @@ const {
 const { buildEnterpriseSwarmTasks } = require('./enterprise-swarm-plan');
 const { configuredRunCap } = require('./run-service');
 const { listDepartmentPools } = require('./department-pools');
+const {
+  departmentIdForWorkstream,
+  projectedEnterpriseDepartmentId,
+} = require('./enterprise-departments');
 
 const DEFAULT_PLANNER_TASKS = 64;
 // Matches swarm-orchestrator / enterprise-swarm-plan logical capacity (10k).
@@ -83,7 +87,9 @@ function normalizePlannerTasks(rawTasks, { maxTasks = MAX_PLANNER_TASKS } = {}) 
       : [];
     const externalEffect = Boolean(source.externalEffect || source.external_effect);
     const role = externalEffect ? TASK_ROLES.REVIEWER : roleFor(source.role);
-    const departmentId = slug(source.departmentId || source.deptId || source.department || 'product-engineering');
+    const departmentId = projectedEnterpriseDepartmentId(
+      slug(source.departmentId || source.deptId || source.department || 'product-engineering'),
+    );
     const acceptance = Array.isArray(source.acceptance)
       ? source.acceptance.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
       : [];
@@ -178,15 +184,23 @@ function fallbackFleetTasks({ companyPlan, objective, logicalTasks }) {
     logicalTasks,
   });
   return legacy.map((task) => {
-    if (task.role === TASK_ROLES.INTEGRATOR) return task;
+    const input = task.input && typeof task.input === 'object' ? task.input : {};
+    const departmentId = (input.departmentId
+      ? projectedEnterpriseDepartmentId(input.departmentId)
+      : '')
+      || (input.workstreamId
+        ? departmentIdForWorkstream(input.workstreamId)
+        : task.role === TASK_ROLES.REVIEWER
+          ? 'trust'
+          : 'product-engineering');
     if (task.input?.kind === 'draft') {
       return {
         ...task,
         role: TASK_ROLES.WRITER,
         stage: 'work',
         input: {
-          ...task.input,
-          departmentId: task.input.workstreamId || 'product-engineering',
+          ...input,
+          departmentId,
           instruction: String(task.input.instruction || '').replace(
             /no modifiques archivos\.?/i,
             'implementa el entregable en el workspace y verifica los cambios.',
@@ -194,7 +208,13 @@ function fallbackFleetTasks({ companyPlan, objective, logicalTasks }) {
         },
       };
     }
-    return task;
+    return {
+      ...task,
+      input: {
+        ...input,
+        departmentId,
+      },
+    };
   });
 }
 
@@ -280,7 +300,7 @@ async function planFleetTasks({
             role: 'system',
             content: [
               'Eres el planner de una flota de ingeniería. Devuelve SOLO JSON válido.',
-              'Esquema: {"tasks":[{"id":"kebab","title":"...","description":"...","departmentId":"...","role":"writer|read-only|reviewer|integrator","dependsOn":[],"acceptance":["..."]}]}.',
+              'Esquema: {"tasks":[{"id":"kebab","title":"...","description":"...","departmentId":"ceo-office|product-engineering|marketing|customer-success|sales-operations|trust","role":"writer|read-only|reviewer|integrator","dependsOn":[],"acceptance":["..."]}]}.',
               'Descompón en un DAG pequeño y ejecutable. Las tareas que cambian código usan role=writer. Investigación usa read-only. Efectos externos nunca son writer. Evita dos writers sobre el mismo archivo en el mismo nivel o explicita su dependencia.',
             ].join(' '),
           },

@@ -60,6 +60,114 @@ const runs = [
   },
 ]
 
+const commandCenter = {
+  readiness: {
+    status: "attention",
+    score: 86,
+    runState: "queued",
+    checks: [{
+      id: "workspace",
+      label: "Workspace",
+      status: "ready",
+      detail: "Proyecto y runtime vinculados.",
+    }],
+    lastCheckedAt: now,
+  },
+  mission: "Ayudar a empresas a ejecutar mejor.",
+  vision: "Operaciones autónomas con control humano.",
+  swarmSummary: {
+    logicalAgents: 3,
+    planned: 2,
+    active: 0,
+    queued: 1,
+    blocked: 1,
+    completed: 0,
+    failed: 0,
+    cancelled: 1,
+    maxParallel: 4,
+  },
+  departments: [
+    {
+      id: "product-engineering",
+      workstreamId: "software_landing",
+      name: "Producto e Ingeniería",
+      objective: "Construir y verificar el producto.",
+      status: "blocked",
+      logicalAgents: 3,
+      plannedTasks: 0,
+      activeAgents: 0,
+      queuedTasks: 1,
+      blockedTasks: 1,
+      failedTasks: 0,
+      cancelledTasks: 1,
+      completedTasks: 0,
+      progress: 33,
+      currentWork: "Esperar dependencia verificada",
+      owner: "CEO Office",
+      lastUpdatedAt: now,
+    },
+    {
+      id: "marketing",
+      workstreamId: "social_presence",
+      name: "Marketing",
+      objective: "Preparar borradores sin publicar automáticamente.",
+      status: "planned",
+      logicalAgents: 0,
+      plannedTasks: 2,
+      activeAgents: 0,
+      queuedTasks: 0,
+      blockedTasks: 0,
+      failedTasks: 0,
+      cancelledTasks: 0,
+      completedTasks: 0,
+      progress: 0,
+      currentWork: null,
+      owner: "CEO Office",
+      lastUpdatedAt: null,
+    },
+  ],
+  liveEvents: [
+    {
+      id: "swarm-task:blocked-1",
+      timestamp: now,
+      title: "Esperar dependencia verificada",
+      kind: "verification",
+      status: "blocked",
+      detail: "La tarea depende de evidencia durable.",
+      departmentId: "product-engineering",
+      departmentName: "Producto e Ingeniería",
+    },
+    {
+      id: "swarm-task:cancelled-1",
+      timestamp: "2026-07-23T15:59:00.000Z",
+      title: "Integración cancelada",
+      kind: "coding",
+      status: "cancelled",
+      detail: "Cancelada por el operador.",
+      departmentId: "product-engineering",
+      departmentName: "Producto e Ingeniería",
+    },
+  ],
+  executiveSummary: {
+    title: "Informe del CEO Office",
+    summary: "La operación conserva estados y evidencia persistidos.",
+    updatedAt: now,
+    highlights: [],
+    risks: ["1 tarea espera una dependencia"],
+    nextActions: ["Resolver el bloqueo antes de ejecutar"],
+  },
+  swarm: {
+    id: "swarm-matrix-qa",
+    name: "CEO Office",
+    status: "queued",
+    progressPercent: 33,
+    maxConcurrency: 4,
+    totalTaskCount: 3,
+    updatedAt: now,
+  },
+  governance: { externalActions: "review" },
+}
+
 async function fulfillJson(route: Route, payload: unknown, status = 200) {
   await route.fulfill({
     status,
@@ -73,8 +181,10 @@ async function mockMatrixCompany(
   {
     linkedProject = true,
     malformedCodexLists = false,
-  }: { linkedProject?: boolean; malformedCodexLists?: boolean } = {},
+    userPlan = "PRO",
+  }: { linkedProject?: boolean; malformedCodexLists?: boolean; userPlan?: "FREE" | "PRO" } = {},
 ) {
+  const currentUser = { ...user, plan: userPlan }
   const operations = {
     projectCreates: 0,
     projectUpdates: [] as Array<Record<string, unknown>>,
@@ -82,7 +192,11 @@ async function mockMatrixCompany(
     proactiveToggles: 0,
     socialPolicyUpdates: 0,
     activityReports: 0,
+    swarmCancels: 0,
+    runCancels: 0,
+    unexpectedApi: [] as string[],
   }
+  const currentCommandCenter = JSON.parse(JSON.stringify(commandCenter)) as typeof commandCenter
   let currentProject = { ...project }
   let projectDeleted = false
   let proactiveEnabled = false
@@ -181,15 +295,32 @@ async function mockMatrixCompany(
       localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
     }
     localStorage.setItem("matrix-qa:user", JSON.stringify(currentUser))
-  }, { activeProject: project, currentUser: user, timestamp: now, shouldLinkProject: linkedProject })
+  }, { activeProject: project, currentUser, timestamp: now, shouldLinkProject: linkedProject })
+
+  await page.route("**/__matrix-preview__/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><html><body><main id=matrix-preview>Preview verificado</main></body></html>",
+    })
+  })
 
   await page.route("**/api/**", async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace(/^\/api(?=\/|$)/, "")
 
-    if (path === "/auth/me") return fulfillJson(route, { user })
+    if (path === "/auth/me") return fulfillJson(route, { user: currentUser })
+    if (path === "/users/settings" && request.method() === "GET") {
+      return fulfillJson(route, { settings: {} })
+    }
+    if (path === "/users/settings" && request.method() === "PUT") {
+      return fulfillJson(route, { settings: request.postDataJSON() })
+    }
     if (path === "/health" && request.method() === "HEAD") return route.fulfill({ status: 204 })
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
+    if (path === "/opencode/health" && request.method() === "GET") {
+      return fulfillJson(route, { ok: true, configured: false, baseUrl: null })
+    }
     if (path === "/projects" && request.method() === "GET") {
       return fulfillJson(route, { projects: projectDeleted ? [] : [currentProject] })
     }
@@ -212,6 +343,22 @@ async function mockMatrixCompany(
     }
     if (path === "/codex/access") {
       return fulfillJson(route, { ok: true, enabled: true, canRun: true, allowlistConfigured: true })
+    }
+    if (path === "/codex/workspace-resolution" && request.method() === "GET") {
+      return fulfillJson(route, {
+        kind: "project",
+        workspaceId: "project:matrix-qa",
+        project: {
+          id: project.id,
+          name: project.name,
+          description: project.description,
+          instructions: project.instructions,
+          organizationId: null,
+          type: "webapp",
+          status: "active",
+          updatedAt: now,
+        },
+      })
     }
     if (path === "/codex/company-associations" && request.method() === "GET") {
       return fulfillJson(route, {
@@ -294,6 +441,52 @@ async function mockMatrixCompany(
       if (malformedCodexLists) return fulfillJson(route, {})
       return fulfillJson(route, { runs })
     }
+    if (/^\/codex\/projects\/[^/]+\/activity$/.test(path) && request.method() === "GET") {
+      return fulfillJson(route, { activity: [] })
+    }
+    if (/^\/codex\/projects\/[^/]+\/company-operations$/.test(path) && request.method() === "GET") {
+      return fulfillJson(route, {
+        operations: {
+          counts: { leads: 0, pendingInbox: 0, pendingActions: 0 },
+          leads: [],
+          inboxItems: [],
+          actions: [],
+        },
+      })
+    }
+    if (/^\/codex\/projects\/[^/]+\/preview\/start$/.test(path) && request.method() === "POST") {
+      return fulfillJson(route, {
+        previewStatus: { ready: true, framework: "react", basePath: "/__matrix-preview__/" },
+        basePath: "/__matrix-preview__/",
+        devUrl: "/__matrix-preview__/",
+        previewUrl: "/__matrix-preview__/",
+      })
+    }
+    if (/^\/codex\/projects\/[^/]+\/preview\/status$/.test(path) && request.method() === "GET") {
+      return fulfillJson(route, {
+        previewStatus: { ready: true, framework: "react", basePath: "/__matrix-preview__/" },
+      })
+    }
+    if (/^\/codex\/projects\/[^/]+\/preview\/stop$/.test(path) && request.method() === "POST") {
+      return fulfillJson(route, { ok: true })
+    }
+    if (/^\/codex\/projects\/[^/]+\/swarms\/[^/]+\/cancel$/.test(path) && request.method() === "POST") {
+      operations.swarmCancels += 1
+      currentCommandCenter.readiness.runState = "cancelled"
+      if (currentCommandCenter.swarm) currentCommandCenter.swarm.status = "cancelled"
+      return fulfillJson(route, { swarm: currentCommandCenter.swarm })
+    }
+    if (/^\/codex\/runs\/[^/]+\/cancel$/.test(path) && request.method() === "POST") {
+      operations.runCancels += 1
+      const runId = path.split("/")[3]
+      const activeRun = runs.find((entry) => entry.id === runId) || runs[0]
+      return fulfillJson(route, {
+        run: { ...activeRun, status: "cancelled", finishedAt: now },
+      })
+    }
+    if (/^\/codex\/projects\/[^/]+\/command-center$/.test(path) && request.method() === "GET") {
+      return fulfillJson(route, { commandCenter: currentCommandCenter, company: null })
+    }
     if (/^\/codex\/projects\/[^/]+\/checkpoints$/.test(path)) {
       if (malformedCodexLists) return fulfillJson(route, { checkpoints: null })
       return fulfillJson(route, { checkpoints: [{ id: "checkpoint-1" }, { id: "checkpoint-2" }] })
@@ -361,7 +554,7 @@ async function mockMatrixCompany(
     }
     if (path === "/payments/subscription") {
       return fulfillJson(route, {
-        plan: "PRO",
+        plan: userPlan,
         status: "active",
         subscription: null,
         apiUsage: 0,
@@ -468,7 +661,8 @@ async function mockMatrixCompany(
       return fulfillJson(route, { chats: [], pagination: { page: 1, limit: 20, total: 0, pages: 0 } })
     }
 
-    return fulfillJson(route, {})
+    operations.unexpectedApi.push(`${request.method()} ${path}`)
+    return fulfillJson(route, { error: "unexpected_api_in_test" }, 501)
   })
 
   return operations
@@ -570,6 +764,177 @@ test("mission evidence, CEO review and report survive a reload", async ({ page }
   expect(operations.activityReports).toBe(1)
   expect(pageErrors).toEqual([])
   await page.screenshot({ path: testInfo.outputPath("mission-evidence-durable.png"), fullPage: true })
+})
+
+test("enterprise command center keeps durable states truthful on desktop and mobile", async ({ page }, testInfo) => {
+  test.setTimeout(240_000)
+  await page.setViewportSize({ width: 1425, height: 900 })
+  const consoleErrors: string[] = []
+  const pageErrors: string[] = []
+  const requestFailures: string[] = []
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text())
+  })
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  page.on("requestfailed", (request) => {
+    requestFailures.push(`${request.method()} ${new URL(request.url()).pathname}: ${request.failure()?.errorText || "failed"}`)
+  })
+  const operations = await mockMatrixCompany(page)
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+  await expect(page.getByRole("button", { name: "Panel", exact: true })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole("button", { name: "Panel", exact: true }).click()
+
+  const center = page.getByTestId("enterprise-command-center")
+  await expect(center).toBeVisible()
+  await expect(center.getByText("En cola", { exact: true }).first()).toBeVisible()
+  await expect(center.getByText("Agentes reales", { exact: true })).toBeVisible()
+  await expect(center.getByText("Planificadas", { exact: true })).toBeVisible()
+  await expect(center.getByText("Bloqueadas", { exact: true })).toBeVisible()
+  await expect(center.getByText("Cancelados", { exact: true })).toBeVisible()
+  await expect(center.getByRole("button", { name: "Iniciar ejecución de agentes" })).toBeDisabled()
+  await expect(center.getByRole("button", { name: "Pausar ejecución de agentes" })).toBeDisabled()
+  await expect(center.getByRole("button", { name: "Cancelar ejecución de agentes" })).toBeEnabled()
+  await expect(center.getByText("Actividad registrada", { exact: true })).toBeVisible()
+
+  await center.getByRole("tab", { name: "Departamentos" }).click()
+  const engineering = center.getByRole("heading", { name: "Producto e Ingeniería" }).locator("../..")
+  await expect(engineering).toContainText("Bloqueado")
+  await expect(engineering).toContainText("1 en cola")
+  await expect(engineering).toContainText("1 bloqueadas")
+  const marketing = center.getByRole("heading", { name: "Marketing" }).locator("../..")
+  await expect(marketing).toContainText("Planificado")
+  await expect(marketing).toContainText("2 planificadas")
+  expect(await center.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath("command-center-truth-desktop.png"), fullPage: true })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(
+    page.getByTestId("agent-company-operation-state-main").filter({ hasText: "EN COLA" }),
+  ).toBeVisible({ timeout: 30_000 })
+  for (const label of [
+    "Acciones del proyecto",
+    "Más acciones del workspace",
+    "Publicar el proyecto",
+    "Mostrar u ocultar el chat del agente",
+  ]) {
+    const control = page.getByRole("button", { name: label })
+    await expect(control).toBeVisible()
+    const bounds = await control.evaluate((element) => {
+      const rect = element.getBoundingClientRect()
+      return { left: rect.left, right: rect.right, width: rect.width, height: rect.height, viewport: window.innerWidth }
+    })
+    expect(bounds.left).toBeGreaterThanOrEqual(0)
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewport)
+    expect(bounds.width).toBeGreaterThanOrEqual(40)
+    expect(bounds.height).toBeGreaterThanOrEqual(40)
+  }
+  await page.getByRole("button", { name: "Más acciones del workspace" }).click()
+  for (const label of ["Buscar", "Código del proyecto", "Herramientas", "Invitar"]) {
+    const item = page.getByRole("menuitem", { name: label, exact: true })
+    await expect(item).toBeVisible()
+    expect((await item.boundingBox())?.height || 0).toBeGreaterThanOrEqual(44)
+  }
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "Panel", exact: true }).click()
+  await expect(center).toBeVisible()
+  await expect(page.getByText("No se pudo cargar", { exact: true })).toHaveCount(0)
+  expect(await center.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  expect(await page.evaluate(() => document.body.scrollWidth <= document.body.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath("command-center-truth-mobile.png"), fullPage: true })
+
+  await center.getByRole("button", { name: "Cancelar ejecución de agentes" }).click()
+  await expect.poll(() => operations.swarmCancels).toBe(1)
+  expect(operations.runCancels).toBe(0)
+  await expect(center.getByText("Cancelado", { exact: true }).first()).toBeVisible()
+  expect(operations.unexpectedApi).toEqual([])
+  expect(consoleErrors).toEqual([])
+  expect(pageErrors).toEqual([])
+  expect(requestFailures).toEqual([])
+})
+
+test("mobile workspace actions remain usable for FREE users at 320px", async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  await page.setViewportSize({ width: 320, height: 720 })
+  const consoleErrors: string[] = []
+  const pageErrors: string[] = []
+  const requestFailures: string[] = []
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text())
+  })
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  page.on("requestfailed", (request) => {
+    requestFailures.push(`${request.method()} ${new URL(request.url()).pathname}: ${request.failure()?.errorText || "failed"}`)
+  })
+  const operations = await mockMatrixCompany(page, { userPlan: "FREE" })
+
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+  const overflow = page.getByRole("button", { name: "Más acciones del workspace" })
+  await expect(overflow).toBeVisible({ timeout: 30_000 })
+  const assertPersistentControls = async () => {
+    for (const label of [
+      "Acciones del proyecto",
+      "Más acciones del workspace",
+      "Publicar el proyecto",
+      "Mostrar u ocultar el chat del agente",
+    ]) {
+      const control = page.getByRole("button", { name: label })
+      await expect(control).toBeVisible()
+      const bounds = await control.evaluate((element) => {
+        const rect = element.getBoundingClientRect()
+        return { left: rect.left, right: rect.right, width: rect.width, height: rect.height, viewport: window.innerWidth }
+      })
+      expect(bounds.left).toBeGreaterThanOrEqual(0)
+      expect(bounds.right).toBeLessThanOrEqual(bounds.viewport)
+      expect(bounds.width).toBeGreaterThanOrEqual(40)
+      expect(bounds.height).toBeGreaterThanOrEqual(40)
+    }
+  }
+
+  await assertPersistentControls()
+  await page.getByRole("button", { name: "Renombrar proyecto SiraGPT" }).click()
+  await expect(page.getByRole("textbox", { name: "Renombrar proyecto" })).toBeVisible()
+  for (const label of ["Guardar nombre", "Cancelar"]) {
+    const control = page.getByRole("button", { name: label, exact: true })
+    await expect(control).toBeVisible()
+    const bounds = await control.boundingBox()
+    expect(bounds?.width || 0).toBeGreaterThanOrEqual(40)
+    expect(bounds?.height || 0).toBeGreaterThanOrEqual(40)
+  }
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click()
+
+  await overflow.click()
+
+  for (const label of [
+    "Buscar",
+    "Código del proyecto",
+    "Herramientas",
+    "Invitar",
+    "Ver planes y precios",
+  ]) {
+    const item = page.getByRole("menuitem", { name: label, exact: true })
+    await expect(item).toBeVisible()
+    const bounds = await item.evaluate((element) => {
+      const rect = element.getBoundingClientRect()
+      return { left: rect.left, right: rect.right, height: rect.height, viewport: window.innerWidth }
+    })
+    expect(bounds.left).toBeGreaterThanOrEqual(0)
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewport)
+    expect(bounds.height).toBeGreaterThanOrEqual(44)
+  }
+  expect(await page.evaluate(() => document.body.scrollWidth <= document.body.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath("workspace-actions-free-320.png"), fullPage: true })
+  await page.keyboard.press("Escape")
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await assertPersistentControls()
+  await overflow.click()
+  await expect(page.getByRole("menuitem", { name: "Ver planes y precios", exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.body.scrollWidth <= document.body.clientWidth + 1)).toBe(true)
+
+  expect(operations.unexpectedApi).toEqual([])
+  expect(consoleErrors).toEqual([])
+  expect(pageErrors).toEqual([])
+  expect(requestFailures).toEqual([])
 })
 
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {

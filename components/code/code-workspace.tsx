@@ -510,6 +510,10 @@ export function CodeWorkspace() {
             <Plus className="h-3.5 w-3.5" />
           </Button>
         }
+        onOpenTools={() => {
+          setMobileView("preview")
+          setNewTabOpen(true)
+        }}
         onOpenSearch={() => {
           setPaletteQuery("")
           setPaletteOpen(true)
