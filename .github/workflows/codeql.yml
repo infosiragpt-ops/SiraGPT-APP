@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v4.37.4
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
@@ -85,6 +85,6 @@ jobs:
       # autobuild avoids spending minutes on vendored/upstream trees before the
       # analysis step and keeps the push SAST gate under its timeout budget.
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v4.37.4
         with:
           category: "/language:${{ matrix.language }}"
