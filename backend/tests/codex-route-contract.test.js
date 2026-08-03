@@ -216,6 +216,36 @@ test('GET /access reports flag and user execution access', async () => {
   assert.equal(res.body.canRun, true);
 });
 
+test('workspace resolution is authenticated, no-store, and owner-bound', async () => {
+  const original = companyAssociationService.resolveWorkspace;
+  const calls = [];
+  companyAssociationService.resolveWorkspace = async (_db, args) => {
+    calls.push(args);
+    return {
+      kind: 'codex',
+      workspaceId: `codex:${args.folderId}`,
+      project: { id: args.folderId, name: 'Runtime A', status: 'ready' },
+    };
+  };
+
+  try {
+    const res = await request(buildApp())
+      .get('/api/codex/workspace-resolution')
+      .query({ folderId: 'codex-a' });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.equal(res.body.workspaceId, 'codex:codex-a');
+    assert.deepEqual(calls, [{ userId: 'u-1', folderId: 'codex-a' }]);
+
+    const invalid = await request(buildApp())
+      .get('/api/codex/workspace-resolution');
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.body.error, 'validation_failed');
+  } finally {
+    companyAssociationService.resolveWorkspace = original;
+  }
+});
+
 test('company association routes persist explicit owner choices and never infer a backfill', async () => {
   const originals = {
     addCompanyConnector: companyAssociationService.addCompanyConnector,
