@@ -96,11 +96,42 @@ describe("code-chat-sessions", () => {
     assert.equal(codexWorkspaceSessionKey(""), "__default__")
   })
 
-  it("names parallel sessions Agente N", () => {
+  it("names the executive entry point and parallel sessions Agente N", () => {
     let store = ensureDefaultSession("local:tesis20")
-    assert.equal(listSessionsForWorkspace("local:tesis20", store)[0]?.title, "Agente 1")
+    assert.equal(listSessionsForWorkspace("local:tesis20", store)[0]?.title, "CEO Office")
     const second = createCodeChatSession("local:tesis20", undefined, store)
     assert.equal(second.session.title, "Agente 2")
+  })
+
+  it("migrates only untouched legacy Agente 1 sessions", () => {
+    storage.set(
+      "code-workspace:agent-sessions:v1",
+      JSON.stringify({
+        sessions: [
+          {
+            id: "empty",
+            workspaceId: "local:legacy",
+            title: "Agente 1",
+            turns: [],
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            id: "used",
+            workspaceId: "local:legacy",
+            title: "Agente 1",
+            turns: [{ id: "u1", role: "user", content: "Construye un CRM" }],
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        ],
+        activeByWorkspace: { "local:legacy": "empty" },
+      }),
+    )
+
+    const sessions = listSessionsForWorkspace("local:legacy", readCodeChatStore())
+    assert.equal(sessions.find((session) => session.id === "empty")?.title, "CEO Office")
+    assert.equal(sessions.find((session) => session.id === "used")?.title, "Agente 1")
   })
 
   it("accepts caller-generated ids for atomic parallel creation", () => {

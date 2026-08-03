@@ -851,7 +851,7 @@ const TOOLS = {
         const model = String(args?.model || configuredModel || definition.model || '').trim().slice(0, 160) || null;
         const effort = ['low', 'medium', 'high'].includes(String(args?.effort || '').toLowerCase())
           ? String(args.effort).toLowerCase()
-          : (ctx.projectSettings?.subagents?.defaultEffort || definition.effort || 'medium');
+          : (ctx.projectSettings?.subagents?.defaultEffort || ctx.effort || definition.effort || 'medium');
         const execute = ({ signal = ctx.signal } = {}) => sdk.runSubagent({
           name: String(args?.agent || ''),
           task: String(args?.task || ''),

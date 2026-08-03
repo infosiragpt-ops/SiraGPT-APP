@@ -29,6 +29,14 @@ type FakeSource = {
   stop: ReturnType<typeof vi.fn>
 }
 
+type FakeFilter = {
+  type: BiquadFilterType
+  frequency: ReturnType<typeof audioParam>
+  Q: ReturnType<typeof audioParam>
+  connect: ReturnType<typeof vi.fn>
+  disconnect: ReturnType<typeof vi.fn>
+}
+
 const contexts: FakeAudioContext[] = []
 let resumeAllowed = true
 
@@ -52,6 +60,7 @@ class FakeAudioContext {
   state: AudioContextState = "suspended"
   currentTime = 0
   destination = {}
+  filters: FakeFilter[] = []
   close = vi.fn(async () => {
     this.state = "closed"
   })
@@ -77,6 +86,17 @@ class FakeAudioContext {
     connect: vi.fn(),
     disconnect: vi.fn(),
   }))
+  createBiquadFilter = vi.fn(() => {
+    const filter: FakeFilter = {
+      type: "lowpass",
+      frequency: audioParam(),
+      Q: audioParam(),
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    }
+    this.filters.push(filter)
+    return filter
+  })
   createBufferSource = vi.fn((): FakeSource => ({
     buffer: null,
     loop: false,
@@ -138,6 +158,12 @@ describe("office soundscape lifecycle", () => {
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-day")
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("terrace-steps")
     expect(contexts[0]?.resume).toHaveBeenCalled()
+    expect(contexts[0]?.filters.map((filter) => filter.type)).toEqual([
+      "highpass",
+      "lowpass",
+    ])
+    expect(contexts[0]?.filters[0]?.frequency.value).toBe(55)
+    expect(contexts[0]?.filters[1]?.frequency.value).toBe(14_500)
   })
 
   it("respects an explicit mute preference on later office openings", async () => {
@@ -221,6 +247,8 @@ describe("office soundscape lifecycle", () => {
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-night")
     expect(apiClientMock.getOfficeSoundscape).not.toHaveBeenCalledWith("work-start")
+    expect(contexts[0]?.filters[0]?.frequency.value).toBe(42)
+    expect(contexts[0]?.filters[1]?.frequency.value).toBe(11_000)
 
     rerender({ activeCount: 3, approvalCount: 0, attentionCount: 0 })
     await waitFor(() =>

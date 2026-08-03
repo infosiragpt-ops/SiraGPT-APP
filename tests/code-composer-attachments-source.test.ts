@@ -53,8 +53,14 @@ describe("code composer attachments", () => {
       /files:\s*!webGroundedConversation\s*&&\s*override\?\.files\s*&&\s*override\.files\.length\s*>\s*0\s*\?\s*override\.files\s*:\s*undefined/,
     )
     assert.match(source, /const attachedFileIds = Array\.from\(new Set\(\(opts\?\.files \|\| \[\]\)\.filter\(Boolean\)\)\)/)
-    assert.match(source, /await sendPrompt\(action\.instruction, \{ autoApply: true, files: attachedFileIds \}\)/)
-    assert.match(source, /pendingInputRef\.current\.push\(\{ text: rawInput, files: attachedFileIds \}\)/)
+    assert.match(
+      source,
+      /await sendPrompt\(action\.instruction, \{ autoApply: true, files: attachedFileIds, mode: effectiveMode \}\)/,
+    )
+    assert.match(
+      source,
+      /pendingInputRef\.current\.push\(\{ text: rawInput, files: attachedFileIds, mode: effectiveMode \}\)/,
+    )
     assert.match(source, /composeCodePromptWithAttachments\(promptWithTarget, readyCodeAttachments\)/)
     assert.match(source, /selectedPreviewTarget/)
     assert.match(source, /buildSelectedElementPrompt\(selectedPreviewTarget, instruction\)/)

@@ -16,12 +16,12 @@ describe("code chat apply-gate source contract", () => {
   it("applies generated files in every mode that is not explicitly read-only", () => {
     assert.match(
       panel,
-      /override\?\.autoApply \?\? \(composerMode !== "ask" && composerMode !== "plan" && composerMode !== "image"\)/,
+      /override\?\.autoApply \?\? \(promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image"\)/,
       "the apply gate must be a read-only blocklist, not an app|build allowlist",
     )
     assert.doesNotMatch(
       panel,
-      /override\?\.autoApply \?\? \(composerMode === "app" \|\| composerMode === "build"\)/,
+      /override\?\.autoApply \?\? \(promptMode === "app" \|\| promptMode === "build"\)/,
       "the old allowlist gate must not come back",
     )
   })

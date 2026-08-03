@@ -1,5 +1,9 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 
+const { injectPreviewInteractionBridges } = require("../backend/src/services/code/preview-proxy") as {
+  injectPreviewInteractionBridges: (html: string, nonce: string) => string
+}
+
 test.describe.configure({ timeout: 120_000 })
 
 const now = "2026-07-23T16:00:00.000Z"
@@ -73,7 +77,14 @@ async function mockMatrixCompany(
   {
     linkedProject = true,
     malformedCodexLists = false,
-  }: { linkedProject?: boolean; malformedCodexLists?: boolean } = {},
+    withPreviewFile = false,
+    withCodexPreview = false,
+  }: {
+    linkedProject?: boolean
+    malformedCodexLists?: boolean
+    withPreviewFile?: boolean
+    withCodexPreview?: boolean
+  } = {},
 ) {
   const operations = {
     projectCreates: 0,
@@ -138,7 +149,7 @@ async function mockMatrixCompany(
     }],
     reports: [] as Array<Record<string, unknown>>,
   }
-  await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject }) => {
+  await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject, seedPreview }) => {
     const ceoSession = {
       id: "ceo-qa",
       workspaceId: "matrix-qa",
@@ -159,6 +170,23 @@ async function mockMatrixCompany(
 
     localStorage.setItem("auth-token", "matrix-qa-token")
     localStorage.setItem("code-workspace:active-folder", JSON.stringify(activeProject))
+    if (seedPreview) {
+      localStorage.setItem(
+        `code-workspace:v1:${activeProject.id}`,
+        JSON.stringify({
+          files: {
+            "index.html": {
+              path: "index.html",
+              language: "html",
+              content: "<!doctype html><html><body><main><h1>Inspector QA</h1><button data-e2e-target='primary'>Seleccionar</button></main></body></html>",
+              updatedAt: Date.parse(timestamp),
+            },
+          },
+          openTabs: ["index.html"],
+          activePath: "index.html",
+        }),
+      )
+    }
     localStorage.setItem(
       "code-workspace:agent-sessions:v1",
       JSON.stringify({
@@ -181,7 +209,13 @@ async function mockMatrixCompany(
       localStorage.setItem("siragpt:codex-project:ceo-qa", "codex-matrix-qa")
     }
     localStorage.setItem("matrix-qa:user", JSON.stringify(currentUser))
-  }, { activeProject: project, currentUser: user, timestamp: now, shouldLinkProject: linkedProject })
+  }, {
+    activeProject: project,
+    currentUser: user,
+    timestamp: now,
+    shouldLinkProject: linkedProject,
+    seedPreview: withPreviewFile,
+  })
 
   await page.route("**/api/**", async (route) => {
     const request = route.request()
@@ -212,6 +246,31 @@ async function mockMatrixCompany(
     }
     if (path === "/codex/access") {
       return fulfillJson(route, { ok: true, enabled: true, canRun: true, allowlistConfigured: true })
+    }
+    if (withCodexPreview && path === "/codex/projects/codex-matrix-qa/preview/start" && request.method() === "POST") {
+      const basePath = "/api/codex/projects/codex-matrix-qa/preview/e2e-preview-token/app/"
+      return fulfillJson(route, {
+        ok: true,
+        basePath,
+        devUrl: basePath,
+        previewUrl: basePath,
+        previewStatus: { running: true, ready: true, basePath },
+      })
+    }
+    if (withCodexPreview && path === "/codex/projects/codex-matrix-qa/preview/status") {
+      return fulfillJson(route, {
+        running: true,
+        ready: true,
+        basePath: "/api/codex/projects/codex-matrix-qa/preview/e2e-preview-token/app/",
+      })
+    }
+    if (withCodexPreview && path === "/codex/projects/codex-matrix-qa/preview/e2e-preview-token/app/") {
+      const nonce = new URL(request.url()).searchParams.get("__sgpt_preview_nonce") || ""
+      const html = injectPreviewInteractionBridges(
+        `<!doctype html><html><head><title>Codex Inspector E2E</title></head><body><main><h1>Inspector Codex</h1><button id="codex-target" data-e2e-target="primary" onclick="document.body.dataset.normalClicks = String(Number(document.body.dataset.normalClicks || '0') + 1)">Seleccionar elemento real</button></main></body></html>`,
+        nonce,
+      )
+      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html })
     }
     if (path === "/codex/company-associations" && request.method() === "GET") {
       return fulfillJson(route, {
@@ -288,6 +347,15 @@ async function mockMatrixCompany(
           lastError: null,
         },
         departments: [],
+      })
+    }
+    if (/^\/codex\/projects\/[^/]+\/company-resources$/.test(path)) {
+      return fulfillJson(route, {
+        resources: {
+          assignments: {},
+          pinned: [],
+          revision: 0,
+        },
       })
     }
     if (/^\/codex\/projects\/[^/]+\/runs$/.test(path) && request.method() === "GET") {
@@ -550,8 +618,8 @@ test("mission evidence, CEO review and report survive a reload", async ({ page }
   const operations = await mockMatrixCompany(page)
 
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
-  await expect(page.getByRole("button", { name: "Archivos" })).toBeVisible({ timeout: 30_000 })
-  await page.getByRole("button", { name: "Archivos" }).click()
+  await expect(page.getByRole("button", { name: "Archivos", exact: true })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole("button", { name: "Archivos", exact: true }).click()
   const record = page.getByTestId("company-mission-evidence-record")
   await expect(record).toContainText("Pendiente de CEO")
   await record.getByRole("button", { name: /Validar la experiencia de APPS y entregar evidencia/ }).click()
@@ -563,8 +631,8 @@ test("mission evidence, CEO review and report survive a reload", async ({ page }
   await expect(page.getByText("Resumen de actividad · 2026-07-23", { exact: true })).toBeVisible()
 
   await page.reload({ waitUntil: "domcontentloaded" })
-  await expect(page.getByRole("button", { name: "Archivos" })).toBeVisible({ timeout: 30_000 })
-  await page.getByRole("button", { name: "Archivos" }).click()
+  await expect(page.getByRole("button", { name: "Archivos", exact: true })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole("button", { name: "Archivos", exact: true }).click()
   await expect(page.getByTestId("company-mission-evidence-record")).toContainText("Aprobado por CEO")
   await expect(page.getByText("Resumen de actividad · 2026-07-23", { exact: true })).toBeVisible()
   expect(operations.activityReports).toBe(1)
@@ -587,8 +655,12 @@ test("modern office city renders a moving day and night environment", async ({ p
   const canvas = scene.locator("canvas")
   await expect(overlay).toBeVisible()
   await expect(scene).toHaveAttribute("data-office-ready", "true")
-  await expect.poll(async () => Number(await canvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(25)
-  await expect.poll(async () => Number(await canvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(3)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(31)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(6)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-architectural-crown-count"))).toBeGreaterThanOrEqual(12)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-glass-facade-count"))).toBeGreaterThanOrEqual(60)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-terrace-amenity-count"))).toBeGreaterThanOrEqual(15)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-tallest-building-height"))).toBeGreaterThanOrEqual(44)
   await expect.poll(async () => Number(await canvas.getAttribute("data-city-light-count"))).toBeGreaterThanOrEqual(14)
 
   const firstFrame = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"))
@@ -629,14 +701,15 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(officeThumbnail).toHaveAttribute("data-office-ready", "true")
   await expect(officeThumbnail).toHaveAttribute("data-office-paused", "false")
   await expect(officeThumbnail).toHaveAttribute("data-rooftop-office", "true")
-  await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(12)
+  await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(15)
+  await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-glass-facade-count"))).toBeGreaterThanOrEqual(28)
   await expect(page.getByTestId("agent-company-live-preview")).toContainText("Oficina · 1/1 puestos")
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
   await expect(page.getByRole("button", { name: "Controlar" })).toContainText(/[1-9]/)
 
   const companyRail = page.locator("[data-agent-company-dock='apps']")
   await expect(companyRail).toBeVisible()
-  await expect(page.getByText("¿Qué quieres construir?", { exact: true })).toBeVisible()
+  await expect(page.getByText("¿Qué quieres lanzar?", { exact: true })).toBeVisible()
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-three-pane.png"), fullPage: true })
 
@@ -655,8 +728,12 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(officeScene).toHaveAttribute("data-office-ready", "true")
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(3)
   await expect(officeScene).toHaveAttribute("data-rooftop-office", "true")
-  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(25)
-  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(3)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(31)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(6)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-architectural-crown-count"))).toBeGreaterThanOrEqual(12)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-glass-facade-count"))).toBeGreaterThanOrEqual(60)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-terrace-amenity-count"))).toBeGreaterThanOrEqual(15)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-tallest-building-height"))).toBeGreaterThanOrEqual(44)
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-window-count"))).toBeGreaterThanOrEqual(1_500)
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-mover-count"))).toBeGreaterThanOrEqual(10)
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-light-count"))).toBeGreaterThanOrEqual(14)
@@ -753,17 +830,30 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByTestId("company-control-surface")).toBeVisible()
   await page.getByRole("button", { name: "Cerrar vista de empresa" }).click()
   await expect(page.getByTestId("company-control-surface")).toBeHidden()
-  await page.getByRole("button", { name: "Archivos" }).click()
-  await expect(page.getByTestId("company-files-surface")).toBeVisible()
-  await expect(page.getByTestId("company-mission-evidence-ledger")).toBeVisible()
-  await expect(page.getByTestId("company-mission-evidence-record")).toContainText("Pendiente de CEO")
-  await page.getByTestId("company-mission-evidence-record")
-    .getByRole("button", { name: /Validar la experiencia de APPS y entregar evidencia/ })
-    .click()
+  await page.getByRole("button", { name: "Archivos", exact: true }).click()
+  const visibleFilesSurface = page.locator('[data-testid="company-files-surface"]:visible')
+  await expect(visibleFilesSurface).toBeVisible()
+  await expect(visibleFilesSurface.getByTestId("company-mission-evidence-ledger")).toBeVisible()
+  // The responsive Apps dock can keep a second company panel mounted but
+  // hidden. Scroll the visible Finder-style pane and exercise the evidence row
+  // users can actually reach instead of resolving the hidden duplicate.
+  await visibleFilesSurface.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await visibleFilesSurface.locator("main").evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  const visibleEvidenceRecord = visibleFilesSurface.getByTestId("company-mission-evidence-record")
+  await expect(visibleEvidenceRecord).toContainText("Pendiente de CEO")
+  const evidenceToggle = visibleEvidenceRecord.getByRole("button", {
+    name: /Validar la experiencia de APPS y entregar evidencia/,
+  })
+  await expect(evidenceToggle).toBeVisible()
+  await evidenceToggle.click()
   await expect(page.getByText("Checkpoint Git verificado", { exact: true })).toBeVisible()
   await expect(page.getByText("La interfaz real de /code pasó la prueba.", { exact: true })).toBeVisible()
-  await page.getByRole("button", { name: "Aprobar" }).click()
-  await expect(page.getByTestId("company-mission-evidence-record")).toContainText("Aprobado por CEO")
+  await visibleEvidenceRecord.getByRole("button", { name: "Aprobar" }).click()
+  await expect(visibleEvidenceRecord).toContainText("Aprobado por CEO")
   await page.getByRole("button", { name: "Generar reporte" }).click()
   await expect(page.getByText("Resumen de actividad · 2026-07-23", { exact: true })).toBeVisible()
   expect(operations.activityReports).toBe(1)
@@ -771,11 +861,11 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByTestId("company-resources-surface")).toBeVisible()
   await expect(page.getByRole("heading", { name: "Activos de la empresa agente" })).toBeVisible()
   await expect(page.getByText("Canales conectados")).toBeVisible()
-  await expect(page.getByText("3 compatibles")).toBeVisible()
-  await expect(page.getByText("borradores y programadas")).toBeVisible()
-  await expect(page.getByText("Facebook", { exact: true })).toBeVisible()
-  await expect(page.getByText("LinkedIn", { exact: true })).toBeVisible()
-  await expect(page.getByText("X", { exact: true }).last()).toBeVisible()
+  await expect(page.getByRole("button", { name: "Todas 3" })).toBeVisible()
+  await expect(page.getByText("2 pendientes · 1 publicadas hoy", { exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Facebook", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "LinkedIn", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "X", exact: true })).toBeVisible()
 
   expect(await companyRail.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath("matrix-company-desktop.png"), fullPage: true })
@@ -832,4 +922,96 @@ test("PROACTIVO provisions and confirms a real company runtime before turning on
   await expect(companyRail.getByRole("button", { name: /PROACTIVO · ON|EN EJECUCIÓN/ })).toBeVisible()
   expect(operations.projectCreates).toBe(1)
   expect(operations.proactiveToggles).toBe(1)
+})
+
+test("visual inspector and model depth selector survive a deterministic interaction matrix", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1425, height: 810 })
+  await mockMatrixCompany(page, { linkedProject: true, withPreviewFile: true, withCodexPreview: true })
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+
+  const previewFrame = page.frameLocator('iframe[title="App en vivo (dev server)"]')
+  const realCodexTarget = previewFrame.locator("#codex-target")
+  await expect(realCodexTarget).toBeVisible({ timeout: 30_000 })
+
+  const selector = page.locator('[data-testid="code-target-selector"]:visible').first()
+  await expect(selector).toBeVisible({ timeout: 30_000 })
+  await expect(selector).toContainText("Seleccionar UI")
+  await expect(selector).toHaveAttribute("aria-pressed", "false")
+
+  await selector.click()
+  await expect(selector).toHaveAttribute("aria-pressed", "true")
+  await expect(selector).toContainText("Cancelar")
+  const inspector = page.getByTestId("code-preview-inspector-toolbar")
+  await expect(inspector).toBeVisible()
+  await expect(inspector).toContainText("Inspector visual activo")
+  await page.screenshot({ path: testInfo.outputPath("professional-code-inspector-active.png") })
+  await inspector.getByRole("button", { name: "Cancelar inspector visual" }).click()
+  await expect(selector).toHaveAttribute("aria-pressed", "false")
+  await expect(inspector).toBeHidden()
+  await expect(previewFrame.locator("html")).not.toHaveAttribute("data-sgpt-selecting", "true")
+
+  // Cancellation must restore the generated app's normal pointer behavior and
+  // the parent must reject any stale bridge message already in flight.
+  const capturedCodexTarget = page.getByTestId("code-target-selection-chip")
+  await realCodexTarget.click()
+  await expect(previewFrame.locator("body")).toHaveAttribute("data-normal-clicks", "1")
+  await page.waitForTimeout(200)
+  await expect(capturedCodexTarget).toBeHidden()
+
+  // Exercise the real cross-origin Codex iframe bridge. This must originate
+  // from pointerdown inside the generated app, never from a fabricated parent
+  // window event or the imprecise region fallback.
+  await selector.click()
+  await expect(previewFrame.locator("html")).toHaveAttribute("data-sgpt-selecting", "true")
+  await realCodexTarget.click()
+  await expect(capturedCodexTarget).toContainText("button#codex-target")
+  await expect(capturedCodexTarget).not.toContainText("preview-region")
+  await expect(selector).toHaveAttribute("aria-pressed", "false")
+  await capturedCodexTarget.getByRole("button", { name: "Quitar elemento seleccionado" }).click()
+  await expect(capturedCodexTarget).toBeHidden()
+
+  const targets = Array.from({ length: 20 }, (_, index) => ({
+    selectionMethod: index % 2 === 0 ? "dom" : "region",
+    selector: index % 2 === 0 ? `[data-e2e-target="${index}"]` : `preview-region(${index + 10}%, ${index + 20}%)`,
+    tagName: index % 2 === 0 ? (["button", "section", "input", "article"][index % 4] || "div") : "region",
+    text: `Elemento profesional ${index + 1}`,
+    rect: { x: 12 + index, y: 30 + index, width: 160, height: 44 },
+    previewKind: index % 2 === 0 ? "html" : "html-region",
+    entry: "index.html",
+    activePath: "index.html",
+  }))
+
+  for (const target of targets) {
+    await page.evaluate((detail) => {
+      window.dispatchEvent(new CustomEvent("siragpt:code-selection-captured", { detail }))
+    }, target)
+    const chip = page.getByTestId("code-target-selection-chip")
+    await expect(chip).toBeVisible()
+    await expect(chip).toContainText(target.selector)
+    await chip.getByRole("button", { name: "Quitar elemento seleccionado" }).click()
+    await expect(chip).toBeHidden()
+  }
+
+  const modelSelector = page.locator('[data-testid="code-model-selector"]:visible').first()
+  await modelSelector.click()
+  const effortGroup = page.getByRole("group", { name: "Profundidad de razonamiento" })
+  await expect(effortGroup).toBeVisible()
+  const effortGroupStyle = await effortGroup.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { className: element.className, display: style.display, gap: style.gap, columns: style.gridTemplateColumns }
+  })
+  expect(effortGroupStyle.className).toBe("model-picker-effort-options")
+  expect(effortGroupStyle).toMatchObject({ display: "grid", gap: "8px" })
+  for (const label of ["Bajo", "Medio", "Extra", "Máx"]) {
+    const option = effortGroup.getByRole("button", { name: label, exact: true })
+    expect(await option.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { borderStyle: style.borderStyle, minHeight: style.minHeight }
+    })).toMatchObject({ borderStyle: "solid", minHeight: "38px" })
+    await option.click()
+    await expect(option).toHaveAttribute("aria-pressed", "true")
+    await expect(modelSelector).toHaveAttribute("aria-label", new RegExp(`Profundidad: ${label}`))
+  }
+
+  await page.screenshot({ path: testInfo.outputPath("professional-code-inspector.png"), fullPage: true })
 })

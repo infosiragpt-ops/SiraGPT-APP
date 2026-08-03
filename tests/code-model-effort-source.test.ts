@@ -16,6 +16,9 @@ describe("code model effort selector source contract", () => {
       /className="model-picker-effort"/,
       "the /code model picker must render the Effort control",
     )
+    assert.match(source, /role="group" aria-label="Profundidad de razonamiento"/)
+    assert.match(source, /aria-pressed=\{index === effortIndex\}/)
+    assert.doesNotMatch(source, /className="model-picker-effort-slider"/)
     assert.match(
       source,
       /reasoningEffort:\s*selectedEffort/,
@@ -23,8 +26,25 @@ describe("code model effort selector source contract", () => {
     )
     assert.match(
       source,
+      /codexApi\.createRun[\s\S]{0,900}reasoningEffort:\s*resolveCodexReasoningEffort\(selectedEffort\)/,
+      "durable Codex plan runs must persist the selected effort",
+    )
+    assert.match(
+      source,
+      /codexApi\.approvePlan[\s\S]{0,500}model:\s*activeModelName[\s\S]{0,250}reasoningEffort:\s*resolveCodexReasoningEffort\(selectedEffort\)/,
+      "plan continuations must preserve exact model and effort",
+    )
+    assert.match(
+      source,
       /selectedEffort=\{selectedEffort\}[\s\S]*onSelectEffort=\{setSelectedEffort\}/,
       "ModelPickerInline must receive the effort state from the code chat panel",
+    )
+  })
+
+  it("cancels a build created after a delayed plan approval", () => {
+    assert.match(
+      source,
+      /const buildRun = await codexApi\.approvePlan[\s\S]{0,900}if \(cancelledTurn\(\)\)[\s\S]{0,700}cancelCodexRunFamily[\s\S]{0,300}runId: buildRun\.id/,
     )
   })
 })

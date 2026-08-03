@@ -29,11 +29,20 @@ type LoopingSource = {
   gain: GainNode
 }
 
+type AmbientMixProfile = {
+  ambienceGain: number
+  highpassHz: number
+  lowpassHz: number
+  fadeSeconds: number
+}
+
 type AudioEngine = {
   context: AudioContext
   master: GainNode
   compressor: DynamicsCompressorNode
   ambienceBus: GainNode
+  ambienceHighpass: BiquadFilterNode
+  ambienceLowpass: BiquadFilterNode
   actionBus: GainNode
   ambience: LoopingSource | null
   stepBuffer: AudioBuffer | null
@@ -43,6 +52,20 @@ type AudioEngine = {
 const SOUND_PREFERENCE_KEY = "siragpt:office-sound-enabled"
 const SOUND_VOLUME_KEY = "siragpt:office-sound-volume"
 const DEFAULT_VOLUME = 0.28
+const AMBIENT_MIX_PROFILES: Record<OfficeAmbientSoundId, AmbientMixProfile> = {
+  "coast-day": {
+    ambienceGain: 0.7,
+    highpassHz: 55,
+    lowpassHz: 14_500,
+    fadeSeconds: 2.6,
+  },
+  "coast-night": {
+    ambienceGain: 0.64,
+    highpassHz: 42,
+    lowpassHz: 11_000,
+    fadeSeconds: 3.2,
+  },
+}
 const encodedSoundCache = new Map<OfficeSoundId, ArrayBuffer>()
 const soundRequests = new Map<OfficeSoundId, Promise<ArrayBuffer>>()
 
@@ -123,16 +146,26 @@ function createAudioEngine(volume: number): AudioEngine | null {
   const master = context.createGain()
   const compressor = context.createDynamicsCompressor()
   const ambienceBus = context.createGain()
+  const ambienceHighpass = context.createBiquadFilter()
+  const ambienceLowpass = context.createBiquadFilter()
   const actionBus = context.createGain()
   master.gain.value = volume
-  ambienceBus.gain.value = 0.72
-  actionBus.gain.value = 0.48
-  compressor.threshold.value = -18
-  compressor.knee.value = 18
-  compressor.ratio.value = 3
-  compressor.attack.value = 0.012
-  compressor.release.value = 0.24
-  ambienceBus.connect(master)
+  ambienceBus.gain.value = AMBIENT_MIX_PROFILES["coast-day"].ambienceGain
+  ambienceHighpass.type = "highpass"
+  ambienceHighpass.frequency.value = AMBIENT_MIX_PROFILES["coast-day"].highpassHz
+  ambienceHighpass.Q.value = 0.55
+  ambienceLowpass.type = "lowpass"
+  ambienceLowpass.frequency.value = AMBIENT_MIX_PROFILES["coast-day"].lowpassHz
+  ambienceLowpass.Q.value = 0.4
+  actionBus.gain.value = 0.42
+  compressor.threshold.value = -20
+  compressor.knee.value = 24
+  compressor.ratio.value = 2.4
+  compressor.attack.value = 0.025
+  compressor.release.value = 0.32
+  ambienceBus.connect(ambienceHighpass)
+  ambienceHighpass.connect(ambienceLowpass)
+  ambienceLowpass.connect(master)
   actionBus.connect(master)
   master.connect(compressor)
   compressor.connect(context.destination)
@@ -141,11 +174,22 @@ function createAudioEngine(volume: number): AudioEngine | null {
     master,
     compressor,
     ambienceBus,
+    ambienceHighpass,
+    ambienceLowpass,
     actionBus,
     ambience: null,
     stepBuffer: null,
     cueBuffers: new Map(),
   }
+}
+
+function applyAmbientMix(engine: AudioEngine, soundId: OfficeAmbientSoundId) {
+  const profile = AMBIENT_MIX_PROFILES[soundId]
+  const now = engine.context.currentTime
+  engine.ambienceBus.gain.setTargetAtTime(profile.ambienceGain, now, 0.18)
+  engine.ambienceHighpass.frequency.setTargetAtTime(profile.highpassHz, now, 0.22)
+  engine.ambienceLowpass.frequency.setTargetAtTime(profile.lowpassHz, now, 0.22)
+  return profile
 }
 
 function stopLoop(
@@ -173,22 +217,27 @@ function stopLoop(
   }
 }
 
-function replaceAmbience(engine: AudioEngine, buffer: AudioBuffer) {
+function replaceAmbience(
+  engine: AudioEngine,
+  buffer: AudioBuffer,
+  soundId: OfficeAmbientSoundId,
+) {
   const { context } = engine
   const now = context.currentTime
+  const profile = applyAmbientMix(engine, soundId)
   const source = context.createBufferSource()
   const gain = context.createGain()
   source.buffer = buffer
   source.loop = true
   gain.gain.setValueAtTime(0.0001, now)
-  gain.gain.linearRampToValueAtTime(1, now + 1.8)
+  gain.gain.linearRampToValueAtTime(1, now + profile.fadeSeconds)
   source.connect(gain)
   gain.connect(engine.ambienceBus)
   source.start()
 
   const previous = engine.ambience
   engine.ambience = { source, gain }
-  stopLoop(previous, context, { fadeSeconds: 1.8 })
+  stopLoop(previous, context, { fadeSeconds: profile.fadeSeconds })
 }
 
 function playActionCue(
@@ -429,7 +478,7 @@ export function useOfficeSoundscape({
           return
         }
 
-        replaceAmbience(engine, ambientBuffer)
+        replaceAmbience(engine, ambientBuffer, ambientId)
         engine.stepBuffer = stepBuffer
         setState(
           engine.context.state === "running" || paused ? "elevenlabs" : "blocked",

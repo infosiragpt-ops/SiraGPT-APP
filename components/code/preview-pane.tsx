@@ -11,12 +11,17 @@
 
 import * as React from "react"
 import {
+  ArrowRight,
+  Bot,
+  Briefcase,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
   Circle,
   Eraser,
   ExternalLink,
   LayoutGrid,
+  Lightbulb,
   Lock,
   Monitor,
   MonitorSmartphone,
@@ -47,6 +52,10 @@ import {
 } from "@/lib/code-workspace-context"
 import { codexApi } from "@/lib/codex/codex-api"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
+import {
+  CODE_AUTONOMOUS_STARTERS,
+  requestCodeAgentInstruction,
+} from "@/lib/code-autonomous-starters"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
@@ -201,6 +210,11 @@ export function PreviewPane() {
   const previewNonceRef = React.useRef("")
   const previewNonce = previewNonceRef.current ||= crypto.randomUUID()
   const [selectionMode, setSelectionMode] = React.useState(false)
+  const selectionModeRef = React.useRef(false)
+  const setSelectionActive = React.useCallback((active: boolean) => {
+    selectionModeRef.current = active
+    setSelectionMode(active)
+  }, [])
   const [selectionFallback, setSelectionFallback] = React.useState(false)
   const selectionReadyRef = React.useRef(false)
   const selectionTimersRef = React.useRef<number[]>([])
@@ -854,12 +868,16 @@ export function PreviewPane() {
         return
       }
       if (m.type === "sgpt-preview-selection-ready") {
+        if (!selectionModeRef.current) return
         selectionReadyRef.current = true
-        setSelectionMode(true)
+        setSelectionActive(true)
         setSelectionFallback(false)
         return
       }
       if (m.type === "sgpt-preview-selection") {
+        // A message already queued by the iframe must not revive a selection
+        // after Escape/Cancelar turned the inspector off in the parent.
+        if (!selectionModeRef.current) return
         const meta = previewMetaRef.current
         const raw = (m.detail || {}) as CodePreviewSelectionDetail
         const detail: CodePreviewSelectionDetail = {
@@ -870,7 +888,7 @@ export function PreviewPane() {
           activeFolderId: meta.activeFolderId,
           capturedAt: raw.capturedAt || new Date().toISOString(),
         }
-        setSelectionMode(false)
+        setSelectionActive(false)
         setSelectionFallback(false)
         selectionReadyRef.current = false
         clearSelectionTimers()
@@ -878,7 +896,10 @@ export function PreviewPane() {
         return
       }
       if (m.type === "sgpt-preview-selection-cancelled") {
-        setSelectionMode(false)
+        // Local cancellation already updated the UI and sent the cancel command;
+        // ignore the bridge acknowledgement so it cannot emit duplicate toasts.
+        if (!selectionModeRef.current) return
+        setSelectionActive(false)
         setSelectionFallback(false)
         selectionReadyRef.current = false
         clearSelectionTimers()
@@ -891,7 +912,7 @@ export function PreviewPane() {
     }
     window.addEventListener("message", onMsg)
     return () => window.removeEventListener("message", onMsg)
-  }, [clearSelectionTimers, previewNonce])
+  }, [clearSelectionTimers, previewNonce, setSelectionActive])
 
   const refresh = React.useCallback(() => {
     setSnapshot({ files, activePath })
@@ -1004,14 +1025,17 @@ export function PreviewPane() {
   const cancelSelectionFromPreview = React.useCallback((reason: string) => {
     clearSelectionTimers()
     selectionReadyRef.current = false
-    setSelectionMode(false)
+    setSelectionActive(false)
     setSelectionFallback(false)
+    // Toolbar/Escape live outside a cross-origin iframe. Explicitly disarm the
+    // injected bridge so it removes its listeners, overlay and crosshair too.
+    postSelectionMessage("sgpt-preview-select-cancel")
     window.dispatchEvent(
       new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
         detail: { reason, source: "preview" },
       }),
     )
-  }, [clearSelectionTimers])
+  }, [clearSelectionTimers, postSelectionMessage, setSelectionActive])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -1019,7 +1043,7 @@ export function PreviewPane() {
       clearSelectionTimers()
       selectionReadyRef.current = false
       setConsoleOpen(false)
-      setSelectionMode(true)
+      setSelectionActive(true)
       setSelectionFallback(false)
       const arm = () => {
         postSelectionMessage("sgpt-preview-select-start")
@@ -1041,7 +1065,7 @@ export function PreviewPane() {
       const detail = (event as CustomEvent<CodePreviewSelectionCancelDetail>).detail
       clearSelectionTimers()
       selectionReadyRef.current = false
-      setSelectionMode(false)
+      setSelectionActive(false)
       setSelectionFallback(false)
       if (detail?.source !== "preview") {
         postSelectionMessage("sgpt-preview-select-cancel")
@@ -1053,7 +1077,18 @@ export function PreviewPane() {
       window.removeEventListener(CODE_SELECT_TARGET_EVENT, startSelection)
       window.removeEventListener(CODE_SELECTION_CANCEL_EVENT, cancelSelection)
     }
-  }, [cancelSelectionFromPreview, clearSelectionTimers, postSelectionMessage])
+  }, [cancelSelectionFromPreview, clearSelectionTimers, postSelectionMessage, setSelectionActive])
+
+  React.useEffect(() => {
+    if (!selectionMode || typeof window === "undefined") return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      cancelSelectionFromPreview("Selección cancelada.")
+    }
+    window.addEventListener("keydown", onKeyDown, { capture: true })
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true })
+  }, [cancelSelectionFromPreview, selectionMode])
 
   const handlePreviewFrameLoad = React.useCallback(() => {
     if (!selectionMode) return
@@ -1114,10 +1149,10 @@ export function PreviewPane() {
       activeFolderId: meta.activeFolderId,
       capturedAt: new Date().toISOString(),
     }
-    setSelectionMode(false)
+    setSelectionActive(false)
     setSelectionFallback(false)
     window.dispatchEvent(new CustomEvent<CodePreviewSelectionDetail>(CODE_SELECTION_CAPTURED_EVENT, { detail }))
-  }, [clearSelectionTimers, selectionFallback])
+  }, [clearSelectionTimers, selectionFallback, setSelectionActive])
 
   const canRenderStaticPreview = result.kind !== "empty" && result.kind !== "unsupported"
   const staticPreviewFrame = (
@@ -1331,10 +1366,31 @@ export function PreviewPane() {
           data-testid="agent-company-preview-slot"
         />
         {selectionMode ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/45 bg-zinc-950/82 px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_18px_45px_-28px_rgba(15,23,42,0.72)] backdrop-blur-xl">
-            <MousePointer2 className="h-3.5 w-3.5 text-violet-200" />
-            <span>{selectionFallback ? "Selecciona un área del preview" : "Selecciona un elemento del preview"}</span>
-            <span className="rounded-full bg-white/12 px-1.5 py-px font-mono text-[10px] text-white/75">Esc</span>
+          <div
+            role="status"
+            data-testid="code-preview-inspector-toolbar"
+            className="pointer-events-auto absolute left-1/2 top-3 z-30 flex w-[min(430px,calc(100%-24px))] -translate-x-1/2 items-center gap-2.5 rounded-xl border border-white/20 bg-zinc-950/[0.92] p-2 pl-2.5 text-white shadow-[0_18px_55px_-24px_rgba(15,23,42,0.82)] backdrop-blur-xl"
+          >
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-400/[0.15] text-violet-200" aria-hidden="true">
+              <MousePointer2 className="h-4 w-4" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-semibold leading-tight">Inspector visual activo</span>
+              <span className="mt-0.5 block truncate text-[10px] font-normal leading-tight text-white/[0.65]">
+                {selectionFallback ? "Haz clic en el área que quieres modificar" : "Haz clic en un elemento de la interfaz"}
+              </span>
+            </span>
+            <kbd className="hidden rounded-md border border-white/15 bg-white/[0.07] px-1.5 py-1 font-mono text-[9px] font-medium text-white/55 sm:inline-flex">
+              Esc
+            </kbd>
+            <button
+              type="button"
+              onClick={() => cancelSelectionFromPreview("Selección cancelada.")}
+              className="inline-flex min-h-8 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-[10px] font-semibold text-white/80 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
+              aria-label="Cancelar inspector visual"
+            >
+              Cancelar
+            </button>
           </div>
         ) : null}
         {selectionFallback ? (
@@ -1493,30 +1549,146 @@ export function PreviewPane() {
 }
 
 function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) {
+  const [launchState, setLaunchState] = React.useState<{
+    id: (typeof CODE_AUTONOMOUS_STARTERS)[number]["id"]
+    status: "accepted" | "error"
+  } | null>(null)
+
+  const startAutonomousBuild = React.useCallback(
+    (starter: (typeof CODE_AUTONOMOUS_STARTERS)[number]) => {
+      const accepted = requestCodeAgentInstruction(starter.prompt, { mode: "app" })
+      setLaunchState({ id: starter.id, status: accepted ? "accepted" : "error" })
+    },
+    [],
+  )
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
-      <div>
-        <p className="text-sm font-medium text-foreground">
-          {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
-        </p>
-        <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
-          {note || "Empieza desde una plantilla o pídele algo al agente — lo verás aquí al instante."}
-        </p>
-      </div>
-      <div className="grid w-full max-w-xs gap-2">
-        {CODE_TEMPLATES.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() =>
-              window.dispatchEvent(new CustomEvent("siragpt:code-load-template", { detail: { id: t.id } }))
-            }
-            className="flex flex-col items-start rounded-lg border border-border/60 bg-background px-4 py-3 text-left shadow-sm transition-colors hover:border-border hover:bg-muted/40"
-          >
-            <span className="text-[13px] font-medium text-foreground">{t.name}</span>
-            <span className="text-[11px] text-muted-foreground">{t.description}</span>
-          </button>
-        ))}
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center gap-7 px-4 py-8 sm:px-6">
+        <header className="text-center">
+          <div className="mx-auto mb-3 inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/35 px-3 text-[11px] font-medium text-muted-foreground">
+            Desarrollo autónomo
+          </div>
+          <h2 className="text-base font-semibold tracking-tight text-foreground">
+            {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
+          </h2>
+          <p className="mx-auto mt-1.5 max-w-lg text-xs leading-relaxed text-muted-foreground">
+            {note || "Elige un objetivo completo para que el agente planifique, construya y verifique el software."}
+          </p>
+        </header>
+
+        <section aria-labelledby="autonomous-starters-title">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-2 text-left">
+            <div>
+              <h3 id="autonomous-starters-title" className="text-[13px] font-semibold text-foreground">
+                Crear con el agente
+              </h3>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                Inicia una ejecución real en modo App; podrás seguirla y dirigirla desde el chat.
+              </p>
+            </div>
+            <span className="rounded-full border border-border/70 px-2 py-1 text-[10px] font-medium text-muted-foreground">
+              Plan · Build · Test
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            {CODE_AUTONOMOUS_STARTERS.map((starter) => {
+              const Icon =
+                starter.id === "ai-platform" ? Bot : starter.id === "business-os" ? Briefcase : Lightbulb
+              const accepted = launchState?.id === starter.id && launchState.status === "accepted"
+              const buildAlreadyStarted = launchState?.status === "accepted"
+
+              return (
+                <button
+                  key={starter.id}
+                  type="button"
+                  onClick={() => startAutonomousBuild(starter)}
+                  disabled={buildAlreadyStarted}
+                  aria-label={`Crear ${starter.title} con el agente autónomo`}
+                  className={cn(
+                    "group flex min-h-[168px] cursor-pointer flex-col rounded-xl border border-border/70 bg-background p-4 text-left shadow-sm transition-[border-color,background-color,box-shadow] duration-200",
+                    "hover:border-foreground/25 hover:bg-muted/25 hover:shadow-md",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                    "disabled:cursor-default disabled:opacity-55",
+                    accepted && "border-foreground/25 bg-muted/30 opacity-100",
+                  )}
+                >
+                  <span className="flex w-full items-start justify-between gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/35 text-foreground">
+                      <Icon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    {accepted ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground">
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        Entregado
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-3 text-[13px] font-semibold text-foreground">{starter.title}</span>
+                  <span className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{starter.description}</span>
+                  <span className="mt-auto flex w-full items-end justify-between gap-2 pt-3">
+                    <span className="text-[10px] font-medium text-muted-foreground">{starter.meta}</span>
+                    <ArrowRight
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transform-none"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {launchState ? (
+            <p
+              role={launchState.status === "error" ? "alert" : "status"}
+              aria-live="polite"
+              className={cn(
+                "mt-3 rounded-lg border px-3 py-2 text-[11px] leading-relaxed",
+                launchState.status === "accepted"
+                  ? "border-border/70 bg-muted/25 text-foreground"
+                  : "border-destructive/30 bg-destructive/5 text-destructive",
+              )}
+            >
+              {launchState.status === "accepted"
+                ? "Instrucción entregada al chat. Sigue allí la aceptación del run, el plan y sus verificaciones; el preview aparecerá aquí cuando esté listo."
+                : "No pude conectar con el agente. Abre el panel Empresa y vuelve a intentarlo."}
+            </p>
+          ) : null}
+        </section>
+
+        <section aria-labelledby="local-prototypes-title" className="border-t border-border/60 pt-5">
+          <div className="mb-3 text-left">
+            <h3 id="local-prototypes-title" className="text-[12px] font-semibold text-foreground">
+              Prototipos locales
+            </h3>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              Ejemplos rápidos en este navegador. Crean archivos de muestra, pero no inician un desarrollo autónomo.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {CODE_TEMPLATES.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent("siragpt:code-load-template", { detail: { id: template.id } }),
+                  )
+                }
+                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2 text-left transition-colors duration-200 hover:border-border hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-medium text-foreground">{template.name}</span>
+                  <span className="block truncate text-[10px] text-muted-foreground">{template.description}</span>
+                </span>
+                <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Local
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   )

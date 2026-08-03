@@ -9,7 +9,7 @@
  */
 
 import * as React from "react"
-import { Command as CommandIcon, Plus } from "lucide-react"
+import { Command as CommandIcon, Monitor, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -93,9 +93,9 @@ export function CodeWorkspace() {
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
-    () => new Set<WorkspacePanelId>(["preview", "terminal"]),
+    () => new Set<WorkspacePanelId>(previewOpen ? ["preview", "terminal"] : ["terminal"]),
   )
-  const [activePanel, setActivePanel] = React.useState<WorkspacePanelId | null>("preview")
+  const [activePanel, setActivePanel] = React.useState<WorkspacePanelId | null>(previewOpen ? "preview" : null)
   const [newTabOpen, setNewTabOpen] = React.useState(false)
   const [inviteOpen, setInviteOpen] = React.useState(false)
   const [activeTool, setActiveTool] = React.useState<WorkspaceToolId | null>(null)
@@ -194,9 +194,13 @@ export function CodeWorkspace() {
       setMobileView((view) => (view === "chat" ? "preview" : "chat"))
       return
     }
+    if (chatOpen) {
+      setChatOpen(false)
+      return
+    }
     setChatOpen(true)
-    focusChat()
-  }, [focusChat, isMobile])
+    window.requestAnimationFrame(() => focusChat())
+  }, [chatOpen, focusChat, isMobile])
 
   const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
     const ids = new Set<WorkspaceToolId>()
@@ -356,7 +360,8 @@ export function CodeWorkspace() {
       }
       if (key === "e") {
         event.preventDefault()
-        setPreviewOpen((value) => !value)
+        if (previewOpen) handleClosePanel("preview")
+        else handleTogglePanel("preview")
         return
       }
       if (key === "b") {
@@ -382,7 +387,7 @@ export function CodeWorkspace() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [focusChat, openComposer, toggleTerminal])
+  }, [focusChat, handleClosePanel, handleTogglePanel, openComposer, previewOpen, toggleTerminal])
 
   const commands = React.useMemo<PaletteCommand[]>(() => {
     const fileItems: PaletteCommand[] = Object.keys(files).map((path) => ({
@@ -543,7 +548,30 @@ export function CodeWorkspace() {
               <div className="absolute inset-0">
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                    <MemoPreviewPane />
+                    {previewOpen ? (
+                      <MemoPreviewPane />
+                    ) : (
+                      <div className="flex h-full min-h-0 items-center justify-center bg-muted/10 px-6 py-10">
+                        <div className="flex max-w-sm flex-col items-center text-center">
+                          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl border border-border/60 bg-background shadow-sm">
+                            <Monitor className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
+                          </div>
+                          <h2 className="text-sm font-semibold text-foreground">Preview cerrado</h2>
+                          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                            Abre el preview para ver y probar los cambios de tu aplicación en vivo.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="mt-4 min-h-11 gap-2 px-4"
+                            onClick={() => handleTogglePanel("preview")}
+                          >
+                            <Monitor className="h-4 w-4" aria-hidden="true" />
+                            Abrir Preview
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </ResizablePanel>
                   {terminalOpen ? (
                     <>

@@ -424,7 +424,9 @@ async function processCodexRunJob({
       reject(timeoutError);
       controller.abort(timeoutError);
     }, timeoutMs);
-    hardTimeoutTimer.unref?.();
+    // Keep the worker alive until the run settles or reaches its hard limit.
+    // A pending Promise alone does not retain Node 22's event loop; unref here
+    // allowed an isolated worker to exit with the durable run still pending.
   });
 
   await assertRunActive('running event:before');
@@ -755,7 +757,9 @@ async function processCodexRunJob({
         qaController.abort(new FleetQaTimeoutError(qaTimeoutMs));
       }
     }, qaTimeoutMs);
-    qaTimer.unref?.();
+    // The matching finally block clears this timer. Keeping it referenced
+    // guarantees that post-terminal QA either completes or times out instead
+    // of disappearing when it is the last outstanding worker operation.
     const qaUsageExecutionId = randomUUID();
     let qaUsageSequence = 0;
     try {
@@ -827,6 +831,7 @@ async function processCodexRunJob({
         prompt: agentRun.prompt,
         model: run.model,
         tier: run.tier,
+        reasoningEffort: run.reasoningEffort,
         planRunId: run.id,
         autoExecute: true,
         db: prisma,

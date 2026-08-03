@@ -133,6 +133,7 @@ export interface CodexRun {
   status: string
   tier: string | null
   model: string | null
+  reasoningEffort?: string | null
   planRunId: string | null
   prompt: string | null
   autoExecute?: boolean
@@ -1010,13 +1011,17 @@ export const codexApi = {
       { method: "POST", body: JSON.stringify({ reason }) },
     ),
 
-  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string; autoExecute?: boolean }) =>
+  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; reasoningEffort?: string; planRunId?: string; autoExecute?: boolean }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),
   listRuns: (projectId: string) =>
     req<{ runs?: unknown }>(`/projects/${projectId}/runs`, { cache: "no-store" })
       .then((r) => arrayOrEmpty<CodexRun>(r?.runs)),
   getRun: (projectId: string, runId: string) => req<{ run: CodexRun }>(`/projects/${projectId}/runs/${runId}`).then((r) => r.run),
   cancelRun: (runId: string) => req<{ run: CodexRun }>(`/runs/${runId}/cancel`, { method: "POST" }).then((r) => r.run),
+  cancelRunFamily: (runId: string) => req<{ runs: CodexRun[]; cancelledRunIds: string[] }>(
+    `/runs/${runId}/cancel-family`,
+    { method: "POST" },
+  ),
   generateRunSummaryAudio: (runId: string) =>
     req<{
       audio: {
@@ -1055,13 +1060,20 @@ export const codexApi = {
       { method: "POST", body: JSON.stringify({ toSeq, ...(checkpointId ? { checkpointId } : {}) }) },
     ).then((r) => r.session),
 
-  approvePlan: (projectId: string, planRunId: string, tier?: string, opts?: { autoExecute?: boolean }) =>
+  approvePlan: (
+    projectId: string,
+    planRunId: string,
+    tier?: string,
+    opts?: { autoExecute?: boolean; model?: string; reasoningEffort?: string },
+  ) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, {
       method: "POST",
       body: JSON.stringify({
         mode: "build",
         planRunId,
         tier,
+        ...(opts?.model ? { model: opts.model } : {}),
+        ...(opts?.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
         ...(opts?.autoExecute ? { autoExecute: true } : {}),
       }),
     }).then((r) => r.run),

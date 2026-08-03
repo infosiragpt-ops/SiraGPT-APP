@@ -73,7 +73,13 @@ export function codeWorkspaceKey(folderId: string | null | undefined): string {
 function migrateSessionStore(parsed: SessionStore): SessionStore {
   const sessions = parsed.sessions.map((s) => {
     const key = codexWorkspaceSessionKey(s.workspaceId)
-    return key === s.workspaceId ? s : { ...s, workspaceId: key }
+    // Empty legacy workspaces shipped with the generic "Agente 1" label. Give
+    // only untouched sessions the executive entry-point name; any real chat or
+    // user-locked title remains exactly as the user left it.
+    const title = s.title === "Agente 1" && s.turns.length === 0 && !s.titleLocked
+      ? "CEO Office"
+      : s.title
+    return key === s.workspaceId && title === s.title ? s : { ...s, workspaceId: key, title }
   })
   const activeByWorkspace: Record<string, string> = {}
   for (const [k, v] of Object.entries(parsed.activeByWorkspace || {})) {
@@ -284,7 +290,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
   const session: CodeChatSession = {
     id: createCodeChatSessionId(),
     workspaceId: key,
-    title: "Agente 1",
+    title: "CEO Office",
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
