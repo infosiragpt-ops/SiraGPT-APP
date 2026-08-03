@@ -56,7 +56,7 @@ const {
 const {
   applyPreviewFrameHeaders: applyPreviewFramePolicy,
   filterPreviewResponseHeaders,
-  injectPreviewConsoleBridge,
+  injectPreviewInteractionBridges,
   previewTokenFor: mintPreviewToken,
   previewNonceFromRequest,
   previewOriginAllowed,
@@ -1917,12 +1917,12 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
     },
     (up) => {
       const nonce = previewNonceFromRequest(req);
-      const injectConsole = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
+      const injectInteractions = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
       const headers = filterPreviewResponseHeaders(up.headers);
-      if (injectConsole) delete headers['content-length'];
-      if (injectConsole) {
+      if (injectInteractions) delete headers['content-length'];
+      if (injectInteractions) {
         readPreviewBody(up).then((body) => {
-          const injected = injectPreviewConsoleBridge(body.toString('utf8'), nonce);
+          const injected = injectPreviewInteractionBridges(body.toString('utf8'), nonce);
           headers['content-length'] = String(Buffer.byteLength(injected));
           res.writeHead(up.statusCode || 502, headers);
           res.end(injected);
@@ -2084,6 +2084,7 @@ router.post(
     body('prompt').optional({ nullable: true }).isString().isLength({ max: 20000 }),
     body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
     body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('reasoningEffort').optional({ nullable: true }).isString().isIn(['low', 'medium', 'high', 'max']),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
     body('autoExecute').optional().isBoolean(),
   ],
@@ -2098,6 +2099,7 @@ router.post(
         prompt: req.body.prompt ?? null,
         model: req.body.model ?? null,
         tier: req.body.tier ?? null,
+        reasoningEffort: req.body.reasoningEffort ?? null,
         planRunId: req.body.planRunId ?? null,
         autoExecute: req.body.autoExecute === true,
       });
@@ -2270,6 +2272,15 @@ router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, asyn
   try {
     const run = await runService.cancelRun({ userId: req.user.id, runId: req.params.id });
     return res.json({ run });
+  } catch (err) {
+    return mapRunError(err, res);
+  }
+});
+
+router.post('/runs/:id/cancel-family', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  try {
+    const result = await runService.cancelRunFamily({ userId: req.user.id, runId: req.params.id });
+    return res.json(result);
   } catch (err) {
     return mapRunError(err, res);
   }

@@ -7,24 +7,30 @@ const { signalWithTimeout } = require('../../utils/abort-signal');
 
 const OFFICE_SOUNDS = Object.freeze({
   'coast-day': Object.freeze({
-    filename: 'office-city-day-v3.mp3',
+    filename: 'office-city-day-v4.mp3',
+    fallbacks: Object.freeze([
+      Object.freeze({ filename: 'office-city-day-v3.mp3', version: 3 }),
+    ]),
     legacyFilename: 'office-coast-day-v2.mp3',
     legacyVersion: 2,
-    version: 3,
-    text: 'Seamless premium daytime ambience for a modern autonomous-company headquarters above a coastal smart city. Inside: soft mechanical keyboards, restrained chair movement and quiet HVAC. Beyond insulated glass: distant electric traffic, light ocean breeze and subtle city air. Wide natural stereo, calm and productive, stable loudness; no speech, music, notifications, horns, sirens, prominent birds or sudden events.',
+    version: 4,
+    text: 'Seamless clean loop with no audible beginning or ending: a premium modern executive office behind a broad glass facade above a coastal electric city in clear daylight. Near-silent HVAC, rare feather-light keyboard taps and soft room tone; distant muted electric traffic, faint ocean air and an airy urban bed. Bright, focused, realistic stereo, even level; no music, speech, notifications, birds, horns, sirens or sudden events.',
     durationSeconds: 30,
     loop: true,
-    promptInfluence: 0.76,
+    promptInfluence: 0.72,
   }),
   'coast-night': Object.freeze({
-    filename: 'office-city-night-v3.mp3',
+    filename: 'office-city-night-v4.mp3',
+    fallbacks: Object.freeze([
+      Object.freeze({ filename: 'office-city-night-v3.mp3', version: 3 }),
+    ]),
     legacyFilename: 'office-coast-night-v2.mp3',
     legacyVersion: 2,
-    version: 3,
-    text: 'Seamless premium night ambience for a modern autonomous-company headquarters above a coastal smart city. Inside: sparse quiet keyboards, soft ventilation and restrained chair movement. Beyond insulated glass: distant electric traffic on wet avenues, gentle ocean breeze and a subtle city hum. Spacious realistic stereo, calm and low-distraction, stable loudness; no speech, music, notifications, horns, sirens, thunder or sudden events.',
+    version: 4,
+    text: 'Seamless clean loop with no audible beginning or ending: an elegant modern executive office behind a glass facade above a coastal electric city at night. Near-silent HVAC, sparse feather-light keyboard taps and soft room tone; distant electric traffic on damp streets, ocean air and a refined city hush. Spacious, intimate, realistic stereo, stable low level; no music, speech, notifications, birds, thunder, horns, sirens or sudden events.',
     durationSeconds: 30,
     loop: true,
-    promptInfluence: 0.76,
+    promptInfluence: 0.72,
   }),
   'terrace-steps': Object.freeze({
     filename: 'office-terrace-steps-v3.mp3',
@@ -96,8 +102,16 @@ function providerError(status, detail) {
 }
 
 async function existingSound(audioDir, soundId, definition) {
+  const configuredFallbacks = Array.isArray(definition.fallbacks)
+    ? definition.fallbacks.map((fallback) => ({
+        filename: fallback.filename,
+        version: Number(fallback.version) || 1,
+        fallback: true,
+      }))
+    : [];
   const candidates = [
     { filename: definition.filename, version: definition.version, fallback: false },
+    ...configuredFallbacks,
     ...(definition.legacyFilename
       ? [{
           filename: definition.legacyFilename,

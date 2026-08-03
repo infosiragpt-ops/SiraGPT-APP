@@ -45,6 +45,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  ScanSearch,
   Search,
   Server,
   Sparkles,
@@ -74,7 +75,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -91,6 +91,13 @@ import { useChat } from "@/lib/chat-context-integrated"
 import {
   agentCompanyDisplayName,
 } from "@/lib/code-agent-company"
+import {
+  CODE_AGENT_REQUEST_EVENT,
+  CODE_AUTONOMOUS_STARTERS,
+  claimCodeAgentRequest,
+  claimPendingCodeAgentInstruction,
+  requestCodeAgentInstruction,
+} from "@/lib/code-autonomous-starters"
 import {
   buildProactiveCompanySystemBlock,
   claimPendingSeedPrompt,
@@ -134,17 +141,25 @@ import {
   renderFiveSections,
 } from "@/lib/code-agent/orchestrator"
 import {
-  FULL_STACK_APP_CONTRACT_PATHS,
   engineTransportInstructions,
   landingSystemPrompt,
   sreSystemPrompt,
   streamOutputFormat,
 } from "@/lib/code-agent/prompts"
+import {
+  APPS_RUNTIME_STACK,
+  APPS_STREAM_CONTRACT_PATHS,
+  buildAppsModePrompt,
+} from "@/lib/code-agent/apps-mode-contract"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
 import { runWhenCodexProjectIdle } from "@/lib/codex/run-slot"
+import {
+  cancelCodexRunFamily,
+  createCodexRunWithCancellationFence,
+} from "@/lib/codex/cancel-run-family"
 import {
   clearSessionCodexProject,
   clearWorkspaceCodexProject,
@@ -217,11 +232,13 @@ type CodeComposerAttachment = {
 type CodeDispatchOptions = {
   forceDeterministic?: boolean
   files?: string[]
+  mode?: ComposerMode
 }
 
 type PendingCodeInput = {
   text: string
   files?: string[]
+  mode?: ComposerMode
 }
 
 type CodexResumeTarget = {
@@ -312,35 +329,6 @@ function composeCodePromptWithAttachments(input: string, files: CodeComposerAtta
   return [text || "Revisa los archivos adjuntos y aplicalos al proyecto de APPS.", "", block].join("\n")
 }
 
-function CodeTargetSelectIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <rect
-        x="3.75"
-        y="3.75"
-        width="14"
-        height="14"
-        rx="2.75"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray="2.9 3.8"
-      />
-      <path
-        d="M8.32 6.34c-.28-.78.54-1.48 1.26-1.08l10.2 5.72c.72.4.64 1.46-.12 1.75l-3.74 1.41c-.24.09-.43.28-.52.52l-1.41 3.74c-.29.77-1.35.84-1.75.12L8.32 6.34Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
 // Coalesce the (possibly many) file-apply batches an agent emits within a
 // single turn into ONE forced preview restart. We deliberately do NOT gate on
 // whether THIS batch contains a package.json: editing a file inside an
@@ -375,25 +363,6 @@ function escapeGeneratedHtml(value: string): string {
 
 function safeJsonForScript(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c")
-}
-
-// Wrap a /code build order in the Codex "APPS mode" envelope. The backend
-// agent-loop keys `appsMode` off the literal "MODO APPS TIPO CODEX" marker —
-// without it, the run neither forces the Vite SPA stack nor runs the
-// ensureAppsVitePreviewable auto-repair, so the agent drifts into broken
-// React/Next+Vite hybrids that render an error overlay. Same envelope the
-// /apps composer uses (components/codex/codex-agent-panel.tsx).
-function buildAppsModePrompt(userText: string): string {
-  return [
-    "MODO APPS TIPO CODEX:",
-    "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
-    "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
-    "- Primero genera un plan tecnico concreto; si la ejecucion continua, construye, prueba/itera y entrega el resultado en preview/codigo.",
-    "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
-    "",
-    "SOLICITUD DEL USUARIO:",
-    userText,
-  ].join("\n")
 }
 
 function compactGeneratedTitle(prompt: string, ctx?: AgentBuildContext): string {
@@ -636,18 +605,15 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
-    "Modo App (construir desde cero, estilo Replit/Codex): tu meta es entregar un SOFTWARE FULL-STACK profesional que el usuario pueda abrir en APPS, ejecutar y evolucionar desde el chat.\n" +
-    "1) AUTONOMÍA TOTAL — NO hagas preguntas de intake. Si falta contexto, PROPÓN internamente un brief completo con defaults razonables (producto, marca, público, estética, módulos, entidades, datos demo) y ejecuta.\n" +
-    "2) PLAN + EJECUCIÓN — diseña internamente arquitectura, UX, modelo de datos, API, validaciones, estados, responsive, accesibilidad y pasos de ejecución. No esperes confirmación; convierte ese plan en archivos aplicables.\n" +
-    "3) GENERAR — entrega un proyecto Next.js 14 + TypeScript + Prisma + PostgreSQL con tres capas claras:\n" +
-    "   • Frontend: app/page.tsx y app/<entidad>/page.tsx con formularios, tablas, loading/empty/error states y navegación.\n" +
-    "   • Backend: app/api/<entidad>/route.ts con GET/POST reales por cada entidad.\n" +
-    "   • Base de datos: prisma/schema.prisma, lib/db.ts, prisma/seed.ts, .env.example y docker-compose.yml para Postgres local.\n" +
-    "   • README.md con comandos: docker compose up -d db, npm install, cp .env.example .env, npm run db:push, npm run db:seed, npm run dev.\n" +
-    "   • PROHIBIDO usar arrays globales o almacenamiento en memoria como persistencia primaria. Los datos deben pasar por Prisma.\n" +
-    streamOutputFormat({ strictStart: false, paths: FULL_STACK_APP_CONTRACT_PATHS }) +
+    "Modo App: entrega SOFTWARE FULL-STACK profesional, ejecutable en APPS y evolucionable desde este chat.\n" +
+    "1) AUTONOMÍA — no hagas intake ni esperes confirmación; completa el brief con defaults razonables.\n" +
+    "2) PLAN + EJECUCIÓN — inspecciona, implementa por capas, ejecuta checks, abre el preview y repara hasta quedar verde.\n" +
+    `3) RUNTIME SOPORTADO — ${APPS_RUNTIME_STACK.frontend}; API ${APPS_RUNTIME_STACK.api}; persistencia ${APPS_RUNTIME_STACK.database}. Respeta el stack de un repo importado.\n` +
+    "4) DATOS REALES — para una app con datos, el frontend consume /api, Express valida y SQLite persiste. No uses arrays globales como persistencia primaria.\n" +
+    "5) EVIDENCIA — no declares éxito sin tipos/tests/build y un preview funcional; informa cualquier gate que no pudiste ejecutar.\n" +
+    streamOutputFormat({ strictStart: false, paths: APPS_STREAM_CONTRACT_PATHS }) +
     "\n" +
-    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
+    "Cierra con archivos cambiados, verificaciones observadas y 1-3 siguientes pasos opcionales.",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
   deps:
@@ -986,6 +952,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     agentPhase === "debugging"
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
+  const composerModeRef = React.useRef<ComposerMode>(composerMode)
+  composerModeRef.current = composerMode
   const [selectingTarget, setSelectingTarget] = React.useState(false)
   const [selectedPreviewTarget, setSelectedPreviewTarget] = React.useState<CodePreviewSelectionDetail | null>(null)
 
@@ -1218,6 +1186,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   ])
 
   const abortRef = React.useRef<AbortController | null>(null)
+  const activeCodexRunRef = React.useRef<{ projectId: string; runId: string; turnId: string } | null>(null)
   const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const codeAttachmentsRef = React.useRef<CodeComposerAttachment[]>([])
   const codeDragCounterRef = React.useRef(0)
@@ -1635,6 +1604,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     setBusy(false)
     abortRef.current?.abort()
     abortRef.current = null
+    // Session navigation detaches the local stream but deliberately leaves the
+    // durable backend run alive. Returning to the session reconnects to it.
+    activeCodexRunRef.current = null
     // Also clear the BUILD latch and any parked/repair state on a session
     // switch — otherwise an in-flight build (buildingApp) from the previous
     // session keeps the composer wedged and would drain a parked message into
@@ -1652,12 +1624,25 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   }, [input])
 
   const cancelStream = React.useCallback(() => {
+    const activeCodexRun = activeCodexRunRef.current
+    activeCodexRunRef.current = null
     abortRef.current?.abort()
     abortRef.current = null
     setBusy(false)
     setTurns((prev) =>
       prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
     )
+    if (activeCodexRun) {
+      void cancelCodexRunFamily(activeCodexRun, {
+        cancelRun: codexApi.cancelRun,
+        cancelFamily: codexApi.cancelRunFamily,
+        listRuns: codexApi.listRuns,
+        // Close the plan→build race without holding the UI stop button.
+        settle: () => new Promise((resolve) => window.setTimeout(resolve, 160)),
+      }).catch(() => {
+        toast.error("No pude confirmar la cancelación del agente en el servidor.")
+      })
+    }
   }, [setTurns])
 
   // runCodexEngine is defined AFTER sendPrompt; the resilience fallback in
@@ -1690,6 +1675,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
          *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
         spokenKind?: "patch" | "debug"
         files?: string[]
+        /** Mode that owns this request. External starters and queued turns can
+         * differ from the mode currently painted in the composer. */
+        mode?: ComposerMode
       },
     ) => {
       const normalized = normalizeChatInput(prompt)
@@ -1757,7 +1745,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )
       }
 
-      const modeInstruction = COMPOSER_MODE_INSTRUCTION[composerMode]
+      const promptMode = override?.mode ?? composerMode
+      const modeInstruction = COMPOSER_MODE_INSTRUCTION[promptMode]
       // Include the recent conversation so the agent actually accumulates the
       // intake context across turns. Without this the chat was stateless per
       // message — it kept re-asking the same questions and never had enough
@@ -1786,7 +1775,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       const finalPrompt = override?.systemPrompt
         ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}${scopedProactiveBlock ? `\n\n${scopedProactiveBlock}` : ""}\n\n${scopedConvoBlock}Usuario: ${text}`
         : includeContext
-          ? `${buildSystemContext(files, activePath, activeFolder, composerMode, scopedProactiveBlock)}\n\n${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
+          ? `${buildSystemContext(files, activePath, activeFolder, promptMode, scopedProactiveBlock)}\n\n${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
           : `${scopedProactiveBlock ? `${scopedProactiveBlock}\n\n` : ""}${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
 
       if (!conversational) {
@@ -1879,7 +1868,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // The old app|build allowlist left deps/debug — and any build
             // misrouted through another mode — streaming file cards into
             // chat while the workspace and preview stayed empty.
-            if (override?.autoApply ?? (composerMode !== "ask" && composerMode !== "plan" && composerMode !== "image")) {
+            if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
@@ -2361,6 +2350,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // queued here (FIFO) and auto-dispatched in arrival order, one at a time,
   // as the panel goes idle.
   const pendingInputRef = React.useRef<PendingCodeInput[]>([])
+  // React state does not update synchronously. This latch closes the tiny
+  // same-tick window in which two external starter clicks could launch two
+  // expensive runs before `busy` becomes observable.
+  const externalRequestInFlightRef = React.useRef(false)
 
   const repairFromLog = React.useCallback(
     async (log: string, visibleLabel?: string) => {
@@ -2995,12 +2988,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         setTurns((prev) =>
           prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
         )
-      const bindAssistantToRun = (runId: string) =>
+      const bindAssistantToRun = (projectId: string, runId: string) => {
+        activeCodexRunRef.current = { projectId, runId, turnId: assistantId }
         setTurns((prev) =>
           prev.map((turn) =>
             turn.id === assistantId ? { ...turn, codexRunId: runId } : turn,
           ),
         )
+      }
 
       const startedAt = Date.now()
       // finish() mirrors runEngine.finish: on a write it attaches the
@@ -3156,7 +3151,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // The stream resolves its `done` promise on a terminal run_status or
           // close(); if the user cancels the turn we abort it via the controller.
           const onAbort = () => handle.close()
-          controller.signal.addEventListener("abort", onAbort)
+          if (controller.signal.aborted) onAbort()
+          else controller.signal.addEventListener("abort", onAbort)
           handle.done
             .then(() => resolve(state))
             .catch(reject)
@@ -3342,15 +3338,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           const seed = initialCodexEngineFold()
           seed.status = opts.resume.status
           completedBuildRunId = opts.resume.runId
-          bindAssistantToRun(opts.resume.runId)
+          bindAssistantToRun(projectId, opts.resume.runId)
           fold = await streamRun(opts.resume.runId, "build", seed)
         } else {
-          const planRun = opts?.resume
-            ? {
-                id: opts.resume.runId,
-                status: opts.resume.status,
-              }
-            : await runWithProjectSlot(projectId, () =>
+          let planRun: { id: string; status: string }
+          if (opts?.resume) {
+            planRun = {
+              id: opts.resume.runId,
+              status: opts.resume.status,
+            }
+          } else {
+            const created = await createCodexRunWithCancellationFence({
+              projectId,
+              createRun: () => runWithProjectSlot(projectId, () =>
                 codexApi.createRun(projectId, {
                   mode: "plan",
                   // APPS-mode envelope → backend forces the Vite SPA stack +
@@ -3358,13 +3358,48 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   prompt: buildAppsModePrompt(text),
                   model: activeModelName || undefined,
                   tier: tierForModelChoice(activeProvider, activeModelName),
+                  reasoningEffort: resolveCodexReasoningEffort(selectedEffort),
                   // The backend owns continuation even when this tab closes.
                   autoExecute: true,
                 }),
+              ),
+              isCancelled: cancelledTurn,
+              cancelDeps: {
+                cancelRun: codexApi.cancelRun,
+                cancelFamily: codexApi.cancelRunFamily,
+                listRuns: codexApi.listRuns,
+              },
+            })
+            if (created.cancelled) {
+              if (created.cancellationError) {
+                toast.error("No pude confirmar la cancelación del plan en el servidor.")
+              }
+              finishStopped()
+              return
+            }
+            planRun = created.run
+          }
+          // A resumed run can also be stopped while project/session lookup is in
+          // flight. Do not bind a cancelled controller to a durable SSE stream.
+          if (cancelledTurn()) {
+            try {
+              await cancelCodexRunFamily(
+                { projectId, runId: planRun.id },
+                {
+                  cancelRun: codexApi.cancelRun,
+                  cancelFamily: codexApi.cancelRunFamily,
+                  listRuns: codexApi.listRuns,
+                },
               )
+            } catch {
+              toast.error("No pude confirmar la cancelación del plan en el servidor.")
+            }
+            finishStopped()
+            return
+          }
           const seed = initialCodexEngineFold()
           if (opts?.resume) seed.status = planRun.status
-          bindAssistantToRun(planRun.id)
+          bindAssistantToRun(projectId, planRun.id)
           fold = await streamRun(planRun.id, "plan", seed)
           if (cancelledTurn()) {
             finishStopped()
@@ -3377,10 +3412,33 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               projectId,
               planRun.id,
               tierForModelChoice(activeProvider, activeModelName),
-              { autoExecute: true },
+              {
+                autoExecute: true,
+                model: activeModelName || undefined,
+                reasoningEffort: resolveCodexReasoningEffort(selectedEffort),
+              },
             )
+            if (cancelledTurn()) {
+              // Approval may finish after the user pressed Detener. Cancel the
+              // just-created durable child explicitly; attaching an already
+              // aborted stream would otherwise leave it working invisibly.
+              try {
+                await cancelCodexRunFamily(
+                  { projectId, runId: buildRun.id },
+                  {
+                    cancelRun: codexApi.cancelRun,
+                    cancelFamily: codexApi.cancelRunFamily,
+                    listRuns: codexApi.listRuns,
+                  },
+                )
+              } catch {
+                toast.error("No pude confirmar la cancelación del build en el servidor.")
+              }
+              finishStopped()
+              return
+            }
             completedBuildRunId = buildRun.id
-            bindAssistantToRun(buildRun.id)
+            bindAssistantToRun(projectId, buildRun.id)
             fold = await streamRun(
               buildRun.id,
               "build",
@@ -3596,9 +3654,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           abortRef.current = null
           setBusy(false)
         }
+        if (activeCodexRunRef.current?.turnId === assistantId) {
+          activeCodexRunRef.current = null
+        }
       }
     },
-    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, detachCodexProjectForLocalFallback, files, markVoiced, runDeterministicPromptInto, setTurns, token],
+    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, detachCodexProjectForLocalFallback, files, markVoiced, runDeterministicPromptInto, selectedEffort, setTurns, token],
   )
 
   // Keep the resilience-fallback ref pointing at the freshest engine closure.
@@ -3684,6 +3745,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       if (!displayText) return
       const text = expandCodexSlashCommand(displayText).prompt
       const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
+      const effectiveMode = opts?.mode ?? composerMode
       if (busy || buildingApp) {
         // The live dev server can fire a BACKGROUND auto-repair turn (it failed
         // to boot, e.g. a cold install over the 90s timeout) that holds the busy
@@ -3695,7 +3757,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           abortRef.current = null
           repairInFlightRef.current = false
         }
-        pendingInputRef.current.push({ text: rawInput, files: attachedFileIds })
+        pendingInputRef.current.push({ text: rawInput, files: attachedFileIds, mode: effectiveMode })
         setInput("")
         toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
         return
@@ -3707,6 +3769,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       if (!sessionId) {
         toast.error("Abre o crea un chat de código (la carpeta/agente no está activo). Recarga si abriste una carpeta local que no montó.")
         return
+      }
+      if (effectiveMode !== composerModeRef.current) {
+        setComposerMode(effectiveMode)
       }
       const sid = sessionId
       if (isQuickGreeting(text)) {
@@ -3809,9 +3874,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         : null
       const buildText = derivedBrief ?? text
 
-      if ((composerMode === "app" || composerMode === "build") && !codexAvailable && isBuildRequest(buildText)) {
+      if ((effectiveMode === "app" || effectiveMode === "build") && !codexAvailable && isBuildRequest(buildText)) {
         const direct = nextAgentAction(defaultAgentState(), buildText, {
-          mode: composerMode,
+          mode: effectiveMode,
           hasModel: false,
         })
         if (direct.type === "generate") {
@@ -3824,7 +3889,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
       const action = nextAgentAction(agent, buildText, {
-        mode: composerMode,
+        mode: effectiveMode,
         forceDeterministic: opts?.forceDeterministic,
         hasModel: !!activeModelName,
       })
@@ -3838,7 +3903,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // local scaffold still produces niche-coherent copy.
           const buildCtx = hasIntake ? action.context : { ...action.context, productType: buildText }
           if (attachedFileIds.length > 0 && activeModelName && !opts?.forceDeterministic) {
-            await sendPrompt(buildText, { autoApply: true, files: attachedFileIds })
+            await sendPrompt(buildText, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
             return
           }
@@ -3871,7 +3936,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
         case "patch": {
           if (attachedFileIds.length > 0 && activeModelName) {
-            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds })
+            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
             return
           }
           if (runDeterministicPatch(action.instruction, sid)) {
@@ -3888,18 +3953,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           if (engineMode && engineAvailable) {
             await runEngine(action.instruction, sid, { iterate: true })
           } else {
-            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds })
+            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
           }
           return
         }
         case "debug": {
           patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: action.log }))
-          if (composerMode === "debug" && activeModelName) {
+          if (effectiveMode === "debug" && activeModelName) {
             await sendPrompt(text, {
               systemPrompt: sreSystemPrompt(action.log, collectConfigFiles(files)),
               autoApply: true,
               spokenKind: "debug",
               files: attachedFileIds,
+              mode: effectiveMode,
             })
           } else {
             await runDeterministicSRE(action.log, text, sid)
@@ -3913,6 +3979,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           await sendPrompt(text, {
             autoApply: false,
             files: attachedFileIds,
+            mode: effectiveMode,
           })
           return
       }
@@ -3956,14 +4023,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // this effect would not re-run — so the drain loops until the queue is empty
   // or the panel goes busy again (that turn's settle resumes the drain).
   React.useEffect(() => {
-    if (busy || buildingApp) return
+    if (busy || buildingApp || externalRequestInFlightRef.current) return
     if (pendingInputRef.current.length === 0) return
     let cancelled = false
     void (async () => {
-      while (!cancelled && !busyRef.current && !buildingAppRef.current) {
+      while (
+        !cancelled
+        && !busyRef.current
+        && !buildingAppRef.current
+        && !externalRequestInFlightRef.current
+      ) {
         const parked = pendingInputRef.current.shift()
         if (!parked) return
-        await dispatchRef.current?.(parked.text, { files: parked.files })
+        await dispatchRef.current?.(parked.text, { files: parked.files, mode: parked.mode })
       }
     })()
     return () => {
@@ -3977,28 +4049,37 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // and the idle-drain above runs it as soon as the current turn settles.
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const runRequest = (text: string) => {
-      if (busyRef.current || buildingAppRef.current) {
-        pendingInputRef.current.push({ text })
+    const runRequest = (text: string, mode?: ComposerMode) => {
+      const requestMode = mode ?? composerModeRef.current
+      if (busyRef.current || buildingAppRef.current || externalRequestInFlightRef.current) {
+        pendingInputRef.current.push({ text, mode: requestMode })
         return
       }
-      void dispatchRef.current?.(text)
+      externalRequestInFlightRef.current = true
+      void Promise.resolve(dispatchRef.current?.(text, { mode: requestMode })).finally(() => {
+        externalRequestInFlightRef.current = false
+        if (busyRef.current || buildingAppRef.current) return
+        const parked = pendingInputRef.current.shift()
+        if (parked) runRequest(parked.text, parked.mode)
+      })
     }
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ text?: string; consumed?: boolean }>).detail
-      const text = detail?.text?.trim()
-      if (!text) return
-      // Handshake with requestProactiveSeedPrompt: mark the shared detail so
-      // the sender knows the kickoff was received and doesn't stash it.
-      if (detail) detail.consumed = true
-      runRequest(text)
+      const detail = (e as CustomEvent<{ text?: string; mode?: string; consumed?: boolean }>).detail
+      // Multiple Apps surfaces can briefly coexist during dock transitions.
+      // The shared detail is claimed synchronously so exactly one panel starts
+      // (or queues) a potentially multi-hour autonomous run.
+      const request = claimCodeAgentRequest(detail)
+      if (!request) return
+      runRequest(request.text, request.mode)
     }
-    window.addEventListener("siragpt:code-agent-request", handler)
+    window.addEventListener(CODE_AGENT_REQUEST_EVENT, handler)
     // A PROACTIVO kickoff fired before this panel mounted lands in the stash
     // (the 120ms race made the button look dead). Claim it exactly once.
     const pending = claimPendingSeedPrompt()
     if (pending) runRequest(pending)
-    return () => window.removeEventListener("siragpt:code-agent-request", handler)
+    const autonomousStarter = claimPendingCodeAgentInstruction()
+    if (autonomousStarter) runRequest(autonomousStarter.text, autonomousStarter.mode)
+    return () => window.removeEventListener(CODE_AGENT_REQUEST_EVENT, handler)
   }, [])
 
   // Orphan-turn recovery: if the browser persisted a user message but the
@@ -4183,7 +4264,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   }, [composerMode])
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
+    <div
+      className="relative flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
+      data-embedded={embedded ? "true" : undefined}
+    >
       {codeDraggingFiles ? (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
           Suelta archivos para adjuntarlos al agente de APPS
@@ -4219,7 +4303,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             {activeFileLabel}
           </span>
         ) : null}
-        {!embedded ? <DropdownMenu>
+        <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
@@ -4252,8 +4336,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
-        </DropdownMenu> : null}
-        {!embedded ? <Button
+        </DropdownMenu>
+        <Button
           type="button"
           variant="ghost"
           size="icon"
@@ -4263,7 +4347,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           onClick={() => createCodeChatSession()}
         >
           <Plus className="h-3.5 w-3.5" />
-        </Button> : null}
+        </Button>
       </div>
 
       {identityIssue ? (
@@ -4292,7 +4376,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} proactive={proactiveEnabled} />
+          <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -4335,15 +4419,23 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           {selectedPreviewTarget ? (
             <div className="mb-1.5 flex items-center gap-1.5">
               <div
-                className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-violet-500/25 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-700 dark:text-violet-200"
+                data-testid="code-target-selection-chip"
+                className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-violet-500/25 bg-violet-500/[0.08] px-2.5 py-1.5 text-[11px] font-medium text-violet-800 shadow-[0_1px_0_rgba(124,58,237,0.04)] dark:text-violet-100"
                 title={selectedElementChipLabel(selectedPreviewTarget)}
               >
-                <CodeTargetSelectIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{selectedElementChipLabel(selectedPreviewTarget)}</span>
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-violet-500/12" aria-hidden="true">
+                  <ScanSearch className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-violet-700/65 dark:text-violet-200/65">
+                    Elemento seleccionado
+                  </span>
+                  <span className="mt-0.5 block truncate">{selectedElementChipLabel(selectedPreviewTarget)}</span>
+                </span>
                 <button
                   type="button"
                   onClick={() => setSelectedPreviewTarget(null)}
-                  className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-violet-700/80 transition-colors hover:bg-violet-500/15 hover:text-violet-900 dark:text-violet-100 dark:hover:text-white"
+                  className="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-violet-700/75 transition-colors hover:bg-violet-500/15 hover:text-violet-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/45 dark:text-violet-100 dark:hover:text-white"
                   aria-label="Quitar elemento seleccionado"
                   title="Quitar elemento seleccionado"
                 >
@@ -4375,6 +4467,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               engineAvailable={engineAvailable}
               engineMode={engineMode}
               onModeChange={(mode) => {
+                if (mode === "plan" && composerModeRef.current !== "plan") {
+                  planReturnModeRef.current = composerModeRef.current
+                } else if (mode !== "plan") {
+                  planReturnModeRef.current = mode
+                }
                 setComposerMode(mode)
                 inputRef.current?.focus()
               }}
@@ -4392,21 +4489,27 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             >
               <Paperclip className="h-[16px] w-[16px]" />
             </Button>
-            <Button
+            <button
               type="button"
-              variant="ghost"
-              size="icon"
               onClick={toggleTargetSelection}
               aria-pressed={selectingTarget}
-              aria-label={selectingTarget ? "Cancelar selección visual" : "Seleccionar elemento del preview"}
-              title={selectingTarget ? "Cancelar selección visual" : "Seleccionar elemento del preview"}
+              aria-label={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
+              title={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
+              data-testid="code-target-selector"
               className={cn(
-                "code-target-select-button h-7 w-7 shrink-0 rounded-md",
+                "code-target-select-button shrink-0 rounded-md",
                 selectingTarget && "code-target-select-button--active",
               )}
             >
-              <CodeTargetSelectIcon className="code-target-select-button__icon h-[18px] w-[18px]" />
-            </Button>
+              {selectingTarget ? (
+                <X className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
+              ) : (
+                <ScanSearch className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
+              )}
+              <span className="code-target-select-button__label">
+                {selectingTarget ? "Cancelar" : "Seleccionar UI"}
+              </span>
+            </button>
             <span className="min-w-0 flex-1" />
             <ModelPickerInline
               models={pickerModels}
@@ -4601,20 +4704,78 @@ function CodeAttachmentTray({
   )
 }
 
-function EmptyChat({ active, proactive = false }: { active: boolean; proactive?: boolean }) {
+function EmptyChat({
+  active,
+  proactive = false,
+  durable = false,
+}: {
+  active: boolean
+  proactive?: boolean
+  durable?: boolean
+}) {
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-6 py-10 text-center">
+    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
+      <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+        <span
+          className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
+          aria-hidden="true"
+        />
+        {durable ? "Agente cloud disponible · hasta 4 h" : "Builder local disponible"}
+      </span>
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
         <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
       </span>
       <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        {proactive ? "Objetivo de la empresa" : "¿Qué quieres construir?"}
+        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
       </h2>
-      <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-muted-foreground">
+      <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
         {proactive
           ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
-          : "Describe tu idea, pide paquetes npm y el agente crea, ejecuta, verifica y corrige el preview en vivo."}
+          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
       </p>
+      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
+        {CODE_AUTONOMOUS_STARTERS.map((starter) => (
+          <button
+            key={starter.id}
+            type="button"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+            onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
+            data-testid={`code-agent-starter-${starter.id}`}
+          >
+            <span className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
+                {starter.id === "ai-platform" ? (
+                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
+                ) : starter.id === "business-os" ? (
+                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Rocket className="h-4 w-4" aria-hidden="true" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-foreground">{starter.title}</span>
+                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
+                  {starter.description}
+                </span>
+                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
+                  {starter.meta}
+                </span>
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
+        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
+          <React.Fragment key={step}>
+            {index > 0 ? <span aria-hidden="true">→</span> : null}
+            <span>{step}</span>
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   )
 }
@@ -5141,6 +5302,10 @@ function resolveComposerEffortIndex(effort: string | null | undefined) {
   return typeof index === "number" ? index : 1
 }
 
+function resolveCodexReasoningEffort(effort: string | null | undefined): "low" | "medium" | "high" | "max" {
+  return (["low", "medium", "high", "max"] as const)[resolveComposerEffortIndex(effort)] || "medium"
+}
+
 function ModelPickerInline({
   models,
   selectedModel,
@@ -5197,12 +5362,13 @@ function ModelPickerInline({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
+          data-testid="code-model-selector"
           className={cn(
-            "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition-colors",
+            "inline-flex h-8 max-w-[min(184px,38vw)] shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
             "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
             "data-[state=open]:border-border data-[state=open]:bg-muted/60 data-[state=open]:text-foreground",
           )}
-          aria-label="Seleccionar modelo"
+          aria-label={`Seleccionar modelo. Actual: ${label}. Profundidad: ${effortLevel.label}`}
           title={
             fast
               ? `${label} — recomendado para preview en vivo`
@@ -5287,40 +5453,26 @@ function ModelPickerInline({
           onKeyDown={(event) => event.stopPropagation()}
         >
           <div className="model-picker-effort-header">
-            <span className="model-picker-effort-title">Effort</span>
+            <span className="model-picker-effort-title">Profundidad</span>
             <span className="model-picker-effort-value">{effortLevel.label}</span>
           </div>
 
-          <div className="model-picker-effort-slider-wrap">
-            <Slider
-              min={0}
-              max={COMPOSER_EFFORT_LEVELS.length - 1}
-              step={1}
-              value={[effortIndex]}
-              onValueChange={(values) => {
-                const next = COMPOSER_EFFORT_LEVELS[values[0] ?? effortIndex]
-                if (next) onSelectEffort(next.value)
-              }}
-              aria-label="Effort"
-              aria-valuetext={effortLevel.label}
-              className="model-picker-effort-slider"
-            />
-            <div className="model-picker-effort-stops" aria-hidden="true">
-              {COMPOSER_EFFORT_LEVELS.map((level, index) => (
-                <button
-                  key={level.value}
-                  type="button"
-                  tabIndex={-1}
-                  className={cn(
-                    "model-picker-effort-stop",
-                    index <= effortIndex && "is-active",
-                    index === effortIndex && "is-current",
-                  )}
-                  onClick={() => onSelectEffort(level.value)}
-                  title={level.label}
-                />
-              ))}
-            </div>
+          <div className="model-picker-effort-options" role="group" aria-label="Profundidad de razonamiento">
+            {COMPOSER_EFFORT_LEVELS.map((level, index) => (
+              <button
+                key={level.value}
+                type="button"
+                aria-pressed={index === effortIndex}
+                className={cn(
+                  "model-picker-effort-option",
+                  index === effortIndex && "is-current",
+                )}
+                onClick={() => onSelectEffort(level.value)}
+                title={`${level.label}: ${level.description}`}
+              >
+                {level.label}
+              </button>
+            ))}
           </div>
 
           <p className="model-picker-effort-description">{effortLevel.description}</p>

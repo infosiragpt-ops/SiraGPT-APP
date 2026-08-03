@@ -17,6 +17,10 @@ export type EdgeDistrictCounts = {
   buildings: number
   secondaryBuildings: number
   signatureTowers: number
+  architecturalCrowns: number
+  glassFacades: number
+  terraceAmenities: number
+  tallestBuildingHeight: number
   windows: number
   trees: number
   vehicles: number
@@ -125,7 +129,7 @@ function setInstanceTransform(
 
 function createBoxInstances(
   instances: BoxInstance[],
-  material: THREE.MeshStandardMaterial,
+  material: THREE.Material,
 ) {
   const mesh = new THREE.InstancedMesh(UNIT_BOX.clone(), material, instances.length)
   instances.forEach((instance, index) => {
@@ -282,14 +286,21 @@ function addFacadeWindows(
   const windowWidth = Math.min(1.05, usableWidth / columns * 0.7)
   const windowHeight = Math.min(0.64, usableHeight / rows * 0.58)
   const dayColors = [0xb4d9e3, 0x9fcbd9, 0x80b5c8, 0xd0e5e8]
-  const nightColors = [
-    0xffcf78,
-    0xffe6a8,
-    0x9bd7e7,
-    0x4c7890,
-    0x294959,
-    0x1e3847,
-  ]
+  const nightLitColors = [0xffcf78, 0xffe6a8, 0x9bd7e7, 0xb9e8ef]
+  const nightDarkColors = [0x294959, 0x1e3847, 0x17303e]
+
+  const windowColor = (row: number) => {
+    if (!night) return dayColors[Math.floor(random() * dayColors.length)]
+    // Keep illumination legible as occupied floors instead of television-like
+    // random noise. Executive floors skew cool; the rest mix warm office light
+    // with intentionally dark floors so the skyline retains depth at night.
+    const lit = random() > 0.34
+    if (!lit) return nightDarkColors[Math.floor(random() * nightDarkColors.length)]
+    const executiveFloor = row >= rows - 2
+    return executiveFloor
+      ? nightLitColors[2 + Math.floor(random() * 2)]
+      : nightLitColors[Math.floor(random() * nightLitColors.length)]
+  }
 
   for (let row = 0; row < rows; row += 1) {
     const y = bottom + ((row + 0.5) / rows) * usableHeight
@@ -298,9 +309,7 @@ function addFacadeWindows(
         building.x -
         usableWidth / 2 +
         ((column + 0.5) / columns) * usableWidth
-      const color = night
-        ? nightColors[Math.floor(random() * nightColors.length)]
-        : dayColors[Math.floor(random() * dayColors.length)]
+      const color = windowColor(row)
       instances.push({
         position: [x, y, building.z + building.depth / 2 + 0.012],
         scale: [windowWidth, windowHeight],
@@ -317,9 +326,7 @@ function addFacadeWindows(
         building.z -
         building.depth * 0.34 +
         ((column + 0.5) / sideColumns) * building.depth * 0.68
-      const color = night
-        ? nightColors[Math.floor(random() * nightColors.length)]
-        : dayColors[Math.floor(random() * dayColors.length)]
+      const color = windowColor(row)
       instances.push({
         position: [building.x - building.width / 2 - 0.012, y, z],
         scale: [Math.min(1.05, building.depth / sideColumns * 0.48), windowHeight],
@@ -540,10 +547,12 @@ export function addEdgeDistrict({
   const structureInstances: BoxInstance[] = []
   const propInstances: BoxInstance[] = []
   const facadeWindows: PlaneInstance[] = []
+  const districtGlassFacades: PlaneInstance[] = []
   const rooftopGlass: PlaneInstance[] = []
   const treeInstances: BoxInstance[] = []
   const signatureTowerInstances: BoxInstance[] = []
   const signatureCrownInstances: BoxInstance[] = []
+  const architecturalGlowInstances: BoxInstance[] = []
   const streetLightGlows: BoxInstance[] = []
   const streetLightPools: PlaneInstance[] = []
 
@@ -580,7 +589,7 @@ export function addEdgeDistrict({
     },
   )
 
-  const secondaryCount = variant === "full" ? 24 : 12
+  const secondaryCount = variant === "full" ? 30 : 14
   const normalizedLots: Array<[number, number]> = [
     [-0.54, -0.64],
     [0, -0.76],
@@ -606,27 +615,43 @@ export function addEdgeDistrict({
     [1.02, 0.26],
     [-0.98, 0.7],
     [0.98, 0.7],
+    [-0.78, -0.88],
+    [-0.26, -0.9],
+    [0.26, -0.9],
+    [0.78, -0.88],
+    [-1.04, -0.08],
+    [1.04, -0.08],
   ]
-  const dayBuildingColors = [0x58717b, 0x416779, 0x6f8589, 0x355665, 0x7d8280, 0x59616a]
-  const nightBuildingColors = [0x2e3c45, 0x304a58, 0x394d56, 0x283e4c, 0x465158, 0x443841]
+  const dayBuildingColors = [0x4e6974, 0x345f70, 0x71878b, 0x294f61, 0x747b7d, 0x4d5c65]
+  const nightBuildingColors = [0x1c303c, 0x203f50, 0x2b444e, 0x192f3e, 0x35464f, 0x382f3a]
+  const dayGlassColors = [0x84b5c1, 0x6ca4b5, 0xa2c5cb, 0x72939f]
+  const nightGlassColors = [0x183f52, 0x1c5064, 0x294f61, 0x273e50]
   const secondaryBuildings: Building[] = []
   let signatureTowerCount = 0
+  let architecturalCrownCount = 0
+  let tallestBuildingHeight = upperTop - groundY
+  let terraceAmenityCount = 0
 
   for (let index = 0; index < secondaryCount; index += 1) {
     const [normalizedX, normalizedZ] = normalizedLots[index]
-    const width = 6.2 + random() * 5.4
-    const depth = 6 + random() * 5.2
-    const foregroundPenalty = normalizedZ > 0.2 ? 5.2 : 0
+    const lotWidth = 6.1 + random() * 5.7
+    const lotDepth = 5.8 + random() * 5.6
+    const foregroundPenalty = normalizedZ > 0.2 ? 7.4 : 0
     const skylineBoost =
-      normalizedZ < -0.25
-        ? 10 + random() * 16
+      normalizedZ < -0.58
+        ? 15 + random() * 24
+        : normalizedZ < -0.25
+          ? 9 + random() * 17
         : normalizedZ < 0.2
-          ? 3.5 + random() * 7
+          ? 4 + random() * 9
           : 0
     const height = Math.max(
-      7.2,
-      9 + random() * 8 + skylineBoost - foregroundPenalty,
+      8.2,
+      10.5 + random() * 10.5 + skylineBoost - foregroundPenalty,
     )
+    const slenderness = height > 40 ? 0.72 : height > 30 ? 0.84 : 1
+    const width = lotWidth * slenderness
+    const depth = lotDepth * (height > 38 ? 0.82 : 1)
     const x = normalizedX * districtHalfWidth + (random() - 0.5) * 2.2
     const z = normalizedZ * districtHalfDepth + (random() - 0.5) * 2
     const palette = night ? nightBuildingColors : dayBuildingColors
@@ -638,6 +663,7 @@ export function addEdgeDistrict({
       height,
       color: palette[Math.floor(random() * palette.length)],
     }
+    tallestBuildingHeight = Math.max(tallestBuildingHeight, height)
     secondaryBuildings.push(building)
     structureInstances.push({
       position: [x, groundY + height / 2, z],
@@ -645,25 +671,36 @@ export function addEdgeDistrict({
       color: building.color,
       rotation: [0, (random() - 0.5) * 0.08, 0],
     })
+    const towerProfile = index % 4
     if (index % 3 === 0) {
-      const crownHeight = 0.5 + random() * 0.6
+      const crownHeight = 0.58 + random() * 0.72
       structureInstances.push({
         position: [x, groundY + height + crownHeight / 2, z],
-        scale: [width * 0.66, crownHeight, depth * 0.66],
-        color: night ? 0x55798a : 0xc9d9da,
+        scale: [width * (towerProfile === 0 ? 0.54 : 0.68), crownHeight, depth * 0.64],
+        color: night ? 0x4a7183 : 0xc6dadd,
       })
+      architecturalCrownCount += 1
     }
     if (height > 20) {
-      const setbackHeight = Math.min(3.4, height * 0.14)
+      const setbackHeight = Math.min(4.8, height * (towerProfile === 2 ? 0.18 : 0.14))
       structureInstances.push({
         position: [x, groundY + height - setbackHeight / 2, z],
-        scale: [width * 0.82, setbackHeight, depth * 0.82],
-        color: night ? 0x3f6172 : 0x9db9c0,
+        scale: [width * (towerProfile === 2 ? 0.68 : 0.82), setbackHeight, depth * 0.8],
+        color: night ? 0x365d70 : 0x91b2bb,
       })
+      if (towerProfile === 2 && height > 31) {
+        const upperSetbackHeight = Math.min(3.3, height * 0.08)
+        structureInstances.push({
+          position: [x, groundY + height - upperSetbackHeight / 2, z],
+          scale: [width * 0.5, upperSetbackHeight, depth * 0.58],
+          color: night ? 0x477487 : 0xaac8cd,
+        })
+      }
     }
-    const signatureTower = index % 7 === 1
+    const signatureTower = index % 5 === 1
     if (signatureTower) {
       signatureTowerCount += 1
+      architecturalCrownCount += 1
       const crownHeight = 4.4 + random() * 3.2
       const crownWidth = width * (0.42 + random() * 0.08)
       const crownDepth = depth * (0.42 + random() * 0.08)
@@ -684,7 +721,50 @@ export function addEdgeDistrict({
         scale: [0.08, 2.08, 0.08],
         color: night ? 0xffc66f : 0x5c7480,
       })
+      architecturalGlowInstances.push({
+        position: [x, groundY + height + crownHeight + 1.12, z],
+        scale: [0.13, 2.12, 0.13],
+        color: fullNight ? 0xffcb77 : timePhase === "dusk" ? 0xffb87a : 0xb8eaf2,
+      })
+    } else if (towerProfile === 3 && height > 24) {
+      // Twin fins and a floating cap give mid-distance towers a recognizable
+      // corporate silhouette without adding unique geometries per building.
+      const finHeight = Math.min(4.6, height * 0.13)
+      for (const side of [-1, 1]) {
+        propInstances.push({
+          position: [x + side * width * 0.24, groundY + height + finHeight / 2, z],
+          scale: [0.12, finHeight, depth * 0.44],
+          color: night ? 0x79b9c8 : 0xd7ebed,
+        })
+      }
+      propInstances.push({
+        position: [x, groundY + height + finHeight, z],
+        scale: [width * 0.62, 0.14, depth * 0.5],
+        color: night ? 0x8bd8e5 : 0xe8f7f8,
+      })
+      architecturalGlowInstances.push({
+        position: [x, groundY + height + finHeight + 0.035, z],
+        scale: [width * 0.56, 0.08, depth * 0.44],
+        color: fullNight ? 0x7de7f2 : timePhase === "dusk" ? 0xf2b786 : 0xc9edf2,
+      })
+      architecturalCrownCount += 1
     }
+    const facadePalette = night ? nightGlassColors : dayGlassColors
+    const facadeColor = facadePalette[(index + towerProfile) % facadePalette.length]
+    const facadeHeight = height * 0.9
+    districtGlassFacades.push(
+      {
+        position: [x, groundY + height * 0.52, z + depth / 2 + 0.025],
+        scale: [width * 0.92, facadeHeight],
+        color: facadeColor,
+      },
+      {
+        position: [x - width / 2 - 0.025, groundY + height * 0.52, z],
+        scale: [depth * 0.9, facadeHeight],
+        color: facadeColor,
+        rotation: [0, Math.PI / 2, 0],
+      },
+    )
     propInstances.push({
       position: [
         x + width * 0.31,
@@ -694,6 +774,13 @@ export function addEdgeDistrict({
       scale: [0.13, height * 0.74, 0.12],
       color: night ? 0x7de3f1 : 0xdaf3f5,
     })
+    if (variant === "full" && height > 24) {
+      propInstances.push({
+        position: [x - width * 0.28, groundY + height * 0.53, z + depth / 2 + 0.07],
+        scale: [0.08, height * 0.72, 0.1],
+        color: night ? 0x62a9ba : 0xc8e3e6,
+      })
+    }
     addFacadeWindows(facadeWindows, building, groundY, variant, random, night)
   }
 
@@ -738,6 +825,19 @@ export function addEdgeDistrict({
       color: night ? 0x6fc6d8 : 0xf1faf9,
     })
   }
+  architecturalGlowInstances.push(
+    {
+      position: [0, upperTop - 0.015, lowerDepth / 2 + 0.15],
+      scale: [lowerWidth * 0.88, 0.07, 0.08],
+      color: fullNight ? 0x72e5f0 : timePhase === "dusk" ? 0xf0b385 : 0xb9e6eb,
+    },
+    {
+      position: [-lowerWidth / 2 - 0.15, upperTop - 0.015, 0],
+      scale: [0.08, 0.07, lowerDepth * 0.82],
+      color: fullNight ? 0x72e5f0 : timePhase === "dusk" ? 0xf0b385 : 0xb9e6eb,
+    },
+  )
+  architecturalCrownCount += 1
 
   const structureMesh = createBoxInstances(
     structureInstances,
@@ -775,6 +875,25 @@ export function addEdgeDistrict({
     signatureCrowns.userData.agentOfficeEnvironment = "edge-district"
     scene.add(signatureCrowns)
   }
+
+  const districtGlassMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    emissive: fullNight ? 0x092b3d : timePhase === "dusk" ? 0x251c24 : 0x092733,
+    emissiveIntensity: fullNight ? 0.62 : timePhase === "dusk" ? 0.32 : 0.08,
+    roughness: 0.075,
+    metalness: 0.42,
+    clearcoat: 1,
+    clearcoatRoughness: 0.06,
+    transparent: true,
+    opacity: fullNight ? 0.6 : timePhase === "dusk" ? 0.48 : 0.34,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  districtGlassMaterial.forceSinglePass = true
+  const districtGlassMesh = createPlaneInstances(districtGlassFacades, districtGlassMaterial)
+  districtGlassMesh.renderOrder = 1
+  districtGlassMesh.userData.agentOfficeEnvironment = "edge-district"
+  scene.add(districtGlassMesh)
 
   const curtainHeight = upperTop - groundY - 0.7
   const curtainMaterial = new THREE.MeshPhysicalMaterial({
@@ -1026,8 +1145,81 @@ export function addEdgeDistrict({
       color: terraceAccent,
     },
   )
+  architecturalGlowInstances.push(
+    {
+      position: [0, 0.052, deckOuterZ + 2.29],
+      scale: [deckWidth * 0.84, 0.045, 0.11],
+      color: fullNight ? 0x66e6f2 : timePhase === "dusk" ? 0xf2bc8f : 0x8bcbd5,
+    },
+    {
+      position: [-deckWidth / 2 + 0.42, 0.052, (deckInnerZ + deckOuterZ) / 2],
+      scale: [0.11, 0.045, deckOuterZ - deckInnerZ + 0.8],
+      color: fullNight ? 0x66e6f2 : timePhase === "dusk" ? 0xf2bc8f : 0x8bcbd5,
+    },
+    {
+      position: [deckWidth / 2 - 0.42, 0.052, (deckInnerZ + deckOuterZ) / 2],
+      scale: [0.11, 0.045, deckOuterZ - deckInnerZ + 0.8],
+      color: fullNight ? 0x66e6f2 : timePhase === "dusk" ? 0xf2bc8f : 0x8bcbd5,
+    },
+  )
+
+  const receptionZ = deckOuterZ + 0.58
+  propInstances.push(
+    {
+      position: [0, 0.48, receptionZ],
+      scale: [4.25, 0.86, 0.72],
+      color: night ? 0x1b3340 : 0x355d6a,
+    },
+    {
+      position: [0, 0.96, receptionZ - 0.04],
+      scale: [4.55, 0.12, 0.92],
+      color: night ? 0x87979d : 0xe9eeeb,
+    },
+  )
+  terraceAmenityCount += 2
+  architecturalGlowInstances.push({
+    position: [0, 0.58, receptionZ + 0.37],
+    scale: [3.45, 0.08, 0.045],
+    color: fullNight ? 0x72e7f1 : timePhase === "dusk" ? 0xffc18b : 0xb7dfe4,
+  })
+  for (const side of [-1, 1]) {
+    const stoolX = side * 1.15
+    propInstances.push(
+      {
+        position: [stoolX, 0.28, receptionZ - 1.05],
+        scale: [0.12, 0.52, 0.12],
+        color: night ? 0x6f8188 : 0x87999f,
+      },
+      {
+        position: [stoolX, 0.56, receptionZ - 1.05],
+        scale: [0.64, 0.12, 0.64],
+        color: night ? 0xbfc9cc : 0xf5f6f3,
+      },
+    )
+    terraceAmenityCount += 2
+
+    const planterX = side * Math.min(4.1, deckWidth * 0.13)
+    propInstances.push({
+      position: [planterX, 0.22, receptionZ + 0.12],
+      scale: [0.72, 0.44, 0.72],
+      color: night ? 0x51656f : 0xdde5e2,
+    })
+    treeInstances.push({
+      position: [planterX, 0.98, receptionZ + 0.12],
+      scale: [0.42, 0.58, 0.42],
+      color: night ? 0x2b6b53 : 0x32855e,
+    })
+    terraceAmenityCount += 1
+  }
 
   const collaborationZ = totalDepth / 2 + 4.65
+  const premiumDeckWidth = Math.min(13.2, totalWidth * 0.48)
+  propInstances.push({
+    position: [0, -0.015, collaborationZ],
+    scale: [premiumDeckWidth, 0.1, 4.75],
+    color: night ? 0x253c49 : 0x9db0b5,
+  })
+  terraceAmenityCount += 1
   propInstances.push(
     {
       position: [0, 0.82, collaborationZ],
@@ -1040,6 +1232,7 @@ export function addEdgeDistrict({
       color: night ? 0x62747e : 0x8b9ca3,
     },
   )
+  terraceAmenityCount += 2
   for (const side of [-1, 1]) {
     for (const offset of [-1.18, 0, 1.18]) {
       propInstances.push({
@@ -1047,8 +1240,69 @@ export function addEdgeDistrict({
         scale: [0.72, 0.46, 0.68],
         color: night ? 0xd3d9dc : 0xf5f6f4,
       })
+      terraceAmenityCount += 1
     }
   }
+
+  const amenityOffset = Math.min(deckWidth * 0.31, 12.6)
+  const reflectionPoolX = -amenityOffset
+  propInstances.push(
+    {
+      position: [reflectionPoolX, 0.005, collaborationZ],
+      scale: [5.15, 0.12, 2.72],
+      color: night ? 0x718087 : 0xe6ece9,
+    },
+    {
+      position: [reflectionPoolX, 0.075, collaborationZ],
+      scale: [4.72, 0.04, 2.3],
+      color: fullNight ? 0x1f87a3 : timePhase === "dusk" ? 0x6f7785 : 0x58b7c8,
+    },
+  )
+  architecturalGlowInstances.push(
+    {
+      position: [reflectionPoolX, 0.105, collaborationZ - 1.16],
+      scale: [4.72, 0.035, 0.055],
+      color: fullNight ? 0x78e3f0 : 0xb4e5ea,
+    },
+    {
+      position: [reflectionPoolX, 0.105, collaborationZ + 1.16],
+      scale: [4.72, 0.035, 0.055],
+      color: fullNight ? 0x78e3f0 : 0xb4e5ea,
+    },
+  )
+  terraceAmenityCount += 2
+
+  const loungeX = amenityOffset
+  const loungeUpholstery = night ? 0xbfcbd0 : 0xf5f7f5
+  for (const side of [-1, 1]) {
+    propInstances.push(
+      {
+        position: [loungeX, 0.3, collaborationZ + side * 0.82],
+        scale: [3.45, 0.44, 0.72],
+        color: loungeUpholstery,
+      },
+      {
+        position: [loungeX, 0.68, collaborationZ + side * 1.08],
+        scale: [3.45, 0.64, 0.18],
+        color: night ? 0x91a3ab : 0xd8e0de,
+        rotation: [side * 0.08, 0, 0],
+      },
+    )
+    terraceAmenityCount += 2
+  }
+  propInstances.push(
+    {
+      position: [loungeX, 0.38, collaborationZ],
+      scale: [1.9, 0.12, 1.18],
+      color: night ? 0x1c303b : 0x335867,
+    },
+    {
+      position: [loungeX, 0.19, collaborationZ],
+      scale: [0.16, 0.38, 0.62],
+      color: night ? 0x61747d : 0x80959d,
+    },
+  )
+  terraceAmenityCount += 2
 
   const pergolaWidth = Math.min(11, totalWidth * 0.42)
   for (const x of [-pergolaWidth / 2, pergolaWidth / 2]) {
@@ -1072,6 +1326,11 @@ export function addEdgeDistrict({
       color: night ? 0x304d5d : 0x8297a0,
     })
   }
+  architecturalGlowInstances.push({
+    position: [0, 3.135, collaborationZ],
+    scale: [pergolaWidth * 0.82, 0.055, 0.1],
+    color: fullNight ? 0xffdda0 : timePhase === "dusk" ? 0xffc38f : 0xcde9e8,
+  })
 
   const brandSign = createBrandSign()
   if (brandSign) {
@@ -1180,6 +1439,20 @@ export function addEdgeDistrict({
       color: night ? 0x245945 : 0x347d57,
     })
   }
+
+  const architecturalGlowMesh = createBoxInstances(
+    architecturalGlowInstances,
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: fullNight ? 0.94 : timePhase === "dusk" ? 0.76 : 0.42,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  )
+  architecturalGlowMesh.renderOrder = 6
+  architecturalGlowMesh.userData.agentOfficeEnvironment = "edge-district"
+  scene.add(architecturalGlowMesh)
 
   const propsMesh = createBoxInstances(
     propInstances,
@@ -1392,11 +1665,15 @@ export function addEdgeDistrict({
       buildings: secondaryCount + 1,
       secondaryBuildings: secondaryCount,
       signatureTowers: signatureTowerCount,
+      architecturalCrowns: architecturalCrownCount,
+      glassFacades: districtGlassFacades.length,
+      terraceAmenities: terraceAmenityCount,
+      tallestBuildingHeight,
       windows: facadeWindows.length,
       trees: treeInstances.length,
       vehicles: vehicleRoutes.length,
       lightFixtures: streetLightGlows.length,
-      expectedDrawCalls: night ? 22 : 21,
+      expectedDrawCalls: night ? 24 : 23,
     },
     framing: {
       target: new THREE.Vector3(
@@ -1405,7 +1682,7 @@ export function addEdgeDistrict({
         -totalDepth * 0.12,
       ),
       yaw: variant === "thumbnail" ? -0.64 : -0.58,
-      pitch: variant === "thumbnail" ? 0.38 : 0.3,
+      pitch: variant === "thumbnail" ? 0.39 : 0.32,
       distance: landscapeDistance,
       landscapeDistance,
       portraitDistance,

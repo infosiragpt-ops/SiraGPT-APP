@@ -25,7 +25,7 @@ export type CompanyAgentFileArtifact = {
   agentName: string
   kind: "file" | "report"
   extension: string
-  source: "workspace" | "session" | "agent-report" | "mission"
+  source: "workspace" | "session" | "agent-report" | "mission" | "activity-report"
 }
 
 export type CompanyAgentFileGroup = {
@@ -414,6 +414,42 @@ export function buildCompanyAgentFileArtifacts({
     }]
   })
 
+  const activityReportArtifacts: CompanyAgentFileArtifact[] = (missionEvidence?.reports || []).map((report) => {
+    const agent = agents.find((candidate) => candidate.departmentId === "ceo-office") || agents[0]
+    const title = safeSlug(report.title, "resumen-actividad")
+    const content = [
+      `# ${report.title}`,
+      "",
+      report.summary || "Sin resumen.",
+      "",
+      `- Autor: ${report.author || "CEO Office"}`,
+      `- Periodo: ${report.period.from} → ${report.period.to}`,
+      `- Estado: ${report.status}`,
+      `- Misiones: ${report.counts.missions}`,
+      `- Completadas: ${report.counts.completed}`,
+      `- Bloqueadas: ${report.counts.blocked}`,
+      `- Pendientes de revisión: ${report.counts.pendingReview}`,
+      `- Aprobadas: ${report.counts.approved}`,
+      `- Entrega: ${report.delivery.status}`,
+      ...(report.contentHash ? [`- Hash: ${report.contentHash}`] : []),
+      "",
+    ].join("\n")
+    return {
+      id: `report:activity:${report.id}`,
+      name: `${report.title}.md`,
+      path: `Agentes/${agent?.name || "CEO Office"}/Reportes/${title}.md`,
+      content,
+      updatedAt: Date.parse(report.createdAt) || Date.now(),
+      departmentId: agent?.departmentId || "ceo-office",
+      departmentName: agent?.departmentName || "CEO Office",
+      agentId: agent?.id || "ceo-office",
+      agentName: agent?.name || report.author || "CEO Office",
+      kind: "report" as const,
+      extension: "md",
+      source: "activity-report" as const,
+    }
+  })
+
   // Touch agents with run activity timestamps when available.
   const runById = new Map(runs.map((run) => [run.id, run]))
   for (const agent of agents) {
@@ -496,6 +532,7 @@ export function buildCompanyAgentFileArtifacts({
 
   const artifacts = [
     ...agentReports,
+    ...activityReportArtifacts,
     ...missionArtifacts,
     ...sessionArtifacts,
     ...workspaceArtifacts,

@@ -16,7 +16,11 @@ describe("APPS autonomous full-stack wiring", () => {
     assert.match(panel, /CORRIDA LARGA AUTONOMA/)
     assert.match(api, /opts\?\.autoExecute/)
     assert.match(api, /autoExecute: true/)
-    assert.match(chat, /\{\s*autoExecute:\s*true\s*\}/)
+    assert.equal(
+      chat.match(/autoExecute:\s*true/g)?.length,
+      2,
+      "plan and approved build must both remain autonomous",
+    )
   })
 
   it("renames user-facing company labels to Empresas", () => {

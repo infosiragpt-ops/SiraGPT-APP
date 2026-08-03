@@ -5,9 +5,11 @@ const assert = require('node:assert/strict');
 
 const {
   closeBuild,
+  ensureAppsVitePreviewable,
   runAgentLoop,
   verifyWorkspace,
 } = require('../src/services/codex/agent-loop');
+const buildTools = require('../src/services/codex/build-tools');
 const { buildPlanMessages } = require('../src/services/codex/plan-mode');
 
 // Scripted llmTurn: shift the next response off a queue.
@@ -50,6 +52,42 @@ test('plan mode delegates and ends waiting_approval with plan_proposed', async (
   assert.equal(res.status, 'waiting_approval');
   assert.equal(f.events[0].type, 'plan_proposed');
   assert.equal(f.writes.length, 0); // plan mode never mutates
+});
+
+test('plan mode forwards the selected model and normalized reasoning effort to the LLM', async () => {
+  let captured = null;
+  const f = fakeDeps({
+    llmTurn: async (args) => {
+      captured = args;
+      return {
+        text: JSON.stringify({
+          architecture: 'Vite',
+          pages: ['/'],
+          components: ['Nav'],
+          tasks: [{ id: 't1', title: 'x' }],
+        }),
+      };
+    },
+  });
+
+  const res = await runAgentLoop({
+    run: {
+      id: 'r-plan-depth',
+      mode: 'plan',
+      prompt: 'landing',
+      tier: 'power',
+      model: 'claude-sonnet-4-5',
+      reasoningEffort: 'max',
+    },
+    project: { id: 'p1', name: 'X' },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'waiting_approval');
+  assert.equal(captured.tier, 'power');
+  assert.equal(captured.model, 'claude-sonnet-4-5');
+  assert.equal(captured.effort, 'high');
+  assert.deepEqual(captured.tools, []);
 });
 
 test('build loop runs grouped tool calls with one groupId, narrative, then done', async () => {
@@ -114,6 +152,69 @@ test('apps build prompt overrides a non-explicit Next.js plan back to Vite', asy
   assert.equal(res.status, 'done');
   assert.match(systemPrompt, /Stack OBLIGATORIO: React 18 \+ Vite 7/i);
   assert.match(systemPrompt, /PROHIBIDO Next\.js/i);
+  assert.match(systemPrompt, /script dev="vite"/i);
+  assert.match(systemPrompt, /sin backend propio/i);
+  assert.doesNotMatch(systemPrompt, /starter FULL-STACK/i);
+});
+
+test('apps full-stack prompt preserves the Express SQLite concurrently contract', async () => {
+  let systemPrompt = '';
+  const f = fakeDeps({
+    fileTree: 'index.html\npackage.json\nsrc/App.tsx\nvite.config.ts\n',
+    plan: { architecture: 'React + Vite + Express + SQLite', pages: ['/'], components: ['Clientes'], tasks: [] },
+    llmTurn: async ({ messages }) => {
+      systemPrompt = messages.find((m) => m.role === 'system')?.content || '';
+      return { text: 'Listo.', toolCalls: [] };
+    },
+  });
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'crea una app con backend, API y base de datos para gestionar clientes',
+  ].join('\n');
+  const res = await runAgentLoop({
+    run: { id: 'r1', mode: 'build', prompt },
+    project: { id: 'p1', name: 'Clientes' },
+    deps: f.deps,
+  });
+  assert.equal(res.status, 'done');
+  assert.match(systemPrompt, /starter FULL-STACK/i);
+  assert.match(systemPrompt, /Express/i);
+  assert.match(systemPrompt, /SQLite/i);
+  assert.match(systemPrompt, /concurrently/i);
+  assert.match(systemPrompt, /NO lo reduzcas a dev="vite"/i);
+  assert.match(systemPrompt, /PLAYBOOK APLICABLE \(backend-real\)/i);
+  assert.doesNotMatch(systemPrompt, /sin backend propio/i);
+});
+
+test('apps prompt recognizes server/app.js as an existing custom backend, not the Express starter', async () => {
+  let systemPrompt = '';
+  const f = fakeDeps({
+    fileTree: 'index.html\npackage.json\nsrc/App.tsx\nserver/app.js\nvite.config.ts\n',
+    llmTurn: async ({ messages }) => {
+      systemPrompt = messages.find((message) => message.role === 'system')?.content || '';
+      return { text: 'Listo.', toolCalls: [] };
+    },
+  });
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'cambia el texto del encabezado',
+  ].join('\n');
+  const res = await runAgentLoop({
+    run: { id: 'r1', mode: 'build', prompt },
+    project: { id: 'p1', name: 'Backend existente' },
+    deps: f.deps,
+  });
+  assert.equal(res.status, 'done');
+  assert.match(systemPrompt, /conserva exactamente el framework actual/i);
+  assert.match(systemPrompt, /CJS\/ESM/i);
+  assert.doesNotMatch(systemPrompt, /starter FULL-STACK/i);
+  assert.doesNotMatch(systemPrompt, /PLAYBOOK APLICABLE \(backend-real\)/i);
 });
 
 test('apps build close repairs an incomplete Next.js workspace into a Vite preview', async () => {
@@ -171,6 +272,241 @@ test('apps build close repairs an incomplete Next.js workspace into a Vite previ
   assert.match(indexWrite.content, /venta de autos/i);
   assert.ok(f.events.some((e) => e.type === 'narrative_delta' && /Normalicé el workspace de APPS/.test(e.data.text)));
 });
+
+test('apps build close detects an existing full-stack workspace and preserves API and SQLite schema', async () => {
+  const writes = [];
+  const customServer = `import express from 'express'\nconst app = express()\napp.get('/api/customers', (_req, res) => res.json([{ id: 7 }]))\napp.listen(3001)\n`;
+  const customDb = `import { DatabaseSync } from 'node:sqlite'\nexport const db = new DatabaseSync('server/customers.db')\ndb.exec('CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')\n`;
+  const customApp = `export default function App() { return <main>Clientes reales</main> }\n`;
+  const files = new Map([
+    ['package.json', JSON.stringify({
+      name: 'customers-app',
+      scripts: { dev: 'next dev', seed: 'node server/seed.js' },
+      dependencies: { next: '^16.0.0', express: '^4.21.0', zod: '^3.24.0' },
+    })],
+    ['index.html', '<div id="root"></div>'],
+    ['src/App.tsx', customApp],
+    ['vite.config.ts', 'export default {}\n'],
+    ['server/index.js', customServer],
+    ['server/db.js', customDb],
+  ]);
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'cambia el color del botón principal y deja el preview funcionando',
+  ].join('\n');
+  const f = fakeDeps({
+    runner: {
+      exec: async (_p, cmd) => {
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: ' M package.json\n M index.html\n', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'add') return { exitCode: 0, stdout: '', stderr: '' };
+        if (cmd[0] === 'git' && cmd.includes('commit')) return { exitCode: 0, stdout: '[main abc] ok\n', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'rev-parse') return { exitCode: 0, stdout: 'abcdef1234567890\n', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'diff') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      readFile: async (_p, path) => ({ content: files.get(path) || '' }),
+      writeFiles: async (_p, nextFiles) => {
+        writes.push(...nextFiles);
+        for (const file of nextFiles) files.set(file.path, file.content);
+        return { ok: true };
+      },
+    },
+    llmTurn: scriptedLlm([{ text: 'Ya está listo.', toolCalls: [] }]),
+    prisma: {
+      user: { findUnique: async () => ({ plan: 'PRO' }) },
+      codexCheckpoint: { create: async () => ({ id: 'cp1', commitSha: 'abcdef1234567890', createdAt: new Date() }) },
+      codexRunMetric: { upsert: async () => ({}) },
+    },
+  });
+  const res = await runAgentLoop({
+    run: { id: 'r1', userId: 'u1', mode: 'build', prompt },
+    project: { id: 'p1', name: 'Clientes' },
+    deps: f.deps,
+  });
+  assert.equal(res.status, 'done');
+
+  const packageWrite = writes.find((file) => file.path === 'package.json');
+  assert.ok(packageWrite);
+  const repairedPackage = JSON.parse(packageWrite.content);
+  assert.match(repairedPackage.scripts.dev, /concurrently/i);
+  assert.match(repairedPackage.scripts['dev:api'], /server\/index\.js/i);
+  assert.match(repairedPackage.scripts['dev:web'], /vite/i);
+  assert.ok(repairedPackage.dependencies.express);
+  assert.ok(repairedPackage.dependencies.zod, 'custom dependencies are preserved');
+  assert.equal(repairedPackage.dependencies.next, undefined);
+
+  assert.equal(writes.some((file) => file.path === 'server/index.js'), false);
+  assert.equal(writes.some((file) => file.path === 'server/db.js'), false);
+  assert.equal(writes.some((file) => file.path === 'src/App.tsx'), false);
+  assert.equal(files.get('server/index.js'), customServer);
+  assert.equal(files.get('server/db.js'), customDb);
+  assert.equal(files.get('src/App.tsx'), customApp);
+  assert.match(files.get('vite.config.ts'), /proxy/i);
+  assert.ok(f.events.some((event) => event.type === 'narrative_delta' && /full-stack/i.test(event.data.text)));
+});
+
+test('apps repair preserves an imported CommonJS Express server/app.js contract', async () => {
+  const writes = [];
+  const originalServer = [
+    "const express = require('express')",
+    'const app = express()',
+    "app.get('/api/health', (_req, res) => res.json({ ok: true }))",
+    'app.listen(3001)',
+    '',
+  ].join('\n');
+  const originalPackage = `${JSON.stringify({
+    name: 'express-commonjs-app',
+    private: true,
+    type: 'commonjs',
+    scripts: {
+      dev: 'vite',
+      start: 'node server/app.js',
+      test: 'node --test',
+    },
+    dependencies: {
+      express: '^4.21.0',
+      react: '^18.3.1',
+      'react-dom': '^18.3.1',
+    },
+    devDependencies: { vite: '^7.0.0', '@vitejs/plugin-react': '^4.5.2' },
+  }, null, 2)}\n`;
+  const files = new Map([
+    ['package.json', originalPackage],
+    ['index.html', '<div id="root"></div><script type="module" src="/src/main.tsx"></script>'],
+    ['src/App.tsx', 'export default function App() { return <main>Express CJS</main> }\n'],
+    ['vite.config.ts', "export default { server: { proxy: { '/api': 'http://localhost:3001' } } }\n"],
+    ['server/app.js', originalServer],
+  ]);
+  const runner = {
+    readFile: async (_projectId, path) => ({ content: files.get(path) || '' }),
+    writeFiles: async (_projectId, nextFiles) => {
+      writes.push(...nextFiles);
+      for (const file of nextFiles) files.set(file.path, file.content);
+      return { ok: true };
+    },
+    exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+  };
+  const events = [];
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'ajusta la pantalla principal y conserva la API existente',
+  ].join('\n');
+
+  const result = await ensureAppsVitePreviewable({
+    run: { id: 'run-express-cjs', projectId: 'p1', prompt },
+    project: { id: 'p1', name: 'Express CJS' },
+    runner,
+    eventStore: { appendEvent: async (_runId, type, data) => events.push({ type, data }) },
+    prisma: null,
+  });
+
+  assert.equal(result.repaired, true);
+  assert.equal(result.fullStack, true);
+  const packageWrite = writes.find((file) => file.path === 'package.json');
+  assert.ok(packageWrite);
+  const repairedPackage = JSON.parse(packageWrite.content);
+  assert.equal(repairedPackage.type, 'commonjs');
+  assert.equal(repairedPackage.scripts.start, 'node server/app.js');
+  assert.equal(repairedPackage.scripts.test, 'node --test');
+  assert.match(repairedPackage.scripts.dev, /concurrently/i);
+  assert.equal(repairedPackage.scripts['dev:api'], 'node server/app.js');
+  assert.equal(repairedPackage.scripts['dev:web'], 'vite');
+  assert.equal(writes.some((file) => file.path.startsWith('server/')), false);
+  assert.equal(files.get('server/app.js'), originalServer);
+  assert.ok(events.some((event) => /backend express/i.test(event.data.text)));
+});
+
+for (const fixture of [
+  {
+    name: 'Koa',
+    dependency: 'koa',
+    version: '^2.15.0',
+    server: "const Koa = require('koa')\nconst app = new Koa()\napp.use((ctx) => { ctx.body = { ok: true } })\napp.listen(3001)\n",
+  },
+  {
+    name: 'Fastify',
+    dependency: 'fastify',
+    version: '^5.2.0',
+    server: "const fastify = require('fastify')()\nfastify.get('/api/health', async () => ({ ok: true }))\nfastify.listen({ port: 3001 })\n",
+  },
+]) {
+  test(`apps repair preserves a valid CommonJS ${fixture.name} server/app.js contract`, async () => {
+    const writes = [];
+    const scripts = {
+      dev: 'concurrently "npm run dev:api" "npm run dev:web"',
+      'dev:api': 'node server/app.js',
+      'dev:web': 'vite',
+      build: 'vite build',
+      start: 'node server/app.js',
+    };
+    const originalPackage = `${JSON.stringify({
+      name: `${fixture.name.toLowerCase()}-app`,
+      private: true,
+      type: 'commonjs',
+      scripts,
+      dependencies: {
+        [fixture.dependency]: fixture.version,
+        react: '^18.3.1',
+        'react-dom': '^18.3.1',
+        concurrently: '^9.1.0',
+      },
+      devDependencies: { vite: '^7.0.0', '@vitejs/plugin-react': '^4.5.2' },
+    }, null, 2)}\n`;
+    const files = new Map([
+      ['package.json', originalPackage],
+      ['index.html', '<div id="root"></div>'],
+      ['src/App.tsx', `export default function App() { return <main>${fixture.name}</main> }\n`],
+      ['vite.config.ts', "export default { server: { proxy: { '/api': 'http://localhost:3001' } } }\n"],
+      ['server/app.js', fixture.server],
+    ]);
+    const runner = {
+      readFile: async (_projectId, path) => ({ content: files.get(path) || '' }),
+      writeFiles: async (_projectId, nextFiles) => {
+        writes.push(...nextFiles);
+        for (const file of nextFiles) files.set(file.path, file.content);
+        return { ok: true };
+      },
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const events = [];
+    const prompt = [
+      'MODO APPS TIPO CODEX:',
+      '- Construye y entrega preview.',
+      '',
+      'SOLICITUD DEL USUARIO:',
+      'ajusta el texto de la pantalla principal',
+    ].join('\n');
+    const result = await ensureAppsVitePreviewable({
+      run: { id: `run-${fixture.name}`, projectId: 'p1', prompt },
+      project: { id: 'p1', name: fixture.name },
+      runner,
+      eventStore: { appendEvent: async (_runId, type, data) => events.push({ type, data }) },
+      prisma: null,
+    });
+
+    assert.equal(result.repaired, true);
+    assert.equal(result.fullStack, true);
+    assert.ok(writes.some((file) => file.path === 'index.html'));
+    assert.ok(writes.some((file) => file.path === 'src/main.tsx'));
+    assert.equal(writes.some((file) => file.path === 'package.json'), false);
+    assert.equal(writes.some((file) => file.path.startsWith('server/')), false);
+    assert.equal(writes.some((file) => file.path === 'vite.config.ts'), false);
+    assert.equal(files.get('package.json'), originalPackage);
+    const preserved = JSON.parse(files.get('package.json'));
+    assert.equal(preserved.type, 'commonjs');
+    assert.deepEqual(preserved.scripts, scripts);
+    assert.ok(preserved.dependencies[fixture.dependency]);
+    assert.equal(preserved.dependencies.express, undefined);
+    assert.equal(files.get('server/app.js'), fixture.server);
+    assert.ok(events.some((event) => new RegExp(`backend ${fixture.name}`, 'i').test(event.data.text)));
+  });
+}
 
 test('apps planning prompt defaults simple apps to Vite index.html', () => {
   const prompt = [
@@ -679,6 +1015,126 @@ test('failed proactive gate records the ledger and refuses to checkpoint', async
   assert.equal(projectState.brief.ledger[0].outcome, 'failed');
   assert.equal(commands.some((cmd) => cmd[0] === 'git' && cmd.includes('commit')), false);
   assert.ok(events.some((event) => event.type === 'narrative_delta' && /No cerré ni promoví/.test(event.data.text)));
+});
+
+test('the authoritative runtime gate runs after the last proactive debugger repair', async () => {
+  const events = [];
+  let repaired = false;
+  let checkpointCalls = 0;
+  const projectState = {
+    id: 'p1',
+    userId: 'u1',
+    brief: { proactive: { enabled: true } },
+  };
+  const prompt = [
+    '[PROACTIVO · Producto] Repara el runtime',
+    '[SIRA_PROACTIVE_META]{"department":"Producto","departmentId":"product-engineering","title":"Repara runtime","acceptanceCriteria":["La app abre"],"objectiveIds":[],"qaCycle":false}',
+  ].join('\n');
+  const files = new Map([
+    ['package.json', '{"scripts":{}}'],
+    ['tsconfig.json', '{"compilerOptions":{"jsx":"react-jsx"}}'],
+    ['src/App.tsx', 'export default function App(){ return <main>Lista</main> }\n'],
+  ]);
+  const runner = {
+    readFile: async (_project, path) => {
+      if (!files.has(path)) throw new Error(`no existe ${path}`);
+      return { content: files.get(path) };
+    },
+    writeFiles: async (_project, writes) => {
+      for (const file of writes) files.set(file.path, file.content);
+      return { ok: true };
+    },
+    exec: async (_project, command) => {
+      if (command[0] === 'git' && command[1] === 'status') {
+        return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+      }
+      if (command[0] === 'git' && command[1] === 'diff') {
+        return { exitCode: 0, stdout: ' 1 file changed, 1 insertion(+), 1 deletion(-)\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    devStatus: async () => (repaired
+      ? { running: true, ready: true, project: 'p1', port: 5173, tail: ['VITE ready'] }
+      : {
+        running: true,
+        ready: false,
+        project: 'p1',
+        error: 'Failed to resolve import "./broken"',
+        tail: ['[vite] Internal server error', 'Cannot find module ./broken'],
+      }),
+    startDev: async () => ({ port: 5173 }),
+    stopDev: async () => ({ ok: true }),
+  };
+  const browserCheck = {
+    devUrlFor: () => 'http://runner:5173',
+    checkApp: async () => ({ unavailable: false, ok: true, rendered: true, rootChars: 12, errors: [] }),
+    formatReport: () => 'browser failure',
+  };
+  const originalGetTool = buildTools.getTool;
+  buildTools.getTool = (name) => (name === 'run_subagent'
+    ? {
+      execute: async () => {
+        repaired = true;
+        return { isError: false, summary: 'runtime reparado' };
+      },
+    }
+    : originalGetTool(name));
+
+  try {
+    const result = await closeBuild({
+      run: { id: 'run-proactive-runtime', projectId: 'p1', userId: 'u1', prompt },
+      project: projectState,
+      runner,
+      eventStore: {
+        appendEvent: async (_runId, type, data) => { events.push({ type, data }); },
+      },
+      prisma: {
+        codexProject: {
+          findUnique: async () => projectState,
+          update: async ({ data }) => {
+            Object.assign(projectState, data);
+            return projectState;
+          },
+        },
+        user: { findUnique: async () => ({ plan: 'PRO' }) },
+      },
+      llmTurn: async () => ({ text: 'sin cambios', toolCalls: [] }),
+      clock: (() => { let now = 0; return () => new Date(1_000_000 + (now += 10)); })(),
+      env: {
+        NODE_ENV: 'test',
+        CODEX_AUTO_VERIFY: '1',
+        CODEX_VERIFY_DEV_SERVER: '1',
+        CODEX_VERIFY_BROWSER: '1',
+        CODEX_VERIFY_DEV_TIMEOUT_MS: '3000',
+        CODEX_PROACTIVE_REPAIR_ROUNDS: '1',
+        CODEX_VERIFY_ROUNDS: '1',
+        CODEX_RUN_BRANCHES: '0',
+        CODEX_AUTO_MEMORY: '0',
+      },
+      metrics: { recordAction: () => {}, recordLlmUsage: () => {}, finalize: async () => ({ costAppliedUsd: 0 }) },
+      sourcePrompt: prompt,
+      browserCheck,
+      backgroundTaskService: { quiesce: async () => ({ ok: true, stopped: 0 }) },
+      checkpointService: {
+        createCheckpoint: async () => {
+          checkpointCalls += 1;
+          return { id: 'cp1', commitSha: 'abcdef1234567890', createdAt: new Date() };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true, 'la reparación verde puede cerrar y crear checkpoint');
+    assert.equal(repaired, true);
+    assert.equal(checkpointCalls, 1);
+    const debuggerIndex = events.findIndex((event) => event.type === 'action_start' && event.data.actionId === 'quality-debug-1');
+    const repairedProbeIndex = events.findIndex((event) => event.type === 'action_start' && event.data.actionId === 'quality-2-runtime');
+    const finalProbeIndex = events.findIndex((event) => event.type === 'action_start' && event.data.actionId === 'quality-runtime-final');
+    assert.ok(debuggerIndex >= 0, 'ejecutó el debugger proactivo');
+    assert.ok(repairedProbeIndex > debuggerIndex, 'reverificó después de reparar');
+    assert.ok(finalProbeIndex > repairedProbeIndex, 'el gate autoritativo observa el workspace ya reparado');
+  } finally {
+    buildTools.getTool = originalGetTool;
+  }
 });
 
 test('project verification unavailable fails closed and never checkpoints', async () => {

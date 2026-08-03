@@ -3337,6 +3337,7 @@ model CodexRun {
   prompt           String?   @db.Text // user's context/instructions for this run
   model            String?
   tier             String?
+  reasoningEffort  String? // low | medium | high | max (max maps to provider high)
   planRunId        String?
   idempotencyKey   String?   @unique
   departmentPoolId String?

@@ -22,6 +22,7 @@ const MODES = ['plan', 'build'];
 const ACTIVE_STATUSES = ['queued', 'running', 'waiting_approval'];
 const TERMINAL_STATUSES = ['done', 'error', 'cancelled'];
 const APPROVABLE_PLAN_STATUSES = ['waiting_approval', 'done'];
+const REASONING_EFFORTS = ['low', 'medium', 'high', 'max'];
 const DEFAULT_MAX_CONCURRENT_RUNS = 1;
 const MAX_CONCURRENT_RUNS_HARD_CAP = 32;
 
@@ -65,13 +66,21 @@ function hashInt32(str) {
  */
 async function insertRunGuarded(
   prisma,
-  { projectId, activeWhere, data, existingWhere = null, activeCap = 1 },
+  {
+    projectId,
+    activeWhere,
+    data,
+    existingWhere = null,
+    activeCap = 1,
+    validateBeforeInsert = null,
+  },
 ) {
   const enforce = async (client) => {
     if (existingWhere) {
       const existing = await client.codexRun.findFirst({ where: existingWhere });
       if (existing) return { row: existing, created: false };
     }
+    if (typeof validateBeforeInsert === 'function') await validateBeforeInsert(client);
     const active = await client.codexRun.count({ where: activeWhere });
     if (active >= activeCap) {
       throw new RunServiceError(
@@ -138,6 +147,7 @@ function publicRun(row) {
     status: row.status,
     model: row.model ?? null,
     tier: row.tier ?? null,
+    reasoningEffort: row.reasoningEffort ?? null,
     planRunId: row.planRunId ?? null,
     departmentPoolId: row.departmentPoolId ?? null,
     swarmTaskId: row.swarmTaskId ?? null,
@@ -182,6 +192,7 @@ async function createRun({
   prompt = null,
   model = null,
   tier = null,
+  reasoningEffort = null,
   planRunId = null,
   autoExecute = false,
   idempotencyKey = null,
@@ -206,6 +217,16 @@ async function createRun({
   const normalizedIdempotencyKey = normalizeLink(idempotencyKey, 'idempotency_key', 300);
   const requestedDepartmentPoolId = normalizeLink(departmentPoolId, 'department_pool_id');
   const requestedSwarmTaskId = normalizeLink(swarmTaskId, 'swarm_task_id');
+  const normalizedReasoningEffort = reasoningEffort == null || String(reasoningEffort).trim() === ''
+    ? null
+    : String(reasoningEffort).trim().toLowerCase();
+  if (normalizedReasoningEffort && !REASONING_EFFORTS.includes(normalizedReasoningEffort)) {
+    throw new RunServiceError(
+      'invalid_reasoning_effort',
+      `reasoningEffort must be one of: ${REASONING_EFFORTS.join(', ')}`,
+      400,
+    );
+  }
 
   const project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
   if (!project) throw new RunServiceError('project_not_found', 'project not found', 404);
@@ -297,6 +318,9 @@ async function createRun({
   if (mode === 'build' && planRunId) activeWhere.id = { not: planRunId };
 
   const inheritAutoExecute = autoExecute || autonomousRunPolicy.isAutoExecutePrompt(planRun?.prompt);
+  const effectiveModel = model == null || String(model).trim() === '' ? planRun?.model || null : model;
+  const effectiveTier = tier == null || String(tier).trim() === '' ? planRun?.tier || null : tier;
+  const effectiveReasoningEffort = normalizedReasoningEffort || planRun?.reasoningEffort || null;
   const sourcePrompt = prompt == null && inheritAutoExecute ? planRun?.prompt : prompt;
   const storedPrompt = inheritAutoExecute
     ? autonomousRunPolicy.withAutoExecutePrompt(sourcePrompt)
@@ -312,14 +336,29 @@ async function createRun({
     activeWhere,
     existingWhere,
     activeCap: configuredRunCap(project, env),
+    validateBeforeInsert: mode === 'build'
+      ? async (client) => {
+        const latestPlan = await client.codexRun.findFirst({
+          where: { id: planRunId, projectId, userId, mode: 'plan' },
+        });
+        if (!latestPlan || !APPROVABLE_PLAN_STATUSES.includes(latestPlan.status)) {
+          throw new RunServiceError(
+            'invalid_plan_run',
+            'planRunId stopped being approvable before build creation',
+            409,
+          );
+        }
+      }
+      : null,
     data: {
       projectId,
       userId,
       mode,
       status: 'queued',
       prompt: storedPrompt,
-      model,
-      tier,
+      model: effectiveModel,
+      tier: effectiveTier,
+      reasoningEffort: effectiveReasoningEffort,
       planRunId,
       idempotencyKey: normalizedIdempotencyKey,
       departmentPoolId: effectiveDepartmentPoolId,
@@ -363,6 +402,44 @@ async function createRun({
   return publicRun(fresh || row);
 }
 
+async function fanoutCancelledRun({
+  run,
+  queue,
+  eventStore,
+  prisma,
+  triggers,
+  abortRun,
+  env,
+}) {
+  await queue.cancelQueuedCodexRun(run.id).catch(() => {});
+  try {
+    const abort = abortRun || require('./run-processor').abortRun;
+    if (typeof abort === 'function') abort(run.id, new Error('codex run cancelled'));
+  } catch { /* worker may live in another process; the DB guard still wins */ }
+  await eventStore.appendEvent(run.id, 'run_status', { status: 'cancelled' }, { prisma }).catch(() => {});
+  await require('./run-completion').publishRunCompletion({
+    run,
+    status: 'cancelled',
+    triggers,
+    env,
+  });
+  await require('./progress-ledger').appendLedgerEntryIfMissing({
+    prisma,
+    project: { id: run.projectId },
+    entry: {
+      department: 'interactive',
+      runId: run.id,
+      outcome: 'cancelled',
+      task: String(run.prompt || '').slice(0, 600),
+      diffstat: {},
+      costUsd: 0,
+      acceptance: [],
+      learnings: ['Corrida cancelada por el usuario antes de completar el objetivo.'],
+      createdAt: new Date().toISOString(),
+    },
+  }).catch(() => {});
+}
+
 /** Cancel a run (cooperative). Emits the single terminal run_status cancelled. */
 async function cancelRun({
   userId,
@@ -381,7 +458,6 @@ async function cancelRun({
     throw new RunServiceError('run_already_terminal', `run is already ${run.status}`, 409);
   }
 
-  await queue.cancelQueuedCodexRun(runId).catch(() => {});
   // Conditional flip — the processor may have stamped a terminal status between
   // our read above and here. Only cancel (and emit the terminal event) when the
   // run is still active, so we don't overwrite a just-finished done/error status
@@ -391,39 +467,108 @@ async function cancelRun({
     data: { status: 'cancelled', finishedAt: new Date() },
   });
   if (flip && flip.count > 0) {
-    // The database transition is authoritative, but cancellation must also
-    // reach the in-process worker immediately; polling alone leaves a live
-    // adapter running until its next step.
-    try {
-      const abort = abortRun || require('./run-processor').abortRun;
-      if (typeof abort === 'function') abort(runId, new Error('codex run cancelled'));
-    } catch { /* worker may live in another process; the DB guard still wins */ }
-    await eventStore.appendEvent(runId, 'run_status', { status: 'cancelled' }, { prisma }).catch(() => {});
-    await require('./run-completion').publishRunCompletion({
+    await fanoutCancelledRun({
       run,
-      status: 'cancelled',
+      queue,
+      eventStore,
+      prisma,
       triggers,
+      abortRun,
       env,
     });
-    await require('./progress-ledger').appendLedgerEntryIfMissing({
-      prisma,
-      project: { id: run.projectId },
-      entry: {
-        department: 'interactive',
-        runId: run.id,
-        outcome: 'cancelled',
-        task: String(run.prompt || '').slice(0, 600),
-        diffstat: {},
-        costUsd: 0,
-        acceptance: [],
-        learnings: ['Corrida cancelada por el usuario antes de completar el objetivo.'],
-        createdAt: new Date().toISOString(),
-      },
-    }).catch(() => {});
   }
 
   const fresh = await prisma.codexRun.findUnique({ where: { id: runId } });
   return publicRun(fresh);
+}
+
+/**
+ * Atomically cancels a visible run and its plan→build continuation. The same
+ * per-project advisory lock used by createRun closes both races: if build
+ * creation wins first we cancel the new child; if cancellation wins first the
+ * create path revalidates the now-cancelled plan and refuses the child.
+ */
+async function cancelRunFamily({
+  userId,
+  runId,
+  db = defaultPrisma,
+  queue = runQueue,
+  eventStore = eventStoreDefault,
+  triggers = null,
+  abortRun = null,
+  env = process.env,
+  clock = () => new Date(),
+}) {
+  const prisma = requireDb(db);
+  const root = await prisma.codexRun.findFirst({ where: { id: runId, userId } });
+  if (!root) throw new RunServiceError('run_not_found', 'run not found', 404);
+
+  const cancelLocked = async (client) => {
+    const currentRoot = await client.codexRun.findFirst({ where: { id: runId, userId } });
+    if (!currentRoot) throw new RunServiceError('run_not_found', 'run not found', 404);
+    const active = await client.codexRun.findMany({
+      where: {
+        userId,
+        projectId: currentRoot.projectId,
+        status: { in: ACTIVE_STATUSES },
+        OR: [{ id: runId }, { planRunId: runId }],
+      },
+    });
+    const cancelled = [];
+    const finishedAt = clock();
+    // A worker does not take this project advisory lock when it stamps its own
+    // terminal status. Transition each candidate conditionally and only retain
+    // rows whose flip actually won; otherwise a run that became `done` between
+    // findMany and updateMany would receive false cancelled events/ledger data.
+    // All successful flips still commit atomically inside this transaction.
+    for (const run of active) {
+      const flip = await client.codexRun.updateMany({
+        where: {
+          id: run.id,
+          userId,
+          projectId: currentRoot.projectId,
+          status: { in: ACTIVE_STATUSES },
+        },
+        data: { status: 'cancelled', finishedAt },
+      });
+      if (flip?.count > 0) {
+        cancelled.push({ ...run, status: 'cancelled', finishedAt });
+      }
+    }
+    return cancelled;
+  };
+
+  let cancelledRows;
+  const canLock = typeof prisma.$transaction === 'function' && typeof prisma.$queryRawUnsafe === 'function';
+  if (canLock) {
+    cancelledRows = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'WITH _lock AS (SELECT pg_advisory_xact_lock($1::int, $2::int)) SELECT 1::int AS locked FROM _lock',
+        CODEX_RUN_LOCK_CLASS,
+        hashInt32(String(root.projectId)),
+      );
+      return cancelLocked(tx);
+    });
+  } else {
+    cancelledRows = await cancelLocked(prisma);
+  }
+
+  await Promise.all(cancelledRows.map((run) => fanoutCancelledRun({
+    run,
+    queue,
+    eventStore,
+    prisma,
+    triggers,
+    abortRun,
+    env,
+  })));
+  const family = await prisma.codexRun.findMany({
+    where: { userId, projectId: root.projectId, OR: [{ id: runId }, { planRunId: runId }] },
+  });
+  return {
+    runs: family.map(publicRun),
+    cancelledRunIds: cancelledRows.map((run) => run.id),
+  };
 }
 
 /**
@@ -534,6 +679,7 @@ async function listRuns({ userId, projectId, db = defaultPrisma, take = 50 }) {
 module.exports = {
   createRun,
   cancelRun,
+  cancelRunFamily,
   resolveToolPermission,
   getRun,
   listRuns,

@@ -6247,7 +6247,7 @@ function FilesView({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col lg:h-[calc(100vh-220px)] lg:min-h-[640px] lg:flex-row">
+        <div className="flex min-h-0 flex-1 flex-col lg:h-[calc(100vh-220px)] lg:min-h-[520px] lg:flex-row">
           <aside className="shrink-0 border-b border-zinc-300/70 bg-[#e8e8e6]/90 p-3 dark:border-white/10 dark:bg-zinc-900/80 lg:w-56 lg:border-b-0 lg:border-r">
             <p className="px-2 text-[11px] font-semibold uppercase text-zinc-500 dark:text-zinc-400">Favoritos</p>
             <div className="mt-2 grid gap-1 sm:grid-cols-3 lg:grid-cols-1">
@@ -6489,7 +6489,7 @@ function FilesView({
                       const reviewing = missionBusy === `review:${record.id}`
                       return (
                         <article key={record.id} className="border-b border-zinc-100 last:border-b-0 dark:border-white/5" data-testid="company-mission-evidence-record">
-                          <div className="flex flex-col gap-3 px-3 py-3 lg:flex-row lg:items-center">
+                          <div className="flex flex-col gap-3 px-3 py-3">
                             <button
                               type="button"
                               className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
@@ -6507,7 +6507,7 @@ function FilesView({
                                 {record.department} · {record.author} · {relativeActivity(Date.parse(record.createdAt))}
                               </span>
                             </button>
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex shrink-0 items-center gap-1.5 self-end">
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -6546,7 +6546,15 @@ function FilesView({
                             </div>
                           </div>
                           {expanded ? (
-                            <div className="grid gap-4 border-t border-zinc-100 px-3 pb-4 pt-3 text-xs dark:border-white/5 lg:grid-cols-2">
+                            <div className="grid gap-4 border-t border-zinc-100 px-3 pb-4 pt-3 text-xs dark:border-white/5">
+                              <div className="rounded-lg bg-zinc-100/75 px-3 py-2 text-[10px] text-zinc-600 dark:bg-white/5 dark:text-zinc-300">
+                                <span className="font-semibold">v{record.version} · {record.source}</span>
+                                {record.contentHash ? (
+                                  <code className="mt-1 block break-all font-mono text-[9px] text-zinc-500 dark:text-zinc-400">
+                                    {record.contentHash}
+                                  </code>
+                                ) : null}
+                              </div>
                               <div>
                                 <h3 className="text-[10px] font-semibold uppercase text-zinc-500">Entregables</h3>
                                 <div className="mt-2 space-y-2">
@@ -6584,6 +6592,27 @@ function FilesView({
                 ) : missionLedger ? (
                   <div className="mt-3 rounded-lg border border-dashed border-zinc-300 py-8 text-center text-xs text-zinc-500 dark:border-zinc-700">
                     Las misiones cerradas aparecerán aquí.
+                  </div>
+                ) : null}
+
+                {missionLedger?.reports.length ? (
+                  <div className="mt-4 space-y-2" data-testid="company-activity-reports">
+                    {missionLedger.reports.map((report) => (
+                      <div
+                        key={report.id}
+                        className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white/75 px-3 py-2.5 text-xs dark:border-white/10 dark:bg-white/5 sm:flex-row sm:items-center"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-semibold">{report.title}</span>
+                          <span className="mt-0.5 block text-[10px] text-zinc-500">
+                            {report.author} · {report.counts.missions} misiones · {report.status === "queued" ? "En cola" : "Borrador"}
+                          </span>
+                        </span>
+                        <span className="shrink-0 rounded-md bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+                          v{report.version}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 ) : null}
               </section>
