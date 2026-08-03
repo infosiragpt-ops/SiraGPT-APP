@@ -3,10 +3,20 @@
 import * as React from "react"
 
 import apiClient from "@/lib/api"
-import type { OfficeTimeOfDay } from "@/lib/agent-office-environment"
+import type {
+  OfficeTimeOfDay,
+  OfficeTimePhase,
+} from "@/lib/agent-office-environment"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
-type OfficeSoundId = "coast-day" | "coast-night" | "terrace-steps"
+type OfficeAmbientSoundId = "coast-day" | "coast-night"
+type OfficeCueSoundId =
+  | "terrace-steps"
+  | "work-start"
+  | "work-complete"
+  | "approval-ready"
+  | "attention"
+type OfficeSoundId = OfficeAmbientSoundId | OfficeCueSoundId
 export type OfficeSoundState =
   | "off"
   | "loading"
@@ -22,15 +32,17 @@ type LoopingSource = {
 type AudioEngine = {
   context: AudioContext
   master: GainNode
+  compressor: DynamicsCompressorNode
   ambienceBus: GainNode
   actionBus: GainNode
   ambience: LoopingSource | null
   stepBuffer: AudioBuffer | null
+  cueBuffers: Map<OfficeCueSoundId, AudioBuffer>
 }
 
 const SOUND_PREFERENCE_KEY = "siragpt:office-sound-enabled"
 const SOUND_VOLUME_KEY = "siragpt:office-sound-volume"
-const DEFAULT_VOLUME = 0.32
+const DEFAULT_VOLUME = 0.28
 const encodedSoundCache = new Map<OfficeSoundId, ArrayBuffer>()
 const soundRequests = new Map<OfficeSoundId, Promise<ArrayBuffer>>()
 
@@ -109,32 +121,44 @@ function createAudioEngine(volume: number): AudioEngine | null {
 
   const context = new AudioContextConstructor({ latencyHint: "playback" })
   const master = context.createGain()
+  const compressor = context.createDynamicsCompressor()
   const ambienceBus = context.createGain()
   const actionBus = context.createGain()
   master.gain.value = volume
   ambienceBus.gain.value = 0.72
-  actionBus.gain.value = 0.3
+  actionBus.gain.value = 0.48
+  compressor.threshold.value = -18
+  compressor.knee.value = 18
+  compressor.ratio.value = 3
+  compressor.attack.value = 0.012
+  compressor.release.value = 0.24
   ambienceBus.connect(master)
   actionBus.connect(master)
-  master.connect(context.destination)
+  master.connect(compressor)
+  compressor.connect(context.destination)
   return {
     context,
     master,
+    compressor,
     ambienceBus,
     actionBus,
     ambience: null,
     stepBuffer: null,
+    cueBuffers: new Map(),
   }
 }
 
 function stopLoop(
   loop: LoopingSource | null,
   context: AudioContext,
-  { immediate = false }: { immediate?: boolean } = {},
+  {
+    immediate = false,
+    fadeSeconds = 0.28,
+  }: { immediate?: boolean; fadeSeconds?: number } = {},
 ) {
   if (!loop) return
   const now = context.currentTime
-  const stopAt = immediate ? now : now + 0.18
+  const stopAt = immediate ? now : now + fadeSeconds
   try {
     loop.gain.gain.cancelScheduledValues(now)
     loop.gain.gain.setValueAtTime(loop.gain.gain.value, now)
@@ -157,14 +181,33 @@ function replaceAmbience(engine: AudioEngine, buffer: AudioBuffer) {
   source.buffer = buffer
   source.loop = true
   gain.gain.setValueAtTime(0.0001, now)
-  gain.gain.linearRampToValueAtTime(1, now + 0.7)
+  gain.gain.linearRampToValueAtTime(1, now + 1.8)
   source.connect(gain)
   gain.connect(engine.ambienceBus)
   source.start()
 
   const previous = engine.ambience
   engine.ambience = { source, gain }
-  stopLoop(previous, context)
+  stopLoop(previous, context, { fadeSeconds: 1.8 })
+}
+
+function playActionCue(
+  engine: AudioEngine,
+  buffer: AudioBuffer,
+  gainValue: number,
+) {
+  if (engine.context.state !== "running") return
+  const source = engine.context.createBufferSource()
+  const gain = engine.context.createGain()
+  source.buffer = buffer
+  gain.gain.value = gainValue
+  source.connect(gain)
+  gain.connect(engine.actionBus)
+  source.onended = () => {
+    source.disconnect()
+    gain.disconnect()
+  }
+  source.start()
 }
 
 function playFootsteps(engine: AudioEngine) {
@@ -173,7 +216,7 @@ function playFootsteps(engine: AudioEngine) {
   const gain = engine.context.createGain()
   source.buffer = engine.stepBuffer
   source.playbackRate.value = 0.96 + Math.random() * 0.08
-  gain.gain.value = 0.18
+  gain.gain.value = 0.12
   source.connect(gain)
   gain.connect(engine.actionBus)
   source.onended = () => {
@@ -186,13 +229,19 @@ function playFootsteps(engine: AudioEngine) {
 export function useOfficeSoundscape({
   active,
   timeOfDay,
+  timePhase,
   paused,
   activeCount,
+  attentionCount = 0,
+  approvalCount = 0,
 }: {
   active: boolean
   timeOfDay: OfficeTimeOfDay
+  timePhase?: OfficeTimePhase
   paused: boolean
   activeCount: number
+  attentionCount?: number
+  approvalCount?: number
 }) {
   const engineRef = React.useRef<AudioEngine | null>(null)
   const loadKeyRef = React.useRef(0)
@@ -200,6 +249,12 @@ export function useOfficeSoundscape({
   const activeRef = React.useRef(active)
   const desiredEnabledRef = React.useRef(true)
   const volumeRef = React.useRef(DEFAULT_VOLUME)
+  const operationalCountsRef = React.useRef({
+    initialized: false,
+    activeCount,
+    attentionCount,
+    approvalCount,
+  })
   const [enabled, setEnabled] = React.useState(false)
   const [state, setState] = React.useState<OfficeSoundState>("off")
   const [volume, setVolumeState] = React.useState(DEFAULT_VOLUME)
@@ -221,6 +276,7 @@ export function useOfficeSoundscape({
       stopLoop(engine.ambience, engine.context, { immediate: true })
       engine.ambience = null
       engine.stepBuffer = null
+      engine.cueBuffers.clear()
       void engine.context.close().catch(() => {})
     }
     setEnabled(false)
@@ -279,6 +335,46 @@ export function useOfficeSoundscape({
     }
   }, [])
 
+  const playCue = React.useCallback(
+    async (soundId: Exclude<OfficeCueSoundId, "terrace-steps">) => {
+      const engine = engineRef.current
+      if (
+        !engine ||
+        engine.context.state === "closed" ||
+        paused ||
+        document.visibilityState !== "visible"
+      ) {
+        return
+      }
+
+      let buffer = engine.cueBuffers.get(soundId)
+      if (!buffer) {
+        try {
+          const encoded = await fetchOfficeSound(soundId)
+          buffer = await engine.context.decodeAudioData(encoded.slice(0))
+        } catch {
+          return
+        }
+        if (
+          !mountedRef.current ||
+          engineRef.current !== engine
+        ) {
+          return
+        }
+        engine.cueBuffers.set(soundId, buffer)
+      }
+
+      const gainByCue: Record<Exclude<OfficeCueSoundId, "terrace-steps">, number> = {
+        "work-start": 0.34,
+        "work-complete": 0.32,
+        "approval-ready": 0.3,
+        attention: 0.28,
+      }
+      playActionCue(engine, buffer, gainByCue[soundId])
+    },
+    [paused],
+  )
+
   React.useEffect(() => {
     mountedRef.current = true
     volumeRef.current = readStoredVolume()
@@ -312,7 +408,10 @@ export function useOfficeSoundscape({
     const loadKey = ++loadKeyRef.current
     setState((current) => (current === "blocked" ? current : "loading"))
 
-    const ambientId: OfficeSoundId = timeOfDay === "day" ? "coast-day" : "coast-night"
+    const ambientId: OfficeAmbientSoundId =
+      timePhase === "dusk" || timePhase === "night" || timeOfDay === "night"
+        ? "coast-night"
+        : "coast-day"
     void Promise.all([
       fetchOfficeSound(ambientId),
       fetchOfficeSound("terrace-steps").catch(() => null),
@@ -341,7 +440,46 @@ export function useOfficeSoundscape({
           setState("unavailable")
         }
       })
-  }, [active, enabled, ensureEngine, paused, timeOfDay])
+  }, [active, enabled, ensureEngine, paused, timeOfDay, timePhase])
+
+  React.useEffect(() => {
+    const previous = operationalCountsRef.current
+    if (!active) {
+      previous.initialized = false
+      previous.activeCount = activeCount
+      previous.attentionCount = attentionCount
+      previous.approvalCount = approvalCount
+      return
+    }
+
+    if (!previous.initialized) {
+      previous.initialized = true
+      previous.activeCount = activeCount
+      previous.attentionCount = attentionCount
+      previous.approvalCount = approvalCount
+      return
+    }
+
+    let cue: Exclude<OfficeCueSoundId, "terrace-steps"> | null = null
+    if (attentionCount > previous.attentionCount) cue = "attention"
+    else if (approvalCount > previous.approvalCount) cue = "approval-ready"
+    else if (activeCount > previous.activeCount) cue = "work-start"
+    else if (activeCount < previous.activeCount) cue = "work-complete"
+
+    previous.activeCount = activeCount
+    previous.attentionCount = attentionCount
+    previous.approvalCount = approvalCount
+
+    if (cue && enabled && !paused) void playCue(cue)
+  }, [
+    active,
+    activeCount,
+    approvalCount,
+    attentionCount,
+    enabled,
+    paused,
+    playCue,
+  ])
 
   React.useEffect(() => {
     if (!active || !enabled) return

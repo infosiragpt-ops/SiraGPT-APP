@@ -177,8 +177,12 @@ export function AgentOfficeOverlay({
   const sound = useOfficeSoundscape({
     active: open,
     timeOfDay,
+    timePhase,
     paused,
     activeCount: visibleModel.activeCount,
+    attentionCount:
+      model.truth.blockedMissions + model.truth.latestBlockers.length,
+    approvalCount: model.truth.pendingApprovals,
   })
 
   React.useEffect(() => {

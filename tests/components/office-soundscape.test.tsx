@@ -68,6 +68,15 @@ class FakeAudioContext {
     connect: vi.fn(),
     disconnect: vi.fn(),
   }))
+  createDynamicsCompressor = vi.fn(() => ({
+    threshold: audioParam(),
+    knee: audioParam(),
+    ratio: audioParam(),
+    attack: audioParam(),
+    release: audioParam(),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+  }))
   createBufferSource = vi.fn((): FakeSource => ({
     buffer: null,
     loop: false,
@@ -125,7 +134,7 @@ describe("office soundscape lifecycle", () => {
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
 
     expect(result.current.enabled).toBe(true)
-    expect(result.current.volume).toBe(0.32)
+    expect(result.current.volume).toBe(0.28)
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-day")
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("terrace-steps")
     expect(contexts[0]?.resume).toHaveBeenCalled()
@@ -186,5 +195,46 @@ describe("office soundscape lifecycle", () => {
     expect(localStorage.getItem("siragpt:office-sound-volume")).toBe("0.21")
     expect(localStorage.getItem("siragpt:office-sound-enabled")).toBe("off")
     expect(result.current.enabled).toBe(false)
+  })
+
+  it("plays restrained operational cues only after a live count changes", async () => {
+    const { result, rerender } = renderHook(
+      ({ activeCount, approvalCount, attentionCount }) =>
+        useOfficeSoundscape({
+          active: true,
+          timeOfDay: "night",
+          timePhase: "night",
+          paused: false,
+          activeCount,
+          approvalCount,
+          attentionCount,
+        }),
+      {
+        initialProps: {
+          activeCount: 2,
+          approvalCount: 0,
+          attentionCount: 0,
+        },
+      },
+    )
+
+    await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
+    expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-night")
+    expect(apiClientMock.getOfficeSoundscape).not.toHaveBeenCalledWith("work-start")
+
+    rerender({ activeCount: 3, approvalCount: 0, attentionCount: 0 })
+    await waitFor(() =>
+      expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("work-start"),
+    )
+
+    rerender({ activeCount: 3, approvalCount: 1, attentionCount: 0 })
+    await waitFor(() =>
+      expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("approval-ready"),
+    )
+
+    rerender({ activeCount: 3, approvalCount: 1, attentionCount: 1 })
+    await waitFor(() =>
+      expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("attention"),
+    )
   })
 })

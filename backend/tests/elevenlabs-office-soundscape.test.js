@@ -41,14 +41,14 @@ test('office soundscape uses a fixed prompt contract and atomically caches the r
     assert.equal(captured.headers['xi-api-key'], 'test-key');
     assert.equal(captured.body.text, OFFICE_SOUNDS['coast-day'].text);
     assert.equal(captured.body.loop, true);
-    assert.equal(captured.body.duration_seconds, 28);
+    assert.equal(captured.body.duration_seconds, 30);
     assert.equal(captured.body.model_id, 'eleven_text_to_sound_v2');
     assert.equal(first.generated, true);
-    assert.equal(first.audioUrl, '/elevenlabs/audio/office-coast-day-v2.mp3');
-    assert.equal(first.version, 2);
+    assert.equal(first.audioUrl, '/elevenlabs/audio/office-city-day-v3.mp3');
+    assert.equal(first.version, 3);
     assert.equal(first.fallback, false);
     assert.equal(fs.readFileSync(first.audioPath, 'utf8'), 'ID3-office-sound');
-    assert.deepEqual(fs.readdirSync(outputDir), ['office-coast-day-v2.mp3']);
+    assert.deepEqual(fs.readdirSync(outputDir), ['office-city-day-v3.mp3']);
 
     const second = await generateOfficeSoundscape({
       soundId: 'coast-day',
@@ -59,7 +59,7 @@ test('office soundscape uses a fixed prompt contract and atomically caches the r
     });
     assert.equal(second.cached, true);
     assert.equal(second.generated, false);
-    assert.equal(second.version, 2);
+    assert.equal(second.version, 3);
   } finally {
     fs.rmSync(outputDir, { recursive: true, force: true });
   }
@@ -103,7 +103,7 @@ test('office soundscape serves a previously generated recording without an API k
 
     assert.equal(result.cached, true);
     assert.equal(result.generated, false);
-    assert.equal(result.version, 2);
+    assert.equal(result.version, 3);
     assert.equal(result.fallback, false);
     assert.equal(result.filename, filename);
   } finally {
@@ -130,7 +130,7 @@ test('office soundscape keeps the prior ElevenLabs recording as a safe fallback'
 
     assert.equal(result.cached, true);
     assert.equal(result.generated, false);
-    assert.equal(result.version, 1);
+    assert.equal(result.version, 2);
     assert.equal(result.fallback, true);
     assert.equal(result.filename, definition.legacyFilename);
   } finally {
@@ -141,4 +141,22 @@ test('office soundscape keeps the prior ElevenLabs recording as a safe fallback'
 test.after(() => {
   if (originalApiKey === undefined) delete process.env.ELEVENLABS_API_KEY;
   else process.env.ELEVENLABS_API_KEY = originalApiKey;
+});
+
+test('office soundscape exposes only curated ambience and operational cues', () => {
+  assert.deepEqual(Object.keys(OFFICE_SOUNDS).sort(), [
+    'approval-ready',
+    'attention',
+    'coast-day',
+    'coast-night',
+    'terrace-steps',
+    'work-complete',
+    'work-start',
+  ]);
+  assert.equal(OFFICE_SOUNDS['coast-day'].loop, true);
+  assert.equal(OFFICE_SOUNDS['coast-night'].loop, true);
+  for (const soundId of ['work-start', 'work-complete', 'approval-ready', 'attention']) {
+    assert.equal(OFFICE_SOUNDS[soundId].loop, false);
+    assert.match(OFFICE_SOUNDS[soundId].text, /no voice/i);
+  }
 });
