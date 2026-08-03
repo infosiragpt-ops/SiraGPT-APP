@@ -26,6 +26,99 @@ describe("cancelCodexRunFamily", () => {
     assert.equal(listCalls, 0)
   })
 
+  it("falls back to legacy cancellation when a rolling-deploy backend lacks the family endpoint", async () => {
+    const singleCalls: string[] = []
+    let familyCalls = 0
+    let listCalls = 0
+    const cancelled = await cancelCodexRunFamily(
+      { projectId: "project-rolling", runId: "plan-rolling" },
+      {
+        cancelFamily: async () => {
+          familyCalls += 1
+          throw Object.assign(new Error("Route not found"), {
+            status: 404,
+            body: { error: "Route not found" },
+          })
+        },
+        cancelRun: async (runId) => { singleCalls.push(runId) },
+        listRuns: async () => {
+          listCalls += 1
+          return [
+            { id: "plan-rolling", status: "running" },
+            { id: "build-rolling", status: "queued", planRunId: "plan-rolling" },
+          ]
+        },
+      },
+    )
+
+    assert.equal(familyCalls, 1)
+    assert.equal(listCalls, 2)
+    assert.deepEqual(singleCalls, ["plan-rolling", "build-rolling"])
+    assert.deepEqual(cancelled, ["plan-rolling", "build-rolling"])
+  })
+
+  it("recognizes an empty-body route 404 from an older backend and verifies via legacy endpoints", async () => {
+    const singleCalls: string[] = []
+    const cancelled = await cancelCodexRunFamily(
+      { projectId: "project-rolling", runId: "plan-empty-404" },
+      {
+        cancelFamily: async () => {
+          throw Object.assign(new Error("codex http 404"), { status: 404, body: {} })
+        },
+        cancelRun: async (runId) => { singleCalls.push(runId) },
+        listRuns: async () => [],
+      },
+    )
+
+    assert.deepEqual(singleCalls, ["plan-empty-404"])
+    assert.deepEqual(cancelled, ["plan-empty-404"])
+  })
+
+  it("keeps a semantic run_not_found response idempotent without probing legacy endpoints", async () => {
+    let singleCalls = 0
+    let listCalls = 0
+    const cancelled = await cancelCodexRunFamily(
+      { projectId: "project-1", runId: "run-gone" },
+      {
+        cancelFamily: async () => {
+          throw Object.assign(new Error("run not found"), {
+            status: 404,
+            body: { error: "run_not_found" },
+          })
+        },
+        cancelRun: async () => { singleCalls += 1 },
+        listRuns: async () => { listCalls += 1; return [] },
+      },
+    )
+
+    assert.deepEqual(cancelled, [])
+    assert.equal(singleCalls, 0)
+    assert.equal(listCalls, 0)
+  })
+
+  it("does not treat an unrelated family 404 as successful cancellation", async () => {
+    let singleCalls = 0
+    let listCalls = 0
+    const upstreamError = Object.assign(new Error("project not found"), {
+      status: 404,
+      body: { error: "project_not_found" },
+    })
+
+    await assert.rejects(
+      cancelCodexRunFamily(
+        { projectId: "project-gone", runId: "run-unknown" },
+        {
+          cancelFamily: async () => { throw upstreamError },
+          cancelRun: async () => { singleCalls += 1 },
+          listRuns: async () => { listCalls += 1; return [] },
+        },
+      ),
+      (error) => error === upstreamError,
+    )
+    assert.equal(singleCalls, 0)
+    assert.equal(listCalls, 0)
+  })
+
   it("cancels the visible plan and its auto-continued build exactly once", async () => {
     const calls: string[] = []
     const cancelled = await cancelCodexRunFamily(
@@ -86,6 +179,27 @@ describe("cancelCodexRunFamily", () => {
     )
 
     assert.deepEqual(calls, ["plan-gone", "build-active"])
+  })
+
+  it("does not confirm an unrelated legacy 404 as an idempotent stop", async () => {
+    let cancelCalls = 0
+    await assert.rejects(
+      cancelCodexRunFamily(
+        { projectId: "project-1", runId: "run-1" },
+        {
+          cancelRun: async () => {
+            cancelCalls += 1
+            throw Object.assign(new Error("workspace not found"), {
+              status: 404,
+              body: { error: "workspace_not_found" },
+            })
+          },
+          listRuns: async () => [],
+        },
+      ),
+      /cancelación durable/i,
+    )
+    assert.equal(cancelCalls, 2)
   })
 
   it("retries a transient cancellation failure before confirming stop", async () => {
