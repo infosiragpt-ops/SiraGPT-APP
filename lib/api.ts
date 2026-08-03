@@ -2852,7 +2852,14 @@ class ApiClient {
   }
 
   async getOfficeSoundscape(
-    soundId: 'coast-day' | 'coast-night' | 'terrace-steps',
+    soundId:
+      | 'coast-day'
+      | 'coast-night'
+      | 'terrace-steps'
+      | 'work-start'
+      | 'work-complete'
+      | 'approval-ready'
+      | 'attention',
     options: { signal?: AbortSignal } = {},
   ): Promise<{
     ok: boolean;

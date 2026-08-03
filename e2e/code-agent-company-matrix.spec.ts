@@ -572,6 +572,45 @@ test("mission evidence, CEO review and report survive a reload", async ({ page }
   await page.screenshot({ path: testInfo.outputPath("mission-evidence-durable.png"), fullPage: true })
 })
 
+test("modern office city renders a moving day and night environment", async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  await page.setViewportSize({ width: 1425, height: 810 })
+  await mockMatrixCompany(page)
+  await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
+
+  const livePreview = page.getByTestId("agent-company-live-preview")
+  await expect(livePreview).toBeVisible({ timeout: 30_000 })
+  await livePreview.click()
+
+  const overlay = page.getByTestId("agent-office-overlay")
+  const scene = page.getByTestId("agent-office-scene")
+  const canvas = scene.locator("canvas")
+  await expect(overlay).toBeVisible()
+  await expect(scene).toHaveAttribute("data-office-ready", "true")
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(25)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(3)
+  await expect.poll(async () => Number(await canvas.getAttribute("data-city-light-count"))).toBeGreaterThanOrEqual(14)
+
+  const firstFrame = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"))
+  expect(firstFrame.length).toBeGreaterThan(10_000)
+  await page.waitForTimeout(750)
+  const secondFrame = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"))
+  expect(secondFrame).not.toBe(firstFrame)
+
+  const timeToggle = page.getByTestId("agent-office-time-toggle")
+  await timeToggle.click()
+  await expect(overlay).toHaveAttribute("data-office-phase", "day")
+  await page.screenshot({ path: testInfo.outputPath("modern-office-city-day.png"), fullPage: true })
+  await timeToggle.click()
+  await expect(overlay).toHaveAttribute("data-office-phase", "dusk")
+  await timeToggle.click()
+  await expect(overlay).toHaveAttribute("data-office-phase", "night")
+  await expect(scene).toHaveAttribute("data-office-ready", "true")
+  await page.screenshot({ path: testInfo.outputPath("modern-office-city-night.png"), fullPage: true })
+
+  expect(await overlay.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+})
+
 test("desktop company panel shows real Matrix-style operations", async ({ page }, testInfo) => {
   test.setTimeout(360_000)
   await page.setViewportSize({ width: 1425, height: 810 })
@@ -591,7 +630,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(officeThumbnail).toHaveAttribute("data-office-paused", "false")
   await expect(officeThumbnail).toHaveAttribute("data-rooftop-office", "true")
   await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(12)
-  await expect(page.getByTestId("agent-company-live-preview")).toContainText("Oficina · 1 activo")
+  await expect(page.getByTestId("agent-company-live-preview")).toContainText("Oficina · 1/1 puestos")
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
   await expect(page.getByRole("button", { name: "Controlar" })).toContainText(/[1-9]/)
 
@@ -603,7 +642,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
 
   await page.getByTestId("agent-company-live-preview").click()
   await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
-  await expect(page.getByTestId("agent-office-overlay")).toContainText("Distrito Edge · Oficina ejecutiva")
+  await expect(page.getByTestId("agent-office-overlay")).toContainText("Oficina operativa · pools reales")
   await expect(officeThumbnail).toHaveAttribute("data-office-paused", "true")
   await page.waitForTimeout(100)
   const pausedThumbnailFrame = Number(await officeThumbnail.locator("canvas").getAttribute("data-frame-count"))
@@ -614,11 +653,13 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   const officeScene = page.getByTestId("agent-office-scene")
   const officeCanvas = officeScene.locator("canvas")
   await expect(officeScene).toHaveAttribute("data-office-ready", "true")
-  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(4)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(3)
   await expect(officeScene).toHaveAttribute("data-rooftop-office", "true")
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(25)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(3)
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-window-count"))).toBeGreaterThanOrEqual(1_500)
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-mover-count"))).toBeGreaterThanOrEqual(10)
+  await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-light-count"))).toBeGreaterThanOrEqual(14)
 
   const firstFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => {
     const gl = canvas.getContext("webgl2") || canvas.getContext("webgl")

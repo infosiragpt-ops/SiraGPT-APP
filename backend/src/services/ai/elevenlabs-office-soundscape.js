@@ -7,31 +7,66 @@ const { signalWithTimeout } = require('../../utils/abort-signal');
 
 const OFFICE_SOUNDS = Object.freeze({
   'coast-day': Object.freeze({
-    filename: 'office-coast-day-v2.mp3',
-    legacyFilename: 'office-coast-day-v1.mp3',
-    version: 2,
-    text: 'Seamless premium daytime ambience inside a modern software engineering office on a glass rooftop: subtle real mechanical keyboards at varied distance, quiet HVAC, occasional soft chair movement, and a faint coastal city breeze beyond closed windows. Professional low-distraction stereo mix, stable volume, no speech, no music, no alerts, no prominent footsteps, no sudden sounds',
-    durationSeconds: 28,
+    filename: 'office-city-day-v3.mp3',
+    legacyFilename: 'office-coast-day-v2.mp3',
+    legacyVersion: 2,
+    version: 3,
+    text: 'Seamless premium daytime soundscape for a modern autonomous-company headquarters high above a coastal smart city. Interior layer: very soft real mechanical keyboards at varied distance, restrained chair movement, quiet premium HVAC. Exterior layer beyond insulated glass: distant electric traffic, a light ocean breeze, and subtle city air. Wide natural stereo image, polished architectural ambience, calm and productive, stable loudness, no speech, no music, no notifications, no horns, no sirens, no prominent birds, no sudden events',
+    durationSeconds: 30,
     loop: true,
-    promptInfluence: 0.72,
+    promptInfluence: 0.76,
   }),
   'coast-night': Object.freeze({
-    filename: 'office-coast-night-v2.mp3',
-    legacyFilename: 'office-coast-night-v1.mp3',
-    version: 2,
-    text: 'Seamless premium night ambience inside a modern software engineering office on a glass rooftop: sparse quiet mechanical keyboard work at varied distance, soft HVAC, occasional restrained chair movement, and a faint evening coastal city breeze beyond closed windows. Calm low-distraction stereo mix, stable volume, no speech, no music, no alerts, no prominent footsteps, no sudden sounds',
-    durationSeconds: 28,
+    filename: 'office-city-night-v3.mp3',
+    legacyFilename: 'office-coast-night-v2.mp3',
+    legacyVersion: 2,
+    version: 3,
+    text: 'Seamless premium night soundscape for a modern autonomous-company headquarters high above a coastal smart city. Interior layer: sparse quiet keyboards, soft ventilation, occasional restrained chair movement. Exterior layer beyond insulated glass: distant electric traffic on wet avenues, a gentle ocean breeze, and a very subtle low city hum. Spacious cinematic stereo image but low-distraction and realistic, stable loudness, no speech, no music, no notifications, no horns, no sirens, no thunder, no sudden events',
+    durationSeconds: 30,
     loop: true,
-    promptInfluence: 0.72,
+    promptInfluence: 0.76,
   }),
   'terrace-steps': Object.freeze({
-    filename: 'office-terrace-steps-v2.mp3',
-    legacyFilename: 'office-terrace-steps-v1.mp3',
-    version: 2,
-    text: 'Three restrained professional office footsteps on a polished stone floor, natural soft leather shoes, close but quiet, clean one-shot recording, no voices, no room ambience, no music, no impact boom',
+    filename: 'office-terrace-steps-v3.mp3',
+    legacyFilename: 'office-terrace-steps-v2.mp3',
+    legacyVersion: 2,
+    version: 3,
+    text: 'Three restrained professional footsteps in soft leather shoes across a premium stone-and-wood office floor, close and realistic with a short architectural room reflection, clean one-shot recording, no voices, no music, no impact boom, no background ambience',
     durationSeconds: 2.4,
     loop: false,
-    promptInfluence: 0.82,
+    promptInfluence: 0.86,
+  }),
+  'work-start': Object.freeze({
+    filename: 'office-work-start-v1.mp3',
+    version: 1,
+    text: 'A refined two-note spatial interface cue for an autonomous agent beginning work: soft glass and warm wood resonance, subtle upward motion, confident and restrained, one-shot, under two seconds, no voice, no music bed, no bass impact, no alarm',
+    durationSeconds: 1.5,
+    loop: false,
+    promptInfluence: 0.9,
+  }),
+  'work-complete': Object.freeze({
+    filename: 'office-work-complete-v1.mp3',
+    version: 1,
+    text: 'A refined professional completion cue for an autonomous agent finishing work: one warm glass tone followed by a very soft clean confirmation shimmer, calm and premium, one-shot, under two seconds, no voice, no music bed, no bass impact, no applause',
+    durationSeconds: 1.6,
+    loop: false,
+    promptInfluence: 0.9,
+  }),
+  'approval-ready': Object.freeze({
+    filename: 'office-approval-ready-v1.mp3',
+    version: 1,
+    text: 'A subtle executive review-ready notification: two precise soft ceramic clicks with a light airy tail, neutral and professional, one-shot, under two seconds, no voice, no music, no alarm, no bass impact',
+    durationSeconds: 1.4,
+    loop: false,
+    promptInfluence: 0.9,
+  }),
+  attention: Object.freeze({
+    filename: 'office-attention-v1.mp3',
+    version: 1,
+    text: 'A restrained professional attention cue for an operations dashboard: one soft low wooden tick and one clear muted glass tone, noticeable without urgency, one-shot, under two seconds, no voice, no siren, no alarm, no music, no bass impact',
+    durationSeconds: 1.4,
+    loop: false,
+    promptInfluence: 0.9,
   }),
 });
 
@@ -64,7 +99,11 @@ async function existingSound(audioDir, soundId, definition) {
   const candidates = [
     { filename: definition.filename, version: definition.version, fallback: false },
     ...(definition.legacyFilename
-      ? [{ filename: definition.legacyFilename, version: 1, fallback: true }]
+      ? [{
+          filename: definition.legacyFilename,
+          version: Number(definition.legacyVersion) || 1,
+          fallback: true,
+        }]
       : []),
   ];
 

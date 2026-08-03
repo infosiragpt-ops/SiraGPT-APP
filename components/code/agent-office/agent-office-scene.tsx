@@ -137,34 +137,34 @@ const PHASE_LIGHTING: Record<OfficeTimePhase, PhaseLighting> = {
     floor: 0xd7d8d3,
   },
   dusk: {
-    sunColor: 0xd8e6ff,
-    sunIntensity: 1.82,
+    sunColor: 0xffbd8b,
+    sunIntensity: 1.92,
     sunPosition: [-24, 13, 8],
-    hemisphereSky: 0xadc0d2,
-    hemisphereGround: 0x3d4851,
-    hemisphereIntensity: 1.6,
-    fillColor: 0xa5c4e8,
-    fillIntensity: 1.22,
-    exposure: 1.16,
-    background: 0x899fb7,
-    fog: 0x8195aa,
-    horizon: 0xb6c6d4,
-    floor: 0xb7bab5,
+    hemisphereSky: 0xcda994,
+    hemisphereGround: 0x3f4852,
+    hemisphereIntensity: 1.52,
+    fillColor: 0x9bc8ef,
+    fillIntensity: 1.16,
+    exposure: 1.12,
+    background: 0x7c8492,
+    fog: 0x75808d,
+    horizon: 0xd8a17b,
+    floor: 0xb8b9b3,
   },
   night: {
     sunColor: 0xa9c9ff,
-    sunIntensity: 1.18,
+    sunIntensity: 1.08,
     sunPosition: [-18, 28, 14],
-    hemisphereSky: 0x8aabc4,
-    hemisphereGround: 0x101a22,
-    hemisphereIntensity: 1.42,
-    fillColor: 0x8eb2dc,
-    fillIntensity: 1.02,
-    exposure: 1.18,
-    background: 0x10293f,
-    fog: 0x173047,
-    horizon: 0x294a61,
-    floor: 0x737c80,
+    hemisphereSky: 0x789bb8,
+    hemisphereGround: 0x12181d,
+    hemisphereIntensity: 1.34,
+    fillColor: 0x87b4df,
+    fillIntensity: 0.94,
+    exposure: 1.16,
+    background: 0x0b1d2c,
+    fog: 0x11283a,
+    horizon: 0x31485b,
+    floor: 0x697277,
   },
 }
 
@@ -691,9 +691,11 @@ export function AgentOfficeScene({
       variant,
     })
     renderer.domElement.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
+    renderer.domElement.dataset.citySignatureTowerCount = String(edgeDistrict.counts.signatureTowers)
     renderer.domElement.dataset.cityWindowCount = String(edgeDistrict.counts.windows)
     renderer.domElement.dataset.cityTreeCount = String(edgeDistrict.counts.trees)
     renderer.domElement.dataset.cityMoverCount = String(edgeDistrict.counts.vehicles)
+    renderer.domElement.dataset.cityLightCount = String(edgeDistrict.counts.lightFixtures)
     renderer.domElement.dataset.rooftopOffice = "true"
     host.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
 
@@ -750,11 +752,19 @@ export function AgentOfficeScene({
     fill.position.set(18, 12, -16)
     scene.add(fill)
     const rim = new THREE.DirectionalLight(
-      resolvedPhase === "dusk" || night ? 0x8dd8ea : 0xdff7ff,
+      resolvedPhase === "dusk" ? 0xffc49b : night ? 0x8dd8ea : 0xdff7ff,
       resolvedPhase === "dusk" || night ? 0.72 : 0.46,
     )
     rim.position.set(-22, 9, -24)
     scene.add(rim)
+    if (interiorLighting) {
+      const urbanBounce = new THREE.DirectionalLight(
+        resolvedPhase === "dusk" ? 0xffad72 : 0xffd39b,
+        resolvedPhase === "dusk" ? 0.38 : 0.24,
+      )
+      urbanBounce.position.set(4, 5, 26)
+      scene.add(urbanBounce)
+    }
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 10, totalDepth + 10),

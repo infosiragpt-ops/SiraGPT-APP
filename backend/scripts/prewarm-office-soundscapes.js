@@ -19,7 +19,7 @@ async function main() {
     generated: sound.generated,
     fallback: sound.fallback,
   }));
-  const current = summary.every((sound) => sound.version === 2 && !sound.fallback);
+  const current = summary.every((sound) => !sound.fallback);
   process.stdout.write(`${JSON.stringify({ ok: current, outputDir, sounds: summary }, null, 2)}\n`);
   if (!current) process.exitCode = 2;
 }

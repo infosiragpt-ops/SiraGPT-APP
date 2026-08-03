@@ -16,9 +16,11 @@ export type EdgeDistrictLight = {
 export type EdgeDistrictCounts = {
   buildings: number
   secondaryBuildings: number
+  signatureTowers: number
   windows: number
   trees: number
   vehicles: number
+  lightFixtures: number
   expectedDrawCalls: number
 }
 
@@ -155,6 +157,30 @@ function createPlaneInstances(
       index,
       instance.position,
       [instance.scale[0], instance.scale[1], 1],
+      instance.rotation,
+    )
+    mesh.setColorAt(index, new THREE.Color(instance.color))
+  })
+  mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+  mesh.frustumCulled = false
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  return mesh
+}
+
+function createCylinderInstances(
+  instances: BoxInstance[],
+  material: THREE.Material,
+) {
+  const geometry = new THREE.CylinderGeometry(0.72, 1, 1, 8, 1, false)
+  const mesh = new THREE.InstancedMesh(geometry, material, instances.length)
+  instances.forEach((instance, index) => {
+    setInstanceTransform(
+      mesh,
+      index,
+      instance.position,
+      instance.scale,
       instance.rotation,
     )
     mesh.setColorAt(index, new THREE.Color(instance.color))
@@ -352,6 +378,7 @@ export function addEdgeDistrict({
   variant,
 }: AddEdgeDistrictOptions): EdgeDistrictResult {
   const night = timeOfDay === "night" || timePhase === "dusk"
+  const fullNight = timeOfDay === "night"
   const random = seededRandom(
     0x5eeda11 + Math.round(totalWidth * 17) + Math.round(totalDepth * 29) + (variant === "full" ? 101 : 7),
   )
@@ -380,9 +407,14 @@ export function addEdgeDistrict({
   const horizonGlow = new THREE.Mesh(
     new THREE.PlaneGeometry(districtHalfWidth * 3.7, 18),
     new THREE.MeshBasicMaterial({
-      color: night ? 0x365d77 : 0xd8e6ec,
+      color:
+        timePhase === "dusk"
+          ? 0xc78968
+          : fullNight
+            ? 0x68594f
+            : 0xd8e6ec,
       transparent: true,
-      opacity: night ? 0.34 : 0.42,
+      opacity: timePhase === "dusk" ? 0.46 : fullNight ? 0.24 : 0.42,
       depthWrite: false,
       fog: false,
     }),
@@ -510,6 +542,10 @@ export function addEdgeDistrict({
   const facadeWindows: PlaneInstance[] = []
   const rooftopGlass: PlaneInstance[] = []
   const treeInstances: BoxInstance[] = []
+  const signatureTowerInstances: BoxInstance[] = []
+  const signatureCrownInstances: BoxInstance[] = []
+  const streetLightGlows: BoxInstance[] = []
+  const streetLightPools: PlaneInstance[] = []
 
   const landmarkDark = night ? 0x243b49 : 0x244b5b
   const landmarkMid = night ? 0x315467 : 0x3e6d7c
@@ -571,9 +607,10 @@ export function addEdgeDistrict({
     [-0.98, 0.7],
     [0.98, 0.7],
   ]
-  const dayBuildingColors = [0x58717b, 0x416779, 0x6f8589, 0x355665, 0x7d8280]
-  const nightBuildingColors = [0x2e3c45, 0x304a58, 0x394d56, 0x283e4c, 0x465158]
+  const dayBuildingColors = [0x58717b, 0x416779, 0x6f8589, 0x355665, 0x7d8280, 0x59616a]
+  const nightBuildingColors = [0x2e3c45, 0x304a58, 0x394d56, 0x283e4c, 0x465158, 0x443841]
   const secondaryBuildings: Building[] = []
+  let signatureTowerCount = 0
 
   for (let index = 0; index < secondaryCount; index += 1) {
     const [normalizedX, normalizedZ] = normalizedLots[index]
@@ -622,6 +659,30 @@ export function addEdgeDistrict({
         position: [x, groundY + height - setbackHeight / 2, z],
         scale: [width * 0.82, setbackHeight, depth * 0.82],
         color: night ? 0x3f6172 : 0x9db9c0,
+      })
+    }
+    const signatureTower = index % 7 === 1
+    if (signatureTower) {
+      signatureTowerCount += 1
+      const crownHeight = 4.4 + random() * 3.2
+      const crownWidth = width * (0.42 + random() * 0.08)
+      const crownDepth = depth * (0.42 + random() * 0.08)
+      signatureTowerInstances.push({
+        position: [x, groundY + height + crownHeight / 2 - 0.08, z],
+        scale: [crownWidth, crownHeight, crownDepth],
+        color: night ? 0x587889 : 0x789ba5,
+        rotation: [0, Math.PI / 8, 0],
+      })
+      signatureCrownInstances.push({
+        position: [x, groundY + height + crownHeight + 0.16, z],
+        scale: [crownWidth * 1.08, 0.24, crownDepth * 1.08],
+        color: night ? 0xffd98e : 0xf2fbff,
+        rotation: [0, Math.PI / 8, 0],
+      })
+      propInstances.push({
+        position: [x, groundY + height + crownHeight + 1.12, z],
+        scale: [0.08, 2.08, 0.08],
+        color: night ? 0xffc66f : 0x5c7480,
       })
     }
     propInstances.push({
@@ -688,6 +749,32 @@ export function addEdgeDistrict({
   )
   structureMesh.userData.agentOfficeEnvironment = "edge-district"
   scene.add(structureMesh)
+
+  if (signatureTowerInstances.length > 0) {
+    const signatureTowers = createCylinderInstances(
+      signatureTowerInstances,
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: night ? 0.18 : 0.24,
+        metalness: 0.58,
+      }),
+    )
+    signatureTowers.userData.agentOfficeEnvironment = "edge-district"
+    scene.add(signatureTowers)
+
+    const signatureCrowns = createCylinderInstances(
+      signatureCrownInstances,
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: night ? 0.92 : 0.58,
+        toneMapped: false,
+      }),
+    )
+    signatureCrowns.renderOrder = 4
+    signatureCrowns.userData.agentOfficeEnvironment = "edge-district"
+    scene.add(signatureCrowns)
+  }
 
   const curtainHeight = upperTop - groundY - 0.7
   const curtainMaterial = new THREE.MeshPhysicalMaterial({
@@ -992,6 +1079,84 @@ export function addEdgeDistrict({
     scene.add(brandSign)
   }
 
+  const addStreetLight = (x: number, z: number, armZ: number) => {
+    const lampY = groundY + 3.45
+    propInstances.push(
+      {
+        position: [x, groundY + 1.7, z],
+        scale: [0.09, 3.4, 0.09],
+        color: night ? 0x4d5961 : 0x62717a,
+      },
+      {
+        position: [x, lampY, z + armZ * 0.34],
+        scale: [0.08, 0.08, 0.72],
+        color: night ? 0x4d5961 : 0x62717a,
+      },
+      {
+        position: [x, lampY - 0.05, z + armZ * 0.7],
+        scale: [0.38, 0.11, 0.2],
+        color: night ? 0xffe4ad : 0xd9e6e8,
+      },
+    )
+    streetLightGlows.push({
+      position: [x, lampY - 0.12, z + armZ * 0.72],
+      scale: [1, 1, 1],
+      color: night ? 0xffd89a : 0xdceff2,
+    })
+    streetLightPools.push({
+      position: [x, groundY + 0.045, z + armZ * 0.72],
+      scale: [3.4, 3.4],
+      color: night ? 0xffd38b : 0xd8edf0,
+      rotation: [-Math.PI / 2, 0, 0],
+    })
+  }
+
+  const boulevardLampPairs = variant === "full" ? 7 : 4
+  for (let index = 0; index < boulevardLampPairs; index += 1) {
+    const progress = (index + 0.5) / boulevardLampPairs
+    const x = -districtHalfWidth * 0.86 + progress * districtHalfWidth * 1.72
+    addStreetLight(x, frontBoulevardZ - 3.25, 1)
+    addStreetLight(x, backBoulevardZ + 2.8, -1)
+  }
+
+  const streetGlowMesh = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.22, 12, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: night ? 0.92 : 0.24,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+    streetLightGlows.length,
+  )
+  streetLightGlows.forEach((instance, index) => {
+    setInstanceTransform(streetGlowMesh, index, instance.position, instance.scale)
+    streetGlowMesh.setColorAt(index, new THREE.Color(instance.color))
+  })
+  streetGlowMesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+  if (streetGlowMesh.instanceColor) streetGlowMesh.instanceColor.needsUpdate = true
+  streetGlowMesh.frustumCulled = false
+  streetGlowMesh.renderOrder = 6
+  streetGlowMesh.userData.agentOfficeEnvironment = "edge-district"
+  scene.add(streetGlowMesh)
+
+  const streetPools = createPlaneInstances(
+    streetLightPools,
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: night ? 0.14 : 0.035,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  )
+  streetPools.renderOrder = 2
+  streetPools.userData.agentOfficeEnvironment = "edge-district"
+  scene.add(streetPools)
+
   const urbanTreeCount = variant === "full" ? 22 : 10
   for (let index = 0; index < urbanTreeCount; index += 1) {
     const side = index % 2 === 0 ? -1 : 1
@@ -1106,7 +1271,33 @@ export function addEdgeDistrict({
   vehicleMesh.userData.agentOfficeEnvironment = "edge-district"
   scene.add(vehicleMesh)
 
+  const vehicleLightMesh = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(0.16, 0.1, 0.1),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: night ? 0.94 : 0.28,
+      toneMapped: false,
+    }),
+    vehicleRoutes.length * 4,
+  )
+  vehicleRoutes.forEach((_, routeIndex) => {
+    for (let lampIndex = 0; lampIndex < 4; lampIndex += 1) {
+      vehicleLightMesh.setColorAt(
+        routeIndex * 4 + lampIndex,
+        new THREE.Color(lampIndex < 2 ? 0xffefc4 : 0xff4f3d),
+      )
+    }
+  })
+  if (vehicleLightMesh.instanceColor) vehicleLightMesh.instanceColor.needsUpdate = true
+  vehicleLightMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  vehicleLightMesh.frustumCulled = false
+  vehicleLightMesh.renderOrder = 5
+  vehicleLightMesh.userData.agentOfficeEnvironment = "edge-district"
+  scene.add(vehicleLightMesh)
+
   const vehicleDummy = new THREE.Object3D()
+  const vehicleLightDummy = new THREE.Object3D()
   const animateVehicles = (elapsedSeconds: number) => {
     vehicleRoutes.forEach((route, index) => {
       const span = route.max - route.min
@@ -1122,8 +1313,29 @@ export function addEdgeDistrict({
       vehicleDummy.scale.set(...route.scale)
       vehicleDummy.updateMatrix()
       vehicleMesh.setMatrixAt(index, vehicleDummy.matrix)
+
+      const forwardX = route.axis === "x" ? route.direction : 0
+      const forwardZ = route.axis === "z" ? route.direction : 0
+      const sideX = -forwardZ
+      const sideZ = forwardX
+      const centerX = route.axis === "x" ? position : route.lane
+      const centerZ = route.axis === "z" ? position : route.lane
+      for (let lampIndex = 0; lampIndex < 4; lampIndex += 1) {
+        const front = lampIndex < 2 ? 1 : -1
+        const side = lampIndex % 2 === 0 ? -1 : 1
+        vehicleLightDummy.position.set(
+          centerX + forwardX * 0.7 * front + sideX * 0.21 * side,
+          groundY + 0.32,
+          centerZ + forwardZ * 0.7 * front + sideZ * 0.21 * side,
+        )
+        vehicleLightDummy.rotation.set(0, route.axis === "z" ? Math.PI / 2 : 0, 0)
+        vehicleLightDummy.scale.set(1, 1, 1)
+        vehicleLightDummy.updateMatrix()
+        vehicleLightMesh.setMatrixAt(index * 4 + lampIndex, vehicleLightDummy.matrix)
+      }
     })
     vehicleMesh.instanceMatrix.needsUpdate = true
+    vehicleLightMesh.instanceMatrix.needsUpdate = true
   }
   animateVehicles(0)
 
@@ -1138,7 +1350,7 @@ export function addEdgeDistrict({
   beacon.userData.agentOfficeEnvironment = "edge-district"
   scene.add(beacon)
 
-  if (night) {
+  if (fullNight) {
     const starCount = variant === "full" ? 150 : 55
     const starPositions = new Float32Array(starCount * 3)
     for (let index = 0; index < starCount; index += 1) {
@@ -1179,10 +1391,12 @@ export function addEdgeDistrict({
     counts: {
       buildings: secondaryCount + 1,
       secondaryBuildings: secondaryCount,
+      signatureTowers: signatureTowerCount,
       windows: facadeWindows.length,
       trees: treeInstances.length,
       vehicles: vehicleRoutes.length,
-      expectedDrawCalls: night ? 16 : 15,
+      lightFixtures: streetLightGlows.length,
+      expectedDrawCalls: night ? 22 : 21,
     },
     framing: {
       target: new THREE.Vector3(
