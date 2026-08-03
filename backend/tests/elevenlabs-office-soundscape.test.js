@@ -155,6 +155,9 @@ test('office soundscape exposes only curated ambience and operational cues', () 
   ]);
   assert.equal(OFFICE_SOUNDS['coast-day'].loop, true);
   assert.equal(OFFICE_SOUNDS['coast-night'].loop, true);
+  for (const definition of Object.values(OFFICE_SOUNDS)) {
+    assert.ok(definition.text.length <= 450, 'ElevenLabs sound prompts must not exceed 450 characters');
+  }
   for (const soundId of ['work-start', 'work-complete', 'approval-ready', 'attention']) {
     assert.equal(OFFICE_SOUNDS[soundId].loop, false);
     assert.match(OFFICE_SOUNDS[soundId].text, /no voice/i);
