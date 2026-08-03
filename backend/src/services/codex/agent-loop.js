@@ -239,6 +239,44 @@ function explicitlyRequestsNext(text) {
   return /\bnext(?:\.js|js)?\b/i.test(source);
 }
 
+const COMMON_NEXT_ROUTE_ENTRIES = [
+  'app/page.js',
+  'app/page.jsx',
+  'app/page.mdx',
+  'app/page.ts',
+  'app/page.tsx',
+  'src/app/page.js',
+  'src/app/page.jsx',
+  'src/app/page.mdx',
+  'src/app/page.ts',
+  'src/app/page.tsx',
+  'pages/index.js',
+  'pages/index.jsx',
+  'pages/index.mdx',
+  'pages/index.ts',
+  'pages/index.tsx',
+  'src/pages/index.js',
+  'src/pages/index.jsx',
+  'src/pages/index.mdx',
+  'src/pages/index.ts',
+  'src/pages/index.tsx',
+];
+
+function isNextRouteEntryPath(value) {
+  const path = String(value || '').trim().replace(/^\.\//, '');
+  return /^(?:src\/)?app\/(?:[^/]+\/)*(?:page|route)\.(?:jsx?|tsx?|mdx)$/i.test(path)
+    || /^(?:src\/)?pages\/(?!_(?:app|document|error)\.)(?:[^/]+\/)*[^/]+\.(?:jsx?|tsx?|mdx)$/i.test(path);
+}
+
+function fileTreeLooksLikeNextApplication(fileTree) {
+  return String(fileTree || '')
+    .split(/\r?\n/)
+    .some((line) => {
+      const match = line.trim().match(/^((?:src\/)?(?:app|pages)\/[^\s:]+\.(?:jsx?|tsx?|mdx))/i);
+      return Boolean(match && isNextRouteEntryPath(match[1]));
+    });
+}
+
 function userRequestFromPrompt(text) {
   const source = String(text || '');
   const parts = source.split(/SOLICITUD DEL USUARIO:/i);
@@ -429,9 +467,15 @@ function buildSystemPrompt({
   parallelTools = true,
   openclawPromptBlock = '',
   companySoul = '',
+  preserveExistingNext = false,
 }) {
   const appsMode = isAppsPrompt(sourcePrompt);
-  const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
+  // Existing Next applications are first-class imported workspaces. A follow-up
+  // such as "cambia el encabezado" must not silently opt them into the Vite
+  // starter merely because that individual instruction did not repeat "Next".
+  const preserveNextApps = appsMode
+    && (explicitlyRequestsNext(sourcePrompt) || preserveExistingNext);
+  const forceViteApps = appsMode && !preserveNextApps;
   const fullStackApps = forceViteApps && appsHasFullStackContract({
     sourcePrompt,
     project,
@@ -441,16 +485,20 @@ function buildSystemPrompt({
     explicitlyRequestsCustomBackend(sourcePrompt)
     || (fileTreeHasBackend(fileTree) && !fileTreeLooksLikeExpressStarter(fileTree))
   );
-  const starterContract = existingCustomBackendApps
-    ? 'Este workspace APPS ya contiene un backend propio. Antes de editarlo, inspecciona package.json y su entry real; conserva exactamente el framework actual (por ejemplo Koa o Fastify), el tipo de módulos CJS/ESM, el archivo de entrada y sus scripts de arranque. Vite sigue siendo obligatorio para el frontend, pero NO sustituyas el backend por Express, NO inventes server/index.js y NO cambies package.json al starter Express.'
-    : fullStackApps
-      ? 'El workspace APPS ya viene provisionado con un starter FULL-STACK ejecutable: frontend React 18 + Vite 7 + TypeScript + Tailwind v4; backend Express en server/index.js; SQLite en server/db.js; proxy /api en vite.config.ts; y un script dev compuesto con concurrently que arranca API y web. Conserva y extiende TODAS esas capas: no reemplaces el backend, la base de datos, el proxy ni el script compuesto por una SPA.'
-      : 'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css, src/lib/ai.ts (helper askAI: IA real sin API keys) y src/lib/storage.ts (helper `storage`: PERSISTENCIA REAL server-side sin backend propio).';
-  const persistenceContract = existingCustomBackendApps
-    ? 'PERSISTENCIA DEL BACKEND EXISTENTE: conserva su driver, esquema y rutas actuales. No migres datos a localStorage ni reemplaces su capa de persistencia por SQLite/Express por defecto; amplía el contrato existente sólo después de leerlo.'
-    : fullStackApps
-      ? 'PERSISTENCIA FULL-STACK: los datos de dominio viven en SQLite y se exponen mediante rutas Express /api/* con validación server-side. El frontend consume la API usando import.meta.env.BASE_URL; no migres esos datos a localStorage ni al helper storage. Reserva storage únicamente para preferencias efímeras/personales que no pertenezcan al modelo de datos del servidor.'
-      : 'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.';
+  const starterContract = preserveNextApps
+    ? 'Este workspace APPS usa Next.js por solicitud explícita o porque ya contiene un router Next ejecutable. Inspecciona package.json y extiende el proyecto en su estructura actual. Conserva app/, pages/, src/app/, src/pages/, next.config.* y next-env.d.ts cuando existan; NO conviertas el proyecto a Vite ni sustituyas sus scripts, routing o configuración Next.'
+    : existingCustomBackendApps
+      ? 'Este workspace APPS ya contiene un backend propio. Antes de editarlo, inspecciona package.json y su entry real; conserva exactamente el framework actual (por ejemplo Koa o Fastify), el tipo de módulos CJS/ESM, el archivo de entrada y sus scripts de arranque. Vite sigue siendo obligatorio para el frontend, pero NO sustituyas el backend por Express, NO inventes server/index.js y NO cambies package.json al starter Express.'
+      : fullStackApps
+        ? 'El workspace APPS ya viene provisionado con un starter FULL-STACK ejecutable: frontend React 18 + Vite 7 + TypeScript + Tailwind v4; backend Express en server/index.js; SQLite en server/db.js; proxy /api en vite.config.ts; y un script dev compuesto con concurrently que arranca API y web. Conserva y extiende TODAS esas capas: no reemplaces el backend, la base de datos, el proxy ni el script compuesto por una SPA.'
+        : 'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css, src/lib/ai.ts (helper askAI: IA real sin API keys) y src/lib/storage.ts (helper `storage`: PERSISTENCIA REAL server-side sin backend propio).';
+  const persistenceContract = preserveNextApps
+    ? 'PERSISTENCIA DEL PROYECTO NEXT EXISTENTE: conserva su ORM, driver, esquema, rutas API/server actions y variables actuales. No migres ni reemplaces esa capa salvo petición explícita del usuario.'
+    : existingCustomBackendApps
+      ? 'PERSISTENCIA DEL BACKEND EXISTENTE: conserva su driver, esquema y rutas actuales. No migres datos a localStorage ni reemplaces su capa de persistencia por SQLite/Express por defecto; amplía el contrato existente sólo después de leerlo.'
+      : fullStackApps
+        ? 'PERSISTENCIA FULL-STACK: los datos de dominio viven en SQLite y se exponen mediante rutas Express /api/* con validación server-side. El frontend consume la API usando import.meta.env.BASE_URL; no migres esos datos a localStorage ni al helper storage. Reserva storage únicamente para preferencias efímeras/personales que no pertenezcan al modelo de datos del servidor.'
+        : 'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.';
   const lines = [
     'Eres un agente de software senior trabajando dentro de un workspace aislado.',
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
@@ -461,14 +509,20 @@ function buildSystemPrompt({
       : 'Emite herramientas de una en una; este runtime tiene desactivada la ejecución paralela.',
     starterContract,
     persistenceContract,
-    'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
-    'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
+    preserveNextApps
+      ? 'SISTEMA DE DISEÑO: conserva el sistema de estilos, componentes y tokens que ya usa el proyecto Next. No introduzcas Tailwind, Vite ni un kit alternativo sin leer primero la configuración existente y sin una petición explícita.'
+      : 'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
+    preserveNextApps
+      ? 'NO ejecutes scaffolds interactivos ni reinicialices el framework. Lee las convenciones App Router/Pages Router existentes y edita sus archivos concretos con write_file/edit_file.'
+      : 'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git. En este runner NO uses bunx para tsc, Vitest, Jest o ESLint: usa type_check y los scripts del package.json; los gates ejecutan los binarios locales con Node.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa repo_map (mapa rankeado de símbolos) al retomar un proyecto existente y list_files/grep_search para el detalle, en vez de adivinar rutas.',
     'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
-    'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
+    preserveNextApps
+      ? 'VERIFICA tu trabajo como lo haría un ingeniero: después de editar o instalar dependencias usa type_check para leer errores reales de compilación, dev_server_check para confirmar que Next corre y browser_check para detectar excepciones de runtime, páginas en blanco u overlays; corrige lo que salga antes de dar el trabajo por terminado.'
+      : 'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
     require('./skills').skillsPromptLine(),
     'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de negocio). Si el proyecto define agentes custom en .sira/agents.json también puedes delegarles.',
     parallelSubagents
@@ -496,8 +550,13 @@ function buildSystemPrompt({
         : 'PROHIBIDO Next.js: NO crees next.config.mjs, app/, pages/ ni cambies package.json a "next dev". Mantén el package.json Vite (script dev="vite"). El resultado debe abrir en el preview de inmediato.');
   }
   if (plan) {
-    lines.push('Plan aprobado por el usuario (síguelo):');
+    lines.push(preserveNextApps
+      ? 'Plan aprobado por el usuario: sigue sus objetivos funcionales sin migrar el framework Next existente.'
+      : 'Plan aprobado por el usuario (síguelo):');
     lines.push(JSON.stringify(plan));
+    if (preserveNextApps) {
+      lines.push('Si el plan menciona Vite, app/ SPA o src/main.tsx, trátalo como una suposición obsoleta del planificador: conserva Next.js y adapta las tareas a su App Router/Pages Router actual.');
+    }
     lines.push('Mantén el checklist del plan al día con update_plan (como TodoWrite): ANTES de empezar una tarea, llama update_plan marcándola in_progress; al terminarla, llama update_plan marcándola completed, ANTES de avanzar a la siguiente. Pasa SIEMPRE la lista COMPLETA de tareas del plan (id + title + status) en cada llamada, no solo la que cambió. Usa exactamente los mismos id y title del plan.');
   }
   if (fileTree) {
@@ -1663,6 +1722,16 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     }
   } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
+  let preserveExistingNext = false;
+  if (isAppsPrompt(sourcePrompt)) {
+    const packageRead = await readRunnerFileResult(runner, projectId, 'package.json');
+    preserveExistingNext = packageRead.ok
+      ? await hasExistingNextApplication({ runner, projectId, pkgText: packageRead.content })
+      // A temporary runner read failure cannot prove the framework. Only a
+      // root-level Next route in the already-known tree activates fail-safe
+      // preservation; ordinary Vite src/pages remains excluded by package read.
+      : fileTreeLooksLikeNextApplication(fileTree);
+  }
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
   const companySoul = deps.companySoul != null
     ? deps.companySoul
@@ -1698,6 +1767,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         parallelTools,
         openclawPromptBlock: deps.openclawPromptBlock || '',
         companySoul,
+        preserveExistingNext,
       }),
     },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
@@ -2450,13 +2520,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   return terminalOutcomeAfterClose(closed, stopHook, 'proactive quality gate failed');
 }
 
-async function readRunnerFile(runner, projectId, path) {
+async function readRunnerFileResult(runner, projectId, path) {
   try {
     const out = await runner.readFile(projectId, path);
-    return String(out?.content || '');
+    return { ok: true, content: String(out?.content || '') };
   } catch {
-    return '';
+    return { ok: false, content: '' };
   }
+}
+
+async function readRunnerFile(runner, projectId, path) {
+  return (await readRunnerFileResult(runner, projectId, path)).content;
 }
 
 function packageLooksLikeNext(pkgText) {
@@ -2467,6 +2541,37 @@ function packageLooksLikeNext(pkgText) {
   } catch {
     return false;
   }
+}
+
+async function hasExistingNextApplication({ runner, projectId, pkgText }) {
+  if (!packageLooksLikeNext(pkgText)) return false;
+
+  // Fast path for the conventional App/Pages router roots. Reading through the
+  // runner also covers freshly imported files that have not been committed yet.
+  const commonEntries = await Promise.all(
+    COMMON_NEXT_ROUTE_ENTRIES.map((path) => readRunnerFile(runner, projectId, path)),
+  );
+  if (commonEntries.some((content) => content.trim())) return true;
+
+  // Dynamic or nested-only routers (for example app/(site)/page.tsx or
+  // pages/[slug].tsx) need a bounded file listing. Failure is fail-safe: once
+  // package.json identifies Next, an unavailable inventory must never authorize
+  // a destructive framework conversion.
+  if (typeof runner?.exec !== 'function') return true;
+  let listed;
+  try {
+    listed = await runner.exec(
+      projectId,
+      ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+      { timeoutMs: 10_000 },
+    );
+  } catch {
+    return true;
+  }
+  if (!listed || (listed.exitCode != null && listed.exitCode !== 0)) return true;
+  return String(listed.stdout || listed.output || '')
+    .split(/\r?\n/)
+    .some(isNextRouteEntryPath);
 }
 
 function packageLooksLikeVite(pkgText) {
@@ -2743,7 +2848,14 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
   const sourcePrompt = await resolveRunSourcePrompt({ run, prisma });
   if (!isAppsPrompt(sourcePrompt) || explicitlyRequestsNext(sourcePrompt)) return { repaired: false };
   const projectId = project?.id || run.projectId;
-  const pkgText = await readRunnerFile(runner, projectId, 'package.json');
+  const packageRead = await readRunnerFileResult(runner, projectId, 'package.json');
+  if (!packageRead.ok) {
+    return { repaired: false, preservationReason: 'package_unavailable' };
+  }
+  const pkgText = packageRead.content;
+  if (await hasExistingNextApplication({ runner, projectId, pkgText })) {
+    return { repaired: false, preservedFramework: 'next' };
+  }
   const detectedBackend = inspectExistingBackendPackage(pkgText);
   const paths = [...new Set([
     'index.html',
@@ -2848,7 +2960,9 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
     // (no shell, no `rm`) — a plain `rm -rf …` string is rejected upstream and
     // the Next leftovers survive. `node -e` with fs.rmSync is allowlisted.
     const purgePaths = [
-      'app', 'pages', 'src/app', 'next.config.mjs', 'next.config.js', 'next-env.d.ts', '.next', '.next-env.d.ts', 'vite.config.js',
+      'app', 'pages', 'src/app', 'src/pages',
+      'next.config.mjs', 'next.config.js', 'next.config.ts', 'next.config.mts', 'next.config.cjs',
+      'next-env.d.ts', '.next', '.next-env.d.ts', 'vite.config.js',
       // The SPA fallback always writes main.tsx. A repaired full-stack app may
       // intentionally retain a custom legacy main.js entry, so do not delete it.
       ...(!fullStack ? ['src/main.js'] : []),

@@ -18,23 +18,56 @@ export type CancelCodexRunFamilyDeps = {
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "waiting_approval"])
 
-function isIdempotentCancelError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false
+function cancelErrorDetails(error: unknown): {
+  status: number | null
+  code: string
+  message: string
+  hasBodyDetails: boolean
+} {
+  if (!error || typeof error !== "object") {
+    return { status: null, code: "", message: String(error || "").toLowerCase(), hasBodyDetails: false }
+  }
   const candidate = error as {
     status?: number
+    statusCode?: number
     code?: string
     message?: string
-    body?: { error?: string; message?: string }
+    body?: { error?: string; code?: string; message?: string }
   }
-  const code = String(candidate.code || candidate.body?.error || "").toLowerCase()
-  const message = `${candidate.message || ""} ${candidate.body?.message || ""}`.toLowerCase()
+  const body = candidate.body
+  const rawStatus = candidate.status ?? candidate.statusCode
+  const status = typeof rawStatus === "number" && Number.isFinite(rawStatus) ? rawStatus : null
+  // Prefer the server's structured cancellation code over a transport-level
+  // Error.code (for example an HTTP client's generic ERR_BAD_REQUEST).
+  const code = String(body?.code || body?.error || candidate.code || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+  const message = `${candidate.message || ""} ${body?.message || ""} ${body?.error || ""}`.toLowerCase()
+  const hasBodyDetails = Boolean(body && Object.keys(body).length > 0)
+  return { status, code, message, hasBodyDetails }
+}
+
+function isIdempotentCancelError(error: unknown): boolean {
+  const { status, code, message } = cancelErrorDetails(error)
   return (
-    candidate.status === 404
-    || (candidate.status === 409 && (
+    code === "run_not_found"
+    || (status === 404 && /\brun (?:was )?not found\b/i.test(message))
+    || (status === 409 && (
       code === "run_already_terminal"
       || /already (?:done|error|cancelled|terminal)|ya (?:termin|cancel)/i.test(message)
     ))
-    || code === "run_not_found"
+  )
+}
+
+function isCancelFamilyEndpointUnavailable(error: unknown): boolean {
+  const { status, code, message, hasBodyDetails } = cancelErrorDetails(error)
+  if (status !== 404 || isIdempotentCancelError(error)) return false
+  return (
+    code === "route_not_found"
+    || code === "endpoint_not_found"
+    || /\b(?:route|endpoint) (?:was )?not found\b|\bcannot post\b/i.test(message)
+    || (!hasBodyDetails && /\bcodex http 404\b/i.test(message))
   )
 }
 
@@ -53,7 +86,10 @@ export async function cancelCodexRunFamily(
       return Array.isArray(result?.cancelledRunIds) ? result.cancelledRunIds : []
     } catch (error) {
       if (isIdempotentCancelError(error)) return []
-      throw error
+      // During a rolling deploy the new frontend can briefly reach an older
+      // backend that does not expose /cancel-family yet. Only that route-level
+      // 404 may degrade to the verified single-run/list fallback below.
+      if (!isCancelFamilyEndpointUnavailable(error)) throw error
     }
   }
 
