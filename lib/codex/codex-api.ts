@@ -644,23 +644,36 @@ export interface CodexEnterpriseCommandCenter {
   readiness: {
     status: "ready" | "attention" | "blocked"
     score: number
-    runState: "idle" | "running" | "paused" | "completed" | "failed"
+    runState:
+      | "idle"
+      | "queued"
+      | "running"
+      | "paused"
+      | "waiting_approval"
+      | "cancelling"
+      | "completed"
+      | "completed_with_errors"
+      | "failed"
+      | "cancelled"
     checks: Array<{
       id: string
       label: string
       status: "ready" | "attention" | "blocked"
       detail?: string
     }>
-    lastCheckedAt?: string
+    lastCheckedAt?: string | null
   }
   mission: string
   vision: string
   swarmSummary: {
     logicalAgents: number
+    planned: number
     active: number
     queued: number
+    blocked: number
     completed: number
     failed: number
+    cancelled: number
     maxParallel: number
   }
   departments: Array<{
@@ -668,22 +681,36 @@ export interface CodexEnterpriseCommandCenter {
     workstreamId?: string
     name: string
     objective: string
-    status: "active" | "queued" | "paused" | "blocked" | "completed"
+    status:
+      | "planned"
+      | "active"
+      | "queued"
+      | "waiting_approval"
+      | "paused"
+      | "cancelling"
+      | "blocked"
+      | "failed"
+      | "completed"
+      | "cancelled"
     logicalAgents: number
+    plannedTasks: number
     activeAgents: number
     queuedTasks: number
+    blockedTasks: number
+    failedTasks: number
+    cancelledTasks: number
     completedTasks: number
     progress: number
     currentWork?: string | null
     owner?: string
-    lastUpdatedAt?: string
+    lastUpdatedAt?: string | null
   }>
   liveEvents: Array<{
     id: string
     timestamp: string
     title: string
     kind: "planning" | "delegation" | "research" | "coding" | "verification" | "delivery" | "warning" | "error"
-    status: "running" | "completed" | "blocked"
+    status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"
     detail?: string
     departmentId?: string
     departmentName?: string
@@ -691,7 +718,7 @@ export interface CodexEnterpriseCommandCenter {
   executiveSummary: {
     title: string
     summary: string
-    updatedAt?: string
+    updatedAt?: string | null
     highlights?: string[]
     risks?: string[]
     nextActions?: string[]

@@ -70,7 +70,7 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
 
   if (editing) {
     return (
-      <div className="flex min-w-0 max-w-[34%] shrink-0 items-center gap-1 rounded-lg border border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.08)] px-1.5 py-0.5 ring-1 ring-[hsl(var(--accent-violet)/0.30)]">
+      <div className="flex min-w-0 max-w-[55%] shrink-0 items-center gap-0.5 rounded-lg border border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.08)] px-0.5 py-0.5 ring-1 ring-[hsl(var(--accent-violet)/0.30)] sm:max-w-[34%] sm:gap-1 sm:px-1.5">
         <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-[hsl(var(--accent-violet))]" />
         <input
           ref={inputRef}
@@ -95,7 +95,7 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => void commit()}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.15)]"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.15)] sm:h-5 sm:w-5 sm:rounded"
           aria-label="Guardar nombre"
         >
           <Check className="h-3.5 w-3.5" />
@@ -104,7 +104,7 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setEditing(false)}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/60"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 sm:h-5 sm:w-5 sm:rounded"
           aria-label="Cancelar"
         >
           <X className="h-3.5 w-3.5" />
@@ -114,14 +114,15 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
   }
 
   return (
-    <div className="group flex min-w-0 max-w-[34%] shrink-0 items-center gap-0.5">
+    <div className="group flex min-w-0 max-w-[45%] shrink-0 items-center gap-0.5 sm:max-w-[34%]">
       <button
         type="button"
         onDoubleClick={startEdit}
         onClick={startEdit}
         title="Doble clic para renombrar"
+        aria-label={`Renombrar proyecto ${name}`}
         className={cn(
-          "flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors",
+          "flex h-10 min-w-0 items-center gap-1.5 rounded-lg px-1.5 transition-colors sm:h-auto sm:py-1",
           "hover:bg-[hsl(var(--accent-violet)/0.10)]",
         )}
       >
@@ -143,10 +144,10 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="flex h-6 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/60"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/60 sm:h-6 sm:w-5"
             aria-label="Acciones del proyecto"
           >
-            <ChevronDown className="h-3.5 w-3.5" />
+            <ChevronDown className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56 rounded-xl border-border/70 p-1.5">

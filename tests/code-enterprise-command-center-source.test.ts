@@ -4,6 +4,8 @@ import { describe, it } from "node:test"
 
 const componentPath = "components/code/enterprise-command-center.tsx"
 const source = readFileSync(componentPath, "utf8")
+const companyPanelSource = readFileSync("components/code/agent-company-panel.tsx", "utf8")
+const previewPaneSource = readFileSync("components/code/preview-pane.tsx", "utf8")
 
 function sliceInterface(name: string): string {
   const start = source.indexOf(`export interface ${name}`)
@@ -36,15 +38,29 @@ describe("enterprise command center source contract", () => {
 
   it("keeps the complete swarm and department telemetry contracts", () => {
     const swarm = sliceInterface("EnterpriseSwarmSummary")
-    for (const field of ["logicalAgents", "active", "queued", "completed", "failed", "maxParallel"]) {
+    for (const field of [
+      "logicalAgents",
+      "planned",
+      "active",
+      "queued",
+      "blocked",
+      "completed",
+      "failed",
+      "cancelled",
+      "maxParallel",
+    ]) {
       assert.match(swarm, new RegExp(`${field}: number`), `missing swarm field ${field}`)
     }
 
     const department = sliceInterface("EnterpriseDepartment")
     for (const field of [
       "logicalAgents",
+      "plannedTasks",
       "activeAgents",
       "queuedTasks",
+      "blockedTasks",
+      "failedTasks",
+      "cancelledTasks",
       "completedTasks",
       "progress",
     ]) {
@@ -54,7 +70,7 @@ describe("enterprise command center source contract", () => {
 
   it("renders a dense responsive command surface without nested UI cards", () => {
     assert.match(source, /data-testid="enterprise-command-center"/)
-    assert.match(source, /grid grid-cols-2 border-t border-border sm:grid-cols-3 xl:grid-cols-6/)
+    assert.match(source, /grid grid-cols-2 border-t border-border sm:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-9/)
     assert.match(source, /xl:grid-cols-\[minmax\(0,1\.45fr\)_minmax\(320px,0\.8fr\)\]/)
     assert.match(source, /min-h-11/)
     assert.doesNotMatch(source, /components\/ui\/card/)
@@ -87,11 +103,63 @@ describe("enterprise command center source contract", () => {
     assert.match(source, /onOpen\(\{ type: "readiness" \}\)/)
     assert.match(source, /onOpen\(\{ type: "department", id: department\.id \}\)/)
     assert.match(source, /onOpen\(\{ type: "event", id: event\.id \}\)/)
-    assert.match(source, /aria-label="Iniciar ejecución de agentes"/)
+    assert.match(source, /aria-label=\{resumable \? "Reanudar ejecución de agentes" : "Iniciar ejecución de agentes"\}/)
     assert.match(source, /aria-label="Pausar ejecución de agentes"/)
     assert.match(source, /aria-label="Cancelar ejecución de agentes"/)
     for (const icon of ["Play", "Pause", "Square", "ChevronRight"]) {
       assert.match(source, new RegExp(`<${icon}\\b`), `missing lucide control ${icon}`)
     }
+  })
+
+  it("keeps queued, approval, partial-completion, cancelling, cancelled and planned states explicit", () => {
+    assert.match(source, /\| "queued"/)
+    assert.match(source, /\| "waiting_approval"/)
+    assert.match(source, /\| "completed_with_errors"/)
+    assert.match(source, /\| "cancelling"/)
+    assert.match(source, /\| "cancelled"/)
+    assert.match(source, /\| "planned"/)
+    assert.match(source, /readiness\.runState === "queued"/)
+    assert.match(source, /readiness\.runState === "waiting_approval"/)
+    assert.match(source, /readiness\.runState === "completed_with_errors"/)
+    assert.match(source, /readiness\.runState === "cancelled"/)
+    assert.match(source, /\{resumable \? "Reanudar" : "Iniciar"\}/)
+  })
+
+  it("does not invent active work or fallback parallel capacity", () => {
+    assert.doesNotMatch(companyPanelSource, /return proactiveState\.enabled \? "running" : "idle"/)
+    assert.doesNotMatch(companyPanelSource, /maxParallel: Math\.max\(8, active\)/)
+    assert.match(companyPanelSource, /maxParallel: active/)
+    assert.match(companyPanelSource, /plannedTasks: 0/)
+    assert.match(companyPanelSource, /status: enterpriseDepartmentStatus\(statuses\)/)
+  })
+
+  it("stops the runner that owns the preview instead of crossing runtime boundaries", () => {
+    assert.match(previewPaneSource, /previewOwnerRef = React\.useRef<PreviewRuntimeLease \| null>/)
+    assert.match(previewPaneSource, /transitionPreviewRuntimeOwner\(previous, owner, PREVIEW_RUNTIME_STOPS\)/)
+    assert.match(previewPaneSource, /stopPreviewRuntimeOwnerKeepalive\(lease\.owner\)/)
+    assert.match(previewPaneSource, /stopPreviewRuntimeOwner\(lease\.owner, PREVIEW_RUNTIME_STOPS\)/)
+    assert.doesNotMatch(previewPaneSource, /getActiveCodexProject\(\)[\s\S]{0,120}stopPreview/)
+  })
+
+  it("keeps the company footer and control board aligned with durable run states", () => {
+    assert.match(companyPanelSource, /operationState=\{commandCenter\?\.readiness\.runState \?\? enterpriseRunState\(codexRuns\)\}/)
+    assert.match(companyPanelSource, /operationState === "queued"\s*\? "EN COLA"/)
+    assert.match(companyPanelSource, /operationState === "waiting_approval"\s*\? "APROBACIÓN"/)
+    assert.match(companyPanelSource, /operationState === "completed_with_errors"\s*\? "CON ERRORES"/)
+    assert.match(companyPanelSource, /role="status"/)
+    assert.match(companyPanelSource, /data-testid=\{`agent-company-operation-state-/)
+    assert.match(companyPanelSource, /data-testid=\{`agent-company-proactive-toggle-/)
+    assert.match(companyPanelSource, /disabled=\{proactiveBusy \|\| proactiveBlockedByOperation\}/)
+    assert.match(companyPanelSource, /if \(!hasSwarm && activeRun\)/)
+    assert.match(companyPanelSource, /const blockedTasks = 0/)
+    assert.doesNotMatch(companyPanelSource, /snapshot\.activeAgents > 0 \? "EN EJECUCIÓN"/)
+    assert.match(companyPanelSource, /const runningRows = rowsForStatus\("running"\)/)
+    assert.match(companyPanelSource, /const queuedRows = rowsForStatus\("queued"\)/)
+    assert.match(companyPanelSource, /const approvalRows = rowsForStatus\("waiting_approval"\)/)
+    assert.match(companyPanelSource, /statuses\.includes\("waiting_approval"\)\) return "waiting_approval"/)
+    assert.match(companyPanelSource, /const failedRows = rowsForStatus\("error"\)/)
+    assert.match(companyPanelSource, /const completedRows = rowsForStatus\("done"\)/)
+    assert.match(companyPanelSource, /const cancelledRows = rowsForStatus\("cancelled"\)/)
+    assert.doesNotMatch(companyPanelSource, /label: "En ejecución",\s*rows: orderedRuns\.filter\(\(run\) => codeRunIsActive\(run\)\)/)
   })
 })

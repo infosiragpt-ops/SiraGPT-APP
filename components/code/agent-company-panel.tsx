@@ -486,37 +486,51 @@ function runTitle(run: AgentCompanyRunLike): string {
 
 function enterpriseRunState(
   runs: readonly CodexRun[],
-  proactiveState: CodexProactiveState,
 ): EnterpriseRunState {
-  if (runs.some((run) => String(run.status).toLowerCase() === "running" || String(run.status).toLowerCase() === "queued")) {
-    return "running"
-  }
-  if (runs.some((run) => String(run.status).toLowerCase() === "error")) return "failed"
-  if (!proactiveState.enabled && runs.some((run) => String(run.status).toLowerCase() === "waiting_approval")) {
-    return "paused"
-  }
-  if (runs.some((run) => String(run.status).toLowerCase() === "done")) return "completed"
-  return proactiveState.enabled ? "running" : "idle"
+  const ordered = [...runs].sort((left, right) => runActivityAt(right) - runActivityAt(left))
+  const active = ordered.find((run) => ["queued", "running", "waiting_approval"].includes(
+    String(run.status).toLowerCase(),
+  ))
+  const status = String(active?.status || ordered[0]?.status || "").toLowerCase()
+  if (status === "queued") return "queued"
+  if (status === "running") return "running"
+  if (status === "waiting_approval") return "waiting_approval"
+  if (status === "done") return "completed"
+  if (status === "error") return "failed"
+  if (status === "cancelled") return "cancelled"
+  return "idle"
+}
+
+const ENTERPRISE_OPERATION_LABELS: Record<EnterpriseRunState, string> = {
+  idle: "Lista para ejecutar",
+  queued: "Ejecución en cola",
+  running: "Operación activa",
+  paused: "Operación en pausa",
+  waiting_approval: "Esperando aprobación",
+  cancelling: "Cancelando operación",
+  completed: "Operación completada",
+  completed_with_errors: "Operación completada con errores",
+  failed: "Operación con errores",
+  cancelled: "Operación cancelada",
 }
 
 function enterpriseReadiness(
   context: CodexCompanyContext | null,
   runs: readonly CodexRun[],
-  proactiveState: CodexProactiveState,
 ): EnterpriseReadiness {
   const areas = context?.readiness.areas || []
   const hasBlocked = areas.some((area) => area.status === "blocked")
   return {
     status: hasBlocked ? "blocked" : context?.readiness.score === 100 ? "ready" : "attention",
     score: context?.readiness.score || 0,
-    runState: enterpriseRunState(runs, proactiveState),
+    runState: enterpriseRunState(runs),
     checks: areas.map((area) => ({
       id: area.id,
       label: area.label,
       status: area.status === "ready" ? "ready" : area.status === "blocked" ? "blocked" : "attention",
       detail: area.status === "ready" ? area.evidence : area.action,
     })),
-    lastCheckedAt: new Date().toISOString(),
+    lastCheckedAt: context?.profile.updatedAt || null,
   }
 }
 
@@ -525,12 +539,26 @@ function enterpriseSwarmSummary(runs: readonly CodexRun[]): EnterpriseSwarmSumma
   const active = statuses.filter((status) => status === "running").length
   return {
     logicalAgents: runs.length,
+    planned: 0,
     active,
-    queued: statuses.filter((status) => status === "queued" || status === "waiting_approval").length,
+    queued: statuses.filter((status) => status === "queued").length,
+    blocked: 0,
     completed: statuses.filter((status) => status === "done").length,
     failed: statuses.filter((status) => status === "error").length,
-    maxParallel: Math.max(8, active),
+    cancelled: statuses.filter((status) => status === "cancelled").length,
+    maxParallel: active,
   }
+}
+
+function enterpriseDepartmentStatus(statuses: readonly string[]): EnterpriseDepartment["status"] {
+  if (!statuses.length) return "planned"
+  if (statuses.includes("running")) return "active"
+  if (statuses.includes("error")) return "failed"
+  if (statuses.includes("waiting_approval")) return "waiting_approval"
+  if (statuses.includes("queued")) return "queued"
+  if (statuses.every((status) => status === "done")) return "completed"
+  if (statuses.every((status) => status === "done" || status === "cancelled")) return "cancelled"
+  return "planned"
 }
 
 function enterpriseDepartments(
@@ -541,24 +569,28 @@ function enterpriseDepartments(
     const assigned = runs
       .filter((run) => departmentIdForRun(run, departments) === department.id)
       .sort((a, b) => runActivityAt(b) - runActivityAt(a))
-    const active = assigned.filter((run) => codeRunIsActive(run))
+    const statuses = assigned.map((run) => String(run.status).toLowerCase())
+    const active = assigned.filter((run) => String(run.status).toLowerCase() === "running")
     const completed = assigned.filter((run) => String(run.status).toLowerCase() === "done")
-    const blocked = assigned.some((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase()))
+    const queuedTasks = statuses.filter((status) => status === "queued").length
+    // Approval is a distinct durable state. A fallback projection must not
+    // inflate the blocker count just because a run awaits human review.
+    const blockedTasks = 0
+    const failedTasks = statuses.filter((status) => status === "error").length
+    const cancelledTasks = statuses.filter((status) => status === "cancelled").length
     const progress = assigned.length ? Math.round((completed.length / assigned.length) * 100) : 0
     return {
       id: department.id,
       name: department.name,
       objective: department.description,
-      status: active.length > 0
-        ? "active"
-        : blocked
-          ? "blocked"
-          : assigned.length > 0 && completed.length === assigned.length
-            ? "completed"
-            : "queued",
+      status: enterpriseDepartmentStatus(statuses),
       logicalAgents: assigned.length,
+      plannedTasks: 0,
       activeAgents: active.length,
-      queuedTasks: assigned.filter((run) => String(run.status).toLowerCase() === "queued").length,
+      queuedTasks,
+      blockedTasks,
+      failedTasks,
+      cancelledTasks,
       completedTasks: completed.length,
       progress,
       currentWork: assigned[0] ? runSummary(assigned[0]) : undefined,
@@ -1447,7 +1479,7 @@ export function AgentCompanyPanel() {
     }
   }, [
     activeFolder?.id,
-    allDepartments.length,
+    allDepartments,
     associatedCodexProjectId,
     codeChatSessions,
     commandCenter?.swarm?.id,
@@ -1481,10 +1513,12 @@ export function AgentCompanyPanel() {
 
   const cancelCompanyExecution = React.useCallback(async () => {
     const codexProjectId = associatedCodexProjectId
+    const swarmId = commandCenter?.swarm?.id || null
     const activeRun = [...codexRuns]
       .filter((run) => codeRunIsActive(run))
       .sort((a, b) => runActivityAt(b) - runActivityAt(a))[0]
-    if (!codexProjectId && !activeRun) {
+    const hasSwarm = Boolean(codexProjectId && swarmId)
+    if (!hasSwarm && !activeRun && !(codexProjectId && proactiveOn)) {
       toast.info("No hay una ejecución activa.")
       return
     }
@@ -1492,10 +1526,10 @@ export function AgentCompanyPanel() {
     setProactiveBusy(true)
     proactiveMutationVersionRef.current += 1
     try {
-      if (codexProjectId && commandCenter?.swarm?.id) {
+      if (codexProjectId && swarmId) {
         await codexApi.cancelSwarm(
           codexProjectId,
-          commandCenter.swarm.id,
+          swarmId,
           "cancelled_by_user",
         )
         await refreshCommandCenter(codexProjectId)
@@ -1506,7 +1540,7 @@ export function AgentCompanyPanel() {
         setProactiveOn(false)
         setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
       }
-      if (activeRun) {
+      if (!hasSwarm && activeRun) {
         const cancelled = await codexApi.cancelRun(activeRun.id)
         setCodexRuns((current) => current.map((run) => run.id === cancelled.id ? cancelled : run))
       }
@@ -2096,7 +2130,7 @@ export function AgentCompanyPanel() {
                 <span className="text-[11px] font-semibold uppercase text-muted-foreground">Empresa de agentes</span>
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-foreground/75">
                   <span className={cn("h-2 w-2 rounded-full", snapshot.activeAgents > 0 ? "bg-sky-500" : "bg-zinc-300")} />
-                  {snapshot.activeAgents > 0 ? `${snapshot.activeAgents} en ejecución` : "Sin ejecuciones"}
+                  {snapshot.activeAgents > 0 ? `${snapshot.activeAgents} operaciones abiertas` : "Sin operaciones abiertas"}
                 </span>
               </div>
               <div className="max-h-[340px] space-y-2 overflow-y-auto p-3">
@@ -2312,6 +2346,7 @@ export function AgentCompanyPanel() {
             proactiveOn={proactiveOn}
             proactiveBusy={proactiveBusy}
             proactiveState={proactiveState}
+            operationState={commandCenter?.readiness.runState ?? enterpriseRunState(codexRuns)}
             canRun={codexAccess?.canRun ?? null}
             onToggleProactive={() => void toggleProactive()}
           />
@@ -2978,6 +3013,7 @@ function CompanyHome({
   proactiveOn,
   proactiveBusy,
   proactiveState,
+  operationState,
   canRun,
   onToggleProactive,
 }: {
@@ -3011,11 +3047,41 @@ function CompanyHome({
   proactiveOn: boolean
   proactiveBusy: boolean
   proactiveState: CodexProactiveState
+  operationState: EnterpriseRunState
   canRun: boolean | null
   onToggleProactive: () => void
 }) {
   const pinnedSet = React.useMemo(() => new Set(pinnedDepartmentIds), [pinnedDepartmentIds])
   const [openDepartmentMenuId, setOpenDepartmentMenuId] = React.useState<string | null>(null)
+  const operationBusy = operationState === "queued"
+    || operationState === "running"
+    || operationState === "paused"
+    || operationState === "waiting_approval"
+    || operationState === "cancelling"
+  const operationAttention = operationState === "paused"
+    || operationState === "waiting_approval"
+    || operationState === "cancelling"
+    || operationState === "completed_with_errors"
+  const operationLabel = operationState === "running"
+    ? "EN EJECUCIÓN"
+    : operationState === "queued"
+      ? "EN COLA"
+      : operationState === "paused"
+        ? "EN PAUSA"
+        : operationState === "waiting_approval"
+          ? "APROBACIÓN"
+          : operationState === "cancelling"
+            ? "CANCELANDO"
+            : operationState === "completed"
+              ? "COMPLETADO"
+              : operationState === "completed_with_errors"
+                ? "CON ERRORES"
+                : operationState === "failed"
+                  ? "ERROR"
+                  : operationState === "cancelled"
+                    ? "CANCELADO"
+                    : null
+  const proactiveBlockedByOperation = operationBusy && !proactiveOn
   return (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
@@ -3268,21 +3334,47 @@ function CompanyHome({
             <span className="min-w-0 flex-1 truncate text-xs font-medium">{user?.name || user?.email || "SiraGPT"}</span>
           </>
         ) : null}
+        {operationLabel ? (
+          <span
+            role="status"
+            data-testid={`agent-company-operation-state-${hideFooter ? "dock" : "main"}`}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold",
+              operationState === "failed"
+                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                : operationAttention
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  : operationState === "queued"
+                    ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                    : operationState === "cancelled"
+                      ? "border-border/60 bg-muted/35 text-muted-foreground"
+                      : "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+            )}
+          >
+            <Radio className="h-3.5 w-3.5" aria-hidden="true" />
+            {operationLabel}
+          </span>
+        ) : null}
         <button
           type="button"
+          data-testid={`agent-company-proactive-toggle-${hideFooter ? "dock" : "main"}`}
           onClick={onToggleProactive}
-          disabled={proactiveBusy}
+          disabled={proactiveBusy || proactiveBlockedByOperation}
           aria-pressed={proactiveOn}
+          aria-label={proactiveOn ? "Pausar modo PROACTIVO" : "Activar modo PROACTIVO"}
           title={
             canRun === false && !proactiveOn
               ? "Ejecución protegida: requiere un runtime aislado o autorización administrativa."
+              : proactiveBlockedByOperation
+                ? "PROACTIVO queda disponible cuando termine la operación actual."
               : proactiveOn
               ? "Modo PROACTIVO ACTIVO — flota multi-departamento continua. Clic para pausar."
               : "Activar PROACTIVO — todos los departamentos trabajan sin detenerse"
           }
           className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            proactiveOn || snapshot.activeAgents > 0
+            "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[11px] font-semibold transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            operationLabel ? "w-8 p-0" : "px-3",
+            proactiveOn
               ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
               : "border-border/60 bg-muted/35 text-foreground/75 hover:bg-muted/60",
           )}
@@ -3290,20 +3382,15 @@ function CompanyHome({
           {canRun === false && !proactiveOn ? (
             <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
           ) : (
-            <Radio
-              className={cn(
-                "h-3.5 w-3.5",
-                snapshot.activeAgents > 0 ? "text-sky-500" : proactiveOn ? "text-emerald-500" : "text-muted-foreground",
-              )}
-            />
+            <Radio className={cn("h-3.5 w-3.5", proactiveOn ? "text-emerald-500" : "text-muted-foreground")} />
           )}
-          {snapshot.activeAgents > 0
-            ? "EN EJECUCIÓN"
-            : proactiveOn
+          <span className={operationLabel ? "sr-only" : undefined}>
+            {proactiveOn
               ? "PROACTIVO · ON"
               : canRun === false
                 ? "PROTEGIDO"
                 : "PROACTIVO"}
+          </span>
         </button>
       </footer>
     </>
@@ -5272,12 +5359,22 @@ function CompanyDashboardSurface({
   const progress = orderedRuns.length ? Math.round((completed / orderedRuns.length) * 100) : 0
   const objective = companyObjective(sessions, rootSessionId)
   const commandReadiness: EnterpriseReadiness = commandCenter?.readiness
-    ?? enterpriseReadiness(companyContext, runs, proactiveState)
+    ?? enterpriseReadiness(companyContext, runs)
   const commandSwarm: EnterpriseSwarmSummary = commandCenter?.swarmSummary
-    ?? enterpriseSwarmSummary(runs)
+    ? {
+        ...commandCenter.swarmSummary,
+        planned: Number(commandCenter.swarmSummary.planned) || 0,
+        blocked: Number(commandCenter.swarmSummary.blocked) || 0,
+        cancelled: Number(commandCenter.swarmSummary.cancelled) || 0,
+      }
+    : enterpriseSwarmSummary(runs)
   const commandDepartments: EnterpriseDepartment[] = commandCenter
     ? commandCenter.departments.map((department) => ({
         ...department,
+        plannedTasks: Number(department.plannedTasks) || 0,
+        blockedTasks: Number(department.blockedTasks) || 0,
+        failedTasks: Number(department.failedTasks) || 0,
+        cancelledTasks: Number(department.cancelledTasks) || 0,
         currentWork: department.currentWork || undefined,
       }))
     : enterpriseDepartments(departments, runs)
@@ -5286,7 +5383,7 @@ function CompanyDashboardSurface({
   const commandExecutiveSummary = commandCenter?.executiveSummary ?? {
     title: "Informe del CEO Office",
     summary: objective,
-    updatedAt: new Date().toISOString(),
+    updatedAt: companyContext?.profile.updatedAt || null,
     highlights: [
       `${completed} ejecuciones completadas`,
       `${checkpointCount} evidencias verificables`,
@@ -5294,8 +5391,15 @@ function CompanyDashboardSurface({
     risks: attention.length ? [`${attention.length} ejecuciones requieren atención`] : [],
     nextActions: ["Definir el siguiente resultado medible desde CEO Office"],
   }
-  const operationActive = commandReadiness.runState === "running"
-  const operationPaused = commandReadiness.runState === "paused"
+  const operationState = commandReadiness.runState
+  const operationActive = operationState === "running"
+  const operationQueued = operationState === "queued"
+  const operationAttention = operationState === "paused"
+    || operationState === "waiting_approval"
+    || operationState === "cancelling"
+    || operationState === "completed_with_errors"
+  const operationComplete = operationState === "completed"
+  const operationFailed = operationState === "failed"
 
   return (
     <SurfacePage testId="company-dashboard-surface">
@@ -5311,10 +5415,26 @@ function CompanyDashboardSurface({
           "inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-semibold",
           operationActive
             ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
-            : "border-zinc-200 bg-white text-zinc-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
+            : operationQueued
+              ? "border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300"
+              : operationAttention
+                ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+                : operationComplete
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
+                  : operationFailed
+                    ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                    : "border-zinc-200 bg-white text-zinc-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
         )}>
-          <span className={cn("h-2 w-2 rounded-full", operationActive ? "bg-emerald-500" : operationPaused ? "bg-amber-500" : "bg-zinc-400")} />
-          {operationActive ? "Operación activa" : operationPaused ? "Operación en pausa" : "Lista para ejecutar"}
+          <span className={cn(
+            "h-2 w-2 rounded-full",
+            operationActive && "bg-emerald-500",
+            operationQueued && "bg-sky-500",
+            operationAttention && "bg-amber-500",
+            operationComplete && "bg-emerald-500",
+            operationFailed && "bg-red-500",
+            !operationActive && !operationQueued && !operationAttention && !operationComplete && !operationFailed && "bg-zinc-400",
+          )} />
+          {ENTERPRISE_OPERATION_LABELS[operationState]}
         </span>
       </div>
 
@@ -5557,27 +5677,52 @@ function CompanyControlSurface({
 }) {
   const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
   const objective = companyObjective(sessions, rootSessionId)
-  const activeCount = orderedRuns.filter(codeRunIsActive).length
-  const attentionCount = orderedRuns.filter((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase())).length
-  const completedCount = orderedRuns.filter((run) => String(run.status).toLowerCase() === "done").length
+  const rowsForStatus = (...statuses: string[]) => {
+    const expected = new Set(statuses)
+    return orderedRuns.filter((run) => expected.has(String(run.status || "").toLowerCase()))
+  }
+  const runningRows = rowsForStatus("running")
+  const queuedRows = rowsForStatus("queued")
+  const approvalRows = rowsForStatus("waiting_approval")
+  const failedRows = rowsForStatus("error")
+  const completedRows = rowsForStatus("done")
+  const cancelledRows = rowsForStatus("cancelled")
   const columns = [
     {
-      id: "active",
+      id: "running",
       label: "En ejecución",
-      rows: orderedRuns.filter((run) => codeRunIsActive(run)),
+      rows: runningRows,
+      tone: "bg-emerald-500",
+    },
+    {
+      id: "queued",
+      label: "En cola",
+      rows: queuedRows,
       tone: "bg-sky-500",
     },
     {
-      id: "attention",
-      label: "Requieren atención",
-      rows: orderedRuns.filter((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase())),
+      id: "approval",
+      label: "Esperando aprobación",
+      rows: approvalRows,
       tone: "bg-amber-500",
     },
     {
-      id: "done",
+      id: "failed",
+      label: "Con errores",
+      rows: failedRows,
+      tone: "bg-rose-500",
+    },
+    {
+      id: "completed",
       label: "Completadas",
-      rows: orderedRuns.filter((run) => String(run.status).toLowerCase() === "done").slice(0, 12),
+      rows: completedRows.slice(0, 12),
       tone: "bg-emerald-500",
+    },
+    {
+      id: "cancelled",
+      label: "Canceladas",
+      rows: cancelledRows.slice(0, 12),
+      tone: "bg-zinc-400",
     },
   ]
 
@@ -5609,10 +5754,13 @@ function CompanyControlSurface({
             </div>
             <p className="mt-1 text-xs text-zinc-500">CEO Office divide el objetivo en resultados comprobables.</p>
           </div>
-          <div className="flex flex-wrap gap-4 text-xs tabular-nums">
-            <span><strong>{activeCount}</strong> en ejecución</span>
-            <span><strong>{attentionCount}</strong> en atención</span>
-            <span><strong>{completedCount}</strong> completadas</span>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs tabular-nums">
+            <span><strong>{runningRows.length}</strong> en ejecución</span>
+            <span><strong>{queuedRows.length}</strong> en cola</span>
+            <span><strong>{approvalRows.length}</strong> por aprobar</span>
+            <span><strong>{failedRows.length}</strong> con errores</span>
+            <span><strong>{completedRows.length}</strong> completadas</span>
+            <span><strong>{cancelledRows.length}</strong> canceladas</span>
             <span><strong>{checkpointCount}</strong> evidencias</span>
           </div>
         </div>
@@ -5623,7 +5771,7 @@ function CompanyControlSurface({
         <h2 className="mt-2 max-w-5xl text-lg font-semibold leading-snug">{objective}</h2>
       </section>
 
-      <div className="mt-7 grid gap-5 xl:grid-cols-3">
+      <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {columns.map((column) => (
           <section key={column.id} className="min-w-0">
             <div className="flex items-center gap-2 px-1">

@@ -28,7 +28,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import type { AgentOfficeModel, AgentOfficeWorker } from "@/lib/agent-office-model"
+import type { AgentOfficeDepartment, AgentOfficeModel, AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
   nextOfficeTimeMode,
   officeTimePhaseModeLabel,
@@ -58,6 +58,20 @@ const ACTIVITY_LABELS = {
   localization: "Localización",
   security: "Seguridad",
 } as const
+
+const COMMAND_STATUS_LABELS: Record<AgentOfficeDepartment["commandStatus"], string> = {
+  planned: "Planificado",
+  active: "Activo",
+  queued: "En cola",
+  waiting_approval: "Esperando aprobación",
+  paused: "En pausa",
+  cancelling: "Cancelando",
+  blocked: "Bloqueado",
+  failed: "Fallido",
+  completed: "Completado",
+  cancelled: "Cancelado",
+  idle: "Sin ejecución",
+}
 
 function relativeTime(timestamp: number): string {
   if (!timestamp || !Number.isFinite(timestamp)) return "Sin actividad registrada"
@@ -489,7 +503,7 @@ export function AgentOfficeOverlay({
             <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Estado</p>
             <p className="mt-0.5 text-sm font-semibold">
               {focusedDepartment
-                ? focusedDepartment.commandStatus
+                ? COMMAND_STATUS_LABELS[focusedDepartment.commandStatus]
                 : truth.readinessStatus === "unknown"
                   ? "sin readiness"
                   : truth.readinessStatus}

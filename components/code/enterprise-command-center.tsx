@@ -13,10 +13,30 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 
-export type EnterpriseRunState = "idle" | "running" | "paused" | "completed" | "failed"
+export type EnterpriseRunState =
+  | "idle"
+  | "queued"
+  | "running"
+  | "paused"
+  | "waiting_approval"
+  | "cancelling"
+  | "completed"
+  | "completed_with_errors"
+  | "failed"
+  | "cancelled"
 export type EnterpriseReadinessState = "ready" | "attention" | "blocked"
-export type EnterpriseDepartmentStatus = "active" | "queued" | "paused" | "blocked" | "completed"
-export type EnterpriseEventStatus = "running" | "completed" | "blocked"
+export type EnterpriseDepartmentStatus =
+  | "planned"
+  | "active"
+  | "queued"
+  | "waiting_approval"
+  | "paused"
+  | "cancelling"
+  | "blocked"
+  | "failed"
+  | "completed"
+  | "cancelled"
+export type EnterpriseEventStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"
 export type EnterpriseEventKind =
   | "planning"
   | "delegation"
@@ -39,15 +59,18 @@ export interface EnterpriseReadiness {
   score: number
   runState: EnterpriseRunState
   checks: EnterpriseReadinessCheck[]
-  lastCheckedAt?: string
+  lastCheckedAt?: string | null
 }
 
 export interface EnterpriseSwarmSummary {
   logicalAgents: number
+  planned: number
   active: number
   queued: number
+  blocked: number
   completed: number
   failed: number
+  cancelled: number
   maxParallel: number
 }
 
@@ -57,13 +80,17 @@ export interface EnterpriseDepartment {
   objective: string
   status: EnterpriseDepartmentStatus
   logicalAgents: number
+  plannedTasks: number
   activeAgents: number
   queuedTasks: number
+  blockedTasks: number
+  failedTasks: number
+  cancelledTasks: number
   completedTasks: number
   progress: number
   currentWork?: string
   owner?: string
-  lastUpdatedAt?: string
+  lastUpdatedAt?: string | null
 }
 
 export interface EnterpriseLiveEvent {
@@ -80,7 +107,7 @@ export interface EnterpriseLiveEvent {
 export interface EnterpriseExecutiveSummary {
   title: string
   summary: string
-  updatedAt?: string
+  updatedAt?: string | null
   highlights?: string[]
   risks?: string[]
   nextActions?: string[]
@@ -123,24 +150,37 @@ const commandTabs = [
 
 const runStateLabels: Record<EnterpriseRunState, string> = {
   idle: "En espera",
+  queued: "En cola",
   running: "En ejecución",
   paused: "En pausa",
+  waiting_approval: "Esperando aprobación",
+  cancelling: "Cancelando",
   completed: "Completado",
+  completed_with_errors: "Completado con errores",
   failed: "Con errores",
+  cancelled: "Cancelado",
 }
 
 const departmentStatusLabels: Record<EnterpriseDepartmentStatus, string> = {
+  planned: "Planificado",
   active: "Activo",
   queued: "En cola",
+  waiting_approval: "Esperando aprobación",
   paused: "En pausa",
+  cancelling: "Cancelando",
   blocked: "Bloqueado",
+  failed: "Fallido",
   completed: "Completado",
+  cancelled: "Cancelado",
 }
 
 const eventStatusLabels: Record<EnterpriseEventStatus, string> = {
+  queued: "En cola",
   running: "En curso",
   completed: "Completado",
   blocked: "Bloqueado",
+  failed: "Fallido",
+  cancelled: "Cancelado",
 }
 
 const eventKindLabels: Record<EnterpriseEventKind, string> = {
@@ -161,11 +201,16 @@ const readinessStyles: Record<EnterpriseReadinessState, string> = {
 }
 
 const departmentStatusStyles: Record<EnterpriseDepartmentStatus, string> = {
+  planned: "border-border bg-background text-muted-foreground",
   active: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
   queued: "border-border bg-muted/60 text-muted-foreground",
+  waiting_approval: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
   paused: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  cancelling: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
   blocked: "border-destructive/30 bg-destructive/10 text-destructive",
+  failed: "border-destructive/30 bg-destructive/10 text-destructive",
   completed: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  cancelled: "border-border bg-muted/60 text-muted-foreground",
 }
 
 function clampPercentage(value: number): number {
@@ -215,7 +260,10 @@ function EventStatusIcon({
       className={cn(
         "rounded-full border-2",
         status === "completed" && "border-emerald-500 bg-emerald-500/20",
-        status === "blocked" && "border-destructive bg-destructive/20",
+        status === "blocked" && "border-amber-500 bg-amber-500/20",
+        status === "failed" && "border-destructive bg-destructive/20",
+        status === "cancelled" && "border-muted-foreground bg-muted",
+        status === "queued" && "border-muted-foreground bg-background",
         status === "running" && "animate-pulse border-sky-500 bg-sky-500/20 motion-reduce:animate-none",
         className,
       )}
@@ -231,7 +279,7 @@ function Metric({
 }: {
   label: string
   value: number
-  tone?: "default" | "active" | "success" | "danger"
+  tone?: "default" | "active" | "success" | "warning" | "danger"
 }) {
   return (
     <div className="min-w-0 border-r border-border/70 px-3 py-3 last:border-r-0 sm:px-4">
@@ -241,6 +289,7 @@ function Metric({
           "mt-1 text-lg font-semibold tabular-nums text-foreground",
           tone === "active" && "text-sky-700 dark:text-sky-300",
           tone === "success" && "text-emerald-700 dark:text-emerald-300",
+          tone === "warning" && value > 0 && "text-amber-700 dark:text-amber-300",
           tone === "danger" && value > 0 && "text-destructive",
         )}
       >
@@ -429,10 +478,28 @@ function DepartmentList({
                       </p>
                     ) : null}
                     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] tabular-nums text-muted-foreground">
-                      <span>{formatCount(department.activeAgents)} activos</span>
-                      <span>{formatCount(department.logicalAgents)} lógicos</span>
-                      <span>{formatCount(department.queuedTasks)} en cola</span>
+                      {department.plannedTasks > 0 ? (
+                        <span>{formatCount(department.plannedTasks)} planificadas</span>
+                      ) : null}
+                      <span>{formatCount(department.logicalAgents)} agentes reales</span>
+                      {department.activeAgents > 0 ? (
+                        <span>{formatCount(department.activeAgents)} activos</span>
+                      ) : null}
+                      {department.queuedTasks > 0 ? (
+                        <span>{formatCount(department.queuedTasks)} en cola</span>
+                      ) : null}
+                      {department.blockedTasks > 0 ? (
+                        <span className="text-amber-700 dark:text-amber-300">
+                          {formatCount(department.blockedTasks)} bloqueadas
+                        </span>
+                      ) : null}
                       <span>{formatCount(department.completedTasks)} completadas</span>
+                      {department.cancelledTasks > 0 ? (
+                        <span>{formatCount(department.cancelledTasks)} canceladas</span>
+                      ) : null}
+                      {department.failedTasks > 0 ? (
+                        <span className="text-destructive">{formatCount(department.failedTasks)} fallidas</span>
+                      ) : null}
                     </div>
                     <div className="mt-2 flex items-center gap-3">
                       <Progress
@@ -488,6 +555,7 @@ function LiveTimeline({
   compact?: boolean
 }) {
   const visibleEvents = compact ? events.slice(0, 6) : events
+  const hasLiveActivity = visibleEvents.some((event) => event.status === "running")
 
   return (
     <section aria-labelledby={compact ? "enterprise-live-title" : "enterprise-activity-title"} className="min-w-0">
@@ -498,11 +566,16 @@ function LiveTimeline({
               id={compact ? "enterprise-live-title" : "enterprise-activity-title"}
               className="text-sm font-semibold text-foreground"
             >
-              Actividad en vivo
+              {hasLiveActivity ? "Actividad en vivo" : "Actividad registrada"}
             </h3>
             <span className="relative flex h-2 w-2" aria-hidden="true">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-50 motion-reduce:animate-none" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              {hasLiveActivity ? (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-50 motion-reduce:animate-none" />
+              ) : null}
+              <span className={cn(
+                "relative inline-flex h-2 w-2 rounded-full",
+                hasLiveActivity ? "bg-emerald-500" : "bg-muted-foreground/60",
+              )} />
             </span>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">Decisiones, ejecución y verificaciones</p>
@@ -523,7 +596,10 @@ function LiveTimeline({
                   className={cn(
                     "mt-0.5 h-4 w-4 shrink-0",
                     event.status === "completed" && "text-emerald-600 dark:text-emerald-400",
-                    event.status === "blocked" && "text-destructive",
+                    event.status === "blocked" && "text-amber-600 dark:text-amber-400",
+                    event.status === "failed" && "text-destructive",
+                    event.status === "cancelled" && "text-muted-foreground",
+                    event.status === "queued" && "text-muted-foreground",
                     event.status === "running" && "text-sky-600 dark:text-sky-400",
                   )}
                 />
@@ -591,9 +667,20 @@ export function EnterpriseCommandCenter({
 }: EnterpriseCommandCenterProps) {
   const [activeTab, setActiveTab] = React.useState<CommandTab>("overview")
   const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([])
-  const canStart = readiness.status !== "blocked" && readiness.runState !== "running"
+  const resumable = readiness.runState === "paused"
+  const canStart = readiness.status !== "blocked" && (
+    readiness.runState === "idle"
+    || readiness.runState === "paused"
+    || readiness.runState === "completed"
+    || readiness.runState === "completed_with_errors"
+    || readiness.runState === "failed"
+    || readiness.runState === "cancelled"
+  )
   const canPause = readiness.runState === "running"
-  const canCancel = readiness.runState === "running" || readiness.runState === "paused"
+  const canCancel = readiness.runState === "queued"
+    || readiness.runState === "running"
+    || readiness.runState === "paused"
+    || readiness.runState === "waiting_approval"
   const capacity = swarmSummary.maxParallel > 0
     ? clampPercentage((swarmSummary.active / swarmSummary.maxParallel) * 100)
     : 0
@@ -650,10 +737,14 @@ export function EnterpriseCommandCenter({
                 <span
                   className={cn(
                     "h-2 w-2 rounded-full",
+                    readiness.runState === "queued" && "bg-sky-500",
                     readiness.runState === "running" && "bg-emerald-500",
-                    readiness.runState === "paused" && "bg-amber-500",
+                    (readiness.runState === "paused" || readiness.runState === "waiting_approval") && "bg-amber-500",
+                    readiness.runState === "cancelling" && "animate-pulse bg-amber-500 motion-reduce:animate-none",
+                    readiness.runState === "completed" && "bg-emerald-500",
+                    readiness.runState === "completed_with_errors" && "bg-amber-500",
                     readiness.runState === "failed" && "bg-destructive",
-                    (readiness.runState === "idle" || readiness.runState === "completed") && "bg-muted-foreground",
+                    (readiness.runState === "idle" || readiness.runState === "cancelled") && "bg-muted-foreground",
                   )}
                   aria-hidden="true"
                 />
@@ -671,10 +762,10 @@ export function EnterpriseCommandCenter({
               onClick={onStart}
               disabled={!canStart}
               className="h-11 min-w-0 px-3 sm:min-w-28"
-              aria-label="Iniciar ejecución de agentes"
+              aria-label={resumable ? "Reanudar ejecución de agentes" : "Iniciar ejecución de agentes"}
             >
               <Play aria-hidden="true" />
-              Iniciar
+              {resumable ? "Reanudar" : "Iniciar"}
             </Button>
             <Button
               type="button"
@@ -701,11 +792,14 @@ export function EnterpriseCommandCenter({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 border-t border-border sm:grid-cols-3 xl:grid-cols-6" aria-label="Resumen del enjambre">
-          <Metric label="Agentes lógicos" value={swarmSummary.logicalAgents} />
+        <div className="grid grid-cols-2 border-t border-border sm:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-9" aria-label="Resumen del enjambre">
+          <Metric label="Agentes reales" value={swarmSummary.logicalAgents} />
+          <Metric label="Planificadas" value={swarmSummary.planned} />
           <Metric label="Activos" value={swarmSummary.active} tone="active" />
           <Metric label="En cola" value={swarmSummary.queued} />
+          <Metric label="Bloqueadas" value={swarmSummary.blocked} tone="warning" />
           <Metric label="Completados" value={swarmSummary.completed} tone="success" />
+          <Metric label="Cancelados" value={swarmSummary.cancelled} />
           <Metric label="Fallidos" value={swarmSummary.failed} tone="danger" />
           <div className="min-w-0 px-3 py-3 sm:px-4">
             <div className="flex items-center justify-between gap-2">
@@ -822,7 +916,9 @@ export function EnterpriseCommandCenter({
       <footer className="flex flex-col gap-2 border-t border-border bg-muted/20 px-4 py-2.5 text-[11px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-1.5 w-1.5 rounded-full bg-sky-500" aria-hidden="true" />
-          {formatCount(swarmSummary.logicalAgents)} agentes coordinados por CEO Office
+          {swarmSummary.logicalAgents > 0
+            ? `${formatCount(swarmSummary.logicalAgents)} agentes persistidos y coordinados por CEO Office`
+            : `${formatCount(swarmSummary.planned)} tareas planificadas, todavía sin agentes en ejecución`}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />

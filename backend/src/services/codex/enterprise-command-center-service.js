@@ -15,6 +15,10 @@ const {
 const {
   loadCompanyOperatingContext,
 } = require('./company-operating-profile');
+const {
+  WORKSTREAM_DEPARTMENTS,
+  projectedEnterpriseDepartmentId,
+} = require('./enterprise-departments');
 
 const ACTIVE_SWARM_STATUSES = new Set([
   SWARM_STATUSES.QUEUED,
@@ -23,13 +27,14 @@ const ACTIVE_SWARM_STATUSES = new Set([
   SWARM_STATUSES.CANCELLING,
 ]);
 
-const WORKSTREAM_DEPARTMENTS = Object.freeze({
-  mission_vision: 'ceo-office',
-  software_landing: 'product-engineering',
-  social_presence: 'marketing',
-  inbox_customer_service: 'customer-success',
-  customer_acquisition_sales: 'sales-operations',
-  quality_assurance: 'trust',
+const DEPARTMENT_NAMES = Object.freeze({
+  'ceo-office': 'CEO Office',
+  'product-engineering': 'Producto e Ingeniería',
+  marketing: 'Marketing',
+  'customer-success': 'Customer Success',
+  'sales-operations': 'Ventas y Revenue Operations',
+  trust: 'Confianza, Privacidad y Cumplimiento',
+  'trust-quality': 'Confianza, Privacidad y Cumplimiento',
 });
 
 const SECRET_PATTERN = /((?:api[_-]?key|authorization|bearer|password|passwd|secret|token|cookie|private[_-]?key))\s*[:=]\s*[^\s,;]+/gi;
@@ -49,6 +54,12 @@ function text(value, max = 500) {
 function iso(value, fallback = new Date()) {
   const date = value instanceof Date ? value : new Date(value || fallback);
   return Number.isNaN(date.getTime()) ? fallback.toISOString() : date.toISOString();
+}
+
+function optionalIso(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function plannerInputFromCompany(company) {
@@ -113,15 +124,20 @@ function plannerInputFromCompany(company) {
 
 function runState(status) {
   switch (status) {
+    case SWARM_STATUSES.QUEUED:
+      return 'queued';
     case SWARM_STATUSES.RUNNING:
-    case SWARM_STATUSES.CANCELLING:
       return 'running';
+    case SWARM_STATUSES.CANCELLING:
+      return 'cancelling';
     case SWARM_STATUSES.PAUSED:
       return 'paused';
     case SWARM_STATUSES.COMPLETED:
-    case SWARM_STATUSES.COMPLETED_WITH_ERRORS:
-    case SWARM_STATUSES.CANCELLED:
       return 'completed';
+    case SWARM_STATUSES.COMPLETED_WITH_ERRORS:
+      return 'completed_with_errors';
+    case SWARM_STATUSES.CANCELLED:
+      return 'cancelled';
     case SWARM_STATUSES.FAILED:
       return 'failed';
     default:
@@ -153,19 +169,55 @@ function readinessProjection(company, swarm) {
           : 'attention',
       detail: text(area?.evidence || area?.action, 320),
     })),
-    lastCheckedAt: iso(swarm?.updatedAt || company?.profile?.updatedAt),
+    lastCheckedAt: optionalIso(swarm?.updatedAt || company?.profile?.updatedAt),
   };
 }
 
+function taskDepartmentId(inputValue) {
+  const input = record(inputValue);
+  const explicitDepartmentId = input.departmentId
+    ? projectedEnterpriseDepartmentId(input.departmentId)
+    : '';
+  if (explicitDepartmentId) return explicitDepartmentId;
+  const workstreamId = text(input.workstreamId, 80);
+  return projectedEnterpriseDepartmentId(
+    WORKSTREAM_DEPARTMENTS[workstreamId] || workstreamId || 'product-engineering',
+  );
+}
+
 function tasksForWorkstream(tasks, workstreamId) {
-  return tasks.filter((task) => record(task.input).workstreamId === workstreamId);
+  const departmentId = projectedEnterpriseDepartmentId(
+    WORKSTREAM_DEPARTMENTS[workstreamId] || workstreamId,
+  );
+  return tasks.filter((task) => {
+    const input = record(task.input);
+    // A durable department assignment is authoritative. Falling back to the
+    // planner workstream is only valid when no department has been persisted.
+    if (text(input.departmentId, 80)) return taskDepartmentId(input) === departmentId;
+    return text(input.workstreamId, 80) === workstreamId || taskDepartmentId(input) === departmentId;
+  });
+}
+
+function latestTask(tasks) {
+  return tasks.reduce((latest, task) => {
+    if (!latest) return task;
+    const latestAt = new Date(latest.updatedAt || 0).getTime();
+    const taskAt = new Date(task.updatedAt || 0).getTime();
+    return taskAt >= latestAt ? task : latest;
+  }, null);
 }
 
 function departmentStatus(swarm, tasks) {
-  if (swarm?.status === SWARM_STATUSES.PAUSED) return 'paused';
-  if (tasks.some((task) => task.status === TASK_STATUSES.FAILED)) return 'blocked';
+  if (!tasks.length) return 'planned';
   if (tasks.some((task) => task.status === TASK_STATUSES.RUNNING)) return 'active';
+  if (swarm?.status === SWARM_STATUSES.CANCELLING) return 'cancelling';
+  if (swarm?.status === SWARM_STATUSES.PAUSED) return 'paused';
+  if (tasks.some((task) => task.status === TASK_STATUSES.FAILED)) return 'failed';
+  if (tasks.some((task) => task.status === TASK_STATUSES.BLOCKED)) return 'blocked';
   if (tasks.length && tasks.every((task) => task.status === TASK_STATUSES.SUCCEEDED)) return 'completed';
+  if (tasks.every((task) => (
+    task.status === TASK_STATUSES.SUCCEEDED || task.status === TASK_STATUSES.CANCELLED
+  ))) return 'cancelled';
   return 'queued';
 }
 
@@ -174,14 +226,20 @@ function departmentProjection(plan, swarmProgress) {
   const swarm = swarmProgress?.swarm || null;
   return plan.workstreams.map((workstream) => {
     const workstreamTasks = tasksForWorkstream(tasks, workstream.id);
-    const logicalTasks = workstreamTasks.length || workstream.tasks.length;
+    const logicalTasks = workstreamTasks.length;
+    const plannedTasks = workstreamTasks.length ? 0 : workstream.tasks.length;
     const completedTasks = workstreamTasks.filter((task) => task.status === TASK_STATUSES.SUCCEEDED).length;
     const activeAgents = workstreamTasks.filter((task) => task.status === TASK_STATUSES.RUNNING).length;
-    const queuedTasks = workstreamTasks.filter((task) => (
-      task.status === TASK_STATUSES.QUEUED || task.status === TASK_STATUSES.BLOCKED
-    )).length;
-    const current = workstreamTasks.find((task) => task.status === TASK_STATUSES.RUNNING)
-      || workstreamTasks.find((task) => task.status === TASK_STATUSES.QUEUED);
+    const queuedTasks = workstreamTasks.filter((task) => task.status === TASK_STATUSES.QUEUED).length;
+    const blockedTasks = workstreamTasks.filter((task) => task.status === TASK_STATUSES.BLOCKED).length;
+    const failedTasks = workstreamTasks.filter((task) => task.status === TASK_STATUSES.FAILED).length;
+    const cancelledTasks = workstreamTasks.filter((task) => task.status === TASK_STATUSES.CANCELLED).length;
+    const latest = latestTask(workstreamTasks);
+    const current = latestTask(workstreamTasks.filter((task) => task.status === TASK_STATUSES.RUNNING))
+      || latestTask(workstreamTasks.filter((task) => task.status === TASK_STATUSES.QUEUED))
+      || latestTask(workstreamTasks.filter((task) => task.status === TASK_STATUSES.BLOCKED))
+      || latestTask(workstreamTasks.filter((task) => task.status === TASK_STATUSES.FAILED))
+      || latest;
     return {
       id: WORKSTREAM_DEPARTMENTS[workstream.id] || workstream.id,
       workstreamId: workstream.id,
@@ -189,24 +247,27 @@ function departmentProjection(plan, swarmProgress) {
       objective: text(workstream.rationale || workstream.title, 360),
       status: departmentStatus(swarm, workstreamTasks),
       logicalAgents: logicalTasks,
+      plannedTasks,
       activeAgents,
       queuedTasks,
+      blockedTasks,
+      failedTasks,
+      cancelledTasks,
       completedTasks,
       progress: logicalTasks ? Math.round((completedTasks / logicalTasks) * 100) : 0,
       currentWork: current ? text(current.title, 240) : null,
       owner: 'CEO Office',
-      lastUpdatedAt: iso(current?.updatedAt || swarm?.updatedAt),
+      lastUpdatedAt: optionalIso(latest?.updatedAt),
     };
   });
 }
 
 function taskEvent(task, swarm) {
   const input = record(task.input);
-  const status = task.status === TASK_STATUSES.RUNNING
-    ? 'running'
-    : task.status === TASK_STATUSES.FAILED || task.status === TASK_STATUSES.CANCELLED
-      ? 'blocked'
-      : 'completed';
+  const departmentId = taskDepartmentId(input);
+  const status = task.status === TASK_STATUSES.SUCCEEDED
+    ? 'completed'
+    : task.status;
   const kind = task.role === 'integrator'
     ? 'coding'
     : task.role === 'reviewer'
@@ -220,8 +281,11 @@ function taskEvent(task, swarm) {
     kind,
     status,
     detail: text(result.summary || task.error || input.instruction, 300),
-    departmentId: WORKSTREAM_DEPARTMENTS[input.workstreamId] || 'product-engineering',
-    departmentName: text(input.workstreamTitle || 'Producto e Ingeniería', 120),
+    departmentId,
+    departmentName: text(
+      input.departmentName || input.workstreamTitle || DEPARTMENT_NAMES[departmentId] || departmentId,
+      120,
+    ),
   };
 }
 
@@ -256,7 +320,7 @@ function executiveSummary(plan, swarmProgress) {
   return {
     title: 'Informe del CEO Office',
     summary: text(plan.executiveSummary, 800),
-    updatedAt: iso(swarm?.updatedAt || new Date()),
+    updatedAt: optionalIso(swarm?.updatedAt),
     highlights: [
       `${Number(progress?.counts?.succeeded) || 0} tareas verificadas`,
       `${plan.workstreams.length} frentes empresariales coordinados`,
@@ -282,11 +346,12 @@ function buildEnterpriseCommandCenter({
   const tasks = Array.isArray(swarmProgress?.tasks) ? swarmProgress.tasks : [];
   const progress = swarmProgress?.progress || aggregateTaskProgress(tasks);
   const taskEvents = tasks
-    .filter((task) => task.status !== TASK_STATUSES.BLOCKED && task.status !== TASK_STATUSES.QUEUED)
+    .filter((task) => task.status !== TASK_STATUSES.QUEUED)
     .map((task) => taskEvent(task, swarm));
   const liveEvents = [...taskEvents, ...activity.map(activityEvent)]
     .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime())
     .slice(0, 80);
+  const departments = departmentProjection(plan, swarmProgress);
 
   return {
     readiness: readinessProjection(company, swarm),
@@ -294,13 +359,16 @@ function buildEnterpriseCommandCenter({
     vision: text(profile.vision, 600) || 'Construir una operación medible, autónoma y supervisable.',
     swarmSummary: {
       logicalAgents: Number(progress?.counts?.total) || 0,
+      planned: departments.reduce((total, department) => total + department.plannedTasks, 0),
       active: Number(progress?.counts?.running) || 0,
-      queued: (Number(progress?.counts?.queued) || 0) + (Number(progress?.counts?.blocked) || 0),
+      queued: Number(progress?.counts?.queued) || 0,
+      blocked: Number(progress?.counts?.blocked) || 0,
       completed: Number(progress?.counts?.succeeded) || 0,
       failed: Number(progress?.counts?.failed) || 0,
+      cancelled: Number(progress?.counts?.cancelled) || 0,
       maxParallel: Number(swarm?.maxConcurrency) || 0,
     },
-    departments: departmentProjection(plan, swarmProgress),
+    departments,
     liveEvents,
     executiveSummary: executiveSummary(plan, swarmProgress),
     swarm: swarm ? {

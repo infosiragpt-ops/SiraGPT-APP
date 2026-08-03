@@ -48,6 +48,14 @@ import {
 import { codexApi } from "@/lib/codex/codex-api"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
+import {
+  samePreviewRuntimeOwner,
+  stopPreviewRuntimeOwner,
+  stopPreviewRuntimeOwnerKeepalive,
+  transitionPreviewRuntimeOwner,
+  type PreviewRuntimeOwner,
+  type PreviewRuntimeStops,
+} from "@/lib/code-preview-runtime-owner"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService } from "@/lib/github-service"
@@ -63,6 +71,13 @@ import {
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error" | "stuck"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
+type PreviewRuntimeLease = { owner: PreviewRuntimeOwner; generation: number }
+
+const PREVIEW_RUNTIME_STOPS: PreviewRuntimeStops = {
+  codex: (id) => codexApi.stopPreview(id),
+  github: (id) => githubService.stop(id),
+  host: (id) => hostRunnerService.stop(id),
+}
 
 // Cap how many times a single failing run can auto-hand its logs to the chat
 // agent for repair, so a fix that keeps failing can't spin an infinite loop.
@@ -227,6 +242,7 @@ export function PreviewPane() {
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
   const modeRef = React.useRef<"host" | "github" | "codex">("host")
+  const previewOwnerRef = React.useRef<PreviewRuntimeLease | null>(null)
   // Every preview start owns a generation and an abort signal. Stopping or
   // starting again invalidates the previous generation so a late 90-second
   // Codex response can never resurrect a preview the user already stopped.
@@ -316,14 +332,12 @@ export function PreviewPane() {
     forceAutoRunRef.current = false
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
-    if (modeRef.current === "codex") {
-      const codexProjectId = activeCodexProjectId || getActiveCodexProject()
-      if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
-    } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
-    else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+    const lease = previewOwnerRef.current
+    previewOwnerRef.current = null
+    if (lease) void stopPreviewRuntimeOwner(lease.owner, PREVIEW_RUNTIME_STOPS).catch(() => {})
     // The Shell tool loses its exec target when the run stops.
     setActiveHostRunId(null)
-  }, [activeCodexProjectId, clearPoll])
+  }, [clearPoll])
 
   // While the app is live, keep polling status at a slow cadence (a) so the
   // runner's lastTouch keeps getting bumped and the idle reaper never kills an
@@ -407,6 +421,35 @@ export function PreviewPane() {
     previewRunGenerationRef.current = generation
     const isCurrentRun = () =>
       previewRunGenerationRef.current === generation && !startController.signal.aborted
+    const claimRuntimeOwner = async (owner: PreviewRuntimeOwner) => {
+      const previous = previewOwnerRef.current?.owner || null
+      previewOwnerRef.current = { owner, generation }
+      await transitionPreviewRuntimeOwner(previous, owner, PREVIEW_RUNTIME_STOPS).catch(() => owner)
+      const lease = previewOwnerRef.current
+      return Boolean(
+        isCurrentRun()
+        && lease?.generation === generation
+        && samePreviewRuntimeOwner(lease.owner, owner),
+      )
+    }
+    const stopLateRuntime = async (owner: PreviewRuntimeOwner) => {
+      if (isCurrentRun()) return false
+      const currentOwner = previewOwnerRef.current?.owner
+      // A newer generation may deliberately reuse the same runtime identity.
+      // In that case its lease is authoritative and the stale caller must not
+      // stop the newer run. Different owners are always cleaned up exactly.
+      if (!samePreviewRuntimeOwner(currentOwner, owner)) {
+        await stopPreviewRuntimeOwner(owner, PREVIEW_RUNTIME_STOPS).catch(() => {})
+      }
+      return true
+    }
+    const releaseRuntimeOwner = async (owner: PreviewRuntimeOwner) => {
+      const lease = previewOwnerRef.current
+      if (lease?.generation === generation && samePreviewRuntimeOwner(lease.owner, owner)) {
+        previewOwnerRef.current = null
+      }
+      await stopPreviewRuntimeOwner(owner, PREVIEW_RUNTIME_STOPS).catch(() => {})
+    }
     clearPoll()
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
     if (!runIdRef.current) {
@@ -418,12 +461,15 @@ export function PreviewPane() {
     }
     const boundRepo = getGitBinding(activeFolder?.id ?? null)
     if (boundRepo) {
-      modeRef.current = "github"
+      const owner: PreviewRuntimeOwner = { kind: "github", id: boundRepo }
+      if (!await claimRuntimeOwner(owner)) return
+      modeRef.current = owner.kind
       runIdRef.current = boundRepo
       const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
       const started = await githubService.run(boundRepo, runtimeEnv).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
-      if (!isCurrentRun()) return
+      if (await stopLateRuntime(owner)) return
       if ("error" in started && started.error) {
+        await releaseRuntimeOwner(owner)
         lastErrorLogRef.current = started.error
         setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
         return
@@ -452,7 +498,9 @@ export function PreviewPane() {
     // is owner-gated anyway — this path works for every user).
     const codexProjectId = activeCodexProjectId || getActiveCodexProject()
     if (codexProjectId) {
-      modeRef.current = "codex"
+      const owner: PreviewRuntimeOwner = { kind: "codex", id: codexProjectId }
+      if (!await claimRuntimeOwner(owner)) return
+      modeRef.current = owner.kind
       const previewOrigin = await codexPreviewOrigin()
       if (!isCurrentRun()) return
       const toDevUrl = (basePath?: string | null) => (basePath ? `${previewOrigin}${basePath}` : "")
@@ -470,7 +518,7 @@ export function PreviewPane() {
       const started: any = await codexApi.startPreview(codexProjectId, startController.signal).catch((err) => ({
         error: err instanceof Error ? err.message : "runner unreachable",
       }))
-      if (!isCurrentRun()) return
+      if (await stopLateRuntime(owner)) return
       if (started?.error) {
         // Self-heal: a stale codex mapping (project wiped / another session)
         // 404s here. Drop it and re-run locally ONCE so the preview just works
@@ -482,6 +530,7 @@ export function PreviewPane() {
           // preview renders it directly; go idle to reveal it. A dev-server
           // project (Vite/Next) re-runs locally via the host runner.
           if (!projectNeedsDevServer(files)) {
+            await releaseRuntimeOwner(owner)
             setLiveRun({ phase: "idle", devUrl: "", note: "" })
             return
           }
@@ -493,6 +542,7 @@ export function PreviewPane() {
         // Unlike the host path, do NOT silently degrade on auto: the srcdoc
         // fallback cannot render a multi-file Vite workspace (black screen) —
         // an honest error banner beats a dead preview.
+        await releaseRuntimeOwner(owner)
         lastErrorLogRef.current = String(started.error)
         setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
         return
@@ -507,18 +557,21 @@ export function PreviewPane() {
     // Workspace files are CodeFile objects; the runner wants path -> content.
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
-    modeRef.current = "host"
+    const owner: PreviewRuntimeOwner = { kind: "host", id: runIdRef.current }
+    if (!await claimRuntimeOwner(owner)) return
+    modeRef.current = owner.kind
     // No-Docker host runner: install deps + boot a real vite dev server, then
     // iframe it through the same-origin reverse proxy (started.devUrl).
     const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
     const started = await hostRunnerService.start(fileMap, runIdRef.current, runtimeEnv)
-    if (!isCurrentRun()) return
+    if (await stopLateRuntime(owner)) return
     // An AUTO run (the agent just finished building) must degrade SILENTLY when
     // the runner can't even start — a disabled environment, or a user who isn't
     // on the allowlist (403 → started.error). Falling back to the static preview
     // is friendlier than slapping a red "no se pudo correr" over a preview the
     // user never asked to run. A manual ▶ Ejecutar still surfaces the reason.
     if (started.disabled) {
+      await releaseRuntimeOwner(owner)
       if (auto) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
@@ -531,6 +584,7 @@ export function PreviewPane() {
       return
     }
     if (started.error) {
+      await releaseRuntimeOwner(owner)
       if (auto) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
@@ -778,7 +832,7 @@ export function PreviewPane() {
   // "pagehide" (tab close / navigation). Without this the runner is orphaned
   // until the 30-min idle reaper — enough leaked dev servers can hit
   // capacity_full. On pagehide a normal fetch would be cancelled, so we fire a
-  // keepalive navigator.sendBeacon straight at the host runner's /stop.
+  // keepalive fetch to the exact runtime owner that created the preview.
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const beaconStop = () => {
@@ -786,18 +840,9 @@ export function PreviewPane() {
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
       if (pollRef.current) window.clearInterval(pollRef.current)
-      // GitHub-backed runs are shut down by githubService.stop on unmount; the
-      // keepalive beacon only targets the same-origin host runner.
-      if (modeRef.current !== "host" || !runIdRef.current) return
-      try {
-        const base = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/code-runner`
-        const url = `${base}/${encodeURIComponent(runIdRef.current)}/stop`
-        if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-          navigator.sendBeacon(url)
-        }
-      } catch {
-        /* best-effort — the idle reaper is the safety net */
-      }
+      const lease = previewOwnerRef.current
+      previewOwnerRef.current = null
+      if (lease) void stopPreviewRuntimeOwnerKeepalive(lease.owner).catch(() => {})
     }
     window.addEventListener("pagehide", beaconStop)
     return () => {
@@ -808,8 +853,9 @@ export function PreviewPane() {
       if (pollRef.current) window.clearInterval(pollRef.current)
       // Component teardown (e.g. switching away from the preview): actively stop
       // the dev server instead of leaking it to the reaper.
-      if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
-      else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+      const lease = previewOwnerRef.current
+      previewOwnerRef.current = null
+      if (lease) void stopPreviewRuntimeOwner(lease.owner, PREVIEW_RUNTIME_STOPS).catch(() => {})
     }
   }, [])
 
