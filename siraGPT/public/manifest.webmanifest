@@ -53,9 +53,9 @@
       "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Proyectos",
-      "short_name": "Proyectos",
-      "description": "Gestionar tus proyectos",
+      "name": "Empresas",
+      "short_name": "Empresas",
+      "description": "Gestionar tus empresas",
       "url": "/projects",
       "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
     }
