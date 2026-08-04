@@ -9,6 +9,7 @@
  */
 
 const AUTOEXEC_PREFIX = '[SIRAGPT_AUTOEXEC_V1]';
+const APPS_MODE_MARKER = 'MODO APPS TIPO CODEX:';
 const INTERACTIVE_TIMEOUT_MS = 15 * 60_000;
 const AUTO_TIMEOUT_MS = 60 * 60_000;
 const DEEP_TIMEOUT_MS = 4 * 60 * 60_000;
@@ -16,8 +17,14 @@ const INTERACTIVE_MAX_STEPS = 24;
 const AUTO_MAX_STEPS = 48;
 const DEEP_MAX_STEPS = 120;
 
+// Simple product asks ("haz un CRM", "software como ChatGPT") must escalate to
+// multi-hour deep budgets so APPS can compile every layer without stopping early.
 const EXPLICIT_DEEP_RE =
-  /\b(?:horas?|hours?|long.?running|sin\s+(?:parar|detenerse)|trabaja\s+(?:solo|aut[oó]nomamente)|agentes?\s+aut[oó]nomos?|openclaw|full.?stack|backend|base\s+de\s+datos|database|api|autenticaci[oó]n|pagos?|deploy|desplieg|producci[oó]n)\b/i;
+  /\b(?:horas?|hours?|long.?running|sin\s+(?:parar|detenerse)|trabaja\s+(?:solo|aut[oó]nomamente)|agentes?\s+aut[oó]nomos?|openclaw|full.?stack|backend|base\s+de\s+datos|database|api|autenticaci[oó]n|pagos?|deploy|desplieg|producci[oó]n|crm|erp|saas|pos|inventario|facturaci[oó]n|n[oó]mina|rrhh|software|plataforma|chat\s*gpt|chatgpt|claude\s*code|como\s+claude|como\s+chatgpt|multi.?capa|todas\s+las\s+capas|compila(?:r)?\s+todas)\b/i;
+
+function isAppsModePrompt(value) {
+  return normalizePrompt(value).includes(APPS_MODE_MARKER);
+}
 
 function normalizePrompt(value) {
   return String(value || '').replace(/\r\n/g, '\n').trim();
@@ -46,12 +53,14 @@ function positiveInt(value, fallback) {
 
 function isDeepAutonomousRun({ prompt = '', profile = null } = {}) {
   const signals = profile?.signals || {};
+  const clean = stripAutoExecutePrompt(prompt);
   return Boolean(
-    signals.externalRepoAdaptation
+    isAppsModePrompt(clean)
+    || signals.externalRepoAdaptation
     || signals.wantsAutonomousAgent
     || signals.massiveSourceFusion
     || signals.nativeRewriteRequired
-    || EXPLICIT_DEEP_RE.test(stripAutoExecutePrompt(prompt)),
+    || EXPLICIT_DEEP_RE.test(clean),
   );
 }
 
@@ -108,6 +117,7 @@ function buildAutonomousRunEnv(env = process.env, policy = {}) {
 
 module.exports = {
   AUTOEXEC_PREFIX,
+  APPS_MODE_MARKER,
   INTERACTIVE_TIMEOUT_MS,
   AUTO_TIMEOUT_MS,
   DEEP_TIMEOUT_MS,
@@ -115,6 +125,7 @@ module.exports = {
   AUTO_MAX_STEPS,
   DEEP_MAX_STEPS,
   isAutoExecutePrompt,
+  isAppsModePrompt,
   stripAutoExecutePrompt,
   withAutoExecutePrompt,
   isDeepAutonomousRun,

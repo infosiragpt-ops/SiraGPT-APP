@@ -407,10 +407,16 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   const appsStarters: { title: string; blurb: string; prompt: string }[] = surface === "apps"
     ? [
         {
+          title: "Asistente tipo ChatGPT",
+          blurb: "Chat streaming, memoria, archivos y admin",
+          prompt:
+            "Crea un software de asistente de IA al nivel de ChatGPT/Claude (sin copiar marca ni UI exacta): chat con streaming vía adaptador de proveedores, historial de hilos, memoria, adjuntos, selector de modelos (mock si no hay keys), sidebar de conversaciones, settings, auth light, rate limits, panel admin básico, seeds realistas en español y estados loading/empty/error. Compila todas las capas (dominio, datos SQLite, API Express, UI React/Vite/Tailwind, integración, calidad) y deja preview usable. Trabaja de forma autónoma durante horas si hace falta.",
+        },
+        {
           title: "CRM de ventas",
           blurb: "Pipeline, clientes, cotizaciones y KPIs",
           prompt:
-            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light.",
+            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light. Compila todas las capas y verifica preview.",
         },
         {
           title: "Inventario multi-almacén",

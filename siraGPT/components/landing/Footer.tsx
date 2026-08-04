@@ -9,7 +9,7 @@ const footerLinks = {
   product: [
     { label: "Chat IA", href: "/chat" },
     { label: "GPTs Personalizados", href: "/gpts" },
-    { label: "Proyectos", href: "/projects" },
+    { label: "Empresas", href: "/projects" },
     { label: "Design Studio", href: "/design" },
     { label: "Biblioteca", href: "/library" },
   ],

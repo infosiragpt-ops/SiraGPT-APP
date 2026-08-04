@@ -36,6 +36,9 @@ describe("APPS durable execution contract", () => {
       /hasta 4 horas y 120 pasos/i,
       /Nunca declares tests.*exitosos sin evidencia/i,
       /No finalices como completado/i,
+      /BLUEPRINTS DE PRODUCTO POTENTE/i,
+      /Asistente tipo ChatGPT/i,
+      /Prioriza profundidad/i,
     ]) {
       assert.match(prompt, signal)
     }
