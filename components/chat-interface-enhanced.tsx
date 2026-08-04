@@ -3684,7 +3684,15 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
         <div
           className="effort-track-fill"
           aria-hidden
-          style={{ width: `${(activeIndex / (EFFORT_LEVELS.length - 1)) * 100}%` }}
+          /* Width is the fraction of the span between first and last stop
+             centers (100% - stop size). That keeps the fill end exact on the
+             active dot instead of overshooting a full-track percentage. */
+          style={{
+            width:
+              activeIndex <= 0
+                ? "0px"
+                : `calc((100% - var(--effort-stop-size, 1.75rem)) * ${activeIndex / (EFFORT_LEVELS.length - 1)})`,
+          }}
         />
         {EFFORT_LEVELS.map((level, index) => (
           <button
@@ -12146,17 +12154,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               title="Detener"
                               disabled={pendingStop && isCurrentChatStreaming}
                               className={cn(
-                                "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                "bg-foreground text-background",
+                                "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                "bg-foreground text-white",
                                 "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
                                 "hover:bg-foreground/90 active:scale-[0.96]",
                                 "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
                               )}
                             >
                               {pendingStop ? (
-                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
+                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
                               ) : (
-                                <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
+                                <span
+                                  aria-hidden
+                                  className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
+                                />
                               )}
                             </Button>
                           )}
@@ -12620,17 +12631,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   title="Detener"
                                   disabled={pendingStop && isCurrentChatStreaming}
                                   className={cn(
-                                    "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                    "bg-foreground text-background",
+                                    "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                    "bg-foreground text-white",
                                     "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
                                     "hover:bg-foreground/90 active:scale-[0.96]",
                                     "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
                                   )}
                                 >
                                   {pendingStop ? (
-                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
+                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
                                   ) : (
-                                    <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
+                                    <span
+                                      aria-hidden
+                                      className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
+                                    />
                                   )}
                                 </Button>
                               )}

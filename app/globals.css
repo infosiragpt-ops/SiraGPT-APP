@@ -1123,13 +1123,14 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .effort-track {
+  --effort-stop-size: 1.75rem;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 1.75rem; /* roomy drag/tap strip; dots stay tiny inside */
-  margin: 0 -0.25rem;
-  padding: 0 0.25rem;
+  height: var(--effort-stop-size); /* roomy drag/tap strip; dots stay tiny inside */
+  margin: 0;
+  padding: 0;
   border-radius: 0.5rem;
   outline: none;
   cursor: pointer;
@@ -1143,26 +1144,29 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   outline-offset: 2px;
 }
 
+/* Line and fill sit on the stop centers: half a stop in from each end so
+   the rail ends exactly under the first/last dots (not floating past them). */
 .effort-track-line,
 .effort-track-fill {
   position: absolute;
   top: 50%;
-  left: 0.7rem;
-  right: 0.7rem;
-  height: 1.5px;
+  left: calc(var(--effort-stop-size) / 2);
+  right: calc(var(--effort-stop-size) / 2);
+  height: 2px;
   transform: translateY(-50%);
   border-radius: 999px;
   pointer-events: none;
 }
 
 .effort-track-line {
-  background: hsl(var(--muted-foreground) / 0.2);
+  /* A bit grayer so the inactive rail is readable against the popover. */
+  background: hsl(220 8% 62% / 0.55);
 }
 
 .effort-track-fill {
   right: auto;
   width: 0;
-  background: hsl(var(--foreground) / 0.5);
+  background: hsl(220 10% 28% / 0.72);
   transition: width 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -1174,11 +1178,11 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: var(--effort-stop-size);
+  height: var(--effort-stop-size);
   min-width: 0;
   min-height: 0;
-  flex: 0 0 1.75rem;
+  flex: 0 0 var(--effort-stop-size);
   margin: 0;
   padding: 0;
   border: 0;
@@ -1194,10 +1198,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .effort-stop::after {
   content: "";
-  width: 0.3125rem;  /* 5px */
-  height: 0.3125rem;
+  width: 0.375rem;  /* 6px — sits centered on the rail */
+  height: 0.375rem;
   border-radius: 999px;
-  background: hsl(var(--muted-foreground) / 0.34);
+  background: hsl(220 8% 58% / 0.72);
   box-shadow: 0 0 0 1.5px hsl(var(--popover));
   transition:
     width 140ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -1207,11 +1211,11 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .effort-stop:hover::after {
-  background: hsl(var(--muted-foreground) / 0.5);
+  background: hsl(220 8% 42% / 0.85);
 }
 
 .effort-stop-reached::after {
-  background: hsl(var(--foreground) / 0.48);
+  background: hsl(220 10% 28% / 0.78);
 }
 
 /* Keep the bare class for contract tests / selectors; the paint is on ::after. */
@@ -1220,12 +1224,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .effort-stop-active::after {
-  width: 0.5rem;   /* 8px thumb */
-  height: 0.5rem;
-  background: hsl(var(--foreground));
+  width: 0.5625rem;   /* 9px thumb — exact center of the stop hit target */
+  height: 0.5625rem;
+  background: hsl(220 12% 12%);
   box-shadow:
     0 0 0 1.5px hsl(var(--popover)),
-    0 0 0 2.5px hsl(var(--foreground) / 0.16);
+    0 0 0 2.5px hsl(220 12% 12% / 0.14);
 }
 
 .effort-stop-active:hover::after {
@@ -1252,20 +1256,20 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .dark .effort-track-line {
-  background: hsl(0 0% 100% / 0.14);
+  background: hsl(0 0% 100% / 0.28);
 }
 
 .dark .effort-track-fill {
-  background: hsl(0 0% 100% / 0.55);
+  background: hsl(0 0% 100% / 0.62);
 }
 
 .dark .effort-stop::after {
-  background: hsl(0 0% 100% / 0.28);
+  background: hsl(0 0% 100% / 0.42);
   box-shadow: 0 0 0 1.5px hsl(var(--popover));
 }
 
 .dark .effort-stop-reached::after {
-  background: hsl(0 0% 100% / 0.5);
+  background: hsl(0 0% 100% / 0.62);
 }
 
 .dark .effort-stop-active::after {
@@ -5533,6 +5537,15 @@ footer {
   -webkit-mask-image: linear-gradient(to bottom, black 0%, black 80%, transparent 100%);
 }
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
+
+/* Stop control: black disc, pure white stop square (never inherits muted fg). */
+.composer-stop-button {
+  color: #fff !important;
+}
+.composer-stop-button .composer-stop-icon {
+  background-color: #fff !important;
+  box-shadow: none;
+}
 
 /* ─── Composer — quiet, minimal surface ──────────────────────────── */
 .composer-surface {
