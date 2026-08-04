@@ -596,8 +596,15 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-initial-stage {
-  padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
-    calc(1rem + env(safe-area-inset-bottom, 0px));
+  /* Optical center (slightly above geometric mid) + shared rail gutters.
+     Horizontal padding alone owns the side margin; the frame must NOT also
+     subtract 2rem or the empty-state bar becomes narrower than the in-chat dock. */
+  box-sizing: border-box;
+  width: 100%;
+  padding: calc(var(--chat-header-height, 64px) + 6vh) var(--chat-mobile-gutter)
+    calc(10vh + env(safe-area-inset-bottom, 0px));
+  align-items: center;
+  justify-content: center;
 }
 
 .code-target-select-button {
@@ -721,8 +728,11 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-composer-dock {
-  /* Keep sticky/fixed from utility classes — do not force position here. */
-  padding: 0.125rem 1rem calc(1rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
+  /* Keep sticky/fixed from utility classes — do not force position here.
+     Side padding matches --chat-mobile-gutter so the bar aligns with the
+     empty-state rail and the transcript content box. */
+  padding: 0.25rem var(--chat-mobile-gutter)
+    calc(0.875rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
   /* Keep the dock transparent so the transcript remains readable all the way
      to the composer's hairline. The surface itself owns separation/elevation. */
   background: transparent;
@@ -734,15 +744,23 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   display: none;
 }
 
-/* The composer keeps the exact width of the approved empty-chat state in
-   every lifecycle state. The dock already supplies the mobile gutters, while
-   the empty stage needs its own 1rem gutter on either side. */
+/* Shared content rail: stage/dock own the outer gutters; the frame always
+   fills the remaining width up to the approved 828px max so empty and
+   in-chat composers share the same outer edges. */
 .chat-composer-frame {
-  width: min(calc(100% - 2rem), var(--chat-content-max-width));
+  box-sizing: border-box;
+  width: min(100%, var(--chat-content-max-width));
+  max-width: 100%;
   margin-inline: auto;
 }
 
 .chat-composer-dock .chat-composer-frame {
+  width: min(100%, var(--chat-content-max-width));
+}
+
+/* Empty stage already applies --chat-mobile-gutter; keep the frame flush to
+   that padded content box (no second 1rem inset). */
+.chat-initial-stage .chat-composer-frame {
   width: min(100%, var(--chat-content-max-width));
 }
 
@@ -5529,6 +5547,8 @@ footer {
     border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
     background-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Stable paint bounds so focus/hover never shift surrounding gutters. */
+  will-change: border-color, box-shadow;
 }
 
 .composer-liquid-surface,
@@ -5603,11 +5623,11 @@ footer {
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: 2.2rem auto;
   align-items: start;
-  column-gap: 0.625rem;
-  row-gap: 0.15rem;
+  column-gap: 0.5rem;
+  row-gap: 0.1rem;
   min-height: 5.25rem;
-  /* Near-zero top padding keeps placeholder/input flush with the bar edge. */
-  padding: 0.28rem 0.75rem 0.4rem !important;
+  /* Symmetric side inset so + and send share equal optical margin to the rim. */
+  padding: 0.28rem 0.7rem 0.4rem !important;
 }
 
 /* Attachments and connector controls remain fully available without changing
