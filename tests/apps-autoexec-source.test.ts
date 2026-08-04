@@ -12,9 +12,10 @@ describe("APPS autonomous full-stack wiring", () => {
     const chat = readFileSync(join(ROOT, "components/code/ai-code-chat-panel.tsx"), "utf8")
 
     assert.match(panel, /autoExecute: surface === "apps"/)
-    assert.match(panel, /COMPILA TODAS LAS CAPAS/)
-    assert.match(panel, /CORRIDA LARGA AUTONOMA/)
-    assert.match(panel, /EXPANSION DESDE INSTRUCCION SIMPLE/)
+    // APPS durable prompt lives in apps-mode-contract (single source of truth).
+    assert.match(panel, /buildAppsModePrompt/)
+    assert.match(panel, /from "@\/lib\/code-agent\/apps-mode-contract"/)
+    assert.match(panel, /ORQUESTACIÓN CLAUDE CODE/)
     assert.match(api, /opts\?\.autoExecute/)
     assert.match(api, /autoExecute: true/)
     assert.equal(
@@ -27,6 +28,8 @@ describe("APPS autonomous full-stack wiring", () => {
     assert.match(contract, /COMPILA TODAS LAS CAPAS/)
     assert.match(contract, /EXPANSIÓN DESDE INSTRUCCIÓN SIMPLE/)
     assert.match(contract, /hasta 4 horas y 120 pasos/)
+    assert.match(contract, /PARIDAD CLAUDE CODE \/ CURSOR \/ CODEX/)
+    assert.match(contract, /buildAppsModePrompt/)
   })
 
   it("renames user-facing company labels to Empresas", () => {
