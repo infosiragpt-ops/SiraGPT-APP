@@ -32,10 +32,13 @@ describe("agent office Edge District", () => {
       variant: "full",
     })
 
-    expect(district.counts.buildings).toBe(31)
+    // secondaryCount full = 38 → landmark + secondaries = 39 denser modern CBD.
+    expect(district.counts.buildings).toBe(39)
     expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(6)
     expect(district.counts.architecturalCrowns).toBeGreaterThanOrEqual(12)
-    expect(district.counts.glassFacades).toBe(60)
+    // 2 glass planes per secondary (+ optional sky-bridge panes).
+    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(76)
+    expect(district.counts.glassFacades).toBeLessThanOrEqual(81)
     expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(20)
     expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(44)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(24)
@@ -57,8 +60,9 @@ describe("agent office Edge District", () => {
       variant: "thumbnail",
     })
 
-    expect(district.counts.buildings).toBe(15)
-    expect(district.counts.glassFacades).toBe(28)
+    // secondaryCount thumbnail = 18 → landmark + secondaries = 19.
+    expect(district.counts.buildings).toBe(19)
+    expect(district.counts.glassFacades).toBe(36)
     expect(district.counts.vehicles).toBe(4)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(24)
 

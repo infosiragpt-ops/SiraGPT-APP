@@ -1148,8 +1148,8 @@ export function AppSidebar() {
                 type="button"
                 role="tab"
                 aria-selected={sidebarMode === "code"}
-                aria-label="Empresas</>"
-                title="Empresas</>"
+                aria-label="Empresas"
+                title="Empresas"
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
                   "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",

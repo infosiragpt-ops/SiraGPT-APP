@@ -54,7 +54,7 @@ const plans: Plan[] = [
     note: "Mismas funciones completas, experiencia ampliada.",
     features: [
       "Todo lo incluido en Pro",
-      "Mayor capacidad para proyectos frecuentes",
+      "Mayor capacidad para empresas frecuentes",
       "Texto, voz, imagen y video en una experiencia unificada",
       "Prioridad superior en soporte y acompañamiento",
     ],

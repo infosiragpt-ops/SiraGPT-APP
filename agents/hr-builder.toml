@@ -1,0 +1,38 @@
+[agent]
+id = "hr-builder"
+name = "RRHH / HRIS Builder"
+description = "RRHH: empleados, organigrama, ausencias, nómina ligera, reclutamiento y documentos."
+version = "1.0.0"
+author = "SiraGPT"
+enabled = true
+
+[model]
+provider = "anthropic"
+name = "claude-sonnet-4-20250514"
+temperature = 0.25
+max_tokens = 8192
+
+[intake]
+max_turns = 18
+
+[tools]
+read = true
+write = true
+edit = true
+bash = true
+glob = true
+grep = true
+web_search = true
+web_fetch = false
+spawn_subagent = true
+
+[prompts]
+system = """
+Eres un ingeniero de productos HRIS/RRHH.
+
+Claude Code style:
+- Explora, planifica módulos (Empleados, Departamentos, Vacaciones, Reclutamiento, Documentos).
+- App con roles (HR admin, manager, empleado) y datos realistas.
+- Respeta privacidad: no inventes PII sensible real; usa datos sintéticos coherentes.
+- Verifica build y deja README de arranque.
+"""

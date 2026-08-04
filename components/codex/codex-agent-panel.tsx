@@ -31,6 +31,7 @@ import { FilesTab } from "./files-tab"
 import { McpServersCard } from "@/components/settings/McpServersCard"
 import { tabsReducer, initialTabsState, type CodexTabId } from "@/lib/codex/workspace-tabs"
 import type { TimelineItem } from "@/lib/codex/timeline-reducer"
+import { buildAppsModePrompt } from "@/lib/code-agent/apps-mode-contract"
 
 // Right-pane tabs on the desktop 3-pane layout (the left pane is always the
 // Agent chat). Web is folded into Preview here; Agent never appears on the right.
@@ -309,30 +310,19 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   }
 
   function buildAutonomousPrompt(fullPrompt: string): string {
+    // Single source of truth for APPS durability + Claude Code / Codex parity.
+    const base = buildAppsModePrompt(fullPrompt)
+    if (surface !== "apps") return base
     return [
-      "MODO APPS TIPO CODEX / CLAUDE CODE:",
-      "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
-      "- Si falta contexto, propone internamente un brief completo con defaults razonables y continua.",
-      "- CORRIDA LARGA AUTONOMA: puedes trabajar durante horas (hasta 4h / 120 pasos). No te detengas por falta de chat abierto. Itera plan → build → verify → fix hasta un resultado usable.",
-      "- EXPANSION DESDE INSTRUCCION SIMPLE: si el usuario escribe una frase corta (ej. 'crea un software como Claude/ChatGPT', 'haz un CRM'), expande a producto multi-capa profesional y construye sin preguntar.",
-      "- COMPILA TODAS LAS CAPAS del software en una sola mision, no un mock visual:",
-      "  1) producto/dominio (flujos, roles, entidades, navegacion)",
-      "  2) datos (schema/modelos, seed realista, persistencia real)",
-      "  3) backend/API (endpoints, validacion, errores)",
-      "  4) frontend (navegacion, pantallas, estados vacios/carga/error, responsive)",
-      "  5) integracion (auth light o gate simple si aplica, wiring API↔UI)",
-      "  6) calidad (typecheck, dev server, smoke de rutas criticas, preview vivo)",
-      "  7) entrega (README honesto, evidencia de checks, riesgos reales)",
-      "- Primero genera un plan tecnico concreto por capas; luego construye, prueba, itera y entrega preview + codigo ejecutable.",
-      "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
-      "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturacion, RRHH, POS, gestion de clientes/proveedores/empresas): delega PRIMERO en enterprise_analyst y construye una app multi-modulo con navegacion lateral, dashboard con KPIs y datos de ejemplo realistas del dominio (nunca lorem ipsum).",
-      "- Para UI usa frontend_builder; para datos/API backend_engineer o db_architect; cierra con qa_reviewer o debugger si hay errores de tsc/dev server.",
-      "- Puedes emitir VARIOS run_subagent en el mismo turno cuando las tareas no dependan entre si.",
-      "- Trabaja como Claude Code / ChatGPT agentico: lee el workspace, escribe archivos completos (no stubs), verifica con type_check/dev_server_check y corrige hasta que el preview arranque de verdad.",
-      "- Si el alcance es grande, prioriza un MVP vertical completo end-to-end y luego expande modulos sin romper lo ya verde.",
+      base,
       "",
-      "SOLICITUD DEL USUARIO:",
-      fullPrompt,
+      "ORQUESTACIÓN CLAUDE CODE / CURSOR / CODEX:",
+      "- Explora el workspace con list/read/glob/grep antes de escribir (nunca asumas el árbol).",
+      "- Prefiere edit quirúrgico sobre reescritura total cuando el archivo ya existe.",
+      "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, POS): delega PRIMERO en enterprise_analyst y construye multi-módulo con sidebar, KPIs y seeds realistas.",
+      "- Usa subagentes en paralelo cuando las tareas no dependan entre sí (frontend_builder + backend_engineer + db_architect).",
+      "- Cierra con qa_reviewer/debugger si typecheck o preview fallan; no declares éxito sin evidencia.",
+      "- Entrega como Claude Code: archivos, checks, preview URL y riesgos reales pendientes.",
     ].join("\n")
   }
 
@@ -417,10 +407,16 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   const appsStarters: { title: string; blurb: string; prompt: string }[] = surface === "apps"
     ? [
         {
+          title: "Asistente tipo ChatGPT",
+          blurb: "Chat streaming, memoria, archivos y admin",
+          prompt:
+            "Crea un software de asistente de IA al nivel de ChatGPT/Claude (sin copiar marca ni UI exacta): chat con streaming vía adaptador de proveedores, historial de hilos, memoria, adjuntos, selector de modelos (mock si no hay keys), sidebar de conversaciones, settings, auth light, rate limits, panel admin básico, seeds realistas en español y estados loading/empty/error. Compila todas las capas (dominio, datos SQLite, API Express, UI React/Vite/Tailwind, integración, calidad) y deja preview usable. Trabaja de forma autónoma durante horas si hace falta.",
+        },
+        {
           title: "CRM de ventas",
           blurb: "Pipeline, clientes, cotizaciones y KPIs",
           prompt:
-            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light.",
+            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light. Compila todas las capas y verifica preview.",
         },
         {
           title: "Inventario multi-almacén",

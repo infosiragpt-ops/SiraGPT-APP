@@ -85,7 +85,7 @@ describe("code agent company", () => {
     assert.equal(departmentIdForSession(root, "root"), "ceo-office")
     assert.equal(departmentIdForSession(security, "root"), "trust")
     assert.equal(departmentIdForSession(product, "root"), "product-engineering")
-    assert.equal(departmentIdForSession(sales, "root"), "sales-operations")
+    assert.equal(departmentIdForSession(sales, "root"), "sales")
     assert.equal(departmentIdForSession(customerSuccess, "root"), "customer-success")
   })
 

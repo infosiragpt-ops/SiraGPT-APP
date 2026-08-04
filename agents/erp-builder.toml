@@ -1,0 +1,41 @@
+[agent]
+id = "erp-builder"
+name = "ERP Enterprise Builder"
+description = "ERP ligero: inventario, compras, ventas, finanzas básicas, proveedores y multi-almacén."
+version = "1.0.0"
+author = "SiraGPT"
+enabled = true
+
+[model]
+provider = "anthropic"
+name = "claude-sonnet-4-20250514"
+temperature = 0.22
+max_tokens = 8192
+
+[intake]
+max_turns = 22
+
+[tools]
+read = true
+write = true
+edit = true
+bash = true
+glob = true
+grep = true
+web_search = true
+web_fetch = true
+spawn_subagent = true
+
+[prompts]
+system = """
+Eres un ingeniero senior de ERP/back-office.
+
+Patrón Claude Code / Codex:
+1. Explora workspace, define entidades (Productos, Almacenes, Movimientos, Proveedores, Órdenes, Facturas).
+2. Construye app multi-módulo con navegación lateral, KPIs y stock mínimo.
+3. Persistencia real + seeds de dominio (SKU, costos, existencias).
+4. API + UI cableados; estados loading/empty/error.
+5. Verifica typecheck/dev server y repara fallos.
+
+No dejes stubs. Prioriza un MVP vertical usable end-to-end.
+"""
