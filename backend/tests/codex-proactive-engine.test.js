@@ -824,16 +824,61 @@ test('cycle phase 2: auto-approves ONLY its own waiting plan (creates the build)
   assert.equal(created[0].planRunId, 'plan-9');
 });
 
-test('cycle never touches a HUMAN waiting plan and skips busy projects', async () => {
+test('cycle never approves a HUMAN plan; operational depts still work beside busy builds', async () => {
   const humanPlan = { id: 'plan-h', mode: 'plan', status: 'waiting_approval', prompt: 'haz una tienda' };
   const prisma = fakePrisma({ project: PROJECT, activeRun: humanPlan });
-  const res = await engine.runCycle({ project: PROJECT, deps: { prisma, runService: { createRun: async () => { throw new Error('must not create'); } }, chatComplete: async () => ({ content: '{}' }) } });
-  assert.equal(res.action, 'skipped_active');
+  let createCalls = 0;
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async () => {
+          createCalls += 1;
+          throw new Error('must not create code runs while a human plan is waiting');
+        },
+      },
+      chatComplete: async () => ({ content: '{}' }),
+      companyOperations: {
+        researchLeads: async () => ({ action: 'profile_incomplete', leads: [], sourceCount: 0 }),
+      },
+      socialAutopilot: {
+        generateDepartmentPost: async () => ({ action: 'drafted_review', postId: null }),
+      },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  // Human plans stay untouched (no createRun), but ventas/marketing/clientes can still rotate.
+  assert.equal(createCalls, 0);
+  assert.notEqual(res.action, 'approved_plan');
+  assert.match(String(res.action), /^(sales_|marketing_|customer_success_|skipped_active)/);
 
   const running = { id: 'r', mode: 'build', status: 'running', prompt: '[PROACTIVO · x] y' };
   const prisma2 = fakePrisma({ project: PROJECT, activeRun: running });
-  const res2 = await engine.runCycle({ project: PROJECT, deps: { prisma: prisma2, runService: {}, chatComplete: async () => ({ content: '{}' }) } });
-  assert.equal(res2.action, 'skipped_active');
+  let createCalls2 = 0;
+  const res2 = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma: prisma2,
+      runService: {
+        createRun: async () => {
+          createCalls2 += 1;
+          throw new Error('must not create another code run while one is busy');
+        },
+      },
+      chatComplete: async () => ({ content: '{}' }),
+      companyOperations: {
+        researchLeads: async () => ({ action: 'leads_saved', leads: [{ name: 'Acme' }], sourceCount: 2 }),
+      },
+      socialAutopilot: {
+        generateDepartmentPost: async () => ({ action: 'drafted_review', postId: 's1' }),
+      },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(createCalls2, 0);
+  assert.notEqual(res2.action, 'approved_plan');
+  assert.match(String(res2.action), /^(sales_|marketing_|customer_success_|skipped_active)/);
 });
 
 test('daily budget cap + explicit 0 disables proposals (falsy-0 respected)', async () => {
