@@ -14,6 +14,7 @@ describe("APPS autonomous full-stack wiring", () => {
     assert.match(panel, /autoExecute: surface === "apps"/)
     assert.match(panel, /COMPILA TODAS LAS CAPAS/)
     assert.match(panel, /CORRIDA LARGA AUTONOMA/)
+    assert.match(panel, /EXPANSION DESDE INSTRUCCION SIMPLE/)
     assert.match(api, /opts\?\.autoExecute/)
     assert.match(api, /autoExecute: true/)
     assert.equal(
@@ -21,6 +22,11 @@ describe("APPS autonomous full-stack wiring", () => {
       2,
       "plan and approved build must both remain autonomous",
     )
+
+    const contract = readFileSync(join(ROOT, "lib/code-agent/apps-mode-contract.ts"), "utf8")
+    assert.match(contract, /COMPILA TODAS LAS CAPAS/)
+    assert.match(contract, /EXPANSIÓN DESDE INSTRUCCIÓN SIMPLE/)
+    assert.match(contract, /hasta 4 horas y 120 pasos/)
   })
 
   it("renames user-facing company labels to Empresas", () => {

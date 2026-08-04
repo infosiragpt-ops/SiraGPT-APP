@@ -159,7 +159,7 @@ describe("professional chat composer surface source contract", () => {
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
-      /\.composer-input-row\s*\{[\s\S]{0,420}align-items: start;[\s\S]{0,120}min-height: 5\.25rem;[\s\S]{0,100}padding: 0\.28rem 0\.75rem 0\.4rem !important;/,
+      /\.composer-input-row\s*\{[\s\S]{0,420}align-items: start;[\s\S]{0,120}min-height: 5\.25rem;[\s\S]{0,100}padding: 0\.28rem 0\.7rem 0\.4rem !important;/,
       "the idle composer should pin text to the top hairline without oversized vertical space"
     )
     assert.match(
@@ -192,8 +192,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-composer-dock\s*\{[\s\S]{0,180}padding: 0\.125rem 1rem/,
-      "the dock should leave only a two-pixel breathing edge above the composer"
+      /\.chat-composer-dock\s*\{[\s\S]{0,220}padding: 0\.25rem var\(--chat-mobile-gutter\)/,
+      "the dock should use the shared mobile gutter token for side margins"
     )
     assert.match(
       globals,
@@ -202,8 +202,13 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), var\(--chat-content-max-width\)\);[\s\S]{0,80}margin-inline: auto;/,
+      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(100%, var\(--chat-content-max-width\)\);[\s\S]{0,80}margin-inline: auto;/,
       "the empty composer should retain its approved 828px content width"
+    )
+    assert.match(
+      globals,
+      /\.chat-initial-stage \.chat-composer-frame\s*\{[\s\S]{0,100}width: min\(100%, var\(--chat-content-max-width\)\);/,
+      "empty-stage must not double-inset the frame after the stage gutters"
     )
     assert.match(
       globals,
