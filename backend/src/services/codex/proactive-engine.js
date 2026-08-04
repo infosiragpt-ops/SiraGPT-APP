@@ -98,8 +98,56 @@ async function writeProactiveState({ prisma, project, patch }) {
   return next;
 }
 
+/**
+ * Ensure every enabled department has a physical pool seat so the office and
+ * fleet show real capacity (not 0/0 puestos) and writers can claim isolation.
+ * Caps per-department size to keep total under department-pools project max.
+ */
+async function ensureFleetDepartmentPools({ prisma, project }) {
+  const departments = companyDepartments.readDepartments(project)
+    .filter((department) => department && department.enabled !== false);
+  if (!departments.length) return [];
+  const existing = await departmentPools.listDepartmentPools({
+    prisma,
+    projectId: project.id,
+  });
+  const byId = new Map(existing.map((pool) => [pool.departmentId, pool]));
+  const maxProject = departmentPools.MAX_PROJECT_POOL_CAPACITY || 512;
+  // Reserve at least 1 seat per department; distribute remaining capacity by desiredAgents.
+  const logicalTotal = departments.reduce(
+    (sum, department) => sum + Math.max(1, Number(department.desiredAgents) || 1),
+    0,
+  );
+  const created = [];
+  for (const department of departments) {
+    if (byId.has(department.id)) continue;
+    const desired = Math.max(1, Number(department.desiredAgents) || 1);
+    // Proportional share of project capacity, min 1, max 32 for first bootstrap.
+    const share = logicalTotal > 0
+      ? Math.max(1, Math.round((desired / logicalTotal) * Math.min(maxProject, logicalTotal)))
+      : 1;
+    const size = Math.min(32, Math.max(1, share));
+    try {
+      const pool = await departmentPools.upsertDepartmentPool({
+        prisma,
+        project,
+        departmentId: department.id,
+        size,
+        enabled: true,
+      });
+      if (pool) created.push(pool);
+    } catch (err) {
+      console.warn(
+        `[codex proactive] pool bootstrap failed for ${department.id}:`,
+        err?.message || err,
+      );
+    }
+  }
+  return created;
+}
+
 async function setProactive({ prisma, projectId, userId, enabled, now = () => new Date() }) {
-  const project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
+  let project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
   if (!project) return null;
   // Permanent fleet: when PROACTIVO turns on, unhide every built-in department
   // and re-enable custom units so the whole company participates in the loop.
@@ -122,8 +170,15 @@ async function setProactive({ prisma, projectId, userId, enabled, now = () => ne
           };
         },
       });
+      project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } }) || project;
     } catch (err) {
       console.warn('[codex proactive] enable-all-departments failed:', err?.message || err);
+    }
+    try {
+      await ensureFleetDepartmentPools({ prisma, project });
+      project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } }) || project;
+    } catch (err) {
+      console.warn('[codex proactive] ensure fleet pools failed:', err?.message || err);
     }
   }
   const state = await writeProactiveState({

@@ -257,7 +257,6 @@ const DEPARTMENT_ICONS: Record<string, React.ComponentType<{ className?: string 
   "ceo-office": Radio,
   "agent-infrastructure": Cpu,
   "growth-engines": TrendingUp,
-  "sales-operations": BriefcaseBusiness,
   localization: Languages,
   integrations: PlugZap,
   trust: ShieldCheck,
@@ -799,13 +798,56 @@ export function AgentCompanyPanel() {
           setCompanyCapacity(proactiveResult.value.capacity || null)
           setDepartmentPools(Array.isArray(proactiveResult.value.departmentPools) ? proactiveResult.value.departmentPools : [])
           setProgressMemory(proactiveResult.value.memory || null)
-          const custom = proactiveResult.value.departments
+          const serverDepartments = Array.isArray(proactiveResult.value.departments)
+            ? proactiveResult.value.departments
+            : []
+          const custom = serverDepartments
             .filter((department) => department.custom)
             .map((department) => ({ ...department, custom: true as const }))
           setCustomDepartments(custom)
           writeCustomDepartments(activeFolder?.id, custom)
+          // Merge built-in capacity/mission from the server so logical agents and
+          // office seats match backend fleet sizing (not the FE 1-agent fallback).
+          const builtInIds = new Set(AGENT_COMPANY_DEPARTMENTS.map((row) => row.id))
+          const serverOverrides: Record<string, DepartmentOverride> = {}
+          for (const department of serverDepartments) {
+            if (!department || department.custom || !builtInIds.has(department.id)) continue
+            const base = AGENT_COMPANY_DEPARTMENTS.find((row) => row.id === department.id)
+            if (!base) continue
+            const patch: DepartmentOverride = {}
+            if (department.desiredAgents != null && department.desiredAgents !== base.desiredAgents) {
+              patch.desiredAgents = Math.max(1, Math.min(MAX_LOGICAL_AGENTS, Number(department.desiredAgents) || 1))
+            }
+            if (department.name && department.name !== base.name) patch.name = department.name
+            if (department.mission && department.mission !== base.mission) patch.mission = department.mission
+            if (department.description && department.description !== base.description) {
+              patch.description = department.description
+            }
+            if (Object.keys(patch).length) serverOverrides[department.id] = patch
+          }
+          if (Object.keys(serverOverrides).length) {
+            setDepartmentOverrides((current) => {
+              const next = { ...current }
+              for (const [id, patch] of Object.entries(serverOverrides)) {
+                next[id] = { ...next[id], ...patch }
+              }
+              writeDepartmentOverrides(activeFolder?.id, next)
+              return next
+            })
+          }
           setProactiveOn(enabled)
           setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
+          // When PROACTIVO is already on, keep department chat seats warm so the
+          // fleet can receive work without waiting for the next button click.
+          if (enabled) {
+            window.setTimeout(() => {
+              try {
+                ensureDepartmentSessions()
+              } catch {
+                /* sessions hydrate asynchronously; next toggle still seeds them */
+              }
+            }, 0)
+          }
         }
       } finally {
         refreshing = false
@@ -1287,15 +1329,18 @@ export function AgentCompanyPanel() {
       rootSessionId = createCodeChatSession({ title: "CEO Office" })
       existingTitles.add("ceo office")
     }
-    for (const department of PROACTIVE_CORE_DEPARTMENTS) {
-      if (department.id === "ceo-office") continue
+    // Full fleet: every enabled department (built-in + custom) gets a chat seat
+    // so PROACTIVO can assign work without a missing-session race.
+    const fleet = allDepartments.length > 0 ? allDepartments : PROACTIVE_CORE_DEPARTMENTS
+    for (const department of fleet) {
+      if (department.id === "ceo-office" || department.enabled === false) continue
       const title = departmentBootstrapTitle(department)
       if (existingTitles.has(title.toLowerCase())) continue
       createCodeChatSession({ title })
       existingTitles.add(title.toLowerCase())
     }
     return rootSessionId
-  }, [codeChatSessions, createCodeChatSession])
+  }, [allDepartments, codeChatSessions, createCodeChatSession])
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn

@@ -17,20 +17,13 @@ export const CODE_COMPANY_SEED_PROMPT_EVENT = "siragpt:code-company-seed-prompt"
 
 const STORAGE_KEY = "code-workspace:agent-company-proactive:v1"
 
-/** Core departments spun up when proactive mode starts (Matrix-style loop). */
+/**
+ * Full fleet spun up when PROACTIVO starts. Every built-in department gets a
+ * chat session and participates in the backend round-robin / mission loop.
+ * Keep this equal to AGENT_COMPANY_DEPARTMENTS so UI and runtime never diverge.
+ */
 export const PROACTIVE_CORE_DEPARTMENTS: readonly AgentDepartmentDefinition[] =
-  AGENT_COMPANY_DEPARTMENTS.filter((department) =>
-    [
-      "ceo-office",
-      "product-engineering",
-      "agent-infrastructure",
-      "growth-engines",
-      "sales-operations",
-      "customer-success",
-      "marketing",
-      "trust",
-    ].includes(department.id),
-  )
+  AGENT_COMPANY_DEPARTMENTS
 
 export type ProactiveCompanyState = {
   enabled: boolean
