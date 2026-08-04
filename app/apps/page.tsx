@@ -71,8 +71,11 @@ function AppsShell() {
             <span>{t.label}</span>
           </button>
         ))}
-        <div className="ml-auto hidden text-[10px] text-zinc-500 md:block">
-          Subagents · Plan/Build · Preview · Sandbox
+        <div className="ml-auto hidden items-center gap-2 text-[10px] text-zinc-500 md:flex">
+          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-300/90">
+            Claude Code mode
+          </span>
+          <span>Subagents · Plan/Build · Preview · Sandbox · Enterprise SDK</span>
         </div>
       </header>
 

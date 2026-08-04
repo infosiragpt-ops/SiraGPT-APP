@@ -29,7 +29,7 @@ export const APPS_STREAM_CONTRACT_PATHS = [
 export function buildAppsModePrompt(userText: string): string {
   return [
     APPS_MODE_MARKER,
-    "OBJETIVO: entregar software ejecutable y verificado a nivel de producto serio (calidad Claude Code / ChatGPT agentico), no un mock visual ni un esqueleto vacío.",
+    "OBJETIVO: entregar software ejecutable y verificado a nivel de producto serio (calidad Claude Code / Cursor / Codex), no un mock visual ni un esqueleto vacío.",
     "",
     "RUNTIME REAL DEL WORKSPACE:",
     `- Frontend: ${APPS_RUNTIME_STACK.frontend}.`,
@@ -37,6 +37,13 @@ export function buildAppsModePrompt(userText: string): string {
     `- Persistencia local real: ${APPS_RUNTIME_STACK.database}.`,
     "- Inspecciona package.json y los archivos existentes antes de editar. Respeta el stack de un repo importado; consérvalo si ya es ejecutable.",
     "- No reemplaces este runtime por Next.js, Prisma o PostgreSQL salvo que el usuario pida explícitamente una migración y el preview pueda ejecutarla.",
+    "",
+    "PARIDAD CLAUDE CODE / CURSOR / CODEX:",
+    "- Tools-first: lee, busca, edita, ejecuta bash y verifica — no improvises el árbol de archivos.",
+    "- Plan → Build → Verify → Fix en bucle (como Claude Code plan mode + Cursor agent + Codex auto).",
+    "- Subagentes para trabajo paralelo (UI, API, datos, QA) cuando no haya dependencia fuerte.",
+    "- Diffs y archivos reales en el workspace; nunca resumas un cambio sin escribirlo.",
+    "- Checkpoints y evidencia (logs, typecheck, preview) antes de declarar listo.",
     "",
     "EXPANSIÓN DESDE INSTRUCCIÓN SIMPLE:",
     "- Si el usuario da una frase corta (p. ej. 'crea un software como ChatGPT', 'haz un CRM', 'app de facturación'), expande internamente a un producto completo multi-capa con defaults profesionales y sigue construyendo sin preguntar.",

@@ -197,86 +197,118 @@ function addDesk(sceneGroup: THREE.Group, x: number, z: number, active: boolean)
   const desk = new THREE.Group()
   desk.position.set(x, 0, z)
 
+  // Modern sit-stand desk: slim top + brushed metal legs + dual ultrawide monitors.
   const desktop = new THREE.Mesh(
-    new THREE.BoxGeometry(1.82, 0.12, 0.84),
-    material(0x314653, 0.46, 0.14),
+    new THREE.BoxGeometry(1.95, 0.09, 0.9),
+    material(0x2a3a44, 0.38, 0.22),
   )
-  desktop.position.y = 0.82
+  desktop.position.y = 0.84
   desk.add(desktop)
 
-  const legMaterial = material(0x27313a, 0.56, 0.34)
-  for (const legX of [-0.68, 0.68]) {
-    for (const legZ of [-0.25, 0.25]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.75, 0.065), legMaterial)
-      leg.position.set(legX, 0.4, legZ)
-      desk.add(leg)
-    }
+  const edgeGlow = new THREE.Mesh(
+    new THREE.BoxGeometry(1.9, 0.02, 0.03),
+    new THREE.MeshBasicMaterial({
+      color: active ? 0x5ee1f2 : 0x7a93a0,
+      transparent: true,
+      opacity: active ? 0.85 : 0.35,
+    }),
+  )
+  edgeGlow.position.set(0, 0.89, 0.44)
+  desk.add(edgeGlow)
+
+  const legMaterial = material(0x1c252d, 0.42, 0.55)
+  for (const legX of [-0.78, 0.78]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.78, 0.55), legMaterial)
+    leg.position.set(legX, 0.4, 0)
+    desk.add(leg)
   }
 
-  const monitorBack = new THREE.Mesh(
-    new THREE.BoxGeometry(0.86, 0.54, 0.07),
-    material(0x172033, 0.45, 0.15),
-  )
-  monitorBack.position.set(0, 1.28, -0.22)
-  monitorBack.rotation.x = -0.04
-  desk.add(monitorBack)
+  const dualOffsets = [-0.38, 0.38]
+  let primaryScreen: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial> | null = null
+  for (const offsetX of dualOffsets) {
+    const monitorBack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.78, 0.5, 0.06),
+      material(0x0f1724, 0.4, 0.22),
+    )
+    monitorBack.position.set(offsetX, 1.32, -0.24)
+    monitorBack.rotation.x = -0.05
+    desk.add(monitorBack)
 
-  const screenMaterial = new THREE.MeshStandardMaterial({
-    color: active ? 0x9bdcff : 0x69809a,
-    emissive: active ? 0x164e63 : 0x111827,
-    emissiveIntensity: active ? 1.1 : 0.2,
-    roughness: 0.38,
-  })
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.43), screenMaterial)
-  screen.position.set(0, 1.28, -0.18)
-  desk.add(screen)
+    const screenMaterial = new THREE.MeshStandardMaterial({
+      color: active ? 0xa8e8ff : 0x5f758c,
+      emissive: active ? 0x0e4f66 : 0x0b1220,
+      emissiveIntensity: active ? 1.25 : 0.22,
+      roughness: 0.32,
+    })
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.4), screenMaterial)
+    screen.position.set(offsetX, 1.32, -0.2)
+    desk.add(screen)
+    if (!primaryScreen) primaryScreen = screen
 
-  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.35, 0.07), legMaterial)
-  stand.position.set(0, 1.03, -0.18)
-  desk.add(stand)
+    const stand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.32, 0.06), legMaterial)
+    stand.position.set(offsetX, 1.05, -0.2)
+    desk.add(stand)
+  }
 
   const monitorBase = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.2, 0.23, 0.035, 16),
+    new THREE.BoxGeometry(1.1, 0.04, 0.28),
     legMaterial,
   )
-  monitorBase.position.set(0, 0.91, -0.18)
+  monitorBase.position.set(0, 0.91, -0.2)
   desk.add(monitorBase)
 
   const deskPad = new THREE.Mesh(
-    new THREE.BoxGeometry(1.02, 0.018, 0.35),
-    material(0x17222c, 0.9),
+    new THREE.BoxGeometry(1.15, 0.016, 0.38),
+    material(0x121c24, 0.9),
   )
-  deskPad.position.set(0, 0.895, 0.16)
+  deskPad.position.set(0, 0.9, 0.18)
   desk.add(deskPad)
 
   const keyboard = new THREE.Mesh(
-    new THREE.BoxGeometry(0.56, 0.025, 0.17),
-    material(0xdce4e7, 0.72, 0.08),
+    new THREE.BoxGeometry(0.62, 0.022, 0.18),
+    material(0xe6eef1, 0.68, 0.1),
   )
-  keyboard.position.set(0, 0.92, 0.13)
+  keyboard.position.set(0, 0.925, 0.14)
   desk.add(keyboard)
 
-  const taskLight = new THREE.Mesh(
-    new THREE.BoxGeometry(0.09, 0.32, 0.09),
-    material(0x82939d, 0.52, 0.35),
+  const trackpad = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.016, 0.16),
+    material(0xcbd5db, 0.55, 0.12),
   )
-  taskLight.position.set(0.68, 1.04, -0.08)
-  taskLight.rotation.z = -0.22
+  trackpad.position.set(0.42, 0.92, 0.2)
+  desk.add(trackpad)
+
+  const taskLight = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.05, 0.34, 10),
+    material(0x8ea0aa, 0.48, 0.4),
+  )
+  taskLight.position.set(0.78, 1.08, -0.06)
+  taskLight.rotation.z = -0.28
   desk.add(taskLight)
 
   const lampGlow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.08, 10, 8),
+    new THREE.SphereGeometry(0.075, 10, 8),
     new THREE.MeshBasicMaterial({
-      color: active ? 0xc9f3ff : 0xf4dfad,
+      color: active ? 0xb8f0ff : 0xf4dfad,
       transparent: true,
-      opacity: active ? 0.9 : 0.55,
+      opacity: active ? 0.95 : 0.55,
     }),
   )
-  lampGlow.position.set(0.72, 1.2, -0.08)
+  lampGlow.position.set(0.84, 1.24, -0.06)
   desk.add(lampGlow)
 
+  // Floating status beacon above the desk when the agent is running.
+  if (active) {
+    const beacon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 }),
+    )
+    beacon.position.set(0, 1.72, -0.22)
+    desk.add(beacon)
+  }
+
   sceneGroup.add(desk)
-  return screen
+  return primaryScreen!
 }
 
 function addChair(sceneGroup: THREE.Group, x: number, z: number) {
