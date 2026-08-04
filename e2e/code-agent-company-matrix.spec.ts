@@ -694,7 +694,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   const operations = await mockMatrixCompany(page)
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
-  await expect(page.getByRole("tab", { name: "Empresas</>" })).toBeVisible()
+  await expect(page.getByRole("tab", { name: "Empresas" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId("agent-company-live-preview")).toBeVisible()
   const officeThumbnail = page.getByTestId("agent-office-thumbnail")

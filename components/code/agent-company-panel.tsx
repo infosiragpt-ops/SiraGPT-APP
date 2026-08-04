@@ -837,17 +837,6 @@ export function AgentCompanyPanel() {
           }
           setProactiveOn(enabled)
           setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
-          // When PROACTIVO is already on, keep department chat seats warm so the
-          // fleet can receive work without waiting for the next button click.
-          if (enabled) {
-            window.setTimeout(() => {
-              try {
-                ensureDepartmentSessions()
-              } catch {
-                /* sessions hydrate asynchronously; next toggle still seeds them */
-              }
-            }, 0)
-          }
         }
       } finally {
         refreshing = false
@@ -1341,6 +1330,12 @@ export function AgentCompanyPanel() {
     }
     return rootSessionId
   }, [allDepartments, codeChatSessions, createCodeChatSession])
+
+  // Keep department chats warm whenever PROACTIVO is on (toggle or server hydrate).
+  React.useEffect(() => {
+    if (!proactiveOn) return
+    ensureDepartmentSessions()
+  }, [proactiveOn, ensureDepartmentSessions])
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn

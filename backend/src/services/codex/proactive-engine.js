@@ -1095,6 +1095,7 @@ module.exports = {
   PROACTIVE_PREFIX,
   readProactiveState,
   setProactive,
+  ensureFleetDepartmentPools,
   proposeTask,
   runCycle,
   tickAll,

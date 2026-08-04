@@ -53,9 +53,53 @@ test('readProactiveState defaults + setProactive persists into brief JSON', asyn
   assert.equal(out.state.enabled, true);
   assert.ok(prisma.state.project.brief.proactive.enabled, 'written inside brief.proactive');
   assert.equal(prisma.state.project.brief.goal, 'x', 'rest of brief preserved');
+  assert.equal(prisma.state.project.brief.proactive.fleetMode, 'all-departments');
+  assert.equal(prisma.state.project.brief.companyDepartmentHidden?.length || 0, 0);
 
   const off = await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: false });
   assert.equal(off.state.enabled, false);
+});
+
+test('setProactive provisions physical department pools for the full fleet', async () => {
+  const pools = new Map();
+  const prisma = fakePrisma({ project: { ...PROJECT, brief: { goal: 'fleet' } } });
+  prisma.codexDepartmentPool = {
+    findMany: async () => [...pools.values()],
+    findUnique: async ({ where }) => {
+      const key = `${where.projectId_departmentId.projectId}:${where.projectId_departmentId.departmentId}`;
+      return pools.get(key) || null;
+    },
+    upsert: async ({ where, create, update }) => {
+      const key = `${where.projectId_departmentId.projectId}:${where.projectId_departmentId.departmentId}`;
+      const previous = pools.get(key);
+      const row = previous
+        ? {
+          ...previous,
+          ...update,
+          updatedAt: new Date('2026-08-04T12:00:00.000Z'),
+        }
+        : {
+          id: `pool-${create.departmentId}`,
+          createdAt: new Date('2026-08-04T12:00:00.000Z'),
+          updatedAt: new Date('2026-08-04T12:00:00.000Z'),
+          ...create,
+        };
+      pools.set(key, row);
+      return row;
+    },
+  };
+
+  await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: true });
+  const departments = require('../src/services/codex/company-departments').readDepartments(prisma.state.project);
+  assert.ok(departments.length >= 10, 'built-in fleet is active');
+  assert.equal(pools.size, departments.length, 'every department gets a physical pool seat');
+  for (const row of pools.values()) {
+    assert.ok(row.size >= 1, `pool ${row.departmentId} needs at least one seat`);
+    assert.equal(row.enabled, true);
+  }
+  // Idempotent: second enable does not duplicate pools.
+  await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: true });
+  assert.equal(pools.size, departments.length);
 });
 
 test('mixed legacy and current metric rows count the larger cost per row', async () => {
