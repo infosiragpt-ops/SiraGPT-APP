@@ -4033,7 +4033,7 @@ function validateConsistencyMatrixInsertion(buffer) {
   }
 }
 
-function validateDocxOperationCriteria(buffer, operations = []) {
+function validateDocxOperationCriteria(buffer, operations = [], { beforeBuffer = null } = {}) {
   const text = extractDocxTextFromBuffer(buffer);
   const normalized = normalizeText(text);
   const checks = [];
@@ -4175,6 +4175,63 @@ function validateDocxOperationCriteria(buffer, operations = []) {
         label: 'Matriz de consistencia agregada al Word',
         passed: result.ok,
         details: result,
+      });
+      continue;
+    }
+    if (op.kind === 'insert_visual') {
+      let beforeDrawings = null;
+      let afterDrawings = null;
+      let beforeMediaParts = null;
+      let afterMediaParts = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const afterXml = readDocxDocumentXml(buffer);
+        beforeDrawings = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:drawing') : null;
+        afterDrawings = countXmlNodes(afterXml, 'w:drawing');
+        const countMediaParts = (candidate) => Object.entries(new PizZip(candidate).files || {})
+          .filter(([name, entry]) => name.startsWith('word/media/') && entry && !entry.dir)
+          .length;
+        beforeMediaParts = Buffer.isBuffer(beforeBuffer) ? countMediaParts(beforeBuffer) : null;
+        afterMediaParts = countMediaParts(buffer);
+      } catch { /* failed counts remain null and the criterion fails closed */ }
+      const passed = Number.isInteger(beforeDrawings)
+        && Number.isInteger(afterDrawings)
+        && Number.isInteger(beforeMediaParts)
+        && Number.isInteger(afterMediaParts)
+        && afterDrawings > beforeDrawings
+        && afterMediaParts > beforeMediaParts;
+      checks.push({
+        id: 'visual_inserted',
+        label: 'Gráfico insertado en el Word original',
+        passed,
+        details: { beforeDrawings, afterDrawings, beforeMediaParts, afterMediaParts },
+      });
+      continue;
+    }
+    if (op.kind === 'insert_table') {
+      let beforeTables = null;
+      let afterTables = null;
+      let beforeRows = null;
+      let afterRows = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const afterXml = readDocxDocumentXml(buffer);
+        beforeTables = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:tbl') : null;
+        afterTables = countXmlNodes(afterXml, 'w:tbl');
+        beforeRows = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:tr') : null;
+        afterRows = countXmlNodes(afterXml, 'w:tr');
+      } catch { /* failed counts remain null and the criterion fails closed */ }
+      const passed = Number.isInteger(beforeTables)
+        && Number.isInteger(afterTables)
+        && Number.isInteger(beforeRows)
+        && Number.isInteger(afterRows)
+        && afterTables > beforeTables
+        && afterRows > beforeRows;
+      checks.push({
+        id: 'native_table_inserted',
+        label: 'Tabla editable insertada en el Word original',
+        passed,
+        details: { beforeTables, afterTables, beforeRows, afterRows },
       });
       continue;
     }
@@ -4578,7 +4635,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
     return buffer.includes(Buffer.from(appendedNeedle.slice(0, Math.min(20, appendedNeedle.length))));
   })();
   const semanticCriteria = format === 'docx'
-    ? validateDocxOperationCriteria(buffer, context.operations || [])
+    ? validateDocxOperationCriteria(buffer, context.operations || [], { beforeBuffer: context.beforeBuffer })
     : await validateOfficeOperationCriteria(buffer, format, context.operations || [], blocks);
   const hasSemanticCriteria = semanticCriteria.checks.length > 0;
   const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
