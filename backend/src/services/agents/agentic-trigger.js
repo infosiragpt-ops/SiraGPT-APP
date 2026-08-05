@@ -41,7 +41,7 @@ const ACTION_VERBS = new RegExp(
       // genuinely targets a deliverable ("redacta un documento Word", "resume
       // esto a un PDF") the ARTIFACT_NOUNS branch below still catches it.
       'cr[eé]a', 'gener', 'dise[ñn]', 'construy', 'hazme', 'haz', 'h[aá]game',
-      'elabor', 'prepar', 'dibuj', 'grafic', 'export',
+      'realiz', 'elabor', 'prepar', 'dibuj', 'grafic', 'export',
       'convier', 'convert', 'transform', 'analiz', 'investig',
       'program', 'codific', 'desarroll', 'implement', 'calcul', 'busca', 'buscar',
       'plote', 'maqueta', 'esquematiza', 'visualiza', 'compila', 'rellena',
@@ -59,7 +59,7 @@ const ARTIFACT_NOUNS = new RegExp(
   '\\b(' +
     [
       'documento', 'docx', 'word', 'pdf', 'excel', 'xlsx', 'csv', 'spreadsheet',
-      'hoja de c[aá]lculo', 'presentaci[oó]n', 'powerpoint', 'pptx', 'diapositiv',
+      'hoja de c[aá]lculo', 'presentaci[oó]n', 'powerpoint', 'pptx?', 'ppts?', 'diapositiv',
       'slide', 'organigram', 'infograf', 'diagram', 'flowchart', 'mapa mental',
       'mindmap', 'l[ií]nea de tiempo', 'cronograma', 'timeline', 'gantt',
       'dashboard', 'tablero', 'kanban', 'swot', 'dafo', 'foda', 'pestel',
@@ -81,7 +81,7 @@ const CREATION_VERBS = new RegExp(
     [
       // Spanish
       'cr[eé]a', 'gener', 'dise[ñn]', 'construy', 'hazme', 'haz', 'h[aá]game',
-      'elabor', 'prepar', 'dibuj', 'grafic', 'export', 'convi[eé]rt', 'convert',
+      'realiz', 'elabor', 'prepar', 'dibuj', 'grafic', 'export', 'convi[eé]rt', 'convert',
       'transform', 'program', 'codific', 'desarroll', 'implement', 'plote',
       'maqueta', 'esquematiza', 'visualiza', 'compila', 'rellena',
       // English

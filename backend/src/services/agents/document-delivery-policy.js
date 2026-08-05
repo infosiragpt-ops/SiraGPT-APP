@@ -52,6 +52,8 @@ function isSourcePreservingEditLight(requestText, files) {
   if (!hasFiles) return false;
   const text = normalizeIntentText(requestText);
   if (!text) return false;
+  // "realiza una ppt de 30 diapositivas de la tesis.pdf" is a NEW deck, not a PDF edit.
+  if (wantsNewPresentationDeliverable(requestText)) return false;
   const hay = withCollapsedRepeats(text);
   if (requestWantsMinimalProofreadingLight(text)) return true;
 
@@ -61,7 +63,7 @@ function isSourcePreservingEditLight(requestText, files) {
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentRegion = /\b(portada|caratula|titulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo|anexo|anexos|apendice)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
-  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?)\b/.test(text);
   if (explicitFreshDeliverable && !/\b(mi|mismo|misma|este|esta|ese|esa|adjunto|subido|cargado)\b/.test(text) && !documentRegion && !preservation) return false;
   return existingDocRef || documentRegion || preservation;
 }
@@ -123,11 +125,40 @@ function estimateWords({ goal, displayGoal, finalText } = {}) {
   return estimate;
 }
 
+/**
+ * True when the user wants a NEW PowerPoint deck (not a surgical edit of an
+ * uploaded .pptx). PDF/Word/images may be attached as *sources*, but the
+ * deliverable is a fresh .pptx — never "preserve PDF + annexes".
+ *
+ * Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf" was
+ * routed through source-preserving PDF edit and returned the PDF with a
+ * generic annex page in under a second.
+ */
+function wantsNewPresentationDeliverable(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  const deckNoun = /\b(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|slides?|deck)\b/.test(t);
+  if (!deckNoun) return false;
+  // Explicit edit of an existing deck → not a *new* deliverable.
+  const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa)\s+(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n)\b/.test(t)
+    || /\b(?:edita|modifica|corrige|actualiza|cambia|mejora|reemplaza|borra|elimina|agrega|inserta)\b[^.?!]{0,100}\b(?:(?:en|de|del|la|el|mi|este|esta)\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiva)\b/.test(t)
+    || /\b(?:en|de)\s+(?:la\s+)?diapositiva\s+\d+\b/.test(t);
+  if (editExistingDeck) return false;
+  const createVerb = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame|arlo|arla)?|elabora(?:r|me)?|prepara(?:r|me)?|arma(?:r|me)?|dise[nñ]a(?:r|me)?|dame|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito|construy(?:e|a|e)\w*)\b/.test(t);
+  const slideCount = /\b\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(t)
+    || /\ben\s+\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(t)
+    || /\b(?:de|con)\s+\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(t);
+  return createVerb || slideCount;
+}
+
 function detectFormat(text, requestedFormat) {
   const explicitWordOutput = WORD_OUTPUT_COMMAND_RE.test(text) && !WORD_SOURCE_TO_OTHER_FORMAT_RE.test(text);
   if (explicitWordOutput) return 'docx';
   const requested = compactText(requestedFormat).toLowerCase().replace(/^\./, '');
   if (['docx', 'xlsx', 'pptx', 'pdf'].includes(requested)) return requested;
+  // New-deck creation always wins over "pdf" / "tesis" tokens in the prompt
+  // (those are sources, not the output format).
+  if (wantsNewPresentationDeliverable(text)) return 'pptx';
   const explicitDeck = EXPLICIT_DECK_OUTPUT_RE.test(text);
   const explicitPdf = EXPLICIT_PDF_OUTPUT_RE.test(text);
   const explicitSheet = EXPLICIT_SHEET_OUTPUT_RE.test(text);
@@ -319,5 +350,6 @@ module.exports = {
   estimateWords,
   hasChatOnlyDirective,
   hasExplicitDocumentOutputRequest,
+  wantsNewPresentationDeliverable,
   wordCount,
 };
