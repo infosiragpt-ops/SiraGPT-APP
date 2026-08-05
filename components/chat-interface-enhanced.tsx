@@ -1077,8 +1077,6 @@ const ActionsDropdown = ({
   handleExcelConnectorToggle,
   closeAllToolsAndConnectors,
 
-  compact = false,
-
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
@@ -1424,12 +1422,10 @@ const ActionsDropdown = ({
                 variant="ghost"
                 size="sm"
                 aria-label="Adjuntar archivos y herramientas"
-                className={compact
-                  ? "composer-plus-chip-trigger flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full p-0"
-                  : "composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"}
+                className="composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"
                 disabled={isMenuDisabled}
               >
-                <Plus className={cn("relative z-10", compact ? "h-4 w-4" : "h-5 w-5")} strokeWidth={2.2} />
+                <Plus className="relative z-10 h-5 w-5" strokeWidth={2.2} />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
@@ -10693,6 +10689,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || chatType === 'thesis'
   );
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
+  const shouldInlineActiveTools = isMediaToolActive || isWebSearchActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
     isVoiceGenerationActive ||
@@ -12303,14 +12300,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
-                        className={cn("composer-input-row", hasActiveTools && "composer-input-row--tools-active")}
+                        className="composer-input-row"
                       >
-                        {/* LEFT — Plus / attach + tool selector. Only inline
-                            while NO tool is active; once a tool turns on,
-                            the "+" moves to the bottom tools row (below) so
-                            it stays level with the active chips. */}
-                        {!hasActiveTools && (
-                          <ActionsDropdown {...actionsDropdownProps} />
+                        {/* LEFT — Plus / attach + tool selector. Media chips
+                            (Voz/Imágenes/Música/Video) render inline right
+                            next to the "+" so both share the same row. */}
+                        <ActionsDropdown {...actionsDropdownProps} />
+                        {shouldInlineActiveTools && (
+                          <div className="composer-inline-active-tools">
+                            <ActiveToolsDisplay {...activeToolsProps} />
+                          </div>
                         )}
 
                         {/* CENTER — single-line default; grows with content. */}
@@ -12496,9 +12495,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       </div>
                     </TooltipProvider>
 
-                    {hasActiveTools && (
+                    {hasActiveTools && !shouldInlineActiveTools && (
                       <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
-                        <ActionsDropdown {...actionsDropdownProps} compact />
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
                     )}
@@ -12734,13 +12732,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         </div>
                         <TooltipProvider>
                           <div
-                            className={cn("composer-input-row", hasActiveTools && "composer-input-row--tools-active")}
+                            className="composer-input-row"
                           >
-                            {/* LEFT — Plus / attach + tool selector. Inline
-                                only while NO tool is active; with tools on,
-                                the "+" moves to the bottom tools row. */}
-                            {!hasActiveTools && (
-                              <ActionsDropdown {...actionsDropdownProps} />
+                            {/* LEFT — Plus / attach + tool selector. Media
+                                chips render inline next to the "+". */}
+                            <ActionsDropdown {...actionsDropdownProps} />
+                            {shouldInlineActiveTools && (
+                              <div className="composer-inline-active-tools">
+                                <ActiveToolsDisplay {...activeToolsProps} />
+                              </div>
                             )}
                             <div className="composer-textarea-shell min-w-0 flex-1">
                               {hasDetectedLinks && input ? (
@@ -12922,9 +12922,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         </TooltipProvider>
 
-                        {hasActiveTools && (
+                        {hasActiveTools && !shouldInlineActiveTools && (
                           <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
-                            <ActionsDropdown {...actionsDropdownProps} compact />
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
                         )}
