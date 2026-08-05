@@ -655,12 +655,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
     let documentEditPreloopAttempted = false;
+    let wantsNewDeckDeliverable = false;
+    try {
+      const { wantsNewPresentationDeliverable } = require('./agents/document-delivery-policy');
+      wantsNewDeckDeliverable = wantsNewPresentationDeliverable(userQuery);
+    } catch (_) { /* best-effort */ }
     if (
       preloopFileIds.length > 0
       && toolContext.prisma
       && toolContext.userId
       && customGptCapabilities?.documents !== false
       && isDocumentEditRequest(userQuery)
+      // Never short-circuit "realiza una ppt de 30 slides de la tesis.pdf" into
+      // source-preserving PDF annex editing — that must create a fresh .pptx.
+      && !wantsNewDeckDeliverable
     ) {
       try {
         const {
@@ -992,7 +1000,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         }
       } catch (_) { /* best-effort */ }
     }
-    if (!initialToolChoice && attachedFileCount >= 1 && availableToolNames.has('document_edit')) {
+    if (
+      !initialToolChoice
+      && !wantsNewDeckDeliverable
+      && attachedFileCount >= 1
+      && availableToolNames.has('document_edit')
+    ) {
       try {
         if (isDocumentEditRequest(userQuery)) {
           documentEditIntent = true;
@@ -1005,7 +1018,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // attachment (live bug: DeepSeek called docintel_analyze instead of
     // returning an edited DOCX). Drop both so the model can only take
     // document_edit (or answer) for edit intents.
-    if ((documentEditIntent || documentMergeIntent || documentEditPreloopAttempted) && Array.isArray(tools)) {
+    // Exception: NEW presentation decks from PDF/images MUST use create_document
+    // (pptx) — blocking it forced the "PDF + anexos" failure path.
+    if (
+      (documentEditIntent || documentMergeIntent || documentEditPreloopAttempted)
+      && !wantsNewDeckDeliverable
+      && Array.isArray(tools)
+    ) {
       const blockedOnEdit = new Set([
         'create_document',
         'docintel_analyze',
@@ -1014,6 +1033,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         'docintel_compare',
       ]);
       tools = tools.filter((t) => t && t.name && !blockedOnEdit.has(t.name));
+    }
+    // Force create_document first for new multi-slide decks so weak models
+    // cannot answer with a preserved PDF annex.
+    if (wantsNewDeckDeliverable && availableToolNames.has('create_document') && !initialToolChoice) {
+      initialToolChoice = 'create_document';
     }
     // A strong specialized-skill intent gets one deterministic first call. The
     // model still selects the concrete id/args and can chain further skills

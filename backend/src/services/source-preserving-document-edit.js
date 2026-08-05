@@ -83,9 +83,31 @@ function requestWantsProfessionalEditing(prompt = '') {
   return transformPhrase || (action && (quality || documentScope));
 }
 
+function wantsNewPresentationDeliverable(prompt = '') {
+  try {
+    const { wantsNewPresentationDeliverable: detect } = require('./agents/document-delivery-policy');
+    return Boolean(detect(prompt));
+  } catch {
+    const text = normalizeText(prompt);
+    if (!text) return false;
+    const deckNoun = /\b(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|slides?|deck)\b/.test(text);
+    if (!deckNoun) return false;
+    const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa)\s+(?:ppt|pptx|powerpoint|presentaci[oó]n)\b/.test(text)
+      || /\b(?:edita|modifica|corrige|actualiza)\b[^.?!]{0,80}\b(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiva)\b/.test(text);
+    if (editExistingDeck) return false;
+    const createVerb = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|elabora(?:r|me)?|prepara(?:r|me)?|dame|quiero|necesito)\b/.test(text);
+    const slideCount = /\b\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(text)
+      || /\ben\s+\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(text);
+    return createVerb || slideCount;
+  }
+}
+
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
+  // Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf + imágenes"
+  // must create a NEW .pptx from sources — never "preserve PDF + anexos".
+  if (wantsNewPresentationDeliverable(prompt)) return false;
   const verbHay = withCollapsedRepeats(text);
   const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
@@ -136,8 +158,9 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
-  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
-    || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|dise[nñ]a(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/.test(text)
+    || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?)\b/.test(text)
+    || wantsNewPresentationDeliverable(prompt);
   const explicitAttachedMutation = hasFiles && (
     /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(editVerbHay)
     || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(editVerbHay))
@@ -7378,6 +7401,7 @@ module.exports = {
   hasRecentGeneratedArtifactSource,
   inferDocumentTitle,
   isSourcePreservingEditRequest,
+  wantsNewPresentationDeliverable,
   loadEditableSourceFiles,
   parseImageEditRequest,
   parsePdfEditRequest,
