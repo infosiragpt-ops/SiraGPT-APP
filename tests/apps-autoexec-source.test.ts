@@ -16,6 +16,7 @@ describe("APPS autonomous full-stack wiring", () => {
     assert.match(panel, /buildAppsModePrompt/)
     assert.match(panel, /from "@\/lib\/code-agent\/apps-mode-contract"/)
     assert.match(panel, /ORQUESTACIÓN CLAUDE CODE/)
+    assert.match(panel, /surface=\{surface === "apps" \? "apps" : "code"\}/)
     assert.match(api, /opts\?\.autoExecute/)
     assert.match(api, /autoExecute: true/)
     assert.equal(

@@ -20,7 +20,7 @@ const DEEP_MAX_STEPS = 120;
 // Simple product asks ("haz un CRM", "software como ChatGPT") must escalate to
 // multi-hour deep budgets so APPS can compile every layer without stopping early.
 const EXPLICIT_DEEP_RE =
-  /\b(?:horas?|hours?|long.?running|sin\s+(?:parar|detenerse)|trabaja\s+(?:solo|aut[oó]nomamente)|agentes?\s+aut[oó]nomos?|openclaw|full.?stack|backend|base\s+de\s+datos|database|api|autenticaci[oó]n|pagos?|deploy|desplieg|producci[oó]n|crm|erp|saas|pos|inventario|facturaci[oó]n|n[oó]mina|rrhh|software|plataforma|chat\s*gpt|chatgpt|claude\s*code|como\s+claude|como\s+chatgpt|multi.?capa|todas\s+las\s+capas|compila(?:r)?\s+todas)\b/i;
+  /\b(?:horas?|hours?|long.?running|sin\s+(?:parar|detenerse)|trabaja\s+(?:solo|aut[oó]nomamente)|agentes?\s+aut[oó]nomos?|openclaw|full.?stack|backend|base\s+de\s+datos|database|api|autenticaci[oó]n|pagos?|deploy|desplieg|producci[oó]n|crm|erp|saas|pos|inventario|facturaci[oó]n|n[oó]mina|rrhh|software|plataforma|chat\s*gpt|chatgpt|claude\s*code|como\s+claude|como\s+chatgpt|multi.?capa|todas\s+las\s+capas|compila(?:r)?\s+todas|f[aá]brica\s+de\s+software|asistente\s+de\s+ia|app\s+completa|producto\s+completo)\b/i;
 
 function isAppsModePrompt(value) {
   return normalizePrompt(value).includes(APPS_MODE_MARKER);
