@@ -150,7 +150,7 @@ test('edits two real DOCX uploads in background and downloads both authenticated
   ];
   const prisma = fakePrisma(rows);
   const events = [];
-  const prompt = 'quiero que en ambos Word el título le coloques 2027; solo modifica eso y devuélveme ambos archivos';
+  const prompt = 'en ambos Word cambia en el titulo de 2026 al 2027 en mi mismo word';
   const tool = buildDocumentEditTool({ prisma });
 
   const result = await tool.execute({ instruction: prompt }, {
@@ -177,6 +177,8 @@ test('edits two real DOCX uploads in background and downloads both authenticated
   assert.equal(artifactEvents.length, 2, 'chat must receive one download card per edited upload');
   assert.equal(artifactEvents[0].artifact.filename, artifactEvents[1].artifact.filename,
     'the proof intentionally uses equal upload names to guard batch-card collapsing');
+  assert.ok(artifactEvents.every((event) => /_editado\.docx$/.test(event.artifact.filename)));
+  assert.ok(artifactEvents.every((event) => !/con_anexos/.test(event.artifact.filename)));
 
   const auth = installAuthSessionMock({ id: userId, email: 'document-e2e@example.com' });
   try {
@@ -215,7 +217,11 @@ test('edits two real DOCX uploads in background and downloads both authenticated
       assert.equal(response.body.length, event.artifact.sizeBytes);
 
       const xml = readDocumentXml(response.body);
-      assert.match(xml, /<w:t[^>]*>2027<\/w:t>/, 'the requested title must be applied exactly');
+      assert.equal(
+        xml.includes(proof.source.title.replace('2026', '2027')),
+        true,
+        'the requested title span must be applied exactly',
+      );
       assert.equal(xml.includes(proof.source.title), false, 'the old title must be gone');
       assert.equal(xml.includes(proof.source.sentinel), true, 'the original body must remain');
       assert.equal(xml.includes(proof.source.tableSentinel), true, 'the original table must remain');
