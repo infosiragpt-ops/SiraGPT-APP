@@ -89,6 +89,7 @@ const ES = {
   },
   "composer": {
     "placeholder": "Describe tu idea — la IA propone el plan y ejecuta…",
+    "placeholderApps": "Ej: crea un software como ChatGPT, un CRM o un ERP… la IA compila todas las capas y puede trabajar horas",
     "plan": "Plan",
     "planTooltip": "El agente planifica internamente y ejecuta en modo automático.",
     "send": "Enviar",
@@ -221,6 +222,7 @@ const EN = {
   },
   "composer": {
     "placeholder": "Describe the idea — AI plans and builds…",
+    "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
     "plan": "Plan",
     "planTooltip": "The agent plans internally and builds automatically.",
     "send": "Send",

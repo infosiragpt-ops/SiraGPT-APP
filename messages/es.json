@@ -610,7 +610,7 @@
     },
     "preview": {
       "start": "▶ Iniciar / Recargar",
-      "hint": "Levanta el dev server de esta app y carga la vista previa."
+      "hint": "Levanta el dev server de este proyecto y carga la vista previa."
     },
     "files": {
       "title": "Código",
@@ -620,7 +620,7 @@
       "none": "Selecciona un archivo para ver su contenido."
     },
     "errors": {
-      "createProject": "No se pudo crear la app",
+      "createProject": "No se pudo crear el proyecto",
       "startRun": "No se pudo iniciar la corrida",
       "approvePlan": "No se pudo aprobar el plan",
       "stopRun": "No se pudo detener la corrida",
@@ -630,15 +630,15 @@
     },
     "panel": {
       "newProject": "Nuevo",
-      "selectProject": "Selecciona una app…",
+      "selectProject": "Selecciona un proyecto…",
       "loading": "Cargando…",
       "emptyDescribe": "Describe qué quieres construir para proponer un plan.",
-      "emptySelect": "Crea o selecciona una app para empezar.",
+      "emptySelect": "Crea o selecciona un proyecto para empezar.",
       "filesHint": "El árbol de archivos del workspace se abre desde el editor de /code.",
       "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
       "openInTab": "Abrir en pestaña nueva",
       "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
-      "defaultProjectName": "App {n}",
+      "defaultProjectName": "Proyecto {n}",
       "defaultAppName": "Nueva app {n}",
       "appsTitle": "APPS",
       "newApp": "Nueva app",
