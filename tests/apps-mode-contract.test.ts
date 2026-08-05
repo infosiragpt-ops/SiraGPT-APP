@@ -39,6 +39,8 @@ describe("APPS durable execution contract", () => {
       /BLUEPRINTS DE PRODUCTO POTENTE/i,
       /Asistente tipo ChatGPT/i,
       /Prioriza profundidad/i,
+      /FÁBRICA DE SOFTWARE/i,
+      /SIRA\.md vivo/i,
     ]) {
       assert.match(prompt, signal)
     }
