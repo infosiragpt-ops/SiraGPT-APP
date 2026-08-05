@@ -10,9 +10,15 @@ const { describe, test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const streamResume = require('../src/services/ai/stream-resume');
+const NOOP_REDIS = {
+  async get() { return null; },
+  async set() { return 'OK'; },
+  async del() { return 0; },
+};
 
 beforeEach(() => {
   streamResume._resetForTests();
+  streamResume._setInjectedRedis(NOOP_REDIS);
 });
 
 describe('parseLastEventId', () => {
