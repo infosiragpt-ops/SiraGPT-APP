@@ -5629,18 +5629,20 @@ footer {
   }
 }
 
-/* Two-row composer (ChatGPT-style): text pinned to the upper hairline of the
-   bar; controls (+, model, mic, send) sit on their own row underneath. */
+/* Single-row professional composer (Claude / ChatGPT control bar):
+   [+]  [textarea grows with content]  [model · mic · send]
+   Short prompts stay compact; multi-line text grows between the side
+   controls with the action cluster bottom-aligned. */
 .composer-input-row {
-  display: grid !important;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: 2.2rem auto;
-  align-items: start;
-  column-gap: 0.5rem;
-  row-gap: 0.1rem;
-  min-height: 5.25rem;
-  /* Symmetric side inset so + and send share equal optical margin to the rim. */
-  padding: 0.28rem 0.7rem 0.4rem !important;
+  display: flex !important;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  column-gap: 0.35rem;
+  row-gap: 0;
+  min-height: 3.35rem;
+  /* Symmetric optical inset so + and send share equal margin to the rim. */
+  padding: 0.4rem 0.45rem 0.4rem 0.4rem !important;
 }
 
 /* Attachments and connector controls remain fully available without changing
@@ -5673,27 +5675,24 @@ footer {
 }
 
 .composer-input-row > :first-child {
-  grid-column: 1;
-  grid-row: 2;
-  align-self: center;
+  flex: 0 0 auto;
+  align-self: flex-end;
 }
 
 .composer-input-row .composer-textarea-shell {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
-  align-self: start;
+  align-self: center;
 }
 
 .composer-input-row .composer-toolbar-actions {
-  grid-column: 3;
-  grid-row: 2;
+  flex: 0 0 auto;
   justify-self: end;
-  align-self: center;
+  align-self: flex-end;
   min-height: 2.75rem;
   max-width: 100%;
-  gap: 0.375rem !important;
+  gap: 0.25rem !important;
 }
 
 .composer-input-row .composer-toolbar-actions > button {
@@ -5720,13 +5719,12 @@ footer {
 }
 
 .composer-inline-active-tools {
-  grid-column: 2;
-  grid-row: 2;
-  align-self: center;
-  justify-self: start;
+  flex: 0 1 auto;
+  align-self: flex-end;
   min-width: 0;
-  max-width: min(56vw, 39rem);
+  max-width: min(42vw, 18rem);
   overflow: visible;
+  margin-bottom: 0.15rem;
 }
 
 .composer-inline-active-tools > div {
@@ -5794,8 +5792,11 @@ footer {
 .composer-textarea-shell {
   position: relative;
   min-width: 0;
-  height: 2.2rem;
-  max-height: 2.2rem;
+  /* Idle height matches a single 15px/1.5 line with comfortable vertical room;
+     multi-line prompts grow via JS up to the shell max-height. */
+  height: auto;
+  min-height: 1.65rem;
+  max-height: min(12.5rem, 42vh);
   overflow: hidden;
 }
 
@@ -5805,14 +5806,14 @@ footer {
   /* Kill base Textarea `flex` so the first line sits on the top of the shell
      instead of optically floating mid-band with a white gap above. */
   display: block !important;
-  height: 2.2rem !important;
-  min-height: 2.2rem !important;
-  max-height: 2.2rem !important;
-  overflow-y: auto !important;
-  /* Pin text/placeholder to the upper hairline of the chat bar. */
-  padding: 0.02rem 0.15rem 0.05rem !important;
-  font-size: 1rem;
-  line-height: 1.45;
+  height: 1.65rem !important;
+  min-height: 1.65rem !important;
+  max-height: min(12.5rem, 42vh) !important;
+  overflow-y: hidden !important;
+  /* Comfortable single-line rhythm; stays optically centered with 44px actions. */
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem !important;
+  font-size: 0.9375rem;
+  line-height: 1.5;
   vertical-align: top;
 }
 
@@ -5822,16 +5823,16 @@ footer {
   inset: 0;
   z-index: 1;
   box-sizing: border-box;
-  height: 2.2rem;
-  max-height: 2.2rem;
+  height: 100%;
+  max-height: min(12.5rem, 42vh);
   overflow: hidden;
   /* Must match .composer-textarea padding so caret/highlights stay locked. */
-  padding: 0.02rem 0.15rem 0.05rem;
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem;
   color: hsl(var(--foreground));
-  font-size: 1rem;
+  font-size: 0.9375rem;
   font-weight: 400;
   letter-spacing: 0;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -6006,34 +6007,35 @@ button.anti-bribery-context-chip:not(:disabled):active {
     border-radius: 1.75rem;
   }
   .composer-input-row {
-    column-gap: 0.5rem;
-    min-height: 5.25rem;
-    padding: 0.28rem 0.625rem 0.4rem !important;
+    column-gap: 0.3rem;
+    min-height: 3.25rem;
+    padding: 0.35rem 0.4rem 0.35rem 0.35rem !important;
   }
   .composer-input-row .composer-toolbar-actions {
-    gap: 0.25rem !important;
+    gap: 0.15rem !important;
   }
   .composer-input-row .composer-model-inline .chat-model-trigger {
     height: 2.75rem !important;
     min-height: 2.75rem;
   }
   .composer-textarea-shell .composer-textarea {
-    height: 2.35rem !important;
-    min-height: 2.35rem !important;
-    max-height: 2.35rem !important;
-    padding: 0.02rem 0.15rem 0.05rem !important;
+    height: 1.65rem !important;
+    min-height: 1.65rem !important;
+    max-height: min(10.5rem, 38vh) !important;
+    padding: 0.18rem 0.25rem 0.18rem 0.15rem !important;
     font-size: 1rem;
-    line-height: 1.45;
+    line-height: 1.5;
   }
-  .composer-textarea-shell,
-  .composer-textarea-highlights {
-    height: 2.35rem;
-    max-height: 2.35rem;
+  .composer-textarea-shell {
+    min-height: 1.65rem;
+    max-height: min(10.5rem, 38vh);
   }
   .composer-textarea-highlights {
-    padding: 0.02rem 0.15rem 0.05rem;
+    height: 100%;
+    max-height: min(10.5rem, 38vh);
+    padding: 0.18rem 0.25rem 0.18rem 0.15rem;
     font-size: 1rem;
-    line-height: 1.45;
+    line-height: 1.5;
   }
   .composer-context-field[data-context-chip="true"] :is(input, textarea) {
     padding-left: 6.85rem !important;
