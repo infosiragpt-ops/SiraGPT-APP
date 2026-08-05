@@ -4362,6 +4362,17 @@ function validateDocxOperationCriteria(buffer, operations = [], { beforeBuffer =
 
 function validateDocxRequestContract(beforeBuffer, afterBuffer, requestText = '', operations = []) {
   if (!Buffer.isBuffer(beforeBuffer) || !Buffer.isBuffer(afterBuffer)) return null;
+  const hasTextMutationOperation = operations.some((op) => (
+    op?.kind === 'replace_text' || op?.kind === 'set_document_title'
+  ));
+  const hasImageMutationOperation = operations.some((op) => (
+    op?.kind === 'replace_image' || op?.kind === 'recolor_image'
+  ));
+  // "reemplaza la figura por la imagen adjunta" is an image operation, not a
+  // request to replace the visible words "figura" and "imagen adjunta". Keep
+  // the independent text contract active for suspicious appendix/section
+  // fallbacks, but do not apply it to a specialized image mutation.
+  if (hasImageMutationOperation && !hasTextMutationOperation) return null;
   const replacement = extractReplacementPair(requestText);
   const titleChange = replacement ? null : extractDocxTitleChange(requestText);
   if (!replacement && !titleChange) return null;
