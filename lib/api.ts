@@ -780,11 +780,29 @@ class ApiClient {
     }
 
     // Idempotency-Key auto-injection. Only for mutating verbs and
-    // only when the caller didn't supply one. safeUUID covers LAN /
-    // plain-HTTP browser contexts where crypto.randomUUID is missing.
+    // only when the caller didn't supply one. When the JSON body already
+    // carries the application-level key, mirror that exact value into the
+    // header; sending an unrelated generated header would make the server
+    // correctly reject the request as an ambiguous identity.
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
-      headers.set('Idempotency-Key', safeUUID());
+      let bodyIdempotencyKey = '';
+      if (typeof options.body === 'string') {
+        try {
+          const parsedBody = JSON.parse(options.body);
+          let parsedMetadata = parsedBody?.metadata;
+          if (typeof parsedMetadata === 'string') {
+            try {
+              parsedMetadata = JSON.parse(parsedMetadata);
+            } catch {
+              parsedMetadata = null;
+            }
+          }
+          const rawKey = parsedBody?.idempotencyKey ?? parsedMetadata?.idempotencyKey;
+          if (typeof rawKey === 'string' && rawKey.trim()) bodyIdempotencyKey = rawKey.trim();
+        } catch { /* non-JSON body: generate a transport key below */ }
+      }
+      headers.set('Idempotency-Key', bodyIdempotencyKey || safeUUID());
     }
 
     // Track last error for re-throw on final failure
@@ -1231,7 +1249,7 @@ class ApiClient {
 
   // Returns AddMessageEnvelope at runtime — kept as `any` because the
   // local Message interface narrows `id` to `string`.
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string; idempotencyKey?: string }): Promise<any> {
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string | Record<string, unknown>; idempotencyKey?: string }): Promise<any> {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -1244,8 +1262,14 @@ class ApiClient {
 
 
 
-  async clearMessageById(messageId: string): Promise<SuccessEnvelope | null> {
-    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, { method: 'DELETE' })) as SuccessEnvelope | null;
+  async clearMessageById(
+    messageId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SuccessEnvelope | null> {
+    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, {
+      method: 'DELETE',
+      signal: options.signal,
+    })) as SuccessEnvelope | null;
   }
 
   async handleFeedbackLikeDislike(messageId: string, feedbackType: 'liked' | 'disliked'): Promise<SuccessEnvelope> {
@@ -1307,10 +1331,15 @@ class ApiClient {
     })) as SuccessEnvelope & { chatId?: string | number };
   }
 
-  async editUserMessage(messageId: string, data: { content: string }) {
+  async editUserMessage(
+    messageId: string,
+    data: { content: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request(`/chats/messages/${messageId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
@@ -1510,7 +1539,7 @@ class ApiClient {
   // the server cursor when content was already rendered. Mid-stream
   // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, reasoningEffort?: string, idempotencyKey?: string },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, idempotencyKey?: string },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
@@ -1593,12 +1622,16 @@ class ApiClient {
           err.status = response.status;
           if (details.code) err.code = details.code;
 
-          // Retriable transport failures: 429 (rate-limit), 5xx server
-          // errors, 408 timeout — only BEFORE any content has reached
-          // the user. Anything else bubbles up (401/403 auth, 422
-          // validation, monthly quota exhausted).
+          // A 409 is normally a terminal identity/payload conflict. The sole
+          // exception is an explicit `{ retryable: true }` response such as
+          // `turn_in_progress`, where replaying the same key attaches to the
+          // existing owner. Payload-mismatch 409s remain single-attempt.
+          const retryableConflict = response.status === 409 && details.retryable === true;
+          // Retriable transport failures: 429 (rate-limit), 5xx server,
+          // 408 timeout, and the explicit retryable 409 above — only BEFORE
+          // any content has reached the user. Anything else bubbles up.
           const retriable = !hasDeliveredAnyContent
-            && (response.status === 429 || response.status >= 500 || response.status === 408)
+            && (response.status === 429 || response.status >= 500 || response.status === 408 || retryableConflict)
             && attempt < MAX_CONNECT_ATTEMPTS;
           if (retriable) {
             // Honor Retry-After header if the server set one (RFC 7231
@@ -3347,17 +3380,25 @@ class ApiClient {
     return res.blob();
   }
 
-  async generateChart(data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string }) {
+  async generateChart(
+    data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request('/ai/generate-chart', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
-  async generateFigmaFlowchart(data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] }) {
+  async generateFigmaFlowchart(
+    data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request('/figma/generate_flowchart', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 

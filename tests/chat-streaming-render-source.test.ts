@@ -5,14 +5,12 @@ import path from "node:path"
 
 const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const source = fs.readFileSync(componentPath, "utf8")
+const renderingSource = fs.readFileSync(path.join(process.cwd(), "lib", "chat", "message-rendering.ts"), "utf8")
 
 describe("chat streaming render source contract", () => {
   it("does not hide the latest user message while a chat is marked streaming", () => {
-    assert.match(
-      source,
-      /const isAssistantMessage = \(message: any\): boolean =>\s*String\(message\?\.role \|\| ""\)\.toUpperCase\(\) === "ASSISTANT"/,
-      "the render path needs an explicit assistant-role guard"
-    )
+    assert.match(source, /isAssistantMessage,/)
+    assert.match(renderingSource, /export function isAssistantMessage/)
 
     assert.match(
       source,

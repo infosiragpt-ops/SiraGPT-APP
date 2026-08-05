@@ -41,7 +41,7 @@ export type ChatResponse = {
   title: string;
   model?: string | null;
   userId?: string | number;
-  projectId?: string | number | null;
+  projectId?: string | null;
   isWordConnectorChat?: boolean;
   isExcelConnectorChat?: boolean;
   createdAt?: string | string;
@@ -49,15 +49,14 @@ export type ChatResponse = {
   messages?: Array<{
       id: string | number;
       chatId: string | number;
-      role: "user" | "assistant" | "system" | "tool";
+      role: "USER" | "ASSISTANT";
       content: string;
-      model?: string | null;
-      createdAt?: string | string;
-      updatedAt?: string | string;
+      tokens?: number | null;
+      timestamp?: string | string;
+      files?: Array<unknown> | string | null;
       metadata?: {
-          [key: string]: unknown;
-        } | null;
-      attachments?: Array<unknown>;
+            [key: string]: unknown;
+          } | string | null;
       feedback?: string | null;
       [key: string]: unknown;
     }>;
@@ -69,7 +68,7 @@ export type CreateChatRequest = {
   model: string;
   isWordConnectorChat?: boolean;
   isExcelConnectorChat?: boolean;
-  projectId?: string | number;
+  projectId?: string;
   idempotencyKey?: string;
 };
 
@@ -141,6 +140,12 @@ export type FileUploadResponse = {
   [key: string]: unknown;
 };
 
+export type ForgotPasswordRequest = {
+  email: string;
+};
+
+export type IdempotencyKey = string;
+
 export type LoginRequest = {
   email: string;
   password: string;
@@ -151,20 +156,19 @@ export type LoosePassword = string;
 export type MessageResponse = {
   id: string | number;
   chatId: string | number;
-  role: "user" | "assistant" | "system" | "tool";
+  role: "USER" | "ASSISTANT";
   content: string;
-  model?: string | null;
-  createdAt?: string | string;
-  updatedAt?: string | string;
+  tokens?: number | null;
+  timestamp?: string | string;
+  files?: Array<unknown> | string | null;
   metadata?: {
-      [key: string]: unknown;
-    } | null;
-  attachments?: Array<unknown>;
+        [key: string]: unknown;
+      } | string | null;
   feedback?: string | null;
   [key: string]: unknown;
 };
 
-export type MessageRole = "user" | "assistant" | "system" | "tool";
+export type MessageRole = "USER" | "ASSISTANT";
 
 export type ModelId = string;
 
@@ -192,11 +196,76 @@ export type RegisterRequest = {
   password: unknown & unknown;
 };
 
+export type ResetPasswordRequest = {
+  token: string;
+  password: unknown & unknown;
+};
+
 export type SendMessageRequest = {
   content: string;
-  role?: "user" | "assistant" | "system" | "tool";
-  model?: string;
-  attachments?: Array<unknown>;
+  role: "USER" | "ASSISTANT";
+  tokens?: number;
+  files?: Array<unknown>;
+  metadata?: {
+      [key: string]: unknown;
+    } | string;
+  idempotencyKey?: string;
 };
 
 export type StrongPassword = unknown & unknown;
+
+export type aiGenerateRequest = {
+  messages: Array<{
+      role: "system" | "user" | "assistant" | "tool";
+      content: string;
+      name?: string;
+      tool_calls?: Array<unknown>;
+      tool_call_id?: string;
+    }>;
+  temperature?: number;
+  maxTokens?: number;
+  stream?: boolean;
+  model?: string;
+  taskType?: "deep_reasoning" | "speed" | "multimodal" | "code" | "embeddings" | "default";
+  files?: Array<{
+      id?: string;
+      name: string;
+      mimeType?: string;
+      content?: string;
+      url?: string;
+    }>;
+  cacheBypass?: boolean;
+  sessionId?: string;
+  projectId?: string;
+};
+
+export type chatMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  name?: string;
+  tool_calls?: Array<unknown>;
+  tool_call_id?: string;
+};
+
+export type fileUpload = {
+  files: Array<{
+      fieldname: string;
+      originalname: string;
+      encoding: string;
+      mimetype: string;
+      size: number;
+      buffer?: unknown;
+    }>;
+  projectId?: string;
+  metadata?: {
+    [key: string]: unknown;
+  };
+};
+
+export type inlineFile = {
+  id?: string;
+  name: string;
+  mimeType?: string;
+  content?: string;
+  url?: string;
+};

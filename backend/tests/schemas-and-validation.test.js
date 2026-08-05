@@ -18,8 +18,11 @@ const {
   AuthResponseSchema,
 } = require('../src/schemas/auth');
 const {
+  CHAT_MESSAGE_ROLES,
   CreateChatRequestSchema,
+  MAX_MESSAGE_CONTENT_CHARS,
   MessageResponseSchema,
+  SendMessageRequestSchema,
 } = require('../src/schemas/chats');
 const {
   FileUploadResponseSchema,
@@ -93,17 +96,55 @@ test('AuthResponseSchema accepts API shape', () => {
 // ---------- chat / file / payment schemas -----------------------------
 
 test('CreateChatRequestSchema requires title + model', () => {
-  const ok = CreateChatRequestSchema.safeParse({ title: 'hi', model: 'gpt-4o' });
+  const ok = CreateChatRequestSchema.safeParse({
+    title: 'hi',
+    model: 'gpt-4o',
+    projectId: 'project-1',
+    isWordConnectorChat: true,
+    idempotencyKey: 'chat-create-1',
+  });
   assert.equal(ok.success, true);
   const bad = CreateChatRequestSchema.safeParse({ title: '', model: '' });
   assert.equal(bad.success, false);
+  assert.equal(CreateChatRequestSchema.safeParse({ title: 'hi', model: 'gpt-4o', projectId: 1 }).success, false);
 });
 
 test('MessageResponseSchema validates basic message', () => {
   const r = MessageResponseSchema.safeParse({
-    id: 'm1', chatId: 'c1', role: 'assistant', content: 'hi',
+    id: 'm1',
+    chatId: 'c1',
+    role: 'ASSISTANT',
+    content: 'hi',
+    tokens: 3,
+    timestamp: new Date().toISOString(),
+    files: [{ id: 'file-1' }],
   });
   assert.equal(r.success, true);
+  assert.equal(MessageResponseSchema.safeParse({
+    id: 'm2', chatId: 'c1', role: 'assistant', content: 'legacy casing',
+  }).success, false);
+});
+
+test('SendMessageRequestSchema mirrors the POST /chats/:id/messages payload', () => {
+  const payload = {
+    role: 'USER',
+    content: ' continúa ',
+    tokens: 4,
+    files: ['file-1'],
+    metadata: { source: 'composer' },
+    idempotencyKey: 'turn-1',
+  };
+  const parsed = SendMessageRequestSchema.safeParse(payload);
+
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.data.content, 'continúa');
+  assert.deepEqual(CHAT_MESSAGE_ROLES, ['USER', 'ASSISTANT']);
+  assert.equal(SendMessageRequestSchema.safeParse({ ...payload, role: 'user' }).success, false);
+  assert.equal(SendMessageRequestSchema.safeParse({ content: 'missing role' }).success, false);
+  assert.equal(SendMessageRequestSchema.safeParse({
+    role: 'USER',
+    content: 'x'.repeat(MAX_MESSAGE_CONTENT_CHARS + 1),
+  }).success, false);
 });
 
 test('FileUploadResponseSchema accepts files array', () => {

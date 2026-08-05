@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 
 const source = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
+const attachmentSource = readFileSync("lib/code-agent/composer-attachments.ts", "utf8")
 
 function sectionBetween(start: string, end: string): string {
   const from = source.indexOf(start)
@@ -45,7 +46,8 @@ describe("code composer attachments", () => {
     assert.match(source, /const readyCodeAttachments = React\.useMemo/)
     assert.match(source, /const hasUploadingCodeAttachments =/)
     assert.match(source, /const canSubmitCodePrompt =/)
-    assert.match(source, /function codeAttachmentFileId/)
+    assert.match(source, /codeAttachmentFileId,/)
+    assert.match(attachmentSource, /export function codeAttachmentFileId/)
     assert.match(source, /const fileIds = readyCodeAttachments\.map\(codeAttachmentFileId\)/)
     assert.match(source, /void dispatch\(payload, \{ files: fileIds \}\)/)
     assert.match(

@@ -70,12 +70,13 @@ function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
   const router = useRouter()
 
+  React.useEffect(() => {
+    if (!isLoading && !user) router.replace("/auth/login?next=/code")
+  }, [isLoading, router, user])
+
   if (isLoading) return <CodeWorkspaceSkeleton />
 
-  if (!user) {
-    if (typeof window !== "undefined") router.replace("/auth/login?next=/code")
-    return <CodeWorkspaceSkeleton />
-  }
+  if (!user) return <CodeWorkspaceSkeleton />
 
   return <>{children}</>
 }
@@ -166,9 +167,10 @@ function ActiveFolderHydrator() {
     } catch {
       /* fail soft */
     }
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId } }))
     }, 120)
+    return () => window.clearTimeout(timer)
   }, [toolId])
 
   React.useEffect(() => {
@@ -194,11 +196,20 @@ function ActiveFolderHydrator() {
       projectId: projectId || undefined,
       title,
     }
+    let dispatched = false
     const openAgent = () => {
+      dispatched = true
       window.dispatchEvent(new CustomEvent(CODE_NEW_CODE_CHAT_EVENT, { detail }))
     }
-    window.setTimeout(openAgent, 220)
-    window.setTimeout(openAgent, 900)
+    const primaryTimer = window.setTimeout(openAgent, 220)
+    const retryTimer = window.setTimeout(openAgent, 900)
+    return () => {
+      window.clearTimeout(primaryTimer)
+      window.clearTimeout(retryTimer)
+      // If dependencies changed before either dispatch, allow the replacement
+      // effect to schedule the same agent/workspace signature again.
+      if (!dispatched && firedAgentRef.current === signature) firedAgentRef.current = null
+    }
   }, [activeFolder?.id, activeFolder?.name, agentId, folderId, localId])
 
   if (!routeIssue) return null

@@ -86,6 +86,7 @@ import {
   validateBatch,
 } from "@/lib/attachment-ingest"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import {
@@ -123,7 +124,23 @@ import {
   type CodeChatAction,
   type CodeChatMetrics,
 } from "@/lib/code-chat-metrics"
-import { defaultAgentState, type AgentBuildContext, type AgentPhase, type BuildErrorVerdict } from "@/lib/code-agent/types"
+import {
+  defaultAgentState,
+  type AgentBuildContext,
+  type AgentPhase,
+  type BuildErrorVerdict,
+  type ComposerMode,
+} from "@/lib/code-agent/types"
+import {
+  buildCodeAttachmentPromptBlock,
+  codeAttachmentFileId,
+  codeAttachmentId,
+  codeAttachmentName,
+  codeAttachmentType,
+  composeCodePromptWithAttachments,
+  formatCodeAttachmentBytes,
+  type CodeComposerAttachment,
+} from "@/lib/code-agent/composer-attachments"
 import {
   buildWebGroundingQuery,
   classifyBuildError,
@@ -144,13 +161,15 @@ import {
   engineTransportInstructions,
   landingSystemPrompt,
   sreSystemPrompt,
-  streamOutputFormat,
 } from "@/lib/code-agent/prompts"
 import {
-  APPS_RUNTIME_STACK,
-  APPS_STREAM_CONTRACT_PATHS,
   buildAppsModePrompt,
 } from "@/lib/code-agent/apps-mode-contract"
+import {
+  COMPOSER_MODE_INSTRUCTION,
+  COMPOSER_MODE_LABEL,
+  COMPOSER_PLACEHOLDER,
+} from "@/lib/code-agent/composer-mode-config"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
@@ -160,6 +179,23 @@ import {
   cancelCodexRunFamily,
   createCodexRunWithCancellationFence,
 } from "@/lib/codex/cancel-run-family"
+import {
+  beginCodexCancellationAttempt,
+  canFinalizeCodexCancellation,
+  classifyCodexCancellationReloadStatus,
+  confirmCodexCancellationBackend,
+  failCodexCancellationBackend,
+  isCodexTurnCancellationLocked,
+  markCodexTurnCancelled,
+  markCodexTurnCancellationFailed,
+  markCodexTurnCancelling,
+  patchCodexTurnUnlessCancellationLocked,
+  reconcileCodexTurnAfterReload,
+  selectCodexCancellationReloadRun,
+  settleCodexCancellationEngine,
+  type CodexCancellationAttempt,
+  type CodexRunCancellationTarget,
+} from "@/lib/codex/turn-cancellation"
 import {
   clearSessionCodexProject,
   clearWorkspaceCodexProject,
@@ -203,31 +239,8 @@ import { DiffView } from "./diff-view"
 import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
-type ComposerMode = "app" | "build" | "deps" | "plan" | "debug" | "ask" | "image"
-
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
-const CODE_UPLOAD_REQUEST_MAX_FILES = 50
-const CODE_UPLOAD_REQUEST_MAX_BYTES = 220 * 1024 * 1024
-
-type CodeComposerAttachment = {
-  tempId: string
-  id?: string
-  fileId?: string
-  attachmentId?: string
-  name: string
-  originalName?: string
-  filename?: string
-  type?: string
-  mimeType?: string
-  size?: number
-  url?: string
-  preview?: string | null
-  file?: File
-  sourceChannel?: string
-  status: "uploading" | "ready" | "failed"
-  uploadError?: string
-}
 
 type CodeDispatchOptions = {
   forceDeterministic?: boolean
@@ -254,79 +267,6 @@ type CodexEngineOptions = {
   displayText?: string
   omitUserTurn?: boolean
   resume?: CodexResumeTarget
-}
-
-function codeAttachmentId(file: CodeComposerAttachment): string {
-  return String(file.id || file.tempId || file.name)
-}
-
-function codeAttachmentFileId(file: CodeComposerAttachment): string | null {
-  return file.id || file.fileId || file.attachmentId || null
-}
-
-function codeAttachmentName(file: Pick<CodeComposerAttachment, "name" | "originalName" | "filename">): string {
-  return String(file.originalName || file.name || file.filename || "archivo")
-}
-
-function codeAttachmentType(file: Pick<CodeComposerAttachment, "type" | "mimeType">): string {
-  return String(file.mimeType || file.type || "application/octet-stream")
-}
-
-function formatCodeAttachmentBytes(size?: number): string {
-  const n = Number(size || 0)
-  if (!Number.isFinite(n) || n <= 0) return ""
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
-  return `${(n / (1024 * 1024)).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)} MB`
-}
-
-function buildCodeUploadChunks(files: File[], tempFiles: CodeComposerAttachment[]) {
-  const chunks: Array<{ files: File[]; temps: CodeComposerAttachment[] }> = []
-  let currentFiles: File[] = []
-  let currentTemps: CodeComposerAttachment[] = []
-  let currentBytes = 0
-
-  files.forEach((file, index) => {
-    const fileBytes = Number(file.size || 0)
-    const wouldOverflowCount = currentFiles.length >= CODE_UPLOAD_REQUEST_MAX_FILES
-    const wouldOverflowBytes =
-      currentFiles.length > 0 && currentBytes + fileBytes > CODE_UPLOAD_REQUEST_MAX_BYTES
-    if (wouldOverflowCount || wouldOverflowBytes) {
-      chunks.push({ files: currentFiles, temps: currentTemps })
-      currentFiles = []
-      currentTemps = []
-      currentBytes = 0
-    }
-    currentFiles.push(file)
-    currentTemps.push(tempFiles[index])
-    currentBytes += fileBytes
-  })
-
-  if (currentFiles.length > 0) chunks.push({ files: currentFiles, temps: currentTemps })
-  return chunks
-}
-
-function buildCodeAttachmentPromptBlock(files: CodeComposerAttachment[]): string {
-  const ready = files.filter((file) => file.status === "ready")
-  if (ready.length === 0) return ""
-  const rows = ready.map((file, index) => {
-    const id = file.id ? `id=${file.id}` : `temp=${file.tempId}`
-    const url = file.url ? `, url=${file.url}` : ""
-    const size = formatCodeAttachmentBytes(file.size)
-    return `- ${index + 1}. ${codeAttachmentName(file)} (${codeAttachmentType(file)}${size ? `, ${size}` : ""}, ${id}${url})`
-  })
-  return [
-    "Archivos adjuntos del usuario para este turno de APPS:",
-    ...rows,
-    "Usa estas referencias como contexto visual/documental del cambio. Si son imagenes, analiza lo que muestran antes de modificar el software. Si necesitas contenido interno que no este disponible en el workspace, indicalo explicitamente.",
-  ].join("\n")
-}
-
-function composeCodePromptWithAttachments(input: string, files: CodeComposerAttachment[]): string {
-  const text = input.trim()
-  const block = buildCodeAttachmentPromptBlock(files)
-  if (!block) return text
-  return [text || "Revisa los archivos adjuntos y aplicalos al proyecto de APPS.", "", block].join("\n")
 }
 
 // Coalesce the (possibly many) file-apply batches an agent emits within a
@@ -581,51 +521,6 @@ function orderFilesForWorkspaceApply<T extends { path: string; content?: string 
     return /^index\.html?$/i.test(path) ? 100 : 50
   }
   return [...files].sort((a, b) => priority(a.path) - priority(b.path))
-}
-
-const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
-  app: "App",
-  build: "Build",
-  deps: "Deps",
-  plan: "Plan",
-  debug: "Debug",
-  ask: "Ask",
-  image: "Image",
-}
-
-const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  app: "Crea, prueba, itera…",
-  build: "Pide un cambio, pega código o / para comandos",
-  deps: "Instala paquetes y úsalos en el código…",
-  plan: "Objetivo o plan antes de editar archivos…",
-  debug: "Error, stack trace o comportamiento esperado…",
-  ask: "Pregunta sobre tu app o tu código — respondo sin tocar archivos…",
-  image: "Describe UI, asset o captura…",
-}
-
-const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
-  app:
-    "Modo App: entrega SOFTWARE FULL-STACK profesional, ejecutable en APPS y evolucionable desde este chat.\n" +
-    "1) AUTONOMÍA — no hagas intake ni esperes confirmación; completa el brief con defaults razonables.\n" +
-    "2) PLAN + EJECUCIÓN — inspecciona, implementa por capas, ejecuta checks, abre el preview y repara hasta quedar verde.\n" +
-    `3) RUNTIME SOPORTADO — ${APPS_RUNTIME_STACK.frontend}; API ${APPS_RUNTIME_STACK.api}; persistencia ${APPS_RUNTIME_STACK.database}. Respeta el stack de un repo importado.\n` +
-    "4) DATOS REALES — para una app con datos, el frontend consume /api, Express valida y SQLite persiste. No uses arrays globales como persistencia primaria.\n" +
-    "5) EVIDENCIA — no declares éxito sin tipos/tests/build y un preview funcional; informa cualquier gate que no pudiste ejecutar.\n" +
-    streamOutputFormat({ strictStart: false, paths: APPS_STREAM_CONTRACT_PATHS }) +
-    "\n" +
-    "Cierra con archivos cambiados, verificaciones observadas y 1-3 siguientes pasos opcionales.",
-  build:
-    "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
-  deps:
-    "Modo Deps: actúa como un ingeniero de dependencias. Primero inspecciona package.json y el stack actual. Si el usuario pide instalar/agregar un paquete, actualiza package.json de forma mínima, instala con el gestor del workspace, ejecuta verificación y usa la dependencia en el código solo si el usuario lo pidió. No inventes paquetes; si un paquete requiere API key, variables o configuración externa, crea .env.example con placeholders y explica el requisito. Mantén el preview vivo funcionando.",
-  plan:
-    "Modo Plan: analiza primero, propone una arquitectura o pasos claros, identifica riesgos y no cambies archivos hasta que el usuario lo pida.",
-  debug:
-    "Modo Debug: diagnostica el error con hipótesis verificables, pide el dato mínimo faltante si hace falta y entrega un parche concreto cuando sea posible.",
-  ask:
-    "Modo Ask (igual que el modo Ask de Replit): responde de forma clara y directa preguntas sobre la app, el código o cómo funciona, con referencias a archivos cuando ayude. NO modifiques ni generes archivos. Si el usuario pide construir, crear o cambiar algo, explícale brevemente cómo se haría y sugiérele cambiar al modo Agent para que lo construya por él.",
-  image:
-    "Modo Image: ayuda a razonar sobre assets, interfaces, capturas o diseño visual. Si se requiere implementación, tradúcelo a cambios de código.",
 }
 
 // Gather config files from the workspace to give the SRE agent enough context
@@ -1186,7 +1081,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   ])
 
   const abortRef = React.useRef<AbortController | null>(null)
-  const activeCodexRunRef = React.useRef<{ projectId: string; runId: string; turnId: string } | null>(null)
+  const activeCodexRunRef = React.useRef<CodexRunCancellationTarget | null>(null)
+  const activeCodexTurnIdRef = React.useRef<string | null>(null)
+  const codexCancellationAttemptRef = React.useRef(0)
+  const codexCancellationRef = React.useRef<CodexCancellationAttempt | null>(null)
+  const explicitCodexStopTurnIdsRef = React.useRef<Set<string>>(new Set())
+  const activeCodexCancellationState = React.useMemo(() => {
+    const turnId = codexCancellationRef.current?.turnId
+    if (!turnId) return null
+    const state = turns.find((turn) => turn.id === turnId)?.cancellationState
+    // Every ref transition also patches turns; this follows that durable turn
+    // without reviving a stale failed marker from another session.
+    return state === "cancelling" || state === "failed" ? state : null
+  }, [turns])
   const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
   const codeAttachmentsRef = React.useRef<CodeComposerAttachment[]>([])
   const codeDragCounterRef = React.useRef(0)
@@ -1351,7 +1258,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         return next
       })
 
-      const chunks = buildCodeUploadChunks(accepted, tempFiles)
+      const chunks = buildComposerUploadChunks(accepted, tempFiles)
       let failedChunks = 0
 
       for (let index = 0; index < chunks.length; index += 1) {
@@ -1602,6 +1509,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     setSelectedPreviewTarget(null)
     setSelectingTarget(false)
     setBusy(false)
+    // Invalidate every pending cancellation callback before aborting the local
+    // stream. A promise from the previous session must never patch this one.
+    codexCancellationAttemptRef.current += 1
+    codexCancellationRef.current = null
+    activeCodexTurnIdRef.current = null
     abortRef.current?.abort()
     abortRef.current = null
     // Session navigation detaches the local stream but deliberately leaves the
@@ -1623,27 +1535,172 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 28), 140)}px`
   }, [input])
 
+  const finalizeCodexCancellation = React.useCallback(
+    (candidate: CodexCancellationAttempt): boolean => {
+      const current = codexCancellationRef.current
+      if (
+        !current
+        || current.turnId !== candidate.turnId
+        || current.attempt !== candidate.attempt
+        || !canFinalizeCodexCancellation(candidate)
+      ) {
+        return false
+      }
+
+      codexCancellationRef.current = null
+      explicitCodexStopTurnIdsRef.current.delete(candidate.turnId)
+      if (activeCodexRunRef.current?.turnId === candidate.turnId) {
+        activeCodexRunRef.current = null
+      }
+      if (activeCodexTurnIdRef.current === candidate.turnId) {
+        activeCodexTurnIdRef.current = null
+      }
+      setTurns((prev) =>
+        markCodexTurnCancelled(prev, candidate.turnId).map((turn) =>
+          turn.id === candidate.turnId
+            ? {
+                ...turn,
+                agentPhases: buildCodeAgentPhases("generate", {
+                  generate: { status: "done", detail: "Cancelación confirmada por el servidor" },
+                }),
+              }
+            : turn,
+        ),
+      )
+      setBusy(false)
+      return true
+    },
+    [setTurns],
+  )
+
+  const beginCodexCancellation = React.useCallback(
+    (turnId: string, target: CodexRunCancellationTarget | null): number => {
+      const attempt = codexCancellationAttemptRef.current + 1
+      codexCancellationAttemptRef.current = attempt
+      const next = beginCodexCancellationAttempt({
+        previous: codexCancellationRef.current,
+        attempt,
+        turnId,
+        target,
+      })
+      codexCancellationRef.current = next
+      activeCodexTurnIdRef.current = turnId
+      if (target) activeCodexRunRef.current = target
+      setBusy(true)
+      setTurns((prev) =>
+        markCodexTurnCancelling(prev, turnId).map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                agentPhases: buildCodeAgentPhases("generate", {
+                  generate: { status: "running", detail: "Confirmando la cancelación durable" },
+                }),
+              }
+            : turn,
+        ),
+      )
+      return attempt
+    },
+    [setTurns],
+  )
+
+  const recordCodexEngineSettled = React.useCallback(
+    (turnId: string, attempt: number): boolean => {
+      const current = codexCancellationRef.current
+      if (!current || current.turnId !== turnId || current.attempt !== attempt) return false
+      const next = settleCodexCancellationEngine(current)
+      codexCancellationRef.current = next
+      return finalizeCodexCancellation(next)
+    },
+    [finalizeCodexCancellation],
+  )
+
+  const recordCodexBackendConfirmation = React.useCallback(
+    (turnId: string, attempt: number): boolean => {
+      const current = codexCancellationRef.current
+      if (!current || current.turnId !== turnId || current.attempt !== attempt) return false
+      const next = confirmCodexCancellationBackend(current)
+      codexCancellationRef.current = next
+      return finalizeCodexCancellation(next)
+    },
+    [finalizeCodexCancellation],
+  )
+
+  const recordCodexCancellationFailure = React.useCallback(
+    (turnId: string, attempt: number): boolean => {
+      const current = codexCancellationRef.current
+      if (!current || current.turnId !== turnId || current.attempt !== attempt) return false
+      codexCancellationRef.current = failCodexCancellationBackend(current)
+      setTurns((prev) =>
+        markCodexTurnCancellationFailed(prev, turnId).map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                agentPhases: buildCodeAgentPhases("generate", {
+                  generate: { status: "error", detail: "El servidor no confirmó la cancelación; puedes reintentar" },
+                }),
+              }
+            : turn,
+        ),
+      )
+      // Keep the stop control visible. The durable worker may still be active.
+      setBusy(true)
+      return true
+    },
+    [setTurns],
+  )
+
+  const requestCodexCancellation = React.useCallback(
+    async (target: CodexRunCancellationTarget, attempt: number): Promise<boolean> => {
+      try {
+        await cancelCodexRunFamily(target, {
+          cancelRun: codexApi.cancelRun,
+          cancelFamily: codexApi.cancelRunFamily,
+          listRuns: codexApi.listRuns,
+          // Close the plan→build race while the bubble truthfully says that
+          // durable cancellation is still being confirmed.
+          settle: () => new Promise((resolve) => window.setTimeout(resolve, 160)),
+        })
+        recordCodexBackendConfirmation(target.turnId, attempt)
+        return true
+      } catch {
+        if (recordCodexCancellationFailure(target.turnId, attempt)) {
+          toast.error("No pude confirmar la cancelación del agente en el servidor. Puedes reintentar.")
+        }
+        return false
+      }
+    },
+    [recordCodexBackendConfirmation, recordCodexCancellationFailure],
+  )
+
   const cancelStream = React.useCallback(() => {
-    const activeCodexRun = activeCodexRunRef.current
-    activeCodexRunRef.current = null
+    const existingCancellation = codexCancellationRef.current
+    if (existingCancellation?.status === "cancelling") return
+
+    const activeCodexRun = existingCancellation?.status === "failed"
+      ? existingCancellation.target
+      : activeCodexRunRef.current
+    const codexTurnId = existingCancellation?.turnId
+      ?? activeCodexRun?.turnId
+      ?? activeCodexTurnIdRef.current
+
+    if (codexTurnId) {
+      explicitCodexStopTurnIdsRef.current.add(codexTurnId)
+      const attempt = beginCodexCancellation(codexTurnId, activeCodexRun)
+      abortRef.current?.abort()
+      abortRef.current = null
+      if (activeCodexRun) void requestCodexCancellation(activeCodexRun, attempt)
+      return
+    }
+
+    // Non-Codex engines have no durable backend run to confirm.
     abortRef.current?.abort()
     abortRef.current = null
     setBusy(false)
     setTurns((prev) =>
       prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
     )
-    if (activeCodexRun) {
-      void cancelCodexRunFamily(activeCodexRun, {
-        cancelRun: codexApi.cancelRun,
-        cancelFamily: codexApi.cancelRunFamily,
-        listRuns: codexApi.listRuns,
-        // Close the plan→build race without holding the UI stop button.
-        settle: () => new Promise((resolve) => window.setTimeout(resolve, 160)),
-      }).catch(() => {
-        toast.error("No pude confirmar la cancelación del agente en el servidor.")
-      })
-    }
-  }, [setTurns])
+  }, [beginCodexCancellation, requestCodexCancellation, setTurns])
 
   // runCodexEngine is defined AFTER sendPrompt; the resilience fallback in
   // sendPrompt's catch reaches it through this ref (kept fresh by an effect).
@@ -2941,6 +2998,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           )
         : null
       const assistantId = continuityTurn?.id || `${id}-a`
+      activeCodexTurnIdRef.current = assistantId
+      activeCodexRunRef.current = opts?.resume
+        ? { projectId: opts.resume.projectId, runId: opts.resume.runId, turnId: assistantId }
+        : null
       const assistantTurn: CodeChatTurn = {
         id: assistantId,
         role: "assistant",
@@ -2950,6 +3011,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             ? "⚙️ Agente Codex trabajando…"
             : "⚙️ Agente Codex construyendo…",
         streaming: true,
+        // Explicitly clear a persisted failed/cancelling marker when continuity
+        // reconnects and takes ownership of the durable run again.
+        cancellationState: undefined,
         codexRunId: opts?.resume?.runId,
         agentLabel: resuming
           ? "Retomando ejecución"
@@ -2983,18 +3047,26 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // signal.aborted or a replaced/cleared abortRef means the user stopped
       // (or superseded) THIS turn — never apply files or fall back afterwards.
       const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
+      const explicitlyStoppedTurn = () => explicitCodexStopTurnIdsRef.current.has(assistantId)
 
       const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
         setTurns((prev) =>
-          prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
+          prev.map((t) =>
+            t.id === assistantId
+              ? patchCodexTurnUnlessCancellationLocked(t, { agentLabel: label, agentPhases: phases })
+              : t,
+          ),
         )
-      const bindAssistantToRun = (projectId: string, runId: string) => {
-        activeCodexRunRef.current = { projectId, runId, turnId: assistantId }
+      const persistAssistantRunId = (runId: string) => {
         setTurns((prev) =>
           prev.map((turn) =>
             turn.id === assistantId ? { ...turn, codexRunId: runId } : turn,
           ),
         )
+      }
+      const bindAssistantToRun = (projectId: string, runId: string) => {
+        activeCodexRunRef.current = { projectId, runId, turnId: assistantId }
+        persistAssistantRunId(runId)
       }
 
       const startedAt = Date.now()
@@ -3014,6 +3086,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         setTurns((prev) =>
           prev.map((t) => {
             if (t.id !== assistantId) return t
+            if (isCodexTurnCancellationLocked(t)) return t
             const wrote = !!(meta?.written && meta.written.length > 0)
             const base = {
               ...t,
@@ -3091,6 +3164,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           let state = fold
           let lastPhase = state.phase
           const applyRender = () => {
+            if (cancelledTurn()) return
             // Narrative + the Claude Code-style live action feed (⏺ Escribiendo
             // `src/App.tsx`… → ✓) so the user watches the agent work in vivo.
             const live = `${codexLiveContent(state)}${codexLiveActionsMarkdown(state)}${codexLivePatchMarkdown(state)}`.trim()
@@ -3122,7 +3196,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId
-                  ? { ...t, ...(live ? { content: live } : {}), agentLabel: label, agentPhases: phases }
+                  ? patchCodexTurnUnlessCancellationLocked(t, {
+                      ...(live ? { content: live } : {}),
+                      agentLabel: label,
+                      agentPhases: phases,
+                    })
                   : t,
               ),
             )
@@ -3130,6 +3208,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           const handle = openRunStream({
             runId,
             onEvent: (ev) => {
+              if (cancelledTurn()) return
               const nextState = foldCodexEvent(state, ev)
               if (nextState !== state) {
                 state = nextState
@@ -3140,6 +3219,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               }
             },
             onStatus: (status) => {
+              if (cancelledTurn()) return
               state = { ...state, status }
             },
             token,
@@ -3162,13 +3242,22 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // Terminal turn state for Detener: streamRun RESOLVES on close() (it does
       // not reject), so without an explicit cancelled check the flow would fall
       // into the deterministic fallback and build the app the user just stopped.
-      const finishStopped = () =>
+      const finishStopped = () => {
+        const cancellation = codexCancellationRef.current
+        if (cancellation?.turnId === assistantId) {
+          recordCodexEngineSettled(assistantId, cancellation.attempt)
+          return
+        }
+        // Session navigation intentionally detaches without cancelling the
+        // backend. Its old async engine must not terminalize the persisted turn.
+        if (activeCodexTurnIdRef.current !== assistantId) return
         finish("_Generación detenida._", {
           label: "Generación detenida",
           phases: buildCodeAgentPhases("generate", {
             generate: { status: "done", detail: "Detenida por el usuario" },
           }),
         })
+      }
 
       const runWithProjectSlot = <T,>(projectId: string, operation: () => Promise<T>) =>
         runWhenCodexProjectIdle({
@@ -3363,7 +3452,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   autoExecute: true,
                 }),
               ),
-              isCancelled: cancelledTurn,
+              // Session navigation only detaches the local controller. The
+              // durable run is cancelled here solely for an explicit Stop.
+              isCancelled: explicitlyStoppedTurn,
               cancelDeps: {
                 cancelRun: codexApi.cancelRun,
                 cancelFamily: codexApi.cancelRunFamily,
@@ -3371,10 +3462,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               },
             })
             if (created.cancelled) {
+              persistAssistantRunId(created.run.id)
+              const pendingCancellation = codexCancellationRef.current
+              if (pendingCancellation?.turnId === assistantId) {
+                const target = { projectId, runId: created.run.id, turnId: assistantId }
+                const attempt = beginCodexCancellation(assistantId, target)
+                // createCodexRunWithCancellationFence already attempted the
+                // durable stop. Record that exact result; do not lie by
+                // terminalizing the bubble after a failed fence.
+                recordCodexEngineSettled(assistantId, attempt)
+                if (created.cancellationError) {
+                  recordCodexCancellationFailure(assistantId, attempt)
+                } else {
+                  recordCodexBackendConfirmation(assistantId, attempt)
+                }
+              }
               if (created.cancellationError) {
                 toast.error("No pude confirmar la cancelación del plan en el servidor.")
               }
-              finishStopped()
               return
             }
             planRun = created.run
@@ -3382,18 +3487,15 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // A resumed run can also be stopped while project/session lookup is in
           // flight. Do not bind a cancelled controller to a durable SSE stream.
           if (cancelledTurn()) {
-            try {
-              await cancelCodexRunFamily(
-                { projectId, runId: planRun.id },
-                {
-                  cancelRun: codexApi.cancelRun,
-                  cancelFamily: codexApi.cancelRunFamily,
-                  listRuns: codexApi.listRuns,
-                },
-              )
-            } catch {
-              toast.error("No pude confirmar la cancelación del plan en el servidor.")
+            if (!explicitlyStoppedTurn()) {
+              // POST /runs won the race with a session switch. Keep the new run
+              // durable and attach its id to the old session turn without
+              // repopulating active refs owned by the newly visible session.
+              persistAssistantRunId(planRun.id)
+              return
             }
+            // cancelStream already owns and is confirming the resume target.
+            // finishStopped supplies the engine-settled half of the gate.
             finishStopped()
             return
           }
@@ -3419,20 +3521,36 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               },
             )
             if (cancelledTurn()) {
+              if (!explicitlyStoppedTurn()) {
+                persistAssistantRunId(buildRun.id)
+                return
+              }
               // Approval may finish after the user pressed Detener. Cancel the
               // just-created durable child explicitly; attaching an already
               // aborted stream would otherwise leave it working invisibly.
-              try {
-                await cancelCodexRunFamily(
+              const cancellation = codexCancellationRef.current
+              if (cancellation?.turnId === assistantId) {
+                const target = { projectId, runId: buildRun.id, turnId: assistantId }
+                const alreadyTargetsChild =
+                  cancellation.target?.projectId === target.projectId
+                  && cancellation.target.runId === target.runId
+                if (!alreadyTargetsChild) {
+                  const attempt = beginCodexCancellation(assistantId, target)
+                  void requestCodexCancellation(target, attempt)
+                }
+              } else {
+                // The user pressed Stop and then navigated away. The UI attempt
+                // was invalidated, but the durable intent still fences this
+                // child so it cannot continue invisibly.
+                persistAssistantRunId(buildRun.id)
+                void cancelCodexRunFamily(
                   { projectId, runId: buildRun.id },
                   {
                     cancelRun: codexApi.cancelRun,
                     cancelFamily: codexApi.cancelRunFamily,
                     listRuns: codexApi.listRuns,
                   },
-                )
-              } catch {
-                toast.error("No pude confirmar la cancelación del build en el servidor.")
+                ).catch(() => {})
               }
               finishStopped()
               return
@@ -3574,12 +3692,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           err?.name === "AbortError" ||
           /\babort|cancel|operation was aborted/i.test(err?.message || "")
         if (aborted) {
-          finish("_Generación detenida._", {
-            label: "Generación detenida",
-            phases: buildCodeAgentPhases("generate", {
-              generate: { status: "done", detail: "Detenida" },
-            }),
-          })
+          finishStopped()
         } else if (errorCode === "company_project_not_found" || errorCode === "project_not_found") {
           const { code, message } = codexIdentityIssue(err, "project_not_found")
           setIdentityIssue({ code, message })
@@ -3654,12 +3767,17 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           abortRef.current = null
           setBusy(false)
         }
-        if (activeCodexRunRef.current?.turnId === assistantId) {
+        const cancellationOwnsTurn = codexCancellationRef.current?.turnId === assistantId
+        if (!cancellationOwnsTurn && activeCodexRunRef.current?.turnId === assistantId) {
           activeCodexRunRef.current = null
         }
+        if (!cancellationOwnsTurn && activeCodexTurnIdRef.current === assistantId) {
+          activeCodexTurnIdRef.current = null
+        }
+        explicitCodexStopTurnIdsRef.current.delete(assistantId)
       }
     },
-    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, detachCodexProjectForLocalFallback, files, markVoiced, runDeterministicPromptInto, selectedEffort, setTurns, token],
+    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, beginCodexCancellation, detachCodexProjectForLocalFallback, files, markVoiced, recordCodexBackendConfirmation, recordCodexCancellationFailure, recordCodexEngineSettled, requestCodexCancellation, runDeterministicPromptInto, selectedEffort, setTurns, token],
   )
 
   // Keep the resilience-fallback ref pointing at the freshest engine closure.
@@ -3695,6 +3813,82 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       try {
         const runs = await codexApi.listRuns(projectId)
         if (cancelled || busyRef.current || buildingAppRef.current) return
+        const persistedCancellations = turnsRef.current.filter(
+          (turn) =>
+            turn.role === "assistant"
+            && (turn.cancellationState === "cancelling" || turn.cancellationState === "failed"),
+        )
+        const reconciliation = new Map<
+          string,
+          {
+            kind: ReturnType<typeof classifyCodexCancellationReloadStatus>
+            run: (typeof runs)[number] | null
+          }
+        >()
+        for (const turn of persistedCancellations) {
+          const run = turn.codexRunId
+            ? selectCodexCancellationReloadRun(runs, turn.codexRunId)
+            : null
+          reconciliation.set(turn.id, {
+            kind: classifyCodexCancellationReloadStatus(run?.status),
+            run,
+          })
+        }
+        if (reconciliation.size > 0) {
+          setTurns((prev) =>
+            prev.map((turn) => {
+              const result = reconciliation.get(turn.id)
+              if (!result) return turn
+              const next = reconcileCodexTurnAfterReload(turn, result.kind)
+              return {
+                ...next,
+                ...(result.run ? { codexRunId: result.run.id } : {}),
+                agentPhases:
+                  result.kind === "cancelled"
+                    ? buildCodeAgentPhases("generate", {
+                        generate: { status: "done", detail: "Cancelación confirmada por el servidor" },
+                      })
+                    : result.kind === "done"
+                      ? buildCodeAgentPhases("verify", {
+                          verify: { status: "done", detail: "La ejecución terminó en el servidor" },
+                        })
+                      : result.kind === "active"
+                        ? buildCodeAgentPhases("generate", {
+                            generate: { status: "error", detail: "La ejecución sigue activa; puedes detenerla de nuevo" },
+                          })
+                        : buildCodeAgentPhases("generate", {
+                            generate: {
+                              status: "error",
+                              detail: result.kind === "error"
+                                ? "La ejecución terminó con error"
+                                : "La ejecución ya no está disponible",
+                            },
+                          }),
+              }
+            }),
+          )
+
+          // A reload interrupts the browser-side cancel request. If the worker
+          // is still active, restore a failed/retryable attempt whose engine is
+          // already settled, plus the exact durable target for the Stop button.
+          const activeCancellation = persistedCancellations
+            .slice()
+            .reverse()
+            .map((turn) => ({ turn, result: reconciliation.get(turn.id) }))
+            .find((entry) => entry.result?.kind === "active" && entry.result.run)
+          if (activeCancellation?.result?.run) {
+            const target = {
+              projectId,
+              runId: activeCancellation.result.run.id,
+              turnId: activeCancellation.turn.id,
+            }
+            const attempt = beginCodexCancellation(activeCancellation.turn.id, target)
+            recordCodexEngineSettled(activeCancellation.turn.id, attempt)
+            recordCodexCancellationFailure(activeCancellation.turn.id, attempt)
+            busyRef.current = true
+            return
+          }
+        }
         const target = selectCodexContinuityRun(
           runs,
           readSessionCodexSyncedRun(sessionId),
@@ -3730,12 +3924,16 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     }
   }, [
     activeFolder?.id,
+    beginCodexCancellation,
     buildingApp,
     busy,
     codexAvailable,
     durableCompanyCodexProjectId,
+    recordCodexCancellationFailure,
+    recordCodexEngineSettled,
     runCodexEngine,
     sessionId,
+    setTurns,
     user?.id,
   ])
 
@@ -4107,7 +4305,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   React.useEffect(() => {
     if (!busy) return
     const t = window.setTimeout(() => {
-      if (!abortRef.current) {
+      if (!abortRef.current && !codexCancellationRef.current) {
         setBusy(false)
         repairInFlightRef.current = false
       }
@@ -4571,11 +4769,30 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   type="button"
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8 shrink-0 rounded-full text-foreground hover:bg-muted"
+                  className={cn(
+                    "h-8 w-8 shrink-0 rounded-full hover:bg-muted",
+                    activeCodexCancellationState === "failed" ? "text-destructive" : "text-foreground",
+                  )}
                   onClick={cancelStream}
-                  aria-label="Detener"
+                  disabled={activeCodexCancellationState === "cancelling"}
+                  aria-label={
+                    activeCodexCancellationState === "cancelling"
+                      ? "Deteniendo agente"
+                      : activeCodexCancellationState === "failed"
+                        ? "Reintentar detención"
+                        : "Detener"
+                  }
+                  title={
+                    activeCodexCancellationState === "cancelling"
+                      ? "Confirmando cancelación en el servidor"
+                      : activeCodexCancellationState === "failed"
+                        ? "Reintentar cancelación en el servidor"
+                        : "Detener"
+                  }
                 >
-                  <StopCircle className="h-4 w-4" />
+                  {activeCodexCancellationState === "cancelling"
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <StopCircle className="h-4 w-4" />}
                 </Button>
               </>
             ) : (

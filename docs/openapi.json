@@ -2151,6 +2151,26 @@
         }
       }
     },
+    "/api/admin/stats/product-quality": {
+      "get": {
+        "operationId": "get_api_admin_stats_product_quality",
+        "summary": "GET /api/admin/stats/product-quality",
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
     "/api/admin/stats/usage": {
       "get": {
         "operationId": "get_api_admin_stats_usage",
@@ -8893,6 +8913,216 @@
         ]
       }
     },
+    "/api/codex/company-associations": {
+      "get": {
+        "operationId": "get_api_codex_company_associations",
+        "summary": "GET /api/codex/company-associations",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_codex_company_associations",
+        "summary": "POST /api/codex/company-associations",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/codex/company-associations/{projectId}/connectors": {
+      "put": {
+        "operationId": "put_api_codex_company_associations_projectId_connectors",
+        "summary": "PUT /api/codex/company-associations/:projectId/connectors",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/company-associations/{projectId}/connectors/{connectorAccountId}": {
+      "delete": {
+        "operationId": "delete_api_codex_company_associations_projectId_connectors_connectorAccountId",
+        "summary": "DELETE /api/codex/company-associations/:projectId/connectors/:connectorAccountId",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "connectorAccountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_codex_company_associations_projectId_connectors_connectorAccountId",
+        "summary": "POST /api/codex/company-associations/:projectId/connectors/:connectorAccountId",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "connectorAccountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/company-associations/orphans": {
+      "get": {
+        "operationId": "get_api_codex_company_associations_orphans",
+        "summary": "GET /api/codex/company-associations/orphans",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/codex/github/actions/analyze-failure": {
       "post": {
         "operationId": "post_api_codex_github_actions_analyze_failure",
@@ -9205,6 +9435,1142 @@
         ]
       }
     },
+    "/api/codex/projects/{id}/activity": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_activity",
+        "summary": "GET /api/codex/projects/:id/activity",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/activity-reports": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_activity_reports",
+        "summary": "POST /api/codex/projects/:id/activity-reports",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/budget": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_budget",
+        "summary": "GET /api/codex/projects/:id/budget",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/business-audit": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_business_audit",
+        "summary": "POST /api/codex/projects/:id/business-audit",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/business-channels": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_business_channels",
+        "summary": "GET /api/codex/projects/:id/business-channels",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "put_api_codex_projects_id_business_channels",
+        "summary": "PUT /api/codex/projects/:id/business-channels",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/business-channels-doctor": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_business_channels_doctor",
+        "summary": "GET /api/codex/projects/:id/business-channels-doctor",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/business-channels/{channelId}": {
+      "put": {
+        "operationId": "put_api_codex_projects_id_business_channels_channelId",
+        "summary": "PUT /api/codex/projects/:id/business-channels/:channelId",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/business-channels/{channelId}/inbox": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_business_channels_channelId_inbox",
+        "summary": "POST /api/codex/projects/:id/business-channels/:channelId/inbox",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/business-channels/{channelId}/pair": {
+      "delete": {
+        "operationId": "delete_api_codex_projects_id_business_channels_channelId_pair",
+        "summary": "DELETE /api/codex/projects/:id/business-channels/:channelId/pair",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_codex_projects_id_business_channels_channelId_pair",
+        "summary": "POST /api/codex/projects/:id/business-channels/:channelId/pair",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/command-center": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_command_center",
+        "summary": "GET /api/codex/projects/:id/command-center",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_company_operations",
+        "summary": "GET /api/codex/projects/:id/company-operations",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/actions/{actionId}/approve": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_company_operations_actions_actionId_approve",
+        "summary": "POST /api/codex/projects/:id/company-operations/actions/:actionId/approve",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/actions/{actionId}/reject": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_company_operations_actions_actionId_reject",
+        "summary": "POST /api/codex/projects/:id/company-operations/actions/:actionId/reject",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/leads/{leadId}": {
+      "patch": {
+        "operationId": "patch_api_codex_projects_id_company_operations_leads_leadId",
+        "summary": "PATCH /api/codex/projects/:id/company-operations/leads/:leadId",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "leadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/leads/{leadId}/outreach": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_company_operations_leads_leadId_outreach",
+        "summary": "POST /api/codex/projects/:id/company-operations/leads/:leadId/outreach",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "leadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/research-leads": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_company_operations_research_leads",
+        "summary": "POST /api/codex/projects/:id/company-operations/research-leads",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/triage-inbox": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_company_operations_triage_inbox",
+        "summary": "POST /api/codex/projects/:id/company-operations/triage-inbox",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-operations/triage-social": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_company_operations_triage_social",
+        "summary": "POST /api/codex/projects/:id/company-operations/triage-social",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-profile": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_company_profile",
+        "summary": "GET /api/codex/projects/:id/company-profile",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_codex_projects_id_company_profile",
+        "summary": "PATCH /api/codex/projects/:id/company-profile",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/company-resources": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_company_resources",
+        "summary": "GET /api/codex/projects/:id/company-resources",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "put_api_codex_projects_id_company_resources",
+        "summary": "PUT /api/codex/projects/:id/company-resources",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/department-pools": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_department_pools",
+        "summary": "GET /api/codex/projects/:id/department-pools",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/department-pools/{departmentId}": {
+      "put": {
+        "operationId": "put_api_codex_projects_id_department_pools_departmentId",
+        "summary": "PUT /api/codex/projects/:id/department-pools/:departmentId",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "departmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/departments": {
+      "put": {
+        "operationId": "put_api_codex_projects_id_departments",
+        "summary": "PUT /api/codex/projects/:id/departments",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/departments/{departmentId}": {
+      "delete": {
+        "operationId": "delete_api_codex_projects_id_departments_departmentId",
+        "summary": "DELETE /api/codex/projects/:id/departments/:departmentId",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "departmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/codex/projects/{id}/export": {
       "post": {
         "operationId": "post_api_codex_projects_id_export",
@@ -9355,6 +10721,242 @@
         ]
       }
     },
+    "/api/codex/projects/{id}/mission-evidence": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_mission_evidence",
+        "summary": "GET /api/codex/projects/:id/mission-evidence",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/mission-evidence/{recordId}/review": {
+      "patch": {
+        "operationId": "patch_api_codex_projects_id_mission_evidence_recordId_review",
+        "summary": "PATCH /api/codex/projects/:id/mission-evidence/:recordId/review",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/office-state": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_office_state",
+        "summary": "GET /api/codex/projects/:id/office-state",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/okrs": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_okrs",
+        "summary": "GET /api/codex/projects/:id/okrs",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/okrs/reprioritize": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_okrs_reprioritize",
+        "summary": "POST /api/codex/projects/:id/okrs/reprioritize",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/okrs/review": {
+      "put": {
+        "operationId": "put_api_codex_projects_id_okrs_review",
+        "summary": "PUT /api/codex/projects/:id/okrs/review",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/codex/projects/{id}/preview/start": {
       "post": {
         "operationId": "post_api_codex_projects_id_preview_start",
@@ -9435,6 +11037,406 @@
       "post": {
         "operationId": "post_api_codex_projects_id_preview_stop",
         "summary": "POST /api/codex/projects/:id/preview/stop",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/proactive": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_proactive",
+        "summary": "GET /api/codex/projects/:id/proactive",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_codex_projects_id_proactive",
+        "summary": "POST /api/codex/projects/:id/proactive",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/publication": {
+      "get": {
+        "operationId": "get_api_codex_projects_id_publication",
+        "summary": "GET /api/codex/projects/:id/publication",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_codex_projects_id_publication",
+        "summary": "POST /api/codex/projects/:id/publication",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/publication/rollback": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_publication_rollback",
+        "summary": "POST /api/codex/projects/:id/publication/rollback",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/swarms": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_swarms",
+        "summary": "POST /api/codex/projects/:id/swarms",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/swarms/{swarmId}/cancel": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_swarms_swarmId_cancel",
+        "summary": "POST /api/codex/projects/:id/swarms/:swarmId/cancel",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "swarmId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/swarms/{swarmId}/pause": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_swarms_swarmId_pause",
+        "summary": "POST /api/codex/projects/:id/swarms/:swarmId/pause",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "swarmId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/swarms/{swarmId}/resume": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_swarms_swarmId_resume",
+        "summary": "POST /api/codex/projects/:id/swarms/:swarmId/resume",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "swarmId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{id}/workspace/recover": {
+      "post": {
+        "operationId": "post_api_codex_projects_id_workspace_recover",
+        "summary": "POST /api/codex/projects/:id/workspace/recover",
         "tags": [
           "codex"
         ],
@@ -9627,6 +11629,190 @@
         ]
       }
     },
+    "/api/codex/projects/{projectId}/runs/{runId}/session/continue": {
+      "post": {
+        "operationId": "post_api_codex_projects_projectId_runs_runId_session_continue",
+        "summary": "POST /api/codex/projects/:projectId/runs/:runId/session/continue",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{projectId}/runs/{runId}/session/fork": {
+      "post": {
+        "operationId": "post_api_codex_projects_projectId_runs_runId_session_fork",
+        "summary": "POST /api/codex/projects/:projectId/runs/:runId/session/fork",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{projectId}/runs/{runId}/session/rewind": {
+      "post": {
+        "operationId": "post_api_codex_projects_projectId_runs_runId_session_rewind",
+        "summary": "POST /api/codex/projects/:projectId/runs/:runId/session/rewind",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/projects/{projectId}/runs/{runId}/transcript": {
+      "get": {
+        "operationId": "get_api_codex_projects_projectId_runs_runId_transcript",
+        "summary": "GET /api/codex/projects/:projectId/runs/:runId/transcript",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/codex/runs": {
       "post": {
         "operationId": "post_api_codex_runs",
@@ -9693,10 +11879,124 @@
         ]
       }
     },
+    "/api/codex/runs/{id}/cancel-family": {
+      "post": {
+        "operationId": "post_api_codex_runs_id_cancel_family",
+        "summary": "POST /api/codex/runs/:id/cancel-family",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/codex/runs/{id}/stream": {
       "get": {
         "operationId": "get_api_codex_runs_id_stream",
         "summary": "GET /api/codex/runs/:id/stream",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/runs/{id}/summary-audio": {
+      "post": {
+        "operationId": "post_api_codex_runs_id_summary_audio",
+        "summary": "POST /api/codex/runs/:id/summary-audio",
+        "tags": [
+          "codex"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/codex/runs/{id}/tool-permission": {
+      "post": {
+        "operationId": "post_api_codex_runs_id_tool_permission",
+        "summary": "POST /api/codex/runs/:id/tool-permission",
         "tags": [
           "codex"
         ],
@@ -11529,18 +13829,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/credits/me": {
@@ -11613,18 +13905,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/credits/spend": {
@@ -11669,18 +13953,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
         },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "userId",
@@ -13069,6 +15345,44 @@
         "security": [
           {
             "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/elevenlabs/office-soundscapes/{soundId}": {
+      "post": {
+        "operationId": "post_api_elevenlabs_office_soundscapes_soundId",
+        "summary": "POST /api/elevenlabs/office-soundscapes/:soundId",
+        "tags": [
+          "elevenlabs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "soundId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ]
       }
@@ -15997,10 +18311,84 @@
         ]
       }
     },
+    "/api/files/{id}/versions/{versionId}/restore": {
+      "post": {
+        "operationId": "post_api_files_id_versions_versionId_restore",
+        "summary": "POST /api/files/:id/versions/:versionId/restore",
+        "tags": [
+          "files"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/files/diagnostics/batch": {
       "get": {
         "operationId": "get_api_files_diagnostics_batch",
         "summary": "GET /api/files/diagnostics/batch Batch diagnostic scan of all the user's files. Returns aggregate summary (healthy / stuck / failed / processing counts) plus a per-file breakdown with stage, error, age, and disk presence. The frontend can use this to show a document health dashboard or automatically prompt the user to repair stale files.",
+        "tags": [
+          "files"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/files/media-token": {
+      "post": {
+        "operationId": "post_api_files_media_token",
+        "summary": "POST /api/files/media-token",
         "tags": [
           "files"
         ],
@@ -16555,10 +18943,18 @@
           "400": {
             "description": "Bad request"
           },
+          "401": {
+            "description": "Unauthorized"
+          },
           "500": {
             "description": "Server error"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/github/connect": {
@@ -18171,6 +20567,34 @@
         ]
       }
     },
+    "/api/gmail/forward": {
+      "post": {
+        "operationId": "post_api_gmail_forward",
+        "summary": "POST /api/gmail/forward",
+        "tags": [
+          "gmail"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/gmail/reply": {
       "post": {
         "operationId": "post_api_gmail_reply",
@@ -18541,18 +20965,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/gpts": {
@@ -24709,6 +27125,32 @@
             "bearerAuth": []
           }
         ]
+      },
+      "post": {
+        "operationId": "post_api_payments_verify_session",
+        "summary": "POST /api/payments/verify-session",
+        "tags": [
+          "payments"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/plan/generate": {
@@ -24771,18 +27213,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/plans/{code}": {
@@ -24837,18 +27271,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
         },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "id",
@@ -24859,6 +27285,106 @@
             }
           }
         ]
+      }
+    },
+    "/api/platform-improvements": {
+      "get": {
+        "operationId": "get_api_platform_improvements",
+        "summary": "GET /api/platform-improvements",
+        "tags": [
+          "platform-improvements"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/platform-improvements/{id}": {
+      "get": {
+        "operationId": "get_api_platform_improvements_id",
+        "summary": "GET /api/platform-improvements/:id",
+        "tags": [
+          "platform-improvements"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/platform-improvements/pipeline/{pipelineId}": {
+      "get": {
+        "operationId": "get_api_platform_improvements_pipeline_pipelineId",
+        "summary": "GET /api/platform-improvements/pipeline/:pipelineId",
+        "tags": [
+          "platform-improvements"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/platform-improvements/summary": {
+      "get": {
+        "operationId": "get_api_platform_improvements_summary",
+        "summary": "GET /api/platform-improvements/summary",
+        "tags": [
+          "platform-improvements"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
       }
     },
     "/api/projects": {
@@ -26601,18 +29127,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/rbac/users/{userId}/roles": {
@@ -26629,18 +29147,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
         },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "userId",
@@ -26665,18 +29175,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
         },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "userId",
@@ -26703,18 +29205,10 @@
           "400": {
             "description": "Bad request"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
           "500": {
             "description": "Server error"
           }
         },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "userId",
@@ -26787,6 +29281,904 @@
         "security": [
           {
             "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library": {
+      "get": {
+        "operationId": "get_api_research_library",
+        "summary": "GET /api/research-library",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/audit": {
+      "post": {
+        "operationId": "post_api_research_library_audit",
+        "summary": "POST /api/research-library/audit",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/citation-graph": {
+      "post": {
+        "operationId": "post_api_research_library_citation_graph",
+        "summary": "POST /api/research-library/citation-graph",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections": {
+      "post": {
+        "operationId": "post_api_research_library_collections",
+        "summary": "POST /api/research-library/collections",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}": {
+      "delete": {
+        "operationId": "delete_api_research_library_collections_id",
+        "summary": "DELETE /api/research-library/collections/:id",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_research_library_collections_id",
+        "summary": "PATCH /api/research-library/collections/:id",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}/comments": {
+      "get": {
+        "operationId": "get_api_research_library_collections_id_comments",
+        "summary": "GET /api/research-library/collections/:id/comments",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_research_library_collections_id_comments",
+        "summary": "POST /api/research-library/collections/:id/comments",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}/comments/{commentId}": {
+      "delete": {
+        "operationId": "delete_api_research_library_collections_id_comments_commentId",
+        "summary": "DELETE /api/research-library/collections/:id/comments/:commentId",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_research_library_collections_id_comments_commentId",
+        "summary": "PATCH /api/research-library/collections/:id/comments/:commentId",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}/references": {
+      "post": {
+        "operationId": "post_api_research_library_collections_id_references",
+        "summary": "POST /api/research-library/collections/:id/references",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}/references/{referenceId}": {
+      "delete": {
+        "operationId": "delete_api_research_library_collections_id_references_referenceId",
+        "summary": "DELETE /api/research-library/collections/:id/references/:referenceId",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "referenceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}/share": {
+      "post": {
+        "operationId": "post_api_research_library_collections_id_share",
+        "summary": "POST /api/research-library/collections/:id/share",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/collections/{id}/share/{organizationId}": {
+      "delete": {
+        "operationId": "delete_api_research_library_collections_id_share_organizationId",
+        "summary": "DELETE /api/research-library/collections/:id/share/:organizationId",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organizationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/conflicts": {
+      "get": {
+        "operationId": "get_api_research_library_conflicts",
+        "summary": "GET /api/research-library/conflicts",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/conflicts/{id}/resolve": {
+      "post": {
+        "operationId": "post_api_research_library_conflicts_id_resolve",
+        "summary": "POST /api/research-library/conflicts/:id/resolve",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/export": {
+      "post": {
+        "operationId": "post_api_research_library_export",
+        "summary": "POST /api/research-library/export",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/references": {
+      "post": {
+        "operationId": "post_api_research_library_references",
+        "summary": "POST /api/research-library/references",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/references/{id}": {
+      "delete": {
+        "operationId": "delete_api_research_library_references_id",
+        "summary": "DELETE /api/research-library/references/:id",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_research_library_references_id",
+        "summary": "PATCH /api/research-library/references/:id",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/research-library/sync/mendeley": {
+      "post": {
+        "operationId": "post_api_research_library_sync_mendeley",
+        "summary": "POST /api/research-library/sync/mendeley",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/sync/zotero": {
+      "post": {
+        "operationId": "post_api_research_library_sync_zotero",
+        "summary": "POST /api/research-library/sync/zotero",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/templates": {
+      "get": {
+        "operationId": "get_api_research_library_templates",
+        "summary": "GET /api/research-library/templates",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_research_library_templates",
+        "summary": "POST /api/research-library/templates",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/research-library/templates/{id}": {
+      "delete": {
+        "operationId": "delete_api_research_library_templates_id",
+        "summary": "DELETE /api/research-library/templates/:id",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_research_library_templates_id",
+        "summary": "PATCH /api/research-library/templates/:id",
+        "tags": [
+          "research-library"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ]
       }
@@ -27099,6 +30491,90 @@
         ]
       }
     },
+    "/api/scientific-search/agents/citation-verifier": {
+      "post": {
+        "operationId": "post_api_scientific_search_agents_citation_verifier",
+        "summary": "POST /api/scientific-search/agents/citation-verifier",
+        "tags": [
+          "scientific-search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/scientific-search/agents/evidence-critic": {
+      "post": {
+        "operationId": "post_api_scientific_search_agents_evidence_critic",
+        "summary": "POST /api/scientific-search/agents/evidence-critic",
+        "tags": [
+          "scientific-search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/scientific-search/agents/systematic-review": {
+      "post": {
+        "operationId": "post_api_scientific_search_agents_systematic_review",
+        "summary": "POST /api/scientific-search/agents/systematic-review",
+        "tags": [
+          "scientific-search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/scientific-search/providers": {
       "get": {
         "operationId": "get_api_scientific_search_providers",
@@ -27123,6 +30599,62 @@
       "post": {
         "operationId": "post_api_scientific_search_review",
         "summary": "POST /api/scientific-search/review — turn a natural-language research request into a full literature review: multilingual query expansion, multi-provider search, evidence extraction, thematic synthesis, consensus/gaps, APA/IEEE/MLA bibliography, a comparison table and an assembled Markdown report. body: { query, providers?, limit?, maxPapers?, timeoutMs? } →    { query, papers, synthesis, bibliography, comparisonTable, report, meta }",
+        "tags": [
+          "scientific-search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/scientific-search/review/assess": {
+      "post": {
+        "operationId": "post_api_scientific_search_review_assess",
+        "summary": "POST /api/scientific-search/review/assess — full-text risk-of-bias and GRADE assessment. Reviewer overrides remain explicit and every automated judgment carries the supporting sentence from the supplied full text.",
+        "tags": [
+          "scientific-search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/scientific-search/review/export": {
+      "post": {
+        "operationId": "post_api_scientific_search_review_export",
+        "summary": "POST /api/scientific-search/review/export — run the same auditable review pipeline and return its protocol as a downloadable Markdown artifact.",
         "tags": [
           "scientific-search"
         ],
@@ -28893,6 +32425,80 @@
             }
           }
         ]
+      },
+      "patch": {
+        "operationId": "patch_api_search_saved_id",
+        "summary": "PATCH /api/search/saved/:id",
+        "tags": [
+          "search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/search/saved/{id}/run": {
+      "post": {
+        "operationId": "post_api_search_saved_id_run",
+        "summary": "POST /api/search/saved/:id/run",
+        "tags": [
+          "search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/search/web": {
@@ -28941,6 +32547,126 @@
             "description": "Server error"
           }
         }
+      }
+    },
+    "/api/social-posts/{id}/approve": {
+      "post": {
+        "operationId": "post_api_social_posts_id_approve",
+        "summary": "POST /api/social-posts/:id/approve",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/social-posts/{id}/cancel": {
+      "post": {
+        "operationId": "post_api_social_posts_id_cancel",
+        "summary": "POST /api/social-posts/:id/cancel",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/social-posts/{id}/publish-now": {
+      "post": {
+        "operationId": "post_api_social_posts_id_publish_now",
+        "summary": "POST /api/social-posts/:id/publish-now",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/social-posts/{id}/retry": {
+      "post": {
+        "operationId": "post_api_social_posts_id_retry",
+        "summary": "POST /api/social-posts/:id/retry",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/social-posts/connect/{platform}": {
@@ -28993,6 +32719,166 @@
         }
       }
     },
+    "/api/social-posts/connections/{platform}": {
+      "delete": {
+        "operationId": "delete_api_social_posts_connections_platform",
+        "summary": "DELETE /api/social-posts/connections/:platform",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/social-posts/legacy": {
+      "get": {
+        "operationId": "get_api_social_posts_legacy",
+        "summary": "GET /api/social-posts/legacy",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/social-posts/legacy/assign": {
+      "post": {
+        "operationId": "post_api_social_posts_legacy_assign",
+        "summary": "POST /api/social-posts/legacy/assign",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/social-posts/oauth/{platform}/callback": {
+      "get": {
+        "operationId": "get_api_social_posts_oauth_platform_callback",
+        "summary": "GET /api/social-posts/oauth/:platform/callback",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/social-posts/operations": {
+      "get": {
+        "operationId": "get_api_social_posts_operations",
+        "summary": "GET /api/social-posts/operations",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/social-posts/operations/policy": {
+      "patch": {
+        "operationId": "patch_api_social_posts_operations_policy",
+        "summary": "PATCH /api/social-posts/operations/policy",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/social-posts/queue": {
+      "post": {
+        "operationId": "post_api_social_posts_queue",
+        "summary": "POST /api/social-posts/queue",
+        "tags": [
+          "social-posts"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
     "/api/social-posts/series": {
       "post": {
         "operationId": "post_api_social_posts_series",
@@ -29027,10 +32913,18 @@
           "400": {
             "description": "Bad request"
           },
+          "401": {
+            "description": "Unauthorized"
+          },
           "500": {
             "description": "Server error"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/spotify/command": {

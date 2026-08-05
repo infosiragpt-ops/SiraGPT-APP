@@ -43,6 +43,11 @@ describe('generateStreamId', () => {
 });
 
 describe('open / append / load (memory fallback)', () => {
+  test('uses a bounded configurable lease that active owners can renew indefinitely', () => {
+    assert.ok(streamResume.DEFAULT_TTL_SECONDS >= 5 * 60);
+    assert.ok(streamResume.DEFAULT_TTL_SECONDS <= 60 * 60);
+  });
+
   test('open without streamId mints a new session', async () => {
     const session = await streamResume.open({});
     assert.ok(session.streamId);
@@ -112,6 +117,30 @@ describe('open / append / load (memory fallback)', () => {
     await streamResume.append(streamId, undefined);
     const record = await streamResume.load(streamId);
     assert.deepEqual(record.chunks, []);
+  });
+
+  test('touch keeps a silent detached owner reconnectable past the old five-minute TTL', async () => {
+    let now = 0;
+    streamResume._setNowForTests(() => now);
+    const session = await streamResume.open({ streamId: 'silent-owner', ttlSeconds: 300 });
+
+    now = 290_000;
+    assert.equal(await streamResume.touch(session.streamId), true);
+    now = 310_000; // past the original five-minute expiry
+
+    const resumed = await streamResume.openExisting({ streamId: session.streamId });
+    assert.equal(resumed.found, true);
+    assert.equal(resumed.record.complete, false);
+  });
+
+  test('terminal records still expire after the bounded default lease', async () => {
+    let now = 0;
+    streamResume._setNowForTests(() => now);
+    const session = await streamResume.open({ streamId: 'terminal-owner' });
+    await streamResume.complete(session.streamId);
+
+    now = (streamResume.DEFAULT_TTL_SECONDS * 1000) + 1;
+    assert.equal(await streamResume.load(session.streamId), null);
   });
 });
 

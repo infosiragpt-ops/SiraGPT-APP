@@ -33,10 +33,21 @@ describe("chat stream id source contract", () => {
       "message send/regenerate paths must call safeUUID(); raw crypto.randomUUID() is undefined on plain HTTP LAN previews",
     )
 
-    const streamIdCalls = outsideImport.match(/const streamId = safeUUID\(\)/g) || []
+    assert.match(
+      outsideImport,
+      /const requestedStreamId = [\s\S]{0,220}options\?\.streamId[\s\S]{0,220}: safeUUID\(\)/,
+      "ordinary chat turns must reuse a persisted stream id and mint one safely only when absent",
+    )
+    assert.match(
+      outsideImport,
+      /const streamId = pendingMessage\?\.streamId \|\| requestedStreamId/,
+      "reload retries must keep Stop ownership on the original durable stream",
+    )
+
+    const freshRegenerationStreamIds = outsideImport.match(/const streamId = safeUUID\(\)/g) || []
     assert.ok(
-      streamIdCalls.length >= 3,
-      `expected all chat generation paths to create stream ids through safeUUID(), found ${streamIdCalls.length}`,
+      freshRegenerationStreamIds.length >= 2,
+      `expected regeneration paths to create stream ids through safeUUID(), found ${freshRegenerationStreamIds.length}`,
     )
 
     assert.doesNotMatch(source, /msg-user-\$\{Date\.now\(\)\}/,

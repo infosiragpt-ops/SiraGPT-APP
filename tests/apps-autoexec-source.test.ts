@@ -8,7 +8,7 @@ const ROOT = process.cwd()
 describe("APPS autonomous full-stack wiring", () => {
   it("enables autoExecute on APPS plan + build so agents can work for hours", () => {
     const panel = readFileSync(join(ROOT, "components/codex/codex-agent-panel.tsx"), "utf8")
-    const api = readFileSync(join(ROOT, "lib/codex/codex-api.ts"), "utf8")
+    const api = readFileSync(join(ROOT, "lib/codex/api/runs.ts"), "utf8")
     const chat = readFileSync(join(ROOT, "components/code/ai-code-chat-panel.tsx"), "utf8")
 
     assert.match(panel, /autoExecute: surface === "apps"/)
