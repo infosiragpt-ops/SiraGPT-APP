@@ -370,7 +370,13 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   }
 
   async function sendStarter(prompt: string) {
-    await send({ prompt, planOnly: false, tier: DEFAULT_TIER, attachments: [] })
+    // APPS product builds need the strongest available model tier by default.
+    await send({
+      prompt,
+      planOnly: false,
+      tier: surface === "apps" ? "power" : DEFAULT_TIER,
+      attachments: [],
+    })
   }
 
   async function stop() {
