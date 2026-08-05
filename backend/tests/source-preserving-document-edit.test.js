@@ -1853,6 +1853,7 @@ describe('source-preserving DOCX title edits', () => {
     planSourcePreservingOperations,
     setDocxDocumentTitleBuffer,
     validateDocxOperationCriteria,
+    validateEditedBuffer,
   } = sourcePreservingInternals;
 
   it('extracts the new title without swallowing the next requested edit', () => {
@@ -1878,6 +1879,183 @@ describe('source-preserving DOCX title edits', () => {
     assert.deepEqual(operations.map((operation) => operation.kind), ['set_document_title']);
     assert.equal(operations[0].newTitle, '2027');
     assert.equal(operations.some((operation) => operation.kind === 'append_generic'), false);
+  });
+
+  it('changes “de 2026 al 2027” only in a complex multi-run cover title', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-de-al-'));
+    const originalPath = path.join(tmp, 'TSP-profesional.docx');
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new TextRun({ text: 'PROPUESTA PROFESIONAL, LIMA, ', bold: true }),
+            new TextRun({ text: '20', bold: true }),
+            new TextRun({ text: '26', bold: true }),
+          ],
+        }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun('2026')] }),
+        new Paragraph('El cuerpo académico conserva la referencia 2026 sin cambios.'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente que no debe validar una operación equivocada.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+
+    const prompt = 'cambia en el titulo de 2026 al 2027 en mi mismo word';
+    const documentXml = new PizZip(original).file('word/document.xml').asText();
+    const operations = planSourcePreservingOperations({ requestText: prompt, documentXml });
+    assert.deepEqual(operations, [{
+      kind: 'replace_text',
+      needle: '2026',
+      replacement: '2027',
+      scope: 'title',
+    }]);
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'professional-cover-de-al',
+        path: originalPath,
+        originalName: 'TSP-profesional.docx',
+        filename: 'TSP-profesional.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'PROPUESTA PROFESIONAL, LIMA, 2026. Referencia 2026. ANEXOS.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-title-de-al',
+      chatId: 'chat-title-de-al',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.request_contract, true);
+    assert.equal(result.validation.details.requestContract.type, 'replace_text');
+    assert.equal(result.validation.details.requestContract.details.targetParagraphIndex, 0);
+    assert.equal(result.orchestration.operations[0].changedCount, 1);
+    assert.match(result.file.filename, /_editado\.docx$/);
+    assert.doesNotMatch(result.file.filename, /con_anexos/);
+    assert.match(result.content, /reemplacé el texto solicitado únicamente en el título/);
+    assert.doesNotMatch(result.content, /agregué el contenido solicitado en anexos/);
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded Word must remain immutable');
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const beforeZip = new PizZip(original);
+    const afterZip = new PizZip(edited);
+    const editedXml = afterZip.file('word/document.xml').asText();
+    const paragraphTexts = [...editedXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map((paragraph) => (
+      [...paragraph[0].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
+        .map((textNode) => textNode[1])
+        .join('')
+    ));
+    assert.equal(paragraphTexts[0], 'PROPUESTA PROFESIONAL, LIMA, 2027');
+    assert.equal(paragraphTexts[1], '2026');
+    assert.match(paragraphTexts[2], /referencia 2026/i);
+    assert.equal(paragraphTexts.filter((text) => text === 'ANEXOS').length, 1);
+    assert.equal((editedXml.match(/<w:p(?:\s|>)/g) || []).length, (documentXml.match(/<w:p(?:\s|>)/g) || []).length);
+    assert.equal((editedXml.match(/<w:sectPr(?:\s|>)/g) || []).length, (documentXml.match(/<w:sectPr(?:\s|>)/g) || []).length);
+
+    for (const name of Object.keys(beforeZip.files)) {
+      if (name === 'word/document.xml' || beforeZip.files[name].dir) continue;
+      assert.equal(
+        beforeZip.file(name).asNodeBuffer().equals(afterZip.file(name).asNodeBuffer()),
+        true,
+        `${name} must remain byte-identical`,
+      );
+    }
+  });
+
+  it('fails closed instead of fabricating ANEXOS for an unresolved title mutation', () => {
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'modifica el título, pero no indico cuál es el texto actual ni el nuevo',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Título actual</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+    );
+
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'modifica el título del anexo 3 desde 2026 hasta 2027',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Anexo 3</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+      'an unresolved title edit must not escape through a section-fill operation',
+    );
+
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'cambia "Estado A" por "Estado B" y modifica el título del anexo 3 desde 2026 hasta 2027',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Estado A</w:t></w:r></w:p><w:p><w:r><w:t>Anexo 3, 2026</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+      'a valid sibling replacement must not hide an unresolved mutation clause',
+    );
+  });
+
+  it('parses “del 2026 al 2027” without leaking the final letter of del', () => {
+    const operations = planSourcePreservingOperations({
+      requestText: 'cambia en el título del 2026 al 2027 en mi mismo Word',
+      documentXml: '<w:document><w:body><w:p><w:r><w:t>LIMA, 2026</w:t></w:r></w:p></w:body></w:document>',
+    });
+    assert.deepEqual(operations, [{
+      kind: 'replace_text',
+      needle: '2026',
+      replacement: '2027',
+      scope: 'title',
+    }]);
+  });
+
+  it('does not validate unrelated growth as a generic appendix', async () => {
+    const before = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+      ] }],
+    })));
+    const unrelatedGrowth = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+        new Paragraph('Crecimiento ajeno a la operación solicitada.'),
+      ] }],
+    })));
+    const validation = validateDocxOperationCriteria(
+      unrelatedGrowth,
+      [{ kind: 'append_generic', wantsInstrument: false }],
+      { beforeBuffer: before },
+    );
+    assert.equal(validation.passed, false);
+    assert.equal(validation.checks[0].details.beforeMarkerCount, 1);
+    assert.equal(validation.checks[0].details.afterMarkerCount, 1);
+
+    const misleadingGrowth = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Texto distinto de los bloques que esta ejecución debía agregar.'),
+      ] }],
+    })));
+    const fingerprintValidation = await validateEditedBuffer(
+      misleadingGrowth,
+      'docx',
+      [
+        { kind: 'pageBreak', text: '' },
+        { kind: 'heading1', text: 'ANEXOS' },
+        { kind: 'heading2', text: 'Contenido agregado según solicitud' },
+      ],
+      {
+        beforeBuffer: before,
+        operations: [{ kind: 'append_generic', wantsInstrument: false }],
+        requestText: 'agrega el contenido solicitado como anexo',
+      },
+    );
+    assert.equal(fingerprintValidation.checks.operation_criteria, true, 'the structural gate alone sees a new anchor');
+    assert.equal(fingerprintValidation.checks.content_appended, false, 'the expected block fingerprint is absent');
+    assert.equal(fingerprintValidation.passed, false);
   });
 
   it('plans a native title update instead of replacing the literal word título', async () => {
