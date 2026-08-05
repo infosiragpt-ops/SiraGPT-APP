@@ -60,7 +60,7 @@ export const MUSIC_STYLE_PROFILES: Readonly<Record<MusicStyle, { label: string; 
   Electronic: { label: "Electronic", description: "Sintetizadores, pulso moderno y energia digital.", accentClass: "bg-cyan-500" },
   Ambient: { label: "Ambient", description: "Capas suaves, atmosfera y movimiento discreto.", accentClass: "bg-teal-500" },
   Orchestral: { label: "Orchestral", description: "Cuerdas, metales y dinamica de partitura.", accentClass: "bg-amber-500" },
-  Latin: { label: "Latin", description: "Ritmo calido, percusion marcada y sabor latino.", accentClass: "bg-red-500" },
+  Latin: { label: "Latin", description: "Ritmo calido, percusion marcada y sabor latino.", accentClass: "bg-orange-500" },
   "Hip-Hop": { label: "Hip-Hop", description: "Beat con groove, bajo presente y espacio vocal.", accentClass: "bg-slate-700 dark:bg-slate-300" },
   Jazz: { label: "Jazz", description: "Armonia rica, swing sutil e instrumentacion organica.", accentClass: "bg-emerald-600" },
 }
