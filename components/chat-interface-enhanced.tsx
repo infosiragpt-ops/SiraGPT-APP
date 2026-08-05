@@ -6444,19 +6444,30 @@ But first, you need to connect your Spotify account securely using the button be
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // The approved composer is a stable-size control. Long prompts scroll
-    // inside the textarea instead of resizing the surrounding surface.
-    textarea.style.removeProperty("height");
+    // Grow with content (Claude/ChatGPT control-bar rhythm) up to the CSS
+    // max-height, then scroll internally so the surface stays professional.
+    const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
+    const computedMax = Number.parseFloat(
+      window.getComputedStyle(textarea).maxHeight || "0",
+    );
+    const maxHeight = Number.isFinite(computedMax) && computedMax > 0
+      ? computedMax
+      : 200;
+    const minHeight = 26;
+
+    textarea.style.height = "0px";
     const scrollHeight = textarea.scrollHeight;
-    const nextHeight = textarea.clientHeight;
-    const nextOverflowY = scrollHeight > textarea.clientHeight + 1 ? "auto" : "hidden";
+    const nextHeight = Math.min(maxHeight, Math.max(minHeight, scrollHeight));
+    const nextOverflowY = scrollHeight > maxHeight + 1 ? "auto" : "hidden";
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = nextOverflowY;
+    if (shell) {
+      shell.style.height = `${nextHeight}px`;
+    }
+
     const previousLayout = textareaLayoutRef.current;
     const heightChanged = previousLayout.height !== nextHeight;
     const overflowChanged = previousLayout.overflowY !== nextOverflowY;
-
-    if (overflowChanged) {
-      textarea.style.overflowY = nextOverflowY;
-    }
     if (heightChanged || overflowChanged) {
       textareaLayoutRef.current = { height: nextHeight, overflowY: nextOverflowY };
     }
@@ -11929,7 +11940,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
-                        className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                        className="composer-input-row"
                       >
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
@@ -11992,7 +12003,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         )}
 
-                        {/* CENTER — stable-height textarea with internal scrolling. */}
+                        {/* CENTER — single-line default; grows with content. */}
                         <div className="composer-textarea-shell min-w-0 flex-1">
                           {hasDetectedLinks && input ? (
                             <div
@@ -12045,16 +12056,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             className={cn(
                               "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
                               "p-0",
-                              "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                              "text-[15px] leading-[1.5] tracking-normal text-foreground",
                               "placeholder:text-muted-foreground/65 placeholder:font-normal",
                               "dark:placeholder:text-[hsl(var(--text-tertiary))]",
                               "outline-none ring-0 focus:outline-none focus:ring-0",
                               "rounded-none transition-colors duration-200",
                             )}
                             style={{
-                              minHeight: "24px",
-                              maxHeight: "var(--chat-textarea-max-height, 200px)",
-                              overflowY: "auto",
+                              minHeight: "26px",
+                              maxHeight: "min(12.5rem, 42vh)",
+                              overflowY: "hidden",
                               overflowX: "hidden",
                               wordWrap: "break-word",
                               border: "none",
@@ -12412,7 +12423,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         </div>
                         <TooltipProvider>
                           <div
-                            className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                            className="composer-input-row"
                           >
                             <ActionsDropdown
                               chatType={chatType}
@@ -12524,16 +12535,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 className={cn(
                                   "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
                                   "p-0",
-                                  "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                                  "text-[15px] leading-[1.5] tracking-normal text-foreground",
                                   "placeholder:text-muted-foreground/65 placeholder:font-normal",
                                   "dark:placeholder:text-[hsl(var(--text-tertiary))]",
                                   "outline-none ring-0 focus:outline-none focus:ring-0",
                                   "rounded-none transition-colors duration-200",
                                 )}
                                 style={{
-                                  minHeight: "24px",
-                                  maxHeight: "var(--chat-textarea-max-height, 200px)",
-                                  overflowY: "auto",
+                                  minHeight: "26px",
+                              maxHeight: "min(12.5rem, 42vh)",
+                              overflowY: "hidden",
                                   overflowX: "hidden",
                                   wordWrap: "break-word",
                                   border: "none",
