@@ -90,11 +90,12 @@ export const hostRunnerService = {
   },
 
   /** Dev-server status: { running, ready, framework, error, tail, devUrl }. */
-  async status(runId: string): Promise<HostRunStatus> {
+  async status(runId: string, signal?: AbortSignal): Promise<HostRunStatus> {
     try {
       const res = await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/status`, {
         credentials: "include",
         headers: authHeaders(),
+        signal,
       })
       if (!res.ok) return { error: `HTTP ${res.status}` }
       return (await res.json().catch(() => ({}))) as HostRunStatus

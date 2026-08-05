@@ -14,9 +14,27 @@ const feedbackLedger = require('../services/agents/feedback-ledger');
 const rag = require('../services/rag-service');
 const chatExport = require('../services/chat-export');
 const triggers = require('../services/trigger-registry');
+const {
+  MESSAGE_IDEMPOTENCY_HASH_FIELD,
+  buildMessageIdempotencyScopeKey,
+  buildMessageRequestFingerprint,
+  createKeyedSerialExecutor,
+  createMessageIdempotencyCoordinator,
+  getStoredMessageRequestFingerprint,
+  normalizeTurnKey,
+} = require('../services/chat-turn-idempotency');
+const {
+  CHAT_MESSAGE_ROLES,
+  MAX_CHAT_TITLE_CHARS,
+  MAX_IDEMPOTENCY_KEY_CHARS,
+  MAX_MESSAGE_CONTENT_CHARS,
+  MAX_MODEL_ID_CHARS,
+} = require('../schemas/chats');
 
 const router = express.Router();
 const chatCreateIdempotencyCache = new Map();
+const chatCreateIdempotencyExecutor = createKeyedSerialExecutor();
+const messageIdempotencyCoordinator = createMessageIdempotencyCoordinator();
 
 function pruneChatCreateIdempotencyCache() {
   const cutoff = Date.now() - 10 * 60 * 1000;
@@ -25,12 +43,63 @@ function pruneChatCreateIdempotencyCache() {
   }
 }
 
-function getChatCreateIdempotencyKey(req) {
-  const raw = req.body?.idempotencyKey || req.headers['idempotency-key'];
-  if (!raw) return null;
-  const value = String(raw).trim();
-  if (!value || value.length > 200) return null;
-  return `chat-create:${req.user.id}:${value}`;
+function resolveRequestIdempotencyKey(req, metadata = null) {
+  const candidates = [];
+  const pushCandidate = (source, path, raw, present) => {
+    if (!present) return null;
+    if (typeof raw !== 'string') {
+      return { source, path, reason: 'must be a string' };
+    }
+    const value = raw.trim();
+    if (!value || value.length > MAX_IDEMPOTENCY_KEY_CHARS) {
+      return { source, path, reason: `must contain 1-${MAX_IDEMPOTENCY_KEY_CHARS} characters` };
+    }
+    candidates.push({ source, path, value });
+    return null;
+  };
+
+  const bodyPresent = Object.prototype.hasOwnProperty.call(req.body || {}, 'idempotencyKey');
+  let error = pushCandidate('body', 'idempotencyKey', req.body?.idempotencyKey, bodyPresent);
+  if (error) return { value: null, error };
+
+  const headerPresent = Object.prototype.hasOwnProperty.call(req.headers || {}, 'idempotency-key');
+  error = pushCandidate('header', 'Idempotency-Key', req.headers?.['idempotency-key'], headerPresent);
+  if (error) return { value: null, error };
+
+  const metadataPresent = metadata
+    && Object.prototype.hasOwnProperty.call(metadata, 'idempotencyKey');
+  error = pushCandidate(
+    'body',
+    'metadata.idempotencyKey',
+    metadata?.idempotencyKey,
+    Boolean(metadataPresent),
+  );
+  if (error) return { value: null, error };
+
+  const distinctValues = new Set(candidates.map((candidate) => candidate.value));
+  if (distinctValues.size > 1) {
+    return {
+      value: null,
+      error: {
+        source: 'request',
+        path: 'idempotencyKey',
+        reason: 'body, header, and metadata idempotency keys must match',
+      },
+    };
+  }
+  return { value: candidates[0]?.value || null, error: null };
+}
+
+function respondInvalidIdempotencyKey(res, error) {
+  return res.status(400).json({
+    error: 'Invalid idempotency key',
+    code: 'INVALID_IDEMPOTENCY_KEY',
+    errors: [{
+      msg: error?.reason || 'Invalid idempotency key',
+      path: error?.path || 'idempotencyKey',
+      location: error?.source === 'header' ? 'headers' : 'body',
+    }],
+  });
 }
 
 function stableStringify(value) {
@@ -39,19 +108,50 @@ function stableStringify(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
 }
 
-function buildMessageFingerprint({ chatId, role, content, files }) {
+function buildChatCreateRequestFingerprint({
+  title,
+  model,
+  isWordConnectorChat,
+  isExcelConnectorChat,
+  projectId,
+}) {
   return crypto
     .createHash('sha256')
-    .update(stableStringify({ chatId, role, content, files: files || null }))
+    .update(stableStringify({
+      title,
+      model,
+      isWordConnectorChat: Boolean(isWordConnectorChat),
+      isExcelConnectorChat: Boolean(isExcelConnectorChat),
+      projectId: projectId || null,
+    }))
     .digest('hex');
 }
 
+function isPlainMetadataObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function parseMessageMetadata(metadata) {
-  if (!metadata) return {};
   if (typeof metadata === 'string') {
-    try { return JSON.parse(metadata); } catch (_) { return {}; }
+    try {
+      const parsed = JSON.parse(metadata);
+      return isPlainMetadataObject(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
   }
-  return typeof metadata === 'object' ? metadata : {};
+  return isPlainMetadataObject(metadata) ? metadata : {};
+}
+
+function isValidMessageMetadata(value) {
+  if (typeof value !== 'string') return isPlainMetadataObject(value);
+  try {
+    return isPlainMetadataObject(JSON.parse(value));
+  } catch (_) {
+    return false;
+  }
 }
 
 const projectChatSelect = {
@@ -252,9 +352,12 @@ router.get('/active-runs', authenticateToken, async (req, res) => {
 
 // Create new chat
 router.post('/', [
-  body('title').trim().isLength({ min: 1 }).withMessage('Title is required'),
-  body('model').trim().isLength({ min: 1 }).withMessage('Model is required'),
-  body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 })
+  body('title').isString().trim().isLength({ min: 1, max: MAX_CHAT_TITLE_CHARS }).withMessage('Title is required'),
+  body('model').isString().trim().isLength({ min: 1, max: MAX_MODEL_ID_CHARS }).withMessage('Model is required'),
+  body('isWordConnectorChat').optional().isBoolean().toBoolean(),
+  body('isExcelConnectorChat').optional().isBoolean().toBoolean(),
+  body('projectId').optional().isString(),
+  body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: MAX_IDEMPOTENCY_KEY_CHARS })
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -263,55 +366,90 @@ router.post('/', [
     }
 
     const { title, model, isWordConnectorChat, isExcelConnectorChat, projectId } = req.body;
-    pruneChatCreateIdempotencyCache();
-    const createKey = getChatCreateIdempotencyKey(req);
-    if (createKey && chatCreateIdempotencyCache.has(createKey)) {
-      const cached = chatCreateIdempotencyCache.get(createKey);
-      const existingChat = await prisma.chat.findFirst({
-        where: { id: cached.chatId, userId: req.user.id, deletedAt: null },
+    const idempotencyIdentity = resolveRequestIdempotencyKey(req);
+    if (idempotencyIdentity.error) {
+      return respondInvalidIdempotencyKey(res, idempotencyIdentity.error);
+    }
+    const createKey = idempotencyIdentity.value
+      ? `chat-create:${req.user.id}:${idempotencyIdentity.value}`
+      : null;
+    const requestFingerprint = createKey ? buildChatCreateRequestFingerprint({
+      title,
+      model,
+      isWordConnectorChat,
+      isExcelConnectorChat,
+      projectId,
+    }) : null;
+    const result = await chatCreateIdempotencyExecutor.run(createKey, async () => {
+      pruneChatCreateIdempotencyCache();
+      if (createKey && chatCreateIdempotencyCache.has(createKey)) {
+        const cached = chatCreateIdempotencyCache.get(createKey);
+        if (cached.requestFingerprint && cached.requestFingerprint !== requestFingerprint) {
+          return { outcome: 'conflict' };
+        }
+        const existingChat = await prisma.chat.findFirst({
+          where: { id: cached.chatId, userId: req.user.id, deletedAt: null },
+          include: {
+            messages: true,
+            project: { select: projectChatSelect },
+          },
+        });
+        if (existingChat) {
+          return { outcome: 'duplicate', chat: existingChat };
+        }
+        chatCreateIdempotencyCache.delete(createKey);
+      }
+
+      // If a projectId is supplied, verify ownership before associating.
+      // Silently dropping a bogus id would create chats orphaned from
+      // any project the user actually owns; returning 400 forces the
+      // client to surface the error.
+      if (projectId) {
+        const ownsProject = await prisma.project.findFirst({
+          where: { id: projectId, userId: req.user.id },
+          select: { id: true },
+        });
+        if (!ownsProject) return { outcome: 'invalid_project' };
+      }
+
+      const chat = await prisma.chat.create({
+        data: {
+          userId: req.user.id,
+          title,
+          model,
+          isWordConnectorChat: isWordConnectorChat || false,
+          isExcelConnectorChat: isExcelConnectorChat || false,
+          projectId: projectId || null,
+        },
         include: {
           messages: true,
           project: { select: projectChatSelect },
-        },
+        }
       });
-      if (existingChat) {
-        return res.status(200).json({ chat: existingChat, duplicate: true });
+      if (createKey) {
+        chatCreateIdempotencyCache.set(createKey, {
+          chatId: chat.id,
+          createdAtMs: Date.now(),
+          requestFingerprint,
+        });
       }
-      chatCreateIdempotencyCache.delete(createKey);
-    }
-
-    // If a projectId is supplied, verify ownership before associating.
-    // Silently dropping a bogus id would create chats orphaned from
-    // any project the user actually owns; returning 400 forces the
-    // client to surface the error.
-    if (projectId) {
-      const ownsProject = await prisma.project.findFirst({
-        where: { id: projectId, userId: req.user.id },
-        select: { id: true },
-      });
-      if (!ownsProject) {
-        return res.status(400).json({ error: 'projectId does not belong to the current user' });
-      }
-    }
-
-    const chat = await prisma.chat.create({
-      data: {
-        userId: req.user.id,
-        title,
-        model,
-        isWordConnectorChat: isWordConnectorChat || false,
-        isExcelConnectorChat: isExcelConnectorChat || false,
-        projectId: projectId || null,
-      },
-      include: {
-        messages: true,
-        project: { select: projectChatSelect },
-      }
+      return { outcome: 'created', chat };
     });
-    if (createKey) {
-      chatCreateIdempotencyCache.set(createKey, { chatId: chat.id, createdAtMs: Date.now() });
+
+    if (result.outcome === 'conflict') {
+      return res.status(409).json({
+        error: 'Idempotency key already used with a different chat payload',
+        code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+      });
+    }
+    if (result.outcome === 'invalid_project') {
+      return res.status(400).json({ error: 'projectId does not belong to the current user' });
+    }
+    if (result.outcome === 'duplicate') {
+      return res.status(200).json({ chat: result.chat, duplicate: true });
     }
 
+    const chat = result.chat;
     res.status(201).json({ chat });
     // Fire-and-forget trigger publish; never block response.
     triggers.publish('chat.created', {
@@ -717,29 +855,22 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Add message to chat
-// Mirrors MAX_CHAT_INPUT_CHARS in lib/chat-input-normalize.ts so the
-// backend rejects pastes that bypass the frontend cap (curl-direct
-// callers, replay attacks, broken clients). 100 k chars ≈ 200 KB at
-// UTF-8 worst case, which is well under the Express JSON body limit.
-// Override via SIRAGPT_MAX_MESSAGE_CHARS for tenant-specific tuning.
-const MAX_MESSAGE_CONTENT_CHARS = (() => {
-  const fromEnv = Number(process.env.SIRAGPT_MAX_MESSAGE_CHARS);
-  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 100_000;
-})();
-
 router.post('/:id/messages', [
-  body('role').isIn(['USER', 'ASSISTANT']).withMessage('Invalid role'),
+  body('role').isIn(CHAT_MESSAGE_ROLES).withMessage('Invalid role'),
   body('content')
+    .isString()
     .trim()
     .isLength({ min: 1 })
     .withMessage('Content is required')
     .isLength({ max: MAX_MESSAGE_CONTENT_CHARS })
     .withMessage(`Content exceeds ${MAX_MESSAGE_CONTENT_CHARS} characters`),
-  body('tokens').optional().isInt({ min: 0 }),
+  body('tokens').optional().isInt({ min: 0 }).toInt(),
   body('files').optional().isArray(),
-  body('metadata').optional(),
-  body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 })
+  body('metadata')
+    .optional()
+    .custom(isValidMessageMetadata)
+    .withMessage('Metadata must be a plain object or a JSON string containing a plain object'),
+  body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: MAX_IDEMPOTENCY_KEY_CHARS })
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -760,89 +891,102 @@ router.post('/:id/messages', [
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    const { role, content, tokens, files, idempotencyKey } = req.body;
+    const { role, content, tokens, files } = req.body;
     const metadata = parseMessageMetadata(req.body.metadata);
-    const messageFingerprint = idempotencyKey || metadata.idempotencyKey || buildMessageFingerprint({
+    const idempotencyIdentity = resolveRequestIdempotencyKey(req, metadata);
+    if (idempotencyIdentity.error) {
+      return respondInvalidIdempotencyKey(res, idempotencyIdentity.error);
+    }
+    const explicitIdempotencyKey = normalizeTurnKey(idempotencyIdentity.value);
+    const requestFingerprint = explicitIdempotencyKey
+      ? buildMessageRequestFingerprint({ role, content, tokens, files, metadata })
+      : null;
+    const scopeKey = buildMessageIdempotencyScopeKey({
+      userId: req.user.id,
       chatId: req.params.id,
-      role,
-      content,
-      files,
+      idempotencyKey: explicitIdempotencyKey,
     });
 
-    const recentMessages = await prisma.message.findMany({
-      where: {
-        chatId: req.params.id,
-        role,
-        timestamp: { gte: new Date(Date.now() - 2 * 60 * 1000) },
-        deletedAt: null,
-      },
-      orderBy: { timestamp: 'desc' },
-      take: 12,
-    });
-
-    const duplicate = recentMessages.find((existing) => {
-      const existingMetadata = parseMessageMetadata(existing.metadata);
-      if (existingMetadata.idempotencyKey && existingMetadata.idempotencyKey === messageFingerprint) return true;
-      if (existing.content !== content) return false;
-      return stableStringify(existing.files || null) === stableStringify(files || null);
-    });
-
-    if (duplicate) {
-      return res.status(200).json({ message: duplicate, duplicate: true });
-    }
-
-    // Commit the dependent writes all-or-nothing: a Message must not persist
-    // with a stale chat.updatedAt (wrong sort position), and the apiUsage
-    // ledger row must not diverge from the user.apiUsage counter if the
-    // process/DB connection drops between writes. None of these reads a prior
-    // write's result, so the array form is valid and each op is identical.
-    const writes = [
-      prisma.message.create({
-        data: {
+    const result = await messageIdempotencyCoordinator.execute({
+      scopeKey,
+      requestFingerprint,
+      findExisting: () => prisma.message.findFirst({
+        where: {
           chatId: req.params.id,
-          role,
-          content,
-          tokens,
-          // tools: [{ "type": "image_generation" }],
-
-          files: files || null,
-          metadata: {
-            ...metadata,
-            idempotencyKey: messageFingerprint,
-          }
+          deletedAt: null,
+          metadata: { path: ['idempotencyKey'], equals: explicitIdempotencyKey },
+        },
+        orderBy: { timestamp: 'desc' },
+      }),
+      getExistingFingerprint: (message) => getStoredMessageRequestFingerprint(
+        message,
+        parseMessageMetadata,
+      ),
+      create: async () => {
+        const persistedMetadata = { ...metadata };
+        delete persistedMetadata[MESSAGE_IDEMPOTENCY_HASH_FIELD];
+        if (explicitIdempotencyKey) {
+          persistedMetadata.idempotencyKey = explicitIdempotencyKey;
+          persistedMetadata[MESSAGE_IDEMPOTENCY_HASH_FIELD] = requestFingerprint;
         }
-      }),
-      // Update chat's updatedAt timestamp
-      prisma.chat.update({
-        where: { id: req.params.id },
-        data: { updatedAt: new Date() }
-      }),
-    ];
 
-    // Track API usage if it's an assistant message
-    if (role === 'ASSISTANT' && tokens) {
-      writes.push(
-        prisma.apiUsage.create({
-          data: {
-            userId: req.user.id,
-            model: chat.model,
-            tokens,
-            cost: tokens * 0.001
-          }
-        }),
-        // Update user's API usage
-        prisma.user.update({
-          where: { id: req.user.id },
-          data: {
-            apiUsage: {
-              increment: tokens
+        // Commit the dependent writes all-or-nothing: a Message must not
+        // persist with a stale chat.updatedAt, and the apiUsage ledger must
+        // not diverge from the user.apiUsage counter.
+        const writes = [
+          prisma.message.create({
+            data: {
+              chatId: req.params.id,
+              role,
+              content,
+              tokens,
+              files: files || null,
+              metadata: persistedMetadata,
             }
-          }
-        })
-      );
+          }),
+          prisma.chat.update({
+            where: { id: req.params.id },
+            data: { updatedAt: new Date() }
+          }),
+        ];
+
+        if (role === 'ASSISTANT' && tokens) {
+          writes.push(
+            prisma.apiUsage.create({
+              data: {
+                userId: req.user.id,
+                model: chat.model,
+                tokens,
+                cost: tokens * 0.001
+              }
+            }),
+            prisma.user.update({
+              where: { id: req.user.id },
+              data: {
+                apiUsage: {
+                  increment: tokens
+                }
+              }
+            })
+          );
+        }
+
+        const [createdMessage] = await prisma.$transaction(writes);
+        return createdMessage;
+      },
+    });
+
+    if (result.outcome === 'conflict') {
+      return res.status(409).json({
+        error: 'Idempotency key already used with a different message payload',
+        code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+      });
+    }
+    if (result.outcome === 'duplicate') {
+      return res.status(200).json({ message: result.message, duplicate: true });
     }
 
-    const [message] = await prisma.$transaction(writes);
+    const message = result.message;
 
     res.status(201).json({ message });
 

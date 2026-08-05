@@ -19,7 +19,7 @@ const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/client-logs.ts",
   "lib/code-agent/subagent.ts",
   "lib/code-runner/host-runner-service.ts",
-  "lib/codex/codex-api.ts",
+  "lib/codex/api/core.ts",
   "lib/codex/run-stream.ts",
   "lib/credits-service.ts",
   "lib/database-new.ts",
@@ -224,7 +224,7 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     required: true,
   },
   {
-    file: "lib/codex/codex-api.ts",
+    file: "lib/codex/api/core.ts",
     reason: "Public Codex feature-flag health GET.",
     accepts: (text) =>
       text.includes("${BASE}/health")

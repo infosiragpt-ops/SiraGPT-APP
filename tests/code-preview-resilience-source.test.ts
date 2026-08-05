@@ -67,8 +67,87 @@ describe("code preview resilience", () => {
       runApp,
       /codexApi\.startPreview\(codexProjectId,\s*startController\.signal\)/,
     )
-    assert.match(runApp, /if \(!isCurrentRun\(\)\) return/)
-    assert.match(previewSource, /previewRunGenerationRef\.current !== generation/)
+    assert.match(runApp, /startPreviewWithCleanupFence\(/)
+    assert.match(runApp, /cleanup: \(\) => codexApi\.stopPreview\(codexProjectId\)/)
+    assert.match(runApp, /if \(fencedStart\.stale\) return/)
+    assert.match(previewSource, /previewRunGenerationRef\.current === generation/)
+  })
+
+  it("compensates every runner start that settles after its UI generation went stale", () => {
+    const runApp = sliceBetween(
+      previewSource,
+      "const runApp = React.useCallback(",
+      "// Mirror the latest values into refs",
+    )
+
+    assert.equal(
+      runApp.match(/startPreviewWithCleanupFence\(/g)?.length,
+      3,
+      "GitHub, Codex and host starts must all own a post-settle cleanup fence",
+    )
+    assert.match(runApp, /cleanup: \(\) => githubService\.stop\(boundRepo\)/)
+    assert.match(runApp, /cleanup: \(\) => codexApi\.stopPreview\(codexProjectId\)/)
+    assert.match(runApp, /cleanup: \(\) => hostRunnerService\.stop\(hostRunId\)/)
+    assert.equal(
+      runApp.match(/shouldCleanupStalePreviewStart\(/g)?.length,
+      3,
+      "each shared runner resource must protect a newer generation lease",
+    )
+  })
+
+  it("serializes readiness and heartbeat polling so slow requests still progress", () => {
+    const polling = sliceBetween(
+      previewSource,
+      "const startReadyHeartbeat = React.useCallback(",
+      "const runApp = React.useCallback",
+    )
+
+    assert.equal(
+      polling.match(/startSerializedPreviewPoll\(/g)?.length,
+      2,
+      "readiness and heartbeat need independent serialized loops",
+    )
+    assert.doesNotMatch(polling, /setInterval\(async/)
+  })
+
+  it("bounds each readiness generation by wall clock and cancels slow status reads", () => {
+    const polling = sliceBetween(
+      previewSource,
+      "const startReadyHeartbeat = React.useCallback(",
+      "const runApp = React.useCallback",
+    )
+
+    assert.match(previewSource, /const PREVIEW_READY_DEADLINE_MS = 200_000/)
+    assert.match(polling, /Date\.now\(\) \+ PREVIEW_READY_DEADLINE_MS/)
+    assert.match(polling, /read: async \(signal\)/)
+    assert.match(polling, /return statusFn\(signal\)/)
+    assert.match(polling, /deadlineAtMs: readinessDeadlineAtMs/)
+    assert.match(polling, /onDeadline: finishTimedOut/)
+    assert.match(polling, /onError: \(\) => \{[\s\S]*Date\.now\(\) < readinessDeadlineAtMs[\s\S]*return false/)
+    assert.match(previewSource, /githubService\.runStatus\(boundRepo, signal\)/)
+    assert.match(previewSource, /codexApi\.previewStatus\(codexProjectId, signal\)/)
+    assert.match(previewSource, /hostRunnerService\.status\(runIdRef\.current, signal\)/)
+  })
+
+  it("stops the owning Codex preview when the pane unmounts", () => {
+    const runApp = sliceBetween(
+      previewSource,
+      "const runApp = React.useCallback(",
+      "// Mirror the latest values into refs",
+    )
+    const lifecycle = sliceBetween(
+      previewSource,
+      "// Lifecycle cleanup: stop the dev server",
+      "// Debounce rebuilds so typing stays smooth",
+    )
+
+    assert.match(runApp, /codexPreviewProjectIdRef\.current = codexProjectId/)
+    assert.match(lifecycle, /if \(modeRef\.current === "codex"\)/)
+    assert.match(
+      lifecycle,
+      /codexPreviewProjectIdRef\.current \|\| getActiveCodexProject\(\)/,
+    )
+    assert.match(lifecycle, /codexApi\.stopPreview\(codexProjectId\)/)
   })
 
   it("auto-retries against the Codex runner when its project link rehydrates after mount", () => {

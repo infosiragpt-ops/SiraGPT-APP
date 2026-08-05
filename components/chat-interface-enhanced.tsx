@@ -98,7 +98,7 @@ import {
 } from "@/components/chat/ComposerInlineDisplays"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
-import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
+import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -108,6 +108,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
+import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
@@ -237,6 +238,62 @@ import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
+import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
+import {
+  isAssistantMessage,
+  parseMessageFilesForRender,
+  shouldRenderChatMessage,
+} from "@/lib/chat/message-rendering"
+import {
+  attachmentHasPreviewSource,
+  buildAgentFileMetadata,
+  collectUploadFileIds,
+  getFileProcessingStage,
+  isComposerFileProcessingPending,
+  isComposerFileUploadFailed,
+  isComposerFileUploadPending,
+  previewAttachmentKey,
+  resolveUploadFileId,
+} from "@/lib/chat/composer-files"
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_PROVIDER,
+  DEFAULT_VIDEO_DURATION,
+  DEFAULT_VIDEO_MODEL,
+  IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_COUNT_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
+  MUSIC_EFFECT_OPTIONS,
+  MUSIC_MODEL_OPTIONS,
+  MUSIC_MOOD_OPTIONS,
+  MUSIC_STYLE_OPTIONS,
+  MUSIC_STYLE_PROFILES,
+  VIDEO_ASPECT_RATIO_OPTIONS,
+  VIDEO_DURATION_OPTIONS,
+  VIDEO_RESOLUTION_OPTIONS,
+  VOICE_ACCENT_OPTIONS,
+  VOICE_COMPOSER_PLACEHOLDER,
+  VOICE_EFFECT_OPTIONS,
+  VOICE_LANGUAGE_OPTIONS,
+  VOICE_MODEL_OPTIONS,
+  isImageModelEntry,
+  isVideoModelEntry,
+  providerForMediaModel,
+  type ImageAspectRatio,
+  type ImageGenerationCount,
+  type ImageQuality,
+  type MusicEffect,
+  type MusicModel,
+  type MusicMood,
+  type MusicStyle,
+  type VideoAspectRatio,
+  type VideoDuration,
+  type VideoResolution,
+  type VoiceAccent,
+  type VoiceEffect,
+  type VoiceLanguage,
+  type VoiceModel,
+} from "@/lib/chat/media-composer-config"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
 // contexts (preview iframes, denied permission, insecure origin) and, when not
@@ -256,24 +313,6 @@ const GPT_RATING_OPTIONS = [
 const getGptRatingLabel = (rating: number): string =>
   GPT_RATING_OPTIONS.find((option) => option.value === rating)?.label || ""
 
-const resolveUploadFileId = (file: any): string | null => {
-  if (!file) return null
-  if (typeof file === "string") return file
-  return file.id || file.fileId || file.attachmentId || null
-}
-
-const collectUploadFileIds = (files: any[] = []): string[] =>
-  files.map(resolveUploadFileId).filter((id): id is string => Boolean(id))
-
-const attachmentHasPreviewSource = (attachment: AttachmentLike | null | undefined): boolean =>
-  Boolean(attachment?.file || attachment?.url || attachment?.extractedText)
-
-const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): string =>
-  String(attachment?.id || attachment?.url || attachment?.name || "")
-
-const isComposerFileUploadPending = (file: any): boolean =>
-  Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
-
 // Universal ingest: pasted plain text longer than this becomes a "PEGADO"
 // (.txt) chip next to the input — expandable/removable — so the bar stays
 // clean. Shorter pastes insert inline at the caret. Configurable per
@@ -283,121 +322,11 @@ const LONG_PASTE_CHIP_THRESHOLD = (() => {
   return Number.isFinite(n) && n > 0 ? n : 1500
 })()
 
-const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
-const PROCESSING_CONTEXT_MIME_RE =
-  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument|rtf)|text\/(?:plain|markdown|csv|tab-separated-values|html|xml)|application\/(?:json|xml))/i
-
-const shouldWaitForDocumentProcessing = (file: any): boolean => {
-  if (!file || !resolveUploadFileId(file)) return false
-  const name = String(file.name || file.originalName || file.filename || "")
-  const mime = String(file.mimeType || file.type || file.contentType || "")
-  return PROCESSING_CONTEXT_EXT_RE.test(name) || PROCESSING_CONTEXT_MIME_RE.test(mime)
-}
-
-const getFileProcessingStage = (file: any): FileProcessingStage | null => {
-  const stage = file?.processingStage || file?.stage || null
-  return typeof stage === "string" ? stage as FileProcessingStage : null
-}
-
-const isComposerFileProcessingPending = (file: any): boolean =>
-  shouldWaitForDocumentProcessing(file) && isActiveProcessingStage(getFileProcessingStage(file))
-
-const isComposerFileUploadFailed = (file: any): boolean =>
-  Boolean(file && (file.status === "failed" || getFileProcessingStage(file) === "failed"))
-
 const normalizePlanName = (plan?: string | null): string =>
   String(plan || "FREE").trim().toUpperCase()
 
 const isFreePlanName = (plan?: string | null): boolean =>
   normalizePlanName(plan) === "FREE"
-
-const sanitizeLongPasteMetaForMessage = (meta: any) => {
-  if (!meta || meta.kind !== "long_paste_document") return null
-  return {
-    kind: "long_paste_document",
-    title: meta.title,
-    filename: meta.filename,
-    preview: meta.preview,
-    originalCharCount: meta.originalCharCount,
-    originalWordCount: meta.originalWordCount,
-    originalLineCount: meta.originalLineCount,
-    createdAt: meta.createdAt,
-  }
-}
-
-const buildAgentFileMetadata = (files: any[] = []) =>
-  files
-    .map((file) => {
-      const id = resolveUploadFileId(file)
-      if (!id) return null
-      const longPasteMeta = getLongPasteMetadata(file)
-      const safeLongPasteMeta = sanitizeLongPasteMetaForMessage(longPasteMeta)
-      const displayName =
-        safeLongPasteMeta?.title ||
-        file?.longPasteTitle ||
-        file?.originalName ||
-        file?.name ||
-        file?.filename ||
-        "archivo"
-
-      return {
-        id,
-        name: displayName,
-        originalName: displayName,
-        filename: file?.filename || file?.name || displayName,
-        mimeType: file?.mimeType || file?.type || file?.contentType || null,
-        type: file?.type || file?.mimeType || file?.contentType || null,
-        size: file?.size ?? null,
-        url: file?.url || null,
-        openaiFileId: file?.openaiFileId || null,
-        sourceChannel: file?.sourceChannel || null,
-        isLongPasteDocument: Boolean(file?.isLongPasteDocument || safeLongPasteMeta),
-        longPasteTitle: safeLongPasteMeta?.title || file?.longPasteTitle || null,
-        longPastePreview: safeLongPasteMeta?.preview || file?.longPastePreview || null,
-        longPasteMeta: safeLongPasteMeta,
-      }
-    })
-    .filter(Boolean)
-
-const parseMessageFilesForRender = (files: any): any[] => {
-  if (!files) return []
-  if (Array.isArray(files)) return files
-  if (typeof files !== "string") return []
-  try {
-    const parsed = JSON.parse(files)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-const CHAT_UPLOAD_REQUEST_MAX_FILES = 50
-const CHAT_UPLOAD_REQUEST_MAX_BYTES = 220 * 1024 * 1024
-
-function buildChatUploadChunks(files: File[], tempFiles: any[]) {
-  const chunks: Array<{ files: File[]; temps: any[] }> = []
-  let currentFiles: File[] = []
-  let currentTemps: any[] = []
-  let currentBytes = 0
-
-  files.forEach((file, index) => {
-    const fileBytes = Number(file.size || 0)
-    const wouldOverflowCount = currentFiles.length >= CHAT_UPLOAD_REQUEST_MAX_FILES
-    const wouldOverflowBytes = currentFiles.length > 0 && currentBytes + fileBytes > CHAT_UPLOAD_REQUEST_MAX_BYTES
-    if (wouldOverflowCount || wouldOverflowBytes) {
-      chunks.push({ files: currentFiles, temps: currentTemps })
-      currentFiles = []
-      currentTemps = []
-      currentBytes = 0
-    }
-    currentFiles.push(file)
-    currentTemps.push(tempFiles[index])
-    currentBytes += fileBytes
-  })
-
-  if (currentFiles.length > 0) chunks.push({ files: currentFiles, temps: currentTemps })
-  return chunks
-}
 
 const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
 const IMAGE_TO_VIDEO_REFERENCE_RE =
@@ -440,25 +369,6 @@ const collectLatestGeneratedImageUrls = (messages: any[] = [], maxImages = 4) =>
   return []
 }
 
-const hasMessageTextForRender = (content: any): boolean => {
-  if (typeof content === "string") return content.trim().length > 0
-  if (content == null) return false
-  return String(content).trim().length > 0
-}
-
-const shouldRenderChatMessage = (message: any, allowEmptyStreamingAssistant = false): boolean => {
-  if (!message) return false
-  const role = String(message.role || "").toUpperCase()
-  if (role === "USER") return true
-  if (message.error || message.progressStage) return true
-  if (hasMessageTextForRender(message.content)) return true
-  if (parseMessageFilesForRender(message.files).length > 0) return true
-  return allowEmptyStreamingAssistant && role === "ASSISTANT"
-}
-
-const isAssistantMessage = (message: any): boolean =>
-  String(message?.role || "").toUpperCase() === "ASSISTANT"
-
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -488,128 +398,6 @@ type SearchActivityState = {
   selectedSources?: AgenticSource[]
   elapsedMs?: number
   entries: SearchActivityEntry[]
-}
-
-type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
-type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
-type ImageQuality = "512px" | "1K" | "2K" | "4K"
-type VideoResolution = "480p" | "720p"
-type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
-type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
-type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
-type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
-type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
-type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
-type MusicModel = "ElevenLabs" | "Lyria 3 Pro" | "Mimo Max 02HD"
-type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orchestral" | "Latin" | "Hip-Hop" | "Jazz"
-type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
-type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
-
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
-  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]", visibleByDefault: true },
-  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8", visibleByDefault: true },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6", visibleByDefault: true },
-  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
-  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9", visibleByDefault: true },
-]
-
-const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
-const IMAGE_COUNT_OPTIONS: ImageGenerationCount[] = [1, 2, 3, 4, 5]
-const VIDEO_RESOLUTION_OPTIONS: VideoResolution[] = ["480p", "720p"]
-const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
-  { value: "auto", label: "Auto", ratio: "Auto", className: "h-6 w-6", visibleByDefault: true },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[16px] w-8", visibleByDefault: true },
-  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[16px]", visibleByDefault: true },
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
-  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-[22px] w-8", visibleByDefault: true },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
-  { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
-]
-const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-const VOICE_MODEL_OPTIONS: VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
-const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
-const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
-const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
-const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Max 02HD"]
-const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
-const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
-const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
-const MUSIC_STYLE_PROFILES: Record<MusicStyle, { label: string; description: string; accentClass: string }> = {
-  Auto: {
-    label: "Auto",
-    description: "Deja que el modelo elija el genero segun tu prompt.",
-    accentClass: "bg-zinc-900 dark:bg-white",
-  },
-  Cinematic: {
-    label: "Cinematic",
-    description: "Texturas amplias, tension y final de trailer.",
-    accentClass: "bg-violet-500",
-  },
-  Pop: {
-    label: "Pop",
-    description: "Hook claro, bateria pulida y estructura comercial.",
-    accentClass: "bg-pink-500",
-  },
-  Electronic: {
-    label: "Electronic",
-    description: "Sintetizadores, pulso moderno y energia digital.",
-    accentClass: "bg-cyan-500",
-  },
-  Ambient: {
-    label: "Ambient",
-    description: "Capas suaves, atmosfera y movimiento discreto.",
-    accentClass: "bg-teal-500",
-  },
-  Orchestral: {
-    label: "Orchestral",
-    description: "Cuerdas, metales y dinamica de partitura.",
-    accentClass: "bg-amber-500",
-  },
-  Latin: {
-    label: "Latin",
-    description: "Ritmo calido, percusion marcada y sabor latino.",
-    accentClass: "bg-red-500",
-  },
-  "Hip-Hop": {
-    label: "Hip-Hop",
-    description: "Beat con groove, bajo presente y espacio vocal.",
-    accentClass: "bg-slate-700 dark:bg-slate-300",
-  },
-  Jazz: {
-    label: "Jazz",
-    description: "Armonia rica, swing sutil e instrumentacion organica.",
-    accentClass: "bg-emerald-600",
-  },
-}
-const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
-
-const DEFAULT_IMAGE_MODEL = ""
-const DEFAULT_IMAGE_PROVIDER = "OpenAI"
-const DEFAULT_VIDEO_MODEL = ""
-const DEFAULT_VIDEO_DURATION: VideoDuration = 8
-
-const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
-  const value = String(modelName || "").toLowerCase()
-  if (value.includes("/")) return "OpenRouter"
-  if (value.includes("openrouter") || value.includes("seedream")) return "OpenRouter"
-  if (value.includes("google") || value.includes("imagen") || value.includes("gemini") || value.includes("veo")) return "Google"
-  if (value.includes("kling")) return "Kling"
-  if (value.includes("openai") || value.includes("dall") || value.includes("gpt-image")) return "OpenAI"
-  return fallback
-}
-
-const isImageModelEntry = (model: any) => {
-  const type = String(model?.type || model?.kind || '').toLowerCase();
-  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
-  return type === 'image' || type === 'images' || type.includes('image') || /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i.test(label);
-}
-
-const isVideoModelEntry = (model: any) => {
-  const type = String(model?.type || model?.kind || '').toLowerCase();
-  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
-  return type === 'video' || type === 'videos' || type.includes('video') || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label);
 }
 
 // `ImageAspectRatioMark` was extracted to
@@ -6745,7 +6533,7 @@ But first, you need to connect your Spotify account securely using the button be
           role: String(m.role || "USER").toUpperCase(),
           content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
           files,
-          metadata: typeof m.metadata === "string" ? m.metadata : undefined,
+          metadata: serializeBranchedMessageMetadata(m.metadata),
         });
       }
 
@@ -7529,7 +7317,7 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }, 90);
 
-      const uploadChunks = buildChatUploadChunks(filesToUpload, tempFiles);
+      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles);
       let failedChunkCount = 0;
 
       for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
@@ -9026,6 +8814,7 @@ REWRITTEN TEXT:`;
       content: msg,
       timestamp: new Date().toISOString(),
       files: filesToSend,
+      metadata: JSON.stringify({ idempotencyKey }),
     };
     const assistantPlaceholder = {
       id: `msg-assistant-processing-${Date.now()}`,
@@ -9033,6 +8822,7 @@ REWRITTEN TEXT:`;
       role: 'ASSISTANT' as const,
       content: '',
       timestamp: new Date().toISOString(),
+      metadata: JSON.stringify({ idempotencyKey }),
     };
 
     if (isNewChat) {

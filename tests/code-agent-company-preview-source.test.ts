@@ -9,7 +9,10 @@ const workspaceSource = readFileSync("lib/code-workspace-context.tsx", "utf8")
 const previewSource = readFileSync("components/code/preview-pane.tsx", "utf8")
 const socialApiSource = readFileSync("lib/company-social-api.ts", "utf8")
 const resourceKeysSource = readFileSync("lib/company-resource-keys.ts", "utf8")
-const codexApiSource = readFileSync("lib/codex/codex-api.ts", "utf8")
+const codexApiSource = [
+  readFileSync("lib/codex/api/company-associations.ts", "utf8"),
+  readFileSync("lib/codex/api/company.ts", "utf8"),
+].join("\n")
 const postPageSource = readFileSync("app/post/page.tsx", "utf8")
 
 test("company navigation renders operational surfaces inside the preview slot", () => {

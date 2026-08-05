@@ -265,4 +265,40 @@ describe("cancelCodexRunFamily", () => {
     assert.deepEqual(familyCalls, ["plan-created-late"])
     assert.equal(result.run.id, "plan-created-late")
   })
+
+  it("keeps a delayed run active when the caller only detached its session", async () => {
+    let releaseCreate!: (run: { id: string; status: string }) => void
+    let detached = false
+    let explicitlyStopped = false
+    const familyCalls: string[] = []
+    const pending = createCodexRunWithCancellationFence({
+      projectId: "project-detached",
+      createRun: () => new Promise<{ id: string; status: string }>((resolve) => { releaseCreate = resolve }),
+      // Detach is intentionally not part of this predicate.
+      isCancelled: () => explicitlyStopped,
+      cancelDeps: {
+        cancelRun: async () => {},
+        cancelFamily: async (runId) => {
+          familyCalls.push(runId)
+          return { cancelledRunIds: [runId] }
+        },
+        listRuns: async () => [],
+      },
+    })
+
+    detached = true
+    releaseCreate({ id: "plan-still-active", status: "queued" })
+    const result = await pending
+    const recoverableTurn = {
+      id: "assistant-old-session",
+      codexRunId: result.run.id,
+    }
+
+    assert.equal(detached, true)
+    assert.equal(explicitlyStopped, false)
+    assert.equal(result.cancelled, false)
+    assert.equal(result.run.status, "queued")
+    assert.deepEqual(familyCalls, [])
+    assert.equal(recoverableTurn.codexRunId, "plan-still-active")
+  })
 })

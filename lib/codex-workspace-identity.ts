@@ -33,6 +33,24 @@ export function codexWorkspaceIdForProject(projectId: string | null | undefined)
   return id ? `project:${id}` : null
 }
 
+/**
+ * Treat a raw Project id and its canonical `project:` workspace id as the same
+ * owner. Local folders and direct `codex:` workspaces only match exactly.
+ */
+export function isSameCodexWorkspace(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftId = String(left || "").trim()
+  const rightId = String(right || "").trim()
+  if (!leftId || !rightId) return false
+  if (leftId === rightId) return true
+
+  const leftProjectId = codexProjectIdFromWorkspaceId(leftId, { assumeProject: true })
+  const rightProjectId = codexProjectIdFromWorkspaceId(rightId, { assumeProject: true })
+  return Boolean(leftProjectId && rightProjectId && leftProjectId === rightProjectId)
+}
+
 export function canonicalCodexWorkspaceId(
   value: string | null | undefined,
   options?: { kind?: "local-folder" | "project" },
