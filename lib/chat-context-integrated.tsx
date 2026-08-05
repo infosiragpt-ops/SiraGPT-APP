@@ -1172,11 +1172,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           files: displayFiles.length ? displayFiles : undefined,
         };
 
-        // Update chat with user message
+        // Update chat with user message. Never steal focus: if the user already
+        // switched to another chat (background send / queue drain), only touch
+        // the chats cache — the active view must stay on what they're reading.
         const updatedMessages = [...activeChat.messages, userMessage];
         const updatedChat = { ...activeChat, messages: updatedMessages };
 
-        setCurrentChat(updatedChat);
+        setCurrentChat((prev) => (prev?.id === activeChat.id ? updatedChat : prev));
         setChats((prev) => prev.filter(c => c && c.id).map((c) => (c.id === activeChat.id ? updatedChat : c)));
       }
 
@@ -1762,15 +1764,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               streamBuffersRef.current.delete(activeChat.id);
               clearPending(activeChat.id);
               bg.complete(activeChat.id);
+              // Fold final partial into chats list so a background-finished
+              // chat is fully readable when the user re-opens it.
+              const finalPartial = bg.get(activeChat.id)?.partialContent;
+              if (finalPartial) {
+                setChats((prev) =>
+                  prev.filter((c) => c && c.id).map((c) => {
+                    if (c.id !== activeChat.id) return c;
+                    return {
+                      ...c,
+                      messages: hydrateTrailingAssistant(c.messages || [], finalPartial),
+                    };
+                  }),
+                );
+              }
               if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) {
-                setIsLoading(false);
-                setIsStreaming(false);
-                setCurrentStreamId(null);
-                abortControllerRef.current = null;
-                // After the stream ends, fetch the persisted chat so we can
-                // swap optimistic IDs for server IDs. We retry up to 3 times
-                // with a delay because the backend may still be persisting
-                // (document uploads add 1-3s after [DONE]).
+                // Do NOT force setIsStreaming(false) — sibling chats may still
+                // stream. markChatIdle in `finally` re-syncs aggregates.
+                if (currentChatRef.current?.id === activeChat.id) {
+                  setCurrentStreamId(null);
+                }
+                if (abortControllerRef.current === controller) {
+                  abortControllerRef.current = null;
+                }
+                // Persist ID sync + cache update even for background chats.
                 const syncIds = async (attempt = 1) => {
                   if (activeStreamingChatIdsRef.current.has(activeChat.id)) return;
                   try {
@@ -1778,11 +1795,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     const serverChat = resp.chat;
                     setCurrentChat(prev => {
                       if (!prev || prev.id !== activeChat.id || activeStreamingChatIdsRef.current.has(activeChat.id)) return prev;
-                      const merged = mergeChatPreservingUserMessages(serverChat, prev);
-                      // If the merge preserved all local content (same
-                      // message count), the IDs are synced — we're done.
-                      return merged;
+                      return mergeChatPreservingUserMessages(serverChat, prev);
                     });
+                    setChats((prev) =>
+                      prev.filter((c) => c && c.id).map((c) =>
+                        c.id === activeChat.id
+                          ? mergeChatPreservingUserMessages(serverChat, c)
+                          : c,
+                      ),
+                    );
                   } catch {
                     if (attempt < 3) {
                       setTimeout(() => syncIds(attempt + 1), 2000 * attempt);
@@ -2024,9 +2045,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        setIsLoading(false);
-        setIsStreaming(false);
-        setCurrentStreamId(null);
+        // Aggregate streaming flags re-synced by markChatIdle — never force
+        // global flags off while sibling chats may still run.
+        if (currentChatRef.current?.id === activeChat.id) {
+          setCurrentStreamId(null);
+        }
       } finally {
         markChatIdle(activeChat.id, streamId);
         pendingStopsRef.current.delete(activeChat.id);
@@ -2299,10 +2322,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const selectChat = useCallback(
     async (chatId: string) => {
       const targetIsStreaming = activeStreamingChatIdsRef.current.has(chatId)
+        || bg.get(chatId)?.status === "streaming"
       const cachedChat = chatsRef.current.find(chat => chat?.id === chatId)
       if (cachedChat) {
         setCurrentChat(prev => {
-          if (prev?.id === chatId && (prev.messages?.length || 0) > 0) return prev
+          if (prev?.id === chatId && (prev.messages?.length || 0) > 0) {
+            // Re-hydrate trailing assistant if this chat is streaming — the
+            // in-view copy can lag the background partial by a frame.
+            if (targetIsStreaming) {
+              const hydrated = hydrateTrailingAssistant(
+                prev.messages,
+                bg.get(chatId)?.partialContent,
+              )
+              if (hydrated !== prev.messages) return { ...prev, messages: hydrated }
+            }
+            return prev
+          }
           const restored = { ...cachedChat, messages: cachedChat.messages || [] }
           // Switching back to a chat that is still streaming: the cached copy
           // may hold a stale (or empty) trailing assistant message because the
@@ -2372,6 +2407,48 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('currentChatId', chatId)
 
         setUploadedFiles([])
+
+        // Background completion catch-up: if the last turn is still a lone
+        // USER message (server kept generating after tab/nav detach), poll a
+        // few times so the finished answer appears without a full refresh.
+        const msgs = chat.messages || []
+        const last = msgs[msgs.length - 1]
+        const lastIsLonelyUser =
+          last && String(last.role || "").toUpperCase() === "USER"
+        if (lastIsLonelyUser) {
+          const pollBg = async (attempt = 1) => {
+            if (currentChatRef.current?.id !== chatId) return
+            if (activeStreamingChatIdsRef.current.has(chatId)) return
+            try {
+              const again = await apiClient.getChat(chatId)
+              const server = again.chat
+              const sMsgs = server?.messages || []
+              const hasAssistantTail = sMsgs.some(
+                (m: any, i: number) =>
+                  i >= msgs.length - 1 &&
+                  String(m?.role || "").toUpperCase() === "ASSISTANT" &&
+                  typeof m?.content === "string" &&
+                  m.content.trim().length > 0,
+              )
+              if (hasAssistantTail) {
+                setCurrentChat((prev) => {
+                  if (!prev || prev.id !== chatId) return prev
+                  return mergeChatPreservingUserMessages(server, prev)
+                })
+                setChats((prev) =>
+                  prev.filter((c) => c && c.id).map((c) =>
+                    c.id === chatId ? mergeChatPreservingUserMessages(server, c) : c,
+                  ),
+                )
+                return
+              }
+            } catch { /* retry */ }
+            if (attempt < 4) {
+              setTimeout(() => { void pollBg(attempt + 1) }, 1500 * attempt)
+            }
+          }
+          setTimeout(() => { void pollBg() }, 1200)
+        }
       } catch (error) {
         console.error("Failed to load chat:", error)
         // Stale/deleted chat id (e.g. restored from localStorage) → clear the

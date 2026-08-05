@@ -4987,6 +4987,7 @@ function ChatInterfaceContent() {
   const {
     currentChat,
     setCurrentChat,
+    chats,
     addMessage,
     addVideoMessage,
     addThesisMessage,
@@ -10233,26 +10234,72 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // would otherwise freeze the version from initial render.
   React.useEffect(() => { handleSendRef.current = handleSend; });
 
-  // Drain queued messages when the pipeline goes idle. Each drain
-  // re-populates the composer from the queue and fires handleSend on the
-  // next tick so React has a chance to commit the setInput/setFiles
-  // updates before the send guard reads them.
+  // Drain queued messages when a chat's pipeline goes idle.
+  // Foreground: current chat idle → restore composer + handleSend.
+  // Background: other idle chats → addMessage directly so work continues
+  // while the user is reading a different conversation.
   React.useEffect(() => {
-    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
-    if (isBusy) return;
     if (pendingMsgQueueRef.current.length === 0) return;
+
     const queueChatId = currentChat?.id ?? null;
-    const nextIndex = pendingMsgQueueRef.current.findIndex((item) => item.chatId === queueChatId);
-    if (nextIndex < 0) return;
-    const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
+    const currentBusy =
+      isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
+
+    // 1) Prefer draining the chat the user is looking at (composer path).
+    if (!currentBusy && queueChatId) {
+      const nextIndex = pendingMsgQueueRef.current.findIndex(
+        (item) => item.chatId === queueChatId,
+      );
+      if (nextIndex >= 0) {
+        const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
+        syncQueuedCount(queueChatId);
+        if (!next) return;
+        setInput(next.msg);
+        uploadedFilesRef.current = next.files || [];
+        setUploadedFiles(next.files || []);
+        const t = setTimeout(() => {
+          handleSendRef.current();
+        }, 0);
+        return () => clearTimeout(t);
+      }
+    }
+
+    // 2) Background drain for any other idle chat with queued work.
+    const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
+      if (!item.chatId) return false;
+      if (item.chatId === queueChatId) return false;
+      if (activeStreamingChatIds.includes(item.chatId)) return false;
+      return true;
+    });
+    if (bgIndex < 0) return;
+    const [bgNext] = pendingMsgQueueRef.current.splice(bgIndex, 1);
+    if (!bgNext?.chatId || !bgNext.msg?.trim()) return;
     syncQueuedCount(queueChatId);
-    if (!next) return;
-    setInput(next.msg);
-    uploadedFilesRef.current = next.files || [];
-    setUploadedFiles(next.files || []);
-    const t = setTimeout(() => { handleSendRef.current(); }, 0);
+    const targetChat =
+      currentChat?.id === bgNext.chatId
+        ? currentChat
+        : (chats || []).find((c: any) => c?.id === bgNext.chatId) || null;
+    if (!targetChat) {
+      pendingMsgQueueRef.current.unshift(bgNext);
+      return;
+    }
+    const files = Array.isArray(bgNext.files) ? bgNext.files : [];
+    const t = setTimeout(() => {
+      void addMessage(bgNext.msg, files, targetChat);
+    }, 0);
     return () => clearTimeout(t);
-  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles, syncQueuedCount]);
+  }, [
+    currentChat,
+    currentChat?.id,
+    chats,
+    isCurrentChatStreaming,
+    isCurrentChatLocalJobBusy,
+    isUploading,
+    activeStreamingChatIds,
+    addMessage,
+    setUploadedFiles,
+    syncQueuedCount,
+  ]);
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -12543,8 +12590,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 )}
                                 style={{
                                   minHeight: "26px",
-                              maxHeight: "min(12.5rem, 42vh)",
-                              overflowY: "hidden",
+                                  maxHeight: "min(12.5rem, 42vh)",
+                                  overflowY: "hidden",
                                   overflowX: "hidden",
                                   wordWrap: "break-word",
                                   border: "none",
