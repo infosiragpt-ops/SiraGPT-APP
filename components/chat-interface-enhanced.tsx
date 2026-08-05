@@ -1077,6 +1077,8 @@ const ActionsDropdown = ({
   handleExcelConnectorToggle,
   closeAllToolsAndConnectors,
 
+  compact = false,
+
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
@@ -1194,7 +1196,6 @@ const ActionsDropdown = ({
     setChatType('computer-use');
     setIsOpen(false);
   };
-
 
   const isMenuDisabled = isLoading || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
@@ -1423,10 +1424,12 @@ const ActionsDropdown = ({
                 variant="ghost"
                 size="sm"
                 aria-label="Adjuntar archivos y herramientas"
-                className="composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"
+                className={compact
+                  ? "composer-plus-chip-trigger flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full p-0"
+                  : "composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"}
                 disabled={isMenuDisabled}
               >
-                <Plus className="relative z-10 h-5 w-5" strokeWidth={2.2} />
+                <Plus className={cn("relative z-10", compact ? "h-4 w-4" : "h-5 w-5")} strokeWidth={2.2} />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
@@ -1583,8 +1586,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-pink-100 dark:bg-pink-900/20 flex items-center justify-center">
-                <Palette className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
+                <Palette className="h-4 w-4 text-violet-600 dark:text-violet-400" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1595,7 +1598,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 shrink-0 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn("w-2 h-2 shrink-0 bg-violet-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1662,8 +1665,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
-                <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-fuchsia-100 dark:bg-fuchsia-900/20 flex items-center justify-center">
+                <Music className="h-4 w-4 text-fuchsia-600 dark:text-fuchsia-400" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1674,7 +1677,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-rose-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-fuchsia-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -2557,9 +2560,9 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
+            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[200px] sm:max-w-[300px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
             aria-label={`Seleccionar modelo de ${tool}`}
-            title={`Modelo: ${label}`}
+            title={`Modelo: ${label}${selected?.provider ? ` · ${selected.provider}` : ""}`}
             disabled={disabled}
             data-media-tool={tool}
           >
@@ -2567,7 +2570,7 @@ const ActiveToolsDisplay = ({
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
               <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
-            <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
+            <span className="min-w-0 truncate max-w-[60px] sm:max-w-[200px]" title={label}>{label}</span>
             {!disabled && <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />}
           </Button>
         </DropdownMenuTrigger>
@@ -2595,8 +2598,8 @@ const ActiveToolsDisplay = ({
                       <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92">{option.displayName}</span>
-                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62">
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={option.displayName}>{option.displayName}</span>
+                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62" title={[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}>
                         {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
                       </span>
                     </span>
@@ -2757,7 +2760,7 @@ const ActiveToolsDisplay = ({
         <>
           <div
             className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
-            style={{ "--image-liquid-red": "#FF0000" } as React.CSSProperties}
+            style={{ "--image-liquid-red": "#7C3AED" } as React.CSSProperties}
           >
             <span className="image-liquid-chip__wave" />
             <span className="image-liquid-chip__gloss" />
@@ -2773,7 +2776,7 @@ const ActiveToolsDisplay = ({
                 "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-[rgba(255,0,0,0.10)] dark:hover:bg-[rgba(255,0,0,0.16)]"
+                  : "hover:bg-[rgba(124,58,237,0.10)] dark:hover:bg-[rgba(124,58,237,0.18)]"
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -2977,7 +2980,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de voz</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceModel}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceModel}>{selectedVoiceModel}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -2994,7 +2997,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Language</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceLanguage}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceLanguage}>{selectedVoiceLanguage}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3011,7 +3014,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Accent</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceAccent}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceAccent}>{selectedVoiceAccent}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3046,7 +3049,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceEffect}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceEffect}>{selectedVoiceEffect}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3071,15 +3074,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,63,94,0.0)_70deg,rgba(244,63,94,0.48)_135deg,rgba(225,29,72,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-fuchsia-300/70 bg-fuchsia-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-fuchsia-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(192,38,211,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-fuchsia-400/80 dark:border-fuchsia-500/40 dark:bg-fuchsia-900/25 dark:text-fuchsia-200">
+            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(232,121,249,0.0)_70deg,rgba(232,121,249,0.48)_135deg,rgba(217,70,239,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(192,38,211,0.35)]" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-fuchsia-800/30"
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -3113,7 +3116,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 p-1.5">
                 <div className="px-2 pb-2 pt-1.5">
                   <div className="flex items-center justify-between gap-3">
@@ -3121,7 +3124,7 @@ const ActiveToolsDisplay = ({
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
                       <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
                     </div>
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-rose-200/80 bg-rose-50 text-rose-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200">
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-fuchsia-200/80 bg-fuchsia-50 text-fuchsia-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-fuchsia-400/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200">
                       <Music className="h-4 w-4" />
                     </span>
                   </div>
@@ -3130,7 +3133,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de música</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicModel}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicModel}>{selectedMusicModel}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3150,7 +3153,7 @@ const ActiveToolsDisplay = ({
                       <span className="block leading-none">Estilo</span>
                       <span className="mt-1 block max-w-[150px] truncate text-[10.5px] font-medium leading-none text-zinc-500 dark:text-white/60">{MUSIC_STYLE_PROFILES[selectedMusicStyle].description}</span>
                     </span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72">{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72" title={MUSIC_STYLE_PROFILES[selectedMusicStyle].label}>{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={10} alignOffset={-8} collisionPadding={12} className="liquid-menu-surface max-h-[min(25rem,calc(100vh-2rem))] w-[min(calc(100vw-1rem),19rem)] overflow-y-auto p-1.5">
@@ -3176,7 +3179,7 @@ const ActiveToolsDisplay = ({
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center justify-between gap-2">
                                 <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
-                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" />}
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-fuchsia-600 dark:text-fuchsia-300" />}
                               </span>
                               <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
                             </span>
@@ -3190,7 +3193,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Mood</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicMood}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicMood}>{selectedMusicMood}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3240,7 +3243,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicEffect}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicEffect}>{selectedMusicEffect}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -10690,7 +10693,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || chatType === 'thesis'
   );
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
-  const shouldInlineActiveTools = isMediaToolActive || isWebSearchActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
     isVoiceGenerationActive ||
@@ -10763,6 +10765,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,
   };
+
 
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
@@ -10866,6 +10869,45 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setShowAudioPanel(true);
     setAudioTab('stt');
   }, []);
+
+  // Shared props bundle for <ActionsDropdown /> (the "+" tools button).
+  // It renders in two spots: inline with the textarea while NO tool is
+  // active, and as a compact chip in the bottom tools row once any tool
+  // is active (so the "+" sits level with the Voz/Imágenes/Música chips).
+  const actionsDropdownProps = {
+    chatType, setChatType,
+    currentPlan,
+    isWorkModeActive, setIsWorkModeActive,
+    isWebSearchActive, setIsWebSearchActive,
+    isImageGenerationActive, setIsImageGenerationActive,
+    isVoiceGenerationActive, setIsVoiceGenerationActive,
+    isMusicGenerationActive, setIsMusicGenerationActive,
+    isVideoGenerationActive, setIsVideoGenerationActive,
+    isComputerUseActive, setIsComputerUseActive,
+    computerUseAppMode, setComputerUseAppMode,
+    computerUseStatus,
+    isGmailActive, setIsGmailActive,
+    isGoogleCalendarActive, setIsGoogleCalendarActive,
+    isGoogleDriveActive, setIsGoogleDriveActive,
+    isSpotifyActive, setIsSpotifyActive,
+    isWordConnectorActive, setIsWordConnectorActive,
+    isExcelConnectorActive, setIsExcelConnectorActive,
+    setShowAudioPanel,
+    openVoicePanel: openGrokVoicePanel,
+    handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
+    handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
+    handleExcelConnectorToggle,
+    closeAllToolsAndConnectors,
+    setAudioTab,
+    handleAndUploadFiles,
+    isUploading,
+    isWebSearching: isCurrentChatLocalJobBusy && isWebSearching,
+    isLoading: isCurrentChatLoading,
+    isGeneratingImage: isCurrentChatLocalJobBusy && isGeneratingImage,
+    isGeneratingVideo: isCurrentChatLocalJobBusy && isGeneratingVideo,
+    isGeneratingPPT,
+    isProcessingGmail: isCurrentChatLocalJobBusy && isProcessingGmail,
+  };
 
   React.useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -12257,76 +12299,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onFileProcessingStatusChange={handleFileProcessingStatusChange}
                       />
                       <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                      {hasActiveTools && !shouldInlineActiveTools && (
-                        <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
-                          <ActiveToolsDisplay {...activeToolsProps} />
-                        </div>
-                      )}
                     </div>
                     {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
-                        className="composer-input-row"
+                        className={cn("composer-input-row", hasActiveTools && "composer-input-row--tools-active")}
                       >
-                        {/* LEFT — Plus / attach + tool selector */}
-                        <ActionsDropdown
-                          chatType={chatType}
-                          setChatType={setChatType}
-                          currentPlan={currentPlan}
-                          isWorkModeActive={isWorkModeActive}
-                          setIsWorkModeActive={setIsWorkModeActive}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVoiceGenerationActive={isVoiceGenerationActive}
-                          setIsVoiceGenerationActive={setIsVoiceGenerationActive}
-                          isMusicGenerationActive={isMusicGenerationActive}
-                          setIsMusicGenerationActive={setIsMusicGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isComputerUseActive={isComputerUseActive}
-                          setIsComputerUseActive={setIsComputerUseActive}
-                          computerUseAppMode={computerUseAppMode}
-                          setComputerUseAppMode={setComputerUseAppMode}
-                          computerUseStatus={computerUseStatus}
-                          isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
-                          isGoogleCalendarActive={isGoogleCalendarActive}
-                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                          isGoogleDriveActive={isGoogleDriveActive}
-                          setIsGoogleDriveActive={setIsGoogleDriveActive}
-                          isSpotifyActive={isSpotifyActive}
-                          setIsSpotifyActive={setIsSpotifyActive}
-                          isWordConnectorActive={isWordConnectorActive}
-                          setIsWordConnectorActive={setIsWordConnectorActive}
-                          isExcelConnectorActive={isExcelConnectorActive}
-                          setIsExcelConnectorActive={setIsExcelConnectorActive}
-                          setShowAudioPanel={setShowAudioPanel}
-                          openVoicePanel={openGrokVoicePanel}
-                          handleComputerUseToggle={handleComputerUseToggle}
-                          handleGmailToggle={handleGmailToggle}
-                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                          handleGoogleDriveToggle={handleGoogleDriveToggle}
-                          handleSpotifyToggle={handleSpotifyToggle}
-                          handleWordConnectorToggle={handleWordConnectorToggle}
-                          handleExcelConnectorToggle={handleExcelConnectorToggle}
-                          closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                          setAudioTab={setAudioTab}
-                          handleAndUploadFiles={handleAndUploadFiles}
-                          isUploading={isUploading}
-                          isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
-                          isLoading={isCurrentChatLoading}
-                          isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
-                          isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
-                          isGeneratingPPT={isGeneratingPPT}
-                          isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
-                        />
-
-                        {shouldInlineActiveTools && (
-                          <div className="composer-inline-active-tools">
-                            <ActiveToolsDisplay {...activeToolsProps} />
-                          </div>
+                        {/* LEFT — Plus / attach + tool selector. Only inline
+                            while NO tool is active; once a tool turns on,
+                            the "+" moves to the bottom tools row (below) so
+                            it stays level with the active chips. */}
+                        {!hasActiveTools && (
+                          <ActionsDropdown {...actionsDropdownProps} />
                         )}
 
                         {/* CENTER — single-line default; grows with content. */}
@@ -12512,6 +12496,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       </div>
                     </TooltipProvider>
 
+                    {hasActiveTools && (
+                      <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+                        <ActionsDropdown {...actionsDropdownProps} compact />
+                        <ActiveToolsDisplay {...activeToolsProps} />
+                      </div>
+                    )}
                   </div>
                   </div>
 
@@ -12741,73 +12731,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             onFileProcessingStatusChange={handleFileProcessingStatusChange}
                           />
                           <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                          {hasActiveTools && !shouldInlineActiveTools && (
-                            <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
-                              <ActiveToolsDisplay {...activeToolsProps} />
-                            </div>
-                          )}
                         </div>
                         <TooltipProvider>
                           <div
-                            className="composer-input-row"
+                            className={cn("composer-input-row", hasActiveTools && "composer-input-row--tools-active")}
                           >
-                            <ActionsDropdown
-                              chatType={chatType}
-                              setChatType={setChatType}
-                              currentPlan={currentPlan}
-                              isWorkModeActive={isWorkModeActive}
-                              setIsWorkModeActive={setIsWorkModeActive}
-                              isWebSearchActive={isWebSearchActive}
-                              setIsWebSearchActive={setIsWebSearchActive}
-                              isImageGenerationActive={isImageGenerationActive}
-                              setIsImageGenerationActive={setIsImageGenerationActive}
-                              isVoiceGenerationActive={isVoiceGenerationActive}
-                              setIsVoiceGenerationActive={setIsVoiceGenerationActive}
-                              isMusicGenerationActive={isMusicGenerationActive}
-                              setIsMusicGenerationActive={setIsMusicGenerationActive}
-                              isVideoGenerationActive={isVideoGenerationActive}
-                              setIsVideoGenerationActive={setIsVideoGenerationActive}
-                              isComputerUseActive={isComputerUseActive}
-                              setIsComputerUseActive={setIsComputerUseActive}
-                              computerUseAppMode={computerUseAppMode}
-                              setComputerUseAppMode={setComputerUseAppMode}
-                              computerUseStatus={computerUseStatus}
-                              isGmailActive={isGmailActive}
-                              setIsGmailActive={setIsGmailActive}
-                              isGoogleCalendarActive={isGoogleCalendarActive}
-                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                              isGoogleDriveActive={isGoogleDriveActive}
-                              setIsGoogleDriveActive={setIsGoogleDriveActive}
-                              isSpotifyActive={isSpotifyActive}
-                              setIsSpotifyActive={setIsSpotifyActive}
-                              isWordConnectorActive={isWordConnectorActive}
-                              setIsWordConnectorActive={setIsWordConnectorActive}
-                              isExcelConnectorActive={isExcelConnectorActive}
-                              setIsExcelConnectorActive={setIsExcelConnectorActive}
-                              setShowAudioPanel={setShowAudioPanel}
-                              openVoicePanel={openGrokVoicePanel}
-                              handleComputerUseToggle={handleComputerUseToggle}
-                              handleGmailToggle={handleGmailToggle}
-                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                              handleGoogleDriveToggle={handleGoogleDriveToggle}
-                              handleSpotifyToggle={handleSpotifyToggle}
-                              handleWordConnectorToggle={handleWordConnectorToggle}
-                              handleExcelConnectorToggle={handleExcelConnectorToggle}
-                              closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                              setAudioTab={setAudioTab}
-                              handleAndUploadFiles={handleAndUploadFiles}
-                              isUploading={isUploading}
-                              isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
-                              isLoading={isCurrentChatLoading}
-                              isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
-                              isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
-                              isGeneratingPPT={isGeneratingPPT}
-                              isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
-                            />
-                            {shouldInlineActiveTools && (
-                              <div className="composer-inline-active-tools">
-                                <ActiveToolsDisplay {...activeToolsProps} />
-                              </div>
+                            {/* LEFT — Plus / attach + tool selector. Inline
+                                only while NO tool is active; with tools on,
+                                the "+" moves to the bottom tools row. */}
+                            {!hasActiveTools && (
+                              <ActionsDropdown {...actionsDropdownProps} />
                             )}
                             <div className="composer-textarea-shell min-w-0 flex-1">
                               {hasDetectedLinks && input ? (
@@ -12989,6 +12922,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         </TooltipProvider>
 
+                        {hasActiveTools && (
+                          <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+                            <ActionsDropdown {...actionsDropdownProps} compact />
+                            <ActiveToolsDisplay {...activeToolsProps} />
+                          </div>
+                        )}
                       </div>
                       </div>
                     </div>
