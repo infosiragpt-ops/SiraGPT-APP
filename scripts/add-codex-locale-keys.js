@@ -89,6 +89,7 @@ const ES = {
   },
   "composer": {
     "placeholder": "Describe tu idea — la IA propone el plan y ejecuta…",
+    "placeholderApps": "Ej: crea un software como ChatGPT, un CRM o un ERP… la IA compila todas las capas y puede trabajar horas",
     "plan": "Plan",
     "planTooltip": "El agente planifica internamente y ejecuta en modo automático.",
     "send": "Enviar",
@@ -114,7 +115,7 @@ const ES = {
   },
   "preview": {
     "start": "▶ Iniciar / Recargar",
-    "hint": "Levanta el dev server de este proyecto y carga la vista previa."
+    "hint": "Levanta el dev server de esta app y carga la vista previa."
   },
   "files": {
     "title": "Código",
@@ -124,7 +125,7 @@ const ES = {
     "none": "Selecciona un archivo para ver su contenido."
   },
   "errors": {
-    "createProject": "No se pudo crear el proyecto",
+    "createProject": "No se pudo crear la app",
     "startRun": "No se pudo iniciar la corrida",
     "approvePlan": "No se pudo aprobar el plan",
     "stopRun": "No se pudo detener la corrida",
@@ -134,15 +135,15 @@ const ES = {
   },
   "panel": {
     "newProject": "Nuevo",
-    "selectProject": "Selecciona un proyecto…",
+    "selectProject": "Selecciona una app…",
     "loading": "Cargando…",
     "emptyDescribe": "Describe qué quieres construir para proponer un plan.",
-    "emptySelect": "Crea o selecciona un proyecto para empezar.",
+    "emptySelect": "Crea o selecciona una app para empezar.",
     "filesHint": "El árbol de archivos del workspace se abre desde el editor de /code.",
     "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
     "openInTab": "Abrir en pestaña nueva",
     "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
-    "defaultProjectName": "Proyecto {n}",
+    "defaultProjectName": "App {n}",
     "defaultAppName": "Nueva app {n}",
     "appsTitle": "APPS",
     "newApp": "Nueva app",
@@ -221,6 +222,7 @@ const EN = {
   },
   "composer": {
     "placeholder": "Describe the idea — AI plans and builds…",
+    "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
     "plan": "Plan",
     "planTooltip": "The agent plans internally and builds automatically.",
     "send": "Send",
