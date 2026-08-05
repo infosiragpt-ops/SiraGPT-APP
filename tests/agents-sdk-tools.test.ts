@@ -61,6 +61,7 @@ describe("Agents SDK tools surface", () => {
     assert.match(panel, /CRM de ventas/)
     assert.match(panel, /enterprise_analyst/)
     assert.match(panel, /buildAutonomousPrompt/)
-    assert.match(panel, /Composer disabled=\{false\}/)
+    // Multi-line Composer with surface so APPS uses Power tier + deep placeholder.
+    assert.match(panel, /<Composer[\s\S]*?disabled=\{false\}[\s\S]*?surface=\{surface === "apps" \? "apps" : "code"\}/)
   })
 })
