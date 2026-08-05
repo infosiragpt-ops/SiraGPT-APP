@@ -4392,6 +4392,7 @@ function validateDocxRequestContract(beforeBuffer, afterBuffer, requestText = ''
       let beforeTargetPresent;
       let replacementPresent;
       let needleAbsentFromTarget;
+      let targetTransformationMatches = true;
       let targetParagraphIndex = null;
       let afterTargetText = '';
 
@@ -4402,7 +4403,18 @@ function validateDocxRequestContract(beforeBuffer, afterBuffer, requestText = ''
         beforeTargetPresent = Boolean(beforeTarget);
         afterTargetText = afterTarget?.text || '';
         replacementPresent = normalizedTextIncludes(afterTargetText, replacement.replacement);
-        needleAbsentFromTarget = !normalizedTextIncludes(afterTargetText, replacement.needle);
+        const matchedSpan = beforeTarget ? findNeedleSpanInText(beforeTarget.text, replacement.needle) : null;
+        const matchedText = matchedSpan
+          ? beforeTarget.text.slice(matchedSpan.start, matchedSpan.end)
+          : replacement.needle;
+        const scopedReplacement = preserveCaseReplacement(matchedText, replacement.replacement);
+        const expectedAfterTargetText = beforeTarget && matchedSpan
+          ? `${beforeTarget.text.slice(0, matchedSpan.start)}${scopedReplacement}${beforeTarget.text.slice(matchedSpan.end)}`
+          : '';
+        targetTransformationMatches = Boolean(expectedAfterTargetText)
+          && normalizeText(afterTargetText) === normalizeText(expectedAfterTargetText);
+        needleAbsentFromTarget = normalizedTextIncludes(replacement.replacement, replacement.needle)
+          || !normalizedTextIncludes(afterTargetText, replacement.needle);
       } else {
         const beforeText = beforeParagraphs.map((paragraph) => paragraph.text).join('\n');
         const afterText = afterParagraphs.map((paragraph) => paragraph.text).join('\n');
@@ -4419,7 +4431,8 @@ function validateDocxRequestContract(beforeBuffer, afterBuffer, requestText = ''
           && executionChanged
           && beforeTargetPresent
           && replacementPresent
-          && needleAbsentFromTarget,
+          && needleAbsentFromTarget
+          && targetTransformationMatches,
         details: {
           needle: compact(replacement.needle, 120),
           replacement: compact(replacement.replacement, 120),
@@ -4428,6 +4441,7 @@ function validateDocxRequestContract(beforeBuffer, afterBuffer, requestText = ''
           beforeTargetPresent,
           replacementPresent,
           needleAbsentFromTarget,
+          targetTransformationMatches,
           targetParagraphIndex,
           afterTargetText: compact(afterTargetText, 180),
         },

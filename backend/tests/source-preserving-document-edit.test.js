@@ -2005,6 +2005,46 @@ describe('source-preserving DOCX title edits', () => {
     }]);
   });
 
+  it('validates a title replacement whose new value contains the old value', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-overlap-'));
+    const originalPath = path.join(tmp, 'informe-2026.docx');
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'INFORME ANUAL 2026', bold: true })],
+        }),
+        new Paragraph('Cuerpo que debe conservarse.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+    const prompt = 'cambia en el título de 2026 a 2026-2027 en mi mismo Word';
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'title-overlap',
+        path: originalPath,
+        originalName: 'informe-2026.docx',
+        filename: 'informe-2026.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'INFORME ANUAL 2026. Cuerpo que debe conservarse.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-title-overlap',
+      chatId: 'chat-title-overlap',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.request_contract, true);
+    assert.equal(result.validation.details.requestContract.details.targetTransformationMatches, true);
+    assert.equal(result.validation.details.requestContract.details.needleAbsentFromTarget, true);
+    const editedXml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(editedXml, /INFORME ANUAL 2026-2027/);
+    assert.doesNotMatch(editedXml, /INFORME ANUAL 2026<\/w:t>/);
+    assert.match(editedXml, /Cuerpo que debe conservarse/);
+  });
+
   it('does not validate unrelated growth as a generic appendix', async () => {
     const before = Buffer.from(await Packer.toBuffer(new Document({
       sections: [{ children: [
