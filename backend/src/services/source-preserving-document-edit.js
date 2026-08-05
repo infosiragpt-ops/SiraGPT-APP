@@ -717,6 +717,64 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
   };
 }
 
+const BATCH_DOCUMENT_FAMILY_SELECTORS = [
+  { terms: 'words?|docx', matches: isDocxFile },
+  { terms: 'pdfs?', matches: isPdfFile },
+  { terms: 'excels?|xlsx', matches: isXlsxFile },
+  { terms: 'powerpoints?|pptx|presentacion(?:es)?', matches: isPptxFile },
+  { terms: 'txt|markdown|md|csv|html|svg|json|xml|yaml|yml', matches: isTextLikeFile },
+];
+
+function batchScopeMentionsFamily(text = '', terms = '') {
+  const family = `(?:${terms})`;
+  return new RegExp(`\\b(?:todos|todas|ambos|ambas|estos|estas|esos|esas|varios|varias)\\s+(?:(?:los|las)\\s+)?(?:(?:mismos?|mismas?)\\s+)?(?:(?:documentos?|archivos?)\\s+)?${family}\\b`).test(text)
+    || new RegExp(`\\b(?:cada|en\\s+cada)\\s+(?:(?:documento|archivo)\\s+)?${family}\\b`).test(text)
+    || new RegExp(`\\b(?:los|las)\\s+(?:dos|tres|cuatro|cinco|\\d+)\\s+(?:(?:documentos?|archivos?)\\s+)?${family}\\b`).test(text)
+    || new RegExp(`\\b(?:los|las|mis)\\s+(?:(?:documentos?|archivos?)\\s+)?${family}\\b`).test(text);
+}
+
+function selectBatchDocumentSources(prompt = '', sourceFiles = []) {
+  const currentSupported = (Array.isArray(sourceFiles) ? sourceFiles : [])
+    .filter((file) => file?.source === 'current_upload')
+    .filter(isSupportedSourcePreservingFile);
+  const text = normalizeText(prompt);
+  const explicitFamilies = BATCH_DOCUMENT_FAMILY_SELECTORS
+    .filter((family) => batchScopeMentionsFamily(text, family.terms));
+  if (!explicitFamilies.length) return currentSupported;
+  return currentSupported.filter((file) => explicitFamilies.some((family) => family.matches(file)));
+}
+
+function requestWantsBatchDocumentEdit(prompt = '', sourceFiles = []) {
+  const batchSources = selectBatchDocumentSources(prompt, sourceFiles);
+  // Plural wording is not enough: "ambos Word" needs at least two Word
+  // sources. Other attached families are references, not extra batch targets.
+  if (batchSources.length < 2) return false;
+  if (requestWantsReferenceIntegration(prompt)) return false;
+
+  const text = normalizeText(prompt);
+  // A merge/integration request has one combined output, not one edited copy
+  // per source. Keep it on the existing document-merge/reference path.
+  if (/\b(?:fusion\w*|combina\w*|une|unir|mezcla\w*|consolida\w*)\b[^.?!]{0,100}\b(?:en\s+)?(?:un|uno|solo|[uú]nico)\b/.test(text)) return false;
+
+  // The selector already resolved explicit family wording such as "ambos
+  // PowerPoint" or "en cada Excel". Reuse its vocabulary here so this
+  // activation gate cannot drift behind the family-specific selector.
+  if (BATCH_DOCUMENT_FAMILY_SELECTORS.some((family) => batchScopeMentionsFamily(text, family.terms))) return true;
+
+  // Users commonly refer to a multi-upload selection without a quantifier:
+  // "edita los documentos adjuntos" / "en los archivos subidos". At this
+  // point we already proved there are at least two editable current uploads,
+  // and the reference/merge vetoes above keep this from consuming inputs that
+  // should instead feed a single combined deliverable.
+  if (/\b(?:en\s+)?(?:los|las|mis)\s+(?:documentos?|archivos?)\s+(?:adjunt\w*|cargad\w*|subid\w*)\b/.test(text)) return true;
+
+  return /\b(?:todos|todas|ambos|ambas)\s+(?:(?:los|las)\s+)?(?:documentos?|archivos?|words?|docx|pdfs?|excels?|xlsx|presentaciones?|pptx)\b/.test(text)
+    || /\b(?:estos|estas|esos|esas|varios|varias)\s+(?:mismos?\s+)?(?:documentos?|archivos?|words?|docx|pdfs?|excels?|xlsx|presentaciones?|pptx)\b/.test(text)
+    || /\b(?:cada\s+(?:uno|una|documento|archivo)|en\s+cada\s+(?:documento|archivo|word|docx|pdf|excel|presentaci[oó]n))\b/.test(text)
+    || /\b(?:los|las)\s+(?:dos|tres|cuatro|cinco|\d+)\s+(?:documentos?|archivos?|words?|docx|pdfs?|excels?|presentaciones?)\b/.test(text)
+    || /\b(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*)\b[^.?!]{0,100}\b(?:ambos|ambas|todos|todas)\b/.test(text);
+}
+
 function xmlEscape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -3596,6 +3654,11 @@ function sectionFallbackBlocks({ prompt = '', target, sourceText = '', sourceFil
     .split(/\n{2,}|---/)
     .map((item) => compact(item, 360))
     .filter((item) => item.length >= 50)
+    // The source summary often contains status text such as "ANEXO 3
+    // pendiente". Re-inserting that marker into the section we just filled
+    // makes the semantic validator correctly reject the artifact. Keep the
+    // substantive reference excerpts and drop only placeholder/status chunks.
+    .filter((item) => !/\b(?:pendiente(?:\s+de\s+completar)?|por\s+completar|completar\s+aqui|rellenar\s+aqui)\b/i.test(item))
     .slice(0, 4);
 
   const blocks = [
@@ -3728,41 +3791,6 @@ async function appendToPdfBuffer(buffer, blocks) {
   return Buffer.from(await pdf.save());
 }
 
-async function buildPdfFromPlainText({ title = 'Documento editado', text = '' } = {}) {
-  const pdf = await PDFDocument.create();
-  let page = pdf.addPage([612, 792]);
-  let { width, height } = page.getSize();
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const margin = 54;
-  let y = height - margin;
-  let maxWidth = width - (margin * 2);
-
-  const addPageIfNeeded = () => {
-    if (y >= margin) return;
-    page = pdf.addPage([612, 792]);
-    ({ width, height } = page.getSize());
-    maxWidth = width - (margin * 2);
-    y = height - margin;
-  };
-  const drawWrapped = (value, currentFont, fontSize, lineHeight) => {
-    const lines = wrapPdfText(value, currentFont, fontSize, maxWidth);
-    for (const line of lines) {
-      addPageIfNeeded();
-      page.drawText(line || ' ', { x: margin, y, size: fontSize, font: currentFont, color: rgb(0.08, 0.1, 0.14) });
-      y -= line ? lineHeight : Math.ceil(lineHeight / 2);
-    }
-  };
-
-  drawWrapped(String(title || 'Documento editado').slice(0, 180), boldFont, 15, 20);
-  y -= 8;
-  for (const paragraph of String(text || '').split(/\n{2,}/)) {
-    drawWrapped(paragraph, font, 10.5, 14);
-    y -= 6;
-  }
-  return Buffer.from(await pdf.save());
-}
-
 async function extractTextFromPdfBuffer(buffer) {
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'siragpt-pdf-text-'));
   const pdfPath = path.join(tmp, 'input.pdf');
@@ -3778,43 +3806,26 @@ async function extractTextFromPdfBuffer(buffer) {
   }
 }
 
-async function executePdfOperations({ input, requestText, sourceText, blocks, sourceFile } = {}) {
+async function executePdfOperations({ input, requestText, blocks } = {}) {
   const ops = planGenericOfficeOperations({ requestText, format: 'pdf' });
   const textEditOps = ops.filter((op) => op.kind === 'replace_text' || op.kind === 'delete_text');
-  if (textEditOps.length === 0) {
-    return {
-      buffer: await appendToPdfBuffer(input, blocks),
-      steps: [{ kind: 'append_generic', mode: 'pdf_append_page' }],
-      validationBlocks: blocks,
-      ops,
-    };
-  }
-
-  let text = String(sourceFile?.extractedText || sourceText || '').trim();
-  if (!text) text = (await extractTextFromPdfBuffer(input)).trim();
-  let edited = text;
-  const steps = [];
-  const validationBlocks = [];
-  for (const op of textEditOps) {
-    const changedCount = countNeedleMatches(edited, op.needle);
-    if (op.kind === 'replace_text') {
-      edited = replaceNeedleText(edited, op.needle, op.replacement);
-      validationBlocks.push(block('normal', op.replacement));
-      steps.push({ kind: 'replace_text', mode: 'pdf_text_rewrite', changedCount });
-    } else {
-      edited = replaceNeedleText(edited, op.needle, '');
-      steps.push({ kind: 'delete_text', mode: 'pdf_text_rewrite', removedCount: changedCount });
-    }
+  if (textEditOps.length > 0) {
+    const error = new Error(
+      'No puedo reemplazar ni eliminar texto dentro de un PDF conservando fielmente su diseño, imágenes y estructura. Adjunta la versión DOCX/Word para editar el contenido o pide una superposición visible sobre una página del PDF.',
+    );
+    error.code = 'PDF_TEXT_EDIT_PRESERVATION_UNSUPPORTED';
+    // Consumers that support the legacy sandbox fallback must keep this
+    // failure closed instead of regenerating a visually different document.
+    error.validationOnlyFailure = true;
+    error.format = 'pdf';
+    throw error;
   }
 
   return {
-    buffer: await buildPdfFromPlainText({
-      title: `${sourceFile?.originalName || sourceFile?.filename || 'PDF'} editado`,
-      text: edited,
-    }),
-    steps,
-    validationBlocks: validationBlocks.length ? validationBlocks : blocks,
-    ops: textEditOps,
+    buffer: await appendToPdfBuffer(input, blocks),
+    steps: [{ kind: 'append_generic', mode: 'pdf_append_page' }],
+    validationBlocks: blocks,
+    ops,
   };
 }
 
@@ -4022,19 +4033,26 @@ function validateConsistencyMatrixInsertion(buffer) {
   }
 }
 
-function validateDocxOperationCriteria(buffer, operations = []) {
+function validateDocxOperationCriteria(buffer, operations = [], { beforeBuffer = null } = {}) {
   const text = extractDocxTextFromBuffer(buffer);
   const normalized = normalizeText(text);
   const checks = [];
   for (const op of operations || []) {
     if (op.kind === 'set_document_title') {
+      let visibleTitle = '';
+      try {
+        const paragraphs = extractDocxParagraphs(readDocxDocumentXml(buffer))
+          .filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
+        visibleTitle = (paragraphs.find(isDocxTitleParagraph) || paragraphs[0])?.text?.trim() || '';
+      } catch { /* handled by the failed criterion below */ }
       checks.push({
         id: 'document_title_changed',
         label: 'Título del documento actualizado',
-        passed: normalizedTextIncludes(text, op.newTitle),
+        passed: normalizeText(visibleTitle) === normalizeText(op.newTitle),
         details: {
           previousTitle: compact(op.previousTitle, 120),
           newTitle: compact(op.newTitle, 120),
+          visibleTitle: compact(visibleTitle, 120),
         },
       });
       continue;
@@ -4157,6 +4175,63 @@ function validateDocxOperationCriteria(buffer, operations = []) {
         label: 'Matriz de consistencia agregada al Word',
         passed: result.ok,
         details: result,
+      });
+      continue;
+    }
+    if (op.kind === 'insert_visual') {
+      let beforeDrawings = null;
+      let afterDrawings = null;
+      let beforeMediaParts = null;
+      let afterMediaParts = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const afterXml = readDocxDocumentXml(buffer);
+        beforeDrawings = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:drawing') : null;
+        afterDrawings = countXmlNodes(afterXml, 'w:drawing');
+        const countMediaParts = (candidate) => Object.entries(new PizZip(candidate).files || {})
+          .filter(([name, entry]) => name.startsWith('word/media/') && entry && !entry.dir)
+          .length;
+        beforeMediaParts = Buffer.isBuffer(beforeBuffer) ? countMediaParts(beforeBuffer) : null;
+        afterMediaParts = countMediaParts(buffer);
+      } catch { /* failed counts remain null and the criterion fails closed */ }
+      const passed = Number.isInteger(beforeDrawings)
+        && Number.isInteger(afterDrawings)
+        && Number.isInteger(beforeMediaParts)
+        && Number.isInteger(afterMediaParts)
+        && afterDrawings > beforeDrawings
+        && afterMediaParts > beforeMediaParts;
+      checks.push({
+        id: 'visual_inserted',
+        label: 'Gráfico insertado en el Word original',
+        passed,
+        details: { beforeDrawings, afterDrawings, beforeMediaParts, afterMediaParts },
+      });
+      continue;
+    }
+    if (op.kind === 'insert_table') {
+      let beforeTables = null;
+      let afterTables = null;
+      let beforeRows = null;
+      let afterRows = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const afterXml = readDocxDocumentXml(buffer);
+        beforeTables = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:tbl') : null;
+        afterTables = countXmlNodes(afterXml, 'w:tbl');
+        beforeRows = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:tr') : null;
+        afterRows = countXmlNodes(afterXml, 'w:tr');
+      } catch { /* failed counts remain null and the criterion fails closed */ }
+      const passed = Number.isInteger(beforeTables)
+        && Number.isInteger(afterTables)
+        && Number.isInteger(beforeRows)
+        && Number.isInteger(afterRows)
+        && afterTables > beforeTables
+        && afterRows > beforeRows;
+      checks.push({
+        id: 'native_table_inserted',
+        label: 'Tabla editable insertada en el Word original',
+        passed,
+        details: { beforeTables, afterTables, beforeRows, afterRows },
       });
       continue;
     }
@@ -4416,6 +4491,111 @@ function buildAgenticDocumentCycle({ operations = [], semanticCriteria, previewH
   };
 }
 
+function zipPartBuffer(zip, name) {
+  const entry = zip?.files?.[name];
+  if (!entry || entry.dir) return null;
+  try {
+    return Buffer.from(entry.asUint8Array());
+  } catch {
+    return null;
+  }
+}
+
+function ooxmlPartNames(zip) {
+  return Object.entries(zip?.files || {})
+    .filter(([, entry]) => entry && !entry.dir)
+    .map(([name]) => name)
+    .sort();
+}
+
+function countXmlNodes(xml = '', tag = '') {
+  if (!tag) return 0;
+  const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (String(xml || '').match(new RegExp(`<${escaped}(?:\\s|>)`, 'g')) || []).length;
+}
+
+/**
+ * Prove that the generated Office file is an edited copy of the uploaded
+ * package instead of a newly reconstructed document. For a title-only DOCX
+ * edit the proof is deliberately strict: every package part except the two
+ * title-bearing XML parts must remain byte-identical, while paragraph/table/
+ * drawing structure must remain unchanged.
+ */
+function assessSourcePreservation(beforeBuffer, afterBuffer, format, operations = []) {
+  if (!Buffer.isBuffer(beforeBuffer) || !Buffer.isBuffer(afterBuffer) || !beforeBuffer.length || !afterBuffer.length) {
+    return { passed: false, reason: 'missing_source_or_output_buffer' };
+  }
+
+  if (!['docx', 'xlsx', 'pptx'].includes(format)) {
+    const signaturePreserved = format === 'pdf'
+      ? beforeBuffer.slice(0, 5).toString('latin1') === '%PDF-' && afterBuffer.slice(0, 5).toString('latin1') === '%PDF-'
+      : afterBuffer.length > 0;
+    return { passed: signaturePreserved, signaturePreserved, strictTitleOnly: false };
+  }
+
+  try {
+    const beforeZip = new PizZip(beforeBuffer);
+    const afterZip = new PizZip(afterBuffer);
+    const beforeParts = ooxmlPartNames(beforeZip);
+    const afterPartSet = new Set(ooxmlPartNames(afterZip));
+    const missingParts = beforeParts.filter((name) => !afterPartSet.has(name));
+    const requiredPart = format === 'docx'
+      ? 'word/document.xml'
+      : format === 'xlsx'
+        ? 'xl/workbook.xml'
+        : 'ppt/presentation.xml';
+    const packageStructurePreserved = missingParts.length === 0 && afterPartSet.has(requiredPart);
+
+    const titleOnly = format === 'docx'
+      && operations.length > 0
+      && operations.every((operation) => operation?.kind === 'set_document_title'
+        || (operation?.kind === 'replace_text' && operation?.scope === 'title'));
+    if (!titleOnly) {
+      return {
+        passed: packageStructurePreserved,
+        packageStructurePreserved,
+        missingParts,
+        strictTitleOnly: false,
+      };
+    }
+
+    const allowedChangedParts = new Set(['word/document.xml', 'docProps/core.xml']);
+    const unexpectedlyChangedParts = beforeParts.filter((name) => {
+      if (allowedChangedParts.has(name)) return false;
+      const beforePart = zipPartBuffer(beforeZip, name);
+      const afterPart = zipPartBuffer(afterZip, name);
+      return !beforePart || !afterPart || !beforePart.equals(afterPart);
+    });
+    const beforeDocumentXml = beforeZip.file('word/document.xml')?.asText() || '';
+    const afterDocumentXml = afterZip.file('word/document.xml')?.asText() || '';
+    const structuralCounts = {
+      paragraphs: [countXmlNodes(beforeDocumentXml, 'w:p'), countXmlNodes(afterDocumentXml, 'w:p')],
+      tables: [countXmlNodes(beforeDocumentXml, 'w:tbl'), countXmlNodes(afterDocumentXml, 'w:tbl')],
+      drawings: [countXmlNodes(beforeDocumentXml, 'w:drawing'), countXmlNodes(afterDocumentXml, 'w:drawing')],
+      sections: [countXmlNodes(beforeDocumentXml, 'w:sectPr'), countXmlNodes(afterDocumentXml, 'w:sectPr')],
+    };
+    const documentStructurePreserved = Object.values(structuralCounts).every(([before, after]) => before === after);
+    const passed = packageStructurePreserved
+      && unexpectedlyChangedParts.length === 0
+      && documentStructurePreserved;
+    return {
+      passed,
+      packageStructurePreserved,
+      documentStructurePreserved,
+      strictTitleOnly: true,
+      missingParts,
+      unexpectedlyChangedParts,
+      structuralCounts,
+    };
+  } catch (error) {
+    return {
+      passed: false,
+      reason: `invalid_${format}_package`,
+      error: String(error?.message || error || '').slice(0, 240),
+    };
+  }
+}
+
 async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   const appendedNeedle = blocks
     .map((item) => String(item.text || '').trim())
@@ -4455,12 +4635,18 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
     return buffer.includes(Buffer.from(appendedNeedle.slice(0, Math.min(20, appendedNeedle.length))));
   })();
   const semanticCriteria = format === 'docx'
-    ? validateDocxOperationCriteria(buffer, context.operations || [])
+    ? validateDocxOperationCriteria(buffer, context.operations || [], { beforeBuffer: context.beforeBuffer })
     : await validateOfficeOperationCriteria(buffer, format, context.operations || [], blocks);
   const hasSemanticCriteria = semanticCriteria.checks.length > 0;
   const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
+  const sourcePreservation = assessSourcePreservation(
+    context.beforeBuffer,
+    buffer,
+    format,
+    context.operations || [],
+  );
   const checks = {
-    source_preserved: true,
+    source_preserved: sourcePreservation.passed,
     content_appended: hasSemanticCriteria ? operationEffectApplied : (appendedNeedle ? appendedTextPresent : operationEffectApplied),
     operation_criteria: semanticCriteria.passed,
     non_empty: buffer.length > 0,
@@ -4492,6 +4678,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
       appendedBlocks: blocks.filter((item) => item.kind !== 'pageBreak').length,
       sizeBytes: buffer.length,
       operationCriteria: semanticCriteria.checks,
+      sourcePreservation,
       agenticCycle: buildAgenticDocumentCycle({
         operations: context.operations || [],
         semanticCriteria,
@@ -4549,7 +4736,15 @@ function clauseIsFill(clauseNorm) {
 
 function clauseIsAppend(clauseNorm) {
   clauseNorm = withCollapsedRepeats(clauseNorm);
-  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|adjunt\w*|coloc\w*)\b/.test(clauseNorm)
+  // `adjunt\w*` used to treat the adjective in "documentos adjuntos" as an
+  // append command. In a compound request ("edita los documentos adjuntos y
+  // cambia el título") that manufactured an ANEXOS page after the surgical
+  // title edit. Keep real "adjunta/agrega" actions, but exclude attachment
+  // descriptors that merely identify the files to edit.
+  const attachmentDescriptor = /\b(?:documentos?|archivos?|imagenes?|fotos?|contenido)\s+adjunt(?:o|a|os|as)\b/.test(clauseNorm);
+  const attachAction = /\badjunt(?:a|ar|e|en|emos|ando|ado)\w*\b/.test(clauseNorm) && !attachmentDescriptor;
+  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|coloc\w*)\b/.test(clauseNorm)
+    || attachAction
     || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
 }
 
@@ -4738,9 +4933,23 @@ function extractReplacementPair(text = '') {
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
 
+const DOCX_TITLE_WRITE_VERB_RE = /\b(?:cambi\w*|modifi(?:c|q)\w*|reemplaz\w*|actualiz\w*|corrig\w*|col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*)\b/iu;
+
+function cleanDocxTitleAssignmentValue(value = '') {
+  return cleanReplacementValue(String(value || '')
+    // Scope/preservation clauses describe what must NOT change; they are not
+    // part of the requested title. This is the exact live phrasing that used
+    // to create the title "2027 solo modifica ello" (or, worse, an appendix).
+    .replace(/\s+(?:y\s+)?(?:solo|solamente|[uú]nicamente)\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:eso|esto|ello|el\s+t[ií]tulo|esa\s+parte)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?no\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?sin\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*|alter\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*|regres\w*)\b[\s\S]*$/iu, '')
+    .trim());
+}
+
 function extractDocxTitleChange(text = '') {
   const raw = String(text || '').trim();
-  if (!/\b(?:cambi\w*|modific\w*|reemplaz\w*|actualiz\w*|corrig\w*)\b/iu.test(raw)) return null;
+  if (!DOCX_TITLE_WRITE_VERB_RE.test(raw) && !/\b(?:t[ií]tulo|title)\b[^.?!]{0,80}\b(?:que\s+diga|debe\s+ser)\b/iu.test(raw)) return null;
   // Full title assignment: "cambia el título a / por / : Nuevo Título"
   // (NOT "cambia de A por B" — that is a surgical span replace, even when the
   // user says "en el título").
@@ -4750,10 +4959,24 @@ function extractDocxTitleChange(text = '') {
     // Title-scoped partial replace is handled as replace_text, not a full title rewrite.
     return null;
   }
-  const match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
+  let match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
+  // Natural owner phrasing used in chat: "el título le coloques 2027",
+  // "el título debe ser 2027" or "el título que diga Informe final".
+  if (!match) {
+    match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:(?:le|lo)\s+)?(?:col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*|que\s+diga|debe\s+ser)\s*(?:a|por|con|como|en|:)?\s+([\s\S]{1,220})$/iu);
+  }
+  // Verb-first forms: "coloca en el título 2027" / "pon el título como 2027".
+  if (!match) {
+    match = raw.match(/\b(?:col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*)\s+(?:(?:en|como|a)\s+)?(?:el\s+)?(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:a|por|con|como|en|:)?\s+([\s\S]{1,220})$/iu);
+  }
+  // Value-first forms: "ponle 2027 al título" / "coloca 2027 como título".
+  if (!match) {
+    const valueFirst = raw.match(/\b(?:col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*)\s+([\s\S]{1,180}?)\s+(?:al|como\s+(?:el\s+)?|en\s+(?:el\s+)?)\s*(?:t[ií]tulo|title)\b/iu);
+    if (valueFirst) match = valueFirst;
+  }
   if (!match) return null;
   const nextAction = /\s+(?:y|e)\s+(?=(?:agreg\w*|a[nñ]ad\w*|inclu\w*|incorpor\w*|conserv\w*|mant\w*|devu[eé]lv\w*|entreg\w*|quit\w*|elimin\w*|borr\w*|revis\w*|verific\w*)\b)/iu;
-  const newTitle = cleanReplacementValue(match[1]
+  const newTitle = cleanDocxTitleAssignmentValue(match[1]
     .split(nextAction)[0]
     .split(/[.;\n]/)[0]
     .replace(/^['"“”‘’`]+|['"“”‘’`]+$/g, '')
@@ -5000,7 +5223,15 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   if (requestWantsMinimalProofreading(norm) && !requestWantsProfessionalEditing(norm)) {
     add({ kind: 'proofread_minimal' });
   }
-  for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
+  for (const clause of clauses) {
+    const operation = buildOperationFromClause(clause, documentXml);
+    // A title-assignment phrase containing "coloca" was historically treated
+    // as an append request by clauseIsAppend(), yielding an unwanted ANEXOS
+    // page. Once the title assignment was parsed, that same clause is fully
+    // accounted for and must not also append generic content.
+    if (rawTitleChange && operation?.kind === 'append_generic' && extractDocxTitleChange(clause)) continue;
+    add(operation);
+  }
 
   // Broader understanding: "completa / rellena las tablas vacías / los anexos /
   // todo lo que falte" with no explicit number → fill every empty-table or empty
@@ -7174,7 +7405,8 @@ async function generateSourcePreservingDocumentEdit({
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
       // Safe page-level fast paths (rotate/extract/remove/merge/overlay) —
-      // resolved BEFORE the legacy lossy text path.
+      // resolved before the generic dispatcher. Replacement/deletion of
+      // embedded PDF text fails closed because it cannot preserve layout.
       const pdfEdit = parsePdfEditRequest(requestText);
       if (pdfEdit) {
         const pdfResult = await runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles, allSourceFiles });
@@ -7196,9 +7428,7 @@ async function generateSourcePreservingDocumentEdit({
       const execution = await executePdfOperations({
         input,
         requestText,
-        sourceText,
         blocks,
-        sourceFile,
       });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -7262,6 +7492,17 @@ async function generateSourcePreservingDocumentEdit({
       orchestration,
     };
   }
+  // Fail closed before the artifact store is touched. A downloadable URL is a
+  // production claim that the requested edit passed every preservation and
+  // semantic check; persisting a failed candidate made that claim false and
+  // also allowed an invalid row into version history.
+  if (validation?.passed !== true) {
+    const error = new Error('La edición no superó la validación de integridad y no se guardó ningún archivo.');
+    error.code = 'SOURCE_PRESERVING_VALIDATION_FAILED';
+    error.validationOnlyFailure = true;
+    error.validation = validation;
+    throw error;
+  }
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -7306,6 +7547,107 @@ async function generateSourcePreservingDocumentEdit({
   }
 }
 
+async function recordSourcePreservingVersion(prisma, {
+  result,
+  sourceFile,
+  userId,
+  chatId,
+} = {}) {
+  // The source identity is part of artifact delivery semantics, not merely
+  // version-history metadata. Keep it even when Prisma version persistence is
+  // unavailable so same-name files in a batch remain distinct download cards.
+  if (result && sourceFile?.id) result.sourceFileId = sourceFile.id;
+  if (!result || result.clarification || result.validation?.passed !== true || !result.artifact || !sourceFile?.id) return result;
+  try {
+    const { recordFileVersion } = require('./document-editing/versioning');
+    const recorded = await recordFileVersion(prisma, {
+      fileId: sourceFile.id,
+      userId,
+      artifactId: result.artifact.id || null,
+      filename: result.file?.filename || result.artifact.filename || 'documento',
+      summary: result.content ? String(result.content).slice(0, 300) : '',
+      editPlan: result.orchestration?.operations || null,
+      validationPassed: Boolean(result.validation?.passed),
+      createdByChatId: chatId || null,
+    });
+    if (recorded) {
+      result.version = { id: recorded.id, version: recorded.version, sourceFileId: sourceFile.id };
+    }
+  } catch { /* versioning never blocks the edit */ }
+  return result;
+}
+
+function buildBatchEditResult({ attempts = [], requestText = '' } = {}) {
+  const successful = attempts.filter((attempt) => attempt?.ok === true && attempt.result?.validation?.passed === true);
+  const failures = attempts
+    .filter((attempt) => attempt?.ok !== true || attempt.result?.validation?.passed !== true)
+    .map((attempt) => ({
+      sourceFileId: attempt?.sourceFile?.id || null,
+      filename: attempt?.sourceFile?.originalName || attempt?.sourceFile?.filename || 'documento',
+      error: attempt?.error || 'La validación del documento editado no pasó.',
+    }));
+  const results = successful.map((attempt) => attempt.result);
+  const names = results.map((result) => result.file?.filename || result.artifact?.filename).filter(Boolean);
+  const allPassed = results.length > 0 && failures.length === 0;
+  const content = failures.length
+    ? `Edité y validé ${results.length} de ${attempts.length} documentos en segundo plano. Archivos listos: ${names.join(', ')}. No pude completar: ${failures.map((failure) => `${failure.filename} (${failure.error})`).join('; ')}.`
+    : `Listo. Edité y validé ${results.length} documentos en segundo plano, conservando cada archivo original y modificando únicamente lo solicitado. Archivos listos: ${names.join(', ')}.`;
+  const validation = {
+    format: results.every((result) => result.format === results[0]?.format) ? (results[0]?.format || 'multiple') : 'multiple',
+    checks: {
+      every_document_validated: allPassed,
+      edited_artifact_created: results.length > 0,
+      original_files_immutable: results.length > 0,
+    },
+    passed: allPassed,
+    partial: results.length > 0 && failures.length > 0,
+    technicalScore: attempts.length ? Math.round((results.length / attempts.length) * 100) : 0,
+    qualityScore: allPassed ? 100 : 0,
+    overallScore: attempts.length ? Math.round((results.length / attempts.length) * 100) : 0,
+    details: {
+      editMode: 'source_preserving_batch_edit',
+      requestedDocuments: attempts.length,
+      completedDocuments: results.length,
+      failedDocuments: failures,
+      request: compact(requestText, 500),
+      documents: successful.map((attempt) => ({
+        sourceFileId: attempt.sourceFile?.id || null,
+        sourceFilename: attempt.sourceFile?.originalName || attempt.sourceFile?.filename || null,
+        artifactId: attempt.result?.artifact?.id || null,
+        artifactFilename: attempt.result?.artifact?.filename || null,
+        validation: attempt.result?.validation || null,
+      })),
+    },
+  };
+  return {
+    batch: true,
+    partial: validation.partial,
+    content,
+    results,
+    failures,
+    artifacts: results.map((result) => result.artifact),
+    files: results.map((result) => result.file),
+    versions: results.map((result) => result.version).filter(Boolean),
+    artifact: results[0]?.artifact || null,
+    file: results[0]?.file || null,
+    version: results[0]?.version || null,
+    previewHtml: results[0]?.previewHtml || null,
+    format: validation.format,
+    validation,
+    orchestration: {
+      mode: 'source_preserving_document_batch',
+      requestedDocuments: attempts.length,
+      completedDocuments: results.length,
+      failedDocuments: failures.length,
+      perDocument: successful.map((attempt) => ({
+        sourceFileId: attempt.sourceFile?.id || null,
+        sourceFilename: attempt.sourceFile?.originalName || attempt.sourceFile?.filename || null,
+        operations: attempt.result?.orchestration?.operations || [],
+      })),
+    },
+  };
+}
+
 async function tryGenerateSourcePreservingDocumentEdit({
   prisma,
   userId,
@@ -7326,6 +7668,51 @@ async function tryGenerateSourcePreservingDocumentEdit({
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+
+  // Explicit plural scope ("todos los documentos", "cada archivo", "ambos")
+  // means one immutable edited copy per current upload. The old selector chose
+  // only the first DOCX and silently treated the rest as references.
+  if (requestWantsBatchDocumentEdit(requestText, sourceFiles)) {
+    const batchSources = selectBatchDocumentSources(requestText, sourceFiles);
+    const attempts = await mapWithConcurrency(
+      batchSources,
+      sourceDocumentParallelism(),
+      async (sourceFile) => {
+        try {
+          if (targetedSection && !isDocxFile(sourceFile)) {
+            throw new Error('La sección solicitada requiere un archivo DOCX.');
+          }
+          const result = await generateSourcePreservingDocumentEdit({
+            sourceFile,
+            sourceFiles: [sourceFile],
+            referenceFiles: [],
+            assetFiles,
+            selectionReason: 'explicit_batch_current_upload',
+            prompt,
+            displayPrompt,
+            userId,
+            chatId,
+            signal,
+          });
+          await recordSourcePreservingVersion(prisma, { result, sourceFile, userId, chatId });
+          return { ok: result?.validation?.passed === true, sourceFile, result };
+        } catch (err) {
+          return {
+            ok: false,
+            sourceFile,
+            error: String(err?.message || err || 'No se pudo editar el documento.').slice(0, 500),
+          };
+        }
+      },
+    );
+    const batch = buildBatchEditResult({ attempts, requestText });
+    if (!batch.results.length) {
+      const error = new Error(batch.failures.map((failure) => `${failure.filename}: ${failure.error}`).join('; ') || 'No se pudo editar ningún documento.');
+      error.code = 'DOCUMENT_BATCH_EDIT_FAILED';
+      throw error;
+    }
+    return batch;
+  }
   if (!supported && !sourceFiles.length && !priorArtifacts.length && assetFiles.length) {
     // Solo se adjuntaron imágenes (sin documento base). Para un intent de
     // edición de imagen, explicamos que las imágenes se editan DENTRO de un
@@ -7368,26 +7755,9 @@ async function tryGenerateSourcePreservingDocumentEdit({
     signal,
   });
 
-  // Non-destructive version history (best-effort): a clarification carries no
-  // artifact, so only real edits produce a version. The original upload
-  // (supported.id) is never mutated; this just records the edited artifact so
-  // the user can list/restore prior versions later.
-  if (result && !result.clarification && result.artifact && supported?.id) {
-    try {
-      const { recordFileVersion } = require('./document-editing/versioning');
-      const recorded = await recordFileVersion(prisma, {
-        fileId: supported.id,
-        userId,
-        artifactId: result.artifact.id || null,
-        filename: result.file?.filename || result.artifact.filename || 'documento',
-        summary: result.content ? String(result.content).slice(0, 300) : '',
-        editPlan: result.orchestration?.operations || null,
-        validationPassed: Boolean(result.validation?.passed),
-        createdByChatId: chatId || null,
-      });
-      if (recorded) result.version = { id: recorded.id, version: recorded.version, sourceFileId: supported.id };
-    } catch { /* versioning never blocks the edit */ }
-  }
+  // Non-destructive version history (best-effort): the original upload is
+  // never mutated; the new immutable artifact becomes the next version.
+  await recordSourcePreservingVersion(prisma, { result, sourceFile: supported, userId, chatId });
   return result;
 }
 
@@ -7422,6 +7792,7 @@ module.exports = {
     planOfficeOperationsSmart,
     sanitizeOfficeOperations,
     buildCombinedSourceText,
+    buildBatchEditResult,
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
     buildDocumentOrchestrationPlan,
@@ -7487,6 +7858,8 @@ module.exports = {
     replaceTextInXlsxBuffer,
     deleteTextFromDocxBuffer,
     requestMentionsGeneralDocument,
+    requestWantsBatchDocumentEdit,
+    selectBatchDocumentSources,
     requestExplicitlyUsesCurrentUploadAsBase,
     requestWantsMinimalProofreading,
     requestWantsMinimalOnlyProofreading,

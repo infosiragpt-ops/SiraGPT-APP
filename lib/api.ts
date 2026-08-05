@@ -83,6 +83,74 @@ export type ChatRunSummary = {
   attempt: number
   snippet: string
 }
+export type AgentTaskPointer = {
+  taskId: string
+  status: "queued" | "running" | "completed" | "cancelled" | "error" | string
+  displayGoal?: string | null
+  updatedAt?: string | null
+}
+export type ChatPendingStreamEnvelope = {
+  ok: boolean
+  pending: Record<string, unknown> | null
+  activeTasks: AgentTaskPointer[]
+  latestTask: AgentTaskPointer | null
+}
+
+const RECOVERABLE_AGENT_TASK_STATUSES = new Set([
+  "queued",
+  "running",
+  "planning",
+  "executing",
+  "verifying",
+  "shipping",
+])
+
+export const MAX_AGENT_TASK_RECOVERY_FAILURES = 8
+
+export function isTerminalAgentTaskRecoveryHttpStatus(statusCode: unknown): boolean {
+  return [401, 403, 404, 410].includes(Number(statusCode))
+}
+
+export function shouldDetachAgentTaskRecovery(failedPolls: number): boolean {
+  return Number.isFinite(failedPolls) && failedPolls >= MAX_AGENT_TASK_RECOVERY_FAILURES
+}
+
+/**
+ * Selects the durable task that /chat should reconnect. `latestTask` alone is
+ * intentionally insufficient because every historic agent chat has one; a
+ * terminal latest task is relevant only while the persisted bubble is still
+ * incomplete (the reload-vs-completion race).
+ */
+export function resolveChatAgentTaskForRecovery(
+  envelope: ChatPendingStreamEnvelope,
+  localTaskId: string | null,
+  hasIncompleteBubble: boolean,
+  excludedTaskIds: ReadonlySet<string> = new Set(),
+): AgentTaskPointer | null {
+  const normalizedLocalTaskId = String(localTaskId || "").trim()
+  const activeTasks = (Array.isArray(envelope?.activeTasks) ? envelope.activeTasks : [])
+    .filter(task => (
+      task?.taskId
+      && !excludedTaskIds.has(task.taskId)
+      && RECOVERABLE_AGENT_TASK_STATUSES.has(String(task.status || "").toLowerCase())
+    ))
+  const matchingActiveTask = normalizedLocalTaskId
+    ? activeTasks.find(task => task.taskId === normalizedLocalTaskId)
+    : null
+  if (matchingActiveTask) return matchingActiveTask
+
+  const activeTask = activeTasks[0]
+  if (activeTask) return activeTask
+  if (!hasIncompleteBubble) return null
+
+  if (normalizedLocalTaskId && !excludedTaskIds.has(normalizedLocalTaskId)) {
+    if (envelope?.latestTask?.taskId === normalizedLocalTaskId) return envelope.latestTask
+    return { taskId: normalizedLocalTaskId, status: "running" }
+  }
+  return envelope?.latestTask?.taskId && !excludedTaskIds.has(envelope.latestTask.taskId)
+    ? envelope.latestTask
+    : null
+}
 export type ImpersonateEnvelope = {
   token?: string
   user?: AuthUser
@@ -1192,6 +1260,15 @@ class ApiClient {
 
   async getChat(id: string): Promise<any> {
     return this.request(`/chats/${id}`);
+  }
+
+  /**
+   * Durable work associated with a chat. In addition to ordinary streamed
+   * completions, the endpoint exposes queued/running agent tasks so /chat can
+   * reconnect its UI after a reload without restarting or cancelling work.
+   */
+  async getChatPendingStream(chatId: string): Promise<ChatPendingStreamEnvelope> {
+    return this.request(`/chats/${encodeURIComponent(chatId)}/pending-stream`);
   }
 
   async updateChat(id: string, data: { title?: string; model?: string }): Promise<any> {

@@ -22,6 +22,18 @@ process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'fake-key';
 
 const runner = require('../src/services/agents/agent-task-runner');
 
+test('source-preserving delivery accepts only literal passed=true', () => {
+  assert.equal(runner.isValidatedSourcePreservingDeliverable({
+    artifact: { id: 'valid' }, validation: { passed: true },
+  }), true);
+  for (const passed of ['true', 1, {}, null, undefined, false]) {
+    assert.equal(runner.isValidatedSourcePreservingDeliverable({
+      artifact: { id: 'rejected' }, validation: { passed },
+    }), false, `passed=${String(passed)} must be rejected`);
+  }
+  assert.equal(runner.isValidatedSourcePreservingDeliverable({ validation: { passed: true } }), false);
+});
+
 // ─── classifyTaskError edge cases ──────────────────────────────────────────
 
 test('classifyTaskError: numeric statusCode is normalised via String() and routed', () => {

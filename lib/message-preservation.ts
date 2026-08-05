@@ -22,7 +22,7 @@ const hasText = (value: unknown) => asText(value).trim().length > 0;
 
 const AGENT_TASK_STATE_RE = /^```agent-task-state\s*\n([\s\S]*?)\n```\s*/;
 
-type AgentTaskContentInfo = {
+export type AgentTaskContentInfo = {
   hasEnvelope: boolean;
   done: boolean;
   error: boolean;
@@ -32,7 +32,7 @@ type AgentTaskContentInfo = {
   visibleTextLength: number;
 };
 
-const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
+export const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
   const raw = asText(value);
   const match = raw.match(AGENT_TASK_STATE_RE);
   if (!match) {
@@ -61,7 +61,14 @@ const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
   const status = typeof state?.status === 'string' ? state.status.toLowerCase() : '';
   const done = state?.done === true || status === 'completed';
   const error = Boolean(state?.error) || status === 'failed' || status === 'error';
-  const taskId = typeof state?.taskId === 'string' ? state.taskId : undefined;
+  const meta = state?.meta && typeof state.meta === 'object'
+    ? state.meta as Record<string, unknown>
+    : null;
+  const taskId = typeof state?.taskId === 'string'
+    ? state.taskId
+    : typeof meta?.taskId === 'string'
+      ? meta.taskId
+      : undefined;
   const visibleText = trailingText || (done && !error ? finalText : '');
 
   return {
@@ -97,6 +104,17 @@ const shouldPreserveLocalAssistantContent = (incomingContent: unknown, localCont
   const localTask = parseAgentTaskContent(localText);
   const incomingCompleted = isCompletedAgentTaskContentInfo(incomingTask);
   const localCompleted = isCompletedAgentTaskContentInfo(localTask);
+  const sameAgentTask = Boolean(
+    incomingTask.taskId
+    && localTask.taskId
+    && incomingTask.taskId === localTask.taskId
+  );
+
+  // Durable task completion can reach the event log just before the final
+  // assistant message is committed. A refresh during that narrow window must
+  // not replace a locally completed bubble (and its download cards) with the
+  // older pending copy of the very same task.
+  if (sameAgentTask && localTask.done && !localTask.error && !incomingTask.done) return true;
 
   if (incomingCompleted && !localCompleted) return false;
   if (incomingCompleted && localCompleted) {

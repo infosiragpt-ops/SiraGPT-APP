@@ -494,6 +494,30 @@ test('upsertArtifactForDelivery keeps the latest same-name artifact', () => {
   assert.deepEqual(artifacts.map(({ id }) => id), ['v2', 'sheet']);
 });
 
+test('upsertArtifactForDelivery preserves batch outputs and replaces source revisions', () => {
+  clearAgentModules();
+  const { upsertArtifactForDelivery } = require('../src/services/agents/agent-task-runner');
+  const artifacts = [];
+
+  upsertArtifactForDelivery(artifacts, {
+    id: 'north-v1', sourceFileId: 'north', filename: 'Informe.docx', format: 'docx',
+  });
+  upsertArtifactForDelivery(artifacts, {
+    id: 'south-v1', sourceFileId: 'south', filename: 'Informe.docx', format: 'docx',
+  });
+  assert.deepEqual(artifacts.map(({ id }) => id), ['north-v1', 'south-v1']);
+
+  upsertArtifactForDelivery(artifacts, {
+    id: 'north-v2', sourceFileId: 'north', filename: 'Informe final.docx', format: 'docx',
+  });
+  assert.deepEqual(artifacts.map(({ id }) => id), ['north-v2', 'south-v1']);
+
+  upsertArtifactForDelivery(artifacts, {
+    id: 'south-v1', sourceFileId: 'south', filename: 'Informe validado.docx', format: 'docx',
+  });
+  assert.deepEqual(artifacts.map(({ filename }) => filename), ['Informe final.docx', 'Informe validado.docx']);
+});
+
 test('runAgentTaskJob continues to Gemini when Cerebras and OpenAI also fail', async () => {
   const restoreEnv = rememberEnv([
     'OPENROUTER_API_KEY',
