@@ -499,7 +499,15 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
         )}
       </div>
       {/* Composer always enabled: first send auto-creates the workspace (Claude Code ergonomics). */}
-      <Composer disabled={false} busy={busy} active={active} showPlanToggle onSend={send} onStop={stop} />
+      <Composer
+        disabled={false}
+        busy={busy}
+        active={active}
+        showPlanToggle
+        surface={surface === "apps" ? "apps" : "code"}
+        onSend={send}
+        onStop={stop}
+      />
     </div>
   )
 
