@@ -54,7 +54,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
-import { dedupeMessages } from "@/lib/message-preservation"
+import { dedupeMessages, mergeChatPreservingUserMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
 import { ComposerCharCounter } from "@/components/composer-char-counter"
@@ -107,7 +107,12 @@ import {
   logIngest,
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
-import { apiClient } from "@/lib/api"
+import {
+  apiClient,
+  isTerminalAgentTaskRecoveryHttpStatus,
+  resolveChatAgentTaskForRecovery,
+  shouldDetachAgentTaskRecovery,
+} from "@/lib/api"
 import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
@@ -327,6 +332,116 @@ const normalizePlanName = (plan?: string | null): string =>
 
 const isFreePlanName = (plan?: string | null): boolean =>
   normalizePlanName(plan) === "FREE"
+
+const AGENT_TASK_STATE_FENCE = /```agent-task-state\s*\n?([\s\S]*?)\n?```/i
+
+const parseAgentTaskMessageMetadata = (metadata: unknown): Record<string, any> => {
+  if (!metadata) return {}
+  if (typeof metadata === "object") return metadata as Record<string, any>
+  if (typeof metadata !== "string") return {}
+  try {
+    const parsed = JSON.parse(metadata)
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const normalizeRecoveredAgentTaskState = (value: unknown, taskId?: string | null): AgentTaskState => {
+  const parsed = value && typeof value === "object"
+    ? value as Partial<AgentTaskState> & { taskId?: unknown; status?: unknown }
+    : {}
+  const legacyTaskId = typeof parsed.taskId === "string" && parsed.taskId.trim()
+    ? parsed.taskId.trim()
+    : null
+  const normalizedTaskId = taskId || parsed.meta?.taskId || legacyTaskId
+  const normalizedStatus = String(parsed.status || "").toLowerCase()
+  return {
+    ...initialAgentState,
+    ...parsed,
+    meta: normalizedTaskId
+      ? { ...(parsed.meta || {}), taskId: normalizedTaskId }
+      : parsed.meta,
+    steps: Array.isArray(parsed.steps)
+      ? parsed.steps.map(step => ({ ...step, toolCalls: Array.isArray(step?.toolCalls) ? step.toolCalls : [] }))
+      : [],
+    artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts : [],
+    approvals: Array.isArray(parsed.approvals) ? parsed.approvals : [],
+    checkpoints: Array.isArray(parsed.checkpoints) ? parsed.checkpoints : [],
+    qualityGates: Array.isArray(parsed.qualityGates) ? parsed.qualityGates : [],
+    repairs: Array.isArray(parsed.repairs) ? parsed.repairs : [],
+    documentAnalysisIds: Array.isArray(parsed.documentAnalysisIds) ? parsed.documentAnalysisIds : [],
+    evidenceRefs: Array.isArray(parsed.evidenceRefs) ? parsed.evidenceRefs : [],
+    finalText: typeof parsed.finalText === "string" ? parsed.finalText : "",
+    done: Boolean(parsed.done) || normalizedStatus === "completed",
+  }
+}
+
+const parseAgentTaskMessageState = (content: unknown): AgentTaskState | null => {
+  if (typeof content !== "string") return null
+  const match = content.match(AGENT_TASK_STATE_FENCE)
+  if (!match?.[1]) return null
+  try {
+    return normalizeRecoveredAgentTaskState(JSON.parse(match[1]))
+  } catch {
+    return null
+  }
+}
+
+const serializeRecoveredAgentTaskState = (state: AgentTaskState): string => {
+  const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```'
+  return state.finalText ? `${fenced}\n\n${state.finalText}` : fenced
+}
+
+const getAgentTaskIdFromMessage = (message: any, state?: AgentTaskState | null): string | null => {
+  const metadata = parseAgentTaskMessageMetadata(message?.metadata)
+  const raw = state?.meta?.taskId || (state as AgentTaskState & { taskId?: unknown } | null)?.taskId || metadata.taskId
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null
+}
+
+const findRecoverableAgentTaskMessage = (messages: any[] = [], taskId?: string | null) => {
+  const unidentified: Array<{ message: any; state: AgentTaskState; taskId: null }> = []
+  let totalCandidates = 0
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    const state = parseAgentTaskMessageState(message?.content)
+    if (!state || state.done) continue
+    totalCandidates += 1
+    const messageTaskId = getAgentTaskIdFromMessage(message, state)
+    if (taskId) {
+      if (messageTaskId === taskId) return { message, state, taskId: messageTaskId }
+      if (!messageTaskId) unidentified.push({ message, state, taskId: null })
+      continue
+    }
+    return { message, state, taskId: messageTaskId }
+  }
+  // A single pre-task-id legacy bubble is safe to adopt. With two or more,
+  // creating a fresh task-specific bubble is preferable to overwriting the
+  // wrong historical execution.
+  return taskId && totalCandidates === 1 && unidentified.length === 1 ? unidentified[0] : null
+}
+
+const isTerminalAgentTaskStatus = (status: unknown): boolean =>
+  new Set(["completed", "cancelled", "canceled", "error", "failed"])
+    .has(String(status || "").toLowerCase())
+
+const waitForAgentTaskRecoveryPoll = (ms: number, signal: AbortSignal): Promise<void> => {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      signal.removeEventListener("abort", finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal.addEventListener("abort", finish, { once: true })
+  })
+}
 
 const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
 const IMAGE_TO_VIDEO_REFERENCE_RE =
@@ -4802,15 +4917,15 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const currentChatId = currentChat?.id ?? null
-  const currentChatIdRef = React.useRef<string | null>(null)
-  React.useEffect(() => { currentChatIdRef.current = currentChatId }, [currentChatId])
+  const currentChatIdRef = React.useRef<string | null>(currentChatId)
+  currentChatIdRef.current = currentChatId
   // Live refs so stable (identity-fixed) callbacks like `branchMessage` can
   // read the latest chat/model without re-creating — required because the
   // memoized MessageComponent ignores callback prop changes.
-  const currentChatRef = React.useRef<any>(null)
-  React.useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
-  const selectedModelRef = React.useRef<string | undefined>(undefined)
-  React.useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
+  const currentChatRef = React.useRef<any>(currentChat)
+  currentChatRef.current = currentChat
+  const selectedModelRef = React.useRef<string | undefined>(selectedModel)
+  selectedModelRef.current = selectedModel
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
@@ -5310,8 +5425,12 @@ function ChatInterfaceContent() {
   const currentAgentTaskIdRef = React.useRef<string | null>(null);
   const localJobControllersRef = React.useRef<Map<string, AbortController>>(new Map());
   const agentTaskIdsByChatRef = React.useRef<Map<string, string>>(new Map());
+  const agentTaskRecoveryControllersRef = React.useRef<Map<string, AbortController>>(new Map());
+  const agentTaskRecoveryWakeKeysRef = React.useRef<Map<string, string>>(new Map());
+  const terminalAgentTaskIdsByChatRef = React.useRef<Map<string, Set<string>>>(new Map());
   const activeLocalJobChatIdsRef = React.useRef<Set<string>>(new Set());
   const [activeLocalJobChatIds, setActiveLocalJobChatIds] = React.useState<string[]>([]);
+  const [agentTaskRecoveryHydrationNonce, setAgentTaskRecoveryHydrationNonce] = React.useState(0);
 
   const syncActiveLocalJobs = React.useCallback(() => {
     setActiveLocalJobChatIds(Array.from(activeLocalJobChatIdsRef.current));
@@ -5336,6 +5455,353 @@ function ChatInterfaceContent() {
       syncActiveLocalJobs();
     }
   }, [syncActiveLocalJobs]);
+
+  // ─── Durable agent-task recovery ───────────────────────────────────
+  // Agent/document tasks execute on the backend and can outlive this page.
+  // Reconnect the visible message bubble after reload or chat navigation by
+  // discovering the task through the chat-scoped durable pointer and polling
+  // its event log. Cleanup aborts only this browser poll; it deliberately does
+  // not call cancelTask, so switching chats never stops server-side work.
+  React.useEffect(() => {
+    const chatId = currentChatId;
+    if (!chatId) return;
+    if (localJobControllersRef.current.has(chatId)) return;
+    if (agentTaskRecoveryControllersRef.current.has(chatId)) return;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    const recoveryControllers = agentTaskRecoveryControllersRef.current;
+    recoveryControllers.set(chatId, controller);
+    // A previous recovery pass can hand off the next durable task while
+    // deliberately keeping this chat busy. Claim that pointer immediately so
+    // an aborted replacement poll can release only the busy state it owns.
+    let recoveredTaskId: string | null = agentTaskIdsByChatRef.current.get(chatId) || null;
+    let bubbleMessageId: string | null = null;
+    let reachedTerminal = false;
+    let recoveryDetached = false;
+    let terminalRecoveryLookupFailure = false;
+
+    const releaseRecoveryBusyIfOwned = () => {
+      const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+      const trackedTaskId = agentTaskIdsByChatRef.current.get(chatId) || null;
+      const stillOwnsRecoveredTask = Boolean(recoveredTaskId && trackedTaskId === recoveredTaskId);
+      if (ownsRecoveryController && stillOwnsRecoveredTask && !localJobControllersRef.current.has(chatId)) {
+        markLocalJobIdle(chatId);
+      }
+    };
+
+    const upsertRecoveredBubble = (taskId: string, state: AgentTaskState, status?: string) => {
+      if (signal.aborted) return;
+      const content = serializeRecoveredAgentTaskState(state);
+      setCurrentChat(prevChat => {
+        if (!prevChat || prevChat.id !== chatId) return prevChat;
+        const messages = [...(prevChat.messages || [])];
+        let messageIndex = messages.findIndex((message: any) => {
+          const parsedState = parseAgentTaskMessageState(message?.content);
+          return getAgentTaskIdFromMessage(message, parsedState) === taskId;
+        });
+        if (messageIndex < 0 && bubbleMessageId) {
+          messageIndex = messages.findIndex((message: any) => message?.id === bubbleMessageId);
+        }
+        if (messageIndex < 0) {
+          const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
+          if (recoverable) messageIndex = messages.findIndex((message: any) => message?.id === recoverable.message.id);
+        }
+
+        if (messageIndex >= 0) {
+          const previous = messages[messageIndex];
+          bubbleMessageId = previous.id;
+          messages[messageIndex] = {
+            ...previous,
+            content,
+            metadata: JSON.stringify({
+              ...parseAgentTaskMessageMetadata(previous.metadata),
+              source: "agent-task",
+              taskId,
+              status: status || (state.done ? (state.error ? "error" : "completed") : "running"),
+              updatedAt: new Date().toISOString(),
+            }),
+          };
+        } else {
+          bubbleMessageId = `msg-ai-recovery-${taskId}`;
+          messages.push({
+            id: bubbleMessageId,
+            chatId,
+            role: "ASSISTANT" as const,
+            content,
+            timestamp: new Date().toISOString(),
+            metadata: JSON.stringify({
+              source: "agent-task",
+              taskId,
+              status: status || "running",
+              recovered: true,
+            }),
+          });
+        }
+        return { ...prevChat, messages };
+      });
+    };
+
+    void (async () => {
+      try {
+        let pendingEnvelope: Awaited<ReturnType<typeof apiClient.getChatPendingStream>> | null = null;
+        // A handed-off task already owns the same-chat queue lock. Keep its
+        // discovery retry alive (also while the user reads another chat) until
+        // the durable endpoint answers; releasing on an unknown result could
+        // overlap queued work with a still-running server task.
+        const maxDiscoveryAttempts = recoveredTaskId ? Number.POSITIVE_INFINITY : 3;
+        for (let attempt = 0; attempt < maxDiscoveryAttempts && !signal.aborted; attempt += 1) {
+          try {
+            pendingEnvelope = await apiClient.getChatPendingStream(chatId);
+            if (pendingEnvelope?.ok) break;
+            pendingEnvelope = null;
+          } catch (error: any) {
+            if (signal.aborted || error?.name === "AbortError") return;
+          }
+          await waitForAgentTaskRecoveryPoll(Math.min(5000, 400 * (attempt + 1)), signal);
+        }
+        if (signal.aborted) return;
+        if (!pendingEnvelope?.ok) return;
+
+        const messages = currentChatRef.current?.id === chatId
+          ? (currentChatRef.current.messages || [])
+          : [];
+        const localCandidate = findRecoverableAgentTaskMessage(messages);
+        const taskPointer = resolveChatAgentTaskForRecovery(
+          pendingEnvelope,
+          localCandidate?.taskId || null,
+          Boolean(localCandidate),
+          terminalAgentTaskIdsByChatRef.current.get(chatId),
+        );
+        const taskId = taskPointer?.taskId || null;
+
+        // latestTask intentionally is not enough by itself: every historic
+        // agent chat has one. A terminal task is recovered only when the
+        // currently persisted bubble still says it is unfinished.
+        if (!taskId) {
+          // The durable endpoint is authoritative: if the handed-off task is
+          // no longer active, release only the busy marker owned by this poll.
+          releaseRecoveryBusyIfOwned();
+          return;
+        }
+        if (localJobControllersRef.current.has(chatId)) return;
+
+        const matchingCandidate = findRecoverableAgentTaskMessage(messages, taskId);
+        recoveredTaskId = taskId;
+        bubbleMessageId = matchingCandidate?.message?.id || null;
+        agentTaskIdsByChatRef.current.set(chatId, taskId);
+        markLocalJobBusy(chatId);
+
+        let state = normalizeRecoveredAgentTaskState(matchingCandidate?.state, taskId);
+        if (state.steps.length === 0 && !state.done) {
+          state = {
+            ...state,
+            steps: [{
+              id: "client-agent-recovery",
+              label: "Recuperando tarea en segundo plano",
+              icon: "thought",
+              reasoning: "Reconectando con la ejecución durable sin reiniciar el trabajo.",
+              status: "running",
+              toolCalls: [],
+            }],
+          };
+        }
+        upsertRecoveredBubble(taskId, state, taskPointer?.status);
+
+        let cursor = 0;
+        let failedPolls = 0;
+        while (!signal.aborted) {
+          let payload: Awaited<ReturnType<typeof agentTaskService.getTaskEvents>> | null = null;
+          try {
+            payload = await agentTaskService.getTaskEvents(taskId, cursor, { signal });
+          } catch (error: any) {
+            if (signal.aborted || error?.name === "AbortError") return;
+          }
+
+          if (!payload?.ok) {
+            failedPolls += 1;
+            const statusCode = Number(payload?.statusCode || 0);
+            if (isTerminalAgentTaskRecoveryHttpStatus(statusCode)) {
+              const accessDenied = statusCode === 401 || statusCode === 403;
+              state = {
+                ...state,
+                done: true,
+                error: accessDenied
+                  ? "No se pudo reconectar la tarea porque la sesión o los permisos cambiaron."
+                  : "La tarea ya no está disponible para reconexión.",
+                stoppedReason: accessDenied ? "recovery_access_denied" : "recovery_not_found",
+              };
+              reachedTerminal = true;
+              terminalRecoveryLookupFailure = true;
+              upsertRecoveredBubble(taskId, state, "error");
+              break;
+            }
+            if (shouldDetachAgentTaskRecovery(failedPolls)) {
+              state = {
+                ...state,
+                done: false,
+                error: "Se perdió temporalmente la conexión con esta tarea. El trabajo del servidor no fue cancelado; vuelve a abrir el chat para reconectar.",
+                stoppedReason: "recovery_poll_exhausted",
+              };
+              recoveryDetached = true;
+              upsertRecoveredBubble(taskId, state, "reconnecting");
+              break;
+            }
+            await waitForAgentTaskRecoveryPoll(Math.min(5000, 600 * (2 ** Math.min(failedPolls, 3))), signal);
+            continue;
+          }
+
+          failedPolls = 0;
+          const events = Array.isArray(payload.events) ? payload.events : [];
+          const cursorBeforeBatch = cursor;
+          for (const event of events) {
+            const seq = Number((event as any)?.seq);
+            if (Number.isFinite(seq)) cursor = Math.max(cursor, seq);
+          }
+
+          if (payload.streamState) {
+            // The server snapshot already includes all events up to this poll,
+            // so use it as the authority and avoid duplicating steps/artifacts.
+            state = normalizeRecoveredAgentTaskState(payload.streamState, taskId);
+          } else if (events.length > 0) {
+            if (cursorBeforeBatch === 0) state = normalizeRecoveredAgentTaskState(null, taskId);
+            for (const event of events) state = reduceEvent(state, event);
+          }
+
+          const normalizedStatus = String(payload.status || "").toLowerCase();
+          if (!state.done && normalizedStatus === "completed") {
+            state = { ...state, done: true, stoppedReason: state.stoppedReason || "recovered_completed" };
+          } else if (!state.done && ["cancelled", "canceled"].includes(normalizedStatus)) {
+            state = { ...state, done: true, error: state.error || "Tarea detenida.", stoppedReason: "cancelled" };
+          } else if (!state.done && ["error", "failed"].includes(normalizedStatus)) {
+            state = { ...state, done: true, error: state.error || payload.error || "La tarea agéntica falló.", stoppedReason: "error" };
+          }
+
+          upsertRecoveredBubble(taskId, state, payload.status);
+          if (state.done || isTerminalAgentTaskStatus(payload.status)) {
+            reachedTerminal = true;
+            break;
+          }
+          await waitForAgentTaskRecoveryPoll(900, signal);
+        }
+      } finally {
+        const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+        if ((reachedTerminal || recoveryDetached) && !signal.aborted) {
+          let terminalIds = terminalAgentTaskIdsByChatRef.current.get(chatId) || new Set<string>();
+          if (reachedTerminal && recoveredTaskId) {
+            terminalIds.add(recoveredTaskId);
+            // Keep this browser-session dedupe bounded while the durable API
+            // converges and removes recently terminal tasks from activeTasks.
+            while (terminalIds.size > 20) {
+              const oldestTaskId = terminalIds.values().next().value;
+              if (!oldestTaskId) break;
+              terminalIds.delete(oldestTaskId);
+            }
+            terminalAgentTaskIdsByChatRef.current.set(chatId, terminalIds);
+          }
+
+          let nextTaskPointer: ReturnType<typeof resolveChatAgentTaskForRecovery> = null;
+          let nextTaskDiscoveryFailed = false;
+          if (reachedTerminal && !terminalRecoveryLookupFailure) {
+            try {
+              const nextEnvelope = await apiClient.getChatPendingStream(chatId);
+              nextTaskPointer = resolveChatAgentTaskForRecovery(
+                nextEnvelope,
+                null,
+                false,
+                terminalIds,
+              );
+            } catch {
+              // Keep the busy ownership during a transient handoff failure. A
+              // fresh recovery pass retries discovery without overlapping the
+              // just-completed task with queued work from the same chat.
+              nextTaskDiscoveryFailed = true;
+            }
+          }
+
+          if (signal.aborted) return;
+
+          const trackedTaskId = agentTaskIdsByChatRef.current.get(chatId) || null;
+          const stillOwnsRecoveredTask = Boolean(recoveredTaskId && trackedTaskId === recoveredTaskId);
+          const hasReplacementController = localJobControllersRef.current.has(chatId);
+          if (stillOwnsRecoveredTask && !hasReplacementController) {
+            if (nextTaskPointer?.taskId) {
+              // Atomic A → B handoff: retain the busy marker and transfer task
+              // ownership before waking the next recovery effect.
+              agentTaskIdsByChatRef.current.set(chatId, nextTaskPointer.taskId);
+            } else if (!nextTaskDiscoveryFailed) {
+              // The durable endpoint confirmed there is no next task.
+              markLocalJobIdle(chatId);
+            }
+          }
+
+          if (ownsRecoveryController) {
+            recoveryControllers.delete(chatId);
+          }
+
+          if (reachedTerminal && currentChatIdRef.current === chatId) {
+            if (nextTaskPointer?.taskId || nextTaskDiscoveryFailed) {
+              setAgentTaskRecoveryHydrationNonce(value => value + 1);
+            }
+            try {
+              const refreshed = await apiClient.getChat(chatId);
+              setCurrentChat(prevChat => (
+                prevChat?.id === chatId
+                  ? mergeChatPreservingUserMessages(refreshed.chat, prevChat)
+                  : prevChat
+              ));
+            } catch {
+              // The reconstructed bubble is already complete; the durable DB
+              // refresh is best-effort and can retry on the next navigation.
+            }
+          }
+        } else if (ownsRecoveryController) {
+          recoveryControllers.delete(chatId);
+        }
+      }
+    })();
+
+    return () => {
+      // A chat switch must not detach recovery: the durable task keeps
+      // running, and releasing its local busy marker here would allow the
+      // same-chat queue to start overlapping work. The poll can safely remain
+      // in the background because every visible-state write is chat-scoped.
+      if (currentChatIdRef.current !== chatId) return;
+      const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+      controller.abort();
+      if (ownsRecoveryController) {
+        recoveryControllers.delete(chatId);
+      }
+    };
+  }, [agentTaskRecoveryHydrationNonce, currentChatId, markLocalJobBusy, markLocalJobIdle, setCurrentChat]);
+
+  // Recovery polls intentionally survive chat navigation, so component
+  // teardown owns the final abort for every background controller.
+  React.useEffect(() => {
+    const recoveryControllers = agentTaskRecoveryControllersRef.current;
+    return () => {
+      for (const controller of recoveryControllers.values()) {
+        controller.abort();
+      }
+      recoveryControllers.clear();
+    };
+  }, []);
+
+  // selectChat can expose a cached shell first and hydrate its messages from
+  // the server a moment later without changing the chat id. Wake recovery once
+  // for that newly-arrived unfinished bubble; the active-controller guards
+  // above keep normal poll updates from creating a second connection.
+  React.useEffect(() => {
+    if (!currentChatId) return;
+    if (localJobControllersRef.current.has(currentChatId)) return;
+    if (agentTaskRecoveryControllersRef.current.has(currentChatId)) return;
+    const candidate = findRecoverableAgentTaskMessage(currentChat?.messages || []);
+    if (!candidate) return;
+    const wakeKey = `${candidate.message?.id || "message"}:${candidate.taskId || "pending"}`;
+    if (agentTaskRecoveryWakeKeysRef.current.get(currentChatId) === wakeKey) return;
+    agentTaskRecoveryWakeKeysRef.current.set(currentChatId, wakeKey);
+    setAgentTaskRecoveryHydrationNonce(value => value + 1);
+  }, [currentChat?.messages, currentChatId]);
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
@@ -5500,16 +5966,24 @@ function ChatInterfaceContent() {
   }, [setCurrentChat]);
 
   const stopActiveGeneration = React.useCallback(() => {
-    if (intentAbortControllerRef.current) {
+    const targetChatId = currentChatId;
+    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
+    const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
+
+    if (intentAbortControllerRef.current && ownsSendingState) {
       intentAbortControllerRef.current.abort();
       intentAbortControllerRef.current = null;
     }
-    const targetChatId = currentChatId;
     const scopedTaskId = targetChatId ? agentTaskIdsByChatRef.current.get(targetChatId) : null;
     const fallbackTaskId = currentAgentTaskIdRef.current;
-    const taskId = scopedTaskId || fallbackTaskId;
+    // A visible chat may be recovering task A while a foreground task B runs
+    // elsewhere. Never fall back to B when Stop was clicked from A.
+    const taskId = targetChatId ? scopedTaskId : fallbackTaskId;
     if (taskId) {
-      if (scopedTaskId && targetChatId) {
+      // A recovered task has no foreground controller. Keep its ownership map
+      // until the durable poll observes cancellation; otherwise the same-chat
+      // queue could start before the server has actually stopped it.
+      if (scopedTaskId && targetChatId && scopedController) {
         agentTaskIdsByChatRef.current.delete(targetChatId);
       }
       if (fallbackTaskId === taskId) {
@@ -5519,7 +5993,6 @@ function ChatInterfaceContent() {
         console.warn('Failed to cancel agent task:', err);
       });
     }
-    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     if (scopedController) {
       scopedController.abort();
       markLocalJobIdle(targetChatId, scopedController);
@@ -5527,48 +6000,51 @@ function ChatInterfaceContent() {
         searchAbortControllerRef.current = null;
         setIsWebSearching(false);
       }
-    } else if (searchAbortControllerRef.current) {
+    } else if (!targetChatId && searchAbortControllerRef.current) {
       const controller = searchAbortControllerRef.current;
       controller.abort();
       searchAbortControllerRef.current = null;
-      if (targetChatId) {
-        markLocalJobIdle(targetChatId, controller);
-      }
       setIsWebSearching(false);
     }
-    if (imageAbortControllerRef.current) {
-      imageAbortControllerRef.current.abort();
+    const imageController = imageAbortControllerRef.current;
+    const ownsImageGeneration = Boolean(imageController && (!targetChatId || imageController === scopedController));
+    if (imageController && ownsImageGeneration) {
+      imageController.abort();
       imageAbortControllerRef.current = null;
       isGeneratingImageRef.current = false;
       setIsGeneratingImage(false);
       if (targetChatId) {
-        markLocalJobIdle(targetChatId);
+        markLocalJobIdle(targetChatId, imageController);
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
     }
-    if (voiceAbortControllerRef.current) {
+    const voiceController = voiceAbortControllerRef.current;
+    const ownsVoiceGeneration = Boolean(voiceController && (!targetChatId || voiceController === scopedController));
+    if (voiceController && ownsVoiceGeneration) {
       const controller = voiceAbortControllerRef.current;
       voiceAbortControllerRef.current = null;
-      if (!controller.signal.aborted) {
+      if (controller && !controller.signal.aborted) {
         controller.abort();
       }
       toast.info('Generación de voz detenida');
     }
-    if (musicAbortControllerRef.current) {
+    const musicController = musicAbortControllerRef.current;
+    const ownsMusicGeneration = Boolean(musicController && (!targetChatId || musicController === scopedController));
+    if (musicController && ownsMusicGeneration) {
       const controller = musicAbortControllerRef.current;
       musicAbortControllerRef.current = null;
-      if (!controller.signal.aborted) {
+      if (controller && !controller.signal.aborted) {
         controller.abort();
       }
       toast.info('Generación de música detenida');
     }
-    if (isGeneratingVoiceRef.current) {
+    if (ownsVoiceGeneration && isGeneratingVoiceRef.current) {
       isGeneratingVoiceRef.current = false;
       setIsGeneratingVoice(false);
       setIsVoiceGenerationActive(true);
     }
-    if (isGeneratingMusicRef.current) {
+    if (ownsMusicGeneration && isGeneratingMusicRef.current) {
       isGeneratingMusicRef.current = false;
       setIsGeneratingMusic(false);
       setIsMusicGenerationActive(true);
@@ -5578,26 +6054,31 @@ function ChatInterfaceContent() {
     // indicators (video / slides) so the composer returns to idle. (The remote
     // render is a POST→poll job, so server-side completion may still finish;
     // this frees the UI and matches the image path.)
-    if (videoAbortControllerRef.current) {
-      videoAbortControllerRef.current.abort();
+    const videoController = videoAbortControllerRef.current;
+    const ownsVideoGeneration = Boolean(videoController && (!targetChatId || videoController === scopedController));
+    if (videoController && ownsVideoGeneration) {
+      videoController.abort();
       videoAbortControllerRef.current = null;
     }
     const videoOperationId = currentVideoOperationIdRef.current;
-    if (videoOperationId) {
+    if (videoOperationId && ownsVideoGeneration) {
       currentVideoOperationIdRef.current = null;
       void apiClient.cancelVideoGeneration(videoOperationId).catch((err) => {
         console.warn('Failed to cancel video generation:', err);
       });
     }
-    setIsGeneratingVideo(false);
-    setIsGeneratingPPT(false);
-    if (targetChatId) {
-      markLocalJobIdle(targetChatId);
+    if (ownsVideoGeneration) {
+      setIsGeneratingVideo(false);
+      setIsGeneratingPPT(false);
     }
-    stopStreaming();
-    setIsSending(false);
-    setSendingChatId(null);
-  }, [currentChatId, markImageGenerationStopped, markLocalJobIdle, stopStreaming]);
+    if (!targetChatId || activeStreamingChatIds.includes(targetChatId)) {
+      stopStreaming();
+    }
+    if (ownsSendingState) {
+      setIsSending(false);
+      setSendingChatId(null);
+    }
+  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -10059,6 +10540,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (!item.chatId) return false;
       if (item.chatId === queueChatId) return false;
       if (activeStreamingChatIds.includes(item.chatId)) return false;
+      if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
       return true;
     });
     if (bgIndex < 0) return;
@@ -10086,6 +10568,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isCurrentChatLocalJobBusy,
     isUploading,
     activeStreamingChatIds,
+    activeLocalJobChatIds,
     addMessage,
     setUploadedFiles,
     syncQueuedCount,
@@ -11451,7 +11934,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } else {
         toast.success('Tarea completada');
       }
-      if (activeChat?.id) selectChat(activeChat.id);
+      // The task belongs to `activeChat`, but the user may have navigated to a
+      // different conversation while it was running. Refresh only when that
+      // chat is still visible; selecting the completed task's chat here would
+      // steal focus and break the background-work contract.
+      if (activeChat?.id && currentChatIdRef.current === activeChat.id) {
+        void selectChat(activeChat.id);
+      }
     } catch (err: any) {
       console.error('Agent task failed:', err);
       toast.error(err?.message || 'Agent task failed');

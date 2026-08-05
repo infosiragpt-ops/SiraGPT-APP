@@ -18,7 +18,9 @@ async function recordFileVersion(prisma, {
   validationPassed = true,
   createdByChatId = null,
 } = {}) {
-  if (!prisma?.fileVersion || !fileId || !userId) return null;
+  // Invalid candidates are never versions. This defensive guard protects
+  // callers beyond the source-preserving editor as well as legacy code paths.
+  if (!prisma?.fileVersion || !fileId || !userId || validationPassed !== true) return null;
   try {
     // Next monotonic version for this file. A unique([fileId, version])
     // constraint guards against races; on collision we retry once.
@@ -60,7 +62,7 @@ async function listFileVersions(prisma, { fileId, userId } = {}) {
   if (!prisma?.fileVersion || !fileId || !userId) return [];
   try {
     return await prisma.fileVersion.findMany({
-      where: { fileId, userId },
+      where: { fileId, userId, validationPassed: true },
       orderBy: { version: 'desc' },
       select: {
         id: true, version: true, artifactId: true, filename: true,
@@ -76,7 +78,7 @@ async function listFileVersions(prisma, { fileId, userId } = {}) {
 async function getFileVersion(prisma, { versionId, userId } = {}) {
   if (!prisma?.fileVersion || !versionId || !userId) return null;
   try {
-    const row = await prisma.fileVersion.findFirst({ where: { id: versionId, userId } });
+    const row = await prisma.fileVersion.findFirst({ where: { id: versionId, userId, validationPassed: true } });
     return row || null;
   } catch {
     return null;
@@ -89,9 +91,9 @@ async function getFileVersion(prisma, { versionId, userId } = {}) {
 async function restoreFileVersion(prisma, { fileId, versionId, userId, createdByChatId = null } = {}) {
   if (!prisma?.fileVersion || !fileId || !versionId || !userId) return null;
   const source = await prisma.fileVersion.findFirst({
-    where: { id: versionId, fileId, userId },
+    where: { id: versionId, fileId, userId, validationPassed: true },
   }).catch(() => null);
-  if (!source?.artifactId) return null;
+  if (!source?.artifactId || source.validationPassed !== true) return null;
   const restored = await recordFileVersion(prisma, {
     fileId,
     userId,

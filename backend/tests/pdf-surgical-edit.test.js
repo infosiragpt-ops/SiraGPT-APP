@@ -2,7 +2,7 @@
 
 // Stage 4 of the DocumentEditingService: SAFE PDF operations (rotate /
 // extract / remove pages, merge, text overlay) via pdf-lib. Deep content
-// edits stay on the legacy path — PDF is not editable like Office.
+// edits fail closed — PDF is not safely editable like Office.
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -88,7 +88,7 @@ describe('parsePdfEditRequest', () => {
     assert.equal(ov.text, 'BORRADOR');
   });
 
-  test('deep-edit and unrelated phrasings return null (legacy path keeps them)', () => {
+  test('deep-edit and unrelated phrasings return null so the caller can fail closed', () => {
     assert.equal(parsePdfEditRequest('corrige la redacción del segundo párrafo'), null);
     assert.equal(parsePdfEditRequest('¿de qué trata este pdf?'), null);
   });

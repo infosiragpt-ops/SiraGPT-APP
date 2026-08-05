@@ -3259,14 +3259,33 @@ function reduceAgentState(state, evt) {
       };
     case 'file_artifact': {
       const artifacts = Array.isArray(state.artifacts) ? [...state.artifacts] : [];
+      const artifactId = String(evt.artifact?.id || '').trim();
       const filename = String(evt.artifact?.filename || '').trim().toLowerCase();
       const format = String(evt.artifact?.format || evt.artifact?.mime || '').trim().toLowerCase();
-      const existingIndex = filename
-        ? artifacts.findIndex((item) => (
-          String(item?.filename || '').trim().toLowerCase() === filename
-          && String(item?.format || item?.mime || '').trim().toLowerCase() === format
-        ))
+      const sourceFileId = String(evt.artifact?.sourceFileId || '').trim();
+      let existingIndex = artifactId
+        ? artifacts.findIndex((item) => String(item?.id || '').trim() === artifactId)
         : -1;
+      if (existingIndex < 0 && sourceFileId) {
+        existingIndex = artifacts.findIndex((item) => (
+          String(item?.sourceFileId || '').trim() === sourceFileId
+        ));
+      }
+      if (existingIndex < 0 && filename) {
+        existingIndex = artifacts.findIndex((item) => {
+          const sameDeliverySlot = (
+            String(item?.filename || '').trim().toLowerCase() === filename
+            && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+          );
+          if (!sameDeliverySlot) return false;
+          const existingSourceFileId = String(item?.sourceFileId || '').trim();
+          // Distinct source ids identify separate outputs in a batch even
+          // when the user uploaded two documents with the same filename.
+          // Legacy/no-source events retain the filename fallback so replayed
+          // revisions do not accumulate duplicate cards.
+          return !(sourceFileId && existingSourceFileId && sourceFileId !== existingSourceFileId);
+        });
+      }
       if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact);
       else artifacts.push(evt.artifact);
       return { ...state, artifacts };

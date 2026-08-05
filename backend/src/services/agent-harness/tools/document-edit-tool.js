@@ -58,6 +58,40 @@ function sourcePreservingNoFallbackResult(err) {
   };
 }
 
+function sourcePreservingValidation(item) {
+  return item?.validation || item?.artifact?.validation || null;
+}
+
+function isValidatedSourcePreservingResult(item) {
+  return Boolean(item?.artifact?.id && sourcePreservingValidation(item)?.passed === true);
+}
+
+function sourcePreservingValidationFailureResult(results = []) {
+  const failed = results.map((item) => ({
+    filename: item?.artifact?.filename || item?.file?.filename || 'documento',
+    reason: sourcePreservingValidation(item)?.reason || 'validation_not_passed',
+  }));
+  return {
+    ok: false,
+    engine: 'in-process',
+    error: 'source_preserving_validation_failed',
+    code: 'SOURCE_PRESERVING_VALIDATION_FAILED',
+    message: 'No entregué el documento editado porque ninguna copia generada superó la validación de integridad. Conservé el archivo original y no generé un documento sustituto.',
+    hint: 'Reintenta o precisa el cambio solicitado; solo se entregan archivos cuya validación final tenga passed=true.',
+    artifacts: [],
+    edited: [],
+    failures: failed,
+  };
+}
+
+function isSourcePreservingValidationError(err) {
+  return Boolean(
+    err?.validationOnlyFailure
+    || err?.code === 'DOCUMENT_BATCH_EDIT_FAILED'
+    || err?.code === 'SOURCE_PRESERVING_VALIDATION_FAILED'
+  );
+}
+
 const inputSchema = z.object({
   instruction: z.string().min(4).max(8000)
     .describe('Complete, self-contained editing instruction in the user\'s language (include EVERY requested change — the document agent sees only this text plus the files)'),
@@ -217,16 +251,8 @@ function buildDocumentEditTool(deps = {}) {
       // sandbox is installed. It returns null when it can't handle the request
       // (e.g. needs a different source format) — in that case we fall straight
       // through to the sandbox doc-agent below, so nothing is ever lost.
-      let requestedSourcePreservingEdit = false;
       try {
         const sp = deps.sourcePreservingEdit || require('../../source-preserving-document-edit');
-        try {
-          if (typeof sp.isSourcePreservingEditRequest === 'function') {
-            requestedSourcePreservingEdit = Boolean(sp.isSourcePreservingEditRequest(args.instruction, rows));
-          }
-        } catch (_) {
-          requestedSourcePreservingEdit = false;
-        }
         const inproc = await sp.tryGenerateSourcePreservingDocumentEdit({
           prisma,
           userId: ctx.userId || null,
@@ -250,37 +276,71 @@ function buildDocumentEditTool(deps = {}) {
             note: 'Transmite esta aclaración al usuario TAL CUAL y espera su respuesta; NO edites ni generes ningún archivo todavía.',
           };
         }
-        if (inproc && inproc.artifact && inproc.artifact.id) {
+        const inprocResults = Array.isArray(inproc?.results) && inproc.results.length
+          ? inproc.results
+          : (inproc ? [inproc] : []);
+        const artifactResults = inprocResults.filter((item) => item?.artifact?.id);
+        const validatedResults = artifactResults.filter(isValidatedSourcePreservingResult);
+        if (validatedResults.length) {
+          const rejectedResults = artifactResults.filter((item) => !isValidatedSourcePreservingResult(item));
+          const artifacts = validatedResults.map((item) => ({
+            id: item.artifact.id,
+            filename: item.artifact.filename,
+            mime: item.artifact.mime,
+            format: item.artifact.format,
+            sizeBytes: item.artifact.sizeBytes,
+            downloadUrl: item.artifact.downloadUrl,
+            previewHtml: item.previewHtml || null,
+            validation: sourcePreservingValidation(item),
+            sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+            documentVersion: item.version || null,
+          }));
           if (ctx && typeof ctx.onEvent === 'function') {
-            try {
-              ctx.onEvent({
-                type: 'file_artifact',
-                artifact: {
-                  id: inproc.artifact.id,
-                  filename: inproc.artifact.filename,
-                  mime: inproc.artifact.mime,
-                  format: inproc.artifact.format,
-                  sizeBytes: inproc.artifact.sizeBytes,
-                  downloadUrl: inproc.artifact.downloadUrl,
-                  previewHtml: inproc.previewHtml || null,
-                  validation: inproc.validation || null,
-                },
-              });
-            } catch (_) { /* UI plumbing must never fail the tool */ }
+            for (const artifact of artifacts) {
+              try {
+                ctx.onEvent({ type: 'file_artifact', artifact });
+              } catch (_) { /* UI plumbing must never fail the tool */ }
+            }
           }
           return {
             ok: true,
             engine: 'in-process',
-            edited: [{
-              filename: inproc.artifact.filename,
-              sizeBytes: inproc.artifact.sizeBytes,
-              downloadUrl: inproc.artifact.downloadUrl,
-              valid: !(inproc.validation && inproc.validation.ok === false),
-            }],
+            batch: Boolean(inproc.batch || artifactResults.length > 1),
+            partial: Boolean(inproc.partial || rejectedResults.length > 0),
+            failures: [
+              ...(Array.isArray(inproc.failures) ? inproc.failures : []),
+              ...rejectedResults.map((item) => ({
+                sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+                filename: item.artifact?.filename || 'documento',
+                error: sourcePreservingValidation(item)?.reason || 'La validación del documento editado no pasó.',
+              })),
+            ],
+            artifacts,
+            edited: validatedResults.map((item) => ({
+              id: item.artifact.id,
+              filename: item.artifact.filename,
+              mime: item.artifact.mime,
+              format: item.artifact.format,
+              sizeBytes: item.artifact.sizeBytes,
+              downloadUrl: item.artifact.downloadUrl,
+              valid: true,
+              sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+            })),
             format: inproc.format,
-            summary: String(inproc.content || '').slice(0, 1200),
-            note: 'El archivo editado (preservando el original) ya aparece como tarjeta de descarga en el chat. Menciónalo brevemente; NO pegues su contenido.',
+            summary: rejectedResults.length
+              ? `Entregué ${validatedResults.length} archivo(s) que superaron la validación. No entregué ${rejectedResults.length} archivo(s) inválido(s).`
+              : String(inproc.content || '').slice(0, 1200),
+            note: validatedResults.length > 1
+              ? 'Los archivos editados (preservando los originales) ya aparecen como tarjetas de descarga en el chat. Menciónalos brevemente; NO pegues su contenido.'
+              : 'El archivo editado (preservando el original) ya aparece como tarjeta de descarga en el chat. Menciónalo brevemente; NO pegues su contenido.',
           };
+        }
+        if (inprocResults.length) {
+          // A non-null source-preserving result means that editor owned this
+          // request. If it produced no strictly validated deliverable, fail
+          // closed: the sandbox would rebuild a different document and hide
+          // the validation failure behind a plausible-looking replacement.
+          return sourcePreservingValidationFailureResult(inprocResults);
         }
         // inproc === null → not a source-preserving edit / unsupported source.
         // Fall through to the sandbox doc-agent below.
@@ -288,8 +348,12 @@ function buildDocumentEditTool(deps = {}) {
         if (isSourcePreservingNoFallbackError(err)) {
           return sourcePreservingNoFallbackResult(err);
         }
-        if (requestedSourcePreservingEdit && err?.validationOnlyFailure) {
-          return sourcePreservingNoFallbackResult(err);
+        if (isSourcePreservingValidationError(err)) {
+          const failure = sourcePreservingValidationFailureResult([]);
+          return {
+            ...failure,
+            details: String(err?.message || '').slice(0, 800) || undefined,
+          };
         }
         // The in-process editor can throw when it needs a different/compatible
         // source (e.g. a section edit on a non-DOCX). The sandbox doc-agent is
@@ -347,12 +411,39 @@ function buildDocumentEditTool(deps = {}) {
         return { ok: false, error: 'no_output', summary: String(result.finalText || '').slice(0, 500), hint: 'El agente de documentos no produjo un archivo editado. Reintenta con una instrucción más específica.' };
       }
 
+      // runDocumentAgent structurally validates every collected output. Treat
+      // anything other than an explicit `valid: true` as untrusted and reject
+      // it BEFORE saveArtifact: an invalid OOXML blob must never obtain a
+      // download URL, emit a chat card, or make the tool report success.
+      const validatedOutputs = outputs.filter((out) => out.valid === true);
+      const rejectedOutputs = outputs
+        .filter((out) => out.valid !== true)
+        .map((out) => ({
+          filename: String(out.name || 'documento'),
+          error: 'validation_failed',
+          reason: out.valid === false ? 'ooxml_structure' : 'validation_not_passed',
+        }));
+      if (!validatedOutputs.length) {
+        return {
+          ok: false,
+          engine: 'sandbox',
+          error: 'document_validation_failed',
+          code: 'DOCUMENT_VALIDATION_FAILED',
+          edited: [],
+          failures: rejectedOutputs,
+          iterations: result.iterations,
+          driver: result.driver,
+          summary: String(result.finalText || '').slice(0, 1200),
+          hint: 'No entregué ningún archivo porque la validación final no pasó. El documento original permanece intacto.',
+        };
+      }
+
       // Persist + announce every deliverable through the existing card plumbing.
       const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveArtifact;
       const edited = [];
-      for (const out of outputs) {
+      for (const out of validatedOutputs) {
         const ext = String(out.name).split('.').pop().toLowerCase();
-        const validation = out.valid === false ? { ok: false, reason: 'ooxml_structure' } : null;
+        const validation = { ok: true, passed: true };
         let saved;
         try {
           saved = saveArtifact({
@@ -390,11 +481,15 @@ function buildDocumentEditTool(deps = {}) {
 
       return {
         ok: edited.some((e) => !e.error),
+        partial: rejectedOutputs.length > 0 || edited.some((e) => e.error),
         edited,
+        failures: rejectedOutputs,
         iterations: result.iterations,
         driver: result.driver,
         summary: String(result.finalText || '').slice(0, 1200),
-        note: 'Los archivos editados ya aparecen como tarjetas de descarga en el chat. Menciónalos brevemente en tu respuesta; NO pegues su contenido.',
+        note: edited.some((e) => !e.error)
+          ? 'Los archivos editados ya aparecen como tarjetas de descarga en el chat. Menciónalos brevemente en tu respuesta; NO pegues su contenido.'
+          : undefined,
       };
     },
   };
