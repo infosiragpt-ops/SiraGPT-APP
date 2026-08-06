@@ -14,6 +14,7 @@ import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { PdfRenderer, type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 
 const ASSET_BASE_URL = (
   process.env.NEXT_PUBLIC_IMAGE_URL
@@ -421,7 +422,18 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
-  const canUsePreviewControls = ["pdf", "pdfBlob", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const canUsePreviewControls = ["pdf", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const pdfBlobUrl = state.kind === "pdfBlob" ? state.url : null
+  const pdfPreviewAttachment = React.useMemo<AttachmentLike | null>(() => (
+    pdfBlobUrl
+      ? {
+          id: pdfBlobUrl,
+          name: `${filename}.pdf`,
+          mimeType: "application/pdf",
+          url: pdfBlobUrl,
+        }
+      : null
+  ), [filename, pdfBlobUrl])
   const previewZoomStyle = React.useMemo(
     () => ({ zoom }) as React.CSSProperties & { zoom: number },
     [zoom],
@@ -854,7 +866,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
       <div
         ref={scrollRef}
-        className="scroll-contain min-h-0 flex-1 overflow-auto bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]"
+        className={cn(
+          "scroll-contain min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]",
+          state.kind === "pdfBlob" ? "overflow-hidden" : "overflow-auto",
+        )}
       >
         {state.kind === "loading" && (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -863,13 +878,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         )}
 
-        {state.kind === "pdfBlob" && (
-          <iframe
-            src={state.url}
-            className="h-full w-full bg-white dark:bg-zinc-900"
-            style={previewZoomStyle}
-            title={`Vista previa ${filename}`}
-          />
+        {state.kind === "pdfBlob" && pdfPreviewAttachment && (
+          <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900" data-testid="generated-pdf-preview">
+            <PdfRenderer a={pdfPreviewAttachment} />
+          </div>
         )}
 
         {state.kind === "pdf" && (

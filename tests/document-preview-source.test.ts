@@ -4,6 +4,7 @@ import path from "node:path"
 import test from "node:test"
 
 const viewerSourcePath = path.join(process.cwd(), "components/viewers/UnifiedDocumentViewer.tsx")
+const generatedPreviewSourcePath = path.join(process.cwd(), "components/document-preview.tsx")
 
 function viewerSource(): string {
   return readFileSync(viewerSourcePath, "utf8")
@@ -21,6 +22,22 @@ test("PDF preview uses a bundled/local pdf.js worker instead of a CDN worker", (
     source,
     /pdfjs\.GlobalWorkerOptions\.workerSrc\s*=\s*new URL\(\s*["']pdfjs-dist\/build\/pdf\.worker\.min\.mjs["'],\s*import\.meta\.url\s*\)\.toString\(\)/,
     "the viewer should bundle the exact pdfjs worker with the app",
+  )
+})
+
+test("generated Office previews use the shared pdf.js renderer instead of a native PDF iframe", () => {
+  const source = readFileSync(generatedPreviewSourcePath, "utf8")
+
+  assert.match(
+    source,
+    /import \{ PdfRenderer, type AttachmentLike \} from "@\/components\/viewers\/UnifiedDocumentViewer"/,
+    "generated artifacts must reuse the tested pdf.js renderer",
+  )
+  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} \/>/)
+  assert.doesNotMatch(
+    source,
+    /state\.kind === "pdfBlob"[\s\S]{0,180}<iframe/,
+    "native PDF iframes render as a blank panel on Safari and some embedded browsers",
   )
 })
 

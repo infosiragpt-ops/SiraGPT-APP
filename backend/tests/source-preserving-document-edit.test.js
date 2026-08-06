@@ -1902,7 +1902,7 @@ describe('source-preserving DOCX title edits', () => {
     })));
     fs.writeFileSync(originalPath, original);
 
-    const prompt = 'cambia en el titulo de 2026 al 2027 en mi mismo word';
+    const prompt = 'cambia en el título de 2026 al 2027 en mi mismo Word. Solo modifica ello.';
     const documentXml = new PizZip(original).file('word/document.xml').asText();
     const operations = planSourcePreservingOperations({ requestText: prompt, documentXml });
     assert.deepEqual(operations, [{
@@ -1948,6 +1948,7 @@ describe('source-preserving DOCX title edits', () => {
         .join('')
     ));
     assert.equal(paragraphTexts[0], 'PROPUESTA PROFESIONAL, LIMA, 2027');
+    assert.doesNotMatch(paragraphTexts[0], /en mi mismo word|solo modifica ello/i);
     assert.equal(paragraphTexts[1], '2026');
     assert.match(paragraphTexts[2], /referencia 2026/i);
     assert.equal(paragraphTexts.filter((text) => text === 'ANEXOS').length, 1);

@@ -5060,6 +5060,19 @@ function cleanReplacementValue(value = '') {
   return text;
 }
 
+// Unquoted replacement prompts often continue with delivery or preservation
+// instructions. Those clauses describe how the edit must be performed; they
+// are never part of the replacement value itself. Keep quoted replacement
+// values literal by applying this cleanup only to the unquoted parser paths.
+function cleanUnquotedReplacementValue(value = '') {
+  return cleanReplacementValue(String(value || '')
+    .replace(/\s+(?:y\s+)?(?:solo|solamente|[uú]nicamente)\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:eso|esto|ello|el\s+t[ií]tulo|esa\s+parte)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?no\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?sin\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*|alter\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*|regres\w*)\b[\s\S]*$/iu, '')
+    .trim());
+}
+
 function extractReplacementScope(text = '') {
   const normalized = normalizeText(text);
   if (/\b(?:titulo|title)\b/.test(normalized)) return 'title';
@@ -5091,7 +5104,7 @@ function extractReplacementPair(text = '') {
   const rawMatch = raw.match(REPLACE_PAIR_CAPTURE_RE);
   if (rawMatch) {
     const needle = cleanReplacementNeedle(rawMatch[1]);
-    const replacement = cleanReplacementValue(rawMatch[2]);
+    const replacement = cleanUnquotedReplacementValue(rawMatch[2]);
     if (needle.length >= 3 && replacement.length >= 1) {
       return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
     }
@@ -5106,7 +5119,7 @@ function extractReplacementPair(text = '') {
     .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim());
-  const replacement = cleanReplacementValue(match[2]);
+  const replacement = cleanUnquotedReplacementValue(match[2]);
   if (needle.length < 3 || replacement.length < 1) return null;
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
