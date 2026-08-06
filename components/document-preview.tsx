@@ -1,6 +1,7 @@
 "use client"
 
 import React from "react"
+import dynamic from "next/dynamic"
 import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
@@ -14,7 +15,15 @@ import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { PdfRenderer, type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+
+// Keep the full document viewer (pdf.js, DOCX/XLSX/PPTX renderers, etc.) out
+// of the eager chat bundle. The same tested PdfRenderer is loaded only when a
+// generated Office preview has actually been converted to PDF.
+const PdfRenderer = dynamic(
+  () => import("@/components/viewers/UnifiedDocumentViewer").then(module => module.PdfRenderer),
+  { ssr: false, loading: () => null },
+)
 
 const ASSET_BASE_URL = (
   process.env.NEXT_PUBLIC_IMAGE_URL
@@ -423,17 +432,14 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
   const canUsePreviewControls = ["pdf", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
-  const pdfBlobUrl = state.kind === "pdfBlob" ? state.url : null
   const pdfPreviewAttachment = React.useMemo<AttachmentLike | null>(() => (
-    pdfBlobUrl
+    state.kind === "pdfBlob"
       ? {
-          id: pdfBlobUrl,
-          name: `${filename}.pdf`,
-          mimeType: "application/pdf",
-          url: pdfBlobUrl,
+          name: filename,
+          url: state.url,
         }
       : null
-  ), [filename, pdfBlobUrl])
+  ), [filename, state])
   const previewZoomStyle = React.useMemo(
     () => ({ zoom }) as React.CSSProperties & { zoom: number },
     [zoom],
@@ -879,7 +885,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
 
         {state.kind === "pdfBlob" && pdfPreviewAttachment && (
-          <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900" data-testid="generated-pdf-preview">
+          <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900">
             <PdfRenderer a={pdfPreviewAttachment} />
           </div>
         )}

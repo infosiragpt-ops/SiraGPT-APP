@@ -30,8 +30,15 @@ test("generated Office previews use the shared pdf.js renderer instead of a nati
 
   assert.match(
     source,
-    /import \{ PdfRenderer, type AttachmentLike \} from "@\/components\/viewers\/UnifiedDocumentViewer"/,
-    "generated artifacts must reuse the tested pdf.js renderer",
+    /import\("@\/components\/viewers\/UnifiedDocumentViewer"\)\.then\(module => module\.PdfRenderer\)/,
+    "generated artifacts must lazily reuse the tested pdf.js renderer",
+  )
+  assert.match(source, /import type \{ AttachmentLike \} from "@\/components\/viewers\/UnifiedDocumentViewer"/)
+  assert.match(source, /ssr: false/)
+  assert.doesNotMatch(
+    source,
+    /import \{[^}]*PdfRenderer[^}]*\} from "@\/components\/viewers\/UnifiedDocumentViewer"/,
+    "the generated preview must not pull the full document viewer into the eager chat bundle",
   )
   assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} \/>/)
   assert.doesNotMatch(
