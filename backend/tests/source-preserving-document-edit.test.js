@@ -1911,6 +1911,13 @@ describe('source-preserving DOCX title edits', () => {
       replacement: '2027',
       scope: 'title',
     }]);
+    assert.deepEqual(
+      sourcePreservingInternals.extractReplacementPair(
+        'cambia en el título de 2026 al 2027, solo modifica ello',
+      ),
+      { needle: '2026', replacement: '2027' },
+      'separator punctuation must not leak into the Word title',
+    );
 
     const result = await generateSourcePreservingDocumentEdit({
       sourceFile: {
@@ -2699,6 +2706,12 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
 
     const generic = planGenericOfficeOperations({ requestText: prompt, format: 'docx' });
     assert.equal(generic.filter((op) => op.kind === 'replace_text')[1].replacement, 'APROBADO');
+
+    const literalPrompt = 'reemplaza "el documento" por "La política conserva tus datos y devuélveme seguridad"';
+    assert.deepEqual(extractAllQuotedReplacementPairs(literalPrompt), [{
+      needle: 'el documento',
+      replacement: 'La política conserva tus datos y devuélveme seguridad',
+    }], 'quoted needles and replacements must stay literal');
   });
 
   it('parses natural "cambia de X por Y" without gluing the Spanish "de" onto the needle', () => {
