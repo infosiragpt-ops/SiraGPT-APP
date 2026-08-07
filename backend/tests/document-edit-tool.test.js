@@ -592,6 +592,73 @@ test('source-preserving target failures do not fall through to document regenera
   assert.match(out.hint, /No generé un documento nuevo/);
 });
 
+test('unresolved source-preserving intent fails closed without sandbox or a false Validado artifact', async () => {
+  let sandboxCalled = false;
+  let blobReadCalled = false;
+  let saveArtifactCalled = false;
+  const events = [];
+  const unresolvedError = new Error(
+    'No pude identificar con seguridad el texto exacto que deseas cambiar en el Word.',
+  );
+  unresolvedError.code = 'SOURCE_EDIT_INTENT_UNRESOLVED';
+
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{
+      id: 'f1',
+      userId: 'u1',
+      path: '/must/not/read/original.docx',
+      originalName: 'original.docx',
+      filename: 'original.docx',
+    }]),
+    fsImpl: {
+      readFile: async () => {
+        blobReadCalled = true;
+        return Buffer.from('unchanged-original-bytes');
+      },
+    },
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => { throw unresolvedError; },
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return {
+        outputs: [{
+          name: 'original-editado.docx',
+          buffer: Buffer.from('unchanged-original-bytes'),
+          valid: true,
+        }],
+        finalText: 'Listo.',
+      };
+    },
+    saveArtifact: () => {
+      saveArtifactCalled = true;
+      return {
+        id: 'must-not-exist',
+        filename: 'original-editado.docx',
+        downloadUrl: '/api/agent/artifact/must-not-exist',
+      };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'modifica el título, pero no indico cuál es el texto actual ni el nuevo' },
+    baseCtx({ onEvent: (event) => events.push(event) }),
+  );
+
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'source_preserving_edit_failed');
+  assert.equal(out.code, 'SOURCE_EDIT_INTENT_UNRESOLVED');
+  assert.equal(blobReadCalled, false, 'unresolved intent must stop before loading bytes for the sandbox');
+  assert.equal(sandboxCalled, false, 'unresolved intent must never fall through to sandbox regeneration');
+  assert.equal(saveArtifactCalled, false, 'unchanged bytes must never be persisted as a validated artifact');
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+  const serialized = JSON.stringify(out);
+  assert.equal(serialized.includes('/api/agent/artifact/'), false, 'no download URL may escape');
+  assert.equal(serialized.includes('"passed":true'), false, 'the response must not claim deterministic validation');
+  assert.equal(serialized.includes('Validado'), false, 'the response must not claim a false Validado state');
+  assert.match(out.hint, /No generé un documento nuevo/);
+});
+
 test('in-process fast path falls through to the sandbox when the editor returns null or throws', async () => {
   const inputPath = tmpFileWith('original-bytes');
 

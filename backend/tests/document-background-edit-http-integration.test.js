@@ -321,7 +321,7 @@ test('real HTTP upload -> background edit -> authenticated download preserves tw
     .send({
       scopeMode: 'global',
       files: fileIds,
-      goal: 'edita los documentos adjuntos y cambia el título a 2027; solo modifica eso y devuélveme ambos archivos',
+      goal: 'en ambos Word cambia en el título de 2026 al 2027 en mi mismo Word. Solo modifica ello.',
       maxSteps: 2,
       maxRuntimeMs: 60_000,
     });
@@ -346,7 +346,8 @@ test('real HTTP upload -> background edit -> authenticated download preserves tw
     assert.equal(downloaded.status, 200);
     assert.match(downloaded.headers['content-disposition'] || '', /^attachment;/);
     const xml = new PizZip(downloaded.body).file('word/document.xml')?.asText() || '';
-    assert.match(xml, /<w:t[^>]*>2027<\/w:t>/);
+    assert.equal(xml.includes(sourceProofs[index].title.replace('2026', '2027')), true);
+    assert.doesNotMatch(xml, /en mi mismo word|solo modifica ello/i);
     assert.equal(xml.includes(sourceProofs[index].title), false);
     assert.equal(xml.includes(sourceProofs[index].sentinel), true);
     assert.equal(xml.includes(sourceProofs[index].tableSentinel), true);

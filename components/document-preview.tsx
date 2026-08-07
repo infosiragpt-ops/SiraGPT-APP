@@ -1,6 +1,7 @@
 "use client"
 
 import React from "react"
+import dynamic from "next/dynamic"
 import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
@@ -14,6 +15,15 @@ import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+
+// Keep the full document viewer (pdf.js, DOCX/XLSX/PPTX renderers, etc.) out
+// of the eager chat bundle. The same tested PdfRenderer is loaded only when a
+// generated Office preview has actually been converted to PDF.
+const PdfRenderer = dynamic(
+  () => import("@/components/viewers/UnifiedDocumentViewer").then(module => module.PdfRenderer),
+  { ssr: false, loading: () => null },
+)
 
 const ASSET_BASE_URL = (
   process.env.NEXT_PUBLIC_IMAGE_URL
@@ -421,7 +431,15 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
-  const canUsePreviewControls = ["pdf", "pdfBlob", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const canUsePreviewControls = ["pdf", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const pdfPreviewAttachment = React.useMemo<AttachmentLike | null>(() => (
+    state.kind === "pdfBlob"
+      ? {
+          name: filename,
+          url: state.url,
+        }
+      : null
+  ), [filename, state])
   const previewZoomStyle = React.useMemo(
     () => ({ zoom }) as React.CSSProperties & { zoom: number },
     [zoom],
@@ -854,7 +872,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
       <div
         ref={scrollRef}
-        className="scroll-contain min-h-0 flex-1 overflow-auto bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]"
+        className={cn(
+          "scroll-contain min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]",
+          state.kind === "pdfBlob" ? "overflow-hidden" : "overflow-auto",
+        )}
       >
         {state.kind === "loading" && (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -863,13 +884,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         )}
 
-        {state.kind === "pdfBlob" && (
-          <iframe
-            src={state.url}
-            className="h-full w-full bg-white dark:bg-zinc-900"
-            style={previewZoomStyle}
-            title={`Vista previa ${filename}`}
-          />
+        {state.kind === "pdfBlob" && pdfPreviewAttachment && (
+          <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900">
+            <PdfRenderer a={pdfPreviewAttachment} />
+          </div>
         )}
 
         {state.kind === "pdf" && (

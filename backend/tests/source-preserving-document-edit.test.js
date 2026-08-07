@@ -1902,7 +1902,7 @@ describe('source-preserving DOCX title edits', () => {
     })));
     fs.writeFileSync(originalPath, original);
 
-    const prompt = 'cambia en el titulo de 2026 al 2027 en mi mismo word';
+    const prompt = 'cambia en el título de 2026 al 2027 en mi mismo Word. Solo modifica ello.';
     const documentXml = new PizZip(original).file('word/document.xml').asText();
     const operations = planSourcePreservingOperations({ requestText: prompt, documentXml });
     assert.deepEqual(operations, [{
@@ -1911,6 +1911,13 @@ describe('source-preserving DOCX title edits', () => {
       replacement: '2027',
       scope: 'title',
     }]);
+    assert.deepEqual(
+      sourcePreservingInternals.extractReplacementPair(
+        'cambia en el título de 2026 al 2027, solo modifica ello',
+      ),
+      { needle: '2026', replacement: '2027' },
+      'separator punctuation must not leak into the Word title',
+    );
 
     const result = await generateSourcePreservingDocumentEdit({
       sourceFile: {
@@ -1948,6 +1955,7 @@ describe('source-preserving DOCX title edits', () => {
         .join('')
     ));
     assert.equal(paragraphTexts[0], 'PROPUESTA PROFESIONAL, LIMA, 2027');
+    assert.doesNotMatch(paragraphTexts[0], /en mi mismo word|solo modifica ello/i);
     assert.equal(paragraphTexts[1], '2026');
     assert.match(paragraphTexts[2], /referencia 2026/i);
     assert.equal(paragraphTexts.filter((text) => text === 'ANEXOS').length, 1);
@@ -2698,6 +2706,12 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
 
     const generic = planGenericOfficeOperations({ requestText: prompt, format: 'docx' });
     assert.equal(generic.filter((op) => op.kind === 'replace_text')[1].replacement, 'APROBADO');
+
+    const literalPrompt = 'reemplaza "el documento" por "La política conserva tus datos y devuélveme seguridad"';
+    assert.deepEqual(extractAllQuotedReplacementPairs(literalPrompt), [{
+      needle: 'el documento',
+      replacement: 'La política conserva tus datos y devuélveme seguridad',
+    }], 'quoted needles and replacements must stay literal');
   });
 
   it('parses natural "cambia de X por Y" without gluing the Spanish "de" onto the needle', () => {

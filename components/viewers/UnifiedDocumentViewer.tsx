@@ -1293,7 +1293,7 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
  *   • predictable styling under light/dark mode
  *   • runs entirely in the browser — no server round-trip
  */
-function PdfRenderer({ a }: { a: AttachmentLike }) {
+export function PdfRenderer({ a }: { a: AttachmentLike }) {
   // pdf.js accepts a URL string OR a `{ data: Uint8Array }` payload.
   // Using `data` for in-memory File blobs avoids creating a blob URL
   // that pdf.js would have to refetch over HTTP.

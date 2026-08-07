@@ -5019,8 +5019,8 @@ function extractAllQuotedReplacementPairs(text = '') {
   const re = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]\s+(?:por|con|al|a\s+(?:la|el)|a)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/giu;
   let match;
   while ((match = re.exec(raw))) {
-    const needle = cleanReplacementNeedle(match[1]);
-    const replacement = cleanReplacementValue(match[2]);
+    const needle = cleanQuotedReplacementValue(match[1]);
+    const replacement = cleanQuotedReplacementValue(match[2]);
     if (needle.length >= 2 && replacement.length >= 1) {
       pairs.push({ needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) });
     }
@@ -5060,6 +5060,30 @@ function cleanReplacementValue(value = '') {
   return text;
 }
 
+// Quotation marks are an explicit literal boundary. Do not run semantic
+// cleanup rules over quoted text: a legitimate value such as
+// "La política conserva tus datos" must remain byte-faithful to the user.
+function cleanQuotedReplacementValue(value = '') {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+// Unquoted replacement prompts often continue with delivery or preservation
+// instructions. Those clauses describe how the edit must be performed; they
+// are never part of the replacement value itself. Keep quoted replacement
+// values literal by applying this cleanup only to the unquoted parser paths.
+function cleanUnquotedReplacementValue(value = '') {
+  return cleanReplacementValue(String(value || '')
+    .replace(/\s+(?:y\s+)?(?:solo|solamente|[uú]nicamente)\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:eso|esto|ello|el\s+t[ií]tulo|esa\s+parte)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?no\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?sin\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*|alter\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*|regres\w*)\b[\s\S]*$/iu, '')
+    .trim())
+    // Commas/colons commonly separate the replacement from a preservation
+    // clause ("a 2027, solo modifica ello"); they are not document content.
+    .replace(/[,;:]+$/g, '')
+    .trim();
+}
+
 function extractReplacementScope(text = '') {
   const normalized = normalizeText(text);
   if (/\b(?:titulo|title)\b/.test(normalized)) return 'title';
@@ -5079,8 +5103,8 @@ function extractReplacementPair(text = '') {
   if (allQuoted.length) return allQuoted[0];
   const quoted = extractQuotedValues(raw);
   if (quoted.length >= 2 && REPLACE_VERB_RE.test(raw)) {
-    const needle = cleanReplacementNeedle(quoted[0]);
-    const replacement = cleanReplacementValue(quoted[1]);
+    const needle = cleanQuotedReplacementValue(quoted[0]);
+    const replacement = cleanQuotedReplacementValue(quoted[1]);
     if (needle.length >= 2 && replacement.length >= 1) {
       return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
     }
@@ -5091,7 +5115,7 @@ function extractReplacementPair(text = '') {
   const rawMatch = raw.match(REPLACE_PAIR_CAPTURE_RE);
   if (rawMatch) {
     const needle = cleanReplacementNeedle(rawMatch[1]);
-    const replacement = cleanReplacementValue(rawMatch[2]);
+    const replacement = cleanUnquotedReplacementValue(rawMatch[2]);
     if (needle.length >= 3 && replacement.length >= 1) {
       return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
     }
@@ -5106,7 +5130,7 @@ function extractReplacementPair(text = '') {
     .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim());
-  const replacement = cleanReplacementValue(match[2]);
+  const replacement = cleanUnquotedReplacementValue(match[2]);
   if (needle.length < 3 || replacement.length < 1) return null;
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
