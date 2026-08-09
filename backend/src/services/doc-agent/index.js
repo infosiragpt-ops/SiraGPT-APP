@@ -21,8 +21,16 @@ const { createSandbox } = require('./sandbox');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
 const { buildDocAgentSystemPrompt } = require('./skills');
 const { runDocAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
+const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 
 const DEFAULT_MODEL = process.env.SIRAGPT_DOC_AGENT_MODEL || 'openai/gpt-4o-mini';
+const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000;
+
+function resolveMaxRuntimeMs(value = process.env.SIRAGPT_DOC_AGENT_MAX_RUNTIME_MS) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_MAX_RUNTIME_MS;
+  return Math.max(30_000, Math.min(30 * 60 * 1000, Math.floor(parsed)));
+}
 
 function createOpenRouterClient() {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -127,9 +135,15 @@ async function runDocumentAgent({
   if (!task) throw new Error('runDocumentAgent: instruction is required');
   const llm = client || createOpenRouterClient();
 
-  const sandbox = await createSandbox({ driver });
-  onEvent({ type: 'sandbox_ready', driver: sandbox.driver });
+  const abortScope = composeAbortSignals([signal], {
+    timeoutMs: resolveMaxRuntimeMs(),
+    timeoutReason: 'document_agent_timeout',
+  });
+  let sandbox = null;
   try {
+    throwIfAborted(abortScope.signal);
+    sandbox = await createSandbox({ driver, signal: abortScope.signal });
+    onEvent({ type: 'sandbox_ready', driver: sandbox.driver });
     const names = [];
     for (let i = 0; i < files.length; i += 1) {
       const f = files[i];
@@ -146,9 +160,12 @@ async function runDocumentAgent({
     const executors = makeToolExecutors(sandbox);
 
     let result = await runDocAgentLoop({
-      client: llm, model, messages, tools: TOOL_DEFINITIONS, executors, maxIterations, onEvent, signal,
+      client: llm, model, messages, tools: TOOL_DEFINITIONS, executors, maxIterations, onEvent,
+      signal: abortScope.signal,
     });
+    throwIfAborted(abortScope.signal);
     let outputs = await collectValidOutputs(sandbox, onEvent);
+    throwIfAborted(abortScope.signal);
 
     // An output byte-identical to an input is a copy, not an edit — a flaky
     // model sometimes repacks the file without applying any change. Treat
@@ -170,7 +187,7 @@ async function runDocumentAgent({
     // model can burn its iterations on a wrong strategy — e.g. str_replace on
     // the binary .docx). We nudge it with the failure and let it finish the job
     // on the SAME sandbox (its scratch work + uploads are still there).
-    const needsRetry = !signal?.aborted && outputs.filter((o) => o.valid !== false).length === 0 && files.length > 0;
+    const needsRetry = !abortScope.signal.aborted && outputs.filter((o) => o.valid !== false).length === 0 && files.length > 0;
     if (needsRetry) {
       onEvent({ type: 'retry', reason: 'no_valid_output' });
       messages.push({
@@ -184,17 +201,31 @@ async function runDocumentAgent({
       });
       result = await runDocAgentLoop({
         client: llm, model, messages, tools: TOOL_DEFINITIONS, executors,
-        maxIterations: Math.min(maxIterations, 12), onEvent, signal,
+        maxIterations: Math.min(maxIterations, 12), onEvent, signal: abortScope.signal,
       });
+      throwIfAborted(abortScope.signal);
       outputs = await collectValidOutputs(sandbox, onEvent);
+      throwIfAborted(abortScope.signal);
       markUneditedCopies(outputs);
     }
 
+    throwIfAborted(abortScope.signal);
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name) });
     return { ...result, outputs, driver: sandbox.driver };
   } finally {
-    await sandbox.destroy();
+    try {
+      if (sandbox) await sandbox.destroy();
+    } finally {
+      abortScope.cleanup();
+    }
   }
 }
 
-module.exports = { runDocumentAgent, createOpenRouterClient, DEFAULT_MODEL, isValidOoxml };
+module.exports = {
+  runDocumentAgent,
+  createOpenRouterClient,
+  DEFAULT_MODEL,
+  DEFAULT_MAX_RUNTIME_MS,
+  resolveMaxRuntimeMs,
+  isValidOoxml,
+};

@@ -12,6 +12,7 @@ const express = require('express');
 const path = require('path');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const prisma = require('../config/database');
 const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 const {
@@ -26,6 +27,12 @@ const {
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+const {
+  beginDocumentOperation,
+  inspectDocumentOperation,
+  buildDocumentReplayFrame,
+} = require('../services/document-operation-idempotency');
+const { buildPublicStreamError } = require('../services/observability/public-stream-error');
 const {
   buildPreviousContentDocumentPrompt,
   findPreviousAssistantContent,
@@ -42,34 +49,38 @@ const router = express.Router();
 router.use(authenticateToken);
 
 async function persistSuccess(chatId, userId, displayPrompt, content, file) {
-  const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-  if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
-  // Persist the dataUrl so document downloads and right-pane previews
-  // keep working after a chat reload. Generated files are scoped by the
-  // authenticated chat fetch; future storage can move bytes to object
-  // storage without changing the client contract.
-  const persistedFile = file;
-  const assistant = await prisma.message.create({
-    data: { chatId, role: 'ASSISTANT', content, files: JSON.stringify([persistedFile]) },
+  return prisma.$transaction(async (tx) => {
+    const chat = await tx.chat.findFirst({ where: { id: chatId, userId } });
+    if (!chat) return null;
+    await tx.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
+    // Persist the dataUrl so document downloads and right-pane previews
+    // keep working after a chat reload. Generated files are scoped by the
+    // authenticated chat fetch; future storage can move bytes to object
+    // storage without changing the client contract.
+    const persistedFile = file;
+    const assistant = await tx.message.create({
+      data: { chatId, role: 'ASSISTANT', content, files: JSON.stringify([persistedFile]) },
+    });
+    await tx.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
+    return {
+      id: assistant.id, role: assistant.role, content: assistant.content,
+      files: [file], // still hand back the real one for this turn
+    };
   });
-  await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
-  return {
-    id: assistant.id, role: assistant.role, content: assistant.content,
-    files: [file], // still hand back the real one for this turn
-  };
 }
 
 async function persistFailure(chatId, userId, displayPrompt, reason) {
-  const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-  if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
-  const content = `No pude generar el documento: ${reason}. Dame más detalle (formato, estructura, datos) y lo intento otra vez.`;
-  const assistant = await prisma.message.create({
-    data: { chatId, role: 'ASSISTANT', content },
+  return prisma.$transaction(async (tx) => {
+    const chat = await tx.chat.findFirst({ where: { id: chatId, userId } });
+    if (!chat) return null;
+    await tx.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
+    const content = `No pude generar el documento: ${reason}. Dame más detalle (formato, estructura, datos) y lo intento otra vez.`;
+    const assistant = await tx.message.create({
+      data: { chatId, role: 'ASSISTANT', content },
+    });
+    await tx.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
+    return { id: assistant.id, role: assistant.role, content: assistant.content, files: [] };
   });
-  await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
-  return { id: assistant.id, role: assistant.role, content: assistant.content, files: [] };
 }
 
 async function loadReferenceFiles(fileIds, userId) {
@@ -184,6 +195,77 @@ async function loadPreviousAssistantContentForExport(chatId, userId) {
   return findPreviousAssistantContent(chat?.messages || []);
 }
 
+function resolveDocumentIdempotencyKey(req) {
+  const bodyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  const headerValue = req.get?.('Idempotency-Key');
+  const headerKey = typeof headerValue === 'string' ? headerValue.trim() : '';
+  return { bodyKey, headerKey, key: bodyKey || headerKey || null };
+}
+
+function respondDocumentOperationOutcome(req, res, operation) {
+  if (operation.outcome === 'invalid_key') {
+    res.status(400).json({ error: 'Invalid idempotency key', code: 'INVALID_IDEMPOTENCY_KEY' });
+    return true;
+  }
+  if (operation.outcome === 'conflict') {
+    res.status(409).json({
+      error: 'Idempotency key already used with a different payload',
+      code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+    });
+    return true;
+  }
+  if (operation.outcome === 'in_progress') {
+    res.setHeader('Retry-After', '3');
+    res.status(409).json({
+      error: 'Document operation is already running',
+      code: 'DOCUMENT_OPERATION_IN_PROGRESS',
+    });
+    return true;
+  }
+  if (operation.outcome === 'replay') {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (operation.key) res.setHeader('X-Idempotency-Key-Echo', operation.key);
+    res.flushHeaders?.();
+    res.write(`data: ${JSON.stringify(buildDocumentReplayFrame(operation.result))}\n\n`);
+    res.end();
+    return true;
+  }
+  return false;
+}
+
+// Completed idempotent retries are reads, not new expensive generations. Probe
+// the durable result before charging plan quota; a new request still passes
+// through the normal quota middleware and atomically acquires its lease later.
+async function prepareDocumentReplay(req, res, next) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const { bodyKey, headerKey, key } = resolveDocumentIdempotencyKey(req);
+  if (bodyKey && headerKey && bodyKey !== headerKey) {
+    return res.status(400).json({
+      error: 'Idempotency keys in body and header must match',
+      code: 'INVALID_IDEMPOTENCY_KEY',
+    });
+  }
+  req.documentIdempotencyKey = key;
+  try {
+    const inspected = await inspectDocumentOperation({
+      userId: req.user.id,
+      route: 'doc.generate',
+      key,
+      body: req.body,
+    });
+    if (respondDocumentOperationOutcome(req, res, inspected)) return undefined;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+const documentPlanQuota = enforcePlanQuota({ surface: 'doc.generate' });
+
 router.post(
   '/generate',
   [
@@ -205,7 +287,10 @@ router.post(
     body('researchSources.*.title').optional().isString().trim().isLength({ min: 1, max: 320 }),
     body('researchSources.*.abstract').optional({ nullable: true }).isString().isLength({ max: 6000 }),
     body('researchSources.*.doi').optional({ nullable: true }).isString().isLength({ max: 220 }),
+    body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: 200 }),
   ],
+  prepareDocumentReplay,
+  documentPlanQuota,
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -213,14 +298,21 @@ router.post(
     const prompt = req.body.prompt.trim();
     const displayPrompt = (req.body.displayPrompt || prompt).trim();
     const { chatId } = req.body;
+    const operation = await beginDocumentOperation({
+      userId: req.user.id,
+      route: 'doc.generate',
+      key: req.documentIdempotencyKey || null,
+      body: req.body,
+    });
+    if (respondDocumentOperationOutcome(req, res, operation)) return undefined;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
+    if (operation.key) res.setHeader('X-Idempotency-Key-Echo', operation.key);
     res.flushHeaders();
     const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {} };
-
     const controller = new AbortController();
     let clientGone = false;
     res.on('close', () => {
@@ -233,7 +325,7 @@ router.post(
 
     send({ type: 'stage', label: 'Preparando generador', pct: 1 });
 
-    let content = null, file = null, format = null, errorMsg = null;
+    let content = null, file = null, format = null, errorMsg = null, publicError = null;
 
     try {
       const researchArtifact = normalizeResearchArtifactInput({
@@ -279,6 +371,12 @@ router.post(
         // así que encaminamos la pregunta por el canal de fallo para que el
         // texto llegue íntegro al usuario en vez de un "resultado vacío".
         errorMsg = preservedEdit.content;
+        publicError = {
+          code: 'clarification_required',
+          message: String(preservedEdit.content || ''),
+          error: String(preservedEdit.content || ''),
+          retryable: false,
+        };
       } else if (preservedEdit) {
         send({ type: 'stage', label: 'Conservando documento original', pct: 40 });
         content = preservedEdit.content;
@@ -330,13 +428,21 @@ router.post(
           for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
             if (clientGone) break;
             if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
-            if (ev.type === 'error') { errorMsg = ev.error; continue; }
+            if (ev.type === 'error') {
+              publicError = buildPublicStreamError(new Error(String(ev.error || 'document pipeline failed')), {
+                req,
+                surface: 'doc.generate',
+              });
+              errorMsg = publicError.message;
+              continue;
+            }
             send(ev);
           }
         }
       }
     } catch (err) {
-      errorMsg = err?.message || 'doc failed';
+      publicError = buildPublicStreamError(err, { req, surface: 'doc.generate' });
+      errorMsg = publicError.message;
     }
 
     clearInterval(heartbeat);
@@ -344,11 +450,47 @@ router.post(
     if (content && file && (file.url || file.dataUrl)) {
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
       let assistantMessage = null;
+      let persistenceError = null;
       if (chatId) {
-        try { assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content, file); }
-        catch (e) { console.error('[doc] persist success error:', e?.message); }
+        try {
+          assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content, file);
+          if (!assistantMessage) {
+            const missingChatError = new Error('document chat was not found during persistence');
+            missingChatError.code = 'PERSISTENCE_FAILED';
+            throw missingChatError;
+          }
+        } catch (error) {
+          const persistenceFailure = error || new Error('document persistence failed');
+          persistenceFailure.code = 'PERSISTENCE_FAILED';
+          persistenceError = buildPublicStreamError(persistenceFailure, {
+            req,
+            surface: 'doc.generate.persistence',
+          });
+          console.error('[doc] persist success error:', persistenceFailure?.message);
+          send({ type: 'warning', ...persistenceError });
+        }
       }
-      send({ type: 'final', content, file, format, assistantMessage });
+      if (operation.outcome === 'acquired') {
+        try {
+          if (persistenceError) {
+            await operation.fail();
+          } else {
+            await operation.complete({
+              chatId,
+              assistantMessageId: assistantMessage?.id || null,
+              content,
+              file,
+              format,
+            });
+          }
+        } catch (idempotencyError) {
+          console.warn('[doc] idempotency completion failed:', idempotencyError?.message || idempotencyError);
+        }
+      }
+      send({
+        type: 'final', content, file, format, assistantMessage,
+        ...(persistenceError ? { persistenceError } : {}),
+      });
     } else {
       const reason = errorMsg || 'resultado vacío';
       console.error('[doc] generation failed:', reason);
@@ -357,7 +499,21 @@ router.post(
         try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
         catch (e) { console.error('[doc] persist failure error:', e?.message); }
       }
-      send({ type: 'error', error: reason, assistantMessage });
+      if (operation.outcome === 'acquired') {
+        try { await operation.fail(); }
+        catch (idempotencyError) { console.warn('[doc] idempotency release failed:', idempotencyError?.message || idempotencyError); }
+      }
+      send({
+        type: 'error',
+        ...(publicError || {
+          code: 'document_generation_failed',
+          message: reason,
+          error: reason,
+          retryable: false,
+          ...(req.requestId ? { requestId: req.requestId } : {}),
+        }),
+        assistantMessage,
+      });
     }
 
     try { res.end(); } catch {}

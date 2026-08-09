@@ -124,7 +124,11 @@ function makeToolExecutors(sandbox) {
       if (r.stdout) parts.push(r.stdout);
       if (r.stderr) parts.push(`[stderr] ${r.stderr}`);
       parts.push(r.timedOut ? `[exit ${r.exitCode} — TIMED OUT]` : `[exit ${r.exitCode}]`);
-      return cap(parts.join('\n'));
+      const output = cap(parts.join('\n'));
+      if (r.aborted) return `ERROR: sandbox command aborted\n${output}`;
+      if (r.timedOut) return `ERROR: sandbox command timed out\n${output}`;
+      if (Number(r.exitCode) !== 0) return `ERROR: sandbox command failed\n${output}`;
+      return output;
     },
 
     async read_file(args) {

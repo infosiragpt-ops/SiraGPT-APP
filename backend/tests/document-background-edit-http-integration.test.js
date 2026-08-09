@@ -217,7 +217,11 @@ function installInMemoryPrisma() {
   patch(prisma.documentTable, 'findMany', async ({ where = {}, take } = {}) => (
     tables.filter((row) => !where.analysisId || row.analysisId === where.analysisId).slice(0, take || tables.length)
   ));
-  patch(prisma, '$transaction', async (operations) => Promise.all(operations));
+  patch(prisma, '$transaction', async (operationsOrCallback) => (
+    typeof operationsOrCallback === 'function'
+      ? operationsOrCallback(prisma)
+      : Promise.all(operationsOrCallback)
+  ));
 
   patch(prisma.generatedArtifact, 'findMany', async () => []);
   patch(prisma.message, 'findMany', async () => []);

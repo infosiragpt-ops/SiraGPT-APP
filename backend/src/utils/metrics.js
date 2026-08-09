@@ -239,6 +239,11 @@ registerGauge('siragpt_queue_probe_last_success_timestamp_seconds', {
   maxSeries: 20,
   suppressWhenEmpty: true,
 });
+registerCounter('siragpt_stream_failures_total', {
+  help: 'Sanitized streaming failures by bounded backend surface and stable public code',
+  labels: ['surface', 'code'],
+  maxSeries: 64,
+});
 registerGauge('siragpt_queue_probe_staleness_seconds', {
   help: 'Seconds elapsed since the last successful shared health probe for each physical queue',
   labels: ['queue'],

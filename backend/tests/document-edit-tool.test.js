@@ -20,7 +20,14 @@ const path = require('path');
 const ARTIFACT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-edit-artifacts-'));
 process.env.AGENT_ARTIFACT_DIR = ARTIFACT_DIR;
 
-const { buildDocumentEditTool, MAX_CALLS_PER_TURN, MAX_FILE_BYTES } = require('../src/services/agent-harness/tools/document-edit-tool');
+const {
+  buildDocumentEditTool,
+  MAX_CALLS_PER_TURN,
+  MAX_FILE_BYTES,
+  MAX_TOTAL_FILE_BYTES,
+  _documentEditBulkhead,
+  _reservedRowBytes,
+} = require('../src/services/agent-harness/tools/document-edit-tool');
 const { buildHarnessTools } = require('../src/services/agent-harness/run-agent-turn');
 
 // The tool now tries the in-process source-preserving editor BEFORE the
@@ -58,6 +65,83 @@ function baseCtx(overrides = {}) {
     ...overrides,
   };
 }
+
+test('aggregate byte guard rejects oversized batches before any editor or blob read', async () => {
+  let sourceEditorCalls = 0;
+  let blobReads = 0;
+  let sandboxCalls = 0;
+  const before = _documentEditBulkhead.snapshot();
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{
+      id: 'f1', userId: 'u1', size: MAX_TOTAL_FILE_BYTES + 1,
+      path: '/must/not/read.docx', originalName: 'grande.docx', filename: 'grande.docx',
+    }]),
+    fsImpl: { readFile: async () => { blobReads += 1; return Buffer.from('x'); } },
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => { sourceEditorCalls += 1; return null; },
+    },
+    runDocumentAgent: async () => { sandboxCalls += 1; return { outputs: [] }; },
+  });
+
+  const out = await tool.execute({ instruction: 'edita el documento completo' }, baseCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'total_files_too_large');
+  assert.equal(out.code, 'DOCUMENT_EDIT_TOTAL_BYTES_EXCEEDED');
+  assert.equal(sourceEditorCalls, 0);
+  assert.equal(blobReads, 0);
+  assert.equal(sandboxCalls, 0);
+  const after = _documentEditBulkhead.snapshot();
+  assert.equal(after.inFlight, before.inFlight);
+  assert.equal(after.tokensInFlight, before.tokensInFlight);
+});
+
+test('measured storage bytes reject a stale legacy size before the source-preserving editor reads it', async () => {
+  let sourceEditorCalls = 0;
+  let blobReads = 0;
+  let sandboxCalls = 0;
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{
+      id: 'f1', userId: 'u1', size: 1024,
+      path: '/legacy/oversized.docx', originalName: 'oversized.docx', filename: 'oversized.docx',
+    }]),
+    statSource: async () => ({ size: MAX_FILE_BYTES + 1 }),
+    fsImpl: { readFile: async () => { blobReads += 1; return Buffer.alloc(MAX_FILE_BYTES + 1); } },
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => { sourceEditorCalls += 1; return null; },
+    },
+    runDocumentAgent: async () => { sandboxCalls += 1; return { outputs: [] }; },
+  });
+
+  const out = await tool.execute({ instruction: 'edita este documento' }, baseCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'file_too_large');
+  assert.equal(out.code, 'DOCUMENT_EDIT_FILE_BYTES_EXCEEDED');
+  assert.equal(sourceEditorCalls, 0);
+  assert.equal(blobReads, 0);
+  assert.equal(sandboxCalls, 0);
+});
+
+test('legacy rows reserve the per-file maximum and release global admission on every return path', async () => {
+  assert.equal(
+    _reservedRowBytes([{}, {}, {}]),
+    Math.min(MAX_TOTAL_FILE_BYTES, 3 * MAX_FILE_BYTES),
+    'unknown legacy sizes must be reserved conservatively',
+  );
+
+  const p = tmpFileWith('x');
+  const before = _documentEditBulkhead.snapshot();
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a.docx' }]),
+    sourcePreservingEdit: SP_NULL,
+    runDocumentAgent: async () => ({ outputs: [], finalText: 'sin salida' }),
+  });
+  const out = await tool.execute({ instruction: 'edita este documento' }, baseCtx());
+  assert.equal(out.error, 'no_output');
+  const after = _documentEditBulkhead.snapshot();
+  assert.equal(after.inFlight, before.inFlight);
+  assert.equal(after.tokensInFlight, before.tokensInFlight);
+  fs.rmSync(p, { force: true });
+});
 
 test('happy path: ownership-scoped lookup, agent gets bytes, artifact card emitted', async () => {
   const inputPath = tmpFileWith('original-bytes');
@@ -143,7 +227,7 @@ test('error paths return ok:false without throwing', async () => {
   // file_blob_missing
   const t1 = buildDocumentEditTool({
     sourcePreservingEdit: SP_NULL,
-    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: '/does/not/exist', originalName: 'a.docx', filename: 'a' }]),
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', size: 128, path: '/does/not/exist', originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => ({ outputs: [] }),
   });
   const r1 = await t1.execute({ instruction: 'edita el documento' }, baseCtx());
@@ -376,8 +460,8 @@ test('in-process fast path emits and returns every source-preserving batch artif
   const second = makeResult('2');
   const tool = buildDocumentEditTool({
     prisma: fakePrisma([
-      { id: 'f1', userId: 'u1', path: '/not-read/uno.docx', originalName: 'uno.docx', filename: 'uno.docx' },
-      { id: 'f2', userId: 'u1', path: '/not-read/dos.docx', originalName: 'dos.docx', filename: 'dos.docx' },
+      { id: 'f1', userId: 'u1', size: 1024, path: '/not-read/uno.docx', originalName: 'uno.docx', filename: 'uno.docx' },
+      { id: 'f2', userId: 'u1', size: 1024, path: '/not-read/dos.docx', originalName: 'dos.docx', filename: 'dos.docx' },
     ]),
     sourcePreservingEdit: {
       tryGenerateSourcePreservingDocumentEdit: async () => ({
@@ -431,8 +515,8 @@ test('source-preserving fast path emits and returns only artifacts with validati
   const invalid = makeResult('invalid', { passed: false, ok: true, reason: 'title_not_changed' });
   const tool = buildDocumentEditTool({
     prisma: fakePrisma([
-      { id: 'fvalid', userId: 'u1', path: '/not-read/valid.docx', originalName: 'valid.docx', filename: 'valid.docx' },
-      { id: 'finvalid', userId: 'u1', path: '/not-read/invalid.docx', originalName: 'invalid.docx', filename: 'invalid.docx' },
+      { id: 'fvalid', userId: 'u1', size: 512, path: '/not-read/valid.docx', originalName: 'valid.docx', filename: 'valid.docx' },
+      { id: 'finvalid', userId: 'u1', size: 512, path: '/not-read/invalid.docx', originalName: 'invalid.docx', filename: 'invalid.docx' },
     ]),
     sourcePreservingEdit: {
       isSourcePreservingEditRequest: () => true,
@@ -477,7 +561,7 @@ test('source-preserving validation failure is terminal and never falls through t
       },
     },
     prisma: fakePrisma([
-      { id: 'f1', userId: 'u1', path: '/not-read/original.docx', originalName: 'original.docx', filename: 'original.docx' },
+      { id: 'f1', userId: 'u1', size: 900, path: '/not-read/original.docx', originalName: 'original.docx', filename: 'original.docx' },
     ]),
     sourcePreservingEdit: {
       isSourcePreservingEditRequest: () => true,
@@ -569,7 +653,7 @@ test('source-preserving target failures do not fall through to document regenera
   targetError.code = 'REPLACE_TEXT_NOT_FOUND';
 
   const tool = buildDocumentEditTool({
-    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: '/no/read/needed.docx', originalName: 'tesis.docx', filename: 'tesis.docx' }]),
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', size: 1024, path: '/no/read/needed.docx', originalName: 'tesis.docx', filename: 'tesis.docx' }]),
     sourcePreservingEdit: {
       isSourcePreservingEditRequest: () => true,
       tryGenerateSourcePreservingDocumentEdit: async () => { throw targetError; },
@@ -606,6 +690,7 @@ test('unresolved source-preserving intent fails closed without sandbox or a fals
     prisma: fakePrisma([{
       id: 'f1',
       userId: 'u1',
+      size: 1024,
       path: '/must/not/read/original.docx',
       originalName: 'original.docx',
       filename: 'original.docx',
@@ -705,6 +790,7 @@ test('sandbox path materializes r2: attachments instead of fs.readFile on the re
     prisma: fakePrisma([{
       id: 'f1',
       userId: 'u1',
+      size: 8,
       path: 'r2:uploads/u1/informe.docx',
       originalName: 'informe.docx',
       filename: 'informe.docx',
