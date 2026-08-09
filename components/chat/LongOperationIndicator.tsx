@@ -3,6 +3,7 @@
 import * as React from "react"
 import { X } from "lucide-react"
 
+import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 export interface LongOperationIndicatorProps {
@@ -53,14 +54,13 @@ export function LongOperationIndicator({
         </span>
       </div>
       {onCancel ? (
-        <button
-          type="button"
+        <AccessibleIconButton
+          label="Cancelar operación"
           onClick={onCancel}
-          className="ml-1 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="Cancelar operación"
+          className="ml-1"
         >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </AccessibleIconButton>
       ) : null}
     </div>
   )

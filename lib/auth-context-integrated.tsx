@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { apiClient } from "./api"
 import { devLog } from "./dev-log"
 import { clearAllChatDrafts } from "@/hooks/use-chat-draft"
+import { clearPersistedComposerQueues } from "@/lib/chat/composer-queue"
 
 interface User {
   id: string
@@ -290,8 +291,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSessionStatus("unauthenticated")
       apiClient.setToken(null)
       // Wipe any saved composer drafts so a different account on the
-      // same device cannot see the previous user's unsent chat text.
+      // same device cannot see the previous user's unsent chat text or tasks.
       clearAllChatDrafts()
+      clearPersistedComposerQueues()
     }
   }
 

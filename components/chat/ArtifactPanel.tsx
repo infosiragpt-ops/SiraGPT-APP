@@ -18,6 +18,7 @@ import {
   RefreshCw, FileCode, Download, ExternalLink, X, Eye, Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
+import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
 import dynamic from "next/dynamic"
 const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
@@ -31,18 +32,44 @@ const ShikiCodeView = dynamic(
  * focus on unmount. Body scroll is locked while the panel is mounted on
  * mobile so the underlying chat doesn't bleed through.
  */
+function useMobileDrawer(): boolean {
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return
+    const media = window.matchMedia("(max-width: 639px)")
+    const sync = () => setIsMobile(media.matches)
+    sync()
+    if (typeof media.addEventListener === "function") media.addEventListener("change", sync)
+    else media.addListener(sync)
+    return () => {
+      if (typeof media.removeEventListener === "function") media.removeEventListener("change", sync)
+      else media.removeListener(sync)
+    }
+  }, [])
+
+  return isMobile
+}
+
 function useDialogA11y(
   containerRef: React.RefObject<HTMLDivElement | null>,
   onClose: () => void,
+  isModal: boolean,
 ) {
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
+
   useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return
     const previouslyFocused = (typeof document !== "undefined"
       ? (document.activeElement as HTMLElement | null)
       : null)
 
-    // Move focus into the panel (first focusable, else the container itself)
     const node = containerRef.current
-    if (node) {
+    // The inline desktop split is part of the page, not a modal: do not steal
+    // focus, lock scrolling or trap Tab there. Those behaviours belong only
+    // to the full-screen mobile drawer.
+    if (isModal && node) {
       const focusable = node.querySelector<HTMLElement>(
         'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       )
@@ -50,18 +77,16 @@ function useDialogA11y(
     }
 
     // Lock body scroll (mobile drawer behavior)
-    const prevOverflow = typeof document !== "undefined" ? document.body.style.overflow : ""
-    if (typeof document !== "undefined") {
-      document.body.style.overflow = "hidden"
-    }
+    const prevOverflow = document.body.style.overflow
+    if (isModal) document.body.style.overflow = "hidden"
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation()
-        onClose()
+        closeRef.current()
         return
       }
-      if (e.key === "Tab" && node) {
+      if (isModal && e.key === "Tab" && node) {
         const focusables = Array.from(
           node.querySelectorAll<HTMLElement>(
             'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
@@ -84,17 +109,12 @@ function useDialogA11y(
 
     return () => {
       window.removeEventListener("keydown", onKey, true)
-      if (typeof document !== "undefined") {
-        document.body.style.overflow = prevOverflow
-      }
-      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+      if (isModal) document.body.style.overflow = prevOverflow
+      if (isModal && previouslyFocused && typeof previouslyFocused.focus === "function") {
         try { previouslyFocused.focus({ preventScroll: true }) } catch { /* noop */ }
       }
     }
-    // We intentionally only run this on mount/unmount — containerRef / onClose
-    // identity is stable enough for the lifetime of one open instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [containerRef, isModal])
 }
 
 function toFullDocument(code: string, language: string): string {
@@ -128,8 +148,9 @@ function ArtifactPanelMounted({
   const lang = (language || "").toLowerCase()
   const isMermaid = lang === "mermaid"
   const panelRef = useRef<HTMLDivElement | null>(null)
+  const isMobileDrawer = useMobileDrawer()
 
-  useDialogA11y(panelRef, close)
+  useDialogA11y(panelRef, close, isMobileDrawer)
 
   const srcDoc = useMemo(() => {
     if (isMermaid) return ""
@@ -183,19 +204,22 @@ function ArtifactPanelMounted({
     <>
       {/* Mobile backdrop — tap to close. Hidden on desktop where the
           split-pane handles layout instead of an overlay. */}
-      <div
-        aria-hidden="true"
-        data-focus-skip="true"
-        onClick={close}
-        className="fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px] sm:hidden"
-      />
+      {isMobileDrawer ? (
+        <div
+          aria-hidden="true"
+          data-focus-skip="true"
+          onClick={close}
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px]"
+        />
+      ) : null}
     <div
       ref={panelRef}
-      role="dialog"
-      aria-modal="true"
+      role={isMobileDrawer ? "dialog" : "region"}
+      aria-modal={isMobileDrawer ? true : undefined}
       aria-label={title || "Panel de artefacto"}
       tabIndex={-1}
       data-open="true"
+      data-presentation={isMobileDrawer ? "mobile-drawer" : "desktop-split"}
       className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 transition-transform duration-200 ease-out translate-x-full data-[open=true]:translate-x-0 sm:relative sm:inset-auto sm:z-auto sm:translate-x-0 sm:transition-none"
     >
       {/* Header */}
@@ -208,7 +232,7 @@ function ArtifactPanelMounted({
           <div className="mr-1 inline-flex rounded-full bg-muted p-0.5 text-xs font-medium">
             <button
               onClick={() => setView("preview")}
-              className={`grid h-6 w-14 place-items-center rounded-full transition-colors ${view === "preview" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+              className={`grid h-11 w-14 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 sm:h-7 ${view === "preview" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
                 }`}
               aria-pressed={view === "preview"}
             >
@@ -216,7 +240,7 @@ function ArtifactPanelMounted({
             </button>
             <button
               onClick={() => setView("code")}
-              className={`grid h-6 w-14 place-items-center rounded-full transition-colors ${view === "code" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+              className={`grid h-11 w-14 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 sm:h-7 ${view === "code" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
                 }`}
               aria-pressed={view === "code"}
             >
@@ -226,7 +250,7 @@ function ArtifactPanelMounted({
           <IconButton label="Reiniciar" onClick={onReset}><RefreshCw className="h-3.5 w-3.5" /></IconButton>
           <IconButton label="Descargar" onClick={onDownload}><Download className="h-3.5 w-3.5" /></IconButton>
           <IconButton label="Abrir en nueva pestaña" onClick={onOpenNewTab}><ExternalLink className="h-3.5 w-3.5" /></IconButton>
-          <IconButton label="Cerrar" onClick={close} large><X className="h-4 w-4" /></IconButton>
+          <IconButton label="Cerrar" onClick={close}><X className="h-4 w-4" aria-hidden="true" /></IconButton>
         </div>
       </div>
 
@@ -261,22 +285,14 @@ function ArtifactPanelMounted({
   )
 }
 
-function IconButton({ label, onClick, children, large = false }: { label: string; onClick: () => void; children: React.ReactNode; large?: boolean }) {
-  // `large` enlarges the touch target on mobile (h-10 w-10) while keeping
-  // the compact desktop size (h-8 w-8). Used for the close button so it
-  // meets the 44px touch-target guideline on small screens.
-  const sizeClass = large
-    ? "h-10 w-10 sm:h-8 sm:w-8"
-    : "h-8 w-8"
+function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
+    <AccessibleIconButton
       onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={`grid ${sizeClass} place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50`}
+      label={label}
     >
       {children}
-    </button>
+    </AccessibleIconButton>
   )
 }
 
