@@ -67,6 +67,18 @@
       "source": 1130718,
       "title": "undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives",
       "reason": "Advisory transitiva en el grafo de Next/npm (2026-08). Fix real requiere bump coordinado de undici/next en PR de dependencias."
+    },
+    {
+      "package": "nanoid",
+      "source": 1138810,
+      "title": "nanoid: non-secure generators can loop indefinitely with negative size",
+      "reason": "Advisory transitiva en nanoid 3/5 (2026-08); sin fix estable en la rama. Mantener excepción temporal hasta PR dedicado de bumps — no bloquea i18n."
+    },
+    {
+      "package": "nanoid",
+      "source": 1138813,
+      "title": "nanoid: custom generators can loop indefinitely when size is zero",
+      "reason": "Advisory transitiva en nanoid 3/5 (2026-08); sin fix estable en la rama. Mantener excepción temporal hasta PR dedicado de bumps — no bloquea i18n."
     }
   ]
 }
