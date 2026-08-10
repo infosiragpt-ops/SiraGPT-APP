@@ -11,22 +11,29 @@ import {
 
 describe("code autonomous starters", () => {
   it("offers distinct professional instructions through the real build pipeline", () => {
-    assert.equal(CODE_AUTONOMOUS_STARTERS.length, 3)
-    assert.equal(new Set(CODE_AUTONOMOUS_STARTERS.map((starter) => starter.id)).size, 3)
+    assert.equal(CODE_AUTONOMOUS_STARTERS.length, 6)
+    assert.equal(new Set(CODE_AUTONOMOUS_STARTERS.map((starter) => starter.id)).size, 6)
+
+    const fullStackStarters = CODE_AUTONOMOUS_STARTERS.filter(
+      (starter) => starter.id !== "api-backend",
+    )
 
     for (const starter of CODE_AUTONOMOUS_STARTERS) {
       assert.ok(starter.title.length > 3)
       assert.ok(starter.description.length > 12)
-      assert.match(starter.prompt, /frontend/i)
-      assert.match(starter.prompt, /backend/i)
       assert.match(starter.prompt, /pruebas/i)
-      assert.match(starter.prompt, /preview/i)
-      assert.match(starter.prompt, /React \+ Vite/i)
       assert.match(starter.prompt, /Express/i)
-      assert.match(starter.prompt, /SQLite/i)
       assert.match(starter.prompt, /máximo 4 horas y 120 pasos/i)
       assert.doesNotMatch(starter.prompt, /Next\.js/i)
       assert.doesNotMatch(starter.prompt, /sk-[a-z0-9_-]{12,}/i)
+    }
+
+    for (const starter of fullStackStarters) {
+      assert.match(starter.prompt, /frontend/i)
+      assert.match(starter.prompt, /backend/i)
+      assert.match(starter.prompt, /preview/i)
+      assert.match(starter.prompt, /React \+ Vite/i)
+      assert.match(starter.prompt, /SQLite/i)
     }
   })
 
