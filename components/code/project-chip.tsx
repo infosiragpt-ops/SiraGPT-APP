@@ -31,11 +31,11 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
   const [saving, setSaving] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
 
-  const name = activeFolder?.name?.trim() || "Proyecto"
+  const name = activeFolder?.name?.trim() || "Empresa"
 
   const startEdit = React.useCallback(() => {
     if (!activeFolder) {
-      toast.message("Crea o abre un proyecto para renombrarlo.")
+      toast.message("Crea o abre una empresa para renombrarla.")
       return
     }
     setDraft(activeFolder.name || "")
@@ -87,9 +87,9 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
           }}
           onBlur={() => void commit()}
           maxLength={120}
-          placeholder="Nombre del proyecto"
+          placeholder="Nombre de la empresa"
           className="min-w-0 flex-1 bg-transparent text-[12px] font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
-          aria-label="Renombrar proyecto"
+          aria-label="Renombrar empresa"
         />
         <button
           type="button"
@@ -144,7 +144,7 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
           <button
             type="button"
             className="flex h-6 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/60"
-            aria-label="Acciones del proyecto"
+            aria-label="Acciones de la empresa"
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
@@ -157,13 +157,13 @@ export function ProjectChip({ onOpenCode }: { onOpenCode?: () => void }) {
                 Sincronizado en la nube
               </span>
             ) : (
-              "Sin proyecto activo"
+              "Sin empresa activa"
             )}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="gap-2.5 rounded-lg text-sm" onClick={startEdit}>
             <Pencil className="h-4 w-4 text-muted-foreground" />
-            Renombrar proyecto
+            Renombrar empresa
           </DropdownMenuItem>
           {onOpenCode ? (
             <DropdownMenuItem className="gap-2.5 rounded-lg text-sm" onClick={onOpenCode}>
