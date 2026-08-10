@@ -18,8 +18,55 @@ import type {
   AgentGoal,
   AgentSignal,
   AgentState,
+  AgentTask,
   BuildErrorVerdict,
 } from "./types"
+
+// ---- persistent task tracking -----------------------------------------------
+
+let taskSeq = 0
+
+function generateTaskId(): string {
+  taskSeq += 1
+  return `task-${Date.now().toString(36)}-${taskSeq}`
+}
+
+export function createAgentTask(title: string, detail?: string, files?: string[]): AgentTask {
+  const now = Date.now()
+  return {
+    id: generateTaskId(),
+    title,
+    status: "pending",
+    detail,
+    files,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function updateAgentTask(
+  tasks: AgentTask[],
+  taskId: string,
+  patch: Partial<Pick<AgentTask, "status" | "detail" | "files" | "title">>,
+): AgentTask[] {
+  return tasks.map((task) =>
+    task.id === taskId
+      ? { ...task, ...patch, updatedAt: Date.now() }
+      : task,
+  )
+}
+
+export function addAgentTask(tasks: AgentTask[] | undefined, task: AgentTask): AgentTask[] {
+  return [...(tasks || []), task]
+}
+
+export function activeAgentTasks(tasks: AgentTask[] | undefined): AgentTask[] {
+  return (tasks || []).filter((task) => task.status === "in_progress" || task.status === "pending")
+}
+
+export function completedAgentTaskCount(tasks: AgentTask[] | undefined): number {
+  return (tasks || []).filter((task) => task.status === "completed").length
+}
 
 // ---- autonomous brief -------------------------------------------------------
 
@@ -56,7 +103,7 @@ function clean(text: string): string {
 }
 
 const BUILD_NOUN =
-  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma|juegos?|videojuegos?|games?|arcade|calculadora|quiz)\b/
+  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma|juegos?|videojuegos?|games?|arcade|calculadora|quiz|bot|api|servidor|backend|frontend|saas|crm|erp|pos|punto de venta|inventario|reserv[ao]|citas?|agenda|calendario|encuesta|formulario|landing page)\b/
 const BUILD_VERB =
   /\b(cre|cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|contr[uú]ye(?:me)?|contruir|costr[uú]ye(?:me)?|costruir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/
 const APP_GOAL_CUE =
@@ -548,6 +595,16 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "patch", instruction: text }
   }
 
+  // 7b) Multi-task instruction: user chains 2+ actions with "y luego", "después",
+  //   "también", "primero... luego...", "además". When the preview is already
+  //   running, treat each clause as a sequential patch instruction.
+  if (
+    state.phase === "preview"
+    && /\b(?:y luego|despues|despues de eso|tambien|ademas|primero.*luego|por otro lado|a continuacion|seguidamente)\b/i.test(normalizeCodeIntent(text))
+  ) {
+    return { type: "patch", instruction: text }
+  }
+
   if (
     (signal.mode === "app" || signal.mode === "build")
     && isCodeWriteRequest(text)
@@ -797,6 +854,78 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       arreglo:
         "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json`; el preview reintentará la instalación automáticamente. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
       siguientePaso: "Aplica el cambio; el preview reintentará automáticamente si es un proyecto Node, o se actualizará en vivo si es estático.",
+    }
+  }
+
+  // TypeScript compilation errors.
+  if (/TS\d{4}:|error TS\d{4}|Type error|Type '.*' is not assignable|Cannot find name '.*'|Property '.*' does not exist/i.test(text)) {
+    return {
+      matched: true,
+      category: "typescript_error",
+      diagnostico: "El compilador de TypeScript encontró un error de tipos.",
+      quePasaba: "Un archivo .ts/.tsx tiene un error de tipado: tipo incompatible, nombre no encontrado o propiedad inexistente.",
+      causaRaiz:
+        "El código generado tiene una inconsistencia de tipos: un import faltante, un tipo mal inferido, o una propiedad que no existe en la interfaz/type.",
+      arreglo:
+        "Corrige el archivo específico indicado en el error TS: añade el import faltante, ajusta el tipo, o usa el tipo correcto. Si es un `any` intencional, añade un comentario `// eslint-disable-next-line @typescript-eslint/no-explicit-any` y usa `as` con tipo correcto.",
+      siguientePaso: "Aplico el parche y reintento el build automáticamente.",
+    }
+  }
+
+  // Vite/Next config errors.
+  if (/ vite config|vite\.config|Invalid option|next\.config|ERR_UNSUPPORTED_ESM|ERR_REQUIRE_ESM/i.test(text)) {
+    return {
+      matched: true,
+      category: "config_error",
+      diagnostico: "Error de configuración del bundler (Vite/Next).",
+      quePasaba: "El archivo de configuración (vite.config.ts o next.config.mjs) tiene una opción inválida o sintaxis incorrecta.",
+      causaRaiz: "La configuración generada usa una API incompatible con la versión instalada del bundler.",
+      arreglo:
+        "Revisa vite.config.ts / next.config.mjs: usa solo opciones válidas para la versión instalada. Para Vite 7 con Tailwind v4, los plugins son `react()` y `tailwindcss()` importados de `@vitejs/plugin-react` y `@tailwindcss/vite` respectivamente. NO uses `postcss.config.js` ni `tailwind.config.js` con Tailwind v4.",
+      siguientePaso: "Corrijo la configuración y reintento el build.",
+    }
+  }
+
+  // Port already in use.
+  if (/EADDRINUSE|port.*already.*in.*use|Port \d+ is already in use/i.test(text)) {
+    return {
+      matched: true,
+      category: "port_in_use",
+      diagnostico: "El puerto del dev server ya está en uso.",
+      quePasaba: "Otro proceso (o un dev server anterior que no terminó) ocupa el puerto que el preview intenta usar.",
+      causaRaiz: "Un proceso zombie del preview anterior no liberó el puerto.",
+      arreglo:
+        "El sistema debe matar el proceso anterior y reintentar. Si persiste, cambiar el puerto en vite.config.ts (server.port) o next.config.mjs.",
+      siguientePaso: "Termino el proceso anterior y reintento automáticamente.",
+    }
+  }
+
+  // ESLint / linting errors that block the build.
+  if (/ESLint|eslint.*error|Parsing error|Unexpected token|SyntaxError/i.test(text)) {
+    return {
+      matched: true,
+      category: "syntax_lint_error",
+      diagnostico: "Error de sintaxis o lint que bloquea el build.",
+      quePasaba: "Un archivo tiene un error de sintaxis (token inesperado, JSX mal formado) o un error de ESLint configurado como error.",
+      causaRaiz: "El código generado tiene un typo, un JSX mal cerrado, o un import sin uso que ESLint rechaza.",
+      arreglo:
+        "Corrige la sintaxis en el archivo indicado: cierra todas las etiquetas JSX, verifica comas y llaves, y elimina imports sin uso. Si ESLint es muy estricto, ajusta la regla a `warn` en `.eslintrc` o añade `// eslint-disable-next-line` con justificación.",
+      siguientePaso: "Corrijo la sintaxis y reintento el build.",
+    }
+  }
+
+  // CSS/Tailwind compilation errors.
+  if (/PostCSS|tailwind|@apply|unknown utility|Cannot apply unknown utility/i.test(text)) {
+    return {
+      matched: true,
+      category: "css_tailwind_error",
+      diagnostico: "Error de compilación CSS/Tailwind.",
+      quePasaba: "Tailwind o PostCSS no puede procesar una directiva o utility class.",
+      causaRaiz:
+        "Con Tailwind v4, las directivas v3 (`@tailwind base/components/utilities`) están prohibidas. Se usa `@import \"tailwindcss\"` y `@theme inline`.",
+      arreglo:
+        "En Tailwind v4: reemplaza `@tailwind base; @tailwind components; @tailwind utilities;` por `@import \"tailwindcss\";`. Elimina `tailwind.config.js` y `postcss.config.js` si existen. Usa `@tailwindcss/vite` como plugin en vite.config.ts. Si usas `@apply`, verifica que la utility exista en Tailwind v4.",
+      siguientePaso: "Corrijo el CSS y reintento el build.",
     }
   }
 

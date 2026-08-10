@@ -12,6 +12,21 @@ export type AgentPhase = "idle" | "intake" | "generating" | "preview" | "debuggi
 
 export type AgentGoal = "landing" | "app"
 
+/** A persistent task the agent tracks across multiple turns. */
+export type AgentTask = {
+  id: string
+  title: string
+  status: "pending" | "in_progress" | "completed" | "blocked"
+  /** Brief description of what this task involves. */
+  detail?: string
+  /** Files affected by this task. */
+  files?: string[]
+  /** Timestamp (ms) when the task was created. */
+  createdAt: number
+  /** Timestamp (ms) when the task was last updated. */
+  updatedAt: number
+}
+
 /** Context accumulated during the intake gate (slot-filling, goal-adaptive). */
 export interface AgentBuildContext {
   goal: AgentGoal
@@ -38,6 +53,8 @@ export interface AgentState {
   lastError?: string
   /** Which tier produced the last generation. */
   generator?: "llm" | "deterministic"
+  /** Persistent task list the agent tracks across turns. */
+  tasks?: AgentTask[]
 }
 
 export function defaultAgentState(): AgentState {

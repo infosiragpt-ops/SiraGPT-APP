@@ -21,7 +21,7 @@ export type CodeAgentRequestDetail = {
 }
 
 export type CodeAutonomousStarter = {
-  id: "ai-platform" | "business-os" | "custom-product"
+  id: "ai-platform" | "business-os" | "custom-product" | "ecommerce-store" | "analytics-dashboard" | "api-backend"
   title: string
   description: string
   meta: string
@@ -60,6 +60,39 @@ export const CODE_AUTONOMOUS_STARTERS: readonly CodeAutonomousStarter[] = [
       "Construye un centro de soporte SaaS con IA full-stack profesional y completamente navegable.",
       "Usa frontend React + Vite + TypeScript, backend/API Express y SQLite. Incluye inbox multicanal simulado, tickets con estados, prioridades y responsables, clientes, base de conocimiento, búsqueda, respuestas asistidas mediante un adaptador de IA, automatizaciones, métricas, autenticación local, RBAC, auditoría, datos demo y estados loading/empty/error.",
       "Añade validación, límites, pruebas, Docker y documentación para desplegar el backend por separado y migrar a PostgreSQL. Divide el trabajo entre especialistas lógicos, integra de forma segura y deja evidencia de los checks y un preview funcional. Ejecuta de forma autónoma dentro del presupuesto de la corrida (máximo 4 horas y 120 pasos). Usa placeholders para secretos y no copies marcas ni interfaces de terceros.",
+    ].join("\n\n"),
+  },
+  {
+    id: "ecommerce-store",
+    title: "Tienda online",
+    description: "Catálogo, carrito, checkout, inventario y panel de administración.",
+    meta: "E-commerce · Pagos · Inventario",
+    prompt: [
+      "Construye una tienda online e-commerce full-stack profesional y completamente funcional.",
+      "Usa frontend React + Vite + TypeScript, backend/API Express y SQLite. Incluye catálogo de productos con búsqueda y filtros, categorías, vista de detalle, carrito de compras persistente, flujo de checkout simulado (pasos: envío → pago → confirmación), gestión de inventario, panel de administración con CRUD de productos, pedidos y clientes, métricas de ventas, autenticación local con roles (cliente vs admin), datos demo realistas y estados loading/empty/error.",
+      "Añade validación de formularios, límites de stock, pruebas, Docker y documentación para desplegar el backend por separado y migrar a PostgreSQL. Trabaja de forma autónoma dentro del presupuesto de la corrida (máximo 4 horas y 120 pasos): verifica tipos, arranca el servidor, revisa el preview y corrige errores antes de entregar. Usa placeholders para secretos y no copies marcas ni interfaces de terceros.",
+    ].join("\n\n"),
+  },
+  {
+    id: "analytics-dashboard",
+    title: "Dashboard analítico",
+    description: "Métricas en tiempo real, gráficos, segmentación y reportes exportables.",
+    meta: "Dashboard · Charts · Data",
+    prompt: [
+      "Construye un dashboard analítico full-stack profesional con visualizaciones interactivas.",
+      "Usa frontend React + Vite + TypeScript, backend/API Express y SQLite. Incluye dashboard principal con KPI cards, gráficos de líneas/barras/donut (usa recharts o una librería ligera), tabla de datos con ordenamiento y filtros, segmentación por rango de fechas, exportación a CSV/JSON, métricas en tiempo real (simuladas con intervalos), panel de configuración, autenticación local, datos demo coherentes y estados loading/empty/error.",
+      "Añade validación, pruebas, Docker y documentación. Trabaja de forma autónoma dentro del presupuesto de la corrida (máximo 4 horas y 120 pasos): verifica tipos, arranca el servidor, revisa el preview y corrige errores antes de entregar. Usa placeholders para secretos.",
+    ].join("\n\n"),
+  },
+  {
+    id: "api-backend",
+    title: "API REST completa",
+    description: "Backend con autenticación, CRUD, validación, rate limiting y documentación.",
+    meta: "API · Backend · OpenAPI",
+    prompt: [
+      "Construye una API REST profesional completa con Express + TypeScript + SQLite.",
+      "Incluye autenticación JWT con refresh tokens, middleware de validación (Zod o similar), rate limiting por IP y por usuario, CORS configurable, CRUD completo para al menos 3 entidades relacionadas, paginación y filtros, manejo centralizado de errores, logging estructurado, documentación OpenAPI/Swagger autogenerada, seed con datos demo, pruebas de integración con supertest, Docker y un README con instrucciones de despliegue.",
+      "Asegura que todos los endpoints respondan correctamente, los tests pasen y la documentación Swagger sea navegable. Trabaja de forma autónoma dentro del presupuesto de la corrida (máximo 4 horas y 120 pasos): verifica tipos, arranca el servidor, ejecuta los tests y corrige errores antes de entregar. Usa placeholders para secretos.",
     ].join("\n\n"),
   },
 ] as const
