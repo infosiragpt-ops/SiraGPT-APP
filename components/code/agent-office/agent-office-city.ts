@@ -592,20 +592,20 @@ export function addEdgeDistrict({
   const streetLightGlows: BoxInstance[] = []
   const streetLightPools: PlaneInstance[] = []
 
-  const landmarkDark = night ? 0x243b49 : 0x244b5b
-  const landmarkMid = night ? 0x315467 : 0x3e6d7c
-  const landmarkLight = night ? 0x426b7d : 0x5b8995
-  const lowerHeight = 3.8
-  const middleBottom = groundY + 3
-  const middleTop = -2.35
-  const upperBottom = -3.05
-  const upperTop = -0.22
-  const lowerWidth = totalWidth + 14
-  const lowerDepth = totalDepth + 14
-  const middleWidth = totalWidth + 10
-  const middleDepth = totalDepth + 10
-  const upperWidth = totalWidth + 7
-  const upperDepth = totalDepth + 7
+  const landmarkDark = night ? 0x1a3543 : 0x1c4053
+  const landmarkMid = night ? 0x2a5369 : 0x356a7d
+  const landmarkLight = night ? 0x3d7589 : 0x4a92a4
+  const lowerHeight = 5.2
+  const middleBottom = groundY + 4
+  const middleTop = -1.85
+  const upperBottom = -2.55
+  const upperTop = 0.48
+  const lowerWidth = totalWidth + 22
+  const lowerDepth = totalDepth + 22
+  const middleWidth = totalWidth + 16
+  const middleDepth = totalDepth + 16
+  const upperWidth = totalWidth + 11
+  const upperDepth = totalDepth + 11
 
   structureInstances.push(
     {
@@ -625,7 +625,7 @@ export function addEdgeDistrict({
     },
   )
 
-  const secondaryCount = variant === "full" ? 38 : 18
+  const secondaryCount = variant === "full" ? 52 : 22
   const normalizedLots: Array<[number, number]> = [
     [-0.54, -0.64],
     [0, -0.76],
@@ -666,12 +666,27 @@ export function addEdgeDistrict({
     [1.08, 0.48],
     [-0.18, -0.68],
     [0.18, -0.68],
+    // Additional dense CBD lots for modern skyline
+    [-0.66, -0.78],
+    [0.66, -0.78],
+    [-1.16, -0.68],
+    [1.16, -0.68],
+    [-0.38, -0.44],
+    [0.38, -0.44],
+    [-0.92, -0.12],
+    [0.92, -0.12],
+    [-0.72, 0.56],
+    [0.72, 0.56],
+    [-0.12, -0.52],
+    [0.12, -0.52],
+    [-1.18, 0.36],
+    [1.18, 0.36],
   ]
   // Cooler silver/graphite corporate palette (modern glass district).
-  const dayBuildingColors = [0x5a727c, 0x3d6878, 0x7a9096, 0x2f5868, 0x6e787c, 0x51636d, 0x4a6a78]
-  const nightBuildingColors = [0x152833, 0x1a3544, 0x243a46, 0x122838, 0x2c3d48, 0x2a2834, 0x1c2f3c]
-  const dayGlassColors = [0x92c8d6, 0x78b4c6, 0xb0d4dc, 0x6fa0b0, 0xa4d0da]
-  const nightGlassColors = [0x154458, 0x1a5870, 0x245868, 0x1e3f52, 0x2a5062]
+  const dayBuildingColors = [0x6a8290, 0x487084, 0x8a9ca6, 0x3a6478, 0x788490, 0x5e7280, 0x567284, 0x426880, 0x728698]
+  const nightBuildingColors = [0x182e3c, 0x1e3a4c, 0x283e4e, 0x152c3c, 0x304554, 0x2a2c3a, 0x1e3444, 0x16304a, 0x243848]
+  const dayGlassColors = [0xa4d8e6, 0x88c4d6, 0xc0e0e8, 0x7ab0c4, 0xb8e0ec, 0x9cd2e2, 0x6ca0c2]
+  const nightGlassColors = [0x1a5068, 0x205a78, 0x286080, 0x224258, 0x2e586e, 0x185070, 0x1e4868]
   const secondaryBuildings: Building[] = []
   let signatureTowerCount = 0
   let architecturalCrownCount = 0
@@ -685,19 +700,19 @@ export function addEdgeDistrict({
     const foregroundPenalty = normalizedZ > 0.2 ? 6.8 : 0
     const skylineBoost =
       normalizedZ < -0.58
-        ? 18 + random() * 28
+        ? 26 + random() * 36
         : normalizedZ < -0.25
-          ? 11 + random() * 20
+          ? 16 + random() * 26
         : normalizedZ < 0.2
-          ? 5 + random() * 11
+          ? 8 + random() * 14
           : 0
     const height = Math.max(
-      9.2,
-      11.5 + random() * 12 + skylineBoost - foregroundPenalty,
+      11,
+      14 + random() * 14 + skylineBoost - foregroundPenalty,
     )
-    const slenderness = height > 40 ? 0.72 : height > 30 ? 0.84 : 1
+    const slenderness = height > 48 ? 0.68 : height > 36 ? 0.78 : height > 26 ? 0.88 : 1
     const width = lotWidth * slenderness
-    const depth = lotDepth * (height > 38 ? 0.82 : 1)
+    const depth = lotDepth * (height > 42 ? 0.8 : 1)
     const x = normalizedX * districtHalfWidth + (random() - 0.5) * 2.2
     const z = normalizedZ * districtHalfDepth + (random() - 0.5) * 2
     const palette = night ? nightBuildingColors : dayBuildingColors
@@ -909,7 +924,7 @@ export function addEdgeDistrict({
     z: 0,
     width: lowerWidth,
     depth: lowerDepth,
-    height: upperTop - groundY,
+    height: upperTop - groundY + 2.5,
     color: landmarkLight,
   }
   addFacadeWindows(facadeWindows, landmarkFacade, groundY, variant, random, night)
@@ -1091,7 +1106,7 @@ export function addEdgeDistrict({
   atrium.userData.agentOfficeEnvironment = "edge-district"
   scene.add(atrium)
 
-  const deckWidth = totalWidth + 8
+  const deckWidth = totalWidth + 14
   const deckInnerZ = totalDepth / 2 + 1.1
   const deckOuterZ = totalDepth / 2 + 7
   const deckPoints: Array<[number, number]> = [
@@ -1769,8 +1784,8 @@ export function addEdgeDistrict({
 
   const baseDistance =
     variant === "thumbnail"
-      ? Math.max(38, totalWidth * 1.08, totalDepth * 1.2)
-      : Math.max(42, totalWidth * 1.1, totalDepth * 1.24)
+      ? Math.max(44, totalWidth * 1.22, totalDepth * 1.34)
+      : Math.max(50, totalWidth * 1.28, totalDepth * 1.4)
   const landscapeDistance = variant === "thumbnail" ? baseDistance * 0.94 : baseDistance
   const portraitDistance = landscapeDistance * (variant === "thumbnail" ? 1.2 : 1.42)
 
@@ -1793,21 +1808,21 @@ export function addEdgeDistrict({
       trees: treeInstances.length,
       vehicles: vehicleRoutes.length,
       lightFixtures: streetLightGlows.length,
-      expectedDrawCalls: night ? 24 : 23,
+      expectedDrawCalls: night ? 26 : 25,
     },
     framing: {
       target: new THREE.Vector3(
         0,
-        variant === "thumbnail" ? 0.45 : 0.9,
-        -totalDepth * 0.12,
+        variant === "thumbnail" ? 0.65 : 1.4,
+        -totalDepth * 0.1,
       ),
       yaw: variant === "thumbnail" ? -0.64 : -0.58,
-      pitch: variant === "thumbnail" ? 0.39 : 0.32,
+      pitch: variant === "thumbnail" ? 0.42 : 0.36,
       distance: landscapeDistance,
       landscapeDistance,
       portraitDistance,
-      minDistance: 14,
-      maxDistance: 132,
+      minDistance: 16,
+      maxDistance: 152,
       groundY,
       officeY,
       districtWidth: districtHalfWidth * 2,

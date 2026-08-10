@@ -32,17 +32,17 @@ describe("agent office Edge District", () => {
       variant: "full",
     })
 
-    // secondaryCount full = 38 → landmark + secondaries = 39 denser modern CBD.
-    expect(district.counts.buildings).toBe(39)
-    expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(6)
-    expect(district.counts.architecturalCrowns).toBeGreaterThanOrEqual(12)
+    // secondaryCount full = 52 → landmark + secondaries = 53 denser modern CBD.
+    expect(district.counts.buildings).toBe(53)
+    expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(8)
+    expect(district.counts.architecturalCrowns).toBeGreaterThanOrEqual(16)
     // 2 glass planes per secondary (+ optional sky-bridge panes).
-    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(76)
-    expect(district.counts.glassFacades).toBeLessThanOrEqual(81)
-    expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(20)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(44)
-    expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(24)
-    expect(district.counts.windows).toBeGreaterThanOrEqual(1_500)
+    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(104)
+    expect(district.counts.glassFacades).toBeLessThanOrEqual(112)
+    expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(24)
+    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(55)
+    expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
+    expect(district.counts.windows).toBeGreaterThanOrEqual(2_000)
 
     dispose(scene)
   })
@@ -60,11 +60,11 @@ describe("agent office Edge District", () => {
       variant: "thumbnail",
     })
 
-    // secondaryCount thumbnail = 18 → landmark + secondaries = 19.
-    expect(district.counts.buildings).toBe(19)
-    expect(district.counts.glassFacades).toBe(36)
+    // secondaryCount thumbnail = 22 → landmark + secondaries = 23.
+    expect(district.counts.buildings).toBe(23)
+    expect(district.counts.glassFacades).toBe(44)
     expect(district.counts.vehicles).toBe(4)
-    expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(24)
+    expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
 
     dispose(scene)
   })
