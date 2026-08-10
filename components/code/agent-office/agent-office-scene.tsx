@@ -399,12 +399,13 @@ function addWorker({
   group.position.set(x, 0, z + 1.15)
   group.rotation.y = Math.PI
 
-  const bodyMaterial = material(ACTIVITY_COLORS[worker.activity], 0.68)
-  const skinTones = [0xf0c59b, 0xd9a06f, 0xb97745, 0x7d4d2d]
-  const skinMaterial = material(skinTones[workerIndex % skinTones.length], 0.76)
-  const trousersMaterial = material(workerIndex % 2 === 0 ? 0x26384a : 0x35313f, 0.8)
-  const shoeMaterial = material(0x17191e, 0.88)
-  const hairMaterial = material(workerIndex % 3 === 0 ? 0x171717 : 0x4b342b, 0.9)
+  const bodyMaterial = material(ACTIVITY_COLORS[worker.activity], 0.58, 0.08)
+  const skinTones = [0xf0c59b, 0xd9a06f, 0xb97745, 0x7d4d2d, 0xc9a580, 0xa07050]
+  const skinMaterial = material(skinTones[workerIndex % skinTones.length], 0.72, 0.04)
+  const trousersMaterial = material(workerIndex % 2 === 0 ? 0x26384a : 0x35313f, 0.78, 0.06)
+  const shoeMaterial = material(0x17191e, 0.84, 0.12)
+  const hairColors = [0x171717, 0x4b342b, 0x6b5040, 0x8a6a4a, 0x2a2a2a, 0x5a3a20]
+  const hairMaterial = material(hairColors[workerIndex % hairColors.length], 0.88, 0.02)
 
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.5, 6, 12), bodyMaterial)
   body.position.y = 1.23
@@ -431,15 +432,22 @@ function addWorker({
   neck.position.y = 1.68
   group.add(neck)
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 14, 10), skinMaterial)
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 18, 14), skinMaterial)
   head.position.y = 1.82
   group.add(head)
 
-  const eyeMaterial = material(0x111827, 0.82)
+  const eyeMaterial = material(0x111827, 0.78, 0.06)
   for (const eyeX of [-0.075, 0.075]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 6), eyeMaterial)
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 8), eyeMaterial)
     eye.position.set(eyeX, 1.85, 0.215)
     group.add(eye)
+    const eyeWhite = new THREE.Mesh(
+      new THREE.SphereGeometry(0.034, 10, 8),
+      material(0xf0f4f8, 0.4, 0.02),
+    )
+    eyeWhite.position.set(eyeX, 1.85, 0.21)
+    eyeWhite.scale.set(1, 0.7, 0.5)
+    group.add(eyeWhite)
   }
 
   const hair = new THREE.Mesh(
@@ -1261,8 +1269,9 @@ export function AgentOfficeScene({
           const x = oceanPosition.getX(index)
           const depth = oceanBase[index]
           const wave =
-            Math.sin(elapsed * 0.72 + x * 0.11 + depth * 0.07) * 0.12 +
-            Math.sin(elapsed * 0.43 - x * 0.05 + depth * 0.14) * 0.07
+            Math.sin(elapsed * 0.72 + x * 0.11 + depth * 0.07) * 0.22 +
+            Math.sin(elapsed * 0.43 - x * 0.05 + depth * 0.14) * 0.14 +
+            Math.sin(elapsed * 1.1 + x * 0.18 + depth * 0.09) * 0.06
           oceanPosition.setZ(index, wave)
         }
         oceanPosition.needsUpdate = true
