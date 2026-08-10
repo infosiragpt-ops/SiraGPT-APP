@@ -3941,7 +3941,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptRatingNote, gptReport]);
 
   const project = currentChat?.project;
-  const projectName = project?.name || String(currentChat?.title || "Proyecto").replace(/^Chat in\s+/i, "");
+  const projectName = project?.name || String(currentChat?.title || "Empresa").replace(/^Chat in\s+/i, "");
   const activeProjectModelName = currentChat?.model || selectedModel;
   const selectedProjectModel = React.useMemo(() => {
     return availableModels.find((m: any) => m.name === activeProjectModelName);
@@ -3962,9 +3962,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo del proyecto actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo de la empresa actualizado: ${model.displayName || model.name}`);
     } catch {
-      toast.error("No se pudo actualizar el modelo del proyecto");
+      toast.error("No se pudo actualizar el modelo de la empresa");
     }
   }, [currentChat?.id, setCurrentChat, setSelectedModel, setSelectedProvider]);
 
@@ -3986,11 +3986,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       });
       const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, request);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat del proyecto");
+      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat de la empresa");
       localStorage.setItem("currentChatId", data.chat.id);
       window.location.href = `/chat?id=${data.chat.id}`;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat del proyecto");
+      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat de la empresa");
     }
   }, [currentChat?.project?.id, currentChat?.projectId, projectName, activeProjectModelName]);
 
@@ -3998,8 +3998,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const projectId = currentChat?.project?.id || currentChat?.projectId;
     if (!projectId) return;
     const r = await copyTextSafe(`${window.location.origin}/projects/${projectId}`);
-    if (r.ok) toast.success("Enlace del proyecto copiado");
-    else toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
+    if (r.ok) toast.success("Enlace de la empresa copiado");
+    else toast.error("No se pudo copiar el enlace de la empresa. Cópialo manualmente.");
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
   const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
@@ -4149,7 +4149,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="gpt-model-submenu model-picker-content w-[min(calc(100vw-1.25rem),20rem)] max-h-[min(70dvh,28rem)] overflow-hidden rounded-2xl p-1.5">
                   <div className="gpt-model-submenu-title relative z-10 px-2.5 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-neutral-500 dark:text-muted-foreground">
-                    Modelos disponibles para este proyecto
+                    Modelos disponibles para esta empresa
                   </div>
                   <ScrollArea className="gpt-model-submenu-scroll relative z-10 h-[min(58dvh,22rem)] pr-1">
                     {gptModelsByProvider.length > 0 ? (
@@ -4204,7 +4204,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewProjectChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <PenSquare className="mr-3 h-5 w-5" />
-              Nuevo chat en proyecto
+              Nuevo chat en empresa
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setProjectDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <Info className="mr-3 h-5 w-5" />
@@ -4219,7 +4219,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               className="h-12 rounded-2xl px-3 text-[15px]"
             >
               <FolderOpen className="mr-3 h-5 w-5" />
-              Abrir proyecto
+              Abrir empresa
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyProjectLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <Link2 className="mr-3 h-5 w-5" />
@@ -4233,7 +4233,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <DialogHeader>
               <DialogTitle>{projectName}</DialogTitle>
               <DialogDescription>
-                Este chat usa instrucciones, archivos, documentos y memoria aislados del proyecto.
+                Este chat usa instrucciones, archivos, documentos y memoria aislados de la empresa.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 text-sm">
@@ -4262,7 +4262,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               <Button variant="outline" onClick={() => setProjectDialog(null)}>Cerrar</Button>
               {(currentChat?.project?.id || currentChat?.projectId) && (
                 <Button onClick={() => { window.location.href = `/projects/${currentChat?.project?.id || currentChat?.projectId}` }}>
-                  Abrir proyecto
+                  Abrir empresa
                 </Button>
               )}
             </DialogFooter>

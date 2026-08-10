@@ -34,8 +34,8 @@
     "code": "Code"
   },
   "projects": {
-    "title": "Projects",
-    "newProject": "New project",
+    "title": "Unternehmen",
+    "newProject": "Neues Unternehmen",
     "searchPlaceholder": "Search projects…",
     "sortBy": "Sort by",
     "sort": {

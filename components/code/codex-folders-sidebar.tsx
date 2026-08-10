@@ -194,11 +194,11 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
     async (node: WorkspaceTreeNode) => {
       const isCloud = node.kind === "project"
       const message = isCloud
-        ? `¿Mover el proyecto "${node.name}" a Papelera? Podrás restaurarlo desde Empresas durante 30 días.`
-        : `¿Quitar la carpeta "${node.name}" de tus proyectos? No se borra ningún archivo de tu disco.`
+        ? `¿Mover la empresa "${node.name}" a Papelera? Podrás restaurarla desde Empresas durante 30 días.`
+        : `¿Quitar la carpeta "${node.name}" de tus empresas? No se borra ningún archivo de tu disco.`
       if (typeof window !== "undefined" && !window.confirm(message)) return
       if (isCloud && typeof window !== "undefined") {
-        const typed = window.prompt(`Para confirmar, escribe el nombre exacto del proyecto: ${node.name}`)
+        const typed = window.prompt(`Para confirmar, escribe el nombre exacto de la empresa: ${node.name}`)
         if (typed?.trim() !== node.name) return
       }
       try {
@@ -214,9 +214,9 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
           return next
         })
         await refresh()
-        toast.success(isCloud ? `Proyecto "${node.name}" movido a Papelera.` : `Carpeta "${node.name}" quitada.`)
+        toast.success(isCloud ? `Empresa "${node.name}" movida a Papelera.` : `Carpeta "${node.name}" quitada.`)
       } catch (err: any) {
-        toast.error(err?.message || "No se pudo eliminar el proyecto")
+        toast.error(err?.message || "No se pudo eliminar la empresa")
       }
     },
     [forgetWorkspace, refresh],
@@ -231,7 +231,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
           const updated = await projectsService.update(node.chatListId, { name: clean })
           setProjects((prev) => prev.map((project) => (project.id === updated.id ? { ...project, ...updated } : project)))
           upsertCodexProject({ id: node.id, name: updated.name, kind: "project" })
-          toast.success("Proyecto renombrado.")
+          toast.success("Empresa renombrada.")
           return
         }
 
@@ -243,7 +243,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
           toast.success("Carpeta renombrada en APPS.")
         }
       } catch (err: any) {
-        toast.error(err?.message || "No se pudo cambiar el nombre del proyecto")
+        toast.error(err?.message || "No se pudo cambiar el nombre de la empresa")
       }
     },
     [],
@@ -252,7 +252,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
   const handleToggleWorkspacePin = React.useCallback(
     async (node: WorkspaceTreeNode) => {
       if (node.kind !== "project") {
-        toast.info("Las carpetas locales se ordenan por uso reciente; los proyectos cloud sí se pueden anclar.")
+        toast.info("Las carpetas locales se ordenan por uso reciente; las empresas cloud sí se pueden anclar.")
         return
       }
 
@@ -265,7 +265,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
       )
       try {
         await projectsService.update(node.chatListId, { isStarred: nextPinned })
-        toast.success(nextPinned ? "Proyecto anclado." : "Proyecto desanclado.")
+        toast.success(nextPinned ? "Empresa anclada." : "Empresa desanclada.")
       } catch (err: any) {
         setProjects((prev) =>
           prev.map((project) =>
@@ -284,7 +284,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
       toast.info(
         node.kind === "local-folder"
           ? "Carpeta abierta en APPS. Mostrarla en Finder requiere permisos nativos del navegador."
-          : "Proyecto abierto. Para verlo en Finder primero crea o enlaza un worktree local.",
+          : "Empresa abierta. Para verla en Finder primero crea o enlaza un worktree local.",
       )
     },
     [handleOpenWorkspace],

@@ -181,7 +181,7 @@ export function ProjectInviteDialog({ open, onOpenChange }: Props) {
 
         <form onSubmit={handleSubmit} className="space-y-4 px-5 py-4">
           <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Proyecto</p>
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Empresa</p>
             <p className="mt-0.5 truncate text-sm font-medium">{workspaceName}</p>
           </div>
 

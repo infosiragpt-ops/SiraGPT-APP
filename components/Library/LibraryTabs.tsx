@@ -336,14 +336,14 @@ const MediaLibrary: React.FC = () => {
                         key={`project-${project.id}`}
                         className="library-card group cursor-pointer aspect-square"
                         onClick={() => router.push(`/projects/${project.id}`)}
-                        title={`Abrir proyecto: ${project.name}`}
+                        title={`Abrir empresa: ${project.name}`}
                     >
                         <div className="flex flex-col items-center justify-center w-full h-full p-3 text-center gap-2">
                             <div className="library-card-badge"><Globe className="w-7 h-7" /></div>
                             <p className="library-card-title" title={project.name}>
                                 {project.name}
                             </p>
-                            <span className="text-xs text-[hsl(var(--muted-foreground))]">Proyecto · App web</span>
+                            <span className="text-xs text-[hsl(var(--muted-foreground))]">Empresa · App web</span>
                         </div>
                     </div>
                 ))}

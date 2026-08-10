@@ -583,7 +583,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
           setFolders((prev) => prev.map((folder) => (folder.id === updated.id ? { ...folder, ...updated } : folder)))
           upsertCodexProject({ id: node.id, name: updated.name, kind: "project" })
           refreshCodexProjects()
-          toast.success("Proyecto renombrado.")
+          toast.success("Empresa renombrada.")
           return
         }
 
@@ -595,7 +595,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
           toast.success("Carpeta renombrada en APPS.")
         }
       } catch (err: any) {
-        toast.error(err?.message || "No se pudo cambiar el nombre del proyecto")
+        toast.error(err?.message || "No se pudo cambiar el nombre de la empresa")
       }
     },
     [refreshCodexProjects],
@@ -604,7 +604,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const handleToggleWorkspacePin = React.useCallback(
     async (node: WorkspaceTreeNode) => {
       if (node.kind !== "project") {
-        toast.info("Las carpetas locales se ordenan por uso reciente; los proyectos cloud sí se pueden anclar.")
+        toast.info("Las carpetas locales se ordenan por uso reciente; las empresas cloud sí se pueden anclar.")
         return
       }
 
@@ -617,7 +617,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       )
       try {
         await projectsService.update(node.chatListId, { isStarred: nextPinned })
-        toast.success(nextPinned ? "Proyecto anclado." : "Proyecto desanclado.")
+        toast.success(nextPinned ? "Empresa anclada." : "Empresa desanclada.")
       } catch (err: any) {
         setFolders((prev) =>
           prev.map((folder) =>
@@ -636,7 +636,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       toast.info(
         node.kind === "local-folder"
           ? "Carpeta abierta en APPS. Mostrarla en Finder requiere permisos nativos del navegador."
-          : "Proyecto abierto. Para verlo en Finder primero crea o enlaza un worktree local.",
+          : "Empresa abierta. Para verla en Finder primero crea o enlaza un worktree local.",
       )
     },
     [handleOpenWorkspace],
