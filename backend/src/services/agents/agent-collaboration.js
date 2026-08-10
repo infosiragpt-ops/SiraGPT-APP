@@ -150,6 +150,7 @@ async function executeSubTask(task, idx, user, options, patternKey, taskContext)
         maxSteps: task.maxSteps || options.maxSteps || DEFAULT_MAX_STEPS,
         maxRuntimeMs: task.maxRuntimeMs || options.maxRuntimeMs || DEFAULT_RUNTIME_MS,
         context,
+        signal: options.signal || null,
       },
       null
     );
@@ -298,7 +299,8 @@ async function forkJoin({ subTasks = [], user, options = {} }) {
     const task = subTasks[idx];
     if (r.status === 'fulfilled') {
       const value = r.value;
-      if (value && value.ok !== false) {
+      const status = String(value?.status || '').toLowerCase();
+      if (value && value.ok !== false && !['cancelled', 'canceled', 'failed', 'failure', 'error'].includes(status)) {
         return {
           index: idx,
           goal: task.goal,

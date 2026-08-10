@@ -21,10 +21,108 @@
  */
 
 const { z } = require('zod');
+const { createTokenBulkhead } = require('../../ai-product-os/token-bulkhead');
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // whole-blob reads — keep RSS sane
+const MAX_TOTAL_FILE_BYTES = Math.max(
+  MAX_FILE_BYTES,
+  Math.min(
+    200 * 1024 * 1024,
+    Number(process.env.DOCUMENT_EDIT_MAX_TOTAL_BYTES) || 60 * 1024 * 1024,
+  ),
+);
+const DOCUMENT_EDIT_GLOBAL_BYTES = Math.max(
+  MAX_TOTAL_FILE_BYTES,
+  Math.min(
+    1024 * 1024 * 1024,
+    Number(process.env.DOCUMENT_EDIT_GLOBAL_BYTES_IN_FLIGHT) || 160 * 1024 * 1024,
+  ),
+);
+const DOCUMENT_EDIT_MAX_CONCURRENT = Math.max(
+  1,
+  Math.min(12, Number(process.env.DOCUMENT_EDIT_MAX_CONCURRENT) || 3),
+);
 const MAX_CALLS_PER_TURN = 3;            // each call pays an inner LLM loop
 const DOC_AGENT_MAX_ITERATIONS = 18;     // inner loop budget inside ONE tool call
+
+const documentEditBulkhead = createTokenBulkhead({
+  model: 'document-edit-bytes',
+  maxConcurrent: DOCUMENT_EDIT_MAX_CONCURRENT,
+  maxTokensInFlight: DOCUMENT_EDIT_GLOBAL_BYTES,
+});
+
+function declaredRowBytes(rows = []) {
+  return rows.reduce((sum, row) => {
+    const bytes = Number(row?.size);
+    return sum + (Number.isFinite(bytes) && bytes > 0 ? Math.floor(bytes) : 0);
+  }, 0);
+}
+
+function reservedRowBytes(rows = []) {
+  const conservative = rows.reduce((sum, row) => {
+    const bytes = Number(row?.size);
+    return sum + (Number.isFinite(bytes) && bytes > 0
+      ? Math.min(MAX_FILE_BYTES, Math.floor(bytes))
+      : MAX_FILE_BYTES);
+  }, 0);
+  return Math.max(1, Math.min(MAX_TOTAL_FILE_BYTES, conservative));
+}
+
+async function inspectFileByteBudget(rows = [], { objectStorage, statSource } = {}) {
+  let totalBytes = 0;
+  for (const row of rows) {
+    const declared = Number(row?.size);
+    const declaredBytes = Number.isFinite(declared) && declared > 0 ? Math.floor(declared) : null;
+    let measuredBytes = null;
+    try {
+      const measured = typeof statSource === 'function'
+        ? await statSource(row)
+        : (row?.path && typeof objectStorage?.stat === 'function'
+          ? await objectStorage.stat(row.path)
+          : null);
+      const rawSize = typeof measured === 'number' ? measured : measured?.size;
+      if (Number.isFinite(Number(rawSize)) && Number(rawSize) >= 0) {
+        measuredBytes = Math.floor(Number(rawSize));
+      }
+    } catch {
+      measuredBytes = null;
+    }
+
+    // A legacy row with neither a trustworthy DB size nor a storage stat is
+    // rejected before the source-preserving editor can materialize an
+    // unbounded object into memory.
+    const actualBytes = measuredBytes ?? declaredBytes;
+    if (actualBytes == null) {
+      return {
+        ok: false,
+        error: 'file_size_unavailable',
+        code: 'DOCUMENT_EDIT_FILE_SIZE_UNAVAILABLE',
+        fileId: row?.id || null,
+      };
+    }
+    if (actualBytes > MAX_FILE_BYTES) {
+      return {
+        ok: false,
+        error: 'file_too_large',
+        code: 'DOCUMENT_EDIT_FILE_BYTES_EXCEEDED',
+        fileId: row?.id || null,
+        totalBytes: actualBytes,
+        maxBytes: MAX_FILE_BYTES,
+      };
+    }
+    totalBytes += actualBytes;
+    if (totalBytes > MAX_TOTAL_FILE_BYTES) {
+      return {
+        ok: false,
+        error: 'total_files_too_large',
+        code: 'DOCUMENT_EDIT_TOTAL_BYTES_EXCEEDED',
+        totalBytes,
+        maxBytes: MAX_TOTAL_FILE_BYTES,
+      };
+    }
+  }
+  return { ok: true, totalBytes: Math.max(1, totalBytes) };
+}
 
 const MIME_BY_EXT = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -156,6 +254,53 @@ function buildDocumentEditTool(deps = {}) {
       }
       if (!rows.length) return { ok: false, error: 'file_not_found' };
 
+      const declaredBytes = declaredRowBytes(rows);
+      if (declaredBytes > MAX_TOTAL_FILE_BYTES) {
+        return {
+          ok: false,
+          error: 'total_files_too_large',
+          code: 'DOCUMENT_EDIT_TOTAL_BYTES_EXCEEDED',
+          totalBytes: declaredBytes,
+          maxBytes: MAX_TOTAL_FILE_BYTES,
+          hint: 'Reduce el número o el tamaño de los archivos y vuelve a intentarlo.',
+        };
+      }
+
+      const objectStorageForAdmission = deps.objectStorage || require('../../object-storage');
+      const byteBudget = await inspectFileByteBudget(rows, {
+        objectStorage: objectStorageForAdmission,
+        statSource: deps.statSource,
+      });
+      if (!byteBudget.ok) {
+        return {
+          ...byteBudget,
+          hint: byteBudget.error === 'file_size_unavailable'
+            ? 'No pude verificar de forma segura el tamaño del archivo. Vuelve a subirlo e inténtalo otra vez.'
+            : 'Reduce el número o el tamaño de los archivos y vuelve a intentarlo.',
+        };
+      }
+
+      let releaseAdmission;
+      try {
+        releaseAdmission = await documentEditBulkhead.acquire({
+          // Legacy rows without a stored size reserve the per-file maximum so
+          // they cannot silently overcommit the global memory budget.
+          tokens: byteBudget.totalBytes,
+          signal: ctx.signal || null,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: err?.code === 'CAPACITY_EXCEEDED' ? 'total_files_too_large' : 'document_edit_busy',
+          code: err?.code || 'DOCUMENT_EDIT_ADMISSION_REJECTED',
+          retryable: err?.code !== 'CAPACITY_EXCEEDED',
+          retryAfterSeconds: err?.code === 'CAPACITY_EXCEEDED' ? undefined : 5,
+          maxBytes: MAX_TOTAL_FILE_BYTES,
+        };
+      }
+
+      try {
+
       // MERGE FAST PATH — deterministic Cowork-style "N docx → 1 docx". When
       // the instruction is a merge ("combina / fusiona / une … en un solo
       // word") and 2+ files are attached, merge them in-process (real OOXML
@@ -173,6 +318,7 @@ function buildDocumentEditTool(deps = {}) {
           if (ordered.every(isDocx)) {
             try {
               const loaded = [];
+              let loadedBytes = 0;
               const objectStorage = deps.objectStorage || require('../../object-storage');
               const readSourceBuffer = deps.readSourceBuffer
                 || (deps.sourcePreservingEdit && deps.sourcePreservingEdit.readSourceBuffer)
@@ -189,6 +335,8 @@ function buildDocumentEditTool(deps = {}) {
                     buffer = await fsImpl.readFile(row.path);
                   }
                   if (buffer.length > MAX_FILE_BYTES) throw new Error('file_too_large');
+                  loadedBytes += buffer.length;
+                  if (loadedBytes > MAX_TOTAL_FILE_BYTES) throw new Error('total_files_too_large');
                   loaded.push({ name: row.originalName || row.filename, buffer });
                 } finally {
                   await cleanup().catch(() => {});
@@ -363,6 +511,7 @@ function buildDocumentEditTool(deps = {}) {
       }
 
       const files = [];
+      let loadedBytes = 0;
       const objectStorage = deps.objectStorage || require('../../object-storage');
       const readSourceBuffer = deps.readSourceBuffer
         || (deps.sourcePreservingEdit && deps.sourcePreservingEdit.readSourceBuffer)
@@ -385,6 +534,16 @@ function buildDocumentEditTool(deps = {}) {
         try {
           if (buffer.length > MAX_FILE_BYTES) {
             return { ok: false, error: 'file_too_large', fileId: row.id, maxBytes: MAX_FILE_BYTES };
+          }
+          loadedBytes += buffer.length;
+          if (loadedBytes > MAX_TOTAL_FILE_BYTES) {
+            return {
+              ok: false,
+              error: 'total_files_too_large',
+              code: 'DOCUMENT_EDIT_TOTAL_BYTES_EXCEEDED',
+              totalBytes: loadedBytes,
+              maxBytes: MAX_TOTAL_FILE_BYTES,
+            };
           }
           files.push({ name: row.originalName || row.filename, buffer });
         } finally {
@@ -492,8 +651,20 @@ function buildDocumentEditTool(deps = {}) {
           ? 'Los archivos editados ya aparecen como tarjetas de descarga en el chat. Menciónalos brevemente en tu respuesta; NO pegues su contenido.'
           : undefined,
       };
+      } finally {
+        releaseAdmission();
+      }
     },
   };
 }
 
-module.exports = { buildDocumentEditTool, MAX_FILE_BYTES, MAX_CALLS_PER_TURN };
+module.exports = {
+  buildDocumentEditTool,
+  MAX_FILE_BYTES,
+  MAX_TOTAL_FILE_BYTES,
+  DOCUMENT_EDIT_GLOBAL_BYTES,
+  MAX_CALLS_PER_TURN,
+  _documentEditBulkhead: documentEditBulkhead,
+  _reservedRowBytes: reservedRowBytes,
+  _inspectFileByteBudget: inspectFileByteBudget,
+};

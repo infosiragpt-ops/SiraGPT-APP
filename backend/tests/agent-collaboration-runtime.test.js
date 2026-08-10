@@ -39,6 +39,7 @@ function loadCollaborationWithRunner(runAgentTaskJob) {
 
 test('forkJoin runs only valid tasks and forwards task/runtime options', async () => {
   const calls = [];
+  const signal = new AbortController().signal;
   const { collaboration, restore } = loadCollaborationWithRunner(async (payload, job) => {
     calls.push({ payload, job });
     return { ok: true, output: `done:${payload.goal}` };
@@ -47,7 +48,7 @@ test('forkJoin runs only valid tasks and forwards task/runtime options', async (
   try {
     const result = await collaboration.forkJoin({
       user: { id: 'user-1' },
-      options: { chatId: 'chat-1', maxSteps: 9, maxRuntimeMs: 1234 },
+      options: { chatId: 'chat-1', maxSteps: 9, maxRuntimeMs: 1234, signal },
       subTasks: [
         { goal: 'first', context: { a: 1 } },
         { goal: '   ' },
@@ -68,6 +69,7 @@ test('forkJoin runs only valid tasks and forwards task/runtime options', async (
     assert.equal(calls[0].payload.chatId, 'chat-1');
     assert.equal(calls[0].payload.maxSteps, 9);
     assert.equal(calls[0].payload.maxRuntimeMs, 1234);
+    assert.equal(calls[0].payload.signal, signal);
     assert.deepEqual(calls[0].payload.context, { a: 1 });
     assert.equal(calls[1].payload.taskId, 'task-2');
     assert.equal(calls[1].payload.maxSteps, 3);

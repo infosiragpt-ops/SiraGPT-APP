@@ -26,6 +26,7 @@ import {
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
 import dynamic from "next/dynamic"
 const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
@@ -300,17 +301,17 @@ function ActionRail({ onReset, onToggleCode, showCode, onDownload, onOpenNewTab 
 
 function IconButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
+    <AccessibleIconButton
       onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={`grid h-7 w-7 place-items-center rounded-full transition-colors ${active
+      label={label}
+      aria-pressed={active}
+      className={`${active
         ? "bg-primary text-primary-foreground"
         : "text-muted-foreground hover:bg-muted hover:text-foreground"
         }`}
     >
       {children}
-    </button>
+    </AccessibleIconButton>
   )
 }
 

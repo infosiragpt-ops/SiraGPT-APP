@@ -61,6 +61,7 @@ const {
   DEFAULT_THIN_THRESHOLD,
 } = require('./attachment-context-guard');
 const apa7 = require('../marco-teorico/apa7');
+const { throwIfAborted } = require('../../utils/abort-signals');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -1650,9 +1651,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     maxRuntimeMs = 2 * 60 * 60 * 1000,
     folderCode = null,
     cycle = null,
+    signal: externalSignal = null,
   } = payload;
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
+  throwIfAborted(externalSignal);
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
   const hasEditableDocumentContext = hasAttachedFiles || Boolean(preferRecentArtifact);
@@ -1675,37 +1678,51 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       maxSteps: Math.min(25, maxSteps),
     }));
     if (subTasks.length >= 2) {
-      taskStore.markTaskStatus({ taskId, userId: user.id }, 'running');
-      const fj = await forkJoin({
-        subTasks,
-        user,
-        options: {
-          chatId,
-          model,
-          maxSteps: Math.min(25, maxSteps),
-          maxRuntimeMs: Math.min(maxRuntimeMs, 180_000),
-          onEvent: (type, data) => {
-            try {
-              taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
-            } catch (err) {
-              // Best-effort: keep the multi-agent run going, but surface a lost
-              // sub-task event (durable trace + SSE replay feed off this hook).
-              console.warn('[agent-task-runner] fork_join event append failed for', taskId, '-', err?.message || err);
-            }
+      try {
+        throwIfAborted(externalSignal);
+        taskStore.markTaskStatus({ taskId, userId: user.id }, 'running');
+        const fj = await forkJoin({
+          subTasks,
+          user,
+          options: {
+            chatId,
+            model,
+            maxSteps: Math.min(25, maxSteps),
+            maxRuntimeMs: Math.min(maxRuntimeMs, 180_000),
+            signal: externalSignal,
+            onEvent: (type, data) => {
+              try {
+                taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
+              } catch (err) {
+                // Best-effort: keep the multi-agent run going, but surface a lost
+                // sub-task event (durable trace + SSE replay feed off this hook).
+                console.warn('[agent-task-runner] fork_join event append failed for', taskId, '-', err?.message || err);
+              }
+            },
           },
-        },
-      });
-      taskStore.markTaskStatus(
-        { taskId, userId: user.id },
-        fj.ok ? 'completed' : 'failed',
-        { mergedSummary: fj.mergedSummary || null },
-      );
-      return { ok: fj.ok, pattern: 'fork_join', mergedSummary: fj.mergedSummary, results: fj.results };
+        });
+        throwIfAborted(externalSignal);
+        taskStore.markTaskStatus(
+          { taskId, userId: user.id },
+          fj.ok ? 'completed' : 'failed',
+          { mergedSummary: fj.mergedSummary || null },
+        );
+        return { ok: fj.ok, pattern: 'fork_join', mergedSummary: fj.mergedSummary, results: fj.results };
+      } catch (error) {
+        if (externalSignal?.aborted) {
+          taskStore.markTaskStatus({ taskId, userId: user.id }, 'cancelled');
+        }
+        throw error;
+      }
     }
   }
 
   const internals = routeInternals();
   const controller = new AbortController();
+  const abortFromCaller = () => {
+    if (controller.signal.aborted) return;
+    try { controller.abort(externalSignal?.reason); } catch { controller.abort(); }
+  };
   const startedAt = Date.now();
   const existing = taskStore.getTaskSnapshotForUser(taskId, user.id);
   let streamState = existing?.streamState || internals.initialAgentState();
@@ -2127,7 +2144,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
   let stepIdCounter = 0;
   let currentStepId = null;
-  const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
+  const runtimeTimer = setTimeout(() => {
+    const timeoutError = new Error('agent_runtime_timeout');
+    timeoutError.name = 'TimeoutError';
+    timeoutError.code = 'AGENT_RUNTIME_TIMEOUT';
+    try { controller.abort(timeoutError); } catch { controller.abort(); }
+  }, maxRuntimeMs + 5000);
+  runtimeTimer.unref?.();
 
   // ── BullMQ lock heartbeat ──────────────────────────────────────────
   // Agent tasks routinely run 10–20 min (max_steps=80 reached at ~19min
@@ -2265,6 +2288,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     });
     return { taskId, status, artifacts: artifactsList.length };
   };
+
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener?.('abort', abortFromCaller, { once: true });
 
   try {
     // Editing the user's existing file is not the same as auto-generating a
@@ -3549,6 +3575,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     return { taskId, status: task.status };
   } finally {
     clearTimeout(runtimeTimer);
+    externalSignal?.removeEventListener?.('abort', abortFromCaller);
     if (lockHeartbeatTimer) {
       clearInterval(lockHeartbeatTimer);
       lockHeartbeatTimer = null;
