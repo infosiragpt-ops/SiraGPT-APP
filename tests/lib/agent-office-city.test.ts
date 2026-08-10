@@ -40,7 +40,7 @@ describe("agent office Edge District", () => {
     expect(district.counts.glassFacades).toBeGreaterThanOrEqual(104)
     expect(district.counts.glassFacades).toBeLessThanOrEqual(112)
     expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(24)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(31)
+    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(36)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
     expect(district.counts.windows).toBeGreaterThanOrEqual(1_800)
     expect(district.counts.vehicles).toBeGreaterThanOrEqual(16)

@@ -598,11 +598,11 @@ export function addEdgeDistrict({
   const landmarkDark = night ? 0x142838 : 0x18384a
   const landmarkMid = night ? 0x205070 : 0x286880
   const landmarkLight = night ? 0x3578a0 : 0x4090b0
-  const lowerHeight = 6.5
-  const middleBottom = groundY + 5
-  const middleTop = 3.5
-  const upperBottom = 2.8
-  const upperTop = 8.8
+  const lowerHeight = 7.5
+  const middleBottom = groundY + 6
+  const middleTop = 5.5
+  const upperBottom = 4.8
+  const upperTop = 14
   const lowerWidth = totalWidth + 26
   const lowerDepth = totalDepth + 26
   const middleWidth = totalWidth + 18
@@ -703,19 +703,23 @@ export function addEdgeDistrict({
     const foregroundPenalty = normalizedZ > 0.2 ? 6.8 : 0
     const skylineBoost =
       normalizedZ < -0.58
-        ? 18 + random() * 18
+        ? 10 + random() * 8
         : normalizedZ < -0.25
-          ? 10 + random() * 14
+          ? 5 + random() * 6
         : normalizedZ < 0.2
-          ? 4 + random() * 10
+          ? 2 + random() * 5
           : 0
-    const height = Math.max(
-      10,
-      12 + random() * 10 + skylineBoost - foregroundPenalty,
+    const landmarkTotalHeight = upperTop - groundY + 2.5
+    const height = Math.min(
+      landmarkTotalHeight - 6,
+      Math.max(
+        10,
+        12 + random() * 10 + skylineBoost - foregroundPenalty,
+      ),
     )
-    const slenderness = height > 32 ? 0.74 : height > 24 ? 0.84 : height > 18 ? 0.9 : 1
+    const slenderness = height > 24 ? 0.78 : height > 18 ? 0.88 : 1
     const width = lotWidth * slenderness
-    const depth = lotDepth * (height > 42 ? 0.8 : 1)
+    const depth = lotDepth * (height > 28 ? 0.82 : 1)
     const x = normalizedX * districtHalfWidth + (random() - 0.5) * 2.2
     const z = normalizedZ * districtHalfDepth + (random() - 0.5) * 2
     const palette = night ? nightBuildingColors : dayBuildingColors
@@ -752,7 +756,7 @@ export function addEdgeDistrict({
         scale: [width * (towerProfile === 2 ? 0.68 : 0.82), setbackHeight, depth * 0.8],
         color: night ? 0x365d70 : 0x91b2bb,
       })
-      if (towerProfile === 2 && height > 31) {
+      if (towerProfile === 2 && height > 24) {
         const upperSetbackHeight = Math.min(3.3, height * 0.08)
         structureInstances.push({
           position: [x, groundY + height - upperSetbackHeight / 2, z],
@@ -848,7 +852,7 @@ export function addEdgeDistrict({
     addFacadeWindows(facadeWindows, building, groundY, variant, random, night)
 
     // Helipads / tech decks on the tallest signature towers.
-    if (signatureTower && height > 32) {
+    if (signatureTower && height > 25) {
       const padY = groundY + height + 0.08
       propInstances.push(
         {
@@ -880,7 +884,7 @@ export function addEdgeDistrict({
   if (variant === "full") {
     const bridgeCandidates = secondaryBuildings
       .map((building, index) => ({ building, index }))
-      .filter(({ building }) => building.height > 26)
+      .filter(({ building }) => building.height > 20)
       .sort((a, b) => b.building.height - a.building.height)
     let bridgesBuilt = 0
     for (let i = 0; i < bridgeCandidates.length && bridgesBuilt < 5; i += 1) {
@@ -1816,16 +1820,16 @@ export function addEdgeDistrict({
     framing: {
       target: new THREE.Vector3(
         0,
-        variant === "thumbnail" ? 1.0 : 2.8,
+        variant === "thumbnail" ? 1.0 : 4.2,
         -totalDepth * 0.08,
       ),
-      yaw: variant === "thumbnail" ? -0.64 : -0.58,
-      pitch: variant === "thumbnail" ? 0.48 : 0.42,
+      yaw: variant === "thumbnail" ? -0.64 : -0.56,
+      pitch: variant === "thumbnail" ? 0.48 : 0.38,
       distance: landscapeDistance,
       landscapeDistance,
       portraitDistance,
       minDistance: 18,
-      maxDistance: 172,
+      maxDistance: 185,
       groundY,
       officeY,
       districtWidth: districtHalfWidth * 2,
