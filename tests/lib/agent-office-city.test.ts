@@ -40,9 +40,10 @@ describe("agent office Edge District", () => {
     expect(district.counts.glassFacades).toBeGreaterThanOrEqual(104)
     expect(district.counts.glassFacades).toBeLessThanOrEqual(112)
     expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(24)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(55)
+    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(31)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
-    expect(district.counts.windows).toBeGreaterThanOrEqual(2_000)
+    expect(district.counts.windows).toBeGreaterThanOrEqual(1_800)
+    expect(district.counts.vehicles).toBeGreaterThanOrEqual(16)
 
     dispose(scene)
   })
@@ -63,7 +64,7 @@ describe("agent office Edge District", () => {
     // secondaryCount thumbnail = 22 → landmark + secondaries = 23.
     expect(district.counts.buildings).toBe(23)
     expect(district.counts.glassFacades).toBe(44)
-    expect(district.counts.vehicles).toBe(4)
+    expect(district.counts.vehicles).toBe(6)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
 
     dispose(scene)

@@ -468,10 +468,10 @@ export function addEdgeDistrict({
   scene.add(horizonGlow)
 
   const oceanGeometry = new THREE.PlaneGeometry(
-    districtHalfWidth * 3.5,
-    138,
-    variant === "full" ? 42 : 20,
-    variant === "full" ? 22 : 10,
+    districtHalfWidth * 4,
+    168,
+    variant === "full" ? 64 : 32,
+    variant === "full" ? 34 : 16,
   )
   const oceanPosition = oceanGeometry.attributes.position as THREE.BufferAttribute
   const oceanBase = new Float32Array(oceanPosition.count)
@@ -480,12 +480,15 @@ export function addEdgeDistrict({
   }
   const ocean = new THREE.Mesh(
     oceanGeometry,
-    new THREE.MeshStandardMaterial({
-      color: night ? 0x164d68 : 0x3b91a8,
-      roughness: night ? 0.28 : 0.2,
-      metalness: 0.46,
-      emissive: night ? 0x082d43 : 0x0c3d4d,
-      emissiveIntensity: night ? 0.58 : 0.14,
+    new THREE.MeshPhysicalMaterial({
+      color: night ? 0x0d3a5c : 0x2a8aaa,
+      roughness: night ? 0.12 : 0.06,
+      metalness: 0.62,
+      emissive: night ? 0x052238 : 0x0a4a60,
+      emissiveIntensity: night ? 0.72 : 0.1,
+      clearcoat: 1,
+      clearcoatRoughness: 0.04,
+      envMapIntensity: 1.2,
     }),
   )
   ocean.rotation.x = -Math.PI / 2
@@ -592,20 +595,20 @@ export function addEdgeDistrict({
   const streetLightGlows: BoxInstance[] = []
   const streetLightPools: PlaneInstance[] = []
 
-  const landmarkDark = night ? 0x1a3543 : 0x1c4053
-  const landmarkMid = night ? 0x2a5369 : 0x356a7d
-  const landmarkLight = night ? 0x3d7589 : 0x4a92a4
-  const lowerHeight = 5.2
-  const middleBottom = groundY + 4
-  const middleTop = -1.85
-  const upperBottom = -2.55
-  const upperTop = 0.48
-  const lowerWidth = totalWidth + 22
-  const lowerDepth = totalDepth + 22
-  const middleWidth = totalWidth + 16
-  const middleDepth = totalDepth + 16
-  const upperWidth = totalWidth + 11
-  const upperDepth = totalDepth + 11
+  const landmarkDark = night ? 0x142838 : 0x18384a
+  const landmarkMid = night ? 0x205070 : 0x286880
+  const landmarkLight = night ? 0x3578a0 : 0x4090b0
+  const lowerHeight = 6.5
+  const middleBottom = groundY + 5
+  const middleTop = 3.5
+  const upperBottom = 2.8
+  const upperTop = 8.8
+  const lowerWidth = totalWidth + 26
+  const lowerDepth = totalDepth + 26
+  const middleWidth = totalWidth + 18
+  const middleDepth = totalDepth + 18
+  const upperWidth = totalWidth + 12
+  const upperDepth = totalDepth + 12
 
   structureInstances.push(
     {
@@ -690,7 +693,7 @@ export function addEdgeDistrict({
   const secondaryBuildings: Building[] = []
   let signatureTowerCount = 0
   let architecturalCrownCount = 0
-  let tallestBuildingHeight = upperTop - groundY
+  let tallestBuildingHeight = upperTop - groundY + 2.5
   let terraceAmenityCount = 0
 
   for (let index = 0; index < secondaryCount; index += 1) {
@@ -700,17 +703,17 @@ export function addEdgeDistrict({
     const foregroundPenalty = normalizedZ > 0.2 ? 6.8 : 0
     const skylineBoost =
       normalizedZ < -0.58
-        ? 26 + random() * 36
+        ? 18 + random() * 18
         : normalizedZ < -0.25
-          ? 16 + random() * 26
+          ? 10 + random() * 14
         : normalizedZ < 0.2
-          ? 8 + random() * 14
+          ? 4 + random() * 10
           : 0
     const height = Math.max(
-      11,
-      14 + random() * 14 + skylineBoost - foregroundPenalty,
+      10,
+      12 + random() * 10 + skylineBoost - foregroundPenalty,
     )
-    const slenderness = height > 48 ? 0.68 : height > 36 ? 0.78 : height > 26 ? 0.88 : 1
+    const slenderness = height > 32 ? 0.74 : height > 24 ? 0.84 : height > 18 ? 0.9 : 1
     const width = lotWidth * slenderness
     const depth = lotDepth * (height > 42 ? 0.8 : 1)
     const x = normalizedX * districtHalfWidth + (random() - 0.5) * 2.2
@@ -924,7 +927,7 @@ export function addEdgeDistrict({
     z: 0,
     width: lowerWidth,
     depth: lowerDepth,
-    height: upperTop - groundY + 2.5,
+    height: upperTop - groundY + 4,
     color: landmarkLight,
   }
   addFacadeWindows(facadeWindows, landmarkFacade, groundY, variant, random, night)
@@ -1627,7 +1630,7 @@ export function addEdgeDistrict({
   trees.userData.agentOfficeEnvironment = "edge-district"
   scene.add(trees)
 
-  const vehicleCount = variant === "full" ? 10 : 4
+  const vehicleCount = variant === "full" ? 16 : 6
   const vehicleRoutes: VehicleRoute[] = []
   for (let index = 0; index < vehicleCount; index += 1) {
     const horizontal = index < Math.ceil(vehicleCount * 0.6)
@@ -1640,7 +1643,7 @@ export function addEdgeDistrict({
         speed: 3.4 + random() * 2.3,
         phase: random(),
         direction: index % 2 === 0 ? 1 : -1,
-        scale: [1.45, 0.36, 0.68],
+        scale: [1.5, 0.38, 0.72],
       })
     } else {
       vehicleRoutes.push({
@@ -1651,15 +1654,15 @@ export function addEdgeDistrict({
         speed: 2.9 + random() * 2.1,
         phase: random(),
         direction: index % 2 === 0 ? 1 : -1,
-        scale: [1.45, 0.36, 0.68],
+        scale: [1.5, 0.38, 0.72],
       })
     }
   }
 
   const vehicleMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    roughness: 0.38,
-    metalness: 0.44,
+    roughness: 0.32,
+    metalness: 0.58,
   })
   const vehicleMesh = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -1667,8 +1670,8 @@ export function addEdgeDistrict({
     vehicleRoutes.length,
   )
   const vehicleColors = night
-    ? [0xffcf67, 0xc5d9e8, 0x55b7d4, 0xe3695d]
-    : [0xf3f4f4, 0x254f68, 0xd8564b, 0xe0a63b]
+    ? [0xffcf67, 0xc5d9e8, 0x55b7d4, 0xe3695d, 0x8bd4a0, 0xb9a0e8, 0xe8a0c8]
+    : [0xf3f4f4, 0x254f68, 0xd8564b, 0xe0a63b, 0x2a9d4a, 0x4a6a8a, 0x8a4a8a]
   vehicleRoutes.forEach((_, index) => {
     vehicleMesh.setColorAt(index, new THREE.Color(vehicleColors[index % vehicleColors.length]))
   })
@@ -1680,11 +1683,11 @@ export function addEdgeDistrict({
   scene.add(vehicleMesh)
 
   const vehicleLightMesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.16, 0.1, 0.1),
+    new THREE.BoxGeometry(0.2, 0.12, 0.12),
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: night ? 0.94 : 0.28,
+      opacity: night ? 0.96 : 0.32,
       toneMapped: false,
     }),
     vehicleRoutes.length * 4,
@@ -1784,8 +1787,8 @@ export function addEdgeDistrict({
 
   const baseDistance =
     variant === "thumbnail"
-      ? Math.max(44, totalWidth * 1.22, totalDepth * 1.34)
-      : Math.max(50, totalWidth * 1.28, totalDepth * 1.4)
+      ? Math.max(52, totalWidth * 1.38, totalDepth * 1.5)
+      : Math.max(60, totalWidth * 1.44, totalDepth * 1.56)
   const landscapeDistance = variant === "thumbnail" ? baseDistance * 0.94 : baseDistance
   const portraitDistance = landscapeDistance * (variant === "thumbnail" ? 1.2 : 1.42)
 
@@ -1808,21 +1811,21 @@ export function addEdgeDistrict({
       trees: treeInstances.length,
       vehicles: vehicleRoutes.length,
       lightFixtures: streetLightGlows.length,
-      expectedDrawCalls: night ? 26 : 25,
+      expectedDrawCalls: night ? 27 : 26,
     },
     framing: {
       target: new THREE.Vector3(
         0,
-        variant === "thumbnail" ? 0.65 : 1.4,
-        -totalDepth * 0.1,
+        variant === "thumbnail" ? 1.0 : 2.8,
+        -totalDepth * 0.08,
       ),
       yaw: variant === "thumbnail" ? -0.64 : -0.58,
-      pitch: variant === "thumbnail" ? 0.42 : 0.36,
+      pitch: variant === "thumbnail" ? 0.48 : 0.42,
       distance: landscapeDistance,
       landscapeDistance,
       portraitDistance,
-      minDistance: 16,
-      maxDistance: 152,
+      minDistance: 18,
+      maxDistance: 172,
       groundY,
       officeY,
       districtWidth: districtHalfWidth * 2,
