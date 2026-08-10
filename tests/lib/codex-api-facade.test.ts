@@ -44,6 +44,7 @@ const EXPECTED_METHODS = [
   "updateCompanyProfile",
   "runBusinessAudit",
   "getCompanyOperations",
+  "getOfficeState",
   "researchCompanyLeads",
   "triageCompanyInbox",
   "triageCompanySocial",

@@ -34,6 +34,7 @@ function run(overrides: Partial<CodexRun> & Pick<CodexRun, "id" | "prompt" | "st
     tier: "pro",
     model: overrides.model || "gpt-5.4",
     planRunId: null,
+    departmentPoolId: overrides.departmentPoolId,
     prompt: overrides.prompt,
     error: overrides.error || null,
     createdAt: overrides.createdAt || "2026-07-28T15:00:00.000Z",
@@ -116,6 +117,96 @@ test("buildAgentOfficeModel keeps empty departments without inventing workers", 
   assert.ok(model.departments.every((department) => department.workers.length === 0))
   assert.equal(model.truth.occupiedDesks, 0)
   assert.equal(model.truth.pendingApprovals, 0)
+})
+
+test("buildAgentOfficeModel preserves every built-in and custom department with its logical capacity", () => {
+  const customDepartment = {
+    id: "custom-legal-ops",
+    name: "Legal Operations",
+    description: "Contratos, políticas y trazabilidad legal.",
+    keywords: ["legal", "contrato", "política"],
+    kind: "research" as const,
+    desiredAgents: 7,
+    custom: true,
+  }
+  const departments = [...AGENT_COMPANY_DEPARTMENTS, customDepartment]
+  const model = buildAgentOfficeModel({
+    departments,
+    sessions: [],
+    runs: [
+      run({
+        id: "only-live-run",
+        prompt: "[PROACTIVO · Producto e Ingeniería] Mantener activa una sola unidad",
+        status: "running",
+      }),
+    ],
+    rootSessionId: null,
+  })
+
+  const expectedIds = departments.map((department) => department.id)
+  assert.deepEqual(model.departments.map((department) => department.id), expectedIds)
+  assert.equal(new Set(model.departments.map((department) => department.id)).size, expectedIds.length)
+
+  const builtInLogicalCapacity = AGENT_COMPANY_DEPARTMENTS.reduce(
+    (sum, department) => sum + Math.max(1, Number(department.desiredAgents) || 1),
+    0,
+  )
+  assert.equal(builtInLogicalCapacity, 196)
+  assert.equal(
+    model.departments.reduce((sum, department) => sum + department.pool.size, 0),
+    builtInLogicalCapacity + customDepartment.desiredAgents,
+  )
+
+  assert.equal(model.totalCount, 1)
+  assert.equal(model.departments.find((department) => department.id === customDepartment.id)?.workers.length, 0)
+  assert.equal(model.departments.find((department) => department.id === "trust")?.workers.length, 0)
+  assert.equal(model.departments.find((department) => department.id === "product-engineering")?.activeCount, 1)
+})
+
+test("a linked pooled run stays authoritative and is represented by only its session worker", () => {
+  const departmentPools: CodexDepartmentPool[] = [{
+    id: "pool-product",
+    projectId: "office-qa",
+    departmentId: "product-engineering",
+    size: 16,
+    dailyBudgetUsd: 25,
+    enabled: true,
+    createdAt: "2026-08-10T15:00:00.000Z",
+    updatedAt: "2026-08-10T15:00:00.000Z",
+  }]
+  const linkedRun = run({
+    id: "pooled-run",
+    status: "running",
+    departmentPoolId: "pool-product",
+    prompt: "[PROACTIVO · Marketing] Lanzar una campaña engañosa para la atribución",
+  })
+  const misleadingSession = session({
+    id: "misleading-sales-session",
+    title: "Ventas y Marketing",
+    turns: [{
+      id: "linked-turn",
+      role: "assistant",
+      content: "Preparando anuncios y captación comercial.",
+      codexRunId: linkedRun.id,
+      streaming: true,
+    }],
+  })
+
+  const model = buildAgentOfficeModel({
+    departments: AGENT_COMPANY_DEPARTMENTS,
+    sessions: [misleadingSession],
+    runs: [linkedRun],
+    rootSessionId: null,
+    departmentPools,
+  })
+
+  assert.equal(model.totalCount, 1)
+  assert.equal(model.workers.length, 1)
+  assert.equal(model.workers[0]?.source, "session")
+  assert.equal(model.workers[0]?.sessionId, misleadingSession.id)
+  assert.equal(model.workers[0]?.runId, linkedRun.id)
+  assert.equal(model.workers[0]?.departmentId, "product-engineering")
+  assert.equal(model.departments.find((department) => department.id === "marketing")?.workers.length, 0)
 })
 
 test("officeWorkerStance seats running agents and paces blocked ones", () => {

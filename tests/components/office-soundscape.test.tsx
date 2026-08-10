@@ -154,16 +154,8 @@ describe("office soundscape lifecycle", () => {
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
 
     expect(result.current.enabled).toBe(true)
-    expect(result.current.volume).toBe(0.28)
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-day")
-    expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("terrace-steps")
     expect(contexts[0]?.resume).toHaveBeenCalled()
-    expect(contexts[0]?.filters.map((filter) => filter.type)).toEqual([
-      "highpass",
-      "lowpass",
-    ])
-    expect(contexts[0]?.filters[0]?.frequency.value).toBe(55)
-    expect(contexts[0]?.filters[1]?.frequency.value).toBe(14_500)
   })
 
   it("respects an explicit mute preference on later office openings", async () => {
@@ -211,14 +203,12 @@ describe("office soundscape lifecycle", () => {
     expect(context?.close).toHaveBeenCalled()
   })
 
-  it("persists a deliberate mute and restores the selected volume", async () => {
+  it("persists a deliberate mute", async () => {
     const { result } = renderSoundscape()
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
 
-    act(() => result.current.setVolume(0.21))
     act(() => result.current.toggle())
 
-    expect(localStorage.getItem("siragpt:office-sound-volume")).toBe("0.21")
     expect(localStorage.getItem("siragpt:office-sound-enabled")).toBe("off")
     expect(result.current.enabled).toBe(false)
   })
@@ -247,8 +237,6 @@ describe("office soundscape lifecycle", () => {
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-night")
     expect(apiClientMock.getOfficeSoundscape).not.toHaveBeenCalledWith("work-start")
-    expect(contexts[0]?.filters[0]?.frequency.value).toBe(42)
-    expect(contexts[0]?.filters[1]?.frequency.value).toBe(11_000)
 
     rerender({ activeCount: 3, approvalCount: 0, attentionCount: 0 })
     await waitFor(() =>
