@@ -687,6 +687,8 @@ const apiLimiterSpecificPrefixes = [
     '/api/agent',
     '/api/rag',
     '/api/document-ai',
+    '/api/doc/',
+    '/api/doc-agent',
 ];
 const apiLimiter = rateLimit({
     ...makeLimiterCommon('api'),
@@ -737,6 +739,8 @@ app.use('/api/auth', authLimiter);
 app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
+app.use('/api/doc', expensiveLimiter);
+app.use('/api/doc-agent', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
 // Autonomous research loop (planner→search→browser→vision LLM) and the
 // scientific-search fan-out (10-16 external APIs in parallel per call) are

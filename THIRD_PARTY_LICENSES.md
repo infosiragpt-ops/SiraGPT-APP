@@ -1242,7 +1242,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `mz` | 2.7.0 | MIT | [link](https://github.com/normalize/mz) |
 | `n-gram` | 2.0.2 | MIT | [link](https://github.com/words/n-gram) |
 | `nan` | 2.27.0 | MIT | [link](https://github.com/nodejs/nan) |
-| `nanoid` | 3.3.16, 5.1.6, 5.1.9 | MIT | [link](https://github.com/ai/nanoid) |
+| `nanoid` | 3.3.18, 5.1.16 | MIT | [link](https://github.com/ai/nanoid) |
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
 | `netmask` | 2.0.2 | MIT | [link](https://github.com/rs/node-netmask) |

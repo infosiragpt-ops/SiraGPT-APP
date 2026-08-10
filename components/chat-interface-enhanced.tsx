@@ -152,10 +152,25 @@ import {
 import MessageComponent from "./message-component"
 import { ErrorBoundary } from "./error-boundary"
 import { Virtuoso } from "react-virtuoso"
-import SpeechToTextComponent from "./speech-to-text-component"
-import TextToSpeechComponent from "./text-to-speech-component"
-import MusicGenerationComponent from "./MusicGenerationComponent"
-import VoiceCatalogModal from "./voice/voice-catalog-modal"
+// Optional media studios are several large client bundles. They are loaded
+// only after the user opens the corresponding tool, keeping the default chat
+// route responsive on first visit.
+const SpeechToTextComponent = dynamic(
+  () => import("./speech-to-text-component"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando transcripción…" /> },
+)
+const TextToSpeechComponent = dynamic(
+  () => import("./text-to-speech-component"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de voz…" /> },
+)
+const MusicGenerationComponent = dynamic(
+  () => import("./MusicGenerationComponent"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de música…" /> },
+)
+const VoiceCatalogModal = dynamic(
+  () => import("./voice/voice-catalog-modal"),
+  { ssr: false, loading: () => null },
+)
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
@@ -175,7 +190,10 @@ import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { safeUUID } from "@/lib/safe-uuid"
 import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
-import VideoGenerationComponent from "./VideoGenerationComponent"
+const VideoGenerationComponent = dynamic(
+  () => import("./VideoGenerationComponent"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de video…" /> },
+)
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
@@ -261,6 +279,12 @@ import {
   resolveUploadFileId,
 } from "@/lib/chat/composer-files"
 import {
+  createPersistedComposerQueueItem,
+  readPersistedComposerQueue,
+  writePersistedComposerQueue,
+  type PersistedComposerQueueItem,
+} from "@/lib/chat/composer-queue"
+import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROVIDER,
   DEFAULT_VIDEO_DURATION,
@@ -306,6 +330,19 @@ import {
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
+
+function ChatToolPanelLoading({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex min-h-28 items-center justify-center gap-3 rounded-xl border border-border/50 bg-muted/20 p-6 text-sm text-muted-foreground"
+    >
+      <span className="h-2.5 w-2.5 rounded-full bg-primary motion-safe:animate-pulse" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  )
+}
 
 const GPT_RATING_OPTIONS = [
   { value: 1, label: "Muy malo" },
@@ -4932,7 +4969,7 @@ function ChatInterfaceContent() {
   // back to the same conversation after a reload or accidental
   // navigation. See hooks/use-chat-draft.ts for the contract.
   const chatDraft = useChatDraft(currentChat?.id, user?.id)
-  const lastRestoredChatIdRef = React.useRef<string | null>(null)
+  const lastRestoredDraftScopeRef = React.useRef<string | null>(null)
   const [isRecording, setIsRecording] = React.useState(false)
   const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
@@ -5006,10 +5043,9 @@ function ChatInterfaceContent() {
   // typing is captured by handleTextareaChange below.
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const id = currentChat?.id
-    if (!id) return
-    if (lastRestoredChatIdRef.current === id) return
-    lastRestoredChatIdRef.current = id
+    const scope = currentChat?.id ?? "__new__"
+    if (lastRestoredDraftScopeRef.current === scope) return
+    lastRestoredDraftScopeRef.current = scope
     const saved = chatDraft.loadInitial()
     if (saved && saved.trim()) {
       setInput(prev => (prev.trim() ? prev : saved))
@@ -8324,21 +8360,91 @@ But first, you need to connect your Spotify account securely using the button be
   // composer is busy streaming a prior turn, we park it in this ref and
   // flush it automatically when the pipeline goes idle. This keeps the
   // "user types 3 things quickly" flow working without losing text.
-  const pendingMsgQueueRef = React.useRef<Array<{ chatId: string | null; msg: string; files: any[] }>>([]);
+  const pendingMsgQueueRef = React.useRef<PersistedComposerQueueItem[]>([]);
   const queueBurstTimestampsRef = React.useRef<number[]>([]);
-  const handleSendRef = React.useRef<() => void>(() => {});
+  const handleSendRef = React.useRef<() => Promise<void>>(async () => {});
+  const queuedComposerSendRef = React.useRef<PersistedComposerQueueItem | null>(null);
+  const queuedSendSucceededRef = React.useRef<Map<string, boolean>>(new Map());
+  const queueDrainClaimsRef = React.useRef<Set<string>>(new Set());
+  const hydratedQueueOwnerRef = React.useRef("");
+  const queueOwnerId = user?.id ? String(user.id) : "";
   // Reactive mirror of the per-chat queued-message count so the composer can
   // SHOW the user that their extra tasks (sent while the agent is thinking)
   // are queued and will run in order. The ref above is the source of truth;
   // this state just drives the visible "N en cola" chip.
   const [queuedCount, setQueuedCount] = React.useState(0);
+  const [queueHydrationVersion, setQueueHydrationVersion] = React.useState(0);
   const syncQueuedCount = React.useCallback((chatId?: string | null) => {
     const cid = chatId ?? currentChatIdRef.current ?? null;
     setQueuedCount(pendingMsgQueueRef.current.filter((q) => q.chatId === cid).length);
   }, []);
+
+  const persistComposerQueue = React.useCallback(() => {
+    if (!queueOwnerId) return;
+    writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
+  }, [queueOwnerId]);
+
+  // Hydrate tasks that the user explicitly queued while another turn was
+  // running. Unlike a plain ref, this survives refreshes and browser restarts.
+  React.useEffect(() => {
+    if (!queueOwnerId) {
+      pendingMsgQueueRef.current = [];
+      queueDrainClaimsRef.current.clear();
+      hydratedQueueOwnerRef.current = "";
+      syncQueuedCount(currentChatIdRef.current);
+      setQueueHydrationVersion((version) => version + 1);
+      return;
+    }
+    const stored = readPersistedComposerQueue(queueOwnerId);
+    if (hydratedQueueOwnerRef.current !== queueOwnerId) {
+      queueDrainClaimsRef.current.clear();
+    }
+    const live = hydratedQueueOwnerRef.current === queueOwnerId
+      ? pendingMsgQueueRef.current
+      : [];
+    const byId = new Map<string, PersistedComposerQueueItem>();
+    for (const item of [...stored, ...live]) byId.set(item.id, item);
+    pendingMsgQueueRef.current = Array.from(byId.values());
+    hydratedQueueOwnerRef.current = queueOwnerId;
+    persistComposerQueue();
+    syncQueuedCount(currentChatIdRef.current);
+    // Refs do not trigger effects. This version makes the drain effect observe
+    // a queue restored from localStorage even if every busy flag stayed idle.
+    setQueueHydrationVersion((version) => version + 1);
+  }, [persistComposerQueue, queueOwnerId, syncQueuedCount]);
+
   React.useEffect(() => {
     syncQueuedCount(currentChat?.id ?? null);
   }, [currentChat?.id, syncQueuedCount]);
+
+  const restoreLastQueuedMessage = React.useCallback(() => {
+    const chatId = currentChatIdRef.current ?? null;
+    const index = pendingMsgQueueRef.current
+      .map((item) => item.chatId === chatId && !queueDrainClaimsRef.current.has(item.id))
+      .lastIndexOf(true);
+    if (index < 0) return;
+    const [item] = pendingMsgQueueRef.current.splice(index, 1);
+    if (!item) return;
+    persistComposerQueue();
+    syncQueuedCount(chatId);
+    setInput(item.msg);
+    chatDraft.save(item.msg);
+    uploadedFilesRef.current = item.files;
+    setUploadedFiles(item.files);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [chatDraft, persistComposerQueue, setUploadedFiles, syncQueuedCount]);
+
+  const removeLastQueuedMessage = React.useCallback(() => {
+    const chatId = currentChatIdRef.current ?? null;
+    const index = pendingMsgQueueRef.current
+      .map((item) => item.chatId === chatId && !queueDrainClaimsRef.current.has(item.id))
+      .lastIndexOf(true);
+    if (index < 0) return;
+    pendingMsgQueueRef.current.splice(index, 1);
+    persistComposerQueue();
+    syncQueuedCount(chatId);
+    toast.success("Tarea quitada de la cola");
+  }, [persistComposerQueue, syncQueuedCount]);
 
   // ────────────────────────────────────────────────────────────
   // Sidebar auto-collapse — when the user turns on any composer tool
@@ -8691,10 +8797,20 @@ But first, you need to connect your Spotify account securely using the button be
   }, [selectChat]);
 
   const handleSend = async () => {
-    let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
+    const queuedSend = queuedComposerSendRef.current;
+    queuedComposerSendRef.current = null;
+    if (queuedSend) queuedSendSucceededRef.current.set(queuedSend.id, false);
+    const markQueuedSendSucceeded = () => {
+      if (queuedSend) queuedSendSucceededRef.current.set(queuedSend.id, true);
+    };
+    let composerFiles = queuedSend
+      ? [...queuedSend.files]
+      : uploadedFilesRef.current.length > 0
+        ? [...uploadedFilesRef.current]
+        : [...uploadedFiles];
     // Normalize before trim so zero-width chars don't sneak past the
     // "is it empty?" check, and so we can warn on catastrophic pastes.
-    const normalized = normalizeChatInput(input);
+    const normalized = normalizeChatInput(queuedSend?.msg ?? input);
     if (shouldWarnUser(normalized)) {
       toast.error(
         `El mensaje supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó al máximo permitido.`,
@@ -8719,6 +8835,7 @@ But first, you need to connect your Spotify account securely using the button be
       setInput("");
       try {
         await runSlashCommand(slash);
+        markQueuedSendSucceeded();
       } catch (err: any) {
         toast.error(`Slash command failed: ${err?.message || err}`);
       }
@@ -8767,7 +8884,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (inFlightSendKeysRef.current.has(sendKey)) {
       return;
     }
-    const idempotencyKey = `chat-send-${safeUUID()}`;
+    const idempotencyKey = queuedSend?.idempotencyKey || `chat-send-${safeUUID()}`;
     inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
 
     const activeFreePreviewTool = isFreePlan
@@ -8833,14 +8950,34 @@ But first, you need to connect your Spotify account securely using the button be
       model: selectedModel || null,
     });
 
-    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
+    const isBusy = isCurrentChatStreaming
+      || isCurrentChatLocalJobBusy
+      || isUploading
+      || sendInFlightChatsRef.current.has(sendLatchKey);
 
     if (isBusy) {
+      // An auto-drained item is still claimed in the durable queue. If the
+      // chat became busy between scheduling and execution, leave that item in
+      // place instead of enqueueing a duplicate with the same idempotency key.
+      if (queuedSend) {
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
       // Park the message — we'll drain the queue once the busy flags
       // flip back to idle (see the useEffect watching busy state).
-      pendingMsgQueueRef.current.push({ chatId: currentChat?.id ?? null, msg, files: composerFiles });
+      const queuedItem = createPersistedComposerQueueItem({
+        id: `queued-${safeUUID()}`,
+        ownerId: queueOwnerId || "__session__",
+        chatId: currentChat?.id ?? null,
+        msg,
+        files: composerFiles,
+        idempotencyKey,
+      });
+      pendingMsgQueueRef.current.push(queuedItem);
+      persistComposerQueue();
       syncQueuedCount(currentChat?.id ?? null);
       setInput("");
+      chatDraft.clear();
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
       const now = Date.now();
@@ -8925,6 +9062,7 @@ REWRITTEN TEXT:`;
             setIsRewriting(false);
           }
         );
+        markQueuedSendSucceeded();
       } catch (error: any) {
         console.error('Rewrite error:', error);
         toast.error(error?.message || 'Failed to rewrite text.');
@@ -9047,6 +9185,7 @@ REWRITTEN TEXT:`;
             toast.error(error.message || 'Error al generar documento');
           }
         );
+        markQueuedSendSucceeded();
       } catch (error: any) {
         setIsGeneratingWord(false);
         console.error('Word Connector error:', error);
@@ -9105,6 +9244,7 @@ REWRITTEN TEXT:`;
           chatId: activeChat?.id,
           files: collectUploadFileIds(filesToSend),
         });
+        markQueuedSendSucceeded();
 
         setIsGeneratingExcel(false);
 
@@ -9180,6 +9320,7 @@ REWRITTEN TEXT:`;
           // createNewChat will handle chat creation and message setup properly
           const newChat = await createNewChat('thesis', msg, undefined, { idempotencyKey });
           if (newChat?.id) {
+            markQueuedSendSucceeded();
             // Select the newly created chat to show messages properly
             setTimeout(async () => {
               await selectChat(newChat.id);
@@ -9204,6 +9345,7 @@ REWRITTEN TEXT:`;
       setIsVoiceGenerationActive(true);
       try {
         await handleVoiceGeneration(msg, filesToSend);
+        markQueuedSendSucceeded();
       } finally {
         isGeneratingVoiceRef.current = false;
         setIsGeneratingVoice(false);
@@ -9219,6 +9361,7 @@ REWRITTEN TEXT:`;
       setIsMusicGenerationActive(true);
       try {
         await handleMusicGeneration(msg, filesToSend);
+        markQueuedSendSucceeded();
       } finally {
         isGeneratingMusicRef.current = false;
         setIsGeneratingMusic(false);
@@ -9277,6 +9420,7 @@ REWRITTEN TEXT:`;
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
+        markQueuedSendSucceeded();
       } finally {
         inFlightSendKeysRef.current.delete(sendKey);
       }
@@ -9331,18 +9475,22 @@ REWRITTEN TEXT:`;
 
       if (isWebSearchActive || shouldUseAcademicSearch) {
         await handleWebSearch(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isGmailActive) {
         await handleGmailCommand(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isGoogleCalendarActive || isGoogleDriveActive) {
         await handleGoogleServicesCommand(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isSpotifyActive) {
         await handleSpotifyCommand(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
@@ -9352,11 +9500,13 @@ REWRITTEN TEXT:`;
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
+          markQueuedSendSucceeded();
           return;
         }
       }
       if (isVideoGenerationActive || chatType === 'video') {
         await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+        markQueuedSendSucceeded();
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -9365,6 +9515,7 @@ REWRITTEN TEXT:`;
         const topics = msg.split(',').map(t => t.trim()).filter(t => t.length > 0);
         if (topics.length >= 1) {
           await addThesisMessage(topics);
+          markQueuedSendSucceeded();
         } else {
           // Remove the optimistic messages since validation failed
           setCurrentChat(prevChat => {
@@ -9440,6 +9591,7 @@ REWRITTEN TEXT:`;
         window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
 
         await startComputerUse(msg, chatId, user?.id, computerUseAppMode || 'browser');
+        markQueuedSendSucceeded();
 
         // Clean up listener
         setTimeout(() => {
@@ -9583,6 +9735,7 @@ REWRITTEN TEXT:`;
           }
           break;
       }
+      markQueuedSendSucceeded();
     } catch (err: any) {
       console.error('Send error', err);
       devLog('Error details:', {
@@ -10510,27 +10663,51 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // while the user is reading a different conversation.
   React.useEffect(() => {
     if (pendingMsgQueueRef.current.length === 0) return;
+    const queueDrainClaims = queueDrainClaimsRef.current;
 
     const queueChatId = currentChat?.id ?? null;
     const currentBusy =
       isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
 
     // 1) Prefer draining the chat the user is looking at (composer path).
-    if (!currentBusy && queueChatId) {
+    if (!currentBusy) {
       const nextIndex = pendingMsgQueueRef.current.findIndex(
-        (item) => item.chatId === queueChatId,
+        (item) => item.chatId === queueChatId && !queueDrainClaims.has(item.id),
       );
       if (nextIndex >= 0) {
-        const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
-        syncQueuedCount(queueChatId);
+        const next = pendingMsgQueueRef.current[nextIndex];
         if (!next) return;
-        setInput(next.msg);
-        uploadedFilesRef.current = next.files || [];
-        setUploadedFiles(next.files || []);
-        const t = setTimeout(() => {
-          handleSendRef.current();
+        queueDrainClaims.add(next.id);
+        let started = false;
+        const t = setTimeout(async () => {
+          started = true;
+          const claimed = pendingMsgQueueRef.current.find((item) => item.id === next.id);
+          if (!claimed) {
+            queueDrainClaims.delete(next.id);
+            return;
+          }
+          queuedComposerSendRef.current = claimed;
+          try {
+            await handleSendRef.current();
+            if (queuedSendSucceededRef.current.get(claimed.id) === true) {
+              const completedIndex = pendingMsgQueueRef.current.findIndex((item) => item.id === claimed.id);
+              if (completedIndex >= 0) {
+                pendingMsgQueueRef.current.splice(completedIndex, 1);
+                persistComposerQueue();
+                syncQueuedCount(queueChatId);
+              }
+            }
+          } catch (error) {
+            console.error("No se pudo procesar la tarea en cola; se conservará para reintentar.", error);
+          } finally {
+            queuedSendSucceededRef.current.delete(claimed.id);
+            queueDrainClaims.delete(claimed.id);
+          }
         }, 0);
-        return () => clearTimeout(t);
+        return () => {
+          clearTimeout(t);
+          if (!started) queueDrainClaims.delete(next.id);
+        };
       }
     }
 
@@ -10538,27 +10715,48 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
       if (!item.chatId) return false;
       if (item.chatId === queueChatId) return false;
+      if (queueDrainClaims.has(item.id)) return false;
       if (activeStreamingChatIds.includes(item.chatId)) return false;
       if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
       return true;
     });
     if (bgIndex < 0) return;
-    const [bgNext] = pendingMsgQueueRef.current.splice(bgIndex, 1);
+    const bgNext = pendingMsgQueueRef.current[bgIndex];
     if (!bgNext?.chatId || !bgNext.msg?.trim()) return;
-    syncQueuedCount(queueChatId);
     const targetChat =
       currentChat?.id === bgNext.chatId
         ? currentChat
         : (chats || []).find((c: any) => c?.id === bgNext.chatId) || null;
     if (!targetChat) {
-      pendingMsgQueueRef.current.unshift(bgNext);
       return;
     }
     const files = Array.isArray(bgNext.files) ? bgNext.files : [];
-    const t = setTimeout(() => {
-      void addMessage(bgNext.msg, files, targetChat);
+    queueDrainClaims.add(bgNext.id);
+    let started = false;
+    const t = setTimeout(async () => {
+      started = true;
+      try {
+        await addMessage(bgNext.msg, files, targetChat, false, undefined, {
+          idempotencyKey: bgNext.idempotencyKey,
+        });
+        // Background work stays durable until the chat context confirms the
+        // message was accepted. A rejection leaves it in FIFO for retry.
+        const completedIndex = pendingMsgQueueRef.current.findIndex((item) => item.id === bgNext.id);
+        if (completedIndex >= 0) {
+          pendingMsgQueueRef.current.splice(completedIndex, 1);
+          persistComposerQueue();
+          syncQueuedCount(queueChatId);
+        }
+      } catch (error) {
+        console.error("No se pudo procesar la tarea en cola; se conservará para reintentar.", error);
+      } finally {
+        queueDrainClaims.delete(bgNext.id);
+      }
     }, 0);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      if (!started) queueDrainClaims.delete(bgNext.id);
+    };
   }, [
     currentChat,
     currentChat?.id,
@@ -10569,8 +10767,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeStreamingChatIds,
     activeLocalJobChatIds,
     addMessage,
+    persistComposerQueue,
     setUploadedFiles,
     syncQueuedCount,
+    queueHydrationVersion,
   ]);
 
   // Prevent Enter key from adding new line when not holding Shift
@@ -12641,13 +12841,29 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           otherwise a silent ref). */}
                       {queuedCount > 0 && (
                         <div className="flex items-center justify-center" aria-live="polite">
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/55 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                          <div className="inline-flex items-center gap-1 rounded-full border border-border/55 bg-muted/50 p-1 pl-2.5 text-[11px] font-medium text-muted-foreground">
                             <span className="relative flex h-1.5 w-1.5">
-                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[hsl(var(--accent-violet))] opacity-75" />
+                              <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-[hsl(var(--accent-violet))] opacity-75" />
                               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet))]" />
                             </span>
-                            {queuedCount} {queuedCount === 1 ? "tarea en cola" : "tareas en cola"} · se procesarán en orden
-                          </span>
+                            <span>{queuedCount} {queuedCount === 1 ? "tarea en cola" : "tareas en cola"}</span>
+                            <button
+                              type="button"
+                              onClick={restoreLastQueuedMessage}
+                              className="inline-flex h-11 items-center rounded-full px-2.5 text-foreground/80 transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7"
+                            >
+                              Editar última
+                            </button>
+                            <button
+                              type="button"
+                              onClick={removeLastQueuedMessage}
+                              aria-label="Quitar última tarea de la cola"
+                              title="Quitar última tarea"
+                              className="inline-grid h-11 w-11 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
                         </div>
                       )}
                       {/* Scroll-to-bottom pill — only shown when the user has

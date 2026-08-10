@@ -34,7 +34,8 @@ describe("chat background multi-chat reliability", () => {
   it("drains queued messages for idle background chats while viewing another", () => {
     const ui = readFileSync(join(ROOT, "components/chat-interface-enhanced.tsx"), "utf8")
     assert.match(ui, /Background drain for any other idle chat/)
-    assert.match(ui, /void addMessage\(bgNext\.msg, files, targetChat\)/)
+    assert.match(ui, /await addMessage\(bgNext\.msg, files, targetChat/)
+    assert.match(ui, /idempotencyKey: bgNext\.idempotencyKey/)
     // chats must be pulled from useChat for the background drain path.
     assert.match(ui, /chats,/)
   })

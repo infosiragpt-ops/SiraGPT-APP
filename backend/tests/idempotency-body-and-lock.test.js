@@ -336,7 +336,7 @@ describe('middleware — store contract for tryAcquire/release', () => {
     assert.equal(b.acquired, false);
     assert.equal(b.existing.state, 'pending');
     assert.equal(b.existing.bodyHash, 'h1');
-    await store.release('k');
+    await store.release('k', a.leaseToken);
     const c = await store.tryAcquire('k', 'h2', 1000);
     assert.equal(c.acquired, true);
   });
@@ -344,7 +344,7 @@ describe('middleware — store contract for tryAcquire/release', () => {
   test('release does NOT delete final entries — only pending locks', async () => {
     const store = createInMemoryIdempotencyStore({ ttlSeconds: 60 });
     await store.put('k', { state: 'final', status: 200, body: { ok: 1 }, headers: {}, bodyHash: null });
-    await store.release('k');
+    await store.release('k', 'not-the-owner');
     const got = await store.get('k');
     assert.equal(got.state, 'final');
   });

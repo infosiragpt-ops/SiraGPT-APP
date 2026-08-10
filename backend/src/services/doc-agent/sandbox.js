@@ -39,6 +39,7 @@ const fsSync = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { throwIfAborted } = require('../../utils/abort-signals');
 
 const CMD_TIMEOUT_MS = clampInt(process.env.SIRAGPT_DOC_SANDBOX_CMD_TIMEOUT_MS, 120_000, 1_000, 600_000);
 const MAX_OUTPUT_BYTES = clampInt(process.env.SIRAGPT_DOC_SANDBOX_MAX_OUTPUT_BYTES, 256 * 1024, 4 * 1024, 4 * 1024 * 1024);
@@ -70,12 +71,16 @@ function truncateOutput(buf) {
   return `${s.slice(0, MAX_OUTPUT_BYTES)}\n…[output truncated at ${MAX_OUTPUT_BYTES} bytes]`;
 }
 
-function runProcess(cmd, args, { timeoutMs = CMD_TIMEOUT_MS, cwd, env, input } = {}) {
+function runProcess(cmd, args, { timeoutMs = CMD_TIMEOUT_MS, cwd, env, input, signal } = {}) {
+  if (signal?.aborted) {
+    return Promise.resolve({ stdout: '', stderr: 'operation aborted', exitCode: 130, timedOut: false, aborted: true });
+  }
   return new Promise((resolve) => {
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
     let settled = false;
     let timedOut = false;
+    let aborted = false;
     const child = spawn(cmd, args, {
       cwd,
       env,
@@ -83,26 +88,37 @@ function runProcess(cmd, args, { timeoutMs = CMD_TIMEOUT_MS, cwd, env, input } =
       // Own process group so a timeout kill takes the whole tree with it.
       detached: process.platform !== 'win32',
     });
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const killTree = () => {
       try {
         if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
         else child.kill('SIGKILL');
       } catch (_) { /* already gone */ }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree();
     }, timeoutMs);
+    const onAbort = () => {
+      aborted = true;
+      killTree();
+    };
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    // Close the tiny race between the pre-spawn check and listener install.
+    if (signal?.aborted) onAbort();
     child.stdout.on('data', (d) => { if (stdout.length < MAX_OUTPUT_BYTES * 2) stdout = Buffer.concat([stdout, d]); });
     child.stderr.on('data', (d) => { if (stderr.length < MAX_OUTPUT_BYTES * 2) stderr = Buffer.concat([stderr, d]); });
     const finish = (exitCode) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ stdout: truncateOutput(stdout), stderr: truncateOutput(stderr), exitCode, timedOut });
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve({ stdout: truncateOutput(stdout), stderr: truncateOutput(stderr), exitCode, timedOut, aborted });
     };
     child.on('error', (err) => {
       stderr = Buffer.concat([stderr, Buffer.from(String(err.message || err))]);
       finish(127);
     });
-    child.on('close', (code, signal) => finish(timedOut ? 124 : (code == null && signal ? 137 : (code ?? 0))));
+    child.on('close', (code, closeSignal) => finish(aborted ? 130 : (timedOut ? 124 : (code == null && closeSignal ? 137 : (code ?? 0)))));
     if (input != null) child.stdin.write(input);
     child.stdin.end();
   });
@@ -110,7 +126,8 @@ function runProcess(cmd, args, { timeoutMs = CMD_TIMEOUT_MS, cwd, env, input } =
 
 /* ── local driver ───────────────────────────────────────────────────────── */
 
-async function createLocalSandbox() {
+async function createLocalSandbox({ signal } = {}) {
+  throwIfAborted(signal);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-doc-sandbox-'));
   await fs.mkdir(path.join(root, 'uploads'), { recursive: true });
   await fs.mkdir(path.join(root, 'outputs'), { recursive: true });
@@ -129,21 +146,25 @@ async function createLocalSandbox() {
     root,
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');
+      throwIfAborted(opts.signal || signal);
       const timeoutMs = clampInt(opts.timeoutMs, CMD_TIMEOUT_MS, 1_000, 600_000);
       // /workspace is a convenience alias in prompts; map it for local runs.
       const mapped = String(command).split('/workspace').join(root);
-      return runProcess('bash', ['-c', mapped], { timeoutMs, cwd: root, env: scrubbedEnv });
+      return runProcess('bash', ['-c', mapped], { timeoutMs, cwd: root, env: scrubbedEnv, signal: opts.signal || signal });
     },
     async putFile(relPath, buffer) {
+      throwIfAborted(signal);
       const abs = resolveInWorkspace(root, relPath);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, buffer);
       return abs;
     },
     async readFile(relPath) {
+      throwIfAborted(signal);
       return fs.readFile(resolveInWorkspace(root, relPath));
     },
     async writeFile(relPath, content) {
+      throwIfAborted(signal);
       const abs = resolveInWorkspace(root, relPath);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, content);
@@ -189,14 +210,15 @@ async function createLocalSandbox() {
 
 /* ── docker driver (CLI-based; ephemeral container per task) ─────────────── */
 
-async function dockerAvailable() {
-  const r = await runProcess('docker', ['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 5_000, env: process.env });
+async function dockerAvailable(signal) {
+  const r = await runProcess('docker', ['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 5_000, env: process.env, signal });
   return r.exitCode === 0;
 }
 
-async function createDockerSandbox() {
+async function createDockerSandbox({ signal, processRunner = runProcess } = {}) {
+  throwIfAborted(signal);
   const name = `sira-doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const run = await runProcess('docker', [
+  const run = await processRunner('docker', [
     'run', '-d', '--rm',
     '--name', name,
     '--network', 'none',
@@ -206,15 +228,40 @@ async function createDockerSandbox() {
     '--read-only=false',
     DOCKER_IMAGE,
     'sleep', 'infinity',
-  ], { timeoutMs: 30_000, env: process.env });
+  ], { timeoutMs: 30_000, env: process.env, signal });
   if (run.exitCode !== 0) {
+    // docker run may have reached the daemon before its CLI was cancelled.
+    // Removing by the preselected name is harmless when no container exists
+    // and prevents an aborted creation from leaking a live sandbox.
+    await processRunner('docker', ['rm', '-f', name], {
+      timeoutMs: 15_000,
+      env: process.env,
+      signal: undefined,
+    }).catch(() => {});
     throw new Error(`docker run failed: ${run.stderr || run.stdout}`);
   }
   let destroyed = false;
   // Staging dir for docker cp round-trips.
-  const stage = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-doc-stage-'));
+  let stage;
+  try {
+    stage = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-doc-stage-'));
+  } catch (error) {
+    await processRunner('docker', ['rm', '-f', name], {
+      timeoutMs: 15_000,
+      env: process.env,
+      signal: undefined,
+    }).catch(() => {});
+    throw error;
+  }
 
-  const dexec = (args, opts = {}) => runProcess('docker', args, { ...opts, env: process.env });
+  const dexec = (args, opts = {}) => {
+    const { ignoreParentAbort = false, ...runOpts } = opts;
+    return processRunner('docker', args, {
+      ...runOpts,
+      env: process.env,
+      signal: ignoreParentAbort ? undefined : (opts.signal || signal),
+    });
+  };
 
   return {
     driver: 'docker',
@@ -265,7 +312,7 @@ async function createDockerSandbox() {
     async destroy() {
       if (destroyed) return;
       destroyed = true;
-      await dexec(['rm', '-f', name], { timeoutMs: 15_000 }).catch(() => {});
+      await dexec(['rm', '-f', name], { timeoutMs: 15_000, ignoreParentAbort: true }).catch(() => {});
       try { fsSync.rmSync(stage, { recursive: true, force: true }); } catch (_) { /* best effort */ }
     },
   };
@@ -279,17 +326,17 @@ async function createDockerSandbox() {
 async function createSandbox(opts = {}) {
   const requested = String(opts.driver || process.env.SIRAGPT_DOC_SANDBOX_DRIVER || 'auto').toLowerCase();
   const hasRemote = Boolean(process.env.SANDBOX_SERVICE_URL && process.env.SANDBOX_API_KEY);
-  if (requested === 'remote') return require('./remote-sandbox').createRemoteSandbox();
-  if (requested === 'local') return createLocalSandbox();
-  if (requested === 'docker') return createDockerSandbox();
+  if (requested === 'remote') return require('./remote-sandbox').createRemoteSandbox({ signal: opts.signal });
+  if (requested === 'local') return createLocalSandbox({ signal: opts.signal });
+  if (requested === 'docker') return createDockerSandbox({ signal: opts.signal });
   // auto: the remote sandbox microservice wins when configured (this is how a
   // Docker-less host like Replit gets real container isolation); then a local
   // Docker daemon; then the in-process local workspace fallback.
-  if (hasRemote) return require('./remote-sandbox').createRemoteSandbox();
-  if (await dockerAvailable()) {
-    try { return await createDockerSandbox(); } catch (_) { /* image missing etc. → local */ }
+  if (hasRemote) return require('./remote-sandbox').createRemoteSandbox({ signal: opts.signal });
+  if (await dockerAvailable(opts.signal)) {
+    try { return await createDockerSandbox({ signal: opts.signal }); } catch (_) { /* image missing etc. → local */ }
   }
-  return createLocalSandbox();
+  return createLocalSandbox({ signal: opts.signal });
 }
 
 module.exports = {
@@ -298,4 +345,5 @@ module.exports = {
   CMD_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,
   DOCKER_IMAGE,
+  _createDockerSandbox: createDockerSandbox,
 };
