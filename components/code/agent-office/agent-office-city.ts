@@ -431,13 +431,13 @@ export function addEdgeDistrict({
   // immediately below the operational office at y=0. Making the facade taller
   // by pushing its base down preserves the skyline without enclosing the
   // rooftop workspace inside an opaque box.
-  const groundY = -44.4
+  const groundY = -58
   const officeY = 0
-  const districtHalfWidth = Math.max(64, totalWidth + 32)
-  const districtHalfDepth = Math.max(48, totalDepth + 28)
+  const districtHalfWidth = Math.max(72, totalWidth + 40)
+  const districtHalfDepth = Math.max(56, totalDepth + 36)
 
   scene.background = new THREE.Color(light.background)
-  scene.fog = new THREE.Fog(light.fog, 72, 238)
+  scene.fog = new THREE.Fog(light.fog, 82, 280)
 
   const horizon = new THREE.Mesh(
     new THREE.PlaneGeometry(districtHalfWidth * 4.1, 104),
@@ -604,17 +604,17 @@ export function addEdgeDistrict({
   const landmarkDark = night ? 0x142838 : 0x18384a
   const landmarkMid = night ? 0x205070 : 0x286880
   const landmarkLight = night ? 0x3578a0 : 0x4090b0
-  const lowerHeight = 7.5
-  const middleBottom = groundY + 6
-  const middleTop = -2.35
-  const upperBottom = -3.05
+  const lowerHeight = 9.5
+  const middleBottom = groundY + 7.5
+  const middleTop = -2.8
+  const upperBottom = -3.5
   const upperTop = -0.22
-  const lowerWidth = totalWidth + 26
-  const lowerDepth = totalDepth + 26
-  const middleWidth = totalWidth + 18
-  const middleDepth = totalDepth + 18
-  const upperWidth = totalWidth + 12
-  const upperDepth = totalDepth + 12
+  const lowerWidth = totalWidth + 38
+  const lowerDepth = totalDepth + 38
+  const middleWidth = totalWidth + 28
+  const middleDepth = totalDepth + 28
+  const upperWidth = totalWidth + 20
+  const upperDepth = totalDepth + 20
 
   structureInstances.push(
     {
@@ -634,7 +634,7 @@ export function addEdgeDistrict({
     },
   )
 
-  const secondaryCount = variant === "full" ? 52 : 22
+  const secondaryCount = variant === "full" ? 55 : 24
   const normalizedLots: Array<[number, number]> = [
     [-0.54, -0.64],
     [0, -0.76],
@@ -690,6 +690,9 @@ export function addEdgeDistrict({
     [0.12, -0.52],
     [-1.18, 0.36],
     [1.18, 0.36],
+    [-0.46, -0.24],
+    [0.46, -0.24],
+    [-0.22, 0.84],
   ]
   // Cooler silver/graphite corporate palette (modern glass district).
   const dayBuildingColors = [0x6a8290, 0x487084, 0x8a9ca6, 0x3a6478, 0x788490, 0x5e7280, 0x567284, 0x426880, 0x728698]
@@ -704,23 +707,23 @@ export function addEdgeDistrict({
 
   for (let index = 0; index < secondaryCount; index += 1) {
     const [normalizedX, normalizedZ] = normalizedLots[index]
-    const lotWidth = 5.8 + random() * 6.2
-    const lotDepth = 5.5 + random() * 5.9
-    const foregroundPenalty = normalizedZ > 0.2 ? 6.8 : 0
+    const lotWidth = 6.2 + random() * 6.8
+    const lotDepth = 5.9 + random() * 6.4
+    const foregroundPenalty = normalizedZ > 0.2 ? 5.2 : 0
     const skylineBoost =
       normalizedZ < -0.58
-        ? 10 + random() * 8
+        ? 14 + random() * 10
         : normalizedZ < -0.25
-          ? 5 + random() * 6
+          ? 8 + random() * 8
         : normalizedZ < 0.2
-          ? 2 + random() * 5
+          ? 4 + random() * 6
           : 0
     const landmarkTotalHeight = upperTop - groundY + 2.5
     const height = Math.min(
-      landmarkTotalHeight - 6,
+      landmarkTotalHeight - 8,
       Math.max(
-        10,
-        12 + random() * 10 + skylineBoost - foregroundPenalty,
+        14,
+        15 + random() * 12 + skylineBoost - foregroundPenalty,
       ),
     )
     const slenderness = height > 24 ? 0.78 : height > 18 ? 0.88 : 1
@@ -893,14 +896,14 @@ export function addEdgeDistrict({
       .filter(({ building }) => building.height > 20)
       .sort((a, b) => b.building.height - a.building.height)
     let bridgesBuilt = 0
-    for (let i = 0; i < bridgeCandidates.length && bridgesBuilt < 5; i += 1) {
-      for (let j = i + 1; j < bridgeCandidates.length && bridgesBuilt < 5; j += 1) {
+    for (let i = 0; i < bridgeCandidates.length && bridgesBuilt < 7; i += 1) {
+      for (let j = i + 1; j < bridgeCandidates.length && bridgesBuilt < 7; j += 1) {
         const a = bridgeCandidates[i].building
         const b = bridgeCandidates[j].building
         const dx = b.x - a.x
         const dz = b.z - a.z
         const dist = Math.hypot(dx, dz)
-        if (dist < 10 || dist > 28) continue
+        if (dist < 10 || dist > 34) continue
         const midX = (a.x + b.x) / 2
         const midZ = (a.z + b.z) / 2
         const bridgeY =
@@ -943,7 +946,7 @@ export function addEdgeDistrict({
   addFacadeWindows(facadeWindows, landmarkFacade, groundY, variant, random, night)
 
   const facadeBandColor = night ? 0x9ce8f1 : 0xe5f5f6
-  const landmarkFloorCount = variant === "full" ? 9 : 6
+  const landmarkFloorCount = variant === "full" ? 12 : 7
   for (let floor = 1; floor <= landmarkFloorCount; floor += 1) {
     const progress = floor / (landmarkFloorCount + 1)
     const y = groundY + 1 + progress * (upperTop - groundY - 1.6)
@@ -960,7 +963,7 @@ export function addEdgeDistrict({
       },
     )
   }
-  const landmarkFinCount = variant === "full" ? 8 : 5
+  const landmarkFinCount = variant === "full" ? 10 : 6
   for (let index = 0; index < landmarkFinCount; index += 1) {
     const progress = (index + 0.5) / landmarkFinCount
     propInstances.push({
@@ -1098,7 +1101,7 @@ export function addEdgeDistrict({
   scene.add(facadeMesh)
 
   const atriumHeight = upperTop - groundY - 1.2
-  const atriumWidth = Math.max(4.2, Math.min(7.4, totalWidth * 0.22))
+  const atriumWidth = Math.max(5.2, Math.min(9.8, totalWidth * 0.28))
   const atrium = new THREE.Mesh(
     new THREE.BoxGeometry(atriumWidth, atriumHeight, 0.38),
     new THREE.MeshPhysicalMaterial({
@@ -1119,7 +1122,7 @@ export function addEdgeDistrict({
   atrium.userData.agentOfficeEnvironment = "edge-district"
   scene.add(atrium)
 
-  const deckWidth = totalWidth + 14
+  const deckWidth = totalWidth + 18
   const deckInnerZ = totalDepth / 2 + 1.1
   const deckOuterZ = totalDepth / 2 + 7
   const deckPoints: Array<[number, number]> = [
@@ -1518,7 +1521,7 @@ export function addEdgeDistrict({
     })
   }
 
-  const boulevardLampPairs = variant === "full" ? 7 : 4
+  const boulevardLampPairs = variant === "full" ? 9 : 5
   for (let index = 0; index < boulevardLampPairs; index += 1) {
     const progress = (index + 0.5) / boulevardLampPairs
     const x = -districtHalfWidth * 0.86 + progress * districtHalfWidth * 1.72
@@ -1564,7 +1567,7 @@ export function addEdgeDistrict({
   streetPools.userData.agentOfficeEnvironment = "edge-district"
   scene.add(streetPools)
 
-  const urbanTreeCount = variant === "full" ? 22 : 10
+  const urbanTreeCount = variant === "full" ? 28 : 12
   for (let index = 0; index < urbanTreeCount; index += 1) {
     const side = index % 2 === 0 ? -1 : 1
     const row = Math.floor(index / 2)
@@ -1640,7 +1643,7 @@ export function addEdgeDistrict({
   trees.userData.agentOfficeEnvironment = "edge-district"
   scene.add(trees)
 
-  const vehicleCount = variant === "full" ? 16 : 6
+  const vehicleCount = variant === "full" ? 20 : 8
   const vehicleRoutes: VehicleRoute[] = []
   for (let index = 0; index < vehicleCount; index += 1) {
     const horizontal = index < Math.ceil(vehicleCount * 0.6)
@@ -1797,8 +1800,8 @@ export function addEdgeDistrict({
 
   const baseDistance =
     variant === "thumbnail"
-      ? Math.max(52, totalWidth * 1.38, totalDepth * 1.5)
-      : Math.max(60, totalWidth * 1.44, totalDepth * 1.56)
+      ? Math.max(64, totalWidth * 1.52, totalDepth * 1.68)
+      : Math.max(72, totalWidth * 1.58, totalDepth * 1.72)
   const landscapeDistance = variant === "thumbnail" ? baseDistance * 0.94 : baseDistance
   const portraitDistance = landscapeDistance * (variant === "thumbnail" ? 1.2 : 1.42)
 
@@ -1821,23 +1824,23 @@ export function addEdgeDistrict({
       trees: treeInstances.length,
       vehicles: vehicleRoutes.length,
       lightFixtures: streetLightGlows.length,
-      expectedDrawCalls: night ? 27 : 26,
+      expectedDrawCalls: night ? 28 : 27,
     },
     framing: {
       target: new THREE.Vector3(
         0,
-        variant === "thumbnail" ? 1.0 : 1.1,
+        variant === "thumbnail" ? 1.0 : 1.4,
         variant === "thumbnail" ? -totalDepth * 0.08 : 0,
       ),
       yaw: variant === "thumbnail" ? -0.64 : -0.62,
-      pitch: variant === "thumbnail" ? 0.48 : 0.66,
-      portraitPitch: variant === "thumbnail" ? 0.48 : 0.84,
-      portraitTargetLift: variant === "thumbnail" ? 2.8 : 0.45,
+      pitch: variant === "thumbnail" ? 0.48 : 0.64,
+      portraitPitch: variant === "thumbnail" ? 0.48 : 0.82,
+      portraitTargetLift: variant === "thumbnail" ? 2.8 : 0.65,
       distance: landscapeDistance,
       landscapeDistance,
       portraitDistance,
-      minDistance: 18,
-      maxDistance: 185,
+      minDistance: 22,
+      maxDistance: 240,
       groundY,
       officeY,
       districtWidth: districtHalfWidth * 2,
