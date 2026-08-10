@@ -54,7 +54,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
-import { dedupeMessages } from "@/lib/message-preservation"
+import { dedupeMessages, mergeChatPreservingUserMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
 import { ComposerCharCounter } from "@/components/composer-char-counter"
@@ -98,7 +98,7 @@ import {
 } from "@/components/chat/ComposerInlineDisplays"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
-import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
+import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -107,7 +107,13 @@ import {
   logIngest,
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
-import { apiClient } from "@/lib/api"
+import {
+  apiClient,
+  isTerminalAgentTaskRecoveryHttpStatus,
+  resolveChatAgentTaskForRecovery,
+  shouldDetachAgentTaskRecovery,
+} from "@/lib/api"
+import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
@@ -237,6 +243,62 @@ import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
+import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
+import {
+  isAssistantMessage,
+  parseMessageFilesForRender,
+  shouldRenderChatMessage,
+} from "@/lib/chat/message-rendering"
+import {
+  attachmentHasPreviewSource,
+  buildAgentFileMetadata,
+  collectUploadFileIds,
+  getFileProcessingStage,
+  isComposerFileProcessingPending,
+  isComposerFileUploadFailed,
+  isComposerFileUploadPending,
+  previewAttachmentKey,
+  resolveUploadFileId,
+} from "@/lib/chat/composer-files"
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_PROVIDER,
+  DEFAULT_VIDEO_DURATION,
+  DEFAULT_VIDEO_MODEL,
+  IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_COUNT_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
+  MUSIC_EFFECT_OPTIONS,
+  MUSIC_MODEL_OPTIONS,
+  MUSIC_MOOD_OPTIONS,
+  MUSIC_STYLE_OPTIONS,
+  MUSIC_STYLE_PROFILES,
+  VIDEO_ASPECT_RATIO_OPTIONS,
+  VIDEO_DURATION_OPTIONS,
+  VIDEO_RESOLUTION_OPTIONS,
+  VOICE_ACCENT_OPTIONS,
+  VOICE_COMPOSER_PLACEHOLDER,
+  VOICE_EFFECT_OPTIONS,
+  VOICE_LANGUAGE_OPTIONS,
+  VOICE_MODEL_OPTIONS,
+  isImageModelEntry,
+  isVideoModelEntry,
+  providerForMediaModel,
+  type ImageAspectRatio,
+  type ImageGenerationCount,
+  type ImageQuality,
+  type MusicEffect,
+  type MusicModel,
+  type MusicMood,
+  type MusicStyle,
+  type VideoAspectRatio,
+  type VideoDuration,
+  type VideoResolution,
+  type VoiceAccent,
+  type VoiceEffect,
+  type VoiceLanguage,
+  type VoiceModel,
+} from "@/lib/chat/media-composer-config"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
 // contexts (preview iframes, denied permission, insecure origin) and, when not
@@ -256,24 +318,6 @@ const GPT_RATING_OPTIONS = [
 const getGptRatingLabel = (rating: number): string =>
   GPT_RATING_OPTIONS.find((option) => option.value === rating)?.label || ""
 
-const resolveUploadFileId = (file: any): string | null => {
-  if (!file) return null
-  if (typeof file === "string") return file
-  return file.id || file.fileId || file.attachmentId || null
-}
-
-const collectUploadFileIds = (files: any[] = []): string[] =>
-  files.map(resolveUploadFileId).filter((id): id is string => Boolean(id))
-
-const attachmentHasPreviewSource = (attachment: AttachmentLike | null | undefined): boolean =>
-  Boolean(attachment?.file || attachment?.url || attachment?.extractedText)
-
-const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): string =>
-  String(attachment?.id || attachment?.url || attachment?.name || "")
-
-const isComposerFileUploadPending = (file: any): boolean =>
-  Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
-
 // Universal ingest: pasted plain text longer than this becomes a "PEGADO"
 // (.txt) chip next to the input — expandable/removable — so the bar stays
 // clean. Shorter pastes insert inline at the caret. Configurable per
@@ -283,120 +327,120 @@ const LONG_PASTE_CHIP_THRESHOLD = (() => {
   return Number.isFinite(n) && n > 0 ? n : 1500
 })()
 
-const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
-const PROCESSING_CONTEXT_MIME_RE =
-  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument|rtf)|text\/(?:plain|markdown|csv|tab-separated-values|html|xml)|application\/(?:json|xml))/i
-
-const shouldWaitForDocumentProcessing = (file: any): boolean => {
-  if (!file || !resolveUploadFileId(file)) return false
-  const name = String(file.name || file.originalName || file.filename || "")
-  const mime = String(file.mimeType || file.type || file.contentType || "")
-  return PROCESSING_CONTEXT_EXT_RE.test(name) || PROCESSING_CONTEXT_MIME_RE.test(mime)
-}
-
-const getFileProcessingStage = (file: any): FileProcessingStage | null => {
-  const stage = file?.processingStage || file?.stage || null
-  return typeof stage === "string" ? stage as FileProcessingStage : null
-}
-
-const isComposerFileProcessingPending = (file: any): boolean =>
-  shouldWaitForDocumentProcessing(file) && isActiveProcessingStage(getFileProcessingStage(file))
-
-const isComposerFileUploadFailed = (file: any): boolean =>
-  Boolean(file && (file.status === "failed" || getFileProcessingStage(file) === "failed"))
-
 const normalizePlanName = (plan?: string | null): string =>
   String(plan || "FREE").trim().toUpperCase()
 
 const isFreePlanName = (plan?: string | null): boolean =>
   normalizePlanName(plan) === "FREE"
 
-const sanitizeLongPasteMetaForMessage = (meta: any) => {
-  if (!meta || meta.kind !== "long_paste_document") return null
-  return {
-    kind: "long_paste_document",
-    title: meta.title,
-    filename: meta.filename,
-    preview: meta.preview,
-    originalCharCount: meta.originalCharCount,
-    originalWordCount: meta.originalWordCount,
-    originalLineCount: meta.originalLineCount,
-    createdAt: meta.createdAt,
-  }
-}
+const AGENT_TASK_STATE_FENCE = /```agent-task-state\s*\n?([\s\S]*?)\n?```/i
 
-const buildAgentFileMetadata = (files: any[] = []) =>
-  files
-    .map((file) => {
-      const id = resolveUploadFileId(file)
-      if (!id) return null
-      const longPasteMeta = getLongPasteMetadata(file)
-      const safeLongPasteMeta = sanitizeLongPasteMetaForMessage(longPasteMeta)
-      const displayName =
-        safeLongPasteMeta?.title ||
-        file?.longPasteTitle ||
-        file?.originalName ||
-        file?.name ||
-        file?.filename ||
-        "archivo"
-
-      return {
-        id,
-        name: displayName,
-        originalName: displayName,
-        filename: file?.filename || file?.name || displayName,
-        mimeType: file?.mimeType || file?.type || file?.contentType || null,
-        type: file?.type || file?.mimeType || file?.contentType || null,
-        size: file?.size ?? null,
-        url: file?.url || null,
-        openaiFileId: file?.openaiFileId || null,
-        sourceChannel: file?.sourceChannel || null,
-        isLongPasteDocument: Boolean(file?.isLongPasteDocument || safeLongPasteMeta),
-        longPasteTitle: safeLongPasteMeta?.title || file?.longPasteTitle || null,
-        longPastePreview: safeLongPasteMeta?.preview || file?.longPastePreview || null,
-        longPasteMeta: safeLongPasteMeta,
-      }
-    })
-    .filter(Boolean)
-
-const parseMessageFilesForRender = (files: any): any[] => {
-  if (!files) return []
-  if (Array.isArray(files)) return files
-  if (typeof files !== "string") return []
+const parseAgentTaskMessageMetadata = (metadata: unknown): Record<string, any> => {
+  if (!metadata) return {}
+  if (typeof metadata === "object") return metadata as Record<string, any>
+  if (typeof metadata !== "string") return {}
   try {
-    const parsed = JSON.parse(files)
-    return Array.isArray(parsed) ? parsed : []
+    const parsed = JSON.parse(metadata)
+    return parsed && typeof parsed === "object" ? parsed : {}
   } catch {
-    return []
+    return {}
   }
 }
 
-const CHAT_UPLOAD_REQUEST_MAX_FILES = 50
-const CHAT_UPLOAD_REQUEST_MAX_BYTES = 220 * 1024 * 1024
+const normalizeRecoveredAgentTaskState = (value: unknown, taskId?: string | null): AgentTaskState => {
+  const parsed = value && typeof value === "object"
+    ? value as Partial<AgentTaskState> & { taskId?: unknown; status?: unknown }
+    : {}
+  const legacyTaskId = typeof parsed.taskId === "string" && parsed.taskId.trim()
+    ? parsed.taskId.trim()
+    : null
+  const normalizedTaskId = taskId || parsed.meta?.taskId || legacyTaskId
+  const normalizedStatus = String(parsed.status || "").toLowerCase()
+  return {
+    ...initialAgentState,
+    ...parsed,
+    meta: normalizedTaskId
+      ? { ...(parsed.meta || {}), taskId: normalizedTaskId }
+      : parsed.meta,
+    steps: Array.isArray(parsed.steps)
+      ? parsed.steps.map(step => ({ ...step, toolCalls: Array.isArray(step?.toolCalls) ? step.toolCalls : [] }))
+      : [],
+    artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts : [],
+    approvals: Array.isArray(parsed.approvals) ? parsed.approvals : [],
+    checkpoints: Array.isArray(parsed.checkpoints) ? parsed.checkpoints : [],
+    qualityGates: Array.isArray(parsed.qualityGates) ? parsed.qualityGates : [],
+    repairs: Array.isArray(parsed.repairs) ? parsed.repairs : [],
+    documentAnalysisIds: Array.isArray(parsed.documentAnalysisIds) ? parsed.documentAnalysisIds : [],
+    evidenceRefs: Array.isArray(parsed.evidenceRefs) ? parsed.evidenceRefs : [],
+    finalText: typeof parsed.finalText === "string" ? parsed.finalText : "",
+    done: Boolean(parsed.done) || normalizedStatus === "completed",
+  }
+}
 
-function buildChatUploadChunks(files: File[], tempFiles: any[]) {
-  const chunks: Array<{ files: File[]; temps: any[] }> = []
-  let currentFiles: File[] = []
-  let currentTemps: any[] = []
-  let currentBytes = 0
+const parseAgentTaskMessageState = (content: unknown): AgentTaskState | null => {
+  if (typeof content !== "string") return null
+  const match = content.match(AGENT_TASK_STATE_FENCE)
+  if (!match?.[1]) return null
+  try {
+    return normalizeRecoveredAgentTaskState(JSON.parse(match[1]))
+  } catch {
+    return null
+  }
+}
 
-  files.forEach((file, index) => {
-    const fileBytes = Number(file.size || 0)
-    const wouldOverflowCount = currentFiles.length >= CHAT_UPLOAD_REQUEST_MAX_FILES
-    const wouldOverflowBytes = currentFiles.length > 0 && currentBytes + fileBytes > CHAT_UPLOAD_REQUEST_MAX_BYTES
-    if (wouldOverflowCount || wouldOverflowBytes) {
-      chunks.push({ files: currentFiles, temps: currentTemps })
-      currentFiles = []
-      currentTemps = []
-      currentBytes = 0
+const serializeRecoveredAgentTaskState = (state: AgentTaskState): string => {
+  const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```'
+  return state.finalText ? `${fenced}\n\n${state.finalText}` : fenced
+}
+
+const getAgentTaskIdFromMessage = (message: any, state?: AgentTaskState | null): string | null => {
+  const metadata = parseAgentTaskMessageMetadata(message?.metadata)
+  const raw = state?.meta?.taskId || (state as AgentTaskState & { taskId?: unknown } | null)?.taskId || metadata.taskId
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null
+}
+
+const findRecoverableAgentTaskMessage = (messages: any[] = [], taskId?: string | null) => {
+  const unidentified: Array<{ message: any; state: AgentTaskState; taskId: null }> = []
+  let totalCandidates = 0
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    const state = parseAgentTaskMessageState(message?.content)
+    if (!state || state.done) continue
+    totalCandidates += 1
+    const messageTaskId = getAgentTaskIdFromMessage(message, state)
+    if (taskId) {
+      if (messageTaskId === taskId) return { message, state, taskId: messageTaskId }
+      if (!messageTaskId) unidentified.push({ message, state, taskId: null })
+      continue
     }
-    currentFiles.push(file)
-    currentTemps.push(tempFiles[index])
-    currentBytes += fileBytes
-  })
+    return { message, state, taskId: messageTaskId }
+  }
+  // A single pre-task-id legacy bubble is safe to adopt. With two or more,
+  // creating a fresh task-specific bubble is preferable to overwriting the
+  // wrong historical execution.
+  return taskId && totalCandidates === 1 && unidentified.length === 1 ? unidentified[0] : null
+}
 
-  if (currentFiles.length > 0) chunks.push({ files: currentFiles, temps: currentTemps })
-  return chunks
+const isTerminalAgentTaskStatus = (status: unknown): boolean =>
+  new Set(["completed", "cancelled", "canceled", "error", "failed"])
+    .has(String(status || "").toLowerCase())
+
+const waitForAgentTaskRecoveryPoll = (ms: number, signal: AbortSignal): Promise<void> => {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      signal.removeEventListener("abort", finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal.addEventListener("abort", finish, { once: true })
+  })
 }
 
 const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
@@ -440,25 +484,6 @@ const collectLatestGeneratedImageUrls = (messages: any[] = [], maxImages = 4) =>
   return []
 }
 
-const hasMessageTextForRender = (content: any): boolean => {
-  if (typeof content === "string") return content.trim().length > 0
-  if (content == null) return false
-  return String(content).trim().length > 0
-}
-
-const shouldRenderChatMessage = (message: any, allowEmptyStreamingAssistant = false): boolean => {
-  if (!message) return false
-  const role = String(message.role || "").toUpperCase()
-  if (role === "USER") return true
-  if (message.error || message.progressStage) return true
-  if (hasMessageTextForRender(message.content)) return true
-  if (parseMessageFilesForRender(message.files).length > 0) return true
-  return allowEmptyStreamingAssistant && role === "ASSISTANT"
-}
-
-const isAssistantMessage = (message: any): boolean =>
-  String(message?.role || "").toUpperCase() === "ASSISTANT"
-
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -488,128 +513,6 @@ type SearchActivityState = {
   selectedSources?: AgenticSource[]
   elapsedMs?: number
   entries: SearchActivityEntry[]
-}
-
-type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
-type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
-type ImageQuality = "512px" | "1K" | "2K" | "4K"
-type VideoResolution = "480p" | "720p"
-type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
-type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
-type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
-type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
-type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
-type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
-type MusicModel = "ElevenLabs" | "Lyria 3 Pro" | "Mimo Max 02HD"
-type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orchestral" | "Latin" | "Hip-Hop" | "Jazz"
-type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
-type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
-
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
-  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]", visibleByDefault: true },
-  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8", visibleByDefault: true },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6", visibleByDefault: true },
-  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
-  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9", visibleByDefault: true },
-]
-
-const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
-const IMAGE_COUNT_OPTIONS: ImageGenerationCount[] = [1, 2, 3, 4, 5]
-const VIDEO_RESOLUTION_OPTIONS: VideoResolution[] = ["480p", "720p"]
-const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
-  { value: "auto", label: "Auto", ratio: "Auto", className: "h-6 w-6", visibleByDefault: true },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[16px] w-8", visibleByDefault: true },
-  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[16px]", visibleByDefault: true },
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
-  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-[22px] w-8", visibleByDefault: true },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
-  { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
-]
-const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-const VOICE_MODEL_OPTIONS: VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
-const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
-const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
-const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
-const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Max 02HD"]
-const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
-const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
-const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
-const MUSIC_STYLE_PROFILES: Record<MusicStyle, { label: string; description: string; accentClass: string }> = {
-  Auto: {
-    label: "Auto",
-    description: "Deja que el modelo elija el genero segun tu prompt.",
-    accentClass: "bg-zinc-900 dark:bg-white",
-  },
-  Cinematic: {
-    label: "Cinematic",
-    description: "Texturas amplias, tension y final de trailer.",
-    accentClass: "bg-violet-500",
-  },
-  Pop: {
-    label: "Pop",
-    description: "Hook claro, bateria pulida y estructura comercial.",
-    accentClass: "bg-pink-500",
-  },
-  Electronic: {
-    label: "Electronic",
-    description: "Sintetizadores, pulso moderno y energia digital.",
-    accentClass: "bg-cyan-500",
-  },
-  Ambient: {
-    label: "Ambient",
-    description: "Capas suaves, atmosfera y movimiento discreto.",
-    accentClass: "bg-teal-500",
-  },
-  Orchestral: {
-    label: "Orchestral",
-    description: "Cuerdas, metales y dinamica de partitura.",
-    accentClass: "bg-amber-500",
-  },
-  Latin: {
-    label: "Latin",
-    description: "Ritmo calido, percusion marcada y sabor latino.",
-    accentClass: "bg-red-500",
-  },
-  "Hip-Hop": {
-    label: "Hip-Hop",
-    description: "Beat con groove, bajo presente y espacio vocal.",
-    accentClass: "bg-slate-700 dark:bg-slate-300",
-  },
-  Jazz: {
-    label: "Jazz",
-    description: "Armonia rica, swing sutil e instrumentacion organica.",
-    accentClass: "bg-emerald-600",
-  },
-}
-const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
-
-const DEFAULT_IMAGE_MODEL = ""
-const DEFAULT_IMAGE_PROVIDER = "OpenAI"
-const DEFAULT_VIDEO_MODEL = ""
-const DEFAULT_VIDEO_DURATION: VideoDuration = 8
-
-const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
-  const value = String(modelName || "").toLowerCase()
-  if (value.includes("/")) return "OpenRouter"
-  if (value.includes("openrouter") || value.includes("seedream")) return "OpenRouter"
-  if (value.includes("google") || value.includes("imagen") || value.includes("gemini") || value.includes("veo")) return "Google"
-  if (value.includes("kling")) return "Kling"
-  if (value.includes("openai") || value.includes("dall") || value.includes("gpt-image")) return "OpenAI"
-  return fallback
-}
-
-const isImageModelEntry = (model: any) => {
-  const type = String(model?.type || model?.kind || '').toLowerCase();
-  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
-  return type === 'image' || type === 'images' || type.includes('image') || /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i.test(label);
-}
-
-const isVideoModelEntry = (model: any) => {
-  const type = String(model?.type || model?.kind || '').toLowerCase();
-  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
-  return type === 'video' || type === 'videos' || type.includes('video') || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label);
 }
 
 // `ImageAspectRatioMark` was extracted to
@@ -1292,7 +1195,6 @@ const ActionsDropdown = ({
     setIsOpen(false);
   };
 
-
   const isMenuDisabled = isLoading || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
   // Premium tools are also marketing/configuration previews for FREE users.
@@ -1680,8 +1582,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-pink-100 dark:bg-pink-900/20 flex items-center justify-center">
-                <Palette className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
+                <Palette className="h-4 w-4 text-violet-600 dark:text-violet-400" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1692,7 +1594,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 shrink-0 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn("w-2 h-2 shrink-0 bg-violet-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1759,8 +1661,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
-                <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-fuchsia-100 dark:bg-fuchsia-900/20 flex items-center justify-center">
+                <Music className="h-4 w-4 text-fuchsia-600 dark:text-fuchsia-400" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1771,7 +1673,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-rose-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-fuchsia-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -2654,9 +2556,9 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
+            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[200px] sm:max-w-[300px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
             aria-label={`Seleccionar modelo de ${tool}`}
-            title={`Modelo: ${label}`}
+            title={`Modelo: ${label}${selected?.provider ? ` · ${selected.provider}` : ""}`}
             disabled={disabled}
             data-media-tool={tool}
           >
@@ -2664,7 +2566,7 @@ const ActiveToolsDisplay = ({
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
               <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
-            <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
+            <span className="min-w-0 truncate max-w-[60px] sm:max-w-[200px]" title={label}>{label}</span>
             {!disabled && <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />}
           </Button>
         </DropdownMenuTrigger>
@@ -2692,8 +2594,8 @@ const ActiveToolsDisplay = ({
                       <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92">{option.displayName}</span>
-                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62">
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={option.displayName}>{option.displayName}</span>
+                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62" title={[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}>
                         {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
                       </span>
                     </span>
@@ -2854,7 +2756,7 @@ const ActiveToolsDisplay = ({
         <>
           <div
             className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
-            style={{ "--image-liquid-red": "#FF0000" } as React.CSSProperties}
+            style={{ "--image-liquid-red": "#7C3AED" } as React.CSSProperties}
           >
             <span className="image-liquid-chip__wave" />
             <span className="image-liquid-chip__gloss" />
@@ -2870,7 +2772,7 @@ const ActiveToolsDisplay = ({
                 "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-[rgba(255,0,0,0.10)] dark:hover:bg-[rgba(255,0,0,0.16)]"
+                  : "hover:bg-[rgba(124,58,237,0.10)] dark:hover:bg-[rgba(124,58,237,0.18)]"
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -3074,7 +2976,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de voz</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceModel}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceModel}>{selectedVoiceModel}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3091,7 +2993,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Language</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceLanguage}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceLanguage}>{selectedVoiceLanguage}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3108,7 +3010,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Accent</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceAccent}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceAccent}>{selectedVoiceAccent}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3143,7 +3045,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceEffect}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceEffect}>{selectedVoiceEffect}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3168,15 +3070,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,63,94,0.0)_70deg,rgba(244,63,94,0.48)_135deg,rgba(225,29,72,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-fuchsia-300/70 bg-fuchsia-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-fuchsia-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(192,38,211,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-fuchsia-400/80 dark:border-fuchsia-500/40 dark:bg-fuchsia-900/25 dark:text-fuchsia-200">
+            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(232,121,249,0.0)_70deg,rgba(232,121,249,0.48)_135deg,rgba(217,70,239,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(192,38,211,0.35)]" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-fuchsia-800/30"
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -3210,7 +3112,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 p-1.5">
                 <div className="px-2 pb-2 pt-1.5">
                   <div className="flex items-center justify-between gap-3">
@@ -3218,7 +3120,7 @@ const ActiveToolsDisplay = ({
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
                       <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
                     </div>
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-rose-200/80 bg-rose-50 text-rose-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200">
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-fuchsia-200/80 bg-fuchsia-50 text-fuchsia-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-fuchsia-400/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200">
                       <Music className="h-4 w-4" />
                     </span>
                   </div>
@@ -3227,7 +3129,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de música</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicModel}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicModel}>{selectedMusicModel}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3247,7 +3149,7 @@ const ActiveToolsDisplay = ({
                       <span className="block leading-none">Estilo</span>
                       <span className="mt-1 block max-w-[150px] truncate text-[10.5px] font-medium leading-none text-zinc-500 dark:text-white/60">{MUSIC_STYLE_PROFILES[selectedMusicStyle].description}</span>
                     </span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72">{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72" title={MUSIC_STYLE_PROFILES[selectedMusicStyle].label}>{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={10} alignOffset={-8} collisionPadding={12} className="liquid-menu-surface max-h-[min(25rem,calc(100vh-2rem))] w-[min(calc(100vw-1rem),19rem)] overflow-y-auto p-1.5">
@@ -3273,7 +3175,7 @@ const ActiveToolsDisplay = ({
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center justify-between gap-2">
                                 <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
-                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" />}
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-fuchsia-600 dark:text-fuchsia-300" />}
                               </span>
                               <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
                             </span>
@@ -3287,7 +3189,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Mood</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicMood}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicMood}>{selectedMusicMood}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3337,7 +3239,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicEffect}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicEffect}>{selectedMusicEffect}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3684,7 +3586,15 @@ function EffortSection({ selectedEffort, setSelectedEffort }: {
         <div
           className="effort-track-fill"
           aria-hidden
-          style={{ width: `${(activeIndex / (EFFORT_LEVELS.length - 1)) * 100}%` }}
+          /* Width is the fraction of the span between first and last stop
+             centers (100% - stop size). That keeps the fill end exact on the
+             active dot instead of overshooting a full-track percentage. */
+          style={{
+            width:
+              activeIndex <= 0
+                ? "0px"
+                : `calc((100% - var(--effort-stop-size, 1.75rem)) * ${activeIndex / (EFFORT_LEVELS.length - 1)})`,
+          }}
         />
         {EFFORT_LEVELS.map((level, index) => (
           <button
@@ -4979,6 +4889,7 @@ function ChatInterfaceContent() {
   const {
     currentChat,
     setCurrentChat,
+    chats,
     addMessage,
     addVideoMessage,
     addThesisMessage,
@@ -5005,15 +4916,15 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const currentChatId = currentChat?.id ?? null
-  const currentChatIdRef = React.useRef<string | null>(null)
-  React.useEffect(() => { currentChatIdRef.current = currentChatId }, [currentChatId])
+  const currentChatIdRef = React.useRef<string | null>(currentChatId)
+  currentChatIdRef.current = currentChatId
   // Live refs so stable (identity-fixed) callbacks like `branchMessage` can
   // read the latest chat/model without re-creating — required because the
   // memoized MessageComponent ignores callback prop changes.
-  const currentChatRef = React.useRef<any>(null)
-  React.useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
-  const selectedModelRef = React.useRef<string | undefined>(undefined)
-  React.useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
+  const currentChatRef = React.useRef<any>(currentChat)
+  currentChatRef.current = currentChat
+  const selectedModelRef = React.useRef<string | undefined>(selectedModel)
+  selectedModelRef.current = selectedModel
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
@@ -5513,8 +5424,12 @@ function ChatInterfaceContent() {
   const currentAgentTaskIdRef = React.useRef<string | null>(null);
   const localJobControllersRef = React.useRef<Map<string, AbortController>>(new Map());
   const agentTaskIdsByChatRef = React.useRef<Map<string, string>>(new Map());
+  const agentTaskRecoveryControllersRef = React.useRef<Map<string, AbortController>>(new Map());
+  const agentTaskRecoveryWakeKeysRef = React.useRef<Map<string, string>>(new Map());
+  const terminalAgentTaskIdsByChatRef = React.useRef<Map<string, Set<string>>>(new Map());
   const activeLocalJobChatIdsRef = React.useRef<Set<string>>(new Set());
   const [activeLocalJobChatIds, setActiveLocalJobChatIds] = React.useState<string[]>([]);
+  const [agentTaskRecoveryHydrationNonce, setAgentTaskRecoveryHydrationNonce] = React.useState(0);
 
   const syncActiveLocalJobs = React.useCallback(() => {
     setActiveLocalJobChatIds(Array.from(activeLocalJobChatIdsRef.current));
@@ -5539,6 +5454,353 @@ function ChatInterfaceContent() {
       syncActiveLocalJobs();
     }
   }, [syncActiveLocalJobs]);
+
+  // ─── Durable agent-task recovery ───────────────────────────────────
+  // Agent/document tasks execute on the backend and can outlive this page.
+  // Reconnect the visible message bubble after reload or chat navigation by
+  // discovering the task through the chat-scoped durable pointer and polling
+  // its event log. Cleanup aborts only this browser poll; it deliberately does
+  // not call cancelTask, so switching chats never stops server-side work.
+  React.useEffect(() => {
+    const chatId = currentChatId;
+    if (!chatId) return;
+    if (localJobControllersRef.current.has(chatId)) return;
+    if (agentTaskRecoveryControllersRef.current.has(chatId)) return;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    const recoveryControllers = agentTaskRecoveryControllersRef.current;
+    recoveryControllers.set(chatId, controller);
+    // A previous recovery pass can hand off the next durable task while
+    // deliberately keeping this chat busy. Claim that pointer immediately so
+    // an aborted replacement poll can release only the busy state it owns.
+    let recoveredTaskId: string | null = agentTaskIdsByChatRef.current.get(chatId) || null;
+    let bubbleMessageId: string | null = null;
+    let reachedTerminal = false;
+    let recoveryDetached = false;
+    let terminalRecoveryLookupFailure = false;
+
+    const releaseRecoveryBusyIfOwned = () => {
+      const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+      const trackedTaskId = agentTaskIdsByChatRef.current.get(chatId) || null;
+      const stillOwnsRecoveredTask = Boolean(recoveredTaskId && trackedTaskId === recoveredTaskId);
+      if (ownsRecoveryController && stillOwnsRecoveredTask && !localJobControllersRef.current.has(chatId)) {
+        markLocalJobIdle(chatId);
+      }
+    };
+
+    const upsertRecoveredBubble = (taskId: string, state: AgentTaskState, status?: string) => {
+      if (signal.aborted) return;
+      const content = serializeRecoveredAgentTaskState(state);
+      setCurrentChat(prevChat => {
+        if (!prevChat || prevChat.id !== chatId) return prevChat;
+        const messages = [...(prevChat.messages || [])];
+        let messageIndex = messages.findIndex((message: any) => {
+          const parsedState = parseAgentTaskMessageState(message?.content);
+          return getAgentTaskIdFromMessage(message, parsedState) === taskId;
+        });
+        if (messageIndex < 0 && bubbleMessageId) {
+          messageIndex = messages.findIndex((message: any) => message?.id === bubbleMessageId);
+        }
+        if (messageIndex < 0) {
+          const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
+          if (recoverable) messageIndex = messages.findIndex((message: any) => message?.id === recoverable.message.id);
+        }
+
+        if (messageIndex >= 0) {
+          const previous = messages[messageIndex];
+          bubbleMessageId = previous.id;
+          messages[messageIndex] = {
+            ...previous,
+            content,
+            metadata: JSON.stringify({
+              ...parseAgentTaskMessageMetadata(previous.metadata),
+              source: "agent-task",
+              taskId,
+              status: status || (state.done ? (state.error ? "error" : "completed") : "running"),
+              updatedAt: new Date().toISOString(),
+            }),
+          };
+        } else {
+          bubbleMessageId = `msg-ai-recovery-${taskId}`;
+          messages.push({
+            id: bubbleMessageId,
+            chatId,
+            role: "ASSISTANT" as const,
+            content,
+            timestamp: new Date().toISOString(),
+            metadata: JSON.stringify({
+              source: "agent-task",
+              taskId,
+              status: status || "running",
+              recovered: true,
+            }),
+          });
+        }
+        return { ...prevChat, messages };
+      });
+    };
+
+    void (async () => {
+      try {
+        let pendingEnvelope: Awaited<ReturnType<typeof apiClient.getChatPendingStream>> | null = null;
+        // A handed-off task already owns the same-chat queue lock. Keep its
+        // discovery retry alive (also while the user reads another chat) until
+        // the durable endpoint answers; releasing on an unknown result could
+        // overlap queued work with a still-running server task.
+        const maxDiscoveryAttempts = recoveredTaskId ? Number.POSITIVE_INFINITY : 3;
+        for (let attempt = 0; attempt < maxDiscoveryAttempts && !signal.aborted; attempt += 1) {
+          try {
+            pendingEnvelope = await apiClient.getChatPendingStream(chatId);
+            if (pendingEnvelope?.ok) break;
+            pendingEnvelope = null;
+          } catch (error: any) {
+            if (signal.aborted || error?.name === "AbortError") return;
+          }
+          await waitForAgentTaskRecoveryPoll(Math.min(5000, 400 * (attempt + 1)), signal);
+        }
+        if (signal.aborted) return;
+        if (!pendingEnvelope?.ok) return;
+
+        const messages = currentChatRef.current?.id === chatId
+          ? (currentChatRef.current.messages || [])
+          : [];
+        const localCandidate = findRecoverableAgentTaskMessage(messages);
+        const taskPointer = resolveChatAgentTaskForRecovery(
+          pendingEnvelope,
+          localCandidate?.taskId || null,
+          Boolean(localCandidate),
+          terminalAgentTaskIdsByChatRef.current.get(chatId),
+        );
+        const taskId = taskPointer?.taskId || null;
+
+        // latestTask intentionally is not enough by itself: every historic
+        // agent chat has one. A terminal task is recovered only when the
+        // currently persisted bubble still says it is unfinished.
+        if (!taskId) {
+          // The durable endpoint is authoritative: if the handed-off task is
+          // no longer active, release only the busy marker owned by this poll.
+          releaseRecoveryBusyIfOwned();
+          return;
+        }
+        if (localJobControllersRef.current.has(chatId)) return;
+
+        const matchingCandidate = findRecoverableAgentTaskMessage(messages, taskId);
+        recoveredTaskId = taskId;
+        bubbleMessageId = matchingCandidate?.message?.id || null;
+        agentTaskIdsByChatRef.current.set(chatId, taskId);
+        markLocalJobBusy(chatId);
+
+        let state = normalizeRecoveredAgentTaskState(matchingCandidate?.state, taskId);
+        if (state.steps.length === 0 && !state.done) {
+          state = {
+            ...state,
+            steps: [{
+              id: "client-agent-recovery",
+              label: "Recuperando tarea en segundo plano",
+              icon: "thought",
+              reasoning: "Reconectando con la ejecución durable sin reiniciar el trabajo.",
+              status: "running",
+              toolCalls: [],
+            }],
+          };
+        }
+        upsertRecoveredBubble(taskId, state, taskPointer?.status);
+
+        let cursor = 0;
+        let failedPolls = 0;
+        while (!signal.aborted) {
+          let payload: Awaited<ReturnType<typeof agentTaskService.getTaskEvents>> | null = null;
+          try {
+            payload = await agentTaskService.getTaskEvents(taskId, cursor, { signal });
+          } catch (error: any) {
+            if (signal.aborted || error?.name === "AbortError") return;
+          }
+
+          if (!payload?.ok) {
+            failedPolls += 1;
+            const statusCode = Number(payload?.statusCode || 0);
+            if (isTerminalAgentTaskRecoveryHttpStatus(statusCode)) {
+              const accessDenied = statusCode === 401 || statusCode === 403;
+              state = {
+                ...state,
+                done: true,
+                error: accessDenied
+                  ? "No se pudo reconectar la tarea porque la sesión o los permisos cambiaron."
+                  : "La tarea ya no está disponible para reconexión.",
+                stoppedReason: accessDenied ? "recovery_access_denied" : "recovery_not_found",
+              };
+              reachedTerminal = true;
+              terminalRecoveryLookupFailure = true;
+              upsertRecoveredBubble(taskId, state, "error");
+              break;
+            }
+            if (shouldDetachAgentTaskRecovery(failedPolls)) {
+              state = {
+                ...state,
+                done: false,
+                error: "Se perdió temporalmente la conexión con esta tarea. El trabajo del servidor no fue cancelado; vuelve a abrir el chat para reconectar.",
+                stoppedReason: "recovery_poll_exhausted",
+              };
+              recoveryDetached = true;
+              upsertRecoveredBubble(taskId, state, "reconnecting");
+              break;
+            }
+            await waitForAgentTaskRecoveryPoll(Math.min(5000, 600 * (2 ** Math.min(failedPolls, 3))), signal);
+            continue;
+          }
+
+          failedPolls = 0;
+          const events = Array.isArray(payload.events) ? payload.events : [];
+          const cursorBeforeBatch = cursor;
+          for (const event of events) {
+            const seq = Number((event as any)?.seq);
+            if (Number.isFinite(seq)) cursor = Math.max(cursor, seq);
+          }
+
+          if (payload.streamState) {
+            // The server snapshot already includes all events up to this poll,
+            // so use it as the authority and avoid duplicating steps/artifacts.
+            state = normalizeRecoveredAgentTaskState(payload.streamState, taskId);
+          } else if (events.length > 0) {
+            if (cursorBeforeBatch === 0) state = normalizeRecoveredAgentTaskState(null, taskId);
+            for (const event of events) state = reduceEvent(state, event);
+          }
+
+          const normalizedStatus = String(payload.status || "").toLowerCase();
+          if (!state.done && normalizedStatus === "completed") {
+            state = { ...state, done: true, stoppedReason: state.stoppedReason || "recovered_completed" };
+          } else if (!state.done && ["cancelled", "canceled"].includes(normalizedStatus)) {
+            state = { ...state, done: true, error: state.error || "Tarea detenida.", stoppedReason: "cancelled" };
+          } else if (!state.done && ["error", "failed"].includes(normalizedStatus)) {
+            state = { ...state, done: true, error: state.error || payload.error || "La tarea agéntica falló.", stoppedReason: "error" };
+          }
+
+          upsertRecoveredBubble(taskId, state, payload.status);
+          if (state.done || isTerminalAgentTaskStatus(payload.status)) {
+            reachedTerminal = true;
+            break;
+          }
+          await waitForAgentTaskRecoveryPoll(900, signal);
+        }
+      } finally {
+        const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+        if ((reachedTerminal || recoveryDetached) && !signal.aborted) {
+          let terminalIds = terminalAgentTaskIdsByChatRef.current.get(chatId) || new Set<string>();
+          if (reachedTerminal && recoveredTaskId) {
+            terminalIds.add(recoveredTaskId);
+            // Keep this browser-session dedupe bounded while the durable API
+            // converges and removes recently terminal tasks from activeTasks.
+            while (terminalIds.size > 20) {
+              const oldestTaskId = terminalIds.values().next().value;
+              if (!oldestTaskId) break;
+              terminalIds.delete(oldestTaskId);
+            }
+            terminalAgentTaskIdsByChatRef.current.set(chatId, terminalIds);
+          }
+
+          let nextTaskPointer: ReturnType<typeof resolveChatAgentTaskForRecovery> = null;
+          let nextTaskDiscoveryFailed = false;
+          if (reachedTerminal && !terminalRecoveryLookupFailure) {
+            try {
+              const nextEnvelope = await apiClient.getChatPendingStream(chatId);
+              nextTaskPointer = resolveChatAgentTaskForRecovery(
+                nextEnvelope,
+                null,
+                false,
+                terminalIds,
+              );
+            } catch {
+              // Keep the busy ownership during a transient handoff failure. A
+              // fresh recovery pass retries discovery without overlapping the
+              // just-completed task with queued work from the same chat.
+              nextTaskDiscoveryFailed = true;
+            }
+          }
+
+          if (signal.aborted) return;
+
+          const trackedTaskId = agentTaskIdsByChatRef.current.get(chatId) || null;
+          const stillOwnsRecoveredTask = Boolean(recoveredTaskId && trackedTaskId === recoveredTaskId);
+          const hasReplacementController = localJobControllersRef.current.has(chatId);
+          if (stillOwnsRecoveredTask && !hasReplacementController) {
+            if (nextTaskPointer?.taskId) {
+              // Atomic A → B handoff: retain the busy marker and transfer task
+              // ownership before waking the next recovery effect.
+              agentTaskIdsByChatRef.current.set(chatId, nextTaskPointer.taskId);
+            } else if (!nextTaskDiscoveryFailed) {
+              // The durable endpoint confirmed there is no next task.
+              markLocalJobIdle(chatId);
+            }
+          }
+
+          if (ownsRecoveryController) {
+            recoveryControllers.delete(chatId);
+          }
+
+          if (reachedTerminal && currentChatIdRef.current === chatId) {
+            if (nextTaskPointer?.taskId || nextTaskDiscoveryFailed) {
+              setAgentTaskRecoveryHydrationNonce(value => value + 1);
+            }
+            try {
+              const refreshed = await apiClient.getChat(chatId);
+              setCurrentChat(prevChat => (
+                prevChat?.id === chatId
+                  ? mergeChatPreservingUserMessages(refreshed.chat, prevChat)
+                  : prevChat
+              ));
+            } catch {
+              // The reconstructed bubble is already complete; the durable DB
+              // refresh is best-effort and can retry on the next navigation.
+            }
+          }
+        } else if (ownsRecoveryController) {
+          recoveryControllers.delete(chatId);
+        }
+      }
+    })();
+
+    return () => {
+      // A chat switch must not detach recovery: the durable task keeps
+      // running, and releasing its local busy marker here would allow the
+      // same-chat queue to start overlapping work. The poll can safely remain
+      // in the background because every visible-state write is chat-scoped.
+      if (currentChatIdRef.current !== chatId) return;
+      const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+      controller.abort();
+      if (ownsRecoveryController) {
+        recoveryControllers.delete(chatId);
+      }
+    };
+  }, [agentTaskRecoveryHydrationNonce, currentChatId, markLocalJobBusy, markLocalJobIdle, setCurrentChat]);
+
+  // Recovery polls intentionally survive chat navigation, so component
+  // teardown owns the final abort for every background controller.
+  React.useEffect(() => {
+    const recoveryControllers = agentTaskRecoveryControllersRef.current;
+    return () => {
+      for (const controller of recoveryControllers.values()) {
+        controller.abort();
+      }
+      recoveryControllers.clear();
+    };
+  }, []);
+
+  // selectChat can expose a cached shell first and hydrate its messages from
+  // the server a moment later without changing the chat id. Wake recovery once
+  // for that newly-arrived unfinished bubble; the active-controller guards
+  // above keep normal poll updates from creating a second connection.
+  React.useEffect(() => {
+    if (!currentChatId) return;
+    if (localJobControllersRef.current.has(currentChatId)) return;
+    if (agentTaskRecoveryControllersRef.current.has(currentChatId)) return;
+    const candidate = findRecoverableAgentTaskMessage(currentChat?.messages || []);
+    if (!candidate) return;
+    const wakeKey = `${candidate.message?.id || "message"}:${candidate.taskId || "pending"}`;
+    if (agentTaskRecoveryWakeKeysRef.current.get(currentChatId) === wakeKey) return;
+    agentTaskRecoveryWakeKeysRef.current.set(currentChatId, wakeKey);
+    setAgentTaskRecoveryHydrationNonce(value => value + 1);
+  }, [currentChat?.messages, currentChatId]);
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
@@ -5703,16 +5965,24 @@ function ChatInterfaceContent() {
   }, [setCurrentChat]);
 
   const stopActiveGeneration = React.useCallback(() => {
-    if (intentAbortControllerRef.current) {
+    const targetChatId = currentChatId;
+    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
+    const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
+
+    if (intentAbortControllerRef.current && ownsSendingState) {
       intentAbortControllerRef.current.abort();
       intentAbortControllerRef.current = null;
     }
-    const targetChatId = currentChatId;
     const scopedTaskId = targetChatId ? agentTaskIdsByChatRef.current.get(targetChatId) : null;
     const fallbackTaskId = currentAgentTaskIdRef.current;
-    const taskId = scopedTaskId || fallbackTaskId;
+    // A visible chat may be recovering task A while a foreground task B runs
+    // elsewhere. Never fall back to B when Stop was clicked from A.
+    const taskId = targetChatId ? scopedTaskId : fallbackTaskId;
     if (taskId) {
-      if (scopedTaskId && targetChatId) {
+      // A recovered task has no foreground controller. Keep its ownership map
+      // until the durable poll observes cancellation; otherwise the same-chat
+      // queue could start before the server has actually stopped it.
+      if (scopedTaskId && targetChatId && scopedController) {
         agentTaskIdsByChatRef.current.delete(targetChatId);
       }
       if (fallbackTaskId === taskId) {
@@ -5722,7 +5992,6 @@ function ChatInterfaceContent() {
         console.warn('Failed to cancel agent task:', err);
       });
     }
-    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     if (scopedController) {
       scopedController.abort();
       markLocalJobIdle(targetChatId, scopedController);
@@ -5730,48 +5999,51 @@ function ChatInterfaceContent() {
         searchAbortControllerRef.current = null;
         setIsWebSearching(false);
       }
-    } else if (searchAbortControllerRef.current) {
+    } else if (!targetChatId && searchAbortControllerRef.current) {
       const controller = searchAbortControllerRef.current;
       controller.abort();
       searchAbortControllerRef.current = null;
-      if (targetChatId) {
-        markLocalJobIdle(targetChatId, controller);
-      }
       setIsWebSearching(false);
     }
-    if (imageAbortControllerRef.current) {
-      imageAbortControllerRef.current.abort();
+    const imageController = imageAbortControllerRef.current;
+    const ownsImageGeneration = Boolean(imageController && (!targetChatId || imageController === scopedController));
+    if (imageController && ownsImageGeneration) {
+      imageController.abort();
       imageAbortControllerRef.current = null;
       isGeneratingImageRef.current = false;
       setIsGeneratingImage(false);
       if (targetChatId) {
-        markLocalJobIdle(targetChatId);
+        markLocalJobIdle(targetChatId, imageController);
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
     }
-    if (voiceAbortControllerRef.current) {
+    const voiceController = voiceAbortControllerRef.current;
+    const ownsVoiceGeneration = Boolean(voiceController && (!targetChatId || voiceController === scopedController));
+    if (voiceController && ownsVoiceGeneration) {
       const controller = voiceAbortControllerRef.current;
       voiceAbortControllerRef.current = null;
-      if (!controller.signal.aborted) {
+      if (controller && !controller.signal.aborted) {
         controller.abort();
       }
       toast.info('Generación de voz detenida');
     }
-    if (musicAbortControllerRef.current) {
+    const musicController = musicAbortControllerRef.current;
+    const ownsMusicGeneration = Boolean(musicController && (!targetChatId || musicController === scopedController));
+    if (musicController && ownsMusicGeneration) {
       const controller = musicAbortControllerRef.current;
       musicAbortControllerRef.current = null;
-      if (!controller.signal.aborted) {
+      if (controller && !controller.signal.aborted) {
         controller.abort();
       }
       toast.info('Generación de música detenida');
     }
-    if (isGeneratingVoiceRef.current) {
+    if (ownsVoiceGeneration && isGeneratingVoiceRef.current) {
       isGeneratingVoiceRef.current = false;
       setIsGeneratingVoice(false);
       setIsVoiceGenerationActive(true);
     }
-    if (isGeneratingMusicRef.current) {
+    if (ownsMusicGeneration && isGeneratingMusicRef.current) {
       isGeneratingMusicRef.current = false;
       setIsGeneratingMusic(false);
       setIsMusicGenerationActive(true);
@@ -5781,26 +6053,31 @@ function ChatInterfaceContent() {
     // indicators (video / slides) so the composer returns to idle. (The remote
     // render is a POST→poll job, so server-side completion may still finish;
     // this frees the UI and matches the image path.)
-    if (videoAbortControllerRef.current) {
-      videoAbortControllerRef.current.abort();
+    const videoController = videoAbortControllerRef.current;
+    const ownsVideoGeneration = Boolean(videoController && (!targetChatId || videoController === scopedController));
+    if (videoController && ownsVideoGeneration) {
+      videoController.abort();
       videoAbortControllerRef.current = null;
     }
     const videoOperationId = currentVideoOperationIdRef.current;
-    if (videoOperationId) {
+    if (videoOperationId && ownsVideoGeneration) {
       currentVideoOperationIdRef.current = null;
       void apiClient.cancelVideoGeneration(videoOperationId).catch((err) => {
         console.warn('Failed to cancel video generation:', err);
       });
     }
-    setIsGeneratingVideo(false);
-    setIsGeneratingPPT(false);
-    if (targetChatId) {
-      markLocalJobIdle(targetChatId);
+    if (ownsVideoGeneration) {
+      setIsGeneratingVideo(false);
+      setIsGeneratingPPT(false);
     }
-    stopStreaming();
-    setIsSending(false);
-    setSendingChatId(null);
-  }, [currentChatId, markImageGenerationStopped, markLocalJobIdle, stopStreaming]);
+    if (!targetChatId || activeStreamingChatIds.includes(targetChatId)) {
+      stopStreaming();
+    }
+    if (ownsSendingState) {
+      setIsSending(false);
+      setSendingChatId(null);
+    }
+  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -6436,19 +6713,30 @@ But first, you need to connect your Spotify account securely using the button be
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // The approved composer is a stable-size control. Long prompts scroll
-    // inside the textarea instead of resizing the surrounding surface.
-    textarea.style.removeProperty("height");
+    // Grow with content (Claude/ChatGPT control-bar rhythm) up to the CSS
+    // max-height, then scroll internally so the surface stays professional.
+    const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
+    const computedMax = Number.parseFloat(
+      window.getComputedStyle(textarea).maxHeight || "0",
+    );
+    const maxHeight = Number.isFinite(computedMax) && computedMax > 0
+      ? computedMax
+      : 200;
+    const minHeight = 26;
+
+    textarea.style.height = "0px";
     const scrollHeight = textarea.scrollHeight;
-    const nextHeight = textarea.clientHeight;
-    const nextOverflowY = scrollHeight > textarea.clientHeight + 1 ? "auto" : "hidden";
+    const nextHeight = Math.min(maxHeight, Math.max(minHeight, scrollHeight));
+    const nextOverflowY = scrollHeight > maxHeight + 1 ? "auto" : "hidden";
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = nextOverflowY;
+    if (shell) {
+      shell.style.height = `${nextHeight}px`;
+    }
+
     const previousLayout = textareaLayoutRef.current;
     const heightChanged = previousLayout.height !== nextHeight;
     const overflowChanged = previousLayout.overflowY !== nextOverflowY;
-
-    if (overflowChanged) {
-      textarea.style.overflowY = nextOverflowY;
-    }
     if (heightChanged || overflowChanged) {
       textareaLayoutRef.current = { height: nextHeight, overflowY: nextOverflowY };
     }
@@ -6725,7 +7013,7 @@ But first, you need to connect your Spotify account securely using the button be
           role: String(m.role || "USER").toUpperCase(),
           content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
           files,
-          metadata: typeof m.metadata === "string" ? m.metadata : undefined,
+          metadata: serializeBranchedMessageMetadata(m.metadata),
         });
       }
 
@@ -7509,7 +7797,7 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }, 90);
 
-      const uploadChunks = buildChatUploadChunks(filesToUpload, tempFiles);
+      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles);
       let failedChunkCount = 0;
 
       for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
@@ -9006,6 +9294,7 @@ REWRITTEN TEXT:`;
       content: msg,
       timestamp: new Date().toISOString(),
       files: filesToSend,
+      metadata: JSON.stringify({ idempotencyKey }),
     };
     const assistantPlaceholder = {
       id: `msg-assistant-processing-${Date.now()}`,
@@ -9013,6 +9302,7 @@ REWRITTEN TEXT:`;
       role: 'ASSISTANT' as const,
       content: '',
       timestamp: new Date().toISOString(),
+      metadata: JSON.stringify({ idempotencyKey }),
     };
 
     if (isNewChat) {
@@ -10214,26 +10504,74 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // would otherwise freeze the version from initial render.
   React.useEffect(() => { handleSendRef.current = handleSend; });
 
-  // Drain queued messages when the pipeline goes idle. Each drain
-  // re-populates the composer from the queue and fires handleSend on the
-  // next tick so React has a chance to commit the setInput/setFiles
-  // updates before the send guard reads them.
+  // Drain queued messages when a chat's pipeline goes idle.
+  // Foreground: current chat idle → restore composer + handleSend.
+  // Background: other idle chats → addMessage directly so work continues
+  // while the user is reading a different conversation.
   React.useEffect(() => {
-    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
-    if (isBusy) return;
     if (pendingMsgQueueRef.current.length === 0) return;
+
     const queueChatId = currentChat?.id ?? null;
-    const nextIndex = pendingMsgQueueRef.current.findIndex((item) => item.chatId === queueChatId);
-    if (nextIndex < 0) return;
-    const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
+    const currentBusy =
+      isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
+
+    // 1) Prefer draining the chat the user is looking at (composer path).
+    if (!currentBusy && queueChatId) {
+      const nextIndex = pendingMsgQueueRef.current.findIndex(
+        (item) => item.chatId === queueChatId,
+      );
+      if (nextIndex >= 0) {
+        const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
+        syncQueuedCount(queueChatId);
+        if (!next) return;
+        setInput(next.msg);
+        uploadedFilesRef.current = next.files || [];
+        setUploadedFiles(next.files || []);
+        const t = setTimeout(() => {
+          handleSendRef.current();
+        }, 0);
+        return () => clearTimeout(t);
+      }
+    }
+
+    // 2) Background drain for any other idle chat with queued work.
+    const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
+      if (!item.chatId) return false;
+      if (item.chatId === queueChatId) return false;
+      if (activeStreamingChatIds.includes(item.chatId)) return false;
+      if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
+      return true;
+    });
+    if (bgIndex < 0) return;
+    const [bgNext] = pendingMsgQueueRef.current.splice(bgIndex, 1);
+    if (!bgNext?.chatId || !bgNext.msg?.trim()) return;
     syncQueuedCount(queueChatId);
-    if (!next) return;
-    setInput(next.msg);
-    uploadedFilesRef.current = next.files || [];
-    setUploadedFiles(next.files || []);
-    const t = setTimeout(() => { handleSendRef.current(); }, 0);
+    const targetChat =
+      currentChat?.id === bgNext.chatId
+        ? currentChat
+        : (chats || []).find((c: any) => c?.id === bgNext.chatId) || null;
+    if (!targetChat) {
+      pendingMsgQueueRef.current.unshift(bgNext);
+      return;
+    }
+    const files = Array.isArray(bgNext.files) ? bgNext.files : [];
+    const t = setTimeout(() => {
+      void addMessage(bgNext.msg, files, targetChat);
+    }, 0);
     return () => clearTimeout(t);
-  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles, syncQueuedCount]);
+  }, [
+    currentChat,
+    currentChat?.id,
+    chats,
+    isCurrentChatStreaming,
+    isCurrentChatLocalJobBusy,
+    isUploading,
+    activeStreamingChatIds,
+    activeLocalJobChatIds,
+    addMessage,
+    setUploadedFiles,
+    syncQueuedCount,
+  ]);
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -10425,6 +10763,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     handleExcelConnectorToggle,
   };
 
+
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
     showAudioPanel ||
@@ -10527,6 +10866,45 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setShowAudioPanel(true);
     setAudioTab('stt');
   }, []);
+
+  // Shared props bundle for <ActionsDropdown /> (the "+" tools button).
+  // It renders in two spots: inline with the textarea while NO tool is
+  // active, and as a compact chip in the bottom tools row once any tool
+  // is active (so the "+" sits level with the Voz/Imágenes/Música chips).
+  const actionsDropdownProps = {
+    chatType, setChatType,
+    currentPlan,
+    isWorkModeActive, setIsWorkModeActive,
+    isWebSearchActive, setIsWebSearchActive,
+    isImageGenerationActive, setIsImageGenerationActive,
+    isVoiceGenerationActive, setIsVoiceGenerationActive,
+    isMusicGenerationActive, setIsMusicGenerationActive,
+    isVideoGenerationActive, setIsVideoGenerationActive,
+    isComputerUseActive, setIsComputerUseActive,
+    computerUseAppMode, setComputerUseAppMode,
+    computerUseStatus,
+    isGmailActive, setIsGmailActive,
+    isGoogleCalendarActive, setIsGoogleCalendarActive,
+    isGoogleDriveActive, setIsGoogleDriveActive,
+    isSpotifyActive, setIsSpotifyActive,
+    isWordConnectorActive, setIsWordConnectorActive,
+    isExcelConnectorActive, setIsExcelConnectorActive,
+    setShowAudioPanel,
+    openVoicePanel: openGrokVoicePanel,
+    handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
+    handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
+    handleExcelConnectorToggle,
+    closeAllToolsAndConnectors,
+    setAudioTab,
+    handleAndUploadFiles,
+    isUploading,
+    isWebSearching: isCurrentChatLocalJobBusy && isWebSearching,
+    isLoading: isCurrentChatLoading,
+    isGeneratingImage: isCurrentChatLocalJobBusy && isGeneratingImage,
+    isGeneratingVideo: isCurrentChatLocalJobBusy && isGeneratingVideo,
+    isGeneratingPPT,
+    isProcessingGmail: isCurrentChatLocalJobBusy && isProcessingGmail,
+  };
 
   React.useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -11595,7 +11973,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } else {
         toast.success('Tarea completada');
       }
-      if (activeChat?.id) selectChat(activeChat.id);
+      // The task belongs to `activeChat`, but the user may have navigated to a
+      // different conversation while it was running. Refresh only when that
+      // chat is still visible; selecting the completed task's chat here would
+      // steal focus and break the background-work contract.
+      if (activeChat?.id && currentChatIdRef.current === activeChat.id) {
+        void selectChat(activeChat.id);
+      }
     } catch (err: any) {
       console.error('Agent task failed:', err);
       toast.error(err?.message || 'Agent task failed');
@@ -11912,79 +12296,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onFileProcessingStatusChange={handleFileProcessingStatusChange}
                       />
                       <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                      {hasActiveTools && !shouldInlineActiveTools && (
-                        <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
-                          <ActiveToolsDisplay {...activeToolsProps} />
-                        </div>
-                      )}
                     </div>
                     {/* Media controls stay inline with the attach button. */}
                     <TooltipProvider>
                       <div
-                        className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                        className="composer-input-row"
                       >
-                        {/* LEFT — Plus / attach + tool selector */}
-                        <ActionsDropdown
-                          chatType={chatType}
-                          setChatType={setChatType}
-                          currentPlan={currentPlan}
-                          isWorkModeActive={isWorkModeActive}
-                          setIsWorkModeActive={setIsWorkModeActive}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVoiceGenerationActive={isVoiceGenerationActive}
-                          setIsVoiceGenerationActive={setIsVoiceGenerationActive}
-                          isMusicGenerationActive={isMusicGenerationActive}
-                          setIsMusicGenerationActive={setIsMusicGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isComputerUseActive={isComputerUseActive}
-                          setIsComputerUseActive={setIsComputerUseActive}
-                          computerUseAppMode={computerUseAppMode}
-                          setComputerUseAppMode={setComputerUseAppMode}
-                          computerUseStatus={computerUseStatus}
-                          isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
-                          isGoogleCalendarActive={isGoogleCalendarActive}
-                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                          isGoogleDriveActive={isGoogleDriveActive}
-                          setIsGoogleDriveActive={setIsGoogleDriveActive}
-                          isSpotifyActive={isSpotifyActive}
-                          setIsSpotifyActive={setIsSpotifyActive}
-                          isWordConnectorActive={isWordConnectorActive}
-                          setIsWordConnectorActive={setIsWordConnectorActive}
-                          isExcelConnectorActive={isExcelConnectorActive}
-                          setIsExcelConnectorActive={setIsExcelConnectorActive}
-                          setShowAudioPanel={setShowAudioPanel}
-                          openVoicePanel={openGrokVoicePanel}
-                          handleComputerUseToggle={handleComputerUseToggle}
-                          handleGmailToggle={handleGmailToggle}
-                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                          handleGoogleDriveToggle={handleGoogleDriveToggle}
-                          handleSpotifyToggle={handleSpotifyToggle}
-                          handleWordConnectorToggle={handleWordConnectorToggle}
-                          handleExcelConnectorToggle={handleExcelConnectorToggle}
-                          closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                          setAudioTab={setAudioTab}
-                          handleAndUploadFiles={handleAndUploadFiles}
-                          isUploading={isUploading}
-                          isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
-                          isLoading={isCurrentChatLoading}
-                          isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
-                          isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
-                          isGeneratingPPT={isGeneratingPPT}
-                          isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
-                        />
-
+                        {/* LEFT — Plus / attach + tool selector. Media chips
+                            (Voz/Imágenes/Música/Video) render inline right
+                            next to the "+" so both share the same row. */}
+                        <ActionsDropdown {...actionsDropdownProps} />
                         {shouldInlineActiveTools && (
                           <div className="composer-inline-active-tools">
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
                         )}
 
-                        {/* CENTER — stable-height textarea with internal scrolling. */}
+                        {/* CENTER — single-line default; grows with content. */}
                         <div className="composer-textarea-shell min-w-0 flex-1">
                           {hasDetectedLinks && input ? (
                             <div
@@ -12037,16 +12365,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             className={cn(
                               "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
                               "p-0",
-                              "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                              "text-[15px] leading-[1.5] tracking-normal text-foreground",
                               "placeholder:text-muted-foreground/65 placeholder:font-normal",
                               "dark:placeholder:text-[hsl(var(--text-tertiary))]",
                               "outline-none ring-0 focus:outline-none focus:ring-0",
                               "rounded-none transition-colors duration-200",
                             )}
                             style={{
-                              minHeight: "24px",
-                              maxHeight: "var(--chat-textarea-max-height, 200px)",
-                              overflowY: "auto",
+                              minHeight: "26px",
+                              maxHeight: "min(12.5rem, 42vh)",
+                              overflowY: "hidden",
                               overflowX: "hidden",
                               wordWrap: "break-word",
                               border: "none",
@@ -12146,17 +12474,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               title="Detener"
                               disabled={pendingStop && isCurrentChatStreaming}
                               className={cn(
-                                "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                "bg-foreground text-background",
+                                "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                "bg-foreground text-white",
                                 "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
                                 "hover:bg-foreground/90 active:scale-[0.96]",
                                 "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
                               )}
                             >
                               {pendingStop ? (
-                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
+                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
                               ) : (
-                                <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
+                                <span
+                                  aria-hidden
+                                  className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
+                                />
                               )}
                             </Button>
                           )}
@@ -12164,6 +12495,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       </div>
                     </TooltipProvider>
 
+                    {hasActiveTools && !shouldInlineActiveTools && (
+                      <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+                        <ActiveToolsDisplay {...activeToolsProps} />
+                      </div>
+                    )}
                   </div>
                   </div>
 
@@ -12393,69 +12729,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             onFileProcessingStatusChange={handleFileProcessingStatusChange}
                           />
                           <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                          {hasActiveTools && !shouldInlineActiveTools && (
-                            <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
-                              <ActiveToolsDisplay {...activeToolsProps} />
-                            </div>
-                          )}
                         </div>
                         <TooltipProvider>
                           <div
-                            className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                            className="composer-input-row"
                           >
-                            <ActionsDropdown
-                              chatType={chatType}
-                              setChatType={setChatType}
-                              currentPlan={currentPlan}
-                              isWorkModeActive={isWorkModeActive}
-                              setIsWorkModeActive={setIsWorkModeActive}
-                              isWebSearchActive={isWebSearchActive}
-                              setIsWebSearchActive={setIsWebSearchActive}
-                              isImageGenerationActive={isImageGenerationActive}
-                              setIsImageGenerationActive={setIsImageGenerationActive}
-                              isVoiceGenerationActive={isVoiceGenerationActive}
-                              setIsVoiceGenerationActive={setIsVoiceGenerationActive}
-                              isMusicGenerationActive={isMusicGenerationActive}
-                              setIsMusicGenerationActive={setIsMusicGenerationActive}
-                              isVideoGenerationActive={isVideoGenerationActive}
-                              setIsVideoGenerationActive={setIsVideoGenerationActive}
-                              isComputerUseActive={isComputerUseActive}
-                              setIsComputerUseActive={setIsComputerUseActive}
-                              computerUseAppMode={computerUseAppMode}
-                              setComputerUseAppMode={setComputerUseAppMode}
-                              computerUseStatus={computerUseStatus}
-                              isGmailActive={isGmailActive}
-                              setIsGmailActive={setIsGmailActive}
-                              isGoogleCalendarActive={isGoogleCalendarActive}
-                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                              isGoogleDriveActive={isGoogleDriveActive}
-                              setIsGoogleDriveActive={setIsGoogleDriveActive}
-                              isSpotifyActive={isSpotifyActive}
-                              setIsSpotifyActive={setIsSpotifyActive}
-                              isWordConnectorActive={isWordConnectorActive}
-                              setIsWordConnectorActive={setIsWordConnectorActive}
-                              isExcelConnectorActive={isExcelConnectorActive}
-                              setIsExcelConnectorActive={setIsExcelConnectorActive}
-                              setShowAudioPanel={setShowAudioPanel}
-                              openVoicePanel={openGrokVoicePanel}
-                              handleComputerUseToggle={handleComputerUseToggle}
-                              handleGmailToggle={handleGmailToggle}
-                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                              handleGoogleDriveToggle={handleGoogleDriveToggle}
-                              handleSpotifyToggle={handleSpotifyToggle}
-                              handleWordConnectorToggle={handleWordConnectorToggle}
-                              handleExcelConnectorToggle={handleExcelConnectorToggle}
-                              closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                              setAudioTab={setAudioTab}
-                              handleAndUploadFiles={handleAndUploadFiles}
-                              isUploading={isUploading}
-                              isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
-                              isLoading={isCurrentChatLoading}
-                              isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
-                              isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
-                              isGeneratingPPT={isGeneratingPPT}
-                              isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
-                            />
+                            {/* LEFT — Plus / attach + tool selector. Media
+                                chips render inline next to the "+". */}
+                            <ActionsDropdown {...actionsDropdownProps} />
                             {shouldInlineActiveTools && (
                               <div className="composer-inline-active-tools">
                                 <ActiveToolsDisplay {...activeToolsProps} />
@@ -12513,16 +12794,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 className={cn(
                                   "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
                                   "p-0",
-                                  "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                                  "text-[15px] leading-[1.5] tracking-normal text-foreground",
                                   "placeholder:text-muted-foreground/65 placeholder:font-normal",
                                   "dark:placeholder:text-[hsl(var(--text-tertiary))]",
                                   "outline-none ring-0 focus:outline-none focus:ring-0",
                                   "rounded-none transition-colors duration-200",
                                 )}
                                 style={{
-                                  minHeight: "24px",
-                                  maxHeight: "var(--chat-textarea-max-height, 200px)",
-                                  overflowY: "auto",
+                                  minHeight: "26px",
+                                  maxHeight: "min(12.5rem, 42vh)",
+                                  overflowY: "hidden",
                                   overflowX: "hidden",
                                   wordWrap: "break-word",
                                   border: "none",
@@ -12620,17 +12901,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   title="Detener"
                                   disabled={pendingStop && isCurrentChatStreaming}
                                   className={cn(
-                                    "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                    "bg-foreground text-background",
+                                    "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                    "bg-foreground text-white",
                                     "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
                                     "hover:bg-foreground/90 active:scale-[0.96]",
                                     "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
                                   )}
                                 >
                                   {pendingStop ? (
-                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
+                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
                                   ) : (
-                                    <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
+                                    <span
+                                      aria-hidden
+                                      className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
+                                    />
                                   )}
                                 </Button>
                               )}
@@ -12638,6 +12922,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </div>
                         </TooltipProvider>
 
+                        {hasActiveTools && !shouldInlineActiveTools && (
+                          <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+                            <ActiveToolsDisplay {...activeToolsProps} />
+                          </div>
+                        )}
                       </div>
                       </div>
                     </div>

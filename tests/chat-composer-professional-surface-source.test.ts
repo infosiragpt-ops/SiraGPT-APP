@@ -159,23 +159,28 @@ describe("professional chat composer surface source contract", () => {
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
-      /\.composer-input-row\s*\{[\s\S]{0,420}align-items: start;[\s\S]{0,120}min-height: 5\.25rem;[\s\S]{0,100}padding: 0\.28rem 0\.75rem 0\.4rem !important;/,
-      "the idle composer should pin text to the top hairline without oversized vertical space"
+      /\.composer-input-row\s*\{[\s\S]{0,420}display: flex !important;[\s\S]{0,120}align-items: flex-end;[\s\S]{0,160}min-height: 3\.35rem;[\s\S]{0,120}padding: 0\.4rem 0\.45rem 0\.4rem 0\.4rem !important;/,
+      "the idle composer should keep a single-row Claude/ChatGPT control bar"
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.75rem;[\s\S]{0,180}min-height: 5\.25rem;/,
-      "phones should keep the same compact hierarchy without oversized rounding"
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.75rem;[\s\S]{0,220}min-height: 3\.25rem;/,
+      "phones should keep the same compact single-row hierarchy"
     )
     assert.match(
       globals,
-      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}display: block !important;[\s\S]{0,220}padding: 0\.02rem 0\.15rem 0\.05rem !important;/,
-      "placeholder/input must sit flush against the upper bar hairline"
+      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}display: block !important;[\s\S]{0,260}padding: 0\.2rem 0\.35rem 0\.2rem 0\.2rem !important;/,
+      "placeholder/input must sit on a comfortable single-line rhythm next to 44px actions"
     )
     assert.equal(
       (chatInterface.match(/"composer-textarea textarea-scrollbar[^"]*",\s*"p-0"/g) || []).length,
       2,
       "both textareas should drop utility padding so CSS can pin the first line"
+    )
+    assert.equal(
+      (chatInterface.match(/className="composer-input-row"/g) || []).length,
+      2,
+      "both composer paths should rely on the shared CSS row contract"
     )
   })
 
@@ -192,8 +197,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-composer-dock\s*\{[\s\S]{0,180}padding: 0\.125rem 1rem/,
-      "the dock should leave only a two-pixel breathing edge above the composer"
+      /\.chat-composer-dock\s*\{[\s\S]{0,220}padding: 0\.25rem var\(--chat-mobile-gutter\)/,
+      "the dock should use the shared mobile gutter token for side margins"
     )
     assert.match(
       globals,
@@ -202,8 +207,13 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(calc\(100% - 2rem\), var\(--chat-content-max-width\)\);[\s\S]{0,80}margin-inline: auto;/,
+      /\.chat-composer-frame\s*\{[\s\S]{0,180}width: min\(100%, var\(--chat-content-max-width\)\);[\s\S]{0,80}margin-inline: auto;/,
       "the empty composer should retain its approved 828px content width"
+    )
+    assert.match(
+      globals,
+      /\.chat-initial-stage \.chat-composer-frame\s*\{[\s\S]{0,100}width: min\(100%, var\(--chat-content-max-width\)\);/,
+      "empty-stage must not double-inset the frame after the stage gutters"
     )
     assert.match(
       globals,
@@ -222,18 +232,23 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-textarea-shell\s*\{[\s\S]{0,160}height: 2\.2rem;[\s\S]{0,80}max-height: 2\.2rem;[\s\S]{0,80}overflow: hidden;/,
-      "long prompts should scroll internally instead of resizing the surface"
+      /\.composer-textarea-shell\s*\{[\s\S]{0,200}height: auto;[\s\S]{0,120}min-height: 1\.65rem;[\s\S]{0,120}max-height: min\(12\.5rem, 42vh\);[\s\S]{0,80}overflow: hidden;/,
+      "short prompts stay compact; long prompts grow then scroll inside the shell"
     )
     assert.match(
       globals,
-      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}height: 2\.2rem !important;[\s\S]{0,100}max-height: 2\.2rem !important;[\s\S]{0,100}overflow-y: auto !important;/,
-      "the textarea height must remain fixed in every text state"
+      /\.composer-textarea-shell \.composer-textarea\s*\{[\s\S]{0,280}min-height: 1\.65rem !important;[\s\S]{0,120}max-height: min\(12\.5rem, 42vh\) !important;/,
+      "the textarea should grow with content up to a professional max height"
+    )
+    assert.match(
+      chatInterface,
+      /resizeComposerTextarea[\s\S]{0,900}scrollHeight[\s\S]{0,400}style\.height/,
+      "typing should auto-grow the textarea height from scrollHeight"
     )
     assert.doesNotMatch(
       chatInterface,
       /data-expanded=|getComposerTextareaMaxHeight|composerIsExpanded/,
-      "no runtime state should opt the composer back into auto expansion"
+      "growth stays CSS/JS layout only — no expanded UI mode flag"
     )
     assert.equal(
       (chatInterface.match(/data-testid="chat-composer-surface"/g) || []).length,

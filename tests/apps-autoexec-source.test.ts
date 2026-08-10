@@ -8,12 +8,15 @@ const ROOT = process.cwd()
 describe("APPS autonomous full-stack wiring", () => {
   it("enables autoExecute on APPS plan + build so agents can work for hours", () => {
     const panel = readFileSync(join(ROOT, "components/codex/codex-agent-panel.tsx"), "utf8")
-    const api = readFileSync(join(ROOT, "lib/codex/codex-api.ts"), "utf8")
+    const api = readFileSync(join(ROOT, "lib/codex/api/runs.ts"), "utf8")
     const chat = readFileSync(join(ROOT, "components/code/ai-code-chat-panel.tsx"), "utf8")
 
     assert.match(panel, /autoExecute: surface === "apps"/)
-    assert.match(panel, /COMPILA TODAS LAS CAPAS/)
-    assert.match(panel, /CORRIDA LARGA AUTONOMA/)
+    // APPS durable prompt lives in apps-mode-contract (single source of truth).
+    assert.match(panel, /buildAppsModePrompt/)
+    assert.match(panel, /from "@\/lib\/code-agent\/apps-mode-contract"/)
+    assert.match(panel, /ORQUESTACIÓN CLAUDE CODE/)
+    assert.match(panel, /surface=\{surface === "apps" \? "apps" : "code"\}/)
     assert.match(api, /opts\?\.autoExecute/)
     assert.match(api, /autoExecute: true/)
     assert.equal(
@@ -21,6 +24,13 @@ describe("APPS autonomous full-stack wiring", () => {
       2,
       "plan and approved build must both remain autonomous",
     )
+
+    const contract = readFileSync(join(ROOT, "lib/code-agent/apps-mode-contract.ts"), "utf8")
+    assert.match(contract, /COMPILA TODAS LAS CAPAS/)
+    assert.match(contract, /EXPANSIÓN DESDE INSTRUCCIÓN SIMPLE/)
+    assert.match(contract, /hasta 4 horas y 120 pasos/)
+    assert.match(contract, /PARIDAD CLAUDE CODE \/ CURSOR \/ CODEX/)
+    assert.match(contract, /buildAppsModePrompt/)
   })
 
   it("renames user-facing company labels to Empresas", () => {

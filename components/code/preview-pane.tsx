@@ -56,7 +56,21 @@ import {
   CODE_AUTONOMOUS_STARTERS,
   requestCodeAgentInstruction,
 } from "@/lib/code-autonomous-starters"
-import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
+import {
+  buildPreviewDocument,
+  projectNeedsDevServer,
+  workspacePreviewRevision,
+  type PreviewKind,
+} from "@/lib/code-preview-build"
+import {
+  shouldCleanupStalePreviewStart,
+  startPreviewWithCleanupFence,
+  type PreviewResourceLease,
+} from "@/lib/code-preview-start-fence"
+import {
+  startSerializedPreviewPoll,
+  type SerializedPreviewPollController,
+} from "@/lib/code-preview-poll"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService } from "@/lib/github-service"
@@ -123,6 +137,11 @@ const AUTO_FIX_MAX = 3
 // Bump the runner's lastTouch (and catch a post-ready crash) while the app is
 // live so the idle reaper never kills an app the user is actively viewing.
 const READY_HEARTBEAT_MS = 60_000
+
+// Readiness is a wall-clock budget, not an attempt budget: a single status
+// request may consume its own network timeout. The serialized poll aborts its
+// in-flight read when this generation reaches the deadline.
+const PREVIEW_READY_DEADLINE_MS = 200_000
 
 // Codex previews are served from a SIBLING origin (a Caddy vhost that exposes
 // ONLY the tokenized preview proxy; the backend advertises it via /health's
@@ -238,14 +257,18 @@ export function PreviewPane() {
   // runner. The dev server stays private on the server; the browser reaches it
   // through the same-origin reverse proxy (/api/code-runner/<id>/app/).
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
-  const pollRef = React.useRef<number | null>(null)
+  const pollRef = React.useRef<SerializedPreviewPollController | null>(null)
   const runIdRef = React.useRef<string>("")
   const modeRef = React.useRef<"host" | "github" | "codex">("host")
+  // Capture the project that actually owns the running Codex preview. The
+  // globally active project may change before this pane unmounts.
+  const codexPreviewProjectIdRef = React.useRef<string | null>(null)
   // Every preview start owns a generation and an abort signal. Stopping or
   // starting again invalidates the previous generation so a late 90-second
   // Codex response can never resurrect a preview the user already stopped.
   const previewRunGenerationRef = React.useRef(0)
   const previewStartAbortRef = React.useRef<AbortController | null>(null)
+  const previewResourceLeaseRef = React.useRef<PreviewResourceLease | null>(null)
   const pendingAutoRunRef = React.useRef(false)
   const forceAutoRunRef = React.useRef(false)
   // Guards the codex self-heal so a genuinely-gone project can't loop forever:
@@ -277,15 +300,10 @@ export function PreviewPane() {
   const canRunProject = hasNodeProject || Boolean(gitBinding) || Boolean(activeCodexProjectId)
   const projectSignature = React.useMemo(() => {
     if (!canRunProject) return ""
-    // Fingerprint EVERY file by path + content length (not a fixed list of key
-    // files), so an edit to any source file changes the signature. This is only
-    // the dedupe fallback for non-forced auto triggers; agent results carry an
-    // explicit force flag and bypass it entirely.
-    const names = Object.keys(files || {}).sort()
-    const fingerprint = names
-      .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
-      .join("|")
-    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${fingerprint}`
+    // Hash file contents as well as paths: equal-length edits must invalidate
+    // the auto-run dedupe just like insertions and deletions do.
+    const revision = workspacePreviewRevision(files || {})
+    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${revision}`
   }, [activeCodexProjectId, activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
@@ -317,9 +335,17 @@ export function PreviewPane() {
 
   const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
-      window.clearInterval(pollRef.current)
+      pollRef.current.stop()
       pollRef.current = null
     }
+  }, [])
+
+  const deactivatePreviewResourceLease = React.useCallback((key?: string, generation?: number) => {
+    const lease = previewResourceLeaseRef.current
+    if (!lease) return
+    if (key && lease.key !== key) return
+    if (generation !== undefined && lease.generation !== generation) return
+    previewResourceLeaseRef.current = { ...lease, active: false }
   }, [])
 
   const stopApp = React.useCallback(() => {
@@ -328,86 +354,102 @@ export function PreviewPane() {
     previewStartAbortRef.current = null
     pendingAutoRunRef.current = false
     forceAutoRunRef.current = false
+    deactivatePreviewResourceLease()
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
     if (modeRef.current === "codex") {
-      const codexProjectId = activeCodexProjectId || getActiveCodexProject()
+      const codexProjectId = codexPreviewProjectIdRef.current || activeCodexProjectId || getActiveCodexProject()
+      codexPreviewProjectIdRef.current = null
       if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
     } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
     // The Shell tool loses its exec target when the run stops.
     setActiveHostRunId(null)
-  }, [activeCodexProjectId, clearPoll])
+  }, [activeCodexProjectId, clearPoll, deactivatePreviewResourceLease])
 
   // While the app is live, keep polling status at a slow cadence (a) so the
   // runner's lastTouch keeps getting bumped and the idle reaper never kills an
   // app the user is actively viewing, and (b) so a crash that happens AFTER the
   // dev server first went ready surfaces as an error instead of a frozen iframe.
   const startReadyHeartbeat = React.useCallback(
-    (statusFn: () => Promise<RunnerStatus>, generation: number) => {
+    (statusFn: (signal?: AbortSignal) => Promise<RunnerStatus>, generation: number) => {
       clearPoll()
-      const intervalId = window.setInterval(async () => {
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        const st = await statusFn()
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        if (st.error) {
-          clearPoll()
-          const rawNote = st.error || "El dev server se cayó."
-          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
-          setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
-        }
-        // A benign not-ready blip (HMR reload) is ignored — we only react to a
-        // hard error; the mere status read already bumped lastTouch.
-      }, READY_HEARTBEAT_MS)
-      pollRef.current = intervalId
+      pollRef.current = startSerializedPreviewPoll({
+        read: statusFn,
+        intervalMs: READY_HEARTBEAT_MS,
+        isCurrent: () => previewRunGenerationRef.current === generation,
+        onValue: (st) => {
+          if (st.error) {
+            clearPoll()
+            const rawNote = st.error || "El dev server se cayó."
+            lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
+            setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
+            return false
+          }
+          // A benign not-ready blip (HMR reload) is ignored — the status read
+          // already bumped lastTouch and the next read queues after this one.
+          return true
+        },
+        schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clear: (timer) => window.clearTimeout(timer),
+      })
     },
     [clearPoll],
   )
 
   // Poll a runner's status until the dev server is ready (or fails / times out).
   const pollUntilReady = React.useCallback(
-    (statusFn: () => Promise<RunnerStatus>, fallbackUrl: string, generation: number) => {
+    (statusFn: (signal?: AbortSignal) => Promise<RunnerStatus>, fallbackUrl: string, generation: number) => {
       clearPoll()
       let tries = 0
-      const intervalId = window.setInterval(async () => {
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        tries += 1
-        const st = await statusFn()
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        if (st.ready) {
-          codexSelfHealedRef.current = false
-          setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
-          startReadyHeartbeat(statusFn, generation)
-        } else if (st.error || tries > 80) {
-          // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
-          // framer-motion + lucide plus dev-server boot can be slow.
-          clearPoll()
-          const rawNote = st.error || "El dev server no arrancó a tiempo."
-          // Keep the full tail so the auto-repair effect hands the agent real
-          // build/runtime output, not just the one-line summary.
-          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
-          setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
-        } else {
+      let timedOut = false
+      const readinessDeadlineAtMs = Date.now() + PREVIEW_READY_DEADLINE_MS
+      const finishTimedOut = () => {
+        if (timedOut || previewRunGenerationRef.current !== generation) return
+        timedOut = true
+        clearPoll()
+        const rawNote = "El dev server no arrancó a tiempo."
+        lastErrorLogRef.current = rawNote
+        setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
+      }
+      pollRef.current = startSerializedPreviewPoll({
+        read: async (signal) => {
+          tries += 1
+          return statusFn(signal)
+        },
+        intervalMs: 2500,
+        isCurrent: () => previewRunGenerationRef.current === generation,
+        onValue: (st) => {
+          if (st.ready) {
+            codexSelfHealedRef.current = false
+            setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
+            startReadyHeartbeat(statusFn, generation)
+            return false
+          }
+          if (st.error || tries > 80) {
+            // Keep an attempt cap as a secondary safety net. The absolute
+            // deadline below is authoritative when status reads are slow.
+            clearPoll()
+            const rawNote = st.error || "El dev server no arrancó a tiempo."
+            // Keep the full tail so the auto-repair effect hands the agent real
+            // build/runtime output, not just the one-line summary.
+            lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
+            setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
+            return false
+          }
           setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
-        }
-      }, 2500)
-      pollRef.current = intervalId
+          return true
+        },
+        onError: () => {
+          if (Date.now() < readinessDeadlineAtMs) return true
+          finishTimedOut()
+          return false
+        },
+        deadlineAtMs: readinessDeadlineAtMs,
+        onDeadline: finishTimedOut,
+        schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clear: (timer) => window.clearTimeout(timer),
+      })
     },
     [clearPoll, startReadyHeartbeat],
   )
@@ -433,18 +475,34 @@ export function PreviewPane() {
     const boundRepo = getGitBinding(activeFolder?.id ?? null)
     if (boundRepo) {
       modeRef.current = "github"
+      codexPreviewProjectIdRef.current = null
       runIdRef.current = boundRepo
       const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
-      const started = await githubService.run(boundRepo, runtimeEnv).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
-      if (!isCurrentRun()) return
+      const resourceKey = `github:${boundRepo}`
+      previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
+      const fencedStart = await startPreviewWithCleanupFence({
+        start: () => githubService.run(boundRepo, runtimeEnv).catch((err) => ({
+          error: err instanceof Error ? err.message : "runner unreachable",
+        })),
+        isCurrent: isCurrentRun,
+        cleanup: () => githubService.stop(boundRepo),
+        shouldCleanup: () => shouldCleanupStalePreviewStart(
+          previewResourceLeaseRef.current,
+          resourceKey,
+          generation,
+        ),
+      })
+      if (fencedStart.stale) return
+      const started = fencedStart.value
       if ("error" in started && started.error) {
+        deactivatePreviewResourceLease(resourceKey, generation)
         lastErrorLogRef.current = started.error
         setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
         return
       }
       pollUntilReady(
-        async () => {
-          const st = await githubService.runStatus(boundRepo)
+        async (signal) => {
+          const st = await githubService.runStatus(boundRepo, signal)
           return {
             ready: Boolean(st.ready || st.status === "ready"),
             error: st.error || null,
@@ -467,11 +525,12 @@ export function PreviewPane() {
     const codexProjectId = activeCodexProjectId || getActiveCodexProject()
     if (codexProjectId) {
       modeRef.current = "codex"
+      codexPreviewProjectIdRef.current = codexProjectId
       const previewOrigin = await codexPreviewOrigin()
       if (!isCurrentRun()) return
       const toDevUrl = (basePath?: string | null) => (basePath ? `${previewOrigin}${basePath}` : "")
-      const codexStatus = async (): Promise<RunnerStatus> => {
-        const st: any = await codexApi.previewStatus(codexProjectId).catch(() => null)
+      const codexStatus = async (signal?: AbortSignal): Promise<RunnerStatus> => {
+        const st: any = await codexApi.previewStatus(codexProjectId, signal).catch(() => null)
         const p = st?.previewStatus || st || {}
         return {
           ready: Boolean(p.ready),
@@ -481,11 +540,26 @@ export function PreviewPane() {
           devUrl: toDevUrl(p.basePath),
         }
       }
-      const started: any = await codexApi.startPreview(codexProjectId, startController.signal).catch((err) => ({
-        error: err instanceof Error ? err.message : "runner unreachable",
-      }))
-      if (!isCurrentRun()) return
+      const resourceKey = `codex:${codexProjectId}`
+      previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
+      const fencedStart = await startPreviewWithCleanupFence({
+        start: () => codexApi.startPreview(codexProjectId, startController.signal).catch((err) => ({
+          error: err instanceof Error ? err.message : "runner unreachable",
+        })),
+        isCurrent: isCurrentRun,
+        // stopApp/unmount may have sent an early stop before /preview/start
+        // finished. Repeat it after settlement to clean up that late server.
+        cleanup: () => codexApi.stopPreview(codexProjectId),
+        shouldCleanup: () => shouldCleanupStalePreviewStart(
+          previewResourceLeaseRef.current,
+          resourceKey,
+          generation,
+        ),
+      })
+      if (fencedStart.stale) return
+      const started: any = fencedStart.value
       if (started?.error) {
+        deactivatePreviewResourceLease(resourceKey, generation)
         // Self-heal: a stale codex mapping (project wiped / another session)
         // 404s here. Drop it and re-run locally ONCE so the preview just works
         // (Replit never shows a dead project) instead of a scary raw code.
@@ -500,6 +574,7 @@ export function PreviewPane() {
             return
           }
           modeRef.current = "host"
+          codexPreviewProjectIdRef.current = null
           setLiveRun({ phase: "starting", devUrl: "", note: "Recuperando el proyecto…" })
           await runAppRef.current({ auto })
           return
@@ -522,17 +597,32 @@ export function PreviewPane() {
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
     modeRef.current = "host"
+    codexPreviewProjectIdRef.current = null
     // No-Docker host runner: install deps + boot a real vite dev server, then
     // iframe it through the same-origin reverse proxy (started.devUrl).
     const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
-    const started = await hostRunnerService.start(fileMap, runIdRef.current, runtimeEnv)
-    if (!isCurrentRun()) return
+    const hostRunId = runIdRef.current
+    const resourceKey = `host:${hostRunId}`
+    previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
+    const fencedStart = await startPreviewWithCleanupFence({
+      start: () => hostRunnerService.start(fileMap, hostRunId, runtimeEnv),
+      isCurrent: isCurrentRun,
+      cleanup: () => hostRunnerService.stop(hostRunId),
+      shouldCleanup: () => shouldCleanupStalePreviewStart(
+        previewResourceLeaseRef.current,
+        resourceKey,
+        generation,
+      ),
+    })
+    if (fencedStart.stale) return
+    const started = fencedStart.value
     // An AUTO run (the agent just finished building) must degrade SILENTLY when
     // the runner can't even start — a disabled environment, or a user who isn't
     // on the allowlist (403 → started.error). Falling back to the static preview
     // is friendlier than slapping a red "no se pudo correr" over a preview the
     // user never asked to run. A manual ▶ Ejecutar still surfaces the reason.
     if (started.disabled) {
+      deactivatePreviewResourceLease(resourceKey, generation)
       if (auto) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
@@ -545,6 +635,7 @@ export function PreviewPane() {
       return
     }
     if (started.error) {
+      deactivatePreviewResourceLease(resourceKey, generation)
       if (auto) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
@@ -555,8 +646,12 @@ export function PreviewPane() {
     }
     // Host run is live → the Shell tool can now exec real commands against it.
     setActiveHostRunId(runIdRef.current)
-    pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "", generation)
-  }, [activeCodexProjectId, activeFolder?.id, clearPoll, files, pollUntilReady])
+    pollUntilReady(
+      (signal) => hostRunnerService.status(runIdRef.current, signal),
+      started.devUrl || "",
+      generation,
+    )
+  }, [activeCodexProjectId, activeFolder?.id, clearPoll, deactivatePreviewResourceLease, files, pollUntilReady])
 
   // Mirror the latest values into refs so the auto-run listener (registered
   // once) and the post-commit auto-run effect always read FRESH state without
@@ -797,9 +892,10 @@ export function PreviewPane() {
     if (typeof window === "undefined") return
     const beaconStop = () => {
       previewRunGenerationRef.current += 1
+      deactivatePreviewResourceLease()
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
-      if (pollRef.current) window.clearInterval(pollRef.current)
+      clearPoll()
       // GitHub-backed runs are shut down by githubService.stop on unmount; the
       // keepalive beacon only targets the same-origin host runner.
       if (modeRef.current !== "host" || !runIdRef.current) return
@@ -817,15 +913,20 @@ export function PreviewPane() {
     return () => {
       window.removeEventListener("pagehide", beaconStop)
       previewRunGenerationRef.current += 1
+      deactivatePreviewResourceLease()
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
-      if (pollRef.current) window.clearInterval(pollRef.current)
+      clearPoll()
       // Component teardown (e.g. switching away from the preview): actively stop
       // the dev server instead of leaking it to the reaper.
-      if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
+      if (modeRef.current === "codex") {
+        const codexProjectId = codexPreviewProjectIdRef.current || getActiveCodexProject()
+        codexPreviewProjectIdRef.current = null
+        if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
+      } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
       else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
     }
-  }, [])
+  }, [clearPoll, deactivatePreviewResourceLease])
 
   // Debounce rebuilds so typing stays smooth; manual refresh bypasses it.
   const [snapshot, setSnapshot] = React.useState({ files, activePath })

@@ -17,20 +17,13 @@ export const CODE_COMPANY_SEED_PROMPT_EVENT = "siragpt:code-company-seed-prompt"
 
 const STORAGE_KEY = "code-workspace:agent-company-proactive:v1"
 
-/** Core departments spun up when proactive mode starts (Matrix-style loop). */
+/**
+ * Full fleet spun up when PROACTIVO starts. Every built-in department gets a
+ * chat session and participates in the backend round-robin / mission loop.
+ * Keep this equal to AGENT_COMPANY_DEPARTMENTS so UI and runtime never diverge.
+ */
 export const PROACTIVE_CORE_DEPARTMENTS: readonly AgentDepartmentDefinition[] =
-  AGENT_COMPANY_DEPARTMENTS.filter((department) =>
-    [
-      "ceo-office",
-      "product-engineering",
-      "agent-infrastructure",
-      "growth-engines",
-      "sales-operations",
-      "customer-success",
-      "marketing",
-      "trust",
-    ].includes(department.id),
-  )
+  AGENT_COMPANY_DEPARTMENTS
 
 export type ProactiveCompanyState = {
   enabled: boolean
@@ -197,8 +190,8 @@ export function buildProactiveKickoffPrompt(companyName: string): string {
     "",
     "Eres el CEO Office. Opera de forma autónoma y continua SIN detenerte hasta que el usuario pause PROACTIVO:",
     "1) Clarifica el objetivo de negocio en UNA pregunta corta SOLO si falta por completo; si ya hay contexto del workspace, asume y ejecuta.",
-    "2) Activa TODOS los departamentos y descompón el objetivo en OKRs + backlog por departamento (Producto/Ingeniería, Infra de Agentes, Growth, Ventas, Clientes, Marketing, Confianza, etc.).",
-    "3) Cadencia tipo heartbeat: cada ciclo un departamento avanza trabajo real con evidencia; rota y no dejes departamentos idle sin motivo.",
+    "2) Activa TODOS los departamentos (CEO, Producto/Ingeniería, INGENIEROS 01/02, Infra de Agentes, Integraciones, Growth, Ventas, Clientes, Marketing, Web, Mercado, Localización, Confianza) y descompón el objetivo en OKRs + backlog por departamento.",
+    "3) Cadencia tipo heartbeat: en cada ciclo el backend rota departamentos; tú no dejes ninguno idle sin motivo y reparte encargos reales con evidencia.",
     "4) Para objetivos grandes crea un grafo de agentes lógicos; investigación en paralelo, escrituras serializadas por archivo, integración final verificada.",
     "5) Distribuye encargos al chat del departamento responsable; CEO Office guarda decisiones, blockers y handoffs (continuidad de sesión).",
     "6) Empieza YA: scaffold/producto, ops, contenido o distribución según el objetivo; deja evidencia verificable (código, checks, preview, métricas).",

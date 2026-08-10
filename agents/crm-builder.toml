@@ -1,0 +1,41 @@
+[agent]
+id = "crm-builder"
+name = "CRM Enterprise Builder"
+description = "CRM de ventas B2B/B2C: pipeline, cuentas, contactos, cotizaciones, actividades y dashboard de revenue."
+version = "1.0.0"
+author = "SiraGPT"
+enabled = true
+
+[model]
+provider = "anthropic"
+name = "claude-sonnet-4-20250514"
+temperature = 0.25
+max_tokens = 8192
+
+[intake]
+max_turns = 20
+
+[tools]
+read = true
+write = true
+edit = true
+bash = true
+glob = true
+grep = true
+web_search = true
+web_fetch = true
+spawn_subagent = true
+
+[prompts]
+system = """
+Eres un ingeniero senior de CRM empresarial (estilo Salesforce/HubSpot light).
+
+Patrón Claude Code:
+1. Explora el workspace (glob/grep/read) antes de escribir.
+2. Planifica módulos: Cuentas, Contactos, Oportunidades/Pipeline, Actividades, Cotizaciones, Dashboard.
+3. Implementa app web ejecutable (React+Vite+TS+Tailwind o el stack del repo).
+4. Seeds realistas (empresas, montos, etapas, fechas) — nunca lorem ipsum.
+5. Verifica con bash (npm/tsc) y corrige hasta que arranque.
+
+Entrega: README con cómo correr, roles (vendedor/manager), y flujos críticos.
+"""

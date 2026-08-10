@@ -206,6 +206,25 @@ function safeArgs(raw) {
   catch { return {}; }
 }
 
+const SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE =
+  'No entregué el documento editado porque ninguna copia generada superó la validación de integridad. Conservé el archivo original y no generé un documento sustituto.';
+
+function sourcePreservingResultValidation(item) {
+  return item?.validation || item?.artifact?.validation || null;
+}
+
+function isValidatedSourcePreservingResult(item) {
+  return Boolean(item?.artifact?.id && sourcePreservingResultValidation(item)?.passed === true);
+}
+
+function isSourcePreservingValidationError(err) {
+  return Boolean(
+    err?.validationOnlyFailure
+    || err?.code === 'DOCUMENT_BATCH_EDIT_FAILED'
+    || err?.code === 'SOURCE_PRESERVING_VALIDATION_FAILED'
+  );
+}
+
 // Turn the model's per-step "thought" into a clean, user-facing reasoning
 // line for the chat timeline (Claude-style transparency). Strips code fences,
 // tool-state/JSON blobs and tool-call syntax, collapses whitespace, and caps
@@ -655,12 +674,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
     let documentEditPreloopAttempted = false;
+    let wantsNewDeckDeliverable = false;
+    try {
+      const { wantsNewPresentationDeliverable } = require('./agents/document-delivery-policy');
+      wantsNewDeckDeliverable = wantsNewPresentationDeliverable(userQuery);
+    } catch (_) { /* best-effort */ }
     if (
       preloopFileIds.length > 0
       && toolContext.prisma
       && toolContext.userId
       && customGptCapabilities?.documents !== false
       && isDocumentEditRequest(userQuery)
+      // Never short-circuit "realiza una ppt de 30 slides de la tesis.pdf" into
+      // source-preserving PDF annex editing — that must create a fresh .pptx.
+      && !wantsNewDeckDeliverable
     ) {
       try {
         const {
@@ -690,24 +717,50 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               artifacts: [],
             };
           }
-          if (preserved?.artifact?.id && preserved?.file) {
-            const artifactEvent = {
-              id: preserved.artifact.id,
-              filename: preserved.artifact.filename,
-              format: preserved.artifact.format,
-              mime: preserved.artifact.mime,
-              sizeBytes: preserved.artifact.sizeBytes,
-              downloadUrl: preserved.artifact.downloadUrl,
-              previewHtml: preserved.previewHtml || null,
-              validation: preserved.validation || null,
-            };
-            await writeSse(res, { type: 'file_artifact', artifact: artifactEvent });
-            const answer = String(preserved.content || 'Listo. Conservé el documento original y apliqué la edición solicitada.').trim();
+          const preservedResults = Array.isArray(preserved?.results) && preserved.results.length
+            ? preserved.results
+            : (preserved ? [preserved] : []);
+          const validatedResults = preservedResults.filter(isValidatedSourcePreservingResult);
+          const rejectedResultCount = preservedResults.length - validatedResults.length;
+          const artifactEvents = validatedResults
+            .map((item) => ({
+              id: item.artifact.id,
+              filename: item.artifact.filename,
+              format: item.artifact.format,
+              mime: item.artifact.mime,
+              sizeBytes: item.artifact.sizeBytes,
+              downloadUrl: item.artifact.downloadUrl,
+              previewHtml: item.previewHtml || null,
+              validation: sourcePreservingResultValidation(item),
+              sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+              documentVersion: item.version || null,
+            }));
+          if (artifactEvents.length) {
+            for (const artifact of artifactEvents) {
+              await writeSse(res, { type: 'file_artifact', artifact });
+            }
+            const fallbackAnswer = artifactEvents.length > 1
+              ? `Listo. Conservé los documentos originales y apliqué la edición solicitada en ${artifactEvents.length} archivos.`
+              : 'Listo. Conservé el documento original y apliqué la edición solicitada.';
+            const answer = rejectedResultCount > 0
+              ? `Listo. Entregué ${artifactEvents.length} archivo(s) que superaron la validación. No entregué ${rejectedResultCount} archivo(s) inválido(s).`
+              : String(preserved.content || fallbackAnswer).trim();
             await writeSse(res, { replace: true, content: answer });
             return {
               finalAnswer: answer,
               stoppedReason: 'source_preserving_document_edit',
-              artifacts: [artifactEvent],
+              artifacts: artifactEvents,
+            };
+          }
+          if (preservedResults.length) {
+            // The source-preserving editor handled the request but could not
+            // prove any output safe. Never fall through to the LLM/tool loop:
+            // that path can regenerate a plausible but different document.
+            await writeSse(res, { replace: true, content: SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE });
+            return {
+              finalAnswer: SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE,
+              stoppedReason: 'source_preserving_document_validation_failed',
+              artifacts: [],
             };
           }
         }
@@ -719,6 +772,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         } catch (_) { /* noop */ }
         // Surgical not-found / ambiguous edit: tell the user instead of letting
         // a weak model call docintel_analyze and "analyze" the attachment.
+        if (isSourcePreservingValidationError(preErr)) {
+          const answer = SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE;
+          await writeSse(res, { replace: true, content: answer });
+          return {
+            finalAnswer: answer,
+            stoppedReason: 'source_preserving_document_validation_failed',
+            artifacts: [],
+          };
+        }
         if (
           code === 'REPLACE_TEXT_NOT_FOUND'
           || code === 'REPLACE_TEXT_UNSPECIFIED'
@@ -992,7 +1054,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         }
       } catch (_) { /* best-effort */ }
     }
-    if (!initialToolChoice && attachedFileCount >= 1 && availableToolNames.has('document_edit')) {
+    if (
+      !initialToolChoice
+      && !wantsNewDeckDeliverable
+      && attachedFileCount >= 1
+      && availableToolNames.has('document_edit')
+    ) {
       try {
         if (isDocumentEditRequest(userQuery)) {
           documentEditIntent = true;
@@ -1005,7 +1072,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // attachment (live bug: DeepSeek called docintel_analyze instead of
     // returning an edited DOCX). Drop both so the model can only take
     // document_edit (or answer) for edit intents.
-    if ((documentEditIntent || documentMergeIntent || documentEditPreloopAttempted) && Array.isArray(tools)) {
+    // Exception: NEW presentation decks from PDF/images MUST use create_document
+    // (pptx) — blocking it forced the "PDF + anexos" failure path.
+    if (
+      (documentEditIntent || documentMergeIntent || documentEditPreloopAttempted)
+      && !wantsNewDeckDeliverable
+      && Array.isArray(tools)
+    ) {
       const blockedOnEdit = new Set([
         'create_document',
         'docintel_analyze',
@@ -1014,6 +1087,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         'docintel_compare',
       ]);
       tools = tools.filter((t) => t && t.name && !blockedOnEdit.has(t.name));
+    }
+    // Force create_document first for new multi-slide decks so weak models
+    // cannot answer with a preserved PDF annex.
+    if (wantsNewDeckDeliverable && availableToolNames.has('create_document') && !initialToolChoice) {
+      initialToolChoice = 'create_document';
     }
     // A strong specialized-skill intent gets one deterministic first call. The
     // model still selects the concrete id/args and can chain further skills

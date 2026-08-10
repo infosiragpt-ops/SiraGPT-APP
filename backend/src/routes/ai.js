@@ -197,6 +197,18 @@ const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
+const {
+  MESSAGE_IDEMPOTENCY_HASH_FIELD,
+  buildActiveGenerateTurnKey,
+  buildAiGenerateRequestFingerprint,
+  claimStreamController,
+  findMessagesByTurnIdentity,
+  findMatchingTurnPair,
+  hasIdempotencyRequestConflict,
+  metadataMatchesTurnIdentity,
+  resolveTurnIdentity,
+  waitForActiveTurn,
+} = require('../services/chat-turn-idempotency');
 const openclawCapabilityKernel = require('../services/openclaw-capability-kernel');
 const router = express.Router();
 const cookie = require('cookie');
@@ -1283,9 +1295,6 @@ async function recoverRecentChatDocumentFiles({ chatId, userId, maxFiles = 4, lo
   return loaded.filter((f) => f && f.attachmentKind !== 'image');
 }
 
-const normalizeDuplicateTurnContent = (value) =>
-  String(value || '').trim().replace(/\s+/g, ' ');
-
 function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
@@ -1317,67 +1326,6 @@ function hasPersistedAssistantPayload(message) {
   if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
   if (message.content != null && typeof message.content !== 'string' && String(message.content).trim().length > 0) return true;
   return parseMessageFilesValue(message.files).length > 0;
-}
-
-async function findRecentCompletedDuplicateTurn(chatId, content, windowMs = 5_000) {
-  const normalized = normalizeDuplicateTurnContent(content);
-  if (!chatId || !normalized) return null;
-
-  const recent = await prisma.message.findMany({
-    where: { chatId, deletedAt: null },
-    orderBy: { timestamp: 'desc' },
-    take: 4,
-    select: {
-      id: true,
-      role: true,
-      content: true,
-      timestamp: true,
-      files: true,
-      tokens: true,
-      metadata: true,
-    },
-  });
-  if (recent.length < 2) return null;
-
-  const ordered = recent.reverse();
-  const assistantMessage = ordered[ordered.length - 1];
-  const userMessage = ordered[ordered.length - 2];
-  if (
-    !userMessage ||
-    !assistantMessage ||
-    userMessage.role !== 'USER' ||
-    assistantMessage.role !== 'ASSISTANT' ||
-    !hasPersistedAssistantPayload(assistantMessage) ||
-    normalizeDuplicateTurnContent(userMessage.content) !== normalized ||
-    userMessage.files
-  ) {
-    return null;
-  }
-
-  const userAgeMs = Date.now() - new Date(userMessage.timestamp).getTime();
-  const assistantDelayMs = new Date(assistantMessage.timestamp).getTime() - new Date(userMessage.timestamp).getTime();
-  if (
-    !Number.isFinite(userAgeMs) ||
-    !Number.isFinite(assistantDelayMs) ||
-    userAgeMs < 0 ||
-    userAgeMs > windowMs ||
-    assistantDelayMs < 0 ||
-    assistantDelayMs > windowMs
-  ) {
-    return null;
-  }
-
-  return { userMessage, assistantMessage };
-}
-
-async function findRecentCompletedDuplicateTurnForUser(userId, chatId, content, windowMs = 5_000) {
-  if (!userId || !chatId) return null;
-  const chat = await prisma.chat.findFirst({
-    where: { id: chatId, userId },
-    select: { id: true },
-  });
-  if (!chat) return null;
-  return findRecentCompletedDuplicateTurn(chatId, content, windowMs);
 }
 
 const activeGenerateTurns = new Map();
@@ -1425,16 +1373,10 @@ function decodeOwnedStreamResumeCursor(cursor, userId, chatId) {
   }
 }
 
-function makeActiveGenerateTurnKey(userId, chatId, content, files) {
-  const normalized = normalizeDuplicateTurnContent(content);
-  if (!userId || !chatId || !normalized) return null;
-  if (Array.isArray(files) && files.length > 0) return null;
-  return `${userId}:${chatId}:${normalized}`;
-}
-
-function createActiveGenerateTurn(key) {
+function createActiveGenerateTurn(key, requestFingerprint) {
   const turn = {
     key,
+    requestFingerprint,
     settled: false,
     promise: null,
     resolve: null,
@@ -1475,32 +1417,56 @@ function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
   res.end();
 }
 
-// Idempotent USER-message persistence. The /generate handler is ~3.8k lines
-// with several branches that each persist the turn, and a request can be
-// retried or double-fired. Creating the USER row unconditionally is what let
-// the "sigue duplicando los mensajes" bug survive the earlier front-end
-// guards. We only skip the write when the turn we are about to save is
-// already the LAST persisted message in the chat AND identical AND unanswered
-// (no assistant row after it) within a short window — i.e. a genuine
-// double-write of the same turn. A message the user legitimately repeats is
-// always preceded by the assistant's reply, so it is never collapsed.
-async function persistUserMessageOnce(chatId, content, filesJson = null, windowMs = 30_000, metadata = null) {
+function respondGenerateTurnError(res, {
+  code,
+  message,
+  retryable,
+  retryAfterSeconds = null,
+  actualModel = '',
+}) {
+  if (!res.headersSent) {
+    if (retryAfterSeconds) res.setHeader('Retry-After', String(retryAfterSeconds));
+    return res.status(409).json({ error: code, code, message, retryable });
+  }
+
   try {
-    const last = await prisma.message.findFirst({
-      where: { chatId, deletedAt: null },
-      orderBy: { timestamp: 'desc' },
-      select: { id: true, role: true, content: true, timestamp: true },
-    });
-    if (
-      last &&
-      last.role === 'USER' &&
-      String(last.content || '').trim() === String(content || '').trim() &&
-      Date.now() - new Date(last.timestamp).getTime() < windowMs
-    ) {
-      return last; // identical unanswered user turn already persisted — skip the duplicate
+    if (retryAfterSeconds) res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.setHeader('X-Model-Actual', String(actualModel || ''));
+  } catch { /* headers already committed */ }
+  try {
+    res.write(`data: ${JSON.stringify({
+      type: 'error',
+      error: code,
+      code,
+      message,
+      retryable,
+      ...(retryAfterSeconds ? { retryAfterSeconds } : {}),
+    })}\n\n`);
+    res.write('data: [DONE]\n\n');
+  } catch { /* socket gone */ }
+  if (!res.writableEnded) res.end();
+  return res;
+}
+
+// Idempotent USER-message persistence. Equal text is not a duplicate: users
+// may intentionally repeat a short instruction while another turn is still
+// running. Only a client-owned idempotencyKey/streamId may collapse writes.
+async function persistUserMessageOnce(chatId, content, filesJson = null, metadata = null, identityInput = null) {
+  const identity = resolveTurnIdentity(identityInput || {});
+  if (identity) {
+    try {
+      const matchingUsers = await findMessagesByTurnIdentity({
+        chatId,
+        identityInput,
+        roles: ['USER'],
+        findMany: (args) => prisma.message.findMany(args),
+        parseMetadata: parseMessageMetadata,
+      });
+      const duplicate = matchingUsers[0] || null;
+      if (duplicate) return duplicate;
+    } catch (guardErr) {
+      console.warn('[ai/persistUserMessageOnce] guard check failed, creating anyway:', guardErr && guardErr.message);
     }
-  } catch (guardErr) {
-    console.warn('[ai/persistUserMessageOnce] guard check failed, creating anyway:', guardErr && guardErr.message);
   }
   const data = { chatId, role: 'USER', content, files: filesJson };
   if (metadata && typeof metadata === 'object') {
@@ -1542,44 +1508,49 @@ async function withGenerateTurnSaveLock(lockKey, fn) {
   }
 }
 
-async function findExistingGenerateTurn({ chatId, idempotencyKey, streamId, fingerprint }) {
+async function findExistingGenerateTurn({
+  chatId,
+  idempotencyKey,
+  streamId,
+  requestFingerprint = null,
+  allowAssistantOnly = false,
+}) {
   if (!chatId) return null;
-  const hasExplicitDedupeSignal = Boolean(idempotencyKey || streamId);
-  if (!hasExplicitDedupeSignal) return null;
+  const identityInput = { idempotencyKey, streamId };
+  if (!resolveTurnIdentity(identityInput)) return null;
 
-  const recentMessages = await prisma.message.findMany({
-    where: {
-      chatId,
-      timestamp: { gte: new Date(Date.now() - 10 * 60 * 1000) },
-      deletedAt: null,
-    },
-    orderBy: { timestamp: 'asc' },
-    take: 80,
+  const matchingMessages = await findMessagesByTurnIdentity({
+    chatId,
+    identityInput,
+    roles: ['USER', 'ASSISTANT'],
+    findMany: (args) => prisma.message.findMany(args),
+    parseMetadata: parseMessageMetadata,
   });
 
-  const matchingUser = recentMessages.find((message) => {
-    if (message.role !== 'USER') return false;
-    const metadata = parseMessageMetadata(message.metadata);
-    if (idempotencyKey && metadata.idempotencyKey === idempotencyKey) return true;
-    if (streamId && metadata.streamId === streamId) return true;
-    if (fingerprint && metadata.turnFingerprint === fingerprint && (metadata.idempotencyKey || metadata.streamId)) return true;
-    return false;
-  });
+  const replayableMessages = matchingMessages.filter((message) => (
+      message.role !== 'ASSISTANT' || hasPersistedAssistantPayload(message)
+  ));
+  let pair = findMatchingTurnPair(
+    replayableMessages,
+    identityInput,
+    parseMessageMetadata,
+  );
+  if (!pair && allowAssistantOnly) {
+    const assistantMessage = replayableMessages.find((message) => (
+      message.role === 'ASSISTANT'
+        && metadataMatchesTurnIdentity(parseMessageMetadata(message.metadata), identityInput)
+    ));
+    if (assistantMessage) pair = { userMessage: null, assistantMessage };
+  }
+  if (!pair) return null;
 
-  if (!matchingUser) return null;
+  const idempotencyConflict = hasIdempotencyRequestConflict(
+    [pair.userMessage, pair.assistantMessage].filter(Boolean),
+    requestFingerprint,
+    parseMessageMetadata,
+  );
 
-  const matchingAssistant = recentMessages.find((message) => {
-    if (message.role !== 'ASSISTANT') return false;
-    if (message.timestamp < matchingUser.timestamp) return false;
-    if (!hasPersistedAssistantPayload(message)) return false;
-    const metadata = parseMessageMetadata(message.metadata);
-    if (idempotencyKey && metadata.idempotencyKey === idempotencyKey) return true;
-    if (streamId && metadata.streamId === streamId) return true;
-    if (fingerprint && metadata.turnFingerprint === fingerprint && (metadata.idempotencyKey || metadata.streamId)) return true;
-    return false;
-  });
-
-  return { userMessage: matchingUser, assistantMessage: matchingAssistant || null };
+  return { ...pair, idempotencyConflict };
 }
 
 // Título estilo Claude a partir del primer mensaje: primera línea con
@@ -1647,26 +1618,21 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           return { assistantMessage: null };
         }
 
-        if (!regenerate) {
-          if (!Array.isArray(processedFiles) || processedFiles.length === 0) {
-            const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt, 120_000);
-            if (duplicateTurn) {
-              console.warn('[ai/generate] duplicate completed turn skipped during save', {
-                chatId,
-                userMessageId: duplicateTurn.userMessage.id,
-                assistantMessageId: duplicateTurn.assistantMessage.id,
-              });
-              return { assistantMessage: duplicateTurn.assistantMessage, duplicate: true };
-            }
-          }
-        }
-
         const existingTurn = await findExistingGenerateTurn({
           chatId,
           idempotencyKey,
           streamId,
-          fingerprint: turnFingerprint,
+          requestFingerprint: safeExtraMetadata[MESSAGE_IDEMPOTENCY_HASH_FIELD] || null,
+          allowAssistantOnly: regenerate,
         });
+        if (existingTurn?.idempotencyConflict) {
+          console.warn('[ai/generate] idempotency payload conflict during save', {
+            chatId,
+            idempotencyKey: idempotencyKey || null,
+            streamId: streamId || null,
+          });
+          return { assistantMessage: null, idempotencyConflict: true };
+        }
         if (existingTurn?.assistantMessage) {
           console.info('[ai/generate] duplicate turn save skipped', {
             chatId,
@@ -1688,13 +1654,13 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             chatId,
             prompt,
             processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
-            30_000,
             turnMetadata,
+            { idempotencyKey, streamId },
           );
         }
 
         const metadataPayload = Object.keys(turnMetadata).length > 0
-          ? JSON.stringify(turnMetadata)
+          ? turnMetadata
           : null;
         if (!normalizedResponseContent.trim() && !hasAssistantFiles) {
           console.warn('[ai/generate] skipped empty assistant message save', {
@@ -1810,13 +1776,13 @@ router.post(
 
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
+    body('streamId').optional().isString().trim().isLength({ min: 1, max: 200 }),
     body('enableWebGrounding').optional().isBoolean(),
     body('webGroundingQuery').optional().isString().isLength({ max: 12000 }),
-    body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
+    body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: 200 }),
     // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
     // Optional; when present it overrides the auto-decided reasoning depth.
     body('reasoningEffort').optional().isString().isLength({ max: 16 }),
-    body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -1839,6 +1805,10 @@ router.post(
     // model thinking) plus a silently-dropped client TCP connection
     // can't keep us streaming tokens to a dead socket.
     let keepAlive = null;
+    // Resume storage ownership must outlive the browser connection. This lease
+    // heartbeat keeps a silent hours-long tool/thinking phase reconnectable
+    // even after res.write starts failing because the tab detached.
+    let resumeLeaseHeartbeat = null;
 
     // Hoisted so the outer `finally` (filter-pipeline post-hook,
     // stream-resume bookkeeping) can read them even when an early
@@ -1861,11 +1831,12 @@ router.post(
     // its signed cursor has been authenticated.
     if (streamId && !__hasResumeRequest) {
       __streamControllerKey = `${req.user.id}:${streamId}`;
-      const publicWebReconnect = req.body.enableWebGrounding === true
-        && streamControllers.has(__streamControllerKey);
-      if (!publicWebReconnect) {
-        streamControllers.set(__streamControllerKey, controller);
-        __ownsStreamController = true;
+      __ownsStreamController = claimStreamController(
+        streamControllers,
+        __streamControllerKey,
+        controller,
+      );
+      if (__ownsStreamController) {
         console.log(`Stream registered with ID: ${streamId}`);
       }
     }
@@ -2042,8 +2013,12 @@ router.post(
           // controller leaves the registry. If this request becomes the new
           // owner in that narrow window, make Stop target the new run.
           if (__streamControllerKey && !__ownsStreamController) {
-            streamControllers.set(__streamControllerKey, controller);
-            __ownsStreamController = true;
+            __ownsStreamController = claimStreamController(
+              streamControllers,
+              __streamControllerKey,
+              controller,
+              { replaceOwner: true },
+            );
           }
         } else {
           res.setHeader('Content-Type', 'text/event-stream');
@@ -2090,48 +2065,98 @@ router.post(
         }
       }
 
-      const activeGenerateTurnKey = makeActiveGenerateTurnKey(userId, chatId, prompt, files);
-      if (canPersist && !regenerate && activeGenerateTurnKey) {
+      const generateIdempotencyRequestHash = resolveTurnIdentity({ idempotencyKey, streamId })
+        ? buildAiGenerateRequestFingerprint({
+            requestBody: req.body,
+          })
+        : null;
+      const activeGenerateTurnKey = buildActiveGenerateTurnKey({
+        userId,
+        chatId,
+        idempotencyKey,
+        streamId,
+      });
+      if (!__hasResumeRequest && canPersist && activeGenerateTurnKey) {
         const activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
         if (activeTurn) {
-          try {
-            let dupTimer;
-            const duplicateTurn = await Promise.race([
-              activeTurn.promise,
-              new Promise((resolve) => {
-                dupTimer = setTimeout(() => resolve(null), 55_000);
-              }),
-            ]).finally(() => clearTimeout(dupTimer));
-            if (duplicateTurn && duplicateTurn.assistantMessage) {
-              fullResponseContent = duplicateTurn.assistantMessage.content || '';
-              console.warn('[ai/generate] active duplicate turn replayed', { chatId });
-              return streamDuplicateTurnReplay(res, duplicateTurn, model);
-            }
-          } catch (activeErr) {
-            console.warn('[ai/generate] active duplicate turn wait failed:', activeErr && activeErr.message);
+          if (activeTurn.requestFingerprint !== generateIdempotencyRequestHash) {
+            return respondGenerateTurnError(res, {
+              code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+              message: 'La clave de idempotencia ya está asociada a otra solicitud.',
+              retryable: false,
+              actualModel: model,
+            });
           }
+
+          const activeWait = await waitForActiveTurn(activeTurn);
+          if (activeWait.outcome === 'replay') {
+            fullResponseContent = activeWait.turn.assistantMessage.content || '';
+            console.warn('[ai/generate] active duplicate turn replayed', { chatId });
+            return streamDuplicateTurnReplay(res, activeWait.turn, model);
+          }
+          if (activeWait.error) {
+            console.warn('[ai/generate] active duplicate turn wait failed:', activeWait.error.message);
+          }
+          // A follower never becomes an owner after waiting. Falling through
+          // here used to execute the model a second time when the 55 s timer
+          // won or the owner failed just before persistence.
+          return respondGenerateTurnError(res, {
+            code: 'turn_in_progress',
+            message: 'El turno original sigue procesándose. Reintenta en unos segundos.',
+            retryable: true,
+            retryAfterSeconds: 3,
+            actualModel: model,
+          });
         } else {
-          req._activeGenerateTurn = createActiveGenerateTurn(activeGenerateTurnKey);
+          req._activeGenerateTurn = createActiveGenerateTurn(
+            activeGenerateTurnKey,
+            generateIdempotencyRequestHash,
+          );
+          // This request became the real owner after a prior owner's replay
+          // entry disappeared. Retarget Stop only now; followers that merely
+          // wait above must never replace the original controller.
+          if (__streamControllerKey && !__ownsStreamController) {
+            __ownsStreamController = claimStreamController(
+              streamControllers,
+              __streamControllerKey,
+              controller,
+              { replaceOwner: true },
+            );
+          }
         }
       }
 
-      // Idempotency for the real production failure mode: the same
-      // /ai/generate turn can be fired again milliseconds after a very fast
-      // assistant reply was already persisted. In that state the previous
-      // USER is no longer "unanswered", so persistUserMessageOnce alone cannot
-      // catch it. Replay the existing assistant turn and skip all model work.
+      // A completed retry is replayed only when the client reuses the same
+      // explicit idempotencyKey/streamId. Equal prompt text is a valid new turn.
       if (
-        canPersist &&
-        !regenerate &&
-        (!Array.isArray(files) || files.length === 0)
+        !__hasResumeRequest
+        && canPersist
+        && resolveTurnIdentity({ idempotencyKey, streamId })
       ) {
         try {
-          const duplicateTurn = await findRecentCompletedDuplicateTurnForUser(userId, chatId, prompt, 120_000);
-          if (duplicateTurn) {
+          const duplicateTurn = await findExistingGenerateTurn({
+            chatId,
+            idempotencyKey,
+            streamId,
+            requestFingerprint: generateIdempotencyRequestHash,
+            allowAssistantOnly: regenerate,
+          });
+          if (duplicateTurn?.idempotencyConflict) {
+            return respondGenerateTurnError(res, {
+              code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+              message: 'La clave de idempotencia ya está asociada a otra solicitud.',
+              retryable: false,
+              actualModel: model,
+            });
+          }
+          if (duplicateTurn?.assistantMessage) {
             fullResponseContent = duplicateTurn.assistantMessage.content || '';
+            if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
+              req._activeGenerateTurn.resolve(duplicateTurn);
+            }
             console.warn('[ai/generate] duplicate completed turn replayed', {
               chatId,
-              userMessageId: duplicateTurn.userMessage.id,
+              userMessageId: duplicateTurn.userMessage?.id || null,
               assistantMessageId: duplicateTurn.assistantMessage.id,
             });
             return streamDuplicateTurnReplay(res, duplicateTurn, model);
@@ -2299,6 +2324,13 @@ router.post(
         }
 
         if (resumeSession && resumeSession.streamId) {
+          if (!resumeSession.isResume) {
+            const leaseStreamId = resumeSession.streamId;
+            resumeLeaseHeartbeat = setInterval(() => {
+              streamResume.touch(leaseStreamId).catch(() => {});
+            }, 30_000);
+            resumeLeaseHeartbeat.unref?.();
+          }
           try {
             res.setHeader('X-Stream-Id', resumeSession.streamId);
             res.setHeader('X-Stream-Cursor', `${resumeSession.streamId}:${resumeSession.record.chunks.length}`);
@@ -5932,22 +5964,47 @@ router.post(
           if (canPersist && userId && chatId) {
             const __chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
             if (__chat) {
+              const triageTurnFingerprint = buildGenerateTurnFingerprint({
+                userId,
+                chatId,
+                prompt,
+                processedFiles,
+              });
+              const triageTurnMetadata = {
+                idempotencyKey: idempotencyKey || streamId || triageTurnFingerprint,
+                streamId: streamId || null,
+                turnFingerprint: triageTurnFingerprint,
+                origin: 'intent_triage',
+                ...(generateIdempotencyRequestHash
+                  ? { [MESSAGE_IDEMPOTENCY_HASH_FIELD]: generateIdempotencyRequestHash }
+                  : {}),
+              };
+              let triageUserMessage = null;
               if (!regenerate) {
-                await persistUserMessageOnce(
+                triageUserMessage = await persistUserMessageOnce(
                   chatId,
                   prompt,
                   processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+                  triageTurnMetadata,
+                  { idempotencyKey, streamId },
                 );
               }
-              await prisma.message.create({
+              const triageAssistantMessage = await prisma.message.create({
                 data: {
                   chatId,
                   role: 'ASSISTANT',
                   content: triageQuestion,
                   tokens: 0,
                   files: null,
+                  metadata: triageTurnMetadata,
                 },
               });
+              if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
+                req._activeGenerateTurn.resolve({
+                  userMessage: triageUserMessage,
+                  assistantMessage: triageAssistantMessage,
+                });
+              }
               await prisma.chat.update({
                 where: { id: chatId },
                 data: {
@@ -6775,7 +6832,14 @@ router.post(
                 processedFiles,
                 [],
                 regenerate,
-                { stoppedByUser: true },
+                {
+                  stoppedByUser: true,
+                  ...(idempotencyKey ? { idempotencyKey } : {}),
+                  ...(streamId ? { streamId } : {}),
+                  ...(generateIdempotencyRequestHash
+                    ? { [MESSAGE_IDEMPOTENCY_HASH_FIELD]: generateIdempotencyRequestHash }
+                    : {}),
+                },
                 req.user?.plan || null,
                 null,
                 req._agentRun || null,
@@ -7090,6 +7154,9 @@ router.post(
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
+          ...(generateIdempotencyRequestHash
+            ? { [MESSAGE_IDEMPOTENCY_HASH_FIELD]: generateIdempotencyRequestHash }
+            : {}),
           ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
           ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
           // Thinking duration for the collapsed trace header ("Pensó durante
@@ -7289,6 +7356,10 @@ router.post(
       if (keepAlive) {
         clearInterval(keepAlive);
         keepAlive = null;
+      }
+      if (resumeLeaseHeartbeat) {
+        clearInterval(resumeLeaseHeartbeat);
+        resumeLeaseHeartbeat = null;
       }
 
         // Filter pipeline post-hooks. Runs ALWAYS so metrics/audit

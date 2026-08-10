@@ -584,6 +584,7 @@
     },
     "composer": {
       "placeholder": "Descreva sua ideia — a IA propõe o plano e executa…",
+      "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
       "plan": "Plan",
       "planTooltip": "The agent plans internally and builds automatically.",
       "send": "Enviar",

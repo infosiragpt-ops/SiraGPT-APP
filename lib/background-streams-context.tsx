@@ -70,24 +70,35 @@ export function useBackgroundStreams(): Ctx {
 }
 
 export function BackgroundStreamsProvider({ children }: { children: React.ReactNode }) {
-  const [, force] = React.useReducer((n) => n + 1, 0)
-  // A plain ref holds the Map. We render on demand via `force` when
-  // meaningful transitions happen (register / complete / fail). This
-  // avoids rerendering every consumer on each token chunk.
-  const streamsRef = React.useRef<Map<string, BackgroundStream>>(new Map())
+  // `streams` is an immutable render snapshot; `streamsRef` is the latest
+  // authoritative snapshot used by token callbacks between throttled renders.
+  // Keeping both prevents stale context values without rendering on every
+  // token received from the network.
+  const [streams, setStreams] = React.useState<Map<string, BackgroundStream>>(() => new Map())
+  const streamsRef = React.useRef<Map<string, BackgroundStream>>(streams)
   const lastChunkTick = React.useRef<Map<string, number>>(new Map())
+  const gcTimersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
-  // Return a stable reference to the Map so React.useMemo consumers
-  // can subscribe to it safely, but only after a force-render.
-  const streams = streamsRef.current
+  const publish = React.useCallback((next: Map<string, BackgroundStream>) => {
+    streamsRef.current = next
+    setStreams(next)
+  }, [])
+
+  const clearGcTimer = React.useCallback((chatId: string) => {
+    const timer = gcTimersRef.current.get(chatId)
+    if (timer) clearTimeout(timer)
+    gcTimersRef.current.delete(chatId)
+  }, [])
 
   const activeCount = React.useMemo(() =>
     Array.from(streams.values()).filter((s) => s.status === "streaming").length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [streams, streams.size, /* force counter via force() */ lastChunkTick.current.size])
+    [streams])
 
   const register = React.useCallback((chatId: string, title: string, controller: AbortController) => {
-    streamsRef.current.set(chatId, {
+    clearGcTimer(chatId)
+    lastChunkTick.current.delete(chatId)
+    const next = new Map(streamsRef.current)
+    next.set(chatId, {
       chatId,
       title: title || "Chat",
       controller,
@@ -95,8 +106,8 @@ export function BackgroundStreamsProvider({ children }: { children: React.ReactN
       partialContent: "",
       startedAt: Date.now(),
     })
-    force()
-  }, [])
+    publish(next)
+  }, [clearGcTimer, publish])
 
   // Token-level appends are high-frequency — we throttle the render
   // trigger to ~5 Hz so sidebar counters stay snappy without
@@ -104,53 +115,76 @@ export function BackgroundStreamsProvider({ children }: { children: React.ReactN
   const appendChunk = React.useCallback((chatId: string, chunk: string) => {
     const s = streamsRef.current.get(chatId)
     if (!s) return
-    s.partialContent += chunk
+    const next = new Map(streamsRef.current)
+    next.set(chatId, { ...s, partialContent: s.partialContent + chunk })
+    // Make the complete content synchronously visible to `get()` even when
+    // this token falls inside the render-throttle window.
+    streamsRef.current = next
     const now = Date.now()
     const last = lastChunkTick.current.get(chatId) ?? 0
     if (now - last > 200) {
       lastChunkTick.current.set(chatId, now)
-      force()
+      setStreams(next)
     }
   }, [])
 
   const complete = React.useCallback((chatId: string) => {
     const s = streamsRef.current.get(chatId)
     if (!s) return
-    s.status = "done"
-    force()
+    const next = new Map(streamsRef.current)
+    next.set(chatId, { ...s, status: "done" })
+    publish(next)
+    clearGcTimer(chatId)
     // Leave the entry in the Map briefly so the sidebar can show the
     // completed-state blue dot before garbage-collecting the stream.
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       const cur = streamsRef.current.get(chatId)
       if (cur && cur.status === "done") {
-        streamsRef.current.delete(chatId)
-        force()
+        const afterGc = new Map(streamsRef.current)
+        afterGc.delete(chatId)
+        streamsRef.current = afterGc
+        setStreams(afterGc)
       }
+      gcTimersRef.current.delete(chatId)
     }, 12000)
-  }, [])
+    gcTimersRef.current.set(chatId, timer)
+  }, [clearGcTimer, publish])
 
   const fail = React.useCallback((chatId: string, error: string) => {
     const s = streamsRef.current.get(chatId)
     if (!s) return
-    s.status = "error"
-    s.error = error
-    force()
-  }, [])
+    clearGcTimer(chatId)
+    const next = new Map(streamsRef.current)
+    next.set(chatId, { ...s, status: "error", error })
+    publish(next)
+  }, [clearGcTimer, publish])
 
   const cancel = React.useCallback((chatId: string) => {
     const s = streamsRef.current.get(chatId)
     if (!s) return
     try { s.controller.abort() } catch { /* already aborted */ }
-    streamsRef.current.delete(chatId)
-    force()
-  }, [])
+    clearGcTimer(chatId)
+    lastChunkTick.current.delete(chatId)
+    const next = new Map(streamsRef.current)
+    next.delete(chatId)
+    publish(next)
+  }, [clearGcTimer, publish])
 
   const dismiss = React.useCallback((chatId: string) => {
-    streamsRef.current.delete(chatId)
-    force()
-  }, [])
+    if (!streamsRef.current.has(chatId)) return
+    clearGcTimer(chatId)
+    lastChunkTick.current.delete(chatId)
+    const next = new Map(streamsRef.current)
+    next.delete(chatId)
+    publish(next)
+  }, [clearGcTimer, publish])
 
   const get = React.useCallback((chatId: string) => streamsRef.current.get(chatId), [])
+
+  React.useEffect(() => () => {
+    gcTimersRef.current.forEach((timer) => clearTimeout(timer))
+    gcTimersRef.current.clear()
+  }, [])
 
   const value = React.useMemo<Ctx>(() => ({
     streams, activeCount, register, appendChunk, complete, fail, cancel, dismiss, get,

@@ -83,6 +83,74 @@ export type ChatRunSummary = {
   attempt: number
   snippet: string
 }
+export type AgentTaskPointer = {
+  taskId: string
+  status: "queued" | "running" | "completed" | "cancelled" | "error" | string
+  displayGoal?: string | null
+  updatedAt?: string | null
+}
+export type ChatPendingStreamEnvelope = {
+  ok: boolean
+  pending: Record<string, unknown> | null
+  activeTasks: AgentTaskPointer[]
+  latestTask: AgentTaskPointer | null
+}
+
+const RECOVERABLE_AGENT_TASK_STATUSES = new Set([
+  "queued",
+  "running",
+  "planning",
+  "executing",
+  "verifying",
+  "shipping",
+])
+
+export const MAX_AGENT_TASK_RECOVERY_FAILURES = 8
+
+export function isTerminalAgentTaskRecoveryHttpStatus(statusCode: unknown): boolean {
+  return [401, 403, 404, 410].includes(Number(statusCode))
+}
+
+export function shouldDetachAgentTaskRecovery(failedPolls: number): boolean {
+  return Number.isFinite(failedPolls) && failedPolls >= MAX_AGENT_TASK_RECOVERY_FAILURES
+}
+
+/**
+ * Selects the durable task that /chat should reconnect. `latestTask` alone is
+ * intentionally insufficient because every historic agent chat has one; a
+ * terminal latest task is relevant only while the persisted bubble is still
+ * incomplete (the reload-vs-completion race).
+ */
+export function resolveChatAgentTaskForRecovery(
+  envelope: ChatPendingStreamEnvelope,
+  localTaskId: string | null,
+  hasIncompleteBubble: boolean,
+  excludedTaskIds: ReadonlySet<string> = new Set(),
+): AgentTaskPointer | null {
+  const normalizedLocalTaskId = String(localTaskId || "").trim()
+  const activeTasks = (Array.isArray(envelope?.activeTasks) ? envelope.activeTasks : [])
+    .filter(task => (
+      task?.taskId
+      && !excludedTaskIds.has(task.taskId)
+      && RECOVERABLE_AGENT_TASK_STATUSES.has(String(task.status || "").toLowerCase())
+    ))
+  const matchingActiveTask = normalizedLocalTaskId
+    ? activeTasks.find(task => task.taskId === normalizedLocalTaskId)
+    : null
+  if (matchingActiveTask) return matchingActiveTask
+
+  const activeTask = activeTasks[0]
+  if (activeTask) return activeTask
+  if (!hasIncompleteBubble) return null
+
+  if (normalizedLocalTaskId && !excludedTaskIds.has(normalizedLocalTaskId)) {
+    if (envelope?.latestTask?.taskId === normalizedLocalTaskId) return envelope.latestTask
+    return { taskId: normalizedLocalTaskId, status: "running" }
+  }
+  return envelope?.latestTask?.taskId && !excludedTaskIds.has(envelope.latestTask.taskId)
+    ? envelope.latestTask
+    : null
+}
 export type ImpersonateEnvelope = {
   token?: string
   user?: AuthUser
@@ -780,11 +848,29 @@ class ApiClient {
     }
 
     // Idempotency-Key auto-injection. Only for mutating verbs and
-    // only when the caller didn't supply one. safeUUID covers LAN /
-    // plain-HTTP browser contexts where crypto.randomUUID is missing.
+    // only when the caller didn't supply one. When the JSON body already
+    // carries the application-level key, mirror that exact value into the
+    // header; sending an unrelated generated header would make the server
+    // correctly reject the request as an ambiguous identity.
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
-      headers.set('Idempotency-Key', safeUUID());
+      let bodyIdempotencyKey = '';
+      if (typeof options.body === 'string') {
+        try {
+          const parsedBody = JSON.parse(options.body);
+          let parsedMetadata = parsedBody?.metadata;
+          if (typeof parsedMetadata === 'string') {
+            try {
+              parsedMetadata = JSON.parse(parsedMetadata);
+            } catch {
+              parsedMetadata = null;
+            }
+          }
+          const rawKey = parsedBody?.idempotencyKey ?? parsedMetadata?.idempotencyKey;
+          if (typeof rawKey === 'string' && rawKey.trim()) bodyIdempotencyKey = rawKey.trim();
+        } catch { /* non-JSON body: generate a transport key below */ }
+      }
+      headers.set('Idempotency-Key', bodyIdempotencyKey || safeUUID());
     }
 
     // Track last error for re-throw on final failure
@@ -1176,6 +1262,15 @@ class ApiClient {
     return this.request(`/chats/${id}`);
   }
 
+  /**
+   * Durable work associated with a chat. In addition to ordinary streamed
+   * completions, the endpoint exposes queued/running agent tasks so /chat can
+   * reconnect its UI after a reload without restarting or cancelling work.
+   */
+  async getChatPendingStream(chatId: string): Promise<ChatPendingStreamEnvelope> {
+    return this.request(`/chats/${encodeURIComponent(chatId)}/pending-stream`);
+  }
+
   async updateChat(id: string, data: { title?: string; model?: string }): Promise<any> {
     return this.request(`/chats/${id}`, {
       method: 'PUT',
@@ -1231,7 +1326,7 @@ class ApiClient {
 
   // Returns AddMessageEnvelope at runtime — kept as `any` because the
   // local Message interface narrows `id` to `string`.
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string; idempotencyKey?: string }): Promise<any> {
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string | Record<string, unknown>; idempotencyKey?: string }): Promise<any> {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -1244,8 +1339,14 @@ class ApiClient {
 
 
 
-  async clearMessageById(messageId: string): Promise<SuccessEnvelope | null> {
-    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, { method: 'DELETE' })) as SuccessEnvelope | null;
+  async clearMessageById(
+    messageId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SuccessEnvelope | null> {
+    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, {
+      method: 'DELETE',
+      signal: options.signal,
+    })) as SuccessEnvelope | null;
   }
 
   async handleFeedbackLikeDislike(messageId: string, feedbackType: 'liked' | 'disliked'): Promise<SuccessEnvelope> {
@@ -1307,10 +1408,15 @@ class ApiClient {
     })) as SuccessEnvelope & { chatId?: string | number };
   }
 
-  async editUserMessage(messageId: string, data: { content: string }) {
+  async editUserMessage(
+    messageId: string,
+    data: { content: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request(`/chats/messages/${messageId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
@@ -1510,7 +1616,7 @@ class ApiClient {
   // the server cursor when content was already rendered. Mid-stream
   // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, reasoningEffort?: string, idempotencyKey?: string },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, idempotencyKey?: string },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
@@ -1593,12 +1699,16 @@ class ApiClient {
           err.status = response.status;
           if (details.code) err.code = details.code;
 
-          // Retriable transport failures: 429 (rate-limit), 5xx server
-          // errors, 408 timeout — only BEFORE any content has reached
-          // the user. Anything else bubbles up (401/403 auth, 422
-          // validation, monthly quota exhausted).
+          // A 409 is normally a terminal identity/payload conflict. The sole
+          // exception is an explicit `{ retryable: true }` response such as
+          // `turn_in_progress`, where replaying the same key attaches to the
+          // existing owner. Payload-mismatch 409s remain single-attempt.
+          const retryableConflict = response.status === 409 && details.retryable === true;
+          // Retriable transport failures: 429 (rate-limit), 5xx server,
+          // 408 timeout, and the explicit retryable 409 above — only BEFORE
+          // any content has reached the user. Anything else bubbles up.
           const retriable = !hasDeliveredAnyContent
-            && (response.status === 429 || response.status >= 500 || response.status === 408)
+            && (response.status === 429 || response.status >= 500 || response.status === 408 || retryableConflict)
             && attempt < MAX_CONNECT_ATTEMPTS;
           if (retriable) {
             // Honor Retry-After header if the server set one (RFC 7231
@@ -3347,17 +3457,25 @@ class ApiClient {
     return res.blob();
   }
 
-  async generateChart(data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string }) {
+  async generateChart(
+    data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request('/ai/generate-chart', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
-  async generateFigmaFlowchart(data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] }) {
+  async generateFigmaFlowchart(
+    data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request('/figma/generate_flowchart', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 

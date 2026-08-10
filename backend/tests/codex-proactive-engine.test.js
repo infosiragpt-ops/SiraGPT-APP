@@ -53,9 +53,53 @@ test('readProactiveState defaults + setProactive persists into brief JSON', asyn
   assert.equal(out.state.enabled, true);
   assert.ok(prisma.state.project.brief.proactive.enabled, 'written inside brief.proactive');
   assert.equal(prisma.state.project.brief.goal, 'x', 'rest of brief preserved');
+  assert.equal(prisma.state.project.brief.proactive.fleetMode, 'all-departments');
+  assert.equal(prisma.state.project.brief.companyDepartmentHidden?.length || 0, 0);
 
   const off = await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: false });
   assert.equal(off.state.enabled, false);
+});
+
+test('setProactive provisions physical department pools for the full fleet', async () => {
+  const pools = new Map();
+  const prisma = fakePrisma({ project: { ...PROJECT, brief: { goal: 'fleet' } } });
+  prisma.codexDepartmentPool = {
+    findMany: async () => [...pools.values()],
+    findUnique: async ({ where }) => {
+      const key = `${where.projectId_departmentId.projectId}:${where.projectId_departmentId.departmentId}`;
+      return pools.get(key) || null;
+    },
+    upsert: async ({ where, create, update }) => {
+      const key = `${where.projectId_departmentId.projectId}:${where.projectId_departmentId.departmentId}`;
+      const previous = pools.get(key);
+      const row = previous
+        ? {
+          ...previous,
+          ...update,
+          updatedAt: new Date('2026-08-04T12:00:00.000Z'),
+        }
+        : {
+          id: `pool-${create.departmentId}`,
+          createdAt: new Date('2026-08-04T12:00:00.000Z'),
+          updatedAt: new Date('2026-08-04T12:00:00.000Z'),
+          ...create,
+        };
+      pools.set(key, row);
+      return row;
+    },
+  };
+
+  await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: true });
+  const departments = require('../src/services/codex/company-departments').readDepartments(prisma.state.project);
+  assert.ok(departments.length >= 10, 'built-in fleet is active');
+  assert.equal(pools.size, departments.length, 'every department gets a physical pool seat');
+  for (const row of pools.values()) {
+    assert.ok(row.size >= 1, `pool ${row.departmentId} needs at least one seat`);
+    assert.equal(row.enabled, true);
+  }
+  // Idempotent: second enable does not duplicate pools.
+  await engine.setProactive({ prisma, projectId: 'p1', userId: 'u1', enabled: true });
+  assert.equal(pools.size, departments.length);
 });
 
 test('mixed legacy and current metric rows count the larger cost per row', async () => {
@@ -780,16 +824,61 @@ test('cycle phase 2: auto-approves ONLY its own waiting plan (creates the build)
   assert.equal(created[0].planRunId, 'plan-9');
 });
 
-test('cycle never touches a HUMAN waiting plan and skips busy projects', async () => {
+test('cycle never approves a HUMAN plan; operational depts still work beside busy builds', async () => {
   const humanPlan = { id: 'plan-h', mode: 'plan', status: 'waiting_approval', prompt: 'haz una tienda' };
   const prisma = fakePrisma({ project: PROJECT, activeRun: humanPlan });
-  const res = await engine.runCycle({ project: PROJECT, deps: { prisma, runService: { createRun: async () => { throw new Error('must not create'); } }, chatComplete: async () => ({ content: '{}' }) } });
-  assert.equal(res.action, 'skipped_active');
+  let createCalls = 0;
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async () => {
+          createCalls += 1;
+          throw new Error('must not create code runs while a human plan is waiting');
+        },
+      },
+      chatComplete: async () => ({ content: '{}' }),
+      companyOperations: {
+        researchLeads: async () => ({ action: 'profile_incomplete', leads: [], sourceCount: 0 }),
+      },
+      socialAutopilot: {
+        generateDepartmentPost: async () => ({ action: 'drafted_review', postId: null }),
+      },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  // Human plans stay untouched (no createRun), but ventas/marketing/clientes can still rotate.
+  assert.equal(createCalls, 0);
+  assert.notEqual(res.action, 'approved_plan');
+  assert.match(String(res.action), /^(sales_|marketing_|customer_success_|skipped_active)/);
 
   const running = { id: 'r', mode: 'build', status: 'running', prompt: '[PROACTIVO · x] y' };
   const prisma2 = fakePrisma({ project: PROJECT, activeRun: running });
-  const res2 = await engine.runCycle({ project: PROJECT, deps: { prisma: prisma2, runService: {}, chatComplete: async () => ({ content: '{}' }) } });
-  assert.equal(res2.action, 'skipped_active');
+  let createCalls2 = 0;
+  const res2 = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma: prisma2,
+      runService: {
+        createRun: async () => {
+          createCalls2 += 1;
+          throw new Error('must not create another code run while one is busy');
+        },
+      },
+      chatComplete: async () => ({ content: '{}' }),
+      companyOperations: {
+        researchLeads: async () => ({ action: 'leads_saved', leads: [{ name: 'Acme' }], sourceCount: 2 }),
+      },
+      socialAutopilot: {
+        generateDepartmentPost: async () => ({ action: 'drafted_review', postId: 's1' }),
+      },
+    },
+    env: { CODEX_PROACTIVE_QA_EVERY_CYCLES: '0' },
+  });
+  assert.equal(createCalls2, 0);
+  assert.notEqual(res2.action, 'approved_plan');
+  assert.match(String(res2.action), /^(sales_|marketing_|customer_success_|skipped_active)/);
 });
 
 test('daily budget cap + explicit 0 disables proposals (falsy-0 respected)', async () => {

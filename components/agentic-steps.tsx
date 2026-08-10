@@ -286,6 +286,7 @@ function StepResearchTrace({ searchCalls, fetchTargets }: { searchCalls: Project
 
 function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: string }) {
   const [downloading, setDownloading] = React.useState(false)
+  const displayName = artifactDisplayName(artifact)
 
   const download = React.useCallback(async () => {
     if (downloading) return
@@ -314,16 +315,18 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
       type="button"
       onClick={download}
       disabled={downloading}
-      className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted disabled:opacity-60"
-      title="Descargar documento"
-      aria-label="Descargar documento"
+      className="inline-flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted disabled:opacity-60 sm:h-14 sm:w-14"
+      title={`Descargar ${displayName}`}
+      aria-label={`Descargar documento: ${displayName}`}
     >
-      {downloading ? <ThinkingIndicator size="lg" /> : <Download className="h-9 w-9 stroke-[2.25]" />}
+      {downloading ? <ThinkingIndicator size="lg" /> : <Download className="h-7 w-7 stroke-[2.25] sm:h-9 sm:w-9" />}
     </button>
   )
 }
 
 function artifactDisplayName(artifact: AgentArtifact): string {
+  const filename = artifact.filename?.trim()
+  if (filename) return filename
   const format = artifactFormat(artifact)
   if (isAudioArtifact(artifact)) return "Audio generado"
   if (format === "docx" || format === "doc") return "Documento Word"
@@ -331,6 +334,12 @@ function artifactDisplayName(artifact: AgentArtifact): string {
   if (format === "pptx" || format === "ppt") return "Presentacion"
   if (format === "pdf") return "Documento PDF"
   return "Archivo generado"
+}
+
+function artifactValidationPassed(artifact: AgentArtifact): boolean {
+  const explicitPassed = artifact.validation?.passed
+  if (typeof explicitPassed === "boolean") return explicitPassed
+  return artifact.validation?.ok === true
 }
 
 function artifactFormat(artifact: AgentArtifact): string {
@@ -755,6 +764,7 @@ function ArtifactCard({
   const displayName = artifactDisplayName(artifact)
   const format = artifactFormat(artifact)
   const formatLabel = format === "bin" ? "archivo" : format.toUpperCase()
+  const validationPassed = artifactValidationPassed(artifact)
   const [historyOpen, setHistoryOpen] = React.useState(false)
 
   const preview = React.useCallback(() => {
@@ -776,44 +786,57 @@ function ArtifactCard({
 
   return (
     <>
-    <div className="my-2 w-full max-w-xl rounded-2xl border border-border/70 bg-background p-4 shadow-sm">
-      <div className="flex min-w-0 items-center justify-between gap-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl bg-muted/30">
+    <div
+      className="my-2 w-full max-w-xl overflow-hidden rounded-2xl border border-border/70 bg-background p-3 shadow-sm sm:p-4"
+      data-testid="agent-artifact-card"
+      data-artifact-id={artifact.id}
+      role="group"
+      aria-label={`Archivo: ${displayName}`}
+    >
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-muted/30 sm:h-20 sm:w-20">
             <ArtifactFormatIcon artifact={artifact} />
           </div>
-          <div className="hidden min-w-0 sm:block">
-            <div className="truncate text-sm font-semibold text-foreground">{displayName}</div>
+          <div className="min-w-0 flex-1">
+            <div
+              className="truncate text-sm font-semibold text-foreground"
+              data-testid="agent-artifact-filename"
+            >
+              {displayName}
+            </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>{formatLabel}</span>
               <span>{sizeKb} KB</span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
-                <ShieldCheck className="h-3 w-3" />
-                Validado
-              </span>
+              {validationPassed && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
+                  <ShieldCheck className="h-3 w-3" />
+                  Validado
+                </span>
+              )}
             </div>
           </div>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-4">
+        <div className="flex w-full shrink-0 items-center justify-end gap-2 border-t border-border/50 pt-2 sm:ml-auto sm:w-auto sm:gap-4 sm:border-0 sm:pt-0">
           {artifact.sourceFileId && (
             <button
               type="button"
               onClick={() => setHistoryOpen(true)}
-              className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
-              title="Historial de versiones"
-              aria-label="Historial de versiones"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted sm:h-14 sm:w-14"
+              title={`Historial de versiones de ${displayName}`}
+              aria-label={`Historial de versiones: ${displayName}`}
             >
-              <History className="h-7 w-7 stroke-[2]" />
+              <History className="h-6 w-6 stroke-[2] sm:h-7 sm:w-7" />
             </button>
           )}
           <button
             type="button"
             onClick={preview}
-            className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
-            title="Ver documento"
-            aria-label="Ver documento"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted sm:h-14 sm:w-14"
+            title={`Ver ${displayName}`}
+            aria-label={`Ver documento: ${displayName}`}
           >
-            <Eye className="h-9 w-9 stroke-[2.25]" />
+            <Eye className="h-7 w-7 stroke-[2.25] sm:h-9 sm:w-9" />
           </button>
           <DownloadButton artifact={artifact} href={href} />
         </div>

@@ -19,6 +19,10 @@ import {
   Terminal,
   FileCode2,
   Globe,
+  Users,
+  Package,
+  Briefcase,
+  Sparkles,
 } from "lucide-react"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
@@ -30,6 +34,7 @@ interface AgentCard {
   tools: string[]
   icon: React.ElementType
   badge?: string
+  domain?: "enterprise" | "engineering" | "research"
 }
 
 type TimelineEvent =
@@ -51,14 +56,46 @@ const AGENTS: AgentCard[] = [
     tools: ["read", "write", "edit", "bash", "glob", "grep", "web_search", "spawn_subagent"],
     icon: Building2,
     badge: "Empresa",
+    domain: "enterprise",
+  },
+  {
+    id: "crm-builder",
+    name: "CRM Builder",
+    description: "Pipeline de ventas, cuentas, contactos, cotizaciones y dashboard de revenue.",
+    model: "Claude Sonnet 4",
+    tools: ["read", "write", "edit", "bash", "glob", "grep", "web_search", "spawn_subagent"],
+    icon: Briefcase,
+    badge: "CRM",
+    domain: "enterprise",
+  },
+  {
+    id: "erp-builder",
+    name: "ERP Builder",
+    description: "Inventario multi-almacén, compras, ventas, proveedores y finanzas ligeras.",
+    model: "Claude Sonnet 4",
+    tools: ["read", "write", "edit", "bash", "glob", "grep", "web_search", "spawn_subagent"],
+    icon: Package,
+    badge: "ERP",
+    domain: "enterprise",
+  },
+  {
+    id: "hr-builder",
+    name: "RRHH / HRIS",
+    description: "Empleados, organigrama, ausencias, reclutamiento y documentos de personal.",
+    model: "Claude Sonnet 4",
+    tools: ["read", "write", "edit", "bash", "glob", "grep", "web_search", "spawn_subagent"],
+    icon: Users,
+    badge: "RRHH",
+    domain: "enterprise",
   },
   {
     id: "builder",
     name: "Builder Full-Stack",
-    description: "Apps web con Next.js / React / Tailwind. Planifica, escribe y verifica en el sandbox.",
+    description: "Apps web con React/Vite/Next + Tailwind. Planifica, escribe y verifica en sandbox.",
     model: "Claude Sonnet 4",
     tools: ["read", "write", "edit", "bash", "glob", "grep", "web_search", "web_fetch", "spawn_subagent"],
     icon: Wrench,
+    domain: "engineering",
   },
   {
     id: "code-reviewer",
@@ -67,6 +104,7 @@ const AGENTS: AgentCard[] = [
     model: "Claude Sonnet 4",
     tools: ["read", "glob", "grep", "web_search"],
     icon: Shield,
+    domain: "engineering",
   },
   {
     id: "researcher",
@@ -75,6 +113,7 @@ const AGENTS: AgentCard[] = [
     model: "Claude Sonnet 4",
     tools: ["web_search", "web_fetch"],
     icon: Search,
+    domain: "research",
   },
 ]
 
@@ -107,16 +146,32 @@ const PROMPTS: Record<string, string[]> = {
     "Crea un CRM de ventas con pipeline, clientes, cotizaciones y dashboard de KPIs",
     "Construye un sistema de inventario multi-almacén con movimientos y stock mínimo",
     "App de facturación electrónica con clientes, productos, impuestos y estados de factura",
+    "Software de gestión empresarial tipo ERP light: compras, ventas, stock y reportes",
+  ],
+  "crm-builder": [
+    "CRM B2B con pipeline Kanban, cuentas, contactos, actividades y forecast de revenue",
+    "CRM para agencia: leads, propuestas, deals y dashboard de conversión",
+  ],
+  "erp-builder": [
+    "ERP ligero con productos, almacenes, movimientos de stock y órdenes de compra",
+    "Back-office de distribución: proveedores, inventario y facturas de venta",
+  ],
+  "hr-builder": [
+    "HRIS con empleados, departamentos, vacaciones y tablero de headcount",
+    "Módulo de reclutamiento: vacantes, candidatos y pipeline de hiring",
   ],
   builder: [
     "Landing page premium para una fintech de remesas con hero, pricing y CTA",
     "Dashboard SaaS de analytics con gráficos y tabla de usuarios",
+    "App tipo Claude Code: chat agentico + panel de archivos + preview",
   ],
   "code-reviewer": [
-    "Revisa el README del workspace y propone un checklist de seguridad",
+    "Revisa el README del workspace y propone un checklist de seguridad OWASP",
+    "Audita package.json y dependencias de riesgo; lista remediaciones",
   ],
   researcher: [
-    "Compara Claude Agent SDK, Cursor agents y OpenAI Codex para un producto SaaS de coding agents",
+    "Compara Claude Code, Cursor 2.0 y OpenAI Codex para un producto SaaS de coding agents",
+    "Investiga patrones de Agent SDK (tools, plan mode, subagents, sandbox)",
   ],
 }
 
@@ -273,46 +328,43 @@ export function AgentsList() {
 
   const suggestions = PROMPTS[selected] || []
 
+  const enterpriseAgents = AGENTS.filter((a) => a.domain === "enterprise")
+  const otherAgents = AGENTS.filter((a) => a.domain !== "enterprise")
+
   return (
     <div className="flex h-full w-full min-h-0">
       <div className="w-80 shrink-0 space-y-3 overflow-auto border-r border-white/10 p-4">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-200">Enterprise Agents</h2>
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-violet-300" />
+            <h2 className="text-sm font-semibold text-zinc-200">Agents SDK</h2>
+          </div>
           <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-            Agents SDK con tools reales en sandbox (Read/Write/Edit/Bash/Glob/Grep/Web). Igual patrón que
-            Claude Code / Cursor / Codex.
+            Harness tipo Claude Code / Cursor / Codex: tools reales en sandbox (Read, Write, Edit, Bash,
+            Glob, Grep, Web, Subagents). Ideal para software de empresas.
           </p>
         </div>
-        {AGENTS.map((agent) => (
-          <button
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+          Software de empresas
+        </div>
+        {enterpriseAgents.map((agent) => (
+          <AgentPickCard
             key={agent.id}
-            type="button"
-            onClick={() => setSelected(agent.id)}
-            className={
-              "w-full rounded-lg border p-3 text-left transition-colors " +
-              (selected === agent.id
-                ? "border-violet-500/50 bg-violet-500/10"
-                : "border-white/10 bg-white/5 hover:border-white/20")
-            }
-          >
-            <div className="flex items-center gap-2">
-              <agent.icon className="h-4 w-4 text-violet-300" />
-              <span className="text-sm font-medium text-zinc-200">{agent.name}</span>
-              {agent.badge && (
-                <span className="ml-auto rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] text-violet-200">
-                  {agent.badge}
-                </span>
-              )}
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-zinc-500">{agent.description}</p>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {agent.tools.map((t) => (
-                <span key={t} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400">
-                  {TOOL_LABELS[t] || t}
-                </span>
-              ))}
-            </div>
-          </button>
+            agent={agent}
+            selected={selected === agent.id}
+            onSelect={() => setSelected(agent.id)}
+          />
+        ))}
+        <div className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+          Ingeniería e investigación
+        </div>
+        {otherAgents.map((agent) => (
+          <AgentPickCard
+            key={agent.id}
+            agent={agent}
+            selected={selected === agent.id}
+            onSelect={() => setSelected(agent.id)}
+          />
         ))}
         {sessionId && (
           <div className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-[10px] text-zinc-500">
@@ -413,6 +465,52 @@ export function AgentsList() {
         </div>
       </div>
     </div>
+  )
+}
+
+function AgentPickCard({
+  agent,
+  selected,
+  onSelect,
+}: {
+  agent: AgentCard
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={
+        "w-full rounded-lg border p-3 text-left transition-colors " +
+        (selected
+          ? "border-violet-500/50 bg-violet-500/10"
+          : "border-white/10 bg-white/5 hover:border-white/20")
+      }
+    >
+      <div className="flex items-center gap-2">
+        <agent.icon className="h-4 w-4 text-violet-300" />
+        <span className="text-sm font-medium text-zinc-200">{agent.name}</span>
+        {agent.badge && (
+          <span className="ml-auto rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] text-violet-200">
+            {agent.badge}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-zinc-500">{agent.description}</p>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {agent.tools.slice(0, 6).map((t) => (
+          <span key={t} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400">
+            {TOOL_LABELS[t] || t}
+          </span>
+        ))}
+        {agent.tools.length > 6 && (
+          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-500">
+            +{agent.tools.length - 6}
+          </span>
+        )}
+      </div>
+    </button>
   )
 }
 

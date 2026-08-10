@@ -6,6 +6,7 @@ import path from "node:path"
 const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const source = fs.readFileSync(componentPath, "utf8")
 const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
+const mediaConfigSource = fs.readFileSync(path.join(process.cwd(), "lib", "chat", "media-composer-config.ts"), "utf8")
 
 describe("chat video auto-activation source contract", () => {
   it("auto-enables the video tool from normal chat intent before send", () => {
@@ -169,8 +170,8 @@ describe("chat video auto-activation source contract", () => {
 
   it("routes active Voice mode to speech generation instead of normal chat", () => {
     assert.match(
-      source,
-      /const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"/,
+      mediaConfigSource,
+      /export const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"/,
       "Voice mode should ask for narration text, not an unsupported voice-design prompt"
     )
     assert.doesNotMatch(
@@ -243,8 +244,8 @@ describe("chat video auto-activation source contract", () => {
 
   it("renders Music Style as a professional guided selector", () => {
     assert.match(
-      source,
-      /const MUSIC_STYLE_PROFILES: Record<MusicStyle,/,
+      mediaConfigSource,
+      /export const MUSIC_STYLE_PROFILES:/,
       "Music style options should carry UI labels, descriptions and accents"
     )
     assert.match(
@@ -358,8 +359,8 @@ describe("chat video auto-activation source contract", () => {
   })
 
   it("uses the working Gemini TTS provider and sends professional voice controls", () => {
-    assert.match(source, /type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs"/)
-    assert.match(source, /const VOICE_MODEL_OPTIONS: VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs"\]/)
+    assert.match(mediaConfigSource, /export type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs"/)
+    assert.match(mediaConfigSource, /VOICE_MODEL_OPTIONS: readonly VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs"\]/)
     assert.match(source, /useState<VoiceModel>\("Gemini 2\.5 Flash TTS"\)/)
     assert.match(
       source,

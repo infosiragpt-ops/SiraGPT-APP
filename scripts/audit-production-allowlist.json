@@ -49,6 +49,24 @@
       "source": 1130589,
       "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (GHSA-mh99-v99m-4gvg)",
       "reason": "Advisory publicado 2026-07-31 (transitivo, sin fix en la rama); bloquea todos los merges. Fix real requiere bump de la sub-dependencia en PR dedicado."
+    },
+    {
+      "package": "brace-expansion",
+      "source": 1130736,
+      "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+      "reason": "Nueva advisory transitiva (2026-08); sin fix estable en la rama de producción. Mantener excepción temporal hasta PR dedicado de bumps."
+    },
+    {
+      "package": "brace-expansion",
+      "source": 1130737,
+      "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+      "reason": "Nueva advisory transitiva (2026-08); sin fix estable en la rama de producción. Mantener excepción temporal hasta PR dedicado de bumps."
+    },
+    {
+      "package": "undici",
+      "source": 1130718,
+      "title": "undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives",
+      "reason": "Advisory transitiva en el grafo de Next/npm (2026-08). Fix real requiere bump coordinado de undici/next en PR de dependencias."
     }
   ]
 }

@@ -138,14 +138,29 @@ function summarizeForChat(text, policy) {
 
 function upsertArtifactForDelivery(artifacts, artifact) {
   if (!Array.isArray(artifacts) || !artifact) return null;
+  const artifactId = String(artifact.id || '').trim();
   const filename = String(artifact.filename || '').trim().toLowerCase();
   const format = String(artifact.format || artifact.mime || '').trim().toLowerCase();
-  const existingIndex = filename
-    ? artifacts.findIndex((item) => (
-      String(item?.filename || '').trim().toLowerCase() === filename
-      && String(item?.format || item?.mime || '').trim().toLowerCase() === format
-    ))
+  const sourceFileId = String(artifact.sourceFileId || '').trim();
+  let existingIndex = artifactId
+    ? artifacts.findIndex((item) => String(item?.id || '').trim() === artifactId)
     : -1;
+  if (existingIndex < 0 && sourceFileId) {
+    existingIndex = artifacts.findIndex((item) => (
+      String(item?.sourceFileId || '').trim() === sourceFileId
+    ));
+  }
+  if (existingIndex < 0 && filename) {
+    existingIndex = artifacts.findIndex((item) => {
+      const sameDeliverySlot = (
+        String(item?.filename || '').trim().toLowerCase() === filename
+        && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+      );
+      if (!sameDeliverySlot) return false;
+      const existingSourceFileId = String(item?.sourceFileId || '').trim();
+      return !(sourceFileId && existingSourceFileId && sourceFileId !== existingSourceFileId);
+    });
+  }
   if (existingIndex >= 0) artifacts.splice(existingIndex, 1, artifact);
   else artifacts.push(artifact);
   return artifact;
@@ -1572,6 +1587,10 @@ function shouldRunSourcePreservingEdit({
     || isSourcePreservingEditRequest(request, fileIds);
 }
 
+function isValidatedSourcePreservingDeliverable(item) {
+  return Boolean(item?.artifact?.id && item?.validation?.passed === true);
+}
+
 const SOURCE_PRESERVING_TARGET_NOT_LOCATED_CODES = new Set([
   'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
   'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
@@ -2307,60 +2326,72 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             },
           });
         }
-        if (!preserved.validation?.passed) {
+        const preservedResults = Array.isArray(preserved.results) && preserved.results.length
+          ? preserved.results
+          : [preserved];
+        const deliverableResults = preservedResults.filter(isValidatedSourcePreservingDeliverable);
+        if (!deliverableResults.length || (!preserved.batch && !preserved.validation?.passed)) {
           const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
-          throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+          throw new Error(`La edición se generó pero no pasó la autoevaluación del documento${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
         }
-        const artifactEvent = {
-          id: preserved.artifact.id,
-          filename: preserved.artifact.filename,
-          format: preserved.artifact.format,
-          mime: preserved.artifact.mime,
-          sizeBytes: preserved.artifact.sizeBytes,
-          downloadUrl: preserved.artifact.downloadUrl,
-          previewHtml: preserved.previewHtml,
-          validation: preserved.validation,
-          sourceFileId: preserved.version?.sourceFileId || null,
-          documentVersion: preserved.version || null,
-        };
-        artifacts.push(artifactEvent);
-        emit({ type: 'file_artifact', artifact: artifactEvent });
-        emit({
-          type: 'checkpoint',
-          label: 'Autoevaluación del documento',
-          status: 'completed',
-          payload: preserved.validation?.details?.agenticCycle || null,
-        });
-        for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
-          emit({
-            type: 'quality_gate',
-            gate: `docx_${criterion.id}`,
-            label: criterion.label || criterion.id,
-            passed: Boolean(criterion.passed),
-            summary: criterion.passed
-              ? 'Criterio verificado en el DOCX generado.'
-              : 'Criterio no cumplido en el DOCX generado.',
-            payload: criterion,
+        for (const item of deliverableResults) {
+          const artifactEvent = {
+            id: item.artifact.id,
+            filename: item.artifact.filename,
+            format: item.artifact.format,
+            mime: item.artifact.mime,
+            sizeBytes: item.artifact.sizeBytes,
+            downloadUrl: item.artifact.downloadUrl,
+            previewHtml: item.previewHtml,
+            validation: item.validation,
+            sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+            documentVersion: item.version || null,
+          };
+          artifacts.push(artifactEvent);
+          emit({ type: 'file_artifact', artifact: artifactEvent });
+          for (const criterion of item.validation?.details?.agenticCycle?.semanticCriteria || []) {
+            emit({
+              type: 'quality_gate',
+              gate: `document_${item.artifact.id}_${criterion.id}`,
+              label: `${item.artifact.filename}: ${criterion.label || criterion.id}`,
+              passed: Boolean(criterion.passed),
+              summary: criterion.passed
+                ? 'Criterio verificado dentro del archivo generado.'
+                : 'Criterio no cumplido dentro del archivo generado.',
+              payload: criterion,
+            });
+          }
+          await persistence.persistGeneratedArtifact({
+            artifact: { ...item.artifact, validation: item.validation },
+            task,
+            previewHtml: item.previewHtml,
+            validation: item.validation,
           });
         }
         emit({
+          type: 'checkpoint',
+          label: deliverableResults.length > 1
+            ? `Autoevaluación de ${deliverableResults.length} documentos`
+            : 'Autoevaluación del documento',
+          status: 'completed',
+          payload: preserved.batch
+            ? preserved.validation?.details || null
+            : preserved.validation?.details?.agenticCycle || null,
+        });
+        emit({
           type: 'quality_gate',
           gate: 'source_preserving_document_edit',
-          label: 'Documento original conservado',
+          label: deliverableResults.length > 1 ? 'Documentos originales conservados' : 'Documento original conservado',
           passed: Boolean(preserved.validation?.passed),
-          summary: 'Se completó el archivo original sin regenerar portada, tablas ni estructura previa.',
+          summary: preserved.partial
+            ? `Se validaron ${deliverableResults.length} documentos; algunos archivos no pudieron completarse y se informaron en la respuesta.`
+            : `Se validaron ${deliverableResults.length} archivo(s) sin mutar los originales.`,
           payload: {
             ...(preserved.validation || {}),
             orchestration: preserved.orchestration || preserved.validation?.details?.orchestration || null,
           },
         });
-        await persistence.persistGeneratedArtifact({
-          artifact: { ...preserved.artifact, validation: preserved.validation },
-          task,
-          previewHtml: preserved.previewHtml,
-          validation: preserved.validation,
-        });
-        emit({ type: 'step_done', id: currentStepId, ok: Boolean(preserved.validation?.passed) });
+        emit({ type: 'step_done', id: currentStepId, ok: deliverableResults.length > 0 });
         currentStepId = null;
         return finishDeterministicTask({
           finalMarkdown: preserved.content,
@@ -3239,53 +3270,53 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // para que el generador de documentos nuevos NO se dispare abajo.
             finalMarkdown = preserved.content;
           } else if (preserved?.artifact) {
-            if (!preserved.validation?.passed) {
+            const preservedResults = Array.isArray(preserved.results) && preserved.results.length
+              ? preserved.results
+              : [preserved];
+            const deliverableResults = preservedResults.filter(isValidatedSourcePreservingDeliverable);
+            if (!deliverableResults.length || (!preserved.batch && !preserved.validation?.passed)) {
               const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
-              throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+              throw new Error(`La edición se generó pero no pasó la autoevaluación del documento${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
             }
-            const artifactEvent = {
-              id: preserved.artifact.id,
-              filename: preserved.artifact.filename,
-              format: preserved.artifact.format,
-              mime: preserved.artifact.mime,
-              sizeBytes: preserved.artifact.sizeBytes,
-              downloadUrl: preserved.artifact.downloadUrl,
-              previewHtml: preserved.previewHtml,
-              validation: preserved.validation,
-            };
-            artifacts.push(artifactEvent);
-            emit({ type: 'file_artifact', artifact: artifactEvent });
-            emit({
-              type: 'checkpoint',
-              label: 'Autoevaluación del documento',
-              status: 'completed',
-              payload: preserved.validation?.details?.agenticCycle || null,
-            });
-            for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
-              emit({
-                type: 'quality_gate',
-                gate: `docx_${criterion.id}`,
-                label: criterion.label || criterion.id,
-                passed: Boolean(criterion.passed),
-                summary: criterion.passed
-                  ? 'Criterio verificado en el DOCX generado.'
-                  : 'Criterio no cumplido en el DOCX generado.',
-                payload: criterion,
+            for (const item of deliverableResults) {
+              const artifactEvent = {
+                id: item.artifact.id,
+                filename: item.artifact.filename,
+                format: item.artifact.format,
+                mime: item.artifact.mime,
+                sizeBytes: item.artifact.sizeBytes,
+                downloadUrl: item.artifact.downloadUrl,
+                previewHtml: item.previewHtml,
+                validation: item.validation,
+                sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+                documentVersion: item.version || null,
+              };
+              artifacts.push(artifactEvent);
+              emit({ type: 'file_artifact', artifact: artifactEvent });
+              await persistence.persistGeneratedArtifact({
+                artifact: { ...item.artifact, validation: item.validation },
+                task,
+                previewHtml: item.previewHtml,
+                validation: item.validation,
               });
             }
             emit({
+              type: 'checkpoint',
+              label: deliverableResults.length > 1
+                ? `Autoevaluación de ${deliverableResults.length} documentos`
+                : 'Autoevaluación del documento',
+              status: 'completed',
+              payload: preserved.batch ? preserved.validation?.details || null : preserved.validation?.details?.agenticCycle || null,
+            });
+            emit({
               type: 'quality_gate',
               gate: 'source_preserving_document_edit',
-              label: 'Documento original conservado',
+              label: deliverableResults.length > 1 ? 'Documentos originales conservados' : 'Documento original conservado',
               passed: Boolean(preserved.validation?.passed),
-              summary: 'Se agregó el contenido solicitado al archivo original sin regenerar portada, tablas ni estructura previa.',
+              summary: preserved.partial
+                ? `Se validaron ${deliverableResults.length} documentos y se informaron los que no pudieron completarse.`
+                : `Se validaron ${deliverableResults.length} archivo(s) sin mutar los originales.`,
               payload: preserved.validation,
-            });
-            await persistence.persistGeneratedArtifact({
-              artifact: { ...preserved.artifact, validation: preserved.validation },
-              task,
-              previewHtml: preserved.previewHtml,
-              validation: preserved.validation,
             });
             finalMarkdown = preserved.content;
           } else {
@@ -3567,5 +3598,6 @@ module.exports = {
   resolveAttachmentFallbackMarkdown,
   resolveAgentToolScopes,
   shouldRunSourcePreservingEdit,
+  isValidatedSourcePreservingDeliverable,
   shouldUseDeterministicAttachmentAnswer,
 };

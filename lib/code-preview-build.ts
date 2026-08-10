@@ -29,6 +29,51 @@ export type PreviewResult = {
   note?: string
 }
 
+const PREVIEW_REVISION_OFFSET = 0x811c9dc5
+const PREVIEW_REVISION_PRIME = 0x01000193
+const previewFileRevisionCache = new WeakMap<CodeFiles[string], string>()
+
+function hashPreviewValue(value: string, seed = PREVIEW_REVISION_OFFSET): number {
+  let hash = seed
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, PREVIEW_REVISION_PRIME) >>> 0
+  }
+  return hash
+}
+
+function previewFileRevision(file: CodeFiles[string]): string {
+  const cached = previewFileRevisionCache.get(file)
+  if (cached) return cached
+
+  const content = file.content ?? ""
+  const hash = hashPreviewValue(content).toString(16).padStart(8, "0")
+  const revision = `${content.length}:${hash}`
+  previewFileRevisionCache.set(file, revision)
+  return revision
+}
+
+/**
+ * Stable, content-sensitive revision for preview auto-run de-duplication.
+ *
+ * CodeFile objects are immutable in the workspace reducer, so a WeakMap lets
+ * unchanged files reuse their content hash while an edited file gets a fresh
+ * hash. Sorting paths makes the result independent of object insertion order.
+ */
+export function workspacePreviewRevision(files: CodeFiles): string {
+  const paths = Object.keys(files).sort()
+  let workspaceHash = PREVIEW_REVISION_OFFSET
+
+  for (const path of paths) {
+    const file = files[path]
+    if (!file) continue
+    const entry = `${path.length}:${path}:${previewFileRevision(file)}\u0000`
+    workspaceHash = hashPreviewValue(entry, workspaceHash)
+  }
+
+  return `${paths.length}:${workspaceHash.toString(16).padStart(8, "0")}`
+}
+
 function ext(path: string): string {
   const i = path.lastIndexOf(".")
   return i >= 0 ? path.slice(i + 1).toLowerCase() : ""

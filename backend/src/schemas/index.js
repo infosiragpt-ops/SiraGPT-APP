@@ -1,6 +1,10 @@
 'use strict';
 
 const { z } = require('zod');
+const authSchemas = require('./auth');
+const chatSchemas = require('./chats');
+const fileSchemas = require('./files');
+const paymentSchemas = require('./payments');
 
 const INLINE_FILE_CONTENT_MAX_CHARS = 10 * 1024 * 1024;
 const INLINE_FILE_MIME_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
@@ -120,6 +124,10 @@ function validateAndSanitize(schema, data) {
 }
 
 module.exports = {
+  ...authSchemas,
+  ...chatSchemas,
+  ...fileSchemas,
+  ...paymentSchemas,
   aiGenerateRequestSchema,
   chatMessageSchema,
   fileUploadSchema,

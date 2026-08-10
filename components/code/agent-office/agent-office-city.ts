@@ -285,21 +285,34 @@ function addFacadeWindows(
   const usableHeight = Math.max(1.4, building.height - (bottom - groundY) - 0.7)
   const windowWidth = Math.min(1.05, usableWidth / columns * 0.7)
   const windowHeight = Math.min(0.64, usableHeight / rows * 0.58)
-  const dayColors = [0xb4d9e3, 0x9fcbd9, 0x80b5c8, 0xd0e5e8]
-  const nightLitColors = [0xffcf78, 0xffe6a8, 0x9bd7e7, 0xb9e8ef]
-  const nightDarkColors = [0x294959, 0x1e3847, 0x17303e]
+  // Cool curtain-wall glass by day; at night a modern office district:
+  // dense warm desks (agents working) + cool monitor glow + dark floors.
+  const dayColors = [0xc5e8f2, 0xaed8e6, 0x8fc4d6, 0xd7f0f5, 0xb8dce8]
+  const nightLitWarm = [0xffd28a, 0xffe7b2, 0xf6c978, 0xffefc4]
+  const nightLitCool = [0x7ed4ef, 0x9be4f4, 0xb5eef8, 0x6bc6e3]
+  const nightDarkColors = [0x1a3342, 0x142833, 0x0f1f2a, 0x1c3848]
+  const agentSilhouette = 0x0a1218
 
-  const windowColor = (row: number) => {
-    if (!night) return dayColors[Math.floor(random() * dayColors.length)]
-    // Keep illumination legible as occupied floors instead of television-like
-    // random noise. Executive floors skew cool; the rest mix warm office light
-    // with intentionally dark floors so the skyline retains depth at night.
-    const lit = random() > 0.34
-    if (!lit) return nightDarkColors[Math.floor(random() * nightDarkColors.length)]
+  const sampleWindow = (row: number): { color: number; lit: boolean } => {
+    if (!night) {
+      return { color: dayColors[Math.floor(random() * dayColors.length)], lit: false }
+    }
+    // Occupancy bands: more agents mid-building; top executive floors cooler.
+    const occupancyBias = row < 2 ? 0.55 : row >= rows - 2 ? 0.28 : 0.22
+    const lit = random() > occupancyBias
+    if (!lit) {
+      return {
+        color: nightDarkColors[Math.floor(random() * nightDarkColors.length)],
+        lit: false,
+      }
+    }
     const executiveFloor = row >= rows - 2
-    return executiveFloor
-      ? nightLitColors[2 + Math.floor(random() * 2)]
-      : nightLitColors[Math.floor(random() * nightLitColors.length)]
+    const color = executiveFloor
+      ? nightLitCool[Math.floor(random() * nightLitCool.length)]
+      : random() > 0.42
+        ? nightLitWarm[Math.floor(random() * nightLitWarm.length)]
+        : nightLitCool[Math.floor(random() * nightLitCool.length)]
+    return { color, lit: true }
   }
 
   for (let row = 0; row < rows; row += 1) {
@@ -309,12 +322,35 @@ function addFacadeWindows(
         building.x -
         usableWidth / 2 +
         ((column + 0.5) / columns) * usableWidth
-      const color = windowColor(row)
+      const sample = sampleWindow(row)
       instances.push({
         position: [x, y, building.z + building.depth / 2 + 0.012],
         scale: [windowWidth, windowHeight],
-        color,
+        color: sample.color,
       })
+      // Desk/agent silhouettes: each lit office window can show people working.
+      if (sample.lit && random() > 0.48) {
+        instances.push({
+          position: [
+            x - windowWidth * 0.18,
+            y - windowHeight * 0.12,
+            building.z + building.depth / 2 + 0.02,
+          ],
+          scale: [windowWidth * 0.16, windowHeight * 0.42],
+          color: agentSilhouette,
+        })
+        if (random() > 0.45) {
+          instances.push({
+            position: [
+              x + windowWidth * 0.2,
+              y - windowHeight * 0.18,
+              building.z + building.depth / 2 + 0.02,
+            ],
+            scale: [windowWidth * 0.12, windowHeight * 0.28],
+            color: agentSilhouette,
+          })
+        }
+      }
     }
   }
 
@@ -326,11 +362,11 @@ function addFacadeWindows(
         building.z -
         building.depth * 0.34 +
         ((column + 0.5) / sideColumns) * building.depth * 0.68
-      const color = windowColor(row)
+      const sample = sampleWindow(row)
       instances.push({
         position: [building.x - building.width / 2 - 0.012, y, z],
         scale: [Math.min(1.05, building.depth / sideColumns * 0.48), windowHeight],
-        color,
+        color: sample.color,
         rotation: [0, Math.PI / 2, 0],
       })
     }
@@ -358,7 +394,7 @@ function createBrandSign() {
   context.fillText("SIRA", 58, 116)
   context.fillStyle = "#8dd8e9"
   context.font = "600 34px Inter, system-ui, sans-serif"
-  context.fillText("AUTONOMOUS COMPANY HQ", 58, 172)
+  context.fillText("MODERN AGENTS HQ · EACH DESK IS AN AGENT", 58, 172)
 
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
@@ -589,7 +625,7 @@ export function addEdgeDistrict({
     },
   )
 
-  const secondaryCount = variant === "full" ? 30 : 14
+  const secondaryCount = variant === "full" ? 38 : 18
   const normalizedLots: Array<[number, number]> = [
     [-0.54, -0.64],
     [0, -0.76],
@@ -621,11 +657,21 @@ export function addEdgeDistrict({
     [0.78, -0.88],
     [-1.04, -0.08],
     [1.04, -0.08],
+    // Extra modern office lots for denser skyline
+    [-0.42, -1.12],
+    [0.42, -1.12],
+    [-1.12, -0.42],
+    [1.12, -0.42],
+    [-1.08, 0.48],
+    [1.08, 0.48],
+    [-0.18, -0.68],
+    [0.18, -0.68],
   ]
-  const dayBuildingColors = [0x4e6974, 0x345f70, 0x71878b, 0x294f61, 0x747b7d, 0x4d5c65]
-  const nightBuildingColors = [0x1c303c, 0x203f50, 0x2b444e, 0x192f3e, 0x35464f, 0x382f3a]
-  const dayGlassColors = [0x84b5c1, 0x6ca4b5, 0xa2c5cb, 0x72939f]
-  const nightGlassColors = [0x183f52, 0x1c5064, 0x294f61, 0x273e50]
+  // Cooler silver/graphite corporate palette (modern glass district).
+  const dayBuildingColors = [0x5a727c, 0x3d6878, 0x7a9096, 0x2f5868, 0x6e787c, 0x51636d, 0x4a6a78]
+  const nightBuildingColors = [0x152833, 0x1a3544, 0x243a46, 0x122838, 0x2c3d48, 0x2a2834, 0x1c2f3c]
+  const dayGlassColors = [0x92c8d6, 0x78b4c6, 0xb0d4dc, 0x6fa0b0, 0xa4d0da]
+  const nightGlassColors = [0x154458, 0x1a5870, 0x245868, 0x1e3f52, 0x2a5062]
   const secondaryBuildings: Building[] = []
   let signatureTowerCount = 0
   let architecturalCrownCount = 0
@@ -634,20 +680,20 @@ export function addEdgeDistrict({
 
   for (let index = 0; index < secondaryCount; index += 1) {
     const [normalizedX, normalizedZ] = normalizedLots[index]
-    const lotWidth = 6.1 + random() * 5.7
-    const lotDepth = 5.8 + random() * 5.6
-    const foregroundPenalty = normalizedZ > 0.2 ? 7.4 : 0
+    const lotWidth = 5.8 + random() * 6.2
+    const lotDepth = 5.5 + random() * 5.9
+    const foregroundPenalty = normalizedZ > 0.2 ? 6.8 : 0
     const skylineBoost =
       normalizedZ < -0.58
-        ? 15 + random() * 24
+        ? 18 + random() * 28
         : normalizedZ < -0.25
-          ? 9 + random() * 17
+          ? 11 + random() * 20
         : normalizedZ < 0.2
-          ? 4 + random() * 9
+          ? 5 + random() * 11
           : 0
     const height = Math.max(
-      8.2,
-      10.5 + random() * 10.5 + skylineBoost - foregroundPenalty,
+      9.2,
+      11.5 + random() * 12 + skylineBoost - foregroundPenalty,
     )
     const slenderness = height > 40 ? 0.72 : height > 30 ? 0.84 : 1
     const width = lotWidth * slenderness
@@ -782,6 +828,80 @@ export function addEdgeDistrict({
       })
     }
     addFacadeWindows(facadeWindows, building, groundY, variant, random, night)
+
+    // Helipads / tech decks on the tallest signature towers.
+    if (signatureTower && height > 32) {
+      const padY = groundY + height + 0.08
+      propInstances.push(
+        {
+          position: [x, padY, z],
+          scale: [width * 0.72, 0.12, depth * 0.72],
+          color: night ? 0x2a3f4c : 0xc5d2d6,
+        },
+        {
+          position: [x, padY + 0.1, z],
+          scale: [width * 0.28, 0.05, depth * 0.05],
+          color: night ? 0xffd98e : 0xf2fbff,
+        },
+        {
+          position: [x, padY + 0.1, z],
+          scale: [width * 0.05, 0.05, depth * 0.28],
+          color: night ? 0xffd98e : 0xf2fbff,
+        },
+      )
+      terraceAmenityCount += 3
+      architecturalGlowInstances.push({
+        position: [x, padY + 0.14, z],
+        scale: [width * 0.55, 0.04, depth * 0.55],
+        color: fullNight ? 0x7de7f2 : timePhase === "dusk" ? 0xf2b786 : 0xc9edf2,
+      })
+    }
+  }
+
+  // Sky bridges between nearby tall offices — modern CBD connectivity.
+  if (variant === "full") {
+    const bridgeCandidates = secondaryBuildings
+      .map((building, index) => ({ building, index }))
+      .filter(({ building }) => building.height > 26)
+      .sort((a, b) => b.building.height - a.building.height)
+    let bridgesBuilt = 0
+    for (let i = 0; i < bridgeCandidates.length && bridgesBuilt < 5; i += 1) {
+      for (let j = i + 1; j < bridgeCandidates.length && bridgesBuilt < 5; j += 1) {
+        const a = bridgeCandidates[i].building
+        const b = bridgeCandidates[j].building
+        const dx = b.x - a.x
+        const dz = b.z - a.z
+        const dist = Math.hypot(dx, dz)
+        if (dist < 10 || dist > 28) continue
+        const midX = (a.x + b.x) / 2
+        const midZ = (a.z + b.z) / 2
+        const bridgeY =
+          groundY + Math.min(a.height, b.height) * (0.62 + random() * 0.12)
+        const yaw = Math.atan2(dz, dx)
+        structureInstances.push({
+          position: [midX, bridgeY, midZ],
+          scale: [dist * 0.92, 0.55, 1.15],
+          color: night ? 0x2a4554 : 0x6d8a94,
+          rotation: [0, yaw, 0],
+        })
+        districtGlassFacades.push({
+          position: [midX, bridgeY + 0.05, midZ],
+          scale: [dist * 0.88, 0.42],
+          color: night ? 0x3a7088 : 0x8fc4d2,
+          rotation: [0, yaw, 0],
+        })
+        architecturalGlowInstances.push({
+          position: [midX, bridgeY - 0.28, midZ],
+          scale: [dist * 0.86, 0.06, 0.9],
+          color: fullNight ? 0x66e6f2 : timePhase === "dusk" ? 0xf2bc8f : 0x8bcbd5,
+          rotation: [0, yaw, 0],
+        })
+        architecturalCrownCount += 1
+        terraceAmenityCount += 1
+        bridgesBuilt += 1
+        break
+      }
+    }
   }
 
   const landmarkFacade: Building = {

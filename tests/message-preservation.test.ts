@@ -3,7 +3,27 @@ import assert from 'node:assert/strict';
 import {
   mergeChatPreservingUserMessages,
   mergeMessagesPreservingUserContent,
+  parseAgentTaskContent,
 } from '../lib/message-preservation';
+
+test('reads a persisted agent task id from the reducer meta envelope', () => {
+  const content = '```agent-task-state\n' + JSON.stringify({
+    meta: { taskId: 'task-from-meta' },
+    done: false,
+  }) + '\n```';
+
+  assert.equal(parseAgentTaskContent(content).taskId, 'task-from-meta');
+});
+
+test('prefers the legacy top-level task id when both envelope locations exist', () => {
+  const content = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-top-level',
+    meta: { taskId: 'task-from-meta' },
+    done: false,
+  }) + '\n```';
+
+  assert.equal(parseAgentTaskContent(content).taskId, 'task-top-level');
+});
 
 test('preserves a visible user message when backend refresh returns blank content by id', () => {
   const local = [
@@ -108,6 +128,61 @@ test('prefers completed agent task server content over longer pending local stat
   );
 
   assert.equal(merged[1].content, incomingContent);
+});
+
+test('keeps a locally completed task with artifacts over a stale pending refresh of the same task', () => {
+  const taskId = 'task-completed-before-db-refresh';
+  const incomingContent = '```agent-task-state\n' + JSON.stringify({
+    taskId,
+    done: false,
+    status: 'running',
+    steps: [{ id: 'edit', status: 'running' }],
+  }) + '\n```';
+  const localContent = '```agent-task-state\n' + JSON.stringify({
+    taskId,
+    done: true,
+    finalText: 'Listo.',
+    artifacts: [{ id: 'artifact-1', filename: 'Informe.docx' }],
+  }) + '\n```\n\nListo.';
+
+  const merged = mergeMessagesPreservingUserContent(
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: incomingContent }],
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: localContent }],
+  );
+
+  assert.equal(merged[0].content, localContent);
+});
+
+test('does not preserve a completed local envelope over a different incoming task', () => {
+  const incomingContent = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-new',
+    done: false,
+    status: 'running',
+  }) + '\n```';
+  const localContent = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-old',
+    done: true,
+    finalText: 'Listo.',
+  }) + '\n```\n\nListo.';
+
+  const merged = mergeMessagesPreservingUserContent(
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: incomingContent }],
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: localContent }],
+  );
+
+  assert.equal(merged[0].content, incomingContent);
+});
+
+test('parses legacy top-level task id and completed status', () => {
+  const content = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'legacy-task',
+    status: 'completed',
+    finalText: 'Terminado',
+  }) + '\n```\n\nTerminado';
+
+  const parsed = parseAgentTaskContent(content);
+  assert.equal(parsed.taskId, 'legacy-task');
+  assert.equal(parsed.done, true);
 });
 
 test('re-inserts a visible user message if the backend refresh drops the turn', () => {

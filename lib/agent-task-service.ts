@@ -644,16 +644,35 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
       }
     case "file_artifact": {
       const artifacts = [...state.artifacts]
+      const incomingId = String(evt.artifact.id || "").trim()
+      const incomingSourceFileId = String(evt.artifact.sourceFileId || "").trim()
       const filename = String(evt.artifact.filename || "").trim().toLowerCase()
       const format = String(evt.artifact.format || evt.artifact.mime || "").trim().toLowerCase()
-      const existingIndex = artifacts.findIndex(artifact => (
-        artifact.id === evt.artifact.id
-        || (
-          filename
-          && String(artifact.filename || "").trim().toLowerCase() === filename
-          && String(artifact.format || artifact.mime || "").trim().toLowerCase() === format
-        )
-      ))
+      let existingIndex = incomingId
+        ? artifacts.findIndex(artifact => String(artifact.id || "").trim() === incomingId)
+        : -1
+
+      // A source-preserving batch can legitimately produce the same output
+      // filename for multiple input documents. Keep those cards only when
+      // both artifacts identify different source files. Generations without
+      // source provenance (for example repeated create_document revisions),
+      // or a new revision of the same source file, replace the prior card.
+      if (existingIndex < 0 && incomingSourceFileId) {
+        existingIndex = artifacts.findIndex(artifact => (
+          String(artifact.sourceFileId || "").trim() === incomingSourceFileId
+        ))
+      }
+      if (existingIndex < 0 && filename) {
+        existingIndex = artifacts.findIndex(artifact => {
+          const samePresentation = (
+            String(artifact.filename || "").trim().toLowerCase() === filename
+            && String(artifact.format || artifact.mime || "").trim().toLowerCase() === format
+          )
+          if (!samePresentation) return false
+          const existingSourceFileId = String(artifact.sourceFileId || "").trim()
+          return !incomingSourceFileId || !existingSourceFileId
+        })
+      }
 
       if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact)
       else artifacts.push(evt.artifact)
@@ -776,7 +795,7 @@ export async function getTaskEvents(
   taskId: string,
   after = 0,
   options: { signal?: AbortSignal } = {},
-): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; streamState?: AgentTaskState; error?: string }> {
+): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; statusCode?: number; streamState?: AgentTaskState; error?: string }> {
   const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
     method: "GET",
     credentials: "include",
@@ -785,7 +804,7 @@ export async function getTaskEvents(
   })
   let payload: any = null
   try { payload = await resp.json() } catch { payload = null }
-  if (!resp.ok) return { ok: false, events: [], error: payload?.error || `HTTP ${resp.status}` }
+  if (!resp.ok) return { ok: false, events: [], statusCode: resp.status, error: payload?.error || `HTTP ${resp.status}` }
   return { ok: true, events: payload?.events || [], status: payload?.status, streamState: payload?.streamState }
 }
 

@@ -44,7 +44,7 @@ describe("code model effort selector source contract", () => {
   it("cancels a build created after a delayed plan approval", () => {
     assert.match(
       source,
-      /const buildRun = await codexApi\.approvePlan[\s\S]{0,900}if \(cancelledTurn\(\)\)[\s\S]{0,700}cancelCodexRunFamily[\s\S]{0,300}runId: buildRun\.id/,
+      /const buildRun = await codexApi\.approvePlan[\s\S]{0,900}if \(cancelledTurn\(\)\)[\s\S]{0,900}runId: buildRun\.id[\s\S]{0,500}beginCodexCancellation\(assistantId, target\)[\s\S]{0,200}requestCodexCancellation\(target, attempt\)/,
     )
   })
 })

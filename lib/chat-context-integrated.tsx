@@ -17,15 +17,24 @@ import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 import {
   save as savePending,
+  buildPendingGeneratePayload,
   clear as clearPending,
+  clearTurn as clearPendingTurn,
+  enableAutomaticRetry,
+  findPendingTurnMatch,
   retryAll,
   subscribeOnlineRetry,
+  type PendingAIRequestEnvelope,
   type PendingMessage,
+  type PendingRetryResult,
 } from "./pending-messages"
 import { devLog } from "./dev-log"
 import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
 import { safeUUID } from "./safe-uuid"
 import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
+import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
+import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
+import { awaitCancellableChatStep } from "./chat/turn-cancellation"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -208,7 +217,7 @@ interface Message {
   }
   presentation?: string // Add this line
   error?: any
-  metadata?: string
+  metadata?: string | Record<string, unknown>
   sources?: Array<{
     title: string
     url: string
@@ -654,6 +663,12 @@ interface PaginationInfo {
   total: number
   pages: number
 }
+interface AddMessageOptions {
+  idempotencyKey?: string
+  streamId?: string
+  reusePending?: boolean
+  requestEnvelope?: PendingAIRequestEnvelope
+}
 interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
@@ -665,7 +680,7 @@ interface ChatContextType {
     options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
   ) => Promise<any>
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: { idempotencyKey?: string }) => Promise<void>
+  addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
   addVideoMessage: (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => Promise<void>
   addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
@@ -732,7 +747,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
   const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'>('text')
-  const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
+  const pollingRegistryRef = useRef<PollingRegistry | null>(null)
+  if (!pollingRegistryRef.current) pollingRegistryRef.current = createPollingRegistry()
+  const pollingRegistry = pollingRegistryRef.current
+  const providerMountedRef = useRef(true)
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMoreChats, setHasMoreChats] = useState(true)
@@ -774,11 +792,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const chatsRef = useRef<Chat[]>([])
   const isStreamingRef = useRef(false)
   const currentChatRef = useRef<Chat | null>(null)
+  const currentUserIdRef = useRef<string | null>(user?.id ? String(user.id) : null)
+  const latestSelectedChatIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    // React StrictMode intentionally runs setup → cleanup → setup in dev, so
+    // ownership must be restored on every setup rather than only initialized
+    // once by useRef.
+    providerMountedRef.current = true
+    return () => {
+      // An in-flight serialized read can settle after timers are cleared. The
+      // ownership fence makes its post-await isCurrent() false, preventing both
+      // setState-after-unmount and a freshly re-armed timeout.
+      providerMountedRef.current = false
+      pollingRegistry.clearAll()
+    }
+  }, [pollingRegistry])
 
   useEffect(() => { chatsRef.current = chats }, [chats])
   useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
   useEffect(() => { currentStreamIdRef.current = currentStreamId }, [currentStreamId])
   useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
+  useEffect(() => {
+    currentUserIdRef.current = user?.id ? String(user.id) : null
+  }, [user?.id])
 
   const syncActiveStreamingState = useCallback(() => {
     const ids = Array.from(activeStreamingChatIdsRef.current)
@@ -1143,9 +1180,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentStreamId, isStreaming, isLoading, markChatIdle, setPendingStopSynced]);
   const addMessage = useCallback(
-    async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: { idempotencyKey?: string }) => { // Added skipUserMessage and forceFlowChartDiagram parameters
+    async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
-      if (!activeChat || !user || !isAuthenticated) return;
+      if (!activeChat || !user || !isAuthenticated) return false;
       const displayFiles = Array.isArray(fileIds)
         ? fileIds.filter(Boolean).map(normalizeMessageAttachment)
         : [];
@@ -1158,8 +1195,48 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         : [];
       const requestFileIds = normalizedFileIds.length > 0 ? normalizedFileIds : historicalDocumentFileIds;
 
-      // Save to pending messages BEFORE sending — survive crashes/offline
-      savePending(content, activeChat.id, requestFileIds?.length ? requestFileIds : undefined, intentOverride);
+      // Generate/persist the backend turn identity BEFORE the first attempt.
+      // Offline/reload retries pass reusePending=true and reuse this exact key
+      // instead of replacing the durable draft with a fresh stream identity.
+      const requestedIdempotencyKey = typeof options?.idempotencyKey === 'string'
+        ? options.idempotencyKey.trim()
+        : '';
+      // The transport id is part of Stop ownership, not just presentation.
+      // Persist/reuse it across reload followers so POST /stop-stream targets
+      // the original server-side owner rather than a newly minted follower id.
+      const requestedStreamId = typeof options?.streamId === 'string' && options.streamId.trim()
+        ? options.streamId.trim()
+        : safeUUID();
+      const requestEnvelope: PendingAIRequestEnvelope = options?.requestEnvelope
+        ? { ...options.requestEnvelope }
+        : {
+            provider: selectProvider,
+            model: selectedModel,
+            reasoningEffort: selectedEffort,
+          };
+      const pendingMessage = options?.reusePending
+        ? null
+        : savePending(
+            content,
+            activeChat.id,
+            requestFileIds?.length ? requestFileIds : undefined,
+            intentOverride,
+            requestedIdempotencyKey || undefined,
+            requestEnvelope,
+            String(user.id),
+            requestedStreamId,
+          );
+      const turnIdempotencyKey = pendingMessage?.idempotencyKey
+        || requestedIdempotencyKey
+        || safeUUID();
+      const streamId = pendingMessage?.streamId || requestedStreamId;
+      const pendingOwnerId = String(user.id);
+      const clearThisPendingTurn = () => clearPendingTurn(
+        activeChat.id,
+        turnIdempotencyKey,
+        pendingOwnerId,
+      );
+      const turnMetadata = JSON.stringify({ idempotencyKey: turnIdempotencyKey });
 
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
@@ -1170,13 +1247,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           content,
           timestamp: new Date().toISOString(),
           files: displayFiles.length ? displayFiles : undefined,
+          metadata: turnMetadata,
         };
 
-        // Update chat with user message
+        // Update chat with user message. Never steal focus: if the user already
+        // switched to another chat (background send / queue drain), only touch
+        // the chats cache — the active view must stay on what they're reading.
         const updatedMessages = [...activeChat.messages, userMessage];
         const updatedChat = { ...activeChat, messages: updatedMessages };
 
-        setCurrentChat(updatedChat);
+        setCurrentChat((prev) => (prev?.id === activeChat.id ? updatedChat : prev));
         setChats((prev) => prev.filter(c => c && c.id).map((c) => (c.id === activeChat.id ? updatedChat : c)));
       }
 
@@ -1185,13 +1265,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // chats start in the same millisecond (e.g. a queue-drain burst), and the
       // reasoning/agent-trace SSE handlers patch by message id — a collision
       // rendered chat A's thinking trace + tool timeline inside chat B.
-      const aiMessagePlaceholder: Message = {
-        id: `msg-ai-${activeChat.id}-${safeUUID()}`,
-        chatId: activeChat.id,
-        role: 'ASSISTANT',
-        content: '',
-        timestamp: new Date().toISOString(),
-      };
+      const existingTurn = options?.reusePending
+        ? findPendingTurnMatch(activeChat.messages || [], {
+            idempotencyKey: turnIdempotencyKey,
+          })
+        : { assistantIndex: -1 };
+      const existingPlaceholder = existingTurn.assistantIndex >= 0
+        ? activeChat.messages?.[existingTurn.assistantIndex]
+        : null;
+      const aiMessagePlaceholder: Message = existingPlaceholder
+        ? {
+            ...existingPlaceholder,
+            content: '',
+            error: undefined,
+            metadata: turnMetadata,
+          }
+        : {
+            id: `msg-ai-${activeChat.id}-${safeUUID()}`,
+            chatId: activeChat.id,
+            role: 'ASSISTANT',
+            content: '',
+            timestamp: new Date().toISOString(),
+            metadata: turnMetadata,
+          };
+      const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
 
       // Add AI placeholder to chat
       setCurrentChat(prevChat => {
@@ -1199,7 +1296,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (prevChat.id !== activeChat.id) return prevChat;
         return {
           ...prevChat,
-          messages: [...prevChat.messages, aiMessagePlaceholder]
+          messages: reuseAssistantPlaceholder
+            ? prevChat.messages.map((message) => (
+                message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message
+              ))
+            : [...prevChat.messages, aiMessagePlaceholder]
         };
       });
       // Mirror the assistant placeholder into the `chats` cache too. When the
@@ -1210,29 +1311,48 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // block also runs when skipUserMessage=true.
       setChats(prev => prev.filter(c => c && c.id).map(c =>
         c.id === activeChat.id
-          ? { ...c, messages: [...(c.messages || []), aiMessagePlaceholder] }
+          ? {
+              ...c,
+              messages: reuseAssistantPlaceholder
+                ? (c.messages || []).map((message) => (
+                    message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message
+                  ))
+                : [...(c.messages || []), aiMessagePlaceholder],
+            }
           : c
       ));
 
       setUploadedFiles([]); // Uploaded files clear kar dein
-      const streamId = safeUUID();
-      markChatStreaming(activeChat.id, streamId);
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      markChatStreaming(activeChat.id, streamId, controller);
       // Reset pending stop state for THIS chat only (per-chat tracking)
       setPendingStopSynced(false, activeChat.id);
       let streamFailed = false;
+      let terminalSucceeded = false;
+      let waitsForDefaultStreamTerminal = false;
+      const throwIfTurnCancelled = () => {
+        if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) return;
+        const cancelled = new Error('Request aborted');
+        cancelled.name = 'AbortError';
+        throw cancelled;
+      };
       try {
         const intent = intentOverride || await aiService.classifyIntent(content, conversationForRouting);
+        throwIfTurnCancelled();
         const professionalPrompt = buildProfessionalCapabilityPrompt(intent, content);
         devLog('intent', intent);
 
         if (intent === 'chart') {
           const fileId = normalizedFileIds.length > 0 ? normalizedFileIds[0] : undefined;
+          throwIfTurnCancelled();
           const chartResponse = await apiClient.generateChart({
             prompt: professionalPrompt,
             displayPrompt: content,
             chatId: activeChat.id,
             fileId,
-          });
+          }, { signal: controller.signal });
+          throwIfTurnCancelled();
 
           const { assistantMessage } = chartResponse;
 
@@ -1250,12 +1370,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         } else if (intent === 'figma') {
           // Handle Figma flowchart generation
+          throwIfTurnCancelled();
           const figmaResponse = await apiClient.generateFigmaFlowchart({
             prompt: professionalPrompt,
             displayPrompt: content,
             chatId: activeChat.id,
             conversationHistory: activeChat.messages || [],
-          });
+          }, { signal: controller.signal });
+          throwIfTurnCancelled();
 
           const { assistantMessage } = figmaResponse;
 
@@ -1276,7 +1398,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // quizzes, dashboards with inputs. Server emits JSX; front
           // mounts it in a sandboxed iframe with React + Babel +
           // curated CDN libs.
-          const controller = new AbortController();
           abortControllerRef.current = controller;
           markChatStreaming(activeChat.id, streamId, controller);
           bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
@@ -1295,6 +1416,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             });
           };
           try {
+            throwIfTurnCancelled();
             await apiClient.generateArtifactStream(
               { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
@@ -1331,6 +1453,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               };
             }
           }
+          throwIfTurnCancelled();
           if (finalMsg) {
             setCurrentChat((prev) => {
               if (!prev) return prev;
@@ -1351,7 +1474,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // assistant message carries a `doc`-typed file with a base64
           // data URL that <DocArtifactDisplay/> turns into a download
           // card (and inline preview for PDF/SVG).
-          const controller = new AbortController();
           abortControllerRef.current = controller;
           markChatStreaming(activeChat.id, streamId, controller);
           bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
@@ -1376,6 +1498,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               model: selectedModel,
               fileIds: requestFileIds,
             });
+            throwIfTurnCancelled();
             await apiClient.generateDocStream(
               docRequest,
               (ev: any) => {
@@ -1420,6 +1543,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               };
             }
           }
+          throwIfTurnCancelled();
           if (finalMsg) {
             setCurrentChat((prev) => {
               if (!prev) return prev;
@@ -1441,7 +1565,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // custom visuals, Mermaid for diagrams) and emits an
           // assistant message with a single `viz`-typed file. Inline
           // rendering is handled by <VizArtifactDisplay/>.
-          const controller = new AbortController();
           abortControllerRef.current = controller;
           markChatStreaming(activeChat.id, streamId, controller);
           bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
@@ -1460,6 +1583,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             });
           };
           try {
+            throwIfTurnCancelled();
             await apiClient.generateVizStream(
               { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
@@ -1496,6 +1620,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               };
             }
           }
+          throwIfTurnCancelled();
           if (finalMsg) {
             setCurrentChat((prev) => {
               if (!prev) return prev;
@@ -1517,7 +1642,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // LaTeX") then emits the final markdown string, which the
           // existing ReactMarkdown + remark-math + rehype-katex
           // pipeline renders with KaTeX automatically.
-          const controller = new AbortController();
           abortControllerRef.current = controller;
           markChatStreaming(activeChat.id, streamId, controller);
           bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
@@ -1539,6 +1663,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
 
           try {
+            throwIfTurnCancelled();
             await apiClient.solveMathStream(
               { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
@@ -1576,6 +1701,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
+          throwIfTurnCancelled();
           if (finalMsg) {
             setCurrentChat((prev) => {
               if (!prev) return prev;
@@ -1598,7 +1724,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // spinner for 30-60s. On `final`/`error` we swap the
           // placeholder for the assistant message returned by the
           // backend (which is already persisted in the DB).
-          const controller = new AbortController();
           abortControllerRef.current = controller;
           markChatStreaming(activeChat.id, streamId, controller);
           bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
@@ -1627,6 +1752,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
 
           try {
+            throwIfTurnCancelled();
             await apiClient.generatePlanStream(
               { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
@@ -1668,6 +1794,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
+          throwIfTurnCancelled();
           if (finalMsg) {
             setCurrentChat((prev) => {
               if (!prev) return prev;
@@ -1684,8 +1811,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setCurrentStreamId(null);
 
         } else {
+          waitsForDefaultStreamTerminal = true;
+          // This branch is protected by the backend's turn-idempotency
+          // contract. Persist both the resolved intent and the exact original
+          // model/provider envelope before opening the socket so a reload
+          // cannot retry the same key using the user's newer model selection.
+          const retryablePending = enableAutomaticRetry(
+            activeChat.id,
+            turnIdempotencyKey,
+            intent,
+            requestEnvelope,
+            String(user.id),
+          );
+          const activeRequestEnvelope = retryablePending?.requestEnvelope || requestEnvelope;
           // Create new AbortController for this request
-          const controller = new AbortController();
           abortControllerRef.current = controller;
           markChatStreaming(activeChat.id, streamId, controller);
 
@@ -1730,17 +1869,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           streamBuffersRef.current.set(activeChat.id, fgBuffer);
 
           // STEP 3: Nayi streaming API call karein
+          throwIfTurnCancelled();
           await apiClient.generateAIStream(
-            {
-              provider: selectProvider,
-              model: selectedModel,
-              reasoningEffort: selectedEffort,
+            buildPendingGeneratePayload({
+              pending: retryablePending,
+              fallbackEnvelope: activeRequestEnvelope,
               prompt: content,
               chatId: activeChat.id,
               files: requestFileIds,
               streamId: streamId,
-              idempotencyKey: options?.idempotencyKey,
-            },
+              idempotencyKey: turnIdempotencyKey,
+            }),
             (chunk) => {
               // Always accumulate in the background-streams store so
               // the user sees progress even if they navigated away.
@@ -1757,20 +1896,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             async () => {
               // onClose: Jab stream khatam ho jaye
+              terminalSucceeded = true;
               fgBuffer.flush();
               fgBuffer.dispose();
               streamBuffersRef.current.delete(activeChat.id);
-              clearPending(activeChat.id);
+              clearThisPendingTurn();
               bg.complete(activeChat.id);
+              // Fold final partial into chats list so a background-finished
+              // chat is fully readable when the user re-opens it.
+              const finalPartial = bg.get(activeChat.id)?.partialContent;
+              if (finalPartial) {
+                setChats((prev) =>
+                  prev.filter((c) => c && c.id).map((c) => {
+                    if (c.id !== activeChat.id) return c;
+                    return {
+                      ...c,
+                      messages: hydrateTrailingAssistant(c.messages || [], finalPartial),
+                    };
+                  }),
+                );
+              }
               if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) {
-                setIsLoading(false);
-                setIsStreaming(false);
-                setCurrentStreamId(null);
-                abortControllerRef.current = null;
-                // After the stream ends, fetch the persisted chat so we can
-                // swap optimistic IDs for server IDs. We retry up to 3 times
-                // with a delay because the backend may still be persisting
-                // (document uploads add 1-3s after [DONE]).
+                // Do NOT force setIsStreaming(false) — sibling chats may still
+                // stream. markChatIdle in `finally` re-syncs aggregates.
+                if (currentChatRef.current?.id === activeChat.id) {
+                  setCurrentStreamId(null);
+                }
+                if (abortControllerRef.current === controller) {
+                  abortControllerRef.current = null;
+                }
+                // Persist ID sync + cache update even for background chats.
                 const syncIds = async (attempt = 1) => {
                   if (activeStreamingChatIdsRef.current.has(activeChat.id)) return;
                   try {
@@ -1778,11 +1933,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     const serverChat = resp.chat;
                     setCurrentChat(prev => {
                       if (!prev || prev.id !== activeChat.id || activeStreamingChatIdsRef.current.has(activeChat.id)) return prev;
-                      const merged = mergeChatPreservingUserMessages(serverChat, prev);
-                      // If the merge preserved all local content (same
-                      // message count), the IDs are synced — we're done.
-                      return merged;
+                      return mergeChatPreservingUserMessages(serverChat, prev);
                     });
+                    setChats((prev) =>
+                      prev.filter((c) => c && c.id).map((c) =>
+                        c.id === activeChat.id
+                          ? mergeChatPreservingUserMessages(serverChat, c)
+                          : c,
+                      ),
+                    );
                   } catch {
                     if (attempt < 3) {
                       setTimeout(() => syncIds(attempt + 1), 2000 * attempt);
@@ -1800,6 +1959,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               fgBuffer.flush();
               fgBuffer.dispose();
               streamBuffersRef.current.delete(activeChat.id);
+              // Preserve the authoritative background partial before moving
+              // the entry to error. Otherwise switching away/back hydrates
+              // the stale chat cache and the visible partial disappears.
+              const failedPartial = bg.get(activeChat.id)?.partialContent;
+              if (failedPartial) {
+                setCurrentChat((prev) => {
+                  if (!prev || prev.id !== activeChat.id) return prev;
+                  return { ...prev, messages: hydrateTrailingAssistant(prev.messages || [], failedPartial) };
+                });
+                setChats((prev) => prev.filter((chat) => chat && chat.id).map((chat) => (
+                  chat.id === activeChat.id
+                    ? { ...chat, messages: hydrateTrailingAssistant(chat.messages || [], failedPartial) }
+                    : chat
+                )));
+              }
               // Mirror the failure into BackgroundStreams so the
               // sidebar pill shows the error state for this chat.
               bg.fail(activeChat.id, error?.message || 'stream failed');
@@ -1946,13 +2120,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               },
             }
           );
+          throwIfTurnCancelled();
         }
-        // Clear pending on successful completion (sync intents like chart/figma)
-        if (!streamFailed) {
-          clearPending(activeChat.id);
+        // Synchronous intent endpoints are terminal when their awaited call
+        // returns. The default SSE branch is terminal only after onClose.
+        if (!waitsForDefaultStreamTerminal && !streamFailed) {
+          terminalSucceeded = true;
+        }
+        if (terminalSucceeded) {
+          clearThisPendingTurn();
         }
       } catch (error: any) {
         streamFailed = true;
+        if (controller.signal.aborted || error?.name === 'AbortError') {
+          // Explicit Stop is terminal user intent, not a transport failure.
+          // Remove the durable draft so online recovery cannot resurrect a
+          // billable operation the user already cancelled.
+          clearThisPendingTurn();
+          terminalSucceeded = true;
+          if (currentChatRef.current?.id === activeChat.id) {
+            setCurrentStreamId(null);
+          }
+          return true;
+        }
         console.error("Failed to start AI stream:", error);
 
         // If the stream already completed successfully (onClose was called),
@@ -1973,7 +2163,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
-            return;
+            clearThisPendingTurn();
+            terminalSucceeded = true;
+            return true;
           }
         }
 
@@ -2024,33 +2216,42 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        setIsLoading(false);
-        setIsStreaming(false);
-        setCurrentStreamId(null);
+        // Aggregate streaming flags re-synced by markChatIdle — never force
+        // global flags off while sibling chats may still run.
+        if (currentChatRef.current?.id === activeChat.id) {
+          setCurrentStreamId(null);
+        }
       } finally {
         markChatIdle(activeChat.id, streamId);
         pendingStopsRef.current.delete(activeChat.id);
         // Mark the background stream as done for non-default intents
         // (the default branch already calls bg.complete in onClose).
-        if (!streamFailed) {
+        if (!streamFailed && terminalSucceeded) {
           bg.complete(activeChat.id);
         }
       }
+      return terminalSucceeded;
     },
     // bg / pendingStop / selectChat / selectProvider are intentionally
     // omitted — they're either refs, secondary helpers, or recreated
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, isAuthenticated, selectedModel, uploadedFiles, markChatStreaming, markChatIdle]
+    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, uploadedFiles, markChatStreaming, markChatIdle]
   );
 
-  const retryPendingMessage = useCallback(async (msg: PendingMessage) => {
+  const retryPendingMessage = useCallback(async (msg: PendingMessage): Promise<PendingRetryResult> => {
     try {
+      // Legacy drafts and non-default deliverables are intentionally manual:
+      // their paid provider operations do not participate in /ai/generate's
+      // idempotency contract, so an automatic replay could double-bill.
+      if (msg.retryPolicy !== 'automatic' || !msg.requestEnvelope) return 'defer'
+      if (!msg.ownerId || msg.ownerId !== currentUserIdRef.current) return 'defer'
+
       // If the original send is still streaming, the pending draft is not
       // actually stale yet. Retrying now would call addMessage() again,
       // creating a second ASSISTANT placeholder/stream for the same USER turn.
-      if (activeStreamingChatIdsRef.current.has(msg.chatId)) return false
+      if (activeStreamingChatIdsRef.current.has(msg.chatId)) return 'defer'
 
       let targetChat =
         currentChatRef.current?.id === msg.chatId
@@ -2062,54 +2263,51 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         targetChat = response.chat
       }
 
-      if (!targetChat) return false
+      if (msg.ownerId !== currentUserIdRef.current) return 'defer'
+      if (!targetChat) return 'failure'
 
-      const createdAt = Date.parse(msg.createdAt)
       const messages: any[] = targetChat.messages || []
+      const pendingTurn = findPendingTurnMatch(messages, msg)
+      const alreadyEchoed = pendingTurn.userIndex !== -1
 
-      // Find the index of the matching USER message in the chat.
-      const echoedIndex = messages.findIndex((message: any) => {
-        if (String(message?.role || "").toUpperCase() !== "USER") return false
-        if (message?.content !== msg.content) return false
-        const messageTime = Date.parse(message?.timestamp || message?.createdAt || "")
-        if (!Number.isFinite(createdAt) || !Number.isFinite(messageTime)) return true
-        return Math.abs(messageTime - createdAt) < 10 * 60 * 1000
-      })
+      // A completed retry is recognized exclusively by the persisted turn
+      // identity on both USER and ASSISTANT rows. Equal prompt text and a
+      // nearby timestamp are intentionally irrelevant.
+      if (pendingTurn.hasAssistantReply) return 'success'
 
-      const alreadyEchoed = echoedIndex !== -1
-
-      if (alreadyEchoed) {
-        // Check whether an ASSISTANT turn already follows the matched user message.
-        // If yes, the AI already replied — re-sending would create a duplicate response.
-        // Clear the stale pending entry and return success without calling addMessage.
-        const hasAssistantReply = messages.slice(echoedIndex + 1).some(
-          (m: any) => String(m?.role || "").toUpperCase() === "ASSISTANT" &&
-                      m?.content && String(m.content).trim().length > 0
-        )
-        if (hasAssistantReply) {
-          return true
-        }
-      }
-
-      await addMessage(
+      const terminal = await addMessage(
         msg.content,
         msg.fileIds,
         targetChat,
         alreadyEchoed,
         msg.intentOverride as ChatIntent | undefined,
+        {
+          idempotencyKey: msg.idempotencyKey || msg.turnKey || msg.id,
+          reusePending: true,
+          requestEnvelope: msg.requestEnvelope,
+          streamId: msg.streamId,
+        },
       )
-      return true
+      return terminal === true ? 'success' : 'failure'
     } catch (error) {
       console.warn("Pending message retry failed:", error)
-      return false
+      return 'failure'
     }
   }, [addMessage])
 
+  const retryPendingMessageRef = useRef(retryPendingMessage)
   useEffect(() => {
-    if (!user || !isAuthenticated) return
-    void retryAll(retryPendingMessage)
-    return subscribeOnlineRetry(retryPendingMessage)
-  }, [user, isAuthenticated, retryPendingMessage])
+    retryPendingMessageRef.current = retryPendingMessage
+  }, [retryPendingMessage])
+
+  const retryOwnerId = user?.id ? String(user.id) : ''
+  useEffect(() => {
+    if (!retryOwnerId || !isAuthenticated) return
+    const retryWithLatestContext = (message: PendingMessage) => retryPendingMessageRef.current(message)
+    const retryOptions = { ownerId: retryOwnerId }
+    void retryAll(retryWithLatestContext, retryOptions)
+    return subscribeOnlineRetry(retryWithLatestContext, retryOptions)
+  }, [retryOwnerId, isAuthenticated])
 
   const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
     const displayFiles = Array.isArray(uploadedFiles)
@@ -2298,11 +2496,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const selectChat = useCallback(
     async (chatId: string) => {
+      latestSelectedChatIdRef.current = chatId
       const targetIsStreaming = activeStreamingChatIdsRef.current.has(chatId)
+        || bg.get(chatId)?.status === "streaming"
       const cachedChat = chatsRef.current.find(chat => chat?.id === chatId)
       if (cachedChat) {
         setCurrentChat(prev => {
-          if (prev?.id === chatId && (prev.messages?.length || 0) > 0) return prev
+          if (prev?.id === chatId && (prev.messages?.length || 0) > 0) {
+            // Re-hydrate trailing assistant if this chat is streaming — the
+            // in-view copy can lag the background partial by a frame.
+            if (targetIsStreaming) {
+              const hydrated = hydrateTrailingAssistant(
+                prev.messages,
+                bg.get(chatId)?.partialContent,
+              )
+              if (hydrated !== prev.messages) return { ...prev, messages: hydrated }
+            }
+            return prev
+          }
           const restored = { ...cachedChat, messages: cachedChat.messages || [] }
           // Switching back to a chat that is still streaming: the cached copy
           // may hold a stale (or empty) trailing assistant message because the
@@ -2332,6 +2543,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
         setCurrentChat(prev => {
+          if (latestSelectedChatIdRef.current !== chatId) return prev
           if (!prev || prev.id !== chatId) return mergeChatPreservingUserMessages(chat, prev)
 
           // Re-check this chat in case it started streaming while the
@@ -2369,9 +2581,52 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         })
 
-        localStorage.setItem('currentChatId', chatId)
+        if (latestSelectedChatIdRef.current === chatId) {
+          localStorage.setItem('currentChatId', chatId)
+          setUploadedFiles([])
+        }
 
-        setUploadedFiles([])
+        // Background completion catch-up: if the last turn is still a lone
+        // USER message (server kept generating after tab/nav detach), poll a
+        // few times so the finished answer appears without a full refresh.
+        const msgs = chat.messages || []
+        const last = msgs[msgs.length - 1]
+        const lastIsLonelyUser =
+          last && String(last.role || "").toUpperCase() === "USER"
+        if (lastIsLonelyUser) {
+          const pollBg = async (attempt = 1) => {
+            if (currentChatRef.current?.id !== chatId) return
+            if (activeStreamingChatIdsRef.current.has(chatId)) return
+            try {
+              const again = await apiClient.getChat(chatId)
+              const server = again.chat
+              const sMsgs = server?.messages || []
+              const hasAssistantTail = sMsgs.some(
+                (m: any, i: number) =>
+                  i >= msgs.length - 1 &&
+                  String(m?.role || "").toUpperCase() === "ASSISTANT" &&
+                  typeof m?.content === "string" &&
+                  m.content.trim().length > 0,
+              )
+              if (hasAssistantTail) {
+                setCurrentChat((prev) => {
+                  if (!prev || prev.id !== chatId) return prev
+                  return mergeChatPreservingUserMessages(server, prev)
+                })
+                setChats((prev) =>
+                  prev.filter((c) => c && c.id).map((c) =>
+                    c.id === chatId ? mergeChatPreservingUserMessages(server, c) : c,
+                  ),
+                )
+                return
+              }
+            } catch { /* retry */ }
+            if (attempt < 4) {
+              setTimeout(() => { void pollBg(attempt + 1) }, 1500 * attempt)
+            }
+          }
+          setTimeout(() => { void pollBg() }, 1200)
+        }
       } catch (error) {
         console.error("Failed to load chat:", error)
         // Stale/deleted chat id (e.g. restored from localStorage) → clear the
@@ -2493,24 +2748,68 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     devLog('Original total messages:', currentChat.messages.length);
 
     setIsLoading(true);
+    const streamId = safeUUID();
+    const controller = new AbortController();
+    const isRegenerationCancelled = () => (
+      controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)
+    );
+    const throwIfRegenerationCancelled = () => {
+      if (!isRegenerationCancelled()) return;
+      const cancelled = new Error('Request aborted');
+      cancelled.name = 'AbortError';
+      throw cancelled;
+    };
+
+    // Own the Stop controller before the first destructive await. A user can
+    // press Stop while a slow delete is in flight; the post-await fence below
+    // then prevents the generation request and every late UI mutation.
+    setCurrentStreamId(streamId);
+    setIsStreaming(true);
+    setPendingStopSynced(false, currentChat.id);
+    abortControllerRef.current = controller;
+    markChatStreaming(currentChat.id, streamId, controller);
+    bg.register(currentChat.id, currentChat.title || 'Chat', controller);
 
     // STEP 1: Delete messages from backend first
     try {
       devLog('Deleting messages from backend:', messagesToDelete.map(m => m.id));
       for (const msg of messagesToDelete) {
         if (msg.id && !msg.id.includes('temp-') && !msg.id.includes('ai-regen-')) {
-          await apiClient.clearMessageById(msg.id);
+          await awaitCancellableChatStep({
+            signal: controller.signal,
+            isPendingStop: () => pendingStopsRef.current.has(currentChat.id),
+            run: () => apiClient.clearMessageById(msg.id, { signal: controller.signal }),
+          });
           devLog('Deleted message from backend:', msg.id);
         }
       }
     } catch (error) {
-      console.error('Error deleting messages from backend:', error);
+      const cancelled = isRegenerationCancelled() || (error as any)?.name === 'AbortError';
+      if (!cancelled) {
+        console.error('Error deleting messages from backend:', error);
+        toast.error('Failed to delete previous messages. Please try again.');
+        bg.fail(currentChat.id, (error as any)?.message || 'delete failed');
+      } else {
+        bg.cancel(currentChat.id);
+      }
+      markChatIdle(currentChat.id, streamId);
       setIsLoading(false);
-      toast.error('Failed to delete previous messages. Please try again.');
+      setIsStreaming(false);
+      setCurrentStreamId(null);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       return;
     }
 
     // STEP 2: Update UI state and start regeneration
+    if (isRegenerationCancelled()) {
+      bg.cancel(currentChat.id);
+      markChatIdle(currentChat.id, streamId);
+      setIsLoading(false);
+      setIsStreaming(false);
+      setCurrentStreamId(null);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      return;
+    }
 
     const aiMessagePlaceholder: Message = {
       id: `ai-regen-${safeUUID()}`,
@@ -2525,6 +2824,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     // Update chat to include messages before regeneration + new placeholder
     setCurrentChat(prev => {
+      if (isRegenerationCancelled()) return prev;
       if (!prev) return null;
       const newState = {
         ...prev,
@@ -2533,19 +2833,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       devLog('Setting chat state with messages:', newState.messages.length);
       return newState;
     });
-
-    const streamId = safeUUID();
-    setCurrentStreamId(streamId);
-    setIsStreaming(true);
-    setPendingStopSynced(false, currentChat.id);
-
-    // Create new AbortController for regeneration
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    // Register this chat as streaming so the sidebar shows the spinner
-    // and stopStreaming can find the controller per-chat (parallel-safe).
-    markChatStreaming(currentChat.id, streamId, controller);
-    bg.register(currentChat.id, currentChat.title || 'Chat', controller);
 
     // Per-frame buffer (regenerate path) — per-chat, won't dispose
     // another chat's active buffer.
@@ -2569,6 +2856,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // Call the streaming function with the original user message
+      throwIfRegenerationCancelled();
       await apiClient.generateAIStream(
         {
           provider: selectProvider,
@@ -2642,7 +2930,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           streamBuffersRef.current.delete(currentChat.id);
           // Mirror the failure into BackgroundStreams so the sidebar
           // pill leaves the "streaming" state instead of spinning forever.
-          bg.fail(currentChat.id, error?.message || 'stream failed');
+          if (isRegenerationCancelled()) {
+            bg.cancel(currentChat.id);
+          } else {
+            bg.fail(currentChat.id, error?.message || 'stream failed');
+          }
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             console.error("Streaming failed during regeneration:", error);
 
@@ -2731,20 +3023,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       );
 
     } catch (error) {
-      console.error("Regeneration failed:", error);
+      const cancelled = isRegenerationCancelled() || (error as any)?.name === 'AbortError';
+      if (!cancelled) console.error("Regeneration failed:", error);
       // Defensive: if generateAIStream throws before onError fires, the
       // buffer would otherwise stay alive and flush into a stale tree.
       streamBuffersRef.current.get(currentChat.id)?.dispose();
       streamBuffersRef.current.delete(currentChat.id);
       // Ensure the background stream leaves the "streaming" state even
       // when the failure bypasses the onError callback.
-      bg.fail(currentChat.id, (error as any)?.message || 'stream failed');
+      if (cancelled) {
+        bg.cancel(currentChat.id);
+      } else {
+        bg.fail(currentChat.id, (error as any)?.message || 'stream failed');
+      }
       markChatIdle(currentChat.id, streamId);
-      pendingStopsRef.current.delete(currentChat.id);
+      if (!cancelled) pendingStopsRef.current.delete(currentChat.id);
       setIsLoading(false);
       setIsStreaming(false);
       setCurrentStreamId(null);
-      abortControllerRef.current = null;
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
     }
   };
 
@@ -2802,10 +3099,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     markChatStreaming(currentChat.id, streamId, controller);
     bg.register(currentChat.id, currentChat.title || 'Chat', controller);
     setPendingStopSynced(false, currentChat.id);
+    const isEditRegenerationCancelled = () => (
+      controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)
+    );
+    const throwIfEditRegenerationCancelled = () => {
+      if (!isEditRegenerationCancelled()) return;
+      const cancelled = new Error('Request aborted');
+      cancelled.name = 'AbortError';
+      throw cancelled;
+    };
 
     try {
       // Update the message in the backend. This should also handle deleting subsequent messages.
-      await apiClient.editUserMessage(messageId, { content: newContent });
+      await awaitCancellableChatStep({
+        signal: controller.signal,
+        isPendingStop: () => pendingStopsRef.current.has(currentChat.id),
+        run: () => apiClient.editUserMessage(
+          messageId,
+          { content: newContent },
+          { signal: controller.signal },
+        ),
+      });
 
       const parsedFiles = typeof updatedUserMessage.files === 'string'
         ? JSON.parse(updatedUserMessage.files)
@@ -2831,6 +3145,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         let docPct = 0;
         const renderDocProgress = () => {
           setCurrentChat((prev) => {
+            if (isEditRegenerationCancelled()) return prev;
             if (!prev) return prev;
             const msgs = prev.messages.map((m: any) =>
               m.id === aiMessagePlaceholder.id
@@ -2840,6 +3155,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             return { ...prev, messages: msgs };
           });
         };
+        throwIfEditRegenerationCancelled();
         renderDocProgress();
         try {
           await apiClient.generateDocStream(
@@ -2872,17 +3188,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             { signal: controller.signal },
           );
         } catch (err: any) {
-          if (err?.name !== 'AbortError') {
-            docFinalMsg = docFinalMsg || {
-              id: aiMessagePlaceholder.id,
-              role: 'ASSISTANT',
-              content: `No pude editar el documento: ${err?.message || 'error de red'}.`,
-              files: [],
-            };
-          }
+          if (err?.name === 'AbortError' || isEditRegenerationCancelled()) throw err;
+          docFinalMsg = docFinalMsg || {
+            id: aiMessagePlaceholder.id,
+            role: 'ASSISTANT',
+            content: `No pude editar el documento: ${err?.message || 'error de red'}.`,
+            files: [],
+          };
         }
+        throwIfEditRegenerationCancelled();
         if (docFinalMsg) {
           setCurrentChat((prev) => {
+            if (isEditRegenerationCancelled()) return prev;
             if (!prev) return prev;
             const msgs = prev.messages.map((m: any) =>
               m.id === aiMessagePlaceholder.id ? { ...docFinalMsg, id: docFinalMsg.id || aiMessagePlaceholder.id } : m
@@ -2903,6 +3220,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Per-frame buffer (edit-and-regenerate path) — per-chat.
+      throwIfEditRegenerationCancelled();
       streamBuffersRef.current.get(currentChat.id)?.dispose();
       const editBuffer = createStreamBuffer({
         onFlush: (joined) => {
@@ -2922,6 +3240,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       streamBuffersRef.current.set(currentChat.id, editBuffer);
 
       // Now, generate the new response
+      throwIfEditRegenerationCancelled();
       await apiClient.generateAIStream(
         {
           provider: selectProvider,
@@ -2990,7 +3309,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           streamBuffersRef.current.delete(currentChat.id);
           // Mirror the failure into BackgroundStreams so the sidebar
           // pill leaves the "streaming" state instead of spinning forever.
-          bg.fail(currentChat.id, error?.message || 'stream failed');
+          if (isEditRegenerationCancelled()) {
+            bg.cancel(currentChat.id);
+          } else {
+            bg.fail(currentChat.id, error?.message || 'stream failed');
+          }
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             console.error("Streaming failed during regeneration:", error);
 
@@ -3078,21 +3401,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       );
     } catch (error) {
-      console.error("Failed to edit and regenerate:", error);
+      const cancelled = isEditRegenerationCancelled() || (error as any)?.name === 'AbortError';
+      if (!cancelled) console.error("Failed to edit and regenerate:", error);
       streamBuffersRef.current.get(currentChat.id)?.dispose();
       streamBuffersRef.current.delete(currentChat.id);
       // Ensure the background stream leaves the "streaming" state even
       // when the failure bypasses the onError callback.
-      bg.fail(currentChat.id, (error as any)?.message || 'stream failed');
+      if (cancelled) {
+        bg.cancel(currentChat.id);
+      } else {
+        bg.fail(currentChat.id, (error as any)?.message || 'stream failed');
+      }
       markChatIdle(currentChat.id, streamId);
-      pendingStopsRef.current.delete(currentChat.id);
+      if (!cancelled) pendingStopsRef.current.delete(currentChat.id);
       setIsLoading(false);
       setIsStreaming(false);
       setCurrentStreamId(null);
-      abortControllerRef.current = null;
-      // Revert UI state on failure
-      setCurrentChat(prev => prev ? { ...prev, messages: currentChat.messages } : null);
-      toast.error("No se pudo regenerar la respuesta.");
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      if (!cancelled) {
+        // Revert UI state only for a real failure. Stop already rendered a
+        // terminal marker and must not be overwritten by this late catch.
+        setCurrentChat(prev => prev ? { ...prev, messages: currentChat.messages } : null);
+        toast.error("No se pudo regenerar la respuesta.");
+      }
     }
     // pendingStop is a boolean state read inside the regen loop; the
     // latest closure is captured at call time, so listing it would
@@ -3116,7 +3447,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const pollTimeoutMs = 8 * 60 * 1000;
     let consecutivePollErrors = 0;
     let settled = false;
-    let interval: NodeJS.Timeout | null = null;
+    let pollController: SerializedPreviewPollController | null = null;
     let onAbort = () => {};
 
     const updateVideoMessageStatus = (status: 'failed' | 'cancelled', payload: any = {}) => {
@@ -3162,13 +3493,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const settle = (status: VideoGenerationTerminalStatus, payload?: any) => {
       if (settled) return;
       settled = true;
-      if (interval) clearInterval(interval);
+      pollController?.stop();
+      pollingRegistry.clear(operationId);
       options?.signal?.removeEventListener('abort', onAbort);
-      setPollingIntervals(prev => {
-        const next = new Map(prev);
-        next.delete(operationId);
-        return next;
-      });
       setIsLoading(false);
       options?.onSettled?.(status, payload);
     };
@@ -3184,25 +3511,31 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
     options?.signal?.addEventListener('abort', onAbort, { once: true });
 
-    interval = setInterval(async () => {
-      if (settled) return;
-      if (options?.signal?.aborted) {
-        onAbort();
-        return;
-      }
+    pollController = startSerializedPreviewPoll<any, ReturnType<typeof setTimeout>>({
+      read: async () => {
+        if (options?.signal?.aborted) {
+          const aborted = new Error('Request aborted');
+          aborted.name = 'AbortError';
+          throw aborted;
+        }
+        if (Date.now() - startedAt > pollTimeoutMs) {
+          return { __pollTimeout: true };
+        }
+        return apiClient.getVideoStatus(operationId);
+      },
+      intervalMs: 5000,
+      isCurrent: () => providerMountedRef.current && !settled && !options?.signal?.aborted,
+      onValue: async (statusResponse) => {
+        if (statusResponse?.__pollTimeout) {
+          const timeoutPayload = {
+            error: 'El video tardó demasiado en responder. Intenta de nuevo o cambia de modelo.',
+          };
+          updateVideoMessageStatus('failed', timeoutPayload);
+          void apiClient.cancelVideoGeneration(operationId).catch(() => null);
+          settle('timeout', timeoutPayload);
+          return false;
+        }
 
-      if (Date.now() - startedAt > pollTimeoutMs) {
-        const timeoutPayload = {
-          error: 'El video tardó demasiado en responder. Intenta de nuevo o cambia de modelo.',
-        };
-        updateVideoMessageStatus('failed', timeoutPayload);
-        void apiClient.cancelVideoGeneration(operationId).catch(() => null);
-        settle('timeout', timeoutPayload);
-        return;
-      }
-
-      try {
-        const statusResponse = await apiClient.getVideoStatus(operationId);
         devLog('📊 Video status response:', statusResponse);
         consecutivePollErrors = 0;
 
@@ -3213,38 +3546,43 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             devLog('🔄 Refreshing chat to show final video state');
             await selectChat(targetChatId);
           }
+          if (settled || options?.signal?.aborted) return false;
           if (status === 'failed' || status === 'cancelled') {
             updateVideoMessageStatus(status, statusResponse);
           }
           settle(status as VideoGenerationTerminalStatus, statusResponse);
-          return;
+          return false;
         }
 
         devLog(' Video still processing:', status);
-      } catch (error: any) {
+        return true;
+      },
+      onError: (error: any) => {
         if (options?.signal?.aborted || error?.name === 'AbortError') {
           onAbort();
-          return;
+          return false;
         }
 
         consecutivePollErrors += 1;
         console.error(' Error polling video status:', error);
-        if (consecutivePollErrors < 3) return;
+        if (consecutivePollErrors < 3) return true;
 
         const failurePayload = {
           error: error?.message || 'No se pudo consultar el estado del video.',
         };
         updateVideoMessageStatus('failed', failurePayload);
         settle('error', failurePayload);
-      }
-    }, 5000);
-
-    setPollingIntervals(prev => {
-      const next = new Map(prev);
-      if (interval) next.set(operationId, interval);
-      return next;
+        return false;
+      },
+      schedule: (callback, delayMs) => {
+        const timer = setTimeout(callback, delayMs);
+        pollingRegistry.register(operationId, timer);
+        return timer;
+      },
+      clear: (timer) => clearTimeout(timer),
     });
-  }, [currentChat?.id, selectChat, setCurrentChat]);
+    if (settled) pollController.stop();
+  }, [currentChat?.id, pollingRegistry, selectChat, setCurrentChat]);
 
   const addVideoMessage = useCallback(async (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => {
     const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
@@ -3442,9 +3780,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, [currentChat, user, isAuthenticated, selectChat]);
 
   const pollThesisStatus = useCallback((sessionId: string, messageId: string, chatId: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const statusResponse = await apiClient.getThesisStatus(sessionId);
+    let settled = false;
+    let pollController: SerializedPreviewPollController | null = null;
+    pollController = startSerializedPreviewPoll<any, ReturnType<typeof setTimeout>>({
+      read: () => apiClient.getThesisStatus(sessionId),
+      intervalMs: 2000,
+      isCurrent: () => providerMountedRef.current && !settled,
+      onValue: (statusResponse) => {
 
         // Update message in the specific chat (works for both new and existing chats)
         setChats(prevChats => {
@@ -3598,106 +3940,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         // Stop polling when completed or error
         if (statusResponse.status === 'completed' || statusResponse.status === 'error') {
-          clearInterval(interval);
-          setPollingIntervals(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(sessionId);
-            return newMap;
-          });
+          settled = true;
+          pollController?.stop();
+          pollingRegistry.clear(sessionId);
+          return false;
         }
-      } catch (error) {
+        return true;
+      },
+      onError: (error) => {
         console.error('Error polling thesis status:', error);
-      }
-    }, 2000); // Poll every 2 seconds for more frequent updates
-
-    // Store interval for cleanup
-    setPollingIntervals(prev => {
-      const newMap = new Map(prev);
-      newMap.set(sessionId, interval);
-      return newMap;
+        return true;
+      },
+      schedule: (callback, delayMs) => {
+        const timer = setTimeout(callback, delayMs);
+        pollingRegistry.register(sessionId, timer);
+        return timer;
+      },
+      clear: (timer) => clearTimeout(timer),
     });
-  }, []);
-
-  // Cleanup function for polling intervals
-  React.useEffect(() => {
-    return () => {
-      // Cleanup all polling intervals when component unmounts
-      pollingIntervals.forEach((interval) => {
-        clearInterval(interval);
-      });
-      setPollingIntervals(new Map());
-    };
-    // Empty deps array: cleanup must run only on unmount. Listing
-    // pollingIntervals here would re-run cleanup on every map change,
-    // clearing intervals we're actively polling.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Video polling function
-
-
-  // const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
-  //   const interval = setInterval(async () => {
-  //     try {
-  //       const statusResponse = await apiClient.getVideoStatus(operationId)
-
-  //       if (statusResponse.status === 'completed' || statusResponse.status === 'failed') {
-  //         // Clear interval
-  //         clearInterval(interval)
-  //         setPollingIntervals(prev => {
-  //           const newMap = new Map(prev)
-  //           newMap.delete(operationId)
-  //           return newMap
-  //         })
-
-  //         // Update message in current chat
-  //         if (currentChat) {
-  //           setCurrentChat(prevChat => {
-  //             if (!prevChat) return prevChat
-
-  //             const updatedMessages = prevChat.messages.map(msg => {
-  //               if (msg.id === messageId) {
-  //                 return {
-  //                   ...msg,
-  //                   content: statusResponse.status === 'completed' 
-  //                     ? `Video generated successfully: "${statusResponse.prompt}"`
-  //                     : `Video generation failed: ${statusResponse.error}`,
-  //                   videoData: {
-  //                     ...msg.videoData!,
-  //                     status: statusResponse.status,
-  //                     filename: statusResponse.filename,
-  //                     error: statusResponse.error
-  //                   }
-  //                 }
-  //               }
-  //               return msg
-  //             })
-
-  //             return {
-  //               ...prevChat,
-  //               messages: updatedMessages
-  //             }
-  //           })
-  //         }
-  //       }
-  //     } catch (error) {
-  //       console.error('Error polling video status:', error)
-  //       clearInterval(interval)
-  //       setPollingIntervals(prev => {
-  //         const newMap = new Map(prev)
-  //         newMap.delete(operationId)
-  //         return newMap
-  //       })
-  //     }
-  //   }, 5000) // Poll every 5 seconds
-
-  //   // Store interval for cleanup
-  //   setPollingIntervals(prev => {
-  //     const newMap = new Map(prev)
-  //     newMap.set(operationId, interval)
-  //     return newMap
-  //   })
-  // }, [currentChat])
+  }, [pollingRegistry]);
 
   const updateMessageInChat = useCallback((messageId: string, newContent: string) => {
     setCurrentChat(prevChat => {
@@ -3716,13 +3977,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     })
   }, [])
-
-  // Cleanup polling intervals on unmount
-  useEffect(() => {
-    return () => {
-      pollingIntervals.forEach(interval => clearInterval(interval))
-    }
-  }, [pollingIntervals])
 
   // ────────────────────────────────────────────────────────────────
   // Context split (task #57). The provider still owns all state in a

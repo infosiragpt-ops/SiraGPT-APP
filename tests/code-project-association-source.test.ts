@@ -12,6 +12,7 @@ const sidebar = readFileSync("components/sidebar/sidebar-folders-dropdown.tsx", 
 const company = readFileSync("components/code/agent-company-panel.tsx", "utf8")
 const chat = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
 const codexApi = readFileSync("lib/codex/codex-api.ts", "utf8")
+const codexApiCore = readFileSync("lib/codex/api/core.ts", "utf8")
 const workspaceRoute = readFileSync("lib/code-workspace-route.ts", "utf8")
 
 test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
@@ -48,7 +49,8 @@ test("404s stay actionable and do not silently become a deterministic build", ()
   assert.match(page, /setRouteIssue\(1\)/)
   assert.match(company, /data-testid="company-association-error"/)
   assert.match(company, /codexIdentityIssue\(error\)/)
-  assert.match(codexApi, /company_project_not_found/)
+  assert.match(codexApi, /codexIdentityIssue/)
+  assert.match(codexApiCore, /company_project_not_found/)
   assert.match(chat, /Entorno no disponible/)
   assert.match(chat, /Keep the active mapping intact|active mapping intact/)
 })

@@ -164,4 +164,32 @@ describe("code-chat-sessions", () => {
     const session = store.sessions.find((s) => s.id === sessionId)
     assert.equal(session?.title, "Greeting in Spanish")
   })
+
+  it("preserves the durable run id needed to reconcile cancellation after reload", () => {
+    storage.set(
+      "code-workspace:agent-sessions:v1",
+      JSON.stringify({
+        sessions: [{
+          id: "cancel-session",
+          workspaceId: "local:cancel",
+          title: "CEO Office",
+          turns: [{
+            id: "assistant-cancel",
+            role: "assistant",
+            content: "Trabajo parcial",
+            streaming: true,
+            codexRunId: "run-cancelled",
+            cancellationState: "cancelling",
+          }],
+          createdAt: 1,
+          updatedAt: 2,
+        }],
+        activeByWorkspace: { "local:cancel": "cancel-session" },
+      }),
+    )
+
+    const restored = readCodeChatStore().sessions[0]?.turns[0]
+    assert.equal(restored?.codexRunId, "run-cancelled")
+    assert.equal(restored?.cancellationState, "cancelling")
+  })
 })

@@ -5,6 +5,7 @@
 import type { AgentState } from "./code-agent/types"
 import { defaultAgentState } from "./code-agent/types"
 import { canonicalCodexWorkspaceId } from "./codex-workspace-identity"
+import type { CodexTurnCancellationState } from "./codex/turn-cancellation"
 
 export type CodeChatTurn = {
   id: string
@@ -16,6 +17,8 @@ export type CodeChatTurn = {
   /** Live Codex-style execution phases for the /code agent turn. */
   agentPhases?: CodeAgentPhase[]
   agentLabel?: string
+  /** Durable stop lifecycle. A turn is terminal only after `cancelled`. */
+  cancellationState?: CodexTurnCancellationState
   /** Real action log + Worked-Summary metrics for a turn that did file work. */
   actions?: import("./code-chat-metrics").CodeChatAction[]
   metrics?: import("./code-chat-metrics").CodeChatMetrics
@@ -125,7 +128,11 @@ function sanitizeTurn(raw: unknown): CodeChatTurn | null {
     content: typeof t.content === "string" ? t.content : "",
   }
   if (typeof t.streaming === "boolean") turn.streaming = t.streaming
+  if (typeof t.codexRunId === "string" && t.codexRunId) turn.codexRunId = t.codexRunId
   if (typeof t.agentLabel === "string") turn.agentLabel = t.agentLabel
+  if (t.cancellationState === "cancelling" || t.cancellationState === "failed" || t.cancellationState === "cancelled") {
+    turn.cancellationState = t.cancellationState
+  }
   if (typeof t.voice === "string" && t.voice) turn.voice = t.voice
   if (typeof t.planMs === "number" && Number.isFinite(t.planMs)) {
     turn.planMs = t.planMs

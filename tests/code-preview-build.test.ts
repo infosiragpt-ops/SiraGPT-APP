@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { buildPreviewDocument, projectNeedsDevServer } from "../lib/code-preview-build"
+import {
+  buildPreviewDocument,
+  projectNeedsDevServer,
+  workspacePreviewRevision,
+} from "../lib/code-preview-build"
 
 type F = Record<string, { path: string; language: string; content: string; updatedAt: number }>
 
@@ -14,6 +18,21 @@ function files(map: Record<string, string>): F {
 }
 
 describe("buildPreviewDocument", () => {
+  it("changes the workspace revision for equal-length content edits", () => {
+    const before = files({ "src/App.tsx": "const mode = 'day'" })
+    const after = files({ "src/App.tsx": "const mode = 'sun'" })
+
+    assert.equal(before["src/App.tsx"].content.length, after["src/App.tsx"].content.length)
+    assert.notEqual(workspacePreviewRevision(before), workspacePreviewRevision(after))
+  })
+
+  it("keeps the workspace revision stable across file insertion order", () => {
+    const first = files({ "src/a.ts": "export const a = 1", "src/b.ts": "export const b = 2" })
+    const second = files({ "src/b.ts": "export const b = 2", "src/a.ts": "export const a = 1" })
+
+    assert.equal(workspacePreviewRevision(first), workspacePreviewRevision(second))
+  })
+
   it("empty workspace → empty", () => {
     const r = buildPreviewDocument(files({}), null)
     assert.equal(r.kind, "empty")

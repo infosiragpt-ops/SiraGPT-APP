@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient as api } from '@/lib/api'
 import { cancelTask, resolveApproval } from '@/lib/agent-task-service'
+import { serializeBranchedMessageMetadata } from '@/lib/chat/branch-metadata'
 import {
   authenticatedFetch,
   clearAuthenticatedFetchCsrfCache,
@@ -236,6 +237,44 @@ describe('generateAIStream cookie session CSRF transport', () => {
     }
   })
 
+  it('retries a 409 only when the server explicitly marks the turn retryable', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-turn-retry')
+    mockFetch
+      .mockResolvedValueOnce(jsonError(409, {
+        error: 'turn_in_progress',
+        code: 'turn_in_progress',
+        retryable: true,
+      }))
+      .mockResolvedValueOnce(sseResponse('owner replay'))
+
+    const streamPromise = runStream()
+    await vi.runAllTimersAsync()
+    const { chunks, onClose, onError } = await streamPromise
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(chunks).toEqual(['owner replay'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a payload-mismatch 409', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-turn-conflict')
+    mockFetch.mockResolvedValueOnce(jsonError(409, {
+      error: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+      code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+      retryable: false,
+    }))
+
+    const { chunks, onClose, onError } = await runStream()
+
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(chunks).toEqual([])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0][0].message).toContain('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD')
+  })
+
   it('force-refreshes csrf_invalid once without consuming the provider retry budget', async () => {
     vi.useFakeTimers()
     let refreshed = false
@@ -390,6 +429,87 @@ describe('generateAIStream cookie session CSRF transport', () => {
       expect(options.credentials).toBe('include')
       expect(headers.get('X-CSRF-Token')).toBe('csrf-control')
     }
+  })
+
+  it('mirrors chat body and metadata turn identities into the Idempotency-Key header', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-idempotency')
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ chat: { id: 'chat-1' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { id: 'message-1' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await api.createChat({ title: 'Chat', model: 'model-a', idempotencyKey: 'create-turn-1' })
+    await api.addMessage('chat-1', {
+      role: 'USER',
+      content: 'hola',
+      metadata: JSON.stringify({ idempotencyKey: 'message-turn-1' }),
+    })
+
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('Idempotency-Key')).toBe('create-turn-1')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).get('Idempotency-Key')).toBe('message-turn-1')
+  })
+
+  it('copies a branched USER/ASSISTANT pair with clean metadata and a fresh identity per row', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-branch')
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { id: 'branched-user' } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { id: 'branched-assistant' } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const originalTurnIdentity = {
+      idempotencyKey: 'source-turn',
+      idempotencyRequestHash: 'source-hash',
+      streamId: 'source-stream',
+      turnFingerprint: 'source-fingerprint',
+    }
+    await api.addMessage('branched-chat', {
+      role: 'USER',
+      content: 'pregunta',
+      metadata: serializeBranchedMessageMetadata(JSON.stringify({
+        ...originalTurnIdentity,
+        origin: 'user-copy',
+      })),
+    })
+    await api.addMessage('branched-chat', {
+      role: 'ASSISTANT',
+      content: 'respuesta',
+      metadata: serializeBranchedMessageMetadata({
+        ...originalTurnIdentity,
+        origin: 'assistant-copy',
+      }),
+    })
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const requestKeys = mockFetch.mock.calls.map(([, options]) => (
+      new Headers(options.headers).get('Idempotency-Key')
+    ))
+    expect(requestKeys[0]).toBeTruthy()
+    expect(requestKeys[1]).toBeTruthy()
+    expect(requestKeys[0]).not.toBe('source-turn')
+    expect(requestKeys[1]).not.toBe('source-turn')
+    expect(requestKeys[0]).not.toBe(requestKeys[1])
+
+    const bodies = mockFetch.mock.calls.map(([, options]) => JSON.parse(String(options.body)))
+    expect(bodies.map((body) => body.role)).toEqual(['USER', 'ASSISTANT'])
+    for (const body of bodies) {
+      const metadata = JSON.parse(body.metadata)
+      expect(metadata).not.toHaveProperty('idempotencyKey')
+      expect(metadata).not.toHaveProperty('idempotencyRequestHash')
+      expect(metadata).not.toHaveProperty('streamId')
+      expect(metadata).not.toHaveProperty('turnFingerprint')
+    }
+    expect(JSON.parse(bodies[0].metadata)).toMatchObject({ origin: 'user-copy' })
+    expect(JSON.parse(bodies[1].metadata)).toMatchObject({ origin: 'assistant-copy' })
   })
 
   it('protects standalone agent cancel and approval transports for cookie sessions', async () => {

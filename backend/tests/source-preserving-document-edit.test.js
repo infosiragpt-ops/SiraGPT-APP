@@ -1,6 +1,5 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
-const { execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -40,15 +39,6 @@ async function makeDocxBuffer() {
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
-function hasPdfToText() {
-  try {
-    execFileSync('pdftotext', ['-v'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function makePdfBuffer() {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
@@ -56,19 +46,6 @@ async function makePdfBuffer() {
   page.drawText('SiraGPT banco real PDF', { x: 72, y: 720, size: 16, font, color: rgb(0, 0, 0) });
   page.drawText('Estado: BORRADOR', { x: 72, y: 690, size: 14, font, color: rgb(0, 0, 0) });
   return Buffer.from(await pdf.save());
-}
-
-function extractPdfTextForTest(buffer) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-text-'));
-  const pdfPath = path.join(tmp, 'input.pdf');
-  const txtPath = path.join(tmp, 'output.txt');
-  try {
-    fs.writeFileSync(pdfPath, buffer);
-    execFileSync('pdftotext', [pdfPath, txtPath]);
-    return fs.readFileSync(txtPath, 'utf8');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
 }
 
 async function makeDocxWithAnexo3Buffer() {
@@ -328,6 +305,14 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);
+    // NEW PowerPoint from thesis PDF + images must NOT preserve the PDF as annexes.
+    const thesisPptPrompt = 'realiza una ppt profesional en 30 ppts de forma profesional de la tesis 20 julio Tesis de maestria.pdf en base a las imagenes de forma profesional';
+    assert.equal(isSourcePreservingEditRequest(thesisPptPrompt, ['file-pdf', 'img-1', 'img-2']), false);
+    assert.equal(isSourcePreservingEditRequest('crea una presentacion de 15 diapositivas de este PDF', ['file-pdf']), false);
+    assert.equal(isSourcePreservingEditRequest('genera un powerpoint de defensa de tesis con 20 slides', ['file-pdf']), false);
+    // Surgical edit of an existing PPTX still preserves source.
+    assert.equal(isSourcePreservingEditRequest('cambia el titulo de la diapositiva 3', ['file-pptx']), true);
+    assert.equal(isSourcePreservingEditRequest('edita mi presentacion y corrige la ortografia', ['file-pptx']), true);
     assert.equal(isSourcePreservingEditRequest('reemplaza BORRADOR por APROBADO en los documentos adjuntos y devuelve un DOCX completo', ['file-docx', 'file-xlsx']), true);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
@@ -1868,6 +1853,7 @@ describe('source-preserving DOCX title edits', () => {
     planSourcePreservingOperations,
     setDocxDocumentTitleBuffer,
     validateDocxOperationCriteria,
+    validateEditedBuffer,
   } = sourcePreservingInternals;
 
   it('extracts the new title without swallowing the next requested edit', () => {
@@ -1879,6 +1865,245 @@ describe('source-preserving DOCX title edits', () => {
       extractNamedSectionAppend('Agrega una sección Recomendaciones con dos puntos.'),
       { sectionTitle: 'Recomendaciones' },
     );
+  });
+
+  it('understands the exact live phrasing and never degrades it to an appendix', () => {
+    const prompt = 'quiero que en este mismo word Modelo Informe.docx el titulo le coloques 2027 solo modifica ello';
+    assert.deepEqual(extractDocxTitleChange(prompt), { newTitle: '2027' });
+
+    const operations = planSourcePreservingOperations({
+      requestText: prompt,
+      documentXml: '<w:document><w:body><w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>Modelo Informe 2026</w:t></w:r></w:p></w:body></w:document>',
+    });
+
+    assert.deepEqual(operations.map((operation) => operation.kind), ['set_document_title']);
+    assert.equal(operations[0].newTitle, '2027');
+    assert.equal(operations.some((operation) => operation.kind === 'append_generic'), false);
+  });
+
+  it('changes “de 2026 al 2027” only in a complex multi-run cover title', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-de-al-'));
+    const originalPath = path.join(tmp, 'TSP-profesional.docx');
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new TextRun({ text: 'PROPUESTA PROFESIONAL, LIMA, ', bold: true }),
+            new TextRun({ text: '20', bold: true }),
+            new TextRun({ text: '26', bold: true }),
+          ],
+        }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun('2026')] }),
+        new Paragraph('El cuerpo académico conserva la referencia 2026 sin cambios.'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente que no debe validar una operación equivocada.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+
+    const prompt = 'cambia en el título de 2026 al 2027 en mi mismo Word. Solo modifica ello.';
+    const documentXml = new PizZip(original).file('word/document.xml').asText();
+    const operations = planSourcePreservingOperations({ requestText: prompt, documentXml });
+    assert.deepEqual(operations, [{
+      kind: 'replace_text',
+      needle: '2026',
+      replacement: '2027',
+      scope: 'title',
+    }]);
+    assert.deepEqual(
+      sourcePreservingInternals.extractReplacementPair(
+        'cambia en el título de 2026 al 2027, solo modifica ello',
+      ),
+      { needle: '2026', replacement: '2027' },
+      'separator punctuation must not leak into the Word title',
+    );
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'professional-cover-de-al',
+        path: originalPath,
+        originalName: 'TSP-profesional.docx',
+        filename: 'TSP-profesional.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'PROPUESTA PROFESIONAL, LIMA, 2026. Referencia 2026. ANEXOS.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-title-de-al',
+      chatId: 'chat-title-de-al',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.request_contract, true);
+    assert.equal(result.validation.details.requestContract.type, 'replace_text');
+    assert.equal(result.validation.details.requestContract.details.targetParagraphIndex, 0);
+    assert.equal(result.orchestration.operations[0].changedCount, 1);
+    assert.match(result.file.filename, /_editado\.docx$/);
+    assert.doesNotMatch(result.file.filename, /con_anexos/);
+    assert.match(result.content, /reemplacé el texto solicitado únicamente en el título/);
+    assert.doesNotMatch(result.content, /agregué el contenido solicitado en anexos/);
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded Word must remain immutable');
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const beforeZip = new PizZip(original);
+    const afterZip = new PizZip(edited);
+    const editedXml = afterZip.file('word/document.xml').asText();
+    const paragraphTexts = [...editedXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map((paragraph) => (
+      [...paragraph[0].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
+        .map((textNode) => textNode[1])
+        .join('')
+    ));
+    assert.equal(paragraphTexts[0], 'PROPUESTA PROFESIONAL, LIMA, 2027');
+    assert.doesNotMatch(paragraphTexts[0], /en mi mismo word|solo modifica ello/i);
+    assert.equal(paragraphTexts[1], '2026');
+    assert.match(paragraphTexts[2], /referencia 2026/i);
+    assert.equal(paragraphTexts.filter((text) => text === 'ANEXOS').length, 1);
+    assert.equal((editedXml.match(/<w:p(?:\s|>)/g) || []).length, (documentXml.match(/<w:p(?:\s|>)/g) || []).length);
+    assert.equal((editedXml.match(/<w:sectPr(?:\s|>)/g) || []).length, (documentXml.match(/<w:sectPr(?:\s|>)/g) || []).length);
+
+    for (const name of Object.keys(beforeZip.files)) {
+      if (name === 'word/document.xml' || beforeZip.files[name].dir) continue;
+      assert.equal(
+        beforeZip.file(name).asNodeBuffer().equals(afterZip.file(name).asNodeBuffer()),
+        true,
+        `${name} must remain byte-identical`,
+      );
+    }
+  });
+
+  it('fails closed instead of fabricating ANEXOS for an unresolved title mutation', () => {
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'modifica el título, pero no indico cuál es el texto actual ni el nuevo',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Título actual</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+    );
+
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'modifica el título del anexo 3 desde 2026 hasta 2027',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Anexo 3</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+      'an unresolved title edit must not escape through a section-fill operation',
+    );
+
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'cambia "Estado A" por "Estado B" y modifica el título del anexo 3 desde 2026 hasta 2027',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Estado A</w:t></w:r></w:p><w:p><w:r><w:t>Anexo 3, 2026</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+      'a valid sibling replacement must not hide an unresolved mutation clause',
+    );
+  });
+
+  it('parses “del 2026 al 2027” without leaking the final letter of del', () => {
+    const operations = planSourcePreservingOperations({
+      requestText: 'cambia en el título del 2026 al 2027 en mi mismo Word',
+      documentXml: '<w:document><w:body><w:p><w:r><w:t>LIMA, 2026</w:t></w:r></w:p></w:body></w:document>',
+    });
+    assert.deepEqual(operations, [{
+      kind: 'replace_text',
+      needle: '2026',
+      replacement: '2027',
+      scope: 'title',
+    }]);
+  });
+
+  it('validates a title replacement whose new value contains the old value', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-overlap-'));
+    const originalPath = path.join(tmp, 'informe-2026.docx');
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'INFORME ANUAL 2026', bold: true })],
+        }),
+        new Paragraph('Cuerpo que debe conservarse.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+    const prompt = 'cambia en el título de 2026 a 2026-2027 en mi mismo Word';
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'title-overlap',
+        path: originalPath,
+        originalName: 'informe-2026.docx',
+        filename: 'informe-2026.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'INFORME ANUAL 2026. Cuerpo que debe conservarse.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-title-overlap',
+      chatId: 'chat-title-overlap',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.request_contract, true);
+    assert.equal(result.validation.details.requestContract.details.targetTransformationMatches, true);
+    assert.equal(result.validation.details.requestContract.details.needleAbsentFromTarget, true);
+    const editedXml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(editedXml, /INFORME ANUAL 2026-2027/);
+    assert.doesNotMatch(editedXml, /INFORME ANUAL 2026<\/w:t>/);
+    assert.match(editedXml, /Cuerpo que debe conservarse/);
+  });
+
+  it('does not validate unrelated growth as a generic appendix', async () => {
+    const before = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+      ] }],
+    })));
+    const unrelatedGrowth = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+        new Paragraph('Crecimiento ajeno a la operación solicitada.'),
+      ] }],
+    })));
+    const validation = validateDocxOperationCriteria(
+      unrelatedGrowth,
+      [{ kind: 'append_generic', wantsInstrument: false }],
+      { beforeBuffer: before },
+    );
+    assert.equal(validation.passed, false);
+    assert.equal(validation.checks[0].details.beforeMarkerCount, 1);
+    assert.equal(validation.checks[0].details.afterMarkerCount, 1);
+
+    const misleadingGrowth = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Texto distinto de los bloques que esta ejecución debía agregar.'),
+      ] }],
+    })));
+    const fingerprintValidation = await validateEditedBuffer(
+      misleadingGrowth,
+      'docx',
+      [
+        { kind: 'pageBreak', text: '' },
+        { kind: 'heading1', text: 'ANEXOS' },
+        { kind: 'heading2', text: 'Contenido agregado según solicitud' },
+      ],
+      {
+        beforeBuffer: before,
+        operations: [{ kind: 'append_generic', wantsInstrument: false }],
+        requestText: 'agrega el contenido solicitado como anexo',
+      },
+    );
+    assert.equal(fingerprintValidation.checks.operation_criteria, true, 'the structural gate alone sees a new anchor');
+    assert.equal(fingerprintValidation.checks.content_appended, false, 'the expected block fingerprint is absent');
+    assert.equal(fingerprintValidation.passed, false);
   });
 
   it('plans a native title update instead of replacing the literal word título', async () => {
@@ -2009,6 +2234,233 @@ describe('source-preserving DOCX title edits', () => {
     const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
     assert.match(xml, /Distrito Judicial de Cajamarca/);
     assert.match(xml, /desarrollado en Ayacucho/);
+  });
+
+  it('edits the real DOCX in place, proves its structure, and leaves the uploaded bytes immutable', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-live-title-'));
+    const originalPath = path.join(tmp, 'Modelo Informe.docx');
+    const cell = (text) => new TableCell({ children: [new Paragraph(text)] });
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          style: 'Title',
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'Modelo Informe 2026', bold: true, color: '1F4E79' })],
+        }),
+        new Paragraph('CENTINELA-CUERPO-ORIGINAL-7429'),
+        new Table({ rows: [new TableRow({ children: [cell('Dato fijo A'), cell('Dato fijo B')] })] }),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+
+    const prompt = 'quiero que en este mismo word Modelo Informe.docx el titulo le coloques 2027 solo modifica ello';
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'modelo-informe-live',
+        path: originalPath,
+        originalName: 'Modelo Informe.docx',
+        filename: 'Modelo Informe.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Modelo Informe 2026. CENTINELA-CUERPO-ORIGINAL-7429.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-live-title',
+      chatId: 'chat-live-title',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.source_preserved, true);
+    assert.equal(result.validation.details.sourcePreservation.strictTitleOnly, true);
+    assert.deepEqual(result.validation.details.sourcePreservation.unexpectedlyChangedParts, []);
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded file must never be mutated');
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+    assert.match(xml, /<w:t[^>]*>2027<\/w:t>/);
+    assert.doesNotMatch(xml, /Modelo Informe 2026/);
+    assert.match(xml, /CENTINELA-CUERPO-ORIGINAL-7429/);
+    assert.match(xml, /Dato fijo A/);
+    assert.match(xml, /Dato fijo B/);
+    assert.match(xml, /<w:b\/>/);
+    assert.match(xml, /w:color w:val="1F4E79"/);
+    assert.doesNotMatch(xml, />ANEXOS</);
+  });
+
+  it('edits only the explicitly requested DOCX family when PDF files are also attached', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-live-title-batch-'));
+    const makeSource = async (filename, title, sentinel) => {
+      const sourcePath = path.join(tmp, filename);
+      const buffer = Buffer.from(await Packer.toBuffer(new Document({
+        sections: [{ children: [
+          new Paragraph({ style: 'Title', children: [new TextRun({ text: title, bold: true })] }),
+          new Paragraph(sentinel),
+          new Table({ rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph(`Tabla ${sentinel}`)] })] })] }),
+        ] }],
+      })));
+      fs.writeFileSync(sourcePath, buffer);
+      return { sourcePath, buffer };
+    };
+    const first = await makeSource('Informe Norte.docx', 'Informe Norte 2026', 'CENTINELA-NORTE-101');
+    const second = await makeSource('Informe Sur.docx', 'Informe Sur 2026', 'CENTINELA-SUR-202');
+    const referencePdfPath = path.join(tmp, 'Referencia.pdf');
+    const referencePdf = await makePdfBuffer();
+    fs.writeFileSync(referencePdfPath, referencePdf);
+    const rows = [
+      {
+        id: 'batch-north', userId: 'user-batch', filename: 'Informe Norte.docx', originalName: 'Informe Norte.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: first.buffer.length,
+        path: first.sourcePath, extractedText: 'Informe Norte 2026. CENTINELA-NORTE-101.',
+      },
+      {
+        id: 'batch-south', userId: 'user-batch', filename: 'Informe Sur.docx', originalName: 'Informe Sur.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: second.buffer.length,
+        path: second.sourcePath, extractedText: 'Informe Sur 2026. CENTINELA-SUR-202.',
+      },
+      {
+        id: 'batch-reference-pdf', userId: 'user-batch', filename: 'Referencia.pdf', originalName: 'Referencia.pdf',
+        mimeType: 'application/pdf', size: referencePdf.length,
+        path: referencePdfPath, extractedText: 'SiraGPT banco real PDF. Estado: BORRADOR.',
+      },
+    ];
+    const prisma = {
+      file: { async findMany() { return [...rows].reverse(); } },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+    const prompt = 'quiero que en ambos Word el título le coloques 2027; solo modifica eso y devuélveme ambos archivos';
+
+    assert.equal(sourcePreservingInternals.requestWantsBatchDocumentEdit(prompt, [
+      { ...rows[0], source: 'current_upload' },
+      { ...rows[2], source: 'current_upload' },
+    ]), false, 'one matching Word plus another family must not activate batch mode');
+    assert.deepEqual(
+      sourcePreservingInternals.selectBatchDocumentSources(prompt, rows.map((row) => ({ ...row, source: 'current_upload' })))
+        .map((file) => file.id),
+      ['batch-north', 'batch-south'],
+    );
+    assert.deepEqual(
+      sourcePreservingInternals.selectBatchDocumentSources(
+        'reemplaza BORRADOR en todos los documentos y devuelve un DOCX completo',
+        rows.map((row) => ({ ...row, source: 'current_upload' })),
+      ).map((file) => file.id),
+      ['batch-north', 'batch-south', 'batch-reference-pdf'],
+      'an output-format mention must not narrow an otherwise generic batch',
+    );
+
+    const familyBatchCases = [
+      ['en cada Word cambia el título', 'word', 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['en cada PDF cambia el título', 'pdf', 'pdf', 'application/pdf'],
+      ['en cada Excel cambia el título', 'excel', 'xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['en ambos PowerPoint cambia el título', 'powerpoint', 'pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ];
+    for (const [familyPrompt, family, extension, mimeType] of familyBatchCases) {
+      const familyRows = [1, 2].map((index) => ({
+        id: `${family}-${index}`,
+        originalName: `${family}-${index}.${extension}`,
+        filename: `${family}-${index}.${extension}`,
+        mimeType,
+        source: 'current_upload',
+      }));
+      assert.equal(
+        sourcePreservingInternals.requestWantsBatchDocumentEdit(familyPrompt, familyRows),
+        true,
+        `${familyPrompt} must activate one edited copy per matching upload`,
+      );
+    }
+
+    for (const genericPrompt of [
+      'edita los documentos adjuntos y cambia el título a 2027',
+      'en los documentos adjuntos cambia el título a 2027',
+      'edita mis archivos cargados y cambia el título a 2027',
+      'en los archivos subidos cambia el título a 2027',
+    ]) {
+      assert.equal(
+        sourcePreservingInternals.requestWantsBatchDocumentEdit(
+          genericPrompt,
+          rows.slice(0, 2).map((row) => ({ ...row, source: 'current_upload' })),
+        ),
+        true,
+        `${genericPrompt} must edit every attached document independently`,
+      );
+    }
+    const bareBatchPlan = sourcePreservingInternals.planSourcePreservingOperations({
+      requestText: 'edita los documentos adjuntos y cambia el título a 2027; solo modifica eso y devuélveme ambos archivos',
+      documentXml: new PizZip(first.buffer).file('word/document.xml').asText(),
+    });
+    assert.deepEqual(
+      bareBatchPlan.map((operation) => operation.kind),
+      ['set_document_title'],
+      'attachment scope and delivery wording must not manufacture an ANEXOS operation',
+    );
+    const strictBatch = sourcePreservingInternals.buildBatchEditResult({
+      attempts: [
+        {
+          ok: true,
+          sourceFile: { id: 'invalid-truthy', originalName: 'truthy.docx' },
+          result: {
+            validation: { passed: 'true' },
+            artifact: { id: 'truthy-artifact', filename: 'truthy.docx' },
+            file: { filename: 'truthy.docx' },
+          },
+        },
+        {
+          ok: true,
+          sourceFile: { id: 'valid-boolean', originalName: 'valid.docx' },
+          result: {
+            validation: { passed: true },
+            artifact: { id: 'valid-artifact', filename: 'valid.docx' },
+            file: { filename: 'valid.docx' },
+          },
+        },
+      ],
+    });
+    assert.deepEqual(strictBatch.results.map((item) => item.artifact.id), ['valid-artifact']);
+    assert.equal(strictBatch.failures[0].sourceFileId, 'invalid-truthy');
+    assert.equal(
+      sourcePreservingInternals.requestWantsBatchDocumentEdit(
+        'fusiona los documentos adjuntos en un solo archivo',
+        rows.slice(0, 2).map((row) => ({ ...row, source: 'current_upload' })),
+      ),
+      false,
+      'a merge request must remain a single combined deliverable',
+    );
+
+    const result = await tryGenerateSourcePreservingDocumentEdit({
+      prisma,
+      userId: 'user-batch',
+      chatId: 'chat-batch',
+      fileIds: ['batch-north', 'batch-south', 'batch-reference-pdf'],
+      prompt,
+      displayPrompt: prompt,
+    });
+
+    assert.equal(result.batch, true);
+    assert.equal(result.partial, false);
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.results.length, 2);
+    assert.deepEqual(result.results.map((item) => item.sourceFileId), ['batch-north', 'batch-south'],
+      'batch source identity must survive even when file-version persistence is unavailable');
+    assert.equal(new Set(result.artifacts.map((artifact) => artifact.id)).size, 2);
+    assert.equal(fs.readFileSync(first.sourcePath).equals(first.buffer), true);
+    assert.equal(fs.readFileSync(second.sourcePath).equals(second.buffer), true);
+    assert.equal(fs.readFileSync(referencePdfPath).equals(referencePdf), true);
+    assert.equal(result.orchestration.requestedDocuments, 2);
+    assert.equal(result.orchestration.perDocument.some((document) => document.sourceFileId === 'batch-reference-pdf'), false);
+
+    const proofs = [
+      { result: result.results[0], own: 'CENTINELA-NORTE-101', other: 'CENTINELA-SUR-202' },
+      { result: result.results[1], own: 'CENTINELA-SUR-202', other: 'CENTINELA-NORTE-101' },
+    ];
+    for (const proof of proofs) {
+      assert.equal(proof.result.validation.passed, true);
+      assert.equal(proof.result.validation.checks.source_preserved, true);
+      const xml = new PizZip(fs.readFileSync(proof.result.artifact.path)).file('word/document.xml').asText();
+      assert.match(xml, /<w:t[^>]*>2027<\/w:t>/);
+      assert.match(xml, new RegExp(proof.own));
+      assert.doesNotMatch(xml, new RegExp(proof.other));
+      assert.doesNotMatch(xml, />ANEXOS</);
+    }
   });
 });
 
@@ -2254,6 +2706,12 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
 
     const generic = planGenericOfficeOperations({ requestText: prompt, format: 'docx' });
     assert.equal(generic.filter((op) => op.kind === 'replace_text')[1].replacement, 'APROBADO');
+
+    const literalPrompt = 'reemplaza "el documento" por "La política conserva tus datos y devuélveme seguridad"';
+    assert.deepEqual(extractAllQuotedReplacementPairs(literalPrompt), [{
+      needle: 'el documento',
+      replacement: 'La política conserva tus datos y devuélveme seguridad',
+    }], 'quoted needles and replacements must stay literal');
   });
 
   it('parses natural "cambia de X por Y" without gluing the Spanish "de" onto the needle', () => {
@@ -2581,34 +3039,44 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.match(text, /matriz de riesgos/i);
   });
 
-  it('rewrites PDF text for explicit replacement requests instead of only appending', { skip: hasPdfToText() ? false : 'pdftotext unavailable' }, async () => {
+  it('fails closed for PDF text replacement or deletion instead of rebuilding and losing formatting', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-generic-'));
     const originalPath = path.join(tmp, 'estado.pdf');
-    fs.writeFileSync(originalPath, await makePdfBuffer());
+    const original = await makePdfBuffer();
+    fs.writeFileSync(originalPath, original);
+    const sourceFile = {
+      id: 'file-pdf',
+      path: originalPath,
+      originalName: 'estado.pdf',
+      filename: 'estado.pdf',
+      mimeType: 'application/pdf',
+      extractedText: 'SiraGPT banco real PDF\nEstado: BORRADOR',
+    };
 
-    const result = await generateSourcePreservingDocumentEdit({
-      sourceFile: {
-        id: 'file-pdf',
-        path: originalPath,
-        originalName: 'estado.pdf',
-        filename: 'estado.pdf',
-        mimeType: 'application/pdf',
-        extractedText: 'SiraGPT banco real PDF\nEstado: BORRADOR',
-      },
-      prompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
-      displayPrompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
-      userId: 'user-office',
-      chatId: 'chat-office',
-    });
+    for (const prompt of [
+      'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      'elimina BORRADOR de este PDF y devuelve el mismo PDF',
+    ]) {
+      await assert.rejects(
+        () => generateSourcePreservingDocumentEdit({
+          sourceFile,
+          prompt,
+          displayPrompt: prompt,
+          userId: 'user-office',
+          chatId: 'chat-office',
+        }),
+        (error) => {
+          assert.equal(error.code, 'PDF_TEXT_EDIT_PRESERVATION_UNSUPPORTED');
+          assert.equal(error.validationOnlyFailure, true);
+          assert.match(error.message, /PDF/);
+          assert.match(error.message, /DOCX\/Word/);
+          assert.match(error.message, /diseño, imágenes y estructura/);
+          return true;
+        },
+      );
+    }
 
-    assert.equal(result.format, 'pdf');
-    assert.equal(result.validation.passed, true);
-    assert.equal(result.validation.checks.operation_criteria, true);
-    assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
-
-    const text = extractPdfTextForTest(fs.readFileSync(result.artifact.path));
-    assert.match(text, /APROBADO/);
-    assert.doesNotMatch(text, /BORRADOR/);
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded PDF must remain byte-identical');
   });
 
   it('replaces and deletes PPTX slide text without rebuilding the deck', async () => {
