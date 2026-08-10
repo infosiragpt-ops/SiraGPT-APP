@@ -7,10 +7,8 @@ import {
   ArrowUpRight,
   BadgeCheck,
   Building2,
-  CircleAlert,
   CircleDollarSign,
   CloudSun,
-  Clock3,
   FileWarning,
   Layers3,
   Loader2,
@@ -27,8 +25,11 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Slider } from "@/components/ui/slider"
-import type { AgentOfficeModel, AgentOfficeWorker } from "@/lib/agent-office-model"
+import type {
+  AgentOfficeDepartment,
+  AgentOfficeModel,
+  AgentOfficeWorker,
+} from "@/lib/agent-office-model"
 import {
   nextOfficeTimeMode,
   officeTimePhaseModeLabel,
@@ -47,6 +48,18 @@ type AgentOfficeOverlayProps = {
   model: AgentOfficeModel
   onClose: () => void
   onOpenWorker: (worker: AgentOfficeWorker) => void
+  onOpenDepartment: (departmentId: string) => void
+  onOpenDashboard: () => void
+  onOpenControl: () => void
+  onOpenFiles: () => void
+  onOpenResources: () => void
+}
+
+type OfficeDestination = {
+  id: "office" | "dashboard" | "control" | "files" | "resources"
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  action?: () => void
 }
 
 const ACTIVITY_LABELS = {
@@ -59,21 +72,12 @@ const ACTIVITY_LABELS = {
   security: "Seguridad",
 } as const
 
-function relativeTime(timestamp: number): string {
-  if (!timestamp || !Number.isFinite(timestamp)) return "Sin actividad registrada"
-  const diff = Math.max(0, Date.now() - timestamp)
-  if (diff < 60_000) return "Ahora"
-  if (diff < 3_600_000) return `Hace ${Math.max(1, Math.floor(diff / 60_000))} min`
-  if (diff < 86_400_000) return `Hace ${Math.max(1, Math.floor(diff / 3_600_000))} h`
-  return `Hace ${Math.max(1, Math.floor(diff / 86_400_000))} d`
-}
-
-function statusDot(worker: AgentOfficeWorker) {
-  if (worker.blocker) return "bg-amber-400"
-  if (worker.statusTone === "active") return "bg-sky-400"
-  if (worker.statusTone === "ready") return "bg-emerald-400"
-  if (worker.statusTone === "attention") return "bg-amber-400"
-  return "bg-zinc-400"
+const EVIDENCE_LABELS: Record<NonNullable<AgentOfficeWorker["evidenceReview"]>, string> = {
+  pending: "Pendiente de CEO",
+  approved: "Aprobada",
+  changes_requested: "Cambios solicitados",
+  rejected: "Rechazada",
+  blocked: "Bloqueada",
 }
 
 function money(value: number | null | undefined): string {
@@ -81,21 +85,24 @@ function money(value: number | null | undefined): string {
   return `$${value.toFixed(value >= 10 ? 2 : 3)}`
 }
 
-function evidenceLabel(status: AgentOfficeWorker["evidenceReview"]): string {
-  switch (status) {
-    case "pending":
-      return "Pendiente de CEO"
-    case "approved":
-      return "Aprobada"
-    case "changes_requested":
-      return "Cambios pedidos"
-    case "rejected":
-      return "Rechazada"
-    case "blocked":
-      return "Bloqueada"
-    default:
-      return "Sin evidencia"
-  }
+function workerTone(worker: AgentOfficeWorker): string {
+  if (worker.blocker || worker.statusTone === "attention") return "bg-amber-400"
+  if (worker.statusTone === "active") return "bg-sky-400"
+  if (worker.statusTone === "ready") return "bg-emerald-400"
+  return "bg-slate-500"
+}
+
+function departmentTone(department: AgentOfficeDepartment): string {
+  if (department.blockers.length > 0 || department.commandStatus === "blocked") return "bg-rose-400"
+  if (department.activeCount > 0 || department.commandStatus === "active") return "bg-sky-400"
+  if (department.commandStatus === "queued") return "bg-amber-400"
+  return "bg-slate-500"
+}
+
+function focusableElements(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => !element.hasAttribute("hidden") && element.offsetParent !== null)
 }
 
 export function AgentOfficeOverlay({
@@ -104,23 +111,48 @@ export function AgentOfficeOverlay({
   model,
   onClose,
   onOpenWorker,
+  onOpenDepartment,
+  onOpenDashboard,
+  onOpenControl,
+  onOpenFiles,
+  onOpenResources,
 }: AgentOfficeOverlayProps) {
   const [mounted, setMounted] = React.useState(false)
   const [paused, setPaused] = React.useState(false)
   const [activeOnly, setActiveOnly] = React.useState(false)
-  const [departmentId, setDepartmentId] = React.useState("all")
+  const [departmentFilter, setDepartmentFilter] = React.useState("all")
+  const [selectedDepartmentId, setSelectedDepartmentId] = React.useState<string | null>(null)
   const [selectedWorkerId, setSelectedWorkerId] = React.useState<string | null>(null)
-  const [rosterOpen, setRosterOpen] = React.useState(false)
-  const [resetCameraKey, setResetCameraKey] = React.useState(0)
+  const [drawerOpen, setDrawerOpen] = React.useState(false)
+  const [cameraCommand, setCameraCommand] = React.useState<{
+    type: "reset" | "zoom-in" | "zoom-out"
+    nonce: number
+  }>({ type: "reset", nonce: 0 })
   const [timeMode, setTimeMode] = React.useState<OfficeTimeMode>("auto")
   const [localClock, setLocalClock] = React.useState(() => new Date())
+  const dialogRef = React.useRef<HTMLDivElement>(null)
+  const closeButtonRef = React.useRef<HTMLButtonElement>(null)
+  const previousFocusRef = React.useRef<HTMLElement | null>(null)
+  const restoreFocusRef = React.useRef(true)
+  const onCloseRef = React.useRef(onClose)
+
   const timeOfDay = resolveOfficeTimeOfDay(timeMode, localClock)
-  // The clock below re-reads the real local time every minute, so on "auto" the
-  // office moves through dawn → day → dusk → night on its own.
   const timePhase = resolveOfficeTimePhase(timeMode, localClock)
   const timeLabel = officeTimePhaseModeLabel(timeMode, timePhase)
+  const logicalAgentCount = model.departments.reduce(
+    (total, department) => total + Math.max(1, department.pool.size),
+    0,
+  )
+  const queuedTasks = model.departments.reduce(
+    (total, department) => total + department.tasksQueued,
+    0,
+  )
 
   React.useEffect(() => setMounted(true), [])
+
+  React.useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   React.useEffect(() => {
     if (!open) return
@@ -131,87 +163,127 @@ export function AgentOfficeOverlay({
 
   React.useEffect(() => {
     if (!open) return
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    restoreFocusRef.current = true
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = "hidden"
+    const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0)
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose()
+      if (event.key === "Escape") {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return
+      const items = focusableElements(dialogRef.current)
+      if (items.length === 0) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => {
+      window.clearTimeout(focusTimer)
       document.body.style.overflow = previousOverflow
       window.removeEventListener("keydown", onKeyDown)
+      if (restoreFocusRef.current) previousFocusRef.current?.focus()
     }
-  }, [onClose, open])
+  }, [open])
 
   React.useEffect(() => {
-    if (departmentId !== "all" && !model.departments.some((department) => department.id === departmentId)) {
-      setDepartmentId("all")
+    if (!open) {
       setSelectedWorkerId(null)
+      setSelectedDepartmentId(null)
+      setDrawerOpen(false)
     }
-  }, [departmentId, model.departments])
+  }, [open])
+
+  React.useEffect(() => {
+    if (departmentFilter !== "all" && !model.departments.some((row) => row.id === departmentFilter)) {
+      setDepartmentFilter("all")
+    }
+  }, [departmentFilter, model.departments])
 
   const visibleModel = React.useMemo<AgentOfficeModel>(() => {
     const departments = model.departments
-      .filter((department) => departmentId === "all" || department.id === departmentId)
+      .filter((department) => departmentFilter === "all" || department.id === departmentFilter)
       .map((department) => {
-        const workers = activeOnly
-          ? department.workers.filter((worker) => worker.active)
-          : department.workers
-        return {
-          ...department,
-          workers,
-          activeCount: workers.filter((worker) => worker.active).length,
-        }
+        const workers = activeOnly ? department.workers.filter((worker) => worker.active) : department.workers
+        return { ...department, workers, activeCount: workers.filter((worker) => worker.active).length }
       })
-      .filter((department) => !activeOnly || department.workers.length > 0 || departmentId === department.id)
+      .filter((department) => !activeOnly || department.workers.length > 0 || departmentFilter === department.id)
     const workers = departments.flatMap((department) => department.workers)
     return {
       departments,
       workers,
       activeCount: workers.filter((worker) => worker.active).length,
       totalCount: workers.length,
-      // Keep company-wide operational truth even when the roster is filtered.
       truth: model.truth,
     }
-  }, [activeOnly, departmentId, model])
+  }, [activeOnly, departmentFilter, model])
+
+  const selectedWorker = model.workers.find((worker) => worker.id === selectedWorkerId) || null
+  const selectedDepartment = model.departments.find((row) => row.id === selectedDepartmentId) || null
   const sound = useOfficeSoundscape({
     active: open,
     timeOfDay,
     timePhase,
     paused,
     activeCount: visibleModel.activeCount,
-    attentionCount:
-      model.truth.blockedMissions + model.truth.latestBlockers.length,
+    attentionCount: model.truth.blockedMissions + model.truth.latestBlockers.length,
     approvalCount: model.truth.pendingApprovals,
   })
 
-  React.useEffect(() => {
-    if (!open) {
-      setSelectedWorkerId(null)
-      setRosterOpen(false)
-    }
-  }, [open])
+  const leaveOffice = React.useCallback((action: () => void) => {
+    restoreFocusRef.current = false
+    onClose()
+    action()
+  }, [onClose])
 
-  const selectedWorker =
-    model.workers.find((worker) => worker.id === selectedWorkerId) || null
-  const truth = model.truth
-  const focusedDepartment =
-    departmentId === "all"
-      ? null
-      : model.departments.find((department) => department.id === departmentId) || null
+  const destinations: OfficeDestination[] = [
+    { id: "office", label: "Vista 3D", icon: Building2 },
+    { id: "dashboard", label: "Panel", icon: Layers3, action: onOpenDashboard },
+    { id: "control", label: "Controlar", icon: Activity, action: onOpenControl },
+    { id: "files", label: "Archivos", icon: FileWarning, action: onOpenFiles },
+    { id: "resources", label: "Recursos", icon: CircleDollarSign, action: onOpenResources },
+  ]
+
+  const sendCameraCommand = React.useCallback((type: "reset" | "zoom-in" | "zoom-out") => {
+    setCameraCommand((current) => ({ type, nonce: current.nonce + 1 }))
+  }, [])
 
   if (!mounted || !open) return null
 
+  const truth = model.truth
+  const healthLabel = truth.readinessStatus === "ready"
+    ? "Operativo"
+    : truth.readinessStatus === "blocked"
+      ? "Bloqueado"
+      : truth.readinessStatus === "attention" || truth.latestBlockers.length > 0
+        ? "Atención"
+        : "En observación"
   return createPortal(
     <div
-      className="fixed inset-0 z-[140] isolate overflow-hidden bg-[#dce5e9] text-zinc-950"
+      ref={dialogRef}
+      className="fixed inset-0 z-[140] isolate overflow-hidden bg-slate-950 text-slate-100"
       role="dialog"
       aria-modal="true"
-      aria-label={`Oficina de agentes de ${companyName}`}
+      aria-labelledby="agent-office-title"
       data-testid="agent-office-overlay"
       data-office-time={timeOfDay}
       data-office-phase={timePhase}
       data-office-sound={sound.state}
+      data-department-count={model.departments.length}
+      data-logical-agent-count={logicalAgentCount}
+      data-interactive-worker-count={model.workers.length}
     >
       <AgentOfficeScene
         model={visibleModel}
@@ -219,480 +291,262 @@ export function AgentOfficeOverlay({
         timeOfDay={timeOfDay}
         timePhase={timePhase}
         selectedWorkerId={selectedWorkerId}
-        resetCameraKey={resetCameraKey}
-        className={cn(rosterOpen && "sm:w-[calc(100%_-_360px)]")}
+        cameraCommand={cameraCommand}
         onSelectWorker={(workerId) => {
+          const worker = model.workers.find((row) => row.id === workerId)
           setSelectedWorkerId(workerId)
-          setRosterOpen(true)
-          window.setTimeout(() => setResetCameraKey((current) => current + 1), 50)
+          setSelectedDepartmentId(worker?.departmentId || null)
+          setDrawerOpen(true)
         }}
-        onSelectDepartment={(nextDepartmentId) => {
-          setDepartmentId(nextDepartmentId)
+        onSelectDepartment={(departmentId) => {
           setSelectedWorkerId(null)
+          setSelectedDepartmentId(departmentId)
+          setDrawerOpen(true)
         }}
       />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex min-h-[68px] items-center gap-3 border-b border-white/65 bg-white/[0.9] px-3 py-2 shadow-[0_14px_38px_-26px_rgba(15,23,42,0.68)] backdrop-blur-xl sm:px-5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-16 items-center border-b border-white/10 bg-slate-950/95 px-3 shadow-2xl backdrop-blur-2xl sm:px-5">
         <div className="pointer-events-auto flex min-w-0 items-center gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white shadow-sm">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-slate-800 to-slate-900 text-sky-300 shadow-lg">
             <Building2 className="h-5 w-5" />
           </span>
-          <span className="min-w-0 max-w-[92px] sm:max-w-[280px]">
-            <span className="block truncate text-sm font-semibold sm:text-base">{companyName}</span>
-            <span className="hidden truncate text-[11px] text-zinc-500 sm:block">
-              Oficina operativa · pools reales · {timeLabel}
+          <span className="min-w-0">
+            <span id="agent-office-title" className="block truncate text-sm font-semibold sm:text-base">Oficina de agentes</span>
+            <span className="block max-w-44 truncate text-[11px] text-slate-400 sm:max-w-[420px]">
+              {companyName} · {healthLabel} · {model.departments.length} departamentos · {logicalAgentCount} puestos
             </span>
           </span>
         </div>
 
-        <div className="pointer-events-auto ml-auto hidden items-center gap-1.5 lg:flex" data-testid="agent-office-truth-chips">
-          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                model.activeCount > 0 ? "animate-pulse bg-sky-500" : "bg-zinc-300",
-              )}
-            />
-            {truth.occupiedDesks}/{truth.physicalAgents || model.totalCount} puestos
-          </span>
-          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <CircleDollarSign className="h-3.5 w-3.5 text-zinc-500" />
-            {money(truth.costTodayUsd)}
-            {truth.dailyBudgetUsd != null ? ` / ${money(truth.dailyBudgetUsd)}` : ""}
-          </span>
-          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <BadgeCheck className="h-3.5 w-3.5 text-zinc-500" />
-            {truth.pendingApprovals} aprob.
-          </span>
-          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <ShieldAlert className="h-3.5 w-3.5 text-zinc-500" />
-            {truth.latestBlockers.length} bloqueos
-          </span>
-          <span className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-200/80 bg-white/75 px-2.5 text-xs font-medium">
-            <Layers3 className="h-3.5 w-3.5 text-zinc-500" />
-            {model.departments.length} depts
-          </span>
-        </div>
-
-        <div className="pointer-events-auto flex items-center gap-0.5 rounded-md border border-zinc-200/80 bg-white/70 p-1 shadow-sm">
+        <div className="pointer-events-auto ml-auto flex items-center gap-1 rounded-xl border border-white/10 bg-slate-800/90 p-1">
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="hidden h-10 w-10 rounded-md bg-transparent sm:inline-flex"
+            className="hidden h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white sm:inline-flex"
             onClick={() => setTimeMode((current) => nextOfficeTimeMode(current))}
             aria-label={`Ambiente ${timeLabel}. Cambiar ciclo de luz`}
             title={`Ambiente ${timeLabel}`}
             data-testid="agent-office-time-toggle"
           >
-            {timeMode === "auto" ? (
-              <Clock3 className="h-4 w-4" />
-            ) : timeMode === "dusk" || timeMode === "dawn" ? (
-              <CloudSun className="h-4 w-4" />
-            ) : timeOfDay === "day" ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
+            {timeMode === "auto" ? <CloudSun className="h-4 w-4" /> : timeOfDay === "day" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className={cn(
-              "h-10 w-10 rounded-md bg-transparent",
-              sound.enabled &&
-                sound.state !== "unavailable" &&
-                "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white",
-            )}
+            className="hidden h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white sm:inline-flex"
             onClick={sound.toggle}
-            aria-label={
-              sound.state === "unavailable"
-                ? "Reintentar sonido de la oficina"
-                : sound.enabled
-                  ? "Desactivar sonido de la oficina"
-                  : "Activar sonido de la oficina"
-            }
-            title={
-              sound.state === "loading"
-                ? "Preparando audio"
-                : sound.state === "elevenlabs"
-                  ? "Audio ElevenLabs activo"
-                  : sound.state === "blocked"
-                    ? "Toca para activar el audio"
-                    : sound.state === "unavailable"
-                      ? "Reintentar audio"
-                      : sound.enabled
-                        ? "Audio activo"
-                        : "Activar audio"
-            }
+            aria-label={sound.enabled ? "Desactivar sonido de la oficina" : "Activar sonido de la oficina"}
             data-testid="agent-office-sound-toggle"
           >
-            {sound.state === "loading" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : sound.enabled && sound.state !== "unavailable" ? (
-              <Volume2 className="h-4 w-4" />
-            ) : (
-              <VolumeX className="h-4 w-4" />
-            )}
+            {sound.state === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : sound.enabled && sound.state !== "unavailable" ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-10 w-10 rounded-md bg-transparent"
+            className="hidden h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white sm:inline-flex"
             onClick={() => setPaused((current) => !current)}
             aria-label={paused ? "Reanudar oficina" : "Pausar oficina"}
-            title={paused ? "Reanudar oficina" : "Pausar oficina"}
           >
             {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
           </Button>
           <Button
+            ref={closeButtonRef}
             type="button"
             variant="ghost"
             size="icon"
-            className="hidden h-10 w-10 rounded-md bg-transparent sm:inline-flex"
-            onClick={() => setResetCameraKey((current) => current + 1)}
-            aria-label="Restablecer cámara"
-            title="Restablecer cámara"
-          >
-            <RotateCcw className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn("h-10 w-10 rounded-md bg-transparent", rosterOpen && "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white")}
-            onClick={() => setRosterOpen((current) => !current)}
-            aria-label="Ver agentes"
-            title="Ver agentes"
-          >
-            <Users className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 rounded-md bg-transparent"
+            className="h-10 w-10 rounded-lg text-slate-200 hover:bg-white/10 hover:text-white"
             onClick={onClose}
             aria-label="Cerrar oficina"
-            title="Cerrar oficina"
           >
             <X className="h-5 w-5" />
           </Button>
         </div>
       </header>
 
-      <div className="pointer-events-none absolute left-3 right-3 top-[78px] z-20 flex items-center gap-2 sm:left-5 sm:right-auto sm:max-w-[720px]">
-        <div className="pointer-events-auto flex h-10 shrink-0 items-center rounded-md border border-white/75 bg-white/90 p-1 shadow-sm backdrop-blur-xl">
+      <nav className="pointer-events-auto absolute bottom-20 left-4 top-20 z-20 hidden w-64 flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/90 shadow-2xl backdrop-blur-2xl lg:flex" aria-label="Navegación de la oficina">
+        <div className="border-b border-white/10 p-2">
+          {destinations.map((destination) => {
+            const Icon = destination.icon
+            return (
+              <button
+                key={destination.id}
+                type="button"
+                className={cn(
+                  "flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
+                  destination.id === "office" ? "bg-sky-400/10 text-sky-200" : "text-slate-300 hover:bg-white/[0.06] hover:text-white",
+                )}
+                aria-current={destination.id === "office" ? "page" : undefined}
+                onClick={() => destination.action && leaveOffice(destination.action)}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {destination.label}
+                {destination.action ? <ArrowUpRight className="ml-auto h-3.5 w-3.5 text-slate-500" /> : null}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex items-center justify-between px-4 pb-2 pt-4">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Departamentos</p>
+            <p className="mt-1 text-xs text-slate-400">{model.departments.length} zonas conectadas</p>
+          </div>
+          <Layers3 className="h-4 w-4 text-slate-500" />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3" data-testid="agent-office-department-list">
+          {model.departments.map((department) => (
+            <button
+              key={department.id}
+              type="button"
+              className={cn(
+                "group flex min-h-[54px] w-full items-center gap-3 rounded-xl px-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
+                selectedDepartmentId === department.id ? "bg-white/[0.09]" : "hover:bg-white/[0.055]",
+              )}
+              onClick={() => {
+                setSelectedWorkerId(null)
+                setSelectedDepartmentId(department.id)
+                setDrawerOpen(true)
+              }}
+              data-department-id={department.id}
+            >
+              <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", departmentTone(department))} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-semibold text-slate-200">{department.name}</span>
+                <span className="mt-1 block text-[10px] text-slate-500">
+                  {department.activeCount} activos · {department.pool.size} puestos
+                </span>
+              </span>
+              <ArrowUpRight className="h-3.5 w-3.5 text-slate-600 group-hover:text-slate-300" />
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <div className="pointer-events-none absolute left-3 right-3 top-20 z-20 flex items-center gap-2 lg:left-72 lg:right-auto">
+        <div className="pointer-events-auto flex h-11 shrink-0 items-center rounded-xl border border-white/10 bg-slate-900/90 p-1 shadow-lg backdrop-blur-xl">
           <button
             type="button"
-            className={cn(
-              "h-8 rounded px-3 text-xs font-medium transition-colors",
-              !activeOnly ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-zinc-100",
-            )}
+            className={cn("h-9 rounded-lg px-3 text-xs font-semibold transition-colors", !activeOnly ? "bg-sky-500 text-white" : "text-slate-400 hover:bg-white/[0.06]")}
             onClick={() => setActiveOnly(false)}
             aria-pressed={!activeOnly}
-          >
-            Todos
-          </button>
+          >Todos</button>
           <button
             type="button"
-            className={cn(
-              "h-8 rounded px-3 text-xs font-medium transition-colors",
-              activeOnly ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-zinc-100",
-            )}
+            className={cn("h-9 rounded-lg px-3 text-xs font-semibold transition-colors", activeOnly ? "bg-sky-500 text-white" : "text-slate-400 hover:bg-white/[0.06]")}
             onClick={() => setActiveOnly(true)}
             aria-pressed={activeOnly}
+          >Activos</button>
+        </div>
+        <label className="pointer-events-auto relative min-w-0 flex-1 sm:w-[270px] sm:flex-none">
+          <select
+            value={departmentFilter}
+            onChange={(event) => {
+              setDepartmentFilter(event.target.value)
+              setSelectedWorkerId(null)
+              setSelectedDepartmentId(event.target.value === "all" ? null : event.target.value)
+            }}
+            className="h-11 w-full appearance-none rounded-xl border border-white/10 bg-slate-900/90 px-3 pr-7 text-xs font-semibold text-slate-200 shadow-lg outline-none backdrop-blur-xl focus:ring-2 focus:ring-sky-400"
+            aria-label="Filtrar por departamento"
           >
-            Activos
-          </button>
-        </div>
-
-        <select
-          value={departmentId}
-          onChange={(event) => {
-            setDepartmentId(event.target.value)
-            setSelectedWorkerId(null)
-          }}
-          className="pointer-events-auto h-10 min-w-0 flex-1 rounded-md border border-white/75 bg-white/90 px-3 text-xs font-medium shadow-sm outline-none backdrop-blur-xl focus:ring-2 focus:ring-zinc-950 sm:w-[270px] sm:flex-none"
-          aria-label="Filtrar por departamento"
-        >
-          <option value="all">Todos los departamentos</option>
-          {model.departments.map((department) => (
-            <option key={department.id} value={department.id}>
-              {department.name} · {department.workers.length}
-            </option>
-          ))}
-        </select>
-
-        <div className="pointer-events-auto hidden h-10 w-32 items-center gap-2 rounded-md border border-white/75 bg-white/90 px-2.5 shadow-sm backdrop-blur-xl md:flex">
-          {sound.enabled ? (
-            <Volume2 className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
-          ) : (
-            <VolumeX className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-          )}
-          <Slider
-            value={[Math.round(sound.volume * 100)]}
-            max={100}
-            step={1}
-            disabled={!sound.enabled}
-            onValueChange={([value]) => sound.setVolume((value || 0) / 100)}
-            className="min-w-0"
-            aria-label="Volumen de la oficina"
-          />
-        </div>
+            <option value="all">Todos los departamentos</option>
+            {model.departments.map((department) => <option key={department.id} value={department.id}>{department.name} · {department.pool.size}</option>)}
+          </select>
+        </label>
       </div>
 
-      <div
-        className="pointer-events-none absolute left-3 right-3 top-[126px] z-20 sm:left-5 sm:right-auto sm:max-w-[720px]"
-        data-testid="agent-office-truth-strip"
-      >
-        <div className="pointer-events-auto grid grid-cols-2 gap-2 rounded-md border border-white/75 bg-white/90 p-2 shadow-sm backdrop-blur-xl sm:grid-cols-4">
-          <div className="rounded bg-zinc-50 px-2.5 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Pool</p>
-            <p className="mt-0.5 text-sm font-semibold tabular-nums">
-              {focusedDepartment
-                ? `${focusedDepartment.pool.occupied}/${focusedDepartment.pool.size}`
-                : `${truth.occupiedDesks}/${truth.physicalAgents || "—"}`}
-            </p>
-            <p className="text-[11px] text-zinc-500">
-              {focusedDepartment
-                ? focusedDepartment.pool.enabled
-                  ? `${focusedDepartment.pool.free} libres`
-                  : "Pool pausado"
-                : `${truth.freeDesks} libres · x${truth.writerConcurrency} writers`}
-            </p>
-          </div>
-          <div className="rounded bg-zinc-50 px-2.5 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Coste hoy</p>
-            <p className="mt-0.5 text-sm font-semibold tabular-nums">
-              {money(focusedDepartment ? focusedDepartment.costTodayUsd : truth.costTodayUsd)}
-            </p>
-            <p className="text-[11px] text-zinc-500">
-              {focusedDepartment?.pool.dailyBudgetUsd != null || truth.dailyBudgetUsd != null
-                ? `tope ${money(focusedDepartment?.pool.dailyBudgetUsd ?? truth.dailyBudgetUsd)}`
-                : "sin tope diario"}
-            </p>
-          </div>
-          <div className="rounded bg-zinc-50 px-2.5 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Evidencia</p>
-            <p className="mt-0.5 text-sm font-semibold tabular-nums">
-              {focusedDepartment
-                ? focusedDepartment.evidencePending
-                : truth.pendingEvidenceReview}{" "}
-              rev.
-            </p>
-            <p className="text-[11px] text-zinc-500">
-              {focusedDepartment
-                ? `${focusedDepartment.evidenceBlocked} bloqueadas`
-                : `${truth.blockedMissions} misiones bloqueadas`}
-            </p>
-          </div>
-          <div className="rounded bg-zinc-50 px-2.5 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Estado</p>
-            <p className="mt-0.5 text-sm font-semibold">
-              {focusedDepartment
-                ? focusedDepartment.commandStatus
-                : truth.readinessStatus === "unknown"
-                  ? "sin readiness"
-                  : truth.readinessStatus}
-            </p>
-            <p className="text-[11px] text-zinc-500">
-              {focusedDepartment?.currentWork
-                || (truth.atRiskObjectives > 0
-                  ? `${truth.atRiskObjectives} OKR en riesgo`
-                  : `${truth.activeObjectives} OKR activos`)}
-            </p>
-          </div>
-        </div>
-        {truth.latestBlockers.length > 0 && departmentId === "all" ? (
-          <div className="pointer-events-auto mt-2 flex items-start gap-2 rounded-md border border-amber-200/80 bg-amber-50/95 px-3 py-2 text-[11px] text-amber-950 shadow-sm backdrop-blur-xl">
-            <FileWarning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0">
-              <span className="font-semibold">Bloqueo reciente: </span>
-              <span className="line-clamp-2">{truth.latestBlockers[0]?.label}</span>
-            </span>
-          </div>
-        ) : focusedDepartment && focusedDepartment.blockers[0] ? (
-          <div className="pointer-events-auto mt-2 flex items-start gap-2 rounded-md border border-amber-200/80 bg-amber-50/95 px-3 py-2 text-[11px] text-amber-950 shadow-sm backdrop-blur-xl">
-            <FileWarning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0">
-              <span className="font-semibold">Bloqueo del depto: </span>
-              <span className="line-clamp-2">{focusedDepartment.blockers[0].label}</span>
-            </span>
-          </div>
-        ) : null}
+      <div className="pointer-events-auto absolute bottom-20 right-3 z-20 flex flex-col gap-2 sm:right-5" aria-label="Controles de cámara">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-lg font-medium text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("zoom-in")} aria-label="Acercar cámara"><span aria-hidden>+</span></Button>
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-lg font-medium text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("zoom-out")} aria-label="Alejar cámara"><span aria-hidden>−</span></Button>
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("reset")} aria-label="Restablecer cámara"><RotateCcw className="h-4 w-4" /></Button>
+        <Button type="button" variant="ghost" size="icon" className={cn("h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white", drawerOpen && !selectedWorker && !selectedDepartment && "border-sky-400/30 bg-sky-400/15 text-sky-200")} onClick={() => { setSelectedWorkerId(null); setSelectedDepartmentId(null); setDrawerOpen(true) }} aria-label="Ver agentes"><Users className="h-4 w-4" /></Button>
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-center gap-3 rounded-md border border-white/70 bg-white/80 px-3 py-2 text-[11px] font-medium text-zinc-600 shadow-sm backdrop-blur-xl sm:flex">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-sky-400" />
-          Trabajando
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-emerald-400" />
-          Listo
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-amber-400" />
-          Revisión
-        </span>
-        {sound.enabled || sound.state === "unavailable" ? (
-          <span className="inline-flex items-center gap-1.5 border-l border-zinc-200 pl-3">
-            {sound.state === "unavailable" ? (
-              <VolumeX className="h-3.5 w-3.5" />
-            ) : (
-              <Volume2 className="h-3.5 w-3.5" />
-            )}
-            {sound.state === "elevenlabs"
-              ? "Ambiente ElevenLabs"
-              : sound.state === "blocked"
-                ? "Toca para activar audio"
-                : sound.state === "unavailable"
-                  ? "Audio no disponible"
-                  : "Preparando ambiente"}
-          </span>
-        ) : null}
-      </div>
-
-      {rosterOpen ? (
-        <aside
-          className="absolute bottom-0 right-0 top-16 z-30 flex w-full flex-col border-l border-white/70 bg-white/90 shadow-[-18px_0_42px_-32px_rgba(15,23,42,0.6)] backdrop-blur-2xl sm:w-[360px]"
-          data-testid="agent-office-roster"
-        >
-          <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200/75 px-4">
-            <div>
-              <p className="text-sm font-semibold">{selectedWorker ? "Actividad del agente" : "Agentes de la oficina"}</p>
-              <p className="text-[11px] text-zinc-500">
-                {selectedWorker ? selectedWorker.departmentName : `${visibleModel.totalCount} visibles`}
-              </p>
+      <div className="pointer-events-none absolute bottom-3 left-3 right-16 z-20 hidden grid-cols-5 gap-px overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl md:grid lg:left-72" data-testid="agent-office-truth-strip">
+        {[
+          { label: "Puestos ocupados", value: `${truth.occupiedDesks}/${logicalAgentCount}`, icon: Users },
+          { label: "Agentes activos", value: String(model.activeCount), icon: Activity },
+          { label: "Tareas en cola", value: String(queuedTasks), icon: Layers3 },
+          { label: "Aprobaciones", value: String(truth.pendingApprovals), icon: BadgeCheck },
+          { label: "Salud del sistema", value: healthLabel, icon: ShieldAlert },
+        ].map((metric) => {
+          const Icon = metric.icon
+          return (
+            <div key={metric.label} className="min-w-0 bg-slate-900 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500"><Icon className="h-3.5 w-3.5" />{metric.label}</div>
+              <p className="mt-1 truncate text-sm font-semibold text-slate-100">{metric.value}</p>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-md"
-              onClick={() => setRosterOpen(false)}
-              aria-label="Cerrar panel de agentes"
-            >
-              <X className="h-4 w-4" />
-            </Button>
+          )
+        })}
+      </div>
+
+      {drawerOpen ? (
+        <aside className="absolute bottom-0 right-0 z-40 flex max-h-[70vh] w-full flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-slate-900/95 shadow-2xl backdrop-blur-2xl sm:bottom-16 sm:top-16 sm:max-h-none sm:w-96 sm:rounded-none sm:rounded-l-2xl" data-testid="agent-office-roster" aria-label="Detalle operativo de la oficina">
+          <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{selectedWorker ? "Agente seleccionado" : selectedDepartment ? "Departamento seleccionado" : "Todos los agentes"}</p>
+              <p className="mt-1 truncate text-[11px] text-slate-500">{selectedWorker?.departmentName || selectedDepartment?.name || `${model.workers.length} agentes operativos`}</p>
+            </div>
+            <Button type="button" variant="ghost" size="icon" className="h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white" onClick={() => setDrawerOpen(false)} aria-label="Cerrar panel"><X className="h-4 w-4" /></Button>
           </div>
 
           {selectedWorker ? (
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
               <div className="flex items-start gap-3">
-                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-sm font-semibold text-white">
+                <span className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-slate-800 text-sm font-semibold text-white">
                   {selectedWorker.name.slice(0, 2).toUpperCase()}
-                  <span className={cn("absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white", statusDot(selectedWorker))} />
+                  <span className={cn("absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-slate-900", workerTone(selectedWorker))} />
                 </span>
-                <div className="min-w-0">
-                  <p className="truncate text-base font-semibold">{selectedWorker.name}</p>
-                  <p className="mt-0.5 text-xs text-zinc-500">{selectedWorker.statusLabel}</p>
-                </div>
+                <div className="min-w-0"><p className="truncate text-base font-semibold">{selectedWorker.name}</p><p className="mt-1 text-xs text-slate-400">{selectedWorker.statusLabel}</p></div>
               </div>
-
-              <dl className="mt-6 divide-y divide-zinc-200/75 border-y border-zinc-200/75">
-                <div className="py-3">
-                  <dt className="text-[10px] font-semibold uppercase text-zinc-500">Trabajo actual</dt>
-                  <dd className="mt-1.5 text-sm leading-5 text-zinc-900">{selectedWorker.task}</dd>
-                </div>
-                <div className="grid grid-cols-2 gap-4 py-3">
-                  <div>
-                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Especialidad</dt>
-                    <dd className="mt-1 text-sm font-medium">{ACTIVITY_LABELS[selectedWorker.activity]}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Fuente</dt>
-                    <dd className="mt-1 text-sm font-medium">{selectedWorker.source === "run" ? "Ejecución" : "Sesión"}</dd>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4 py-3">
-                  <div>
-                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Coste</dt>
-                    <dd className="mt-1 text-sm font-medium tabular-nums">{money(selectedWorker.costUsd)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Evidencia</dt>
-                    <dd className="mt-1 text-sm font-medium">{evidenceLabel(selectedWorker.evidenceReview)}</dd>
-                  </div>
-                </div>
-                {selectedWorker.blocker ? (
-                  <div className="py-3">
-                    <dt className="text-[10px] font-semibold uppercase text-amber-700">Bloqueo</dt>
-                    <dd className="mt-1.5 text-sm leading-5 text-amber-950">{selectedWorker.blocker}</dd>
-                  </div>
-                ) : null}
-                {selectedWorker.evidenceSummary ? (
-                  <div className="py-3">
-                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Resumen de evidencia</dt>
-                    <dd className="mt-1.5 text-sm leading-5 text-zinc-900">{selectedWorker.evidenceSummary}</dd>
-                  </div>
-                ) : null}
-                <div className="py-3">
-                  <dt className="text-[10px] font-semibold uppercase text-zinc-500">Última actividad</dt>
-                  <dd className="mt-1 text-sm font-medium">{relativeTime(selectedWorker.updatedAt)}</dd>
-                </div>
-                {selectedWorker.runId ? (
-                  <div className="py-3">
-                    <dt className="text-[10px] font-semibold uppercase text-zinc-500">Run</dt>
-                    <dd className="mt-1 font-mono text-xs text-zinc-700">{selectedWorker.runId}</dd>
-                  </div>
-                ) : null}
-              </dl>
-
-              <Button
-                type="button"
-                className="mt-5 h-10 w-full rounded-md bg-zinc-950 text-white hover:bg-zinc-800"
-                onClick={() => onOpenWorker(selectedWorker)}
-              >
-                {selectedWorker.sessionId ? "Abrir sesión" : "Abrir departamento"}
-                <ArrowUpRight className="ml-2 h-4 w-4" />
-              </Button>
+              <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.035] p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Trabajo actual</p>
+                <p className="mt-2 text-sm leading-6 text-slate-200">{selectedWorker.task}</p>
+                <p className="mt-3 text-xs text-slate-500">{ACTIVITY_LABELS[selectedWorker.activity]} · {selectedWorker.source === "run" ? "Ejecución" : "Sesión"} · {money(selectedWorker.costUsd)}</p>
+                <p className="mt-2 text-xs text-slate-400">
+                  Evidencia: {selectedWorker.evidenceReview ? EVIDENCE_LABELS[selectedWorker.evidenceReview] : "Sin evidencia"}
+                  {Number.isFinite(selectedWorker.updatedAt) ? ` · Actualizado ${new Date(selectedWorker.updatedAt).toLocaleString("es-PE")}` : ""}
+                </p>
+              </div>
+              {selectedWorker.blocker ? <p className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-xs leading-5 text-amber-100">{selectedWorker.blocker}</p> : null}
+              <Button type="button" className="mt-5 h-11 w-full rounded-xl bg-sky-500 text-white hover:bg-sky-400" onClick={() => leaveOffice(() => onOpenWorker(selectedWorker))}>{selectedWorker.sessionId ? "Abrir sesión" : "Abrir departamento"}<ArrowUpRight className="ml-2 h-4 w-4" /></Button>
             </div>
-          ) : visibleModel.workers.length > 0 ? (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {visibleModel.workers.map((worker) => (
-                <button
-                  key={worker.id}
-                  type="button"
-                  className="flex min-h-[68px] w-full items-center gap-3 border-b border-zinc-200/70 px-4 py-3 text-left hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-zinc-950"
-                  onClick={() => setSelectedWorkerId(worker.id)}
-                >
-                  <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-xs font-semibold text-white">
-                    {worker.name.slice(0, 2).toUpperCase()}
-                    <span className={cn("absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-white", statusDot(worker))} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{worker.name}</span>
-                    <span className="mt-0.5 block truncate text-xs text-zinc-500">{worker.task}</span>
-                  </span>
-                  {worker.statusTone === "attention" ? (
-                    <CircleAlert className="h-4 w-4 shrink-0 text-amber-500" />
-                  ) : worker.active ? (
-                    <Activity className="h-4 w-4 shrink-0 text-sky-500" />
-                  ) : null}
-                </button>
-              ))}
+          ) : selectedDepartment ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="flex items-center gap-3"><span className={cn("h-3 w-3 rounded-full", departmentTone(selectedDepartment))} /><div><p className="text-base font-semibold">{selectedDepartment.name}</p><p className="mt-1 text-xs text-slate-500">{selectedDepartment.commandStatus}</p></div></div>
+              <p className="mt-5 text-sm leading-6 text-slate-300">{selectedDepartment.description}</p>
+              <p className="mt-5 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs leading-5 text-slate-300">{selectedDepartment.pool.occupied}/{selectedDepartment.pool.size} puestos · {selectedDepartment.tasksQueued} en cola · {selectedDepartment.progress}% · {money(selectedDepartment.costTodayUsd)} hoy</p>
+              {selectedDepartment.currentWork ? <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Trabajo actual</p><p className="mt-2 text-sm leading-5 text-slate-200">{selectedDepartment.currentWork}</p></div> : null}
+              {selectedDepartment.blockers[0] ? <div className="mt-3 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-xs leading-5 text-amber-100"><FileWarning className="mt-0.5 h-4 w-4 shrink-0" />{selectedDepartment.blockers[0].label}</div> : null}
+              <Button type="button" className="mt-5 h-11 w-full rounded-xl bg-sky-500 text-white hover:bg-sky-400" onClick={() => leaveOffice(() => onOpenDepartment(selectedDepartment.id))}>Abrir departamento<ArrowUpRight className="ml-2 h-4 w-4" /></Button>
             </div>
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
-              <Users className="h-7 w-7 text-zinc-400" />
-              <p className="mt-3 text-sm font-semibold">No hay agentes en este filtro</p>
-              <p className="mt-1 text-xs leading-5 text-zinc-500">
-                Los escritorios permanecen disponibles para nuevas sesiones y ejecuciones.
-              </p>
+            <div className="min-h-0 flex-1 overflow-y-auto" data-testid="agent-office-worker-list">
+              {model.workers.length > 0 ? model.workers.map((worker) => (
+                <button key={worker.id} type="button" className="flex min-h-[68px] w-full items-center gap-3 border-b border-white/10 px-4 py-3 text-left hover:bg-white/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400" onClick={() => { setSelectedWorkerId(worker.id); setSelectedDepartmentId(worker.departmentId) }}>
+                  <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-slate-800 text-xs font-semibold text-white">{worker.name.slice(0, 2).toUpperCase()}<span className={cn("absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-slate-900", workerTone(worker))} /></span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-200">{worker.name}</span><span className="mt-1 block truncate text-xs text-slate-500">{worker.departmentName} · {worker.task}</span></span>
+                  {worker.active ? <Activity className="h-4 w-4 shrink-0 text-sky-400" /> : worker.blocker ? <ShieldAlert className="h-4 w-4 shrink-0 text-amber-400" /> : null}
+                </button>
+              )) : <div className="flex min-h-[220px] flex-col items-center justify-center px-8 text-center"><Users className="h-7 w-7 text-slate-600" /><p className="mt-3 text-sm font-semibold">Sin agentes ejecutándose</p><p className="mt-1 text-xs leading-5 text-slate-500">Los {logicalAgentCount} puestos permanecen disponibles por departamento.</p></div>}
             </div>
           )}
         </aside>
       ) : null}
 
-      <div className="pointer-events-none absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-md border border-white/75 bg-white/90 px-3 py-2 text-[11px] font-medium shadow-sm backdrop-blur-xl sm:hidden">
-        <span className="h-2 w-2 rounded-full bg-sky-400" />
-        {model.activeCount} {model.activeCount === 1 ? "activo" : "activos"} · {model.totalCount}{" "}
-        {model.totalCount === 1 ? "agente" : "agentes"}
-      </div>
+      <nav className="absolute inset-x-0 bottom-0 z-30 grid h-16 grid-cols-5 border-t border-white/10 bg-slate-950 px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="Navegación móvil de la oficina">
+        {destinations.map((destination) => {
+          const Icon = destination.icon
+          return <button key={destination.id} type="button" className={cn("flex min-h-11 flex-col items-center justify-center gap-1 text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400", destination.id === "office" ? "text-sky-300" : "text-slate-500")} aria-current={destination.id === "office" ? "page" : undefined} onClick={() => destination.action && leaveOffice(destination.action)}><Icon className="h-4 w-4" />{destination.label === "Vista 3D" ? "Oficina" : destination.label}</button>
+        })}
+      </nav>
+
+      <p className="sr-only" role="status" aria-live="polite">
+        {selectedWorker ? `${selectedWorker.name}, ${selectedWorker.statusLabel}` : selectedDepartment ? `${selectedDepartment.name}, ${selectedDepartment.activeCount} agentes activos` : `${model.departments.length} departamentos y ${logicalAgentCount} puestos disponibles`}
+      </p>
+
     </div>,
     document.body,
   )

@@ -11,7 +11,6 @@ import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
 type OfficeAmbientSoundId = "coast-day" | "coast-night"
 type OfficeCueSoundId =
-  | "terrace-steps"
   | "work-start"
   | "work-complete"
   | "approval-ready"
@@ -31,38 +30,27 @@ type LoopingSource = {
 
 type AmbientMixProfile = {
   ambienceGain: number
-  highpassHz: number
-  lowpassHz: number
   fadeSeconds: number
 }
 
 type AudioEngine = {
   context: AudioContext
-  master: GainNode
   compressor: DynamicsCompressorNode
   ambienceBus: GainNode
-  ambienceHighpass: BiquadFilterNode
-  ambienceLowpass: BiquadFilterNode
   actionBus: GainNode
   ambience: LoopingSource | null
-  stepBuffer: AudioBuffer | null
   cueBuffers: Map<OfficeCueSoundId, AudioBuffer>
 }
 
 const SOUND_PREFERENCE_KEY = "siragpt:office-sound-enabled"
-const SOUND_VOLUME_KEY = "siragpt:office-sound-volume"
 const DEFAULT_VOLUME = 0.28
 const AMBIENT_MIX_PROFILES: Record<OfficeAmbientSoundId, AmbientMixProfile> = {
   "coast-day": {
     ambienceGain: 0.7,
-    highpassHz: 55,
-    lowpassHz: 14_500,
     fadeSeconds: 2.6,
   },
   "coast-night": {
     ambienceGain: 0.64,
-    highpassHz: 42,
-    lowpassHz: 11_000,
     fadeSeconds: 3.2,
   },
 }
@@ -107,19 +95,6 @@ function readStoredPreference(): boolean {
   }
 }
 
-function readStoredVolume(): number {
-  try {
-    const raw = window.localStorage.getItem(SOUND_VOLUME_KEY)
-    if (raw === null) return DEFAULT_VOLUME
-    const stored = Number(raw)
-    return Number.isFinite(stored) && stored >= 0 && stored <= 1
-      ? stored
-      : DEFAULT_VOLUME
-  } catch {
-    return DEFAULT_VOLUME
-  }
-}
-
 function storePreference(enabled: boolean) {
   try {
     window.localStorage.setItem(SOUND_PREFERENCE_KEY, enabled ? "on" : "off")
@@ -128,15 +103,7 @@ function storePreference(enabled: boolean) {
   }
 }
 
-function storeVolume(volume: number) {
-  try {
-    window.localStorage.setItem(SOUND_VOLUME_KEY, String(volume))
-  } catch {
-    // Keep the in-memory volume when persistent storage is unavailable.
-  }
-}
-
-function createAudioEngine(volume: number): AudioEngine | null {
+function createAudioEngine(): AudioEngine | null {
   const AudioContextConstructor =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -146,39 +113,25 @@ function createAudioEngine(volume: number): AudioEngine | null {
   const master = context.createGain()
   const compressor = context.createDynamicsCompressor()
   const ambienceBus = context.createGain()
-  const ambienceHighpass = context.createBiquadFilter()
-  const ambienceLowpass = context.createBiquadFilter()
   const actionBus = context.createGain()
-  master.gain.value = volume
+  master.gain.value = DEFAULT_VOLUME
   ambienceBus.gain.value = AMBIENT_MIX_PROFILES["coast-day"].ambienceGain
-  ambienceHighpass.type = "highpass"
-  ambienceHighpass.frequency.value = AMBIENT_MIX_PROFILES["coast-day"].highpassHz
-  ambienceHighpass.Q.value = 0.55
-  ambienceLowpass.type = "lowpass"
-  ambienceLowpass.frequency.value = AMBIENT_MIX_PROFILES["coast-day"].lowpassHz
-  ambienceLowpass.Q.value = 0.4
   actionBus.gain.value = 0.42
   compressor.threshold.value = -20
   compressor.knee.value = 24
   compressor.ratio.value = 2.4
   compressor.attack.value = 0.025
   compressor.release.value = 0.32
-  ambienceBus.connect(ambienceHighpass)
-  ambienceHighpass.connect(ambienceLowpass)
-  ambienceLowpass.connect(master)
+  ambienceBus.connect(master)
   actionBus.connect(master)
   master.connect(compressor)
   compressor.connect(context.destination)
   return {
     context,
-    master,
     compressor,
     ambienceBus,
-    ambienceHighpass,
-    ambienceLowpass,
     actionBus,
     ambience: null,
-    stepBuffer: null,
     cueBuffers: new Map(),
   }
 }
@@ -187,8 +140,6 @@ function applyAmbientMix(engine: AudioEngine, soundId: OfficeAmbientSoundId) {
   const profile = AMBIENT_MIX_PROFILES[soundId]
   const now = engine.context.currentTime
   engine.ambienceBus.gain.setTargetAtTime(profile.ambienceGain, now, 0.18)
-  engine.ambienceHighpass.frequency.setTargetAtTime(profile.highpassHz, now, 0.22)
-  engine.ambienceLowpass.frequency.setTargetAtTime(profile.lowpassHz, now, 0.22)
   return profile
 }
 
@@ -259,22 +210,6 @@ function playActionCue(
   source.start()
 }
 
-function playFootsteps(engine: AudioEngine) {
-  if (!engine.stepBuffer || engine.context.state !== "running") return
-  const source = engine.context.createBufferSource()
-  const gain = engine.context.createGain()
-  source.buffer = engine.stepBuffer
-  source.playbackRate.value = 0.96 + Math.random() * 0.08
-  gain.gain.value = 0.12
-  source.connect(gain)
-  gain.connect(engine.actionBus)
-  source.onended = () => {
-    source.disconnect()
-    gain.disconnect()
-  }
-  source.start()
-}
-
 export function useOfficeSoundscape({
   active,
   timeOfDay,
@@ -297,7 +232,6 @@ export function useOfficeSoundscape({
   const mountedRef = React.useRef(true)
   const activeRef = React.useRef(active)
   const desiredEnabledRef = React.useRef(true)
-  const volumeRef = React.useRef(DEFAULT_VOLUME)
   const operationalCountsRef = React.useRef({
     initialized: false,
     activeCount,
@@ -306,14 +240,13 @@ export function useOfficeSoundscape({
   })
   const [enabled, setEnabled] = React.useState(false)
   const [state, setState] = React.useState<OfficeSoundState>("off")
-  const [volume, setVolumeState] = React.useState(DEFAULT_VOLUME)
 
   activeRef.current = active
 
   const ensureEngine = React.useCallback(() => {
     const current = engineRef.current
     if (current && current.context.state !== "closed") return current
-    engineRef.current = createAudioEngine(volumeRef.current)
+    engineRef.current = createAudioEngine()
     return engineRef.current
   }, [])
 
@@ -324,7 +257,6 @@ export function useOfficeSoundscape({
     if (engine) {
       stopLoop(engine.ambience, engine.context, { immediate: true })
       engine.ambience = null
-      engine.stepBuffer = null
       engine.cueBuffers.clear()
       void engine.context.close().catch(() => {})
     }
@@ -373,19 +305,8 @@ export function useOfficeSoundscape({
     else void enable()
   }, [disable, enable, enabled, state])
 
-  const setVolume = React.useCallback((nextVolume: number) => {
-    const bounded = Math.min(1, Math.max(0, nextVolume))
-    volumeRef.current = bounded
-    setVolumeState(bounded)
-    storeVolume(bounded)
-    const engine = engineRef.current
-    if (engine && engine.context.state !== "closed") {
-      engine.master.gain.setTargetAtTime(bounded, engine.context.currentTime, 0.04)
-    }
-  }, [])
-
   const playCue = React.useCallback(
-    async (soundId: Exclude<OfficeCueSoundId, "terrace-steps">) => {
+    async (soundId: OfficeCueSoundId) => {
       const engine = engineRef.current
       if (
         !engine ||
@@ -413,7 +334,7 @@ export function useOfficeSoundscape({
         engine.cueBuffers.set(soundId, buffer)
       }
 
-      const gainByCue: Record<Exclude<OfficeCueSoundId, "terrace-steps">, number> = {
+      const gainByCue: Record<OfficeCueSoundId, number> = {
         "work-start": 0.34,
         "work-complete": 0.32,
         "approval-ready": 0.3,
@@ -426,8 +347,6 @@ export function useOfficeSoundscape({
 
   React.useEffect(() => {
     mountedRef.current = true
-    volumeRef.current = readStoredVolume()
-    setVolumeState(volumeRef.current)
     return () => {
       mountedRef.current = false
       stopSession()
@@ -461,15 +380,9 @@ export function useOfficeSoundscape({
       timePhase === "dusk" || timePhase === "night" || timeOfDay === "night"
         ? "coast-night"
         : "coast-day"
-    void Promise.all([
-      fetchOfficeSound(ambientId),
-      fetchOfficeSound("terrace-steps").catch(() => null),
-    ])
-      .then(async ([ambientEncoded, stepEncoded]) => {
+    void fetchOfficeSound(ambientId)
+      .then(async (ambientEncoded) => {
         const ambientBuffer = await engine.context.decodeAudioData(ambientEncoded.slice(0))
-        const stepBuffer = stepEncoded
-          ? await engine.context.decodeAudioData(stepEncoded.slice(0)).catch(() => null)
-          : null
         if (
           !mountedRef.current ||
           loadKey !== loadKeyRef.current ||
@@ -479,7 +392,6 @@ export function useOfficeSoundscape({
         }
 
         replaceAmbience(engine, ambientBuffer, ambientId)
-        engine.stepBuffer = stepBuffer
         setState(
           engine.context.state === "running" || paused ? "elevenlabs" : "blocked",
         )
@@ -509,7 +421,7 @@ export function useOfficeSoundscape({
       return
     }
 
-    let cue: Exclude<OfficeCueSoundId, "terrace-steps"> | null = null
+    let cue: OfficeCueSoundId | null = null
     if (attentionCount > previous.attentionCount) cue = "attention"
     else if (approvalCount > previous.approvalCount) cue = "approval-ready"
     else if (activeCount > previous.activeCount) cue = "work-start"
@@ -587,27 +499,9 @@ export function useOfficeSoundscape({
     void resume(engine)
   }, [active, enabled, paused, resume])
 
-  React.useEffect(() => {
-    if (!active || !enabled || paused || activeCount <= 0) return
-    let timer = 0
-    const schedule = () => {
-      timer = window.setTimeout(() => {
-        const engine = engineRef.current
-        if (engine && document.visibilityState === "visible") playFootsteps(engine)
-        schedule()
-      }, 8_000 + Math.round(Math.random() * 6_000))
-    }
-    schedule()
-    return () => window.clearTimeout(timer)
-  }, [active, activeCount, enabled, paused])
-
   return {
     enabled,
     state,
-    volume,
     toggle,
-    setVolume,
-    disable,
-    retry: enable,
   }
 }

@@ -32,6 +32,8 @@ export type EdgeDistrictFraming = {
   target: THREE.Vector3
   yaw: number
   pitch: number
+  portraitPitch: number
+  portraitTargetLift: number
   distance: number
   landscapeDistance: number
   portraitDistance: number
@@ -425,7 +427,11 @@ export function addEdgeDistrict({
   const random = seededRandom(
     0x5eeda11 + Math.round(totalWidth * 17) + Math.round(totalDepth * 29) + (variant === "full" ? 101 : 7),
   )
-  const groundY = -20.4
+  // The headquarters remains a genuinely giant tower, but its roof must sit
+  // immediately below the operational office at y=0. Making the facade taller
+  // by pushing its base down preserves the skyline without enclosing the
+  // rooftop workspace inside an opaque box.
+  const groundY = -44.4
   const officeY = 0
   const districtHalfWidth = Math.max(64, totalWidth + 32)
   const districtHalfDepth = Math.max(48, totalDepth + 28)
@@ -600,9 +606,9 @@ export function addEdgeDistrict({
   const landmarkLight = night ? 0x3578a0 : 0x4090b0
   const lowerHeight = 7.5
   const middleBottom = groundY + 6
-  const middleTop = 5.5
-  const upperBottom = 4.8
-  const upperTop = 14
+  const middleTop = -2.35
+  const upperBottom = -3.05
+  const upperTop = -0.22
   const lowerWidth = totalWidth + 26
   const lowerDepth = totalDepth + 26
   const middleWidth = totalWidth + 18
@@ -1820,11 +1826,13 @@ export function addEdgeDistrict({
     framing: {
       target: new THREE.Vector3(
         0,
-        variant === "thumbnail" ? 1.0 : 4.2,
-        -totalDepth * 0.08,
+        variant === "thumbnail" ? 1.0 : 1.1,
+        variant === "thumbnail" ? -totalDepth * 0.08 : 0,
       ),
-      yaw: variant === "thumbnail" ? -0.64 : -0.56,
-      pitch: variant === "thumbnail" ? 0.48 : 0.38,
+      yaw: variant === "thumbnail" ? -0.64 : -0.62,
+      pitch: variant === "thumbnail" ? 0.48 : 0.66,
+      portraitPitch: variant === "thumbnail" ? 0.48 : 0.84,
+      portraitTargetLift: variant === "thumbnail" ? 2.8 : 0.45,
       distance: landscapeDistance,
       landscapeDistance,
       portraitDistance,

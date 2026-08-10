@@ -3476,7 +3476,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
    Targets #main-content (set in app/layout.tsx around <main>). */
 .skip-to-content {
   position: fixed;
-  top: 0.5rem;
+  top: -5rem;
   left: 0.5rem;
   z-index: 10000;
   padding: 0.625rem 1rem;
@@ -3488,14 +3488,14 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   font-size: 0.875rem;
   font-weight: 600;
   text-decoration: none;
-  /* Visually hidden until focused — uses transform so screen readers
-     still see it (display:none would remove it from the a11y tree). */
-  transform: translateY(-200%);
-  transition: transform 150ms ease-out;
+  /* Keep it in the accessibility tree and tab order outside the viewport. */
+  opacity: 0;
+  pointer-events: none;
 }
-.skip-to-content:focus,
 .skip-to-content:focus-visible {
-  transform: translateY(0);
+  top: 0.5rem;
+  opacity: 1;
+  pointer-events: auto;
   outline: 2px solid hsl(var(--ring));
   outline-offset: 2px;
 }

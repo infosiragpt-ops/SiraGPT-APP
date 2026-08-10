@@ -1092,12 +1092,28 @@ export function AgentCompanyPanel() {
   }, [activeFolder, companyRegistry, projects])
 
   const departmentRows = React.useMemo(() => {
+    const departmentByPoolId = new Map(
+      departmentPools.map((pool) => [pool.id, pool.departmentId] as const),
+    )
+    const runById = new Map(codexRuns.map((run) => [run.id, run] as const))
     return allDepartments.map((department) => {
       const sessions = codeChatSessions.filter(
-        (session) => departmentIdForSession(session, snapshot.rootSessionId, allDepartments) === department.id,
+        (session) => {
+          const linkedRunId = [...session.turns].reverse().find((turn) => turn.codexRunId)?.codexRunId
+          const linkedRun = linkedRunId ? runById.get(linkedRunId) || null : null
+          const durableDepartmentId = linkedRun?.departmentPoolId
+            ? departmentByPoolId.get(linkedRun.departmentPoolId) || null
+            : null
+          return (durableDepartmentId || departmentIdForSession(session, snapshot.rootSessionId, allDepartments)) === department.id
+        },
       )
       const runs = codexRuns.filter(
-        (run) => departmentIdForRun(run, allDepartments) === department.id,
+        (run) => {
+          const durableDepartmentId = run.departmentPoolId
+            ? departmentByPoolId.get(run.departmentPoolId) || null
+            : null
+          return (durableDepartmentId || departmentIdForRun(run, allDepartments)) === department.id
+        },
       )
       const activeRunCount = runs.filter(codeRunIsActive).length
       const activeSessionCount = sessions.filter(codeSessionIsActive).length
@@ -1106,7 +1122,7 @@ export function AgentCompanyPanel() {
       const latestRun = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))[0] || null
       return { department, sessions, runs, activeCount, latest, latestRun }
     })
-  }, [allDepartments, codeChatSessions, codexRuns, snapshot.rootSessionId])
+  }, [allDepartments, codeChatSessions, codexRuns, departmentPools, snapshot.rootSessionId])
 
   const selectedDepartment = departmentRows.find((row) => row.department.id === selectedDepartmentId) || null
   const selectedTask = codeChatSessions.find((session) => session.id === selectedTaskId) || null
@@ -1487,7 +1503,7 @@ export function AgentCompanyPanel() {
     }
   }, [
     activeFolder?.id,
-    allDepartments.length,
+    allDepartments,
     associatedCodexProjectId,
     codeChatSessions,
     commandCenter?.swarm?.id,
@@ -2828,6 +2844,26 @@ export function AgentCompanyPanel() {
         model={officeModel}
         onClose={() => setOfficeOpen(false)}
         onOpenWorker={openOfficeWorker}
+        onOpenDepartment={(departmentId) => {
+          setOfficeOpen(false)
+          openDepartmentChat(departmentId)
+        }}
+        onOpenDashboard={() => {
+          setOfficeOpen(false)
+          openCompanySurface("dashboard")
+        }}
+        onOpenControl={() => {
+          setOfficeOpen(false)
+          openCompanySurface("control")
+        }}
+        onOpenFiles={() => {
+          setOfficeOpen(false)
+          openCompanySurface("files")
+        }}
+        onOpenResources={() => {
+          setOfficeOpen(false)
+          openCompanySurface("resources")
+        }}
       />
     </div>
   )
@@ -3062,24 +3098,24 @@ function CompanyHome({
         <button
           type="button"
           onClick={onOpenOffice}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg border border-zinc-300/70 bg-[#dce5e9] text-left shadow-[0_12px_30px_-22px_rgba(15,23,42,0.7)] transition-shadow hover:shadow-[0_16px_34px_-20px_rgba(15,23,42,0.72)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-xl border border-sky-400/20 bg-[#05070d] text-left shadow-[0_18px_38px_-22px_rgba(2,132,199,0.58)] transition duration-200 hover:-translate-y-0.5 hover:border-sky-400/40 hover:shadow-[0_24px_48px_-24px_rgba(2,132,199,0.72)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           aria-label="Abrir oficina de agentes"
           data-testid="agent-company-live-preview"
         >
           <div className="pointer-events-none absolute inset-0">
             <AgentOfficeScene model={officeModel} variant="thumbnail" paused={officeOpen} />
           </div>
-          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-md border border-white/70 bg-white/[0.9] px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
-            <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-zinc-400")} />
-            Oficina · {officeModel.truth.occupiedDesks}/{officeModel.truth.physicalAgents || officeModel.activeCount} puestos
+          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-[#09111f]/90 px-2.5 py-1.5 text-[11px] font-semibold text-slate-100 shadow-lg backdrop-blur-xl">
+            <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-slate-500")} />
+            Oficina · {officeModel.truth.occupiedDesks}/{officeModel.departments.reduce((total, department) => total + Math.max(1, department.pool.size), 0)} puestos
             {officeModel.truth.latestBlockers.length > 0
               ? ` · ${officeModel.truth.latestBlockers.length} bloqueos`
               : officeModel.truth.pendingApprovals > 0
                 ? ` · ${officeModel.truth.pendingApprovals} aprob.`
                 : ""}
           </span>
-          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/[0.78] px-3 py-2 text-white opacity-100 backdrop-blur-sm transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-visible:opacity-100">
-            <span className="truncate text-[11px] font-medium">Entrar a la sede de {companyName}</span>
+          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between border-t border-white/10 bg-[#05070d]/80 px-3 py-2 text-white backdrop-blur-md">
+            <span className="truncate text-[11px] font-medium">Abrir megaoficina de {companyName}</span>
             <ChevronRight className="h-4 w-4" />
           </span>
         </button>

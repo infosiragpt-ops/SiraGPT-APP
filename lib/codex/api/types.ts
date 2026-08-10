@@ -45,6 +45,10 @@ export interface CodexRun {
   model: string | null
   reasoningEffort?: string | null
   planRunId: string | null
+  /** Durable department attribution returned by the backend when the run is pooled. */
+  departmentPoolId?: string | null
+  /** Durable swarm lineage returned for runs created by an enterprise swarm. */
+  swarmTaskId?: string | null
   prompt: string | null
   autoExecute?: boolean
   error: string | null
@@ -391,6 +395,103 @@ export interface CodexCompanyCapacity {
   writerConcurrency: number
   dailyBudgetUsd: number
   strategy: "isolated_worktrees_serialized_merge"
+}
+export type CodexOfficeStateBlockerKind =
+  | "mission_blocked"
+  | "run_waiting_approval"
+  | "run_error"
+  | "approval_pending"
+  | "inbox_attention"
+  | "external_action_review"
+export interface CodexOfficeState {
+  generatedAt: string
+  projectId: string
+  proactive: {
+    enabled: boolean
+    runsToday: number
+    lastCycleAt: string | null
+    lastError: string | null
+  }
+  lease: {
+    active: boolean
+    expiresAt: string | null
+  } | null
+  pools: Array<{
+    id: string
+    departmentId: string
+    size: number
+    enabled: boolean
+    dailyBudgetUsd: number | null
+    spentTodayUsd: number
+    activeRuns: number
+  }>
+  runs: {
+    active: Array<{
+      id: string
+      mode: string | null
+      status: "queued" | "running" | "waiting_approval"
+      departmentPoolId: string | null
+      swarmTaskId: string | null
+      createdAt: string | null
+      startedAt: string | null
+      updatedAt: string | null
+    }>
+    recentErrors: Array<{
+      id: string
+      mode: string | null
+      departmentPoolId: string | null
+      error: string | null
+      finishedAt: string | null
+    }>
+  }
+  missions: {
+    counts: {
+      in_progress: number
+      blocked: number
+      completed: number
+    }
+    open: Array<{
+      id: string
+      missionKey: string
+      title: string
+      department: string | null
+      status: "in_progress" | "blocked"
+      updatedAt: string | null
+    }>
+  }
+  evidence: {
+    artifacts: number
+  }
+  approvals: {
+    pending: Array<{
+      id: string
+      resourceType: string
+      resourceId: string
+      missionId: string | null
+      reportId: string | null
+      createdAt: string | null
+    }>
+    count: number
+  }
+  operations: {
+    pendingInbox: number
+    pendingActions: number
+    leads: number
+  }
+  usageToday: {
+    costUsd: number
+    tokensIn: number
+    tokensOut: number
+    entries: number
+  }
+  blockers: Array<{
+    kind: CodexOfficeStateBlockerKind
+    id: string
+    department: string | null
+    title: string
+    detail: string
+    since: string | null
+  }>
 }
 export interface CodexCompanyResourceState {
   assignments: Record<string, string>

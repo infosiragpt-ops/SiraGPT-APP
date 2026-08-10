@@ -19,6 +19,7 @@ import type {
   CodexMissionReviewStatus,
   CodexObjectivePortfolio,
   CodexObjectiveReview,
+  CodexOfficeState,
   CodexProgressMemory,
   CodexProjectActivity,
   CodexProactiveState,
@@ -136,6 +137,16 @@ export const companyCodexApi = {
       `/projects/${id}/company-operations`,
       { cache: "no-store" },
     ).then((result) => result.operations),
+  getOfficeState: (id: string, options?: { take?: number }) => {
+    const requestedTake = Number(options?.take)
+    const query = Number.isFinite(requestedTake)
+      ? `?take=${Math.max(1, Math.min(100, Math.trunc(requestedTake)))}`
+      : ""
+    return req<{ state: CodexOfficeState }>(
+      `/projects/${encodeURIComponent(id)}/office-state${query}`,
+      { cache: "no-store" },
+    ).then((result) => result.state)
+  },
   researchCompanyLeads: (id: string) =>
     req<{ result: { action: string; leads?: CodexCompanyLead[]; sourceCount?: number } }>(
       `/projects/${id}/company-operations/research-leads`,

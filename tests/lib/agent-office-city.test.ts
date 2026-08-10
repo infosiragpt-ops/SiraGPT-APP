@@ -40,10 +40,22 @@ describe("agent office Edge District", () => {
     expect(district.counts.glassFacades).toBeGreaterThanOrEqual(104)
     expect(district.counts.glassFacades).toBeLessThanOrEqual(112)
     expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(24)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(36)
+    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(46)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
     expect(district.counts.windows).toBeGreaterThanOrEqual(1_800)
     expect(district.counts.vehicles).toBeGreaterThanOrEqual(16)
+    expect(district.framing.officeY).toBe(0)
+    expect(district.framing.pitch).toBeGreaterThanOrEqual(0.6)
+    expect(district.framing.portraitPitch).toBeGreaterThanOrEqual(0.8)
+    expect(district.framing.target.y).toBeLessThan(2)
+    expect(
+      district.framing.target.y
+      + district.framing.portraitTargetLift,
+    ).toBeLessThan(2)
+    const facadeFront = (26.2 + 26) / 2
+    const sightlineOverFacade = district.framing.target.y
+      + facadeFront * Math.tan(district.framing.pitch) / Math.cos(district.framing.yaw)
+    expect(sightlineOverFacade).toBeGreaterThan(14)
 
     dispose(scene)
   })
@@ -66,6 +78,9 @@ describe("agent office Edge District", () => {
     expect(district.counts.glassFacades).toBe(44)
     expect(district.counts.vehicles).toBe(6)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
+    expect(district.framing.pitch).toBe(0.48)
+    expect(district.framing.portraitPitch).toBe(0.48)
+    expect(district.framing.portraitTargetLift).toBe(2.8)
 
     dispose(scene)
   })
