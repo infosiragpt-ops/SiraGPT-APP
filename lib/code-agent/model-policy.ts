@@ -24,7 +24,7 @@ const SLOW_PATTERNS: RegExp[] = [
   /reason/i,
   /thinking/i,
   /\br1\b/i,
-  /deepseek-(r|v4)/i,
+  /deepseek-(?:r1|reasoner)/i,
   /opus/i,
 ]
 
