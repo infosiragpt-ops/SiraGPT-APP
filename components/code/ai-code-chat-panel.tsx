@@ -4657,7 +4657,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             rows={1}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1.5 flex items-center gap-1">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
@@ -4704,7 +4704,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               ) : (
                 <ScanSearch className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
               )}
-              <span className="code-target-select-button__label">
+              <span className="code-target-select-button__label hidden md:inline">
                 {selectingTarget ? "Cancelar" : "Seleccionar UI"}
               </span>
             </button>

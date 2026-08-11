@@ -118,7 +118,7 @@ export function WorkspaceTopBar({
 
       {/* Panel tabs — sit in the header itself (Publicar height), roughly
           above where the main pane begins. */}
-      <div className="workspace-tab-strip ml-[6%] flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div className="workspace-tab-strip ml-0 flex min-w-0 items-center gap-1 overflow-x-auto md:ml-[6%]">
         {visible.map((panel) => {
           const Icon = panel.icon
           const active = activePanel === panel.id
@@ -248,8 +248,8 @@ export function WorkspaceTopBar({
             : "text-muted-foreground hover:text-foreground",
         )}
       >
-        <UserPlus className="mr-1 h-3 w-3" />
-        Invitar
+        <UserPlus className="h-3 w-3" />
+        <span className="hidden md:inline">Invitar</span>
       </Button>
       <button
         type="button"
@@ -257,12 +257,12 @@ export function WorkspaceTopBar({
         aria-pressed={publishingOpen}
         onClick={onOpenPublishing}
         className={cn(
-          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold transition-colors",
+          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-semibold transition-colors md:px-3",
           "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
         )}
       >
         <Globe className="h-3 w-3" />
-        Publicar
+        <span className="hidden md:inline">Publicar</span>
       </button>
       <Button
         type="button"
