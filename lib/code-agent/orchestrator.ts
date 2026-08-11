@@ -24,11 +24,11 @@ import type {
 
 // ---- persistent task tracking -----------------------------------------------
 
-let taskSeq = 0
-
 function generateTaskId(): string {
-  taskSeq += 1
-  return `task-${Date.now().toString(36)}-${taskSeq}`
+  const uuid = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36)
+  return `task-${uuid}`
 }
 
 export function createAgentTask(title: string, detail?: string, files?: string[]): AgentTask {
@@ -259,7 +259,7 @@ export function isConversationalMessage(text: string): boolean {
   const t = raw
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
 
   // 1) Desire verb + conversational object beats the "quiero/necesito" build
   //    verb: "quiero preguntarte algo", "necesito saber si…", "quisiera
@@ -480,7 +480,7 @@ export function isBareBuildCommand(text: string): boolean {
   const t = raw
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[¡!¿?.,;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()

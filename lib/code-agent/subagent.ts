@@ -1,8 +1,11 @@
 import { createAuthenticatedFetch } from "../authenticated-fetch"
+import { isSlowModel } from "./model-policy"
 
 let activeSubagents = 0
 const MAX_PARALLEL = 6
 const MAX_DEPTH = 1
+const DEFAULT_MODEL =
+  process.env.SIRAGPT_SUBAGENT_MODEL || "claude-sonnet-4-20250514"
 const SIRA_API_ROOT = `${process.env.SIRAGPT_API_BASE || "http://backend:5000"}/api`
 const subagentFetch = createAuthenticatedFetch({ apiBaseUrl: SIRA_API_ROOT })
 
@@ -10,6 +13,7 @@ export interface SubagentRequest {
   name: string
   prompt: string
   depth?: number
+  model?: string
 }
 
 export interface SubagentResult {
@@ -33,16 +37,18 @@ export async function spawnSubagent(req: SubagentRequest): Promise<SubagentResul
     return { name: req.name, summary: "", error: "too many active subagents" }
   }
 
+  const requestedModel = req.model || DEFAULT_MODEL
+  const model = isSlowModel(requestedModel) ? DEFAULT_MODEL : requestedModel
+
   activeSubagents++
   try {
-    // Use the backend LLM with store:false for ephemeral subagent context
     const res = await subagentFetch(
       `${SIRA_API_ROOT}/chat/complete`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
+          model,
           messages: [
             { role: "system", content: "You are " + req.name + ". Respond concisely in under 300 words." },
             { role: "user", content: req.prompt },
