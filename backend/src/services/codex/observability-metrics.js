@@ -49,7 +49,7 @@ const ERROR_CLASSES = Object.freeze([
 function token(value, fallback = 'unknown') {
   return String(value ?? fallback)
     .toLowerCase()
-    .replace(/[^a-z0-9_.:-]+/g, '_')
+    .replace(/[^a-z0-9_.:]+/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_+|_+$/g, '') || fallback;
 }
@@ -166,9 +166,12 @@ function classifyRunError(error, { status = 'error', mode = 'build', message = n
     ?? err?.code
     ?? ''
   );
+  // Transport/provider failures first: timeout, stream abort, 5xx, rate-limit,
+  // refused connections. These are infra, not billing.
+  if (/http codes? 402\b|402\s+payment|payment\s+(?:required|method|insufficient)|402 payment/i.test(text)) return 'payment_required';
+  if (/timeout|timed out|ETIMEDOUT|ECONNREFUSED|429|rate.?limit|5\d\d|provider|service unavailable/i.test(text)) return 'provider_error';
   if (/budget_already_exceeded|DAILY_BUDGET_EXCEEDED|budget_exceeded/i.test(text)) return 'budget_exceeded';
-  if (/402|payment|insufficient[_ ]?credit|quota|OPENROUTER_402|quota_exhausted/i.test(text)) return 'payment_required';
-  if (/timeout|timed out|ETIMEDOUT|ECONNREFUSED|429|rate.?limit|5\d\d|provider/i.test(text)) return 'provider_error';
+  if (/\b402\b|insufficient[_ ]?credit|quota|OPENROUTER_402|quota_exhausted/i.test(text)) return 'payment_required';
   if (/plan[_ ]?parse|parse[_ ]?failed|extractJson/i.test(text)) {
     return mode === 'plan' ? 'plan_parse_failed' : 'internal';
   }

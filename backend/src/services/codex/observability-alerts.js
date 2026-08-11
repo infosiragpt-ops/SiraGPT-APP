@@ -20,7 +20,7 @@ function redact(value) {
   return String(value ?? '')
     .replace(/\b(?:sk|pk|key)-[a-zA-Z0-9_-]{16,}\b/g, '[secret]')
     .replace(/\bBearer\s+[a-zA-Z0-9._~+/=-]{12,}\b/gi, 'Bearer [secret]')
-    .replace(/([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY))\s*[=:]\s*\S+/gi, '$1=[secret]')
+    .replace(/\b([A-Za-z0-9_.-]*(?:TOKEN|SECRET|PASSWORD|API_KEY|KEY)[A-Za-z0-9_.-]*)\s*[=:]\s*[^\s,;]+/gi, '$1=[secret]')
     .trim()
     .slice(0, 2000);
 }

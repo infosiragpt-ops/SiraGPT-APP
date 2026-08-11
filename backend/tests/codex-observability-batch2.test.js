@@ -29,11 +29,15 @@ test('classifyRunError: payment/402 patterns', () => {
   assert.equal(obsMetrics.classifyRunError(new Error('OPENROUTER_402: insufficient credits'), { status: 'error' }), 'payment_required');
   assert.equal(obsMetrics.classifyRunError(new Error('quota_exhausted: plan quota reached'), { status: 'error' }), 'payment_required');
   assert.equal(obsMetrics.classifyRunError(new Error('HTTP 402 payment required'), { status: 'error' }), 'payment_required');
+  // payment anchors must not steal transport strings
+  assert.equal(obsMetrics.classifyRunError(new Error('upstream 500 internal'), { status: 'error' }), 'provider_error');
+  assert.equal(obsMetrics.classifyRunError(new Error('ECONNREFUSED'), { status: 'error' }), 'provider_error');
 });
 
 test('classifyRunError: provider/timeout patterns', () => {
   assert.equal(obsMetrics.classifyRunError(new Error('ECONNREFUSED connect to provider'), { status: 'error' }), 'provider_error');
-  assert.equal(obsMetrics.classifyRunError(new Error('upstream returned 5xx'), { status: 'error' }), 'provider_error');
+  assert.equal(obsMetrics.classifyRunError(new Error('upstream returned HTTP 500 Internal Server Error'), { status: 'error' }), 'provider_error');
+  assert.equal(obsMetrics.classifyRunError(new Error('upstream status 502'), { status: 'error' }), 'provider_error');
   assert.equal(obsMetrics.classifyRunError(new Error('request timed out'), { status: 'error' }), 'provider_error');
 });
 
@@ -95,7 +99,7 @@ test('token normalizes dynamic label values to bounded tokens', () => {
   assert.equal(obsMetrics.token('Plan'), 'plan');
   assert.equal(obsMetrics.token('CODEX-PROJECT+DAILY'), 'codex_project_daily');
   assert.equal(obsMetrics.token(undefined), 'unknown');
-  assert.equal(obsMetrics.token('123--456'), '123456');
+  assert.equal(obsMetrics.token('123--456'), '123_456');
 });
 
 // ── alerting ────────────────────────────────────────────────────────────────
