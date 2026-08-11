@@ -12,11 +12,14 @@ import {
   isBuildLog,
   briefFromConversation,
   isBareBuildCommand,
+  isBareTaskContinue,
   isConversationalMessage,
   isBuildRequest,
   isQuickGreeting,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
+  nextPendingTask,
+  createAgentTask,
   promptFromContext,
   renderFiveSections,
 } from "../lib/code-agent/orchestrator"
@@ -374,4 +377,127 @@ test("briefFromConversation: recovers the discussed idea", () => {
     "¿puedes hacer una app para gestionar los pedidos de mi cafetería?",
   )
   assert.equal(briefFromConversation([{ role: "user", content: "hola" }]), null)
+})
+
+// ── Improvement 1: AgentTask[] wired to FSM ──────────────────────────────────
+
+test("nextPendingTask: returns in_progress task first", () => {
+  const tasks = [
+    createAgentTask("task A", "detail A"),
+    createAgentTask("task B", "detail B"),
+  ]
+  tasks[0].status = "in_progress"
+  tasks[1].status = "pending"
+  const next = nextPendingTask(tasks)
+  assert.ok(next)
+  assert.equal(next!.id, tasks[0].id)
+})
+
+test("nextPendingTask: returns first pending when none in_progress", () => {
+  const tasks = [
+    createAgentTask("task A"),
+    createAgentTask("task B"),
+  ]
+  tasks[0].status = "completed"
+  tasks[1].status = "pending"
+  const next = nextPendingTask(tasks)
+  assert.ok(next)
+  assert.equal(next!.id, tasks[1].id)
+})
+
+test("nextPendingTask: returns null when all completed", () => {
+  const tasks = [createAgentTask("task A")]
+  tasks[0].status = "completed"
+  assert.equal(nextPendingTask(tasks), null)
+})
+
+test("nextPendingTask: returns null for undefined/empty", () => {
+  assert.equal(nextPendingTask(undefined), null)
+  assert.equal(nextPendingTask([]), null)
+})
+
+test("isBareTaskContinue: recognises bare ack phrases", () => {
+  assert.equal(isBareTaskContinue("ok"), true)
+  assert.equal(isBareTaskContinue("okay"), true)
+  assert.equal(isBareTaskContinue("dale"), true)
+  assert.equal(isBareTaskContinue("sigue"), true)
+  assert.equal(isBareTaskContinue("continúa"), true)
+  assert.equal(isBareTaskContinue("continua"), true)
+  assert.equal(isBareTaskContinue("siguiente"), true)
+  assert.equal(isBareTaskContinue("adelante"), true)
+  assert.equal(isBareTaskContinue("next"), true)
+  assert.equal(isBareTaskContinue("go"), true)
+  assert.equal(isBareTaskContinue("procede"), true)
+  assert.equal(isBareTaskContinue("avanza"), true)
+  assert.equal(isBareTaskContinue("vamos"), true)
+  assert.equal(isBareTaskContinue("ok, continúa"), true)
+  assert.equal(isBareTaskContinue("sigue ya"), true)
+  assert.equal(isBareTaskContinue("dale porfa"), true)
+})
+
+test("isBareTaskContinue: rejects substantive messages", () => {
+  assert.equal(isBareTaskContinue("añade una sección de precios"), false)
+  assert.equal(isBareTaskContinue("cambia el color del header"), false)
+  assert.equal(isBareTaskContinue("hazme una app de tareas"), false)
+  assert.equal(isBareTaskContinue("crea una landing"), false)
+})
+
+test("FSM: bare ack in preview phase with pending tasks → work_task action", () => {
+  const task = createAgentTask("Add auth page", "Crea la página de login con formulario")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+  if (action.type === "work_task") {
+    assert.equal(action.taskId, task.id)
+    assert.equal(action.instruction, "Crea la página de login con formulario")
+  }
+})
+
+test("FSM: empty input in preview with pending tasks → work_task action", () => {
+  const task = createAgentTask("Add dashboard", "Crea el dashboard con gráficas")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+})
+
+test("FSM: 'continúa' in preview with pending tasks → work_task", () => {
+  const task = createAgentTask("Add API routes", "Implementa las rutas de la API")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "continúa", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+})
+
+test("FSM: bare ack with no pending tasks → patch (not work_task)", () => {
+  const s = state({ phase: "preview" })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.notEqual(action.type, "work_task")
+})
+
+test("FSM: substantive message in preview with pending tasks → patch (not work_task)", () => {
+  const task = createAgentTask("Add auth page")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "cambia el color del header a azul", { mode: "app", hasModel: true })
+  assert.equal(action.type, "patch")
+})
+
+test("FSM: bare ack outside preview phase → not work_task", () => {
+  const task = createAgentTask("Add auth page")
+  const s = state({
+    phase: "idle",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.notEqual(action.type, "work_task")
 })

@@ -77,6 +77,7 @@ export type AgentAction =
   | { type: "patch"; instruction: string }
   | { type: "debug"; log: string }
   | { type: "passthrough" }
+  | { type: "work_task"; taskId: string; instruction: string }
 
 /** Result of the deterministic build-error classifier (SRE tier-0). */
 export interface BuildErrorVerdict {

@@ -68,6 +68,38 @@ export function completedAgentTaskCount(tasks: AgentTask[] | undefined): number 
   return (tasks || []).filter((task) => task.status === "completed").length
 }
 
+/** Return the next task the agent should work on, or null if none are pending. */
+export function nextPendingTask(tasks: AgentTask[] | undefined): AgentTask | null {
+  const list = tasks || []
+  const inProgress = list.find((task) => task.status === "in_progress")
+  if (inProgress) return inProgress
+  return list.find((task) => task.status === "pending") || null
+}
+
+/** Bare continuation ack: "ok", "continúa", "sigue", "dale", "next", "go". */
+const TASK_CONTINUE_RE =
+  /^(ok(?:ey)?|dale|sigue|continua|contin[uú]a|siguiente|adelante|next|go|procede|avanza|vamos)(?:\s+(?:con|con eso|con la siguiente|la siguiente tarea|el siguiente paso))?(?:\s+(?:ya|ahora|porfa(?:vor)?))?$/
+
+const CONTINUE_WORDS = new Set([
+  "ok", "okay", "dale", "sigue", "continua", "siguiente", "adelante",
+  "next", "go", "procede", "avanza", "vamos", "con", "eso", "la", "el",
+  "tarea", "paso", "ya", "ahora", "porfa", "porfavor", "de", "siguiente",
+])
+
+export function isBareTaskContinue(text: string): boolean {
+  const normalized = clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:'']+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (TASK_CONTINUE_RE.test(normalized)) return true
+  const words = normalized.split(" ").filter(Boolean)
+  if (words.length === 0) return false
+  return words.every((w) => CONTINUE_WORDS.has(w))
+}
+
 // ---- autonomous brief -------------------------------------------------------
 
 // Kept for legacy sessions that may already be mid-intake in local storage.
@@ -554,6 +586,18 @@ function fillSlot(ctx: AgentBuildContext, index: number, raw: string): AgentBuil
 export function nextAgentAction(state: AgentState, input: string, signal: AgentSignal): AgentAction {
   const text = clean(input)
   const tier: "llm" | "deterministic" = signal.hasModel && !signal.forceDeterministic ? "llm" : "deterministic"
+
+  // 0) Autonomous multi-task execution: when there are pending/in-progress tasks
+  //    and the user sent an empty or bare-ack message ("ok", "continúa", "sigue"),
+  //    the agent works on the next task without needing a new instruction.
+  //    This fires BEFORE every other rule so a multi-step plan proceeds
+  //    sequentially without re-prompting the user each turn.
+  if (state.phase === "preview") {
+    const task = nextPendingTask(state.tasks)
+    if (task && (text === "" || isBareTaskContinue(text))) {
+      return { type: "work_task", taskId: task.id, instruction: task.detail || task.title }
+    }
+  }
 
   // 1) Explicit error-fix bridge always wins (user pressed "Reparar error").
   if (signal.fixErrorText) return { type: "debug", log: signal.fixErrorText }
