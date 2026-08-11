@@ -1941,6 +1941,12 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
       }
       res.writeHead(up.statusCode || 502, headers);
       up.pipe(res);
+      // The iframe can navigate away mid-stream; aborting the upstream then
+      // frees the runner socket instead of letting the copy drain to a client
+      // that is already gone.
+      const onClientClose = () => upstream.destroy();
+      res.on('close', onClientClose);
+      res.on('error', onClientClose);
     },
   );
   upstream.on('error', () => {
@@ -2456,6 +2462,12 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   }
   req.on('close', cleanup);
   res.on('close', cleanup);
+  // Some proxies/networks destroy the socket with an 'error' event and never
+  // emit 'close'; without these the heartbeat keeps writing to a dead socket
+  // until the next 25s tick (and even res.write can silently succeed on a
+  // half-open socket). Treat either event as the client going away.
+  req.on('error', cleanup);
+  res.on('error', cleanup);
 
   function write(envelope) {
     if (closed || res.writableEnded) return false;
