@@ -69,7 +69,6 @@ export function completedAgentTaskCount(tasks: AgentTask[] | undefined): number 
   return (tasks || []).filter((task) => task.status === "completed").length
 }
 
-<<<<<<< HEAD
 /** Default autonomous-iteration budget: 20 iterations, 60 minutes. */
 export const DEFAULT_MAX_ITERATIONS = 20
 export const DEFAULT_ITERATION_TIMEOUT_MS = 60 * 60 * 1000
