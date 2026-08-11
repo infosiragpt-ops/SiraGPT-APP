@@ -1056,6 +1056,105 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
   }
 });
 
+// Persist a manual (human) edit from the /chat rich-text editor as a new
+// FileVersion. Auth + ownership scoped, exactly like the versions routes.
+// The ORIGINAL upload is never mutated; the edited Markdown is recorded as
+// the version's `content` and also mirrored into `summary` so the version list
+// (which only selects summary) shows a human-readable "qué cambió" line, and
+// "recargar conserva el estado" works via GET /:id/versions/{id}/content.
+// The edit route accepts `{ content, chatId?, summary? }`.
+router.post('/:id/edit', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true, filename: true, originalName: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
+    if (!content) return res.status(400).json({ error: 'El contenido editado no puede estar vacío' });
+    if (content.length > 2_000_000) {
+      return res.status(400).json({ error: 'El contenido excede el tamaño máximo permitido' });
+    }
+
+    const summary = typeof req.body?.summary === 'string' && req.body.summary.trim()
+      ? req.body.summary.trim().slice(0, 500)
+      : 'Edición manual desde el editor de documentos';
+    const createdByChatId = typeof req.body?.chatId === 'string' && req.body.chatId
+      ? req.body.chatId
+      : null;
+
+    const { recordFileVersion } = require('../services/document-editing/versioning');
+    const version = await recordFileVersion(prisma, {
+      fileId: file.id,
+      userId: req.user.id,
+      artifactId: null, // MVP: no binary artifact — the edited content lives on the version row
+      filename: String(file.originalName || file.filename || 'documento'),
+      summary,
+      validationPassed: true,
+      createdByChatId,
+      editPlan: { type: 'manual_edit', source: 'chat-document-editor' },
+    });
+
+    if (!version) {
+      return res.status(500).json({ error: 'No se pudo registrar la versión del documento' });
+    }
+
+    // Persist the edited content on the version row (additive `content` field)
+    // so a reload can rehydrate the editor without re-parsing the original file.
+    await prisma.fileVersion.update({
+      where: { id: version.id },
+      data: { content },
+    }).catch(() => null);
+
+    return res.status(201).json({
+      fileId: file.id,
+      version: {
+        id: version.id,
+        version: version.version,
+        filename: version.filename,
+        summary: version.summary,
+        validationPassed: version.validationPassed,
+        createdAt: version.createdAt,
+        downloadUrl: null,
+      },
+    });
+  } catch (error) {
+    console.error('File edit error:', error);
+    return res.status(500).json({ error: 'No se pudo guardar la edición del documento' });
+  }
+});
+
+// Read the Markdown content of a specific FileVersion — used to rehydrate the
+// /chat document editor ("recargar conserva el estado"). Returns 404 when the
+// row exists but predates the `content` column (e.g. versions recorded by the
+// background editor, which store a file artifact instead of text); the client
+// falls back to the original extracted text in that case.
+router.get('/:id/versions/:versionId/content', authenticateToken, async (req, res) => {
+  try {
+    const version = await prisma.fileVersion.findFirst({
+      where: { id: req.params.versionId, fileId: req.params.id, userId: req.user.id, validationPassed: true },
+      select: { id: true, content: true, version: true, filename: true },
+    });
+    if (!version) return res.status(404).json({ error: 'Versión no encontrada' });
+    if (typeof version.content !== 'string' || !version.content.trim()) {
+      return res.status(404).json({ error: 'Esta versión no guarda texto editable' });
+    }
+    return res.json({
+      fileId: req.params.id,
+      version: {
+        id: version.id,
+        version: version.version,
+        filename: version.filename,
+        content: version.content,
+      },
+    });
+  } catch (error) {
+    console.error('File version content error:', error);
+    return res.status(500).json({ error: 'No se pudo leer el contenido de la versión' });
+  }
+});
+
 router.get('/:id/analysis', authenticateToken, async (req, res) => {
   try {
     const file = await prisma.file.findFirst({
