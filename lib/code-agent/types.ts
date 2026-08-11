@@ -55,6 +55,22 @@ export interface AgentState {
   generator?: "llm" | "deterministic"
   /** Persistent task list the agent tracks across turns. */
   tasks?: AgentTask[]
+  /** Autonomous-iteration budget preventing infinite agent loops. */
+  budget?: AgentIterationBudget
+}
+
+/** Budget guard for the autonomous agent loop (Mejora 4). */
+export interface AgentIterationBudget {
+  /** How many autonomous iterations have run so far. */
+  count: number
+  /** Hard cap on autonomous iterations (default 20). */
+  max: number
+  /** Epoch ms when the autonomous run started. */
+  startedAt: number
+  /** Max wall-clock duration for the whole run (0 = no time limit). */
+  timeoutMs: number
+  /** True once the budget has been spent; the FSM must stop autonomous work. */
+  exhausted?: boolean
 }
 
 export function defaultAgentState(): AgentState {

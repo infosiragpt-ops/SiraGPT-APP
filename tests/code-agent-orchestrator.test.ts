@@ -20,8 +20,10 @@ import {
   nextAgentAction,
   nextPendingTask,
   createAgentTask,
+  updateAgentTask,
   promptFromContext,
   renderFiveSections,
+  DEFAULT_MAX_ITERATIONS,
 } from "../lib/code-agent/orchestrator"
 
 function state(partial: Partial<AgentState> = {}): AgentState {
@@ -500,4 +502,46 @@ test("FSM: bare ack outside preview phase → not work_task", () => {
   })
   const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
   assert.notEqual(action.type, "work_task")
+})
+
+test("FSM: bare ack with exhausted iteration budget → passthrough (M4)", () => {
+  const task = createAgentTask("Add auth page", "Crea el login")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+    budget: {
+      count: DEFAULT_MAX_ITERATIONS,
+      max: DEFAULT_MAX_ITERATIONS,
+      startedAt: 0,
+      timeoutMs: 60_000,
+      exhausted: true,
+    },
+  })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.equal(action.type, "passthrough")
+})
+
+test("FSM: bare ack with iteration budget under cap → still work_task", () => {
+  const task = createAgentTask("Add auth page", "Crea el login")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+    budget: {
+      count: 1,
+      max: DEFAULT_MAX_ITERATIONS,
+      startedAt: Date.now(),
+      timeoutMs: 60_000,
+    },
+  })
+  const action = nextAgentAction(s, "dale", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+})
+
+test("updateAgentTask: marking completed keeps other tasks untouched", () => {
+  const a = createAgentTask("A", "detalle A")
+  const b = createAgentTask("B", "detalle B")
+  const updated = updateAgentTask([a, b], a.id, { status: "completed" })
+  assert.equal(updated[0].status, "completed")
+  assert.equal(updated[1].status, "pending")
+  assert.ok(updated[0].updatedAt >= a.updatedAt)
 })

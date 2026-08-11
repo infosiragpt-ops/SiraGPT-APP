@@ -156,7 +156,15 @@ import {
   nextAgentAction,
   promptFromContext,
   renderFiveSections,
+  updateAgentTask,
 } from "@/lib/code-agent/orchestrator"
+import {
+  planAgentTasks,
+  nextWorkTaskAction,
+  stepIterationBudget,
+} from "@/lib/code-agent/autonomy"
+import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
+import { runQualityGate } from "@/lib/code-agent/quality-gate"
 import {
   engineTransportInstructions,
   landingSystemPrompt,
@@ -246,6 +254,8 @@ type CodeDispatchOptions = {
   forceDeterministic?: boolean
   files?: string[]
   mode?: ComposerMode
+  /** True when this turn was dispatched by the proactive auto-continuation. */
+  fromWorkTask?: boolean
 }
 
 type PendingCodeInput = {
@@ -1929,6 +1939,16 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
+                  // Mejora 3 (stream validator): when the streamed content fails
+                  // the deterministic structural checks, surface it immediately
+                  // instead of shipping a broken file to the preview. The actual
+                  // auto-retry loop lives in the work_task flow ([retry:N]).
+                  const streamCheck = validateStreamedFiles(
+                    blocks.map((b) => ({ path: b.path as string, content: b.content })),
+                  )
+                  if (!streamCheck.valid && override?.spokenKind !== "debug") {
+                    toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                  }
                   for (const b of blocks) {
                     if (b.path) applyBlock(b.path, b.content)
                   }
@@ -2510,8 +2530,29 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       const ordered = orderFilesForWorkspaceApply(files)
       for (const f of ordered) applyBlock(f.path, f.content)
       if (files.length > 0) openPreviewAndMaybeRun(files)
+      return files
     },
     [applyBlock],
+  )
+
+  // Mejora 3: post-stream deterministic validation + quality gate. Runs the
+  // structural checks (fences, JSON, JSX, truncation) and the pattern-based
+  // quality gate over the files the agent just wrote, and returns a retry
+  // instruction when something would break the preview. Pure — no writes.
+  const validateGeneratedFiles = React.useCallback(
+    (files: Array<{ path: string; content: string }>): { ok: boolean; retryInstruction?: string } => {
+      if (files.length === 0) return { ok: true }
+      const stream = validateStreamedFiles(files)
+      if (!stream.valid) {
+        return { ok: false, retryInstruction: stream.retryInstruction }
+      }
+      const gate = runQualityGate(files)
+      if (!gate.passed) {
+        return { ok: false, retryInstruction: gate.retryInstruction }
+      }
+      return { ok: true }
+    },
+    [],
   )
 
   // Run the deterministic builder from either a raw Codex prompt or an intake
@@ -3940,7 +3981,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: CodeDispatchOptions) => {
       const displayText = rawInput.trim()
-      if (!displayText) return
+      // An empty rawInput is only valid for the proactive auto-continuation
+      // turn (Mejora 2): the FSM Rule 0 interprets empty text as "continue the
+      // plan". Explicit typed input is never allowed to be empty.
+      if (!displayText && !opts?.fromWorkTask) return
       const text = expandCodexSlashCommand(displayText).prompt
       const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
       const effectiveMode = opts?.mode ?? composerMode
@@ -4094,7 +4138,16 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       switch (action.type) {
         case "generate": {
-          patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
+          // Mejora 1: decompose the requested build into an ordered AgentTask[]
+          // plan the agent will execute autonomously after this first generate.
+          const initialPlan = planAgentTasks(buildText, agent.tasks)
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: "generating",
+            context: action.context,
+            tasks: initialPlan.length > 0 ? initialPlan : s.tasks,
+            budget: stepIterationBudget(s),
+          }))
           const hasIntake = !!(action.context.productType || action.context.brand)
           const genPrompt = hasIntake ? promptFromContext(action.context) : buildText
           // Deterministic tier: enrich a bare context with the raw prompt so the
@@ -4132,7 +4185,71 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           }
           return
         }
+        case "work_task": {
+          // Mejora 1: the FSM asked us to execute the next pending AgentTask.
+          // Mark it in_progress, run the instruction through the same patch
+          // machinery, then mark it completed (only after the stream/quality
+          // gate passes — Mejora 3) and let the proactive effect continue with
+          // the next task (Mejora 2).
+          const currentAgent = activeCodeChatSession?.agent
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: "generating",
+            tasks: updateAgentTask(s.tasks || [], action.taskId, { status: "in_progress" }),
+          }))
+          // Mejora 3 retry loop: execute the instruction, validate the files it
+          // produced, and when the stream/quality gate fails re-run the SAME
+          // task with a targeted fix instruction. Attempts live under a
+          // "[retry:N]" prefix so the loop is bounded by MAX_STREAM_RETRIES.
+          let instruction = action.instruction
+          let retryAttempt = 0
+          const filesBefore = new Map(Object.entries(files).map(([path, f]) => [path, f.content]))
+          for (let attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
+            if (attachedFileIds.length > 0 && activeModelName) {
+              await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            } else if (runDeterministicPatch(instruction, sid)) {
+              // patched deterministically
+            } else if (codexAvailable) {
+              const out = await runCodexEngine(instruction, sid, { iterate: true })
+              if (out === "workspace_sync_failed") {
+                await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+              }
+            } else if (engineMode && engineAvailable) {
+              await runEngine(instruction, sid, { iterate: true })
+            } else {
+              await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            }
+            // Validate only the files THIS turn added or modified — never the whole
+            // workspace (pre-existing console.log in old files must not block
+            // a new task).
+            const appliedNow = Object.values(files)
+              .filter((f) => f.content !== filesBefore.get(f.path))
+              .map((f) => ({ path: f.path, content: f.content }))
+            const verdict = validateGeneratedFiles(appliedNow)
+            if (verdict.ok) break
+            if (attempt >= MAX_STREAM_RETRIES) break
+            retryAttempt = attempt + 1
+            const task = currentAgent?.tasks?.find((t) => t.id === action.taskId)
+            const baseInstruction = (task?.detail || task?.title || instruction).replace(/^\[retry:\d+\]\s*/, "")
+            instruction = `${verdict.retryInstruction}\n\n[retry:${retryAttempt}] ${baseInstruction}`
+            toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${verdict.retryInstruction?.slice(0, 90)}…`)
+          }
+          const doneAgent = activeCodeChatSession?.agent
+          const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, { status: "completed" })
+          patchAgentState(sid, (s) => ({ ...s, phase: "preview", tasks: patchedTasks }))
+          return
+        }
         case "patch": {
+          // Mejora 2: a patch instruction with chained steps ("añade X y luego Y")
+          // expands into an autonomous task plan the agent executes one by one.
+          const plan = planAgentTasks(action.instruction, agent.tasks)
+          if (plan.length > 1 || opts?.fromWorkTask) {
+            patchAgentState(sid, (s) => ({
+              ...s,
+              tasks: plan,
+              budget: stepIterationBudget(s),
+            }))
+          }
           if (attachedFileIds.length > 0 && activeModelName) {
             await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
             return
@@ -4240,6 +4357,32 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       cancelled = true
     }
   }, [busy, buildingApp])
+
+  // Proactive auto-continuation (Mejora 2): after a generate/patch turn settles
+  // (busy → idle), if the agent still has pending AgentTask[] work and the
+  // iteration budget allows it, dispatch the next task WITHOUT waiting for the
+  // user to type "ok"/"continúa". This is what makes the /code agent build
+  // multi-step plans all by itself.
+  const autoContinueRef = React.useRef(false)
+  React.useEffect(() => {
+    if (busy || buildingApp || externalRequestInFlightRef.current) return
+    const agentState = activeCodeChatSession?.agent
+    if (!agentState || agentState.phase !== "preview") return
+    if (autoContinueRef.current) return
+    const plan = agentState.tasks || []
+    const hasPending = plan.some((task) => task.status === "pending" || task.status === "in_progress")
+    if (!hasPending) return
+    // Gate on the budget BEFORE dispatching: once max iterations or the timeout
+    // is spent, the run stops autonomously (Mejora 4).
+    const decision = nextWorkTaskAction(agentState)
+    if (decision.type !== "work_task") return
+    autoContinueRef.current = true
+    void Promise.resolve(dispatchRef.current?.("", { fromWorkTask: true, mode: composerModeRef.current }))
+      .catch(() => undefined)
+      .finally(() => {
+        autoContinueRef.current = false
+      })
+  }, [activeCodeChatSession?.agent, busy, buildingApp])
 
   // Tool-initiated agent requests: workspace tools (Auth, Automations, …) emit
   // `siragpt:code-agent-request` with a plain instruction. It flows through the
