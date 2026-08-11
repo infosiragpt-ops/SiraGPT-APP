@@ -1272,7 +1272,7 @@ export function PreviewPane() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
-      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-2">
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 bg-background px-2 py-1.5">
         {/* Canvas — opens the agent-driven mockup canvas tool. The device
             switcher lives beside the address bar, not here. */}
         <button
@@ -1286,7 +1286,7 @@ export function PreviewPane() {
           className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/60"
         >
           <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
-          <span>Canvas</span>
+          <span className="hidden md:inline">Canvas</span>
         </button>
 
         <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
