@@ -38,6 +38,8 @@ const {
 const autonomousRunPolicy = require('./autonomous-run-policy');
 const usageLedger = require('./usage-ledger');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
+const observabilityMetrics = require('./observability-metrics');
+const observabilityAlerts = require('./observability-alerts');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
@@ -724,6 +726,27 @@ async function processCodexRunJob({
       env,
       clock,
     });
+    // Platform telemetry (batch 2): error class + wall duration + failed alerts.
+    // Best-effort — instrumentation must never break the terminal lifecycle.
+    try {
+      const runMode = String(run?.mode || 'unknown');
+      if (status === 'done' && run?.startedAt) {
+        const seconds = (new Date(nowIso(clock)).getTime() - new Date(run.startedAt).getTime()) / 1000;
+        observabilityMetrics.recordRunDuration({ mode: runMode, durationSeconds: seconds });
+        observabilityMetrics.recordPhaseOutcome({ mode: runMode, phase: 'build', outcome: 'ok' });
+      } else if (status === 'error') {
+        const errorClass = observabilityMetrics.classifyRunError(
+          outcome?.error || run?.error,
+          { status, mode: runMode, message: errorMsg },
+        );
+        observabilityMetrics.recordTerminalError({ mode: runMode, status, errorClass });
+        observabilityAlerts.notifyCodexRunFailed({ run, errorClass, error: errorMsg, mode: runMode }, env);
+      } else if (status === 'cancelled') {
+        observabilityMetrics.recordTerminalError({ mode: runMode, status, errorClass: 'cancelled' });
+      }
+    } catch (err) {
+      if (env?.NODE_ENV !== 'test') console.warn('[codex run-processor] telemetry failed:', err?.message || err);
+    }
   }
 
   let fleetQaResult = null;

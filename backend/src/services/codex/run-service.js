@@ -17,6 +17,7 @@ const defaultPrisma = (() => {
 const runQueue = require('./run-queue');
 const eventStoreDefault = require('./event-store');
 const autonomousRunPolicy = require('./autonomous-run-policy');
+const observabilityMetrics = require('./observability-metrics');
 
 const MODES = ['plan', 'build'];
 const ACTIVE_STATUSES = ['queued', 'running', 'waiting_approval'];
@@ -377,6 +378,12 @@ async function createRun({
       // Leave the row `queued`; boot-recovery re-enqueues stuck rows. Surface a
       // soft signal but don't fail the create — the run exists and is recoverable.
       if (process.env.NODE_ENV !== 'test') console.warn('[codex run-service] enqueue failed:', err?.message || err);
+    }
+    // Platform telemetry (batch 2). Best-effort; a metrics failure must not fail create.
+    try {
+      observabilityMetrics.recordRunCreated({ mode: String(row?.mode || 'plan'), clock });
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'test') console.warn('[codex run-service] telemetry failed:', err?.message || err);
     }
   }
 
