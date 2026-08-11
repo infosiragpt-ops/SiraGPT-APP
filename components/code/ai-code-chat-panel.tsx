@@ -2450,6 +2450,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setTurns,
       turns,
       user,
+      activeCodeChatSession?.agent?.budget,
     ],
   )
 
