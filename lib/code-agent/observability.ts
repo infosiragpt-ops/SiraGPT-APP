@@ -95,6 +95,13 @@ export const DEFAULT_MAX_RUNS = 200
 export const DEFAULT_EXPIRE_AFTER_MS = 24 * 60 * 60 * 1000
 export const DEFAULT_LOG_DIR = ".data/code-agent/observability"
 
+declare global {
+  interface Window {
+    /** Set to "off" to disable client-side persistence at runtime. */
+    __SIRAGPT_OBSERVABILITY__?: string
+  }
+}
+
 const PHASE_NAMES: readonly CodeAgentPhaseName[] = [
   "context",
   "generate",
@@ -235,26 +242,27 @@ export function summarizeObservability(sessionId?: string | null): CodeAgentSnap
   }
 }
 
-/** JSONL persistence: one line per run, append-only, path outside git. */
+/**
+ * JSONL persistence via the server-side store route. The panel is
+ * client-side, so writing files directly here would pull `node:fs` into the
+ * webpack client graph (and fail CI with "Unhandled scheme"). Instead we POST
+ * the run to `/api/code-agent/observability`, which appends it to a daily
+ * JSONL under `.data/code-agent/observability/` (outside the git tree).
+ * Best-effort: any failure is swallowed — observability never touches the
+ * agent's hot path.
+ */
 export function persistRun(run: CodeAgentRun): boolean {
   if (state.disablePersistence) return false
-  try {
-    if (typeof process === "undefined") return false
-    if (process && process.env && process.env.SIRAGPT_OBSERVABILITY === "off") return false
-    const fs = require("node:fs") as typeof import("node:fs")
-    const path = require("node:path") as typeof import("node:path")
-    const dir = path.resolve(state.logDir)
-    fs.mkdirSync(dir, { recursive: true })
-    const file = path.join(
-      dir,
-      new Date(run.finishedAt).toISOString().slice(0, 10) + ".jsonl",
-    )
-    fs.appendFileSync(file, JSON.stringify(run) + "\n", "utf8")
-    return true
-  } catch {
-    // Persistence is best-effort: never affect the agent's hot path.
-    return false
-  }
+  if (typeof window === "undefined") return false
+  if (window.__SIRAGPT_OBSERVABILITY__?.toLowerCase() === "off") return false
+  // Fire-and-forget: never await, never surface errors to the UI.
+  void fetch("/api/code-agent/observability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run }),
+    keepalive: true,
+  }).catch(() => {})
+  return true
 }
 
 // ---- module state (isolated per bundle/worker; not shared across processes) --
@@ -317,26 +325,10 @@ export function getObservabilityState(): Readonly<{
 }
 
 /**
- * Convenience used by tests and dev tooling to look inside the buffer without
- * importing the whole module graph. Returns `undefined` on the client.
+ * Deprecated no-op kept for type/tests stability: persistence moved to the
+ * server-side store (`lib/code-agent/observability-store.ts` + the API route).
+ * Reads on the client go through `GET /api/code-agent/observability`.
  */
-export function readLogLines(logDir?: string): string[] {
-  if (typeof process === "undefined" || !process.env) return []
-  try {
-    const fs = require("node:fs") as typeof import("node:fs")
-    const path = require("node:path") as typeof import("node:path")
-    const dir = path.resolve(logDir || DEFAULT_LOG_DIR)
-    const files = fs
-      .readdirSync(dir)
-      .filter((f: string) => f.endsWith(".jsonl"))
-      .sort()
-    return files.flatMap((f: string) =>
-      fs
-        .readFileSync(path.join(dir, f), "utf8")
-        .split("\n")
-        .filter((l: string) => l.trim().length > 0),
-    )
-  } catch {
-    return []
-  }
+export function readLogLines(_logDir?: string): string[] {
+  return []
 }
