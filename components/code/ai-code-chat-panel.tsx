@@ -193,6 +193,13 @@ import {
   COMPOSER_PLACEHOLDER,
 } from "@/lib/code-agent/composer-mode-config"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import {
+  ModelCircuitBreakerRegistry,
+  computeBackoffMs,
+  isRetryableFailure,
+  retryWithBackoff,
+  shouldRetryOpenRouter,
+} from "@/lib/code-agent/resilience"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
@@ -263,6 +270,11 @@ import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+// Per-model circuit breakers for the application-layer stream retry. Module-
+// level so breaker state survives component remounts (a sick model stays
+// "open" between turns instead of tripping fresh every render).
+const modelBreakers = new ModelCircuitBreakerRegistry()
 
 type CodeDispatchOptions = {
   forceDeterministic?: boolean
@@ -1922,22 +1934,120 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }),
           })
         }
-        await apiClient.generateAIStream(
+        await retryWithBackoff(
+          async () => {
+            let streamError: Error | null = null
+            let streamSettled = false
+            await new Promise<void>((resolve) => {
+              apiClient.generateAIStream(
+                {
+                  provider: activeProvider,
+                  model: activeModelName,
+                  prompt: finalPrompt,
+                  streamId: id,
+                  files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
+                  // /code stays on the reliable plain stream. For an explicit public
+                  // web turn the backend performs a deterministic, read-only fetch /
+                  // search first and injects the result as untrusted evidence. We do
+                  // NOT enable the general agent toolset here: a malicious page must
+                  // never gain access to code, shell, files or private connectors.
+                  disableAgentic: true,
+                  enableWebGrounding: webGroundedConversation,
+                  webGroundingQuery: webGroundingQuery || undefined,
+                  reasoningEffort: selectedEffort,
+                },
+                (chunk) => {
+                  assistantText += chunk
+                  setTurns((prev) =>
+                    prev.map((t) => {
+                      if (t.id !== assistantId) return t
+                      const nextContent = t.content + chunk
+                      // The first completed line = the planning line is done → stamp the
+                      // REAL planning duration once (turn start → first line emitted).
+                      const planPatch =
+                        t.planMs == null && nextContent.includes("\n")
+                          ? { planMs: Date.now() - startedAt }
+                          : {}
+                      return { ...t, content: nextContent, ...planPatch }
+                    }),
+                  )
+                },
+                () => {
+                  if (streamSettled) return
+                  streamSettled = true
+                  resolve()
+                },
+                (err) => {
+                  // The transport (lib/api.ts) has already retried 5 times with
+                  // cursor resume. This is the application-layer verdict: hold the
+                  // error until the outer retryWithBackoff decides, so a retriable
+                  // failure never flashes a red "Error en el turno" mid-recovery.
+                  if (streamSettled) return
+                  streamSettled = true
+                  streamError = err || new Error("Error en el chat de código")
+                  resolve()
+                },
+                controller.signal,
+                {
+                  // The backend may replace already-streamed text after its final
+                  // safety scrub. Keep both the UI turn and the local accumulator in
+                  // sync; appending the replacement would duplicate the answer and
+                  // could reintroduce text the scrub intentionally removed.
+                  onReplace: (content) => {
+                    assistantText = content
+                    setTurns((prev) =>
+                      prev.map((t) =>
+                        t.id === assistantId
+                          ? {
+                              ...t,
+                              content,
+                              ...(t.planMs == null && content.includes("\n")
+                                ? { planMs: Date.now() - startedAt }
+                                : {}),
+                            }
+                          : t,
+                      ),
+                    )
+                  },
+                  onUsage: (u) => { usage = u },
+                },
+              )
+            })
+            if (streamError) throw streamError
+          },
           {
-            provider: activeProvider,
-            model: activeModelName,
-            prompt: finalPrompt,
-            streamId: id,
-            files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
-            // /code stays on the reliable plain stream. For an explicit public
-            // web turn the backend performs a deterministic, read-only fetch /
-            // search first and injects the result as untrusted evidence. We do
-            // NOT enable the general agent toolset here: a malicious page must
-            // never gain access to code, shell, files or private connectors.
-            disableAgentic: true,
-            enableWebGrounding: webGroundedConversation,
-            webGroundingQuery: webGroundingQuery || undefined,
-            reasoningEffort: selectedEffort,
+            // Application-layer retry ON TOP of the transport's 5 attempts.
+            // Only retried before any content reached the UI (re-sending after
+            // content would duplicate the turn / break the e2e contract), and
+            // only while the autonomous-iteration budget still allows it.
+            shouldRetry: (err: unknown, attempt: number): boolean => {
+              if (assistantText.trim()) return false
+              const budget = activeCodeChatSession?.agent?.budget
+              const budgetExhausted = budget ? budget.count >= budget.max : false
+              const breaker = modelBreakers.get(activeProvider, activeModelName)
+              if (!breaker.allowRequest()) {
+                toast.error("El modelo está temporalmente degradado. Intenta de nuevo en un momento.")
+                return false
+              }
+              const verdict = shouldRetryOpenRouter(err as any, attempt, { budgetExhausted })
+              if (verdict) breaker.recordFailure()
+              else breaker.recordSuccess()
+              return verdict
+            },
+            delayMs: (attempt) => computeBackoffMs(attempt),
+            onRetry: (attempt, delayMs) => {
+              toast.info(
+                `El stream se interrumpió — reintentando (${attempt}/2, en ${Math.round(delayMs / 1000)}s)…`,
+                { duration: 4000 },
+              )
+              patchAssistant({
+                agentLabel: "Reconectando con el modelo",
+                agentPhases: buildCodeAgentPhases("generate", {
+                  context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+                  generate: { status: "running", detail: `Reintento ${attempt}/2 tras interrupción` },
+                }),
+              })
+            },
           },
           (chunk) => {
             if (firstChunkAt == null) firstChunkAt = Date.now()
@@ -1969,6 +2079,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // writing). Read-only modes (ask/plan/image) pass autoApply:false and
             // never apply. `applied` feeds the Worked-Summary/action-log metrics
             // on the turn (real numbers).
+        )
+            let applied: Array<{ path: string; content: string }> = []
             if (!conversational) {
               patchAssistant({
                 agentLabel: "Aplicando cambios al workspace",
