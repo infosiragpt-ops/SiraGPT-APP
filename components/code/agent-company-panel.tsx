@@ -189,8 +189,6 @@ import { projectsService, type Project } from "@/lib/projects-service"
 import { cn } from "@/lib/utils"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
-import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
-import { AgentOfficeScene } from "./agent-office/agent-office-scene"
 import { CompanyResourcesSurface } from "./company-resources-surface"
 import {
   EnterpriseCommandCenter,
@@ -625,6 +623,64 @@ function replaceCompanyWorkspaceUrl(option: CompanyOption | null) {
   if (option?.projectId) url.searchParams.set("folder", option.projectId)
   else if (option?.kind === "local-folder") url.searchParams.set("local", option.id)
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
+}
+
+// Thumbnail diferido: la escena 3D (three.js + ciudad) es el chunk más pesado
+// del /code. El thumbnail se monta tras el primer idle y con requestIdleCallback
+// para no bloquear la primera pintura ni el TTI; el fallback conserva el testid
+// (agent-office-thumbnail) para que el UI lock y los e2e de la oficina sigan
+// viendo el contenedor, y el canvas llega cuando el usuario ya completó la
+// interacción inicial con el panel.
+const OfficeThumbnailScene = React.lazy(() =>
+  import("./agent-office/agent-office-scene").then((mod) => ({
+    default: mod.AgentOfficeScene,
+  })),
+)
+
+// El overlay de la megaoficina (dialog full con la escena 3D de 196 workers)
+// se carga solo cuando el usuario lo abre; fuera del camino crítico del /code.
+const OfficeOverlay = React.lazy(() =>
+  import("./agent-office/agent-office-overlay").then((mod) => ({
+    default: mod.AgentOfficeOverlay,
+  })),
+)
+
+function LazyAgentOfficeThumbnail({ officeModel, paused = false }: {
+  officeModel: ReturnType<typeof buildAgentOfficeModel>
+  paused?: boolean
+}) {
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => {
+    let cancelled = false
+    const mount = () => {
+      if (cancelled) return
+      setMounted(true)
+    }
+    // Tras el primer frame (next-tick), no idle: el split de bundle ya saca
+    // three.js del camino crítico, y montar pronto mantiene el thumbnail listo
+    // para el UI lock y los e2e de la oficina (data-office-ready) sin esperar
+    // un idle incierto. La carga del chunk lazy ocurre en paralelo a la
+    // primera pintura del panel.
+    const raf = window.requestAnimationFrame(mount)
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(raf)
+    }
+  }, [])
+
+  // Sin testid en el wrapper: agent-office-scene ya expone data-testid
+  // "agent-office-thumbnail" cuando variant=thumbnail, y es esa la que lleva
+  // data-office-ready. Un testid duplicado en el wrapper rompería
+  // getByTestId (devuelve el primero en orden de DOM, sin el atributo).
+  return (
+    <div className="absolute inset-0">
+      {mounted ? (
+        <React.Suspense fallback={<div data-testid="agent-office-thumbnail-fallback" className="absolute inset-0" />}>
+          <OfficeThumbnailScene model={officeModel} variant="thumbnail" paused={paused} />
+        </React.Suspense>
+      ) : null}
+    </div>
+  )
 }
 
 export function AgentCompanyPanel() {
@@ -2841,33 +2897,35 @@ export function AgentCompanyPanel() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AgentOfficeOverlay
-        open={officeOpen}
-        companyName={companyName}
-        model={officeModel}
-        onClose={() => setOfficeOpen(false)}
-        onOpenWorker={openOfficeWorker}
-        onOpenDepartment={(departmentId) => {
-          setOfficeOpen(false)
-          openDepartmentChat(departmentId)
-        }}
-        onOpenDashboard={() => {
-          setOfficeOpen(false)
-          openCompanySurface("dashboard")
-        }}
-        onOpenControl={() => {
-          setOfficeOpen(false)
-          openCompanySurface("control")
-        }}
-        onOpenFiles={() => {
-          setOfficeOpen(false)
-          openCompanySurface("files")
-        }}
-        onOpenResources={() => {
-          setOfficeOpen(false)
-          openCompanySurface("resources")
-        }}
-      />
+      <React.Suspense fallback={null}>
+        <OfficeOverlay
+          open={officeOpen}
+          companyName={companyName}
+          model={officeModel}
+          onClose={() => setOfficeOpen(false)}
+          onOpenWorker={openOfficeWorker}
+          onOpenDepartment={(departmentId) => {
+            setOfficeOpen(false)
+            openDepartmentChat(departmentId)
+          }}
+          onOpenDashboard={() => {
+            setOfficeOpen(false)
+            openCompanySurface("dashboard")
+          }}
+          onOpenControl={() => {
+            setOfficeOpen(false)
+            openCompanySurface("control")
+          }}
+          onOpenFiles={() => {
+            setOfficeOpen(false)
+            openCompanySurface("files")
+          }}
+          onOpenResources={() => {
+            setOfficeOpen(false)
+            openCompanySurface("resources")
+          }}
+        />
+      </React.Suspense>
     </div>
   )
 
@@ -3106,7 +3164,7 @@ function CompanyHome({
           data-testid="agent-company-live-preview"
         >
           <div className="pointer-events-none absolute inset-0">
-            <AgentOfficeScene model={officeModel} variant="thumbnail" paused={officeOpen} />
+            <LazyAgentOfficeThumbnail officeModel={officeModel} paused={officeOpen} />
           </div>
           <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-[#09111f]/90 px-2.5 py-1.5 text-[11px] font-semibold text-slate-100 shadow-lg backdrop-blur-xl">
             <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-slate-500")} />
