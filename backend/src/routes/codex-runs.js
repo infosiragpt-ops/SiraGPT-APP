@@ -24,7 +24,7 @@ router.post(
     body('repository').optional().isString().trim().isLength({ max: 240 }),
     body('branch').optional().isString().trim().isLength({ max: 120 }),
     body('taskId').optional().isString(),
-    body('model').optional().isString(),
+    body('model').optional().isString().isLength({ max: 200 }),
   ],
   authenticateToken,
   enforcePlanQuota({ surface: 'agent.task.create' }),
@@ -118,10 +118,41 @@ router.get(
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-    for (const event of row.events || []) send(event);
-    send({ type: 'snapshot', run: row });
-    res.end();
+    // Replay-only SSE. The stream must never let a write/end exception escape
+    // to the global error handler (it would try to send a JSON 500 after the
+    // SSE head was already flushed) and must close cleanly when the client
+    // disconnects — a dead socket otherwise keeps the handler alive until
+    // Node notices on the next write.
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+
+    const send = (obj) => {
+      if (closed || res.writableEnded) return false;
+      try {
+        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        return true;
+      } catch {
+        cleanup();
+        return false;
+      }
+    };
+    for (const event of row.events || []) {
+      if (!send(event)) break;
+    }
+    if (!closed && send({ type: 'snapshot', run: row })) {
+      try {
+        res.end();
+      } catch {
+        cleanup();
+      }
+    } else {
+      cleanup();
+    }
   },
 );
 
