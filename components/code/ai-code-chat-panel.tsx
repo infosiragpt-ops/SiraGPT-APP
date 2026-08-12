@@ -60,6 +60,7 @@ import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
+import { ComposerSendArrow } from "@/components/chat/ChatComposerSurface"
 import { DictationButton } from "@/components/codex/dictation-button"
 import { Button } from "@/components/ui/button"
 import {
@@ -4606,7 +4607,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   return (
     <div
-      className="relative flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
+      className="relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
       data-embedded={embedded ? "true" : undefined}
     >
       {codeDraggingFiles ? (
@@ -4732,14 +4733,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
-        {/* Replit-style composer card: the text field on top, then a footer
-            row with + on the left and model / Plan / mic / send on the right. */}
+      <form onSubmit={onSubmit} className="code-composer shrink-0" data-testid="code-composer">
         <div
-          className={cn(
-            "group rounded-xl border border-border/70 bg-background px-3 py-2.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#0f87ff]/50 focus-within:shadow-[0_0_0_3px_rgba(15,135,255,0.10)]",
-            codeDraggingFiles && "border-[#0f87ff]/60 shadow-[0_0_0_3px_rgba(15,135,255,0.10)]",
-          )}
+          data-testid="code-composer-surface"
+          className={cn("code-composer__surface", codeDraggingFiles && "is-drop-target")}
           onDragOver={handleComposerDragOver}
           onDrop={handleComposerDrop}
         >
@@ -4758,7 +4755,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             onRetry={retryCodeAttachment}
           />
           {selectedPreviewTarget ? (
-            <div className="mb-1.5 flex items-center gap-1.5">
+            <div className="code-composer__chip-row">
               <div
                 data-testid="code-target-selection-chip"
                 className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-violet-500/25 bg-violet-500/[0.08] px-2.5 py-1.5 text-[11px] font-medium text-violet-800 shadow-[0_1px_0_rgba(124,58,237,0.04)] dark:text-violet-100"
@@ -4798,162 +4795,156 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 : COMPOSER_PLACEHOLDER[composerMode]
             }
             rows={1}
-            className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
+            className="code-composer__input max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            <ComposerPlusMenu
-              mode={composerMode}
-              includeContext={includeContext}
-              activeFileLabel={activeFileLabel}
-              engineAvailable={engineAvailable}
-              engineMode={engineMode}
-              onModeChange={(mode) => {
-                if (mode === "plan" && composerModeRef.current !== "plan") {
-                  planReturnModeRef.current = composerModeRef.current
-                } else if (mode !== "plan") {
-                  planReturnModeRef.current = mode
-                }
-                setComposerMode(mode)
-                inputRef.current?.focus()
-              }}
-              onIncludeContextChange={setIncludeContext}
-              onEngineModeChange={setEngineMode}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => codeFileInputRef.current?.click()}
-              aria-label="Adjuntar imagen o documento"
-              title="Adjuntar imagen, PDF, Word, Excel o PPT"
-              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-            >
-              <Paperclip className="h-[16px] w-[16px]" />
-            </Button>
-            <button
-              type="button"
-              onClick={toggleTargetSelection}
-              aria-pressed={selectingTarget}
-              aria-label={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
-              title={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
-              data-testid="code-target-selector"
-              className={cn(
-                "code-target-select-button shrink-0 rounded-md",
-                selectingTarget && "code-target-select-button--active",
-              )}
-            >
-              {selectingTarget ? (
-                <X className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
-              ) : (
-                <ScanSearch className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
-              )}
-              <span className="code-target-select-button__label hidden md:inline">
-                {selectingTarget ? "Cancelar" : "Seleccionar UI"}
-              </span>
-            </button>
-            <span className="min-w-0 flex-1" />
-            <ModelPickerInline
-              models={pickerModels}
-              selectedModel={activeModelName || ""}
-              fast={modelIsFast}
-              selectedEffort={selectedEffort}
-              onSelectEffort={setSelectedEffort}
-              onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
-            />
-            <button
-              type="button"
-              onClick={togglePlanMode}
-              aria-pressed={composerMode === "plan"}
-              title="Planear antes de editar archivos"
-              className={cn(
-                "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors",
-                composerMode === "plan"
-                  ? "border-[#0f87ff]/40 bg-[#0f87ff]/10 text-[#0b6ccc] dark:text-[#5ab3ff]"
-                  : "border-border/45 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-              )}
-            >
-              <span
-                className={cn(
-                  "flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border transition-colors",
-                  composerMode === "plan"
-                    ? "border-[#0f87ff] bg-[#0f87ff] text-white"
-                    : "border-border",
-                )}
-                aria-hidden="true"
-              >
-                {composerMode === "plan" ? <Check className="h-2.5 w-2.5" strokeWidth={3} /> : null}
-              </span>
-              Plan
-            </button>
-            <DictationButton
-              variant="light"
-              locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
-              onTranscript={(text) => {
-                const chunk = text.trim()
-                if (!chunk) return
-                setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
-                inputRef.current?.focus()
-              }}
-            />
-            {busy ? (
-              <>
-                {canSubmitCodePrompt ? (
-                  <Button
-                    type="submit"
-                    size="icon"
-                    className="h-8 w-8 shrink-0 rounded-full bg-[#0f87ff] text-white transition-colors hover:bg-[#0c74dd]"
-                    aria-label="Enviar al terminar"
-                    title="Enviar al terminar"
-                  >
-                    <ArrowUp className="h-4 w-4" strokeWidth={2.25} />
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className={cn(
-                    "h-8 w-8 shrink-0 rounded-full hover:bg-muted",
-                    activeCodexCancellationState === "failed" ? "text-destructive" : "text-foreground",
-                  )}
-                  onClick={cancelStream}
-                  disabled={activeCodexCancellationState === "cancelling"}
-                  aria-label={
-                    activeCodexCancellationState === "cancelling"
-                      ? "Deteniendo agente"
-                      : activeCodexCancellationState === "failed"
-                        ? "Reintentar detención"
-                        : "Detener"
+          <div className="code-composer__footer">
+            <div className="code-composer__leading">
+              <ComposerPlusMenu
+                mode={composerMode}
+                includeContext={includeContext}
+                activeFileLabel={activeFileLabel}
+                engineAvailable={engineAvailable}
+                engineMode={engineMode}
+                onModeChange={(mode) => {
+                  if (mode === "plan" && composerModeRef.current !== "plan") {
+                    planReturnModeRef.current = composerModeRef.current
+                  } else if (mode !== "plan") {
+                    planReturnModeRef.current = mode
                   }
-                  title={
-                    activeCodexCancellationState === "cancelling"
-                      ? "Confirmando cancelación en el servidor"
-                      : activeCodexCancellationState === "failed"
-                        ? "Reintentar cancelación en el servidor"
-                        : "Detener"
-                  }
-                >
-                  {activeCodexCancellationState === "cancelling"
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <StopCircle className="h-4 w-4" />}
-                </Button>
-              </>
-            ) : (
+                  setComposerMode(mode)
+                  inputRef.current?.focus()
+                }}
+                onIncludeContextChange={setIncludeContext}
+                onEngineModeChange={setEngineMode}
+              />
               <Button
-                type="submit"
+                type="button"
+                variant="ghost"
                 size="icon"
-                className={cn(
-                  "h-8 w-8 shrink-0 rounded-full transition-colors",
-                  canSubmitCodePrompt
-                    ? "bg-[#0f87ff] text-white hover:bg-[#0c74dd]"
-                    : "bg-muted text-muted-foreground/50",
-                )}
-                disabled={!canSubmitCodePrompt}
-                aria-label="Enviar"
+                onClick={() => codeFileInputRef.current?.click()}
+                aria-label="Adjuntar imagen o documento"
+                title="Adjuntar imagen, PDF, Word, Excel o PPT"
+                className="code-composer__icon-btn"
               >
-                <ArrowUp className="h-4 w-4" strokeWidth={2.25} />
+                <Paperclip className="h-[16px] w-[16px]" />
               </Button>
-            )}
+              <button
+                type="button"
+                onClick={toggleTargetSelection}
+                aria-pressed={selectingTarget}
+                aria-label={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
+                title={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
+                data-testid="code-target-selector"
+                className={cn(
+                  "code-target-select-button shrink-0 rounded-md",
+                  selectingTarget && "code-target-select-button--active",
+                )}
+              >
+                {selectingTarget ? (
+                  <X className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <ScanSearch className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
+                )}
+                <span className="code-target-select-button__label">
+                  {selectingTarget ? "Cancelar" : "Seleccionar UI"}
+                </span>
+              </button>
+            </div>
+            <div className="code-composer__trailing">
+              <ModelPickerInline
+                models={pickerModels}
+                selectedModel={activeModelName || ""}
+                fast={modelIsFast}
+                selectedEffort={selectedEffort}
+                onSelectEffort={setSelectedEffort}
+                onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
+              />
+              <button
+                type="button"
+                onClick={togglePlanMode}
+                aria-pressed={composerMode === "plan"}
+                title="Planear antes de editar archivos"
+                className={cn(
+                  "code-composer__plan",
+                  composerMode === "plan" && "is-active",
+                )}
+              >
+                <span
+                  className={cn(
+                    "code-composer__plan-box",
+                    composerMode === "plan" && "is-active",
+                  )}
+                  aria-hidden="true"
+                >
+                  {composerMode === "plan" ? <Check className="h-2.5 w-2.5" strokeWidth={3} /> : null}
+                </span>
+                <span className="code-composer__plan-label">Plan</span>
+              </button>
+              <DictationButton
+                variant="light"
+                locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
+                onTranscript={(text) => {
+                  const chunk = text.trim()
+                  if (!chunk) return
+                  setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
+                  inputRef.current?.focus()
+                }}
+              />
+              {busy ? (
+                <>
+                  {canSubmitCodePrompt ? (
+                    <Button
+                      type="submit"
+                      size="icon"
+                      className="code-composer__send"
+                      aria-label="Enviar al terminar"
+                      title="Enviar al terminar"
+                    >
+                      <ComposerSendArrow className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className={cn(
+                      "code-composer__stop",
+                      activeCodexCancellationState === "failed" && "is-failed",
+                    )}
+                    onClick={cancelStream}
+                    disabled={activeCodexCancellationState === "cancelling"}
+                    aria-label={
+                      activeCodexCancellationState === "cancelling"
+                        ? "Deteniendo agente"
+                        : activeCodexCancellationState === "failed"
+                          ? "Reintentar detención"
+                          : "Detener"
+                    }
+                    title={
+                      activeCodexCancellationState === "cancelling"
+                        ? "Confirmando cancelación en el servidor"
+                        : activeCodexCancellationState === "failed"
+                          ? "Reintentar cancelación en el servidor"
+                          : "Detener"
+                    }
+                  >
+                    {activeCodexCancellationState === "cancelling"
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <StopCircle className="h-4 w-4" />}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="code-composer__send"
+                  disabled={!canSubmitCodePrompt}
+                  aria-label="Enviar"
+                >
+                  <ComposerSendArrow className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </form>
@@ -5497,7 +5488,7 @@ function ComposerPlusMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          className="code-composer__icon-btn"
           aria-label="Modo, contexto y herramientas"
         >
           <Plus className="h-4 w-4" />
@@ -5724,7 +5715,8 @@ function ModelPickerInline({
           type="button"
           data-testid="code-model-selector"
           className={cn(
-            "inline-flex h-8 max-w-[min(184px,38vw)] shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            "code-composer__model",
+            "inline-flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
             "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
             "data-[state=open]:border-border data-[state=open]:bg-muted/60 data-[state=open]:text-foreground",
           )}

@@ -16,7 +16,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { cn } from "@/lib/utils"
 
 /** White stroke send arrow — one professional line, not a filled glyph. */
-function ComposerSendArrow({ className }: { className?: string }) {
+export function ComposerSendArrow({ className }: { className?: string }) {
   return (
     <svg
       aria-hidden

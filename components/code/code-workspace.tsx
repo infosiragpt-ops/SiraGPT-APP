@@ -54,8 +54,9 @@ const MemoAgentCompanyPanel = React.memo(AgentCompanyPanel)
 const MemoAICodeChatPanel = React.memo(AICodeChatPanel)
 const MemoPreviewPane = React.memo(PreviewPane)
 
-const CHAT_DEFAULT_SIZE = 34
-const CHAT_MIN_SIZE = 24
+const CHAT_DEFAULT_SIZE = 40
+const CHAT_MIN_SIZE = 26
+const CHAT_MAX_SIZE = 56
 import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolScreen } from "./tool-screen"
@@ -653,23 +654,38 @@ export function CodeWorkspace() {
           return (
             <>
               <MemoAgentCompanyPanel />
-              <ResizablePanelGroup direction="horizontal" className="h-full">
+              <ResizablePanelGroup
+                autoSaveId="siragpt-code-chat-split"
+                direction="horizontal"
+                className="h-full min-w-0"
+              >
                 {chatOpen ? (
                   <>
                     <ResizablePanel
+                      id="ceo-chat"
+                      order={1}
                       defaultSize={CHAT_DEFAULT_SIZE}
                       minSize={CHAT_MIN_SIZE}
-                      maxSize={50}
+                      maxSize={CHAT_MAX_SIZE}
                       className="min-w-0"
                     >
-                      <div ref={chatColumnRef} className="h-full min-h-0 border-r border-border/50">
+                      <div
+                        ref={chatColumnRef}
+                        className="code-chat-column h-full min-h-0 min-w-0 border-r border-border/50"
+                      >
                         <MemoAICodeChatPanel embedded />
                       </div>
                     </ResizablePanel>
                     <ResizableHandle withHandle />
                   </>
                 ) : null}
-                <ResizablePanel defaultSize={chatOpen ? 66 : 100} minSize={32} className="relative min-w-0">
+                <ResizablePanel
+                  id="preview-main"
+                  order={2}
+                  defaultSize={chatOpen ? 100 - CHAT_DEFAULT_SIZE : 100}
+                  minSize={32}
+                  className="relative min-w-0"
+                >
                   {mainArea}
                 </ResizablePanel>
               </ResizablePanelGroup>

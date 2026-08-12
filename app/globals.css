@@ -651,9 +651,9 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .code-target-select-button__label {
   display: block;
-  max-width: 5.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .code-target-select-button:hover,
@@ -691,22 +691,272 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   }
 }
 
-@media (max-width: 640px) {
+/* Viewport media queries are the wrong signal here: a split laptop
+   still has a wide window, but the /code chat column is ~26–40% of it.
+   Label collapse lives on the composer container instead. */
+
+@media (prefers-reduced-motion: reduce) {
+  .code-target-select-button,
+  .code-target-select-button__icon {
+    transition: none !important;
+  }
+}
+
+/* /code composer: Gemini-style capsule that follows the chat column width
+   (laptop split, resized pane, phone). Container queries — not viewport
+   breakpoints — decide when labels collapse. */
+.code-chat-column,
+.code-composer {
+  container-type: inline-size;
+  container-name: code-composer;
+  min-width: 0;
+}
+
+.code-composer {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.55rem 0.7rem calc(0.65rem + env(safe-area-inset-bottom, 0px));
+}
+
+.code-composer__surface {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem 0.75rem 0.5rem;
+  border: 1px solid hsl(220 10% 86% / 0.96);
+  border-radius: 1.35rem;
+  background-color: hsl(0 0% 100%);
+  box-shadow:
+    0 1px 2px hsl(220 20% 12% / 0.035),
+    0 8px 24px -20px hsl(220 24% 14% / 0.24);
+  transition:
+    border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.code-composer__surface:focus-within {
+  border-color: hsl(211 92% 52% / 0.48);
+  box-shadow:
+    0 0 0 3px hsl(211 92% 52% / 0.12),
+    0 8px 24px -20px hsl(220 24% 14% / 0.24);
+}
+
+.code-composer__surface.is-drop-target {
+  border-color: hsl(211 92% 52% / 0.58);
+  box-shadow: 0 0 0 3px hsl(211 92% 52% / 0.14);
+}
+
+.dark .code-composer__surface {
+  border-color: hsl(var(--composer-border) / 0.96);
+  background-color: hsl(var(--composer-bg));
+}
+
+.dark .code-composer__surface:focus-within {
+  border-color: hsl(211 90% 62% / 0.5);
+  box-shadow: 0 0 0 3px hsl(211 90% 62% / 0.14);
+}
+
+.code-composer__chip-row {
+  margin-bottom: 0.45rem;
+  min-width: 0;
+}
+
+.code-composer__input {
+  width: 100%;
+  min-width: 0;
+}
+
+.code-composer__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  margin-top: 0.45rem;
+  flex-wrap: nowrap;
+}
+
+.code-composer__leading,
+.code-composer__trailing {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.code-composer__trailing {
+  margin-left: auto;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+}
+
+.code-composer__icon-btn {
+  width: 1.75rem !important;
+  min-width: 1.75rem;
+  height: 1.75rem !important;
+  min-height: 1.75rem;
+  padding: 0 !important;
+  border-radius: 0.5rem !important;
+  color: hsl(var(--muted-foreground)) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.code-composer__icon-btn:hover,
+.code-composer__icon-btn:focus-visible,
+.code-composer__icon-btn[data-state="open"] {
+  color: hsl(var(--foreground)) !important;
+  background: hsl(var(--muted) / 0.6) !important;
+}
+
+.code-composer__model {
+  max-width: min(11.5rem, 42%);
+}
+
+.code-composer__plan {
+  display: inline-flex;
+  height: 1.75rem;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid hsl(var(--border) / 0.55);
+  border-radius: 0.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  transition:
+    color 160ms ease-out,
+    background-color 160ms ease-out,
+    border-color 160ms ease-out;
+}
+
+.code-composer__plan:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted) / 0.4);
+}
+
+.code-composer__plan.is-active {
+  border-color: hsl(211 92% 52% / 0.42);
+  background: hsl(211 92% 52% / 0.1);
+  color: hsl(211 82% 38%);
+}
+
+.dark .code-composer__plan.is-active {
+  color: hsl(211 100% 76%);
+}
+
+.code-composer__plan-box {
+  display: flex;
+  height: 0.875rem;
+  width: 0.875rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.25rem;
+}
+
+.code-composer__plan-box.is-active {
+  border-color: hsl(211 92% 52%);
+  background: hsl(211 92% 52%);
+  color: #fff;
+}
+
+.code-composer__send {
+  width: 2rem !important;
+  min-width: 2rem;
+  height: 2rem !important;
+  min-height: 2rem;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  background-color: #0a0a0a !important;
+  color: #fff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.14),
+    0 6px 14px -6px rgba(0, 0, 0, 0.32);
+}
+
+.code-composer__send:hover:not(:disabled) {
+  background-color: #171717 !important;
+}
+
+.code-composer__send:disabled {
+  background-color: hsl(220 10% 90%) !important;
+  color: hsl(220 8% 62%) !important;
+  box-shadow: none !important;
+}
+
+.dark .code-composer__send:disabled {
+  background-color: hsl(220 8% 22%) !important;
+  color: hsl(220 8% 55%) !important;
+}
+
+.code-composer__stop {
+  width: 2rem !important;
+  min-width: 2rem;
+  height: 2rem !important;
+  min-height: 2rem;
+  padding: 0 !important;
+  border-radius: 999px !important;
+}
+
+.code-composer__stop.is-failed {
+  color: hsl(var(--destructive));
+}
+
+@container code-composer (max-width: 430px) {
   .code-target-select-button {
-    width: 2.75rem;
-    min-width: 2.75rem;
+    width: 1.75rem;
+    min-width: 1.75rem;
     padding-inline: 0;
   }
 
   .code-target-select-button__label {
     display: none;
   }
+
+  .code-composer__model {
+    max-width: min(8.5rem, 38%);
+  }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .code-target-select-button,
-  .code-target-select-button__icon {
-    transition: none !important;
+@container code-composer (max-width: 360px) {
+  .code-composer__plan-label {
+    display: none;
+  }
+
+  .code-composer__plan {
+    width: 1.75rem;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .code-composer__model {
+    max-width: min(7rem, 36%);
+  }
+}
+
+@container code-composer (max-width: 300px) {
+  .code-composer__footer {
+    flex-wrap: wrap;
+    row-gap: 0.4rem;
+  }
+
+  .code-composer__trailing {
+    width: 100%;
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
+}
+
+@media (pointer: coarse) {
+  .code-composer__icon-btn,
+  .code-composer__send,
+  .code-composer__stop,
+  .code-composer__plan {
+    min-height: 44px;
+    min-width: 44px;
   }
 }
 
