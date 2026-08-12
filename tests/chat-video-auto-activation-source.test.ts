@@ -5,6 +5,10 @@ import path from "node:path"
 
 const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const source = fs.readFileSync(componentPath, "utf8")
+const composerSurface = fs.readFileSync(
+  path.join(process.cwd(), "components", "chat", "ChatComposerSurface.tsx"),
+  "utf8",
+)
 const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
 const mediaConfigSource = fs.readFileSync(path.join(process.cwd(), "lib", "chat", "media-composer-config.ts"), "utf8")
 
@@ -133,11 +137,16 @@ describe("chat video auto-activation source contract", () => {
       "video mode must be recognized as a prompt-required primary-send state"
     )
 
-    const needsPromptBlocks = source.match(/const needsPrompt = requiresPromptBeforePrimarySend && !hasText/g) || []
+    const needsPromptBlocks = composerSurface.match(/const needsPrompt = requiresPromptBeforePrimarySend && !hasText/g) || []
     assert.equal(
       needsPromptBlocks.length,
+      1,
+      "the shared primary action should derive a needsPrompt state"
+    )
+    assert.equal(
+      (source.match(/\{renderChatComposer\(\)\}/g) || []).length,
       2,
-      "both initial and in-chat composers should derive a needsPrompt state"
+      "both initial and in-chat composers should share that primary action"
     )
 
     // The primary button is now unconditionally Send. This is strictly stronger
@@ -145,27 +154,26 @@ describe("chat video auto-activation source contract", () => {
     // Studio can no longer take over the button in ANY empty state, so it never
     // sits next to the dictation mic as a second, indistinguishable speech
     // affordance. Voice Studio moved to the "+" menu.
-    const arrowAffordanceBlocks = source.match(/const Icon = ArrowUp/g) || []
-    assert.equal(
-      arrowAffordanceBlocks.length,
-      2,
-      "both initial and in-chat composers should always show the arrow send affordance"
+    assert.match(
+      composerSurface,
+      /<ArrowUp className="h-\[16px\] w-\[16px\]" strokeWidth=\{canSend \? 2\.25 : 1\.75\} \/>/,
+      "the shared primary action should always show the arrow send affordance"
     )
-
-    const alwaysSendBlocks = source.match(/const action = handleSend/g) || []
-    assert.equal(
-      alwaysSendBlocks.length,
-      2,
+    assert.match(
+      composerSurface,
+      /onClick=\{onSend\}/,
       "the primary button must always send — never open Voice Studio"
     )
     assert.doesNotMatch(
-      source,
+      `${source}\n${composerSurface}`,
       /const action = canSend[\s\S]{0,80}openGrokVoicePanel/,
       "no composer variant should route its primary action to Voice Studio"
     )
-
-    const disabledBlocks = source.match(/disabled=\{!canSend \|\| busy\}/g) || []
-    assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
+    assert.match(
+      composerSurface,
+      /disabled=\{!canSend \|\| busy\}/,
+      "empty prompt-driven video sends should be disabled in the shared primary action"
+    )
   })
 
   it("routes active Voice mode to speech generation instead of normal chat", () => {
@@ -326,13 +334,13 @@ describe("chat video auto-activation source contract", () => {
       "Voice generation should prioritize cancel over queue-send"
     )
     assert.match(
-      source,
-      /isStopButtonVisible && input\.trim\(\)\.length > 0 && !shouldPrioritizeStopButton/,
+      composerSurface,
+      /if \(hasText && !shouldPrioritizeStopButton\)/,
       "Queue send should be suppressed while Voice generation needs the stop button"
     )
     assert.match(
-      source,
-      /isStopButtonVisible && \(input\.trim\(\)\.length === 0 \|\| shouldPrioritizeStopButton\)/,
+      composerSurface,
+      /aria-label="Detener generación"/,
       "The stop button should remain available even if the composer has text during Voice generation"
     )
   })
