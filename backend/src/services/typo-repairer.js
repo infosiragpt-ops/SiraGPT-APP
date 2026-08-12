@@ -45,6 +45,7 @@ const DIRECT_FIXES = new Map(Object.entries({
   bliografia: 'bibliografía', bibliografi: 'bibliografía',
   amdinistrativa: 'administrativa', amdinistrativo: 'administrativo',
   adminstrativa: 'administrativa', adminstrativo: 'administrativo',
+  delas: 'de las',
   porfavor: 'por favor', porfa: 'por favor',
   tabal: 'tabla', tabl: 'tabla',
   correo: 'correo', corregir: 'corregir', corrgir: 'corregir', corregri: 'corregir',

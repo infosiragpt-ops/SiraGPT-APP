@@ -98,8 +98,11 @@ function wantsNewPresentationDeliverable(prompt = '') {
     if (!text) return false;
     const deckNoun = /\b(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|slides?|deck)\b/.test(text);
     if (!deckNoun) return false;
-    const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa)\s+(?:ppt|pptx|powerpoint|presentaci[oó]n)\b/.test(text)
-      || /\b(?:edita|modifica|corrige|actualiza)\b[^.?!]{0,80}\b(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiva)\b/.test(text);
+    const addMoreSlides = /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(text);
+    const sameDeckCue = /\b(?:estas?|estos?|mism[oa]s?|mim[oa]s)\s+(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(text);
+    if (addMoreSlides || sameDeckCue) return false;
+    const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa|estas)\s+(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(text)
+      || /\b(?:edita|modifica|corrige|actualiza|agrega)\b[^.?!]{0,100}\b(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(text);
     if (editExistingDeck) return false;
     const createVerb = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|elabora(?:r|me)?|prepara(?:r|me)?|dame|quiero|necesito)\b/.test(text);
     const slideCount = /\b\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(text)

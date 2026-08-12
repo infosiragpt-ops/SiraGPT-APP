@@ -41,6 +41,14 @@ const OFFICE_TYPO_FIXES = [
   [/\badminitrativ(\w*)\b/g, 'administrativ$1'],
   [/\bprofe[ei]+sonal\w*\b/g, 'profesional'],
   [/\bprofeiosnal\w*\b/g, 'profesional'],
+  [/\bprofeiosnak\w*\b/g, 'profesional'],
+  [/\bdocuemnt\w*\b/g, 'documento'],
+  [/\bestas\s+mimas\b/g, 'estas mismas'],
+  [/\beste\s+mimo\b/g, 'este mismo'],
+  [/\besta\s+mima\b/g, 'esta misma'],
+  [/\bd\s+elas\b/g, 'de las'],
+  [/\bdelas\b/g, 'de las'],
+  [/\b7ma\b/g, '7a'],
 ];
 
 const ADD_VERB_RE = /\b(agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*|coloc\w*|sum\w*|pon(?:er|ga|le|me)?|add|append)\b/;
@@ -48,7 +56,7 @@ const SLIDE_NOUN_RE = /\b(slides?|diapositiv\w*|laminas?|pptx?|powerpoint|presen
 const SECTION_NOUN_RE = /\b(secciones?|apartados?|capitulos?|secciones?)\b/;
 const ROW_NOUN_RE = /\b(filas?|rows?)\b/;
 const BIBLIOGRAPHY_RE = /\b(referencias?(?:\s+bibliografic\w*)?|bibliograf\w*|citas?\s+bibliografic\w*|fuentes?\s+bibliografic\w*)\b/;
-const SAME_FILE_RE = /\b(esta|este|la|el)\s+mism[oa]\s+(ppt|pptx|presentacion|diapositiva|archivo|deck|documento|word|docx|excel|xlsx|pdf)\b|\ben est[ea]\s+(ppt|pptx|presentacion|documento|archivo|word|excel)\b|\bsin\s+(crear|generar|hacer)\s+(otra|otro|un\s+nuevo|una\s+nueva)\b/;
+const SAME_FILE_RE = /\b(esta|este|la|el|estas|estos)\s+(mism[oa]s?|mim[oa]s?)\s+(ppt|pptx|ppts?|presentacion|diapositiv\w*|laminas?|archivo|deck|documento|word|docx|excel|xlsx|pdf)\b|\ben est[ea]s?\s+(mism[oa]s?\s+)?(ppt|pptx|presentacion|diapositiv\w*|documento|archivo|word|excel)\b|\bsin\s+(crear|generar|hacer)\s+(otra|otro|un\s+nuevo|una\s+nueva)\b|##\s*\S+\.(?:pptx?|docx?|xlsx?|pdf)\b/;
 const PROMPT_DUMP_RE = /\bcontenido agregado segun solicitud\b|\bdocumento base:\b|^\s*anexos\s*$/im;
 const WEAK_LINE_RE = /^(titulo|portada|agenda|indice|briefing ejecutivo|contenido base|slide \d+|diapositiva \d+|untitled|nueva diapositiva)(?:\s+\d+)?$/;
 
@@ -102,16 +110,16 @@ function cleanTopic(raw = '') {
 }
 
 function extractRequestedTopic(text = '') {
-  const sobre = text.match(/\bsobre\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s+y\s+la\s+ultima|\s*$)/);
+  const sobre = text.match(/\b(?:que\s+hablen\s+)?sobre\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s+y\s+la\s+ultima|\s*$)/);
   if (sobre) return cleanTopic(sobre[1]);
-  const afterNoun = text.match(/\b(?:slides?|diapositiv\w*|laminas?|secciones?|apartados?|capitulos?|filas?)\s+(?:mas\s+)?(?:de|con)\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s*$)/);
+  const afterNoun = text.match(/\b(?:slides?|diapositiv\w*|laminas?|ppts?|secciones?|apartados?|capitulos?|filas?)\s+(?:mas\s+)?(?:de|con|sobre)\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s+y\s+la\s+ultima|\s*$)/);
   if (afterNoun) return cleanTopic(afterNoun[1]);
   return '';
 }
 
 function extractRequestedCount(text = '') {
   const countWords = Object.keys(SPANISH_COUNTS).join('|');
-  const unit = '(?:slides?|diapositiv\\w*|laminas?|secciones?|apartados?|capitulos?|filas?|rows?)';
+  const unit = '(?:slides?|diapositiv\\w*|laminas?|ppts?|pptx?|secciones?|apartados?|capitulos?|filas?|rows?)';
   const patterns = [
     new RegExp(`\\b(\\d{1,2}|${countWords})\\s+${unit}\\b`),
     new RegExp(`\\b(?:agreg\\w*|anad\\w*|insert\\w*|inclu\\w*|coloc\\w*|add)\\s+(\\d{1,2}|${countWords})\\b`),
@@ -126,13 +134,21 @@ function extractRequestedCount(text = '') {
   return null;
 }
 
+function parseCitationStyle(text = '') {
+  if (/\bapa\s*(?:7|vii|septima)|7(?:a|ma|\.?a)?\s+edic|\bseptima\s+edic/.test(text)) return 'apa7';
+  if (/\bapa\b/.test(text)) return 'apa7';
+  if (/\biso\s*690\b/.test(text)) return 'iso690';
+  if (/\bchicago|mla\b/.test(text)) return 'chicago';
+  return null;
+}
+
 function parseBibliographyPlacement(text = '', count) {
   const wantsBibliography = BIBLIOGRAPHY_RE.test(text);
   if (!wantsBibliography) {
     return { wantsBibliography: false, lastIsBibliography: false, extraBibliographyUnits: 0 };
   }
   const lastCue = /\b(?:la\s+)?ultima(?:\s+es|\s+de)?\b/.test(text)
-    || /\bde las\s+\d{1,2}\s+la ultima\b/.test(text)
+    || /\bde las\s+\d{1,2}\s+(?:la ultima|que\s+sean)\b/.test(text)
     || /\bcierre\s+(?:con\s+)?(?:bibl|referenc)/.test(text);
   const extraCount = text.match(/\by\s+(\d{1,2}|un|una)\s+(?:slides?|diapositiv\w*|laminas?|secciones?|apartados?\s+)?(?:de\s+)?(?:bibl|referenc)/);
   const extraN = extraCount ? parseCountToken(extraCount[1]) : null;
@@ -178,6 +194,7 @@ function parseStructuralAppendIntent(requestText = '', { format = '' } = {}) {
     topic: topic || '',
     lastIsBibliography,
     wantsBibliography: bib.wantsBibliography,
+    citationStyle: parseCitationStyle(text),
     sameDocument,
     confidence: hasUnitNoun || sameDocument ? 'high' : 'medium',
   };
@@ -243,7 +260,7 @@ function existingTitles(sourceText = '') {
 }
 
 function uniqueTitle(title, taken) {
-  const base = String(title || 'Continuación').trim();
+  const base = polishEs(String(title || 'Continuación').trim());
   if (!taken.has(normalizeText(base))) return base;
   const alt = `${base} — ampliación`;
   return taken.has(normalizeText(alt)) ? `${base} (${taken.size + 1})` : alt;
@@ -281,6 +298,75 @@ function extractSourceCitations(sourceText = '', limit = 5) {
 
 function isGenericExamplesTopic(topic = '') {
   return /^(ejemplos?|examples?|casos?(?:\s+de\s+estudio)?|casuistica)$/.test(normalizeText(topic));
+}
+
+function isSuccessCaseTopic(topic = '') {
+  const t = normalizeText(topic);
+  return /\bcasos?\s+de\s+exito\b/.test(t)
+    || /\bsuccess\s+cases?\b/.test(t)
+    || /\bcasos?\s+exitosos?\b/.test(t)
+    || /\bejemplos?\s+de\s+casos?\b/.test(t);
+}
+
+function polishEs(value = '') {
+  return String(value || '')
+    .replace(/\bexito\b/gi, 'éxito')
+    .replace(/\bultima\b/gi, 'última')
+    .replace(/\bedicion\b/gi, 'edición')
+    .replace(/\bseccion\b/gi, 'sección')
+    .replace(/\bdiapositiva\b/gi, 'diapositiva');
+}
+
+function successCaseAngles(theme) {
+  const field = theme || 'la organización';
+  return [
+    {
+      title: `Caso de éxito 1 — Resultado medible en ${field}`,
+      bulletsFor(anchor) {
+        return [
+          anchor
+            ? `Situación inicial tomada del documento: «${clip(anchor, 140)}».`
+            : `Situación inicial: un proceso crítico de ${field} sin dueño, evidencia ni cadencia.`,
+          'Intervención: se definió un responsable, un indicador y una revisión semanal.',
+          'Resultado: menos retrabajo, tiempos más cortos y decisiones con evidencia.',
+          'Transferencia: el mismo esquema (dueño + métrica + cadencia) se replica en otros procesos.',
+        ];
+      },
+    },
+    {
+      title: `Caso de éxito 2 — Coordinación entre áreas de ${field}`,
+      bulletsFor(anchor) {
+        return [
+          'Problema: cada área optimizaba lo propio y el resultado conjunto se deterioraba.',
+          anchor ? `El documento señala: «${clip(anchor, 130)}».` : 'Se armó un tablero compartido con tres indicadores comunes.',
+          'Acuerdo: umbrales de escalamiento y una reunión breve de desbloqueo.',
+          'Aprendizaje: la coordinación mejora cuando el criterio de éxito es el mismo para todos.',
+        ];
+      },
+    },
+    {
+      title: `Caso de éxito 3 — Control proporcional en ${field}`,
+      bulletsFor() {
+        return [
+          'Riesgo evitado: controles tardíos que solo aparecen después de la crisis.',
+          'Diseño: alertas tempranas, no formularios extra ni burocracia.',
+          'Evidencia: desviaciones se ven en el ciclo, no al cierre del periodo.',
+          'Criterio: cada control tiene dueño, umbral y acción predefinida.',
+        ];
+      },
+    },
+    {
+      title: `Caso de éxito 4 — Ejecución 30-60-90 en ${field}`,
+      bulletsFor() {
+        return [
+          '30 días: diagnóstico honesto, datos actuales y un proceso crítico priorizado.',
+          '60 días: roles, tablero y cadencia de seguimiento ya en marcha.',
+          '90 días: el hábito queda estandarizado y se retiran excepciones injustificadas.',
+          'Cierre: tres compromisos con fecha, responsable y medio de verificación.',
+        ];
+      },
+    },
+  ];
 }
 
 function exampleAngles(subject, theme, anchors = []) {
@@ -408,21 +494,36 @@ function topicDrivenAngles(topic, theme) {
   ];
 }
 
-function bibliographySlide(theme = '', sourceText = '') {
+function bibliographySlide(theme = '', sourceText = '', citationStyle = null) {
   const citations = extractSourceCitations(sourceText);
-  const bullets = citations.length
+  const apa = citationStyle === 'apa7';
+  const title = apa ? 'Referencias (APA 7.ª edición)' : 'Referencias bibliográficas';
+  const fromSource = citations.map((item) => (
+    apa
+      ? `${item}. Formato APA 7: Apellido, A. A. (Año). Título en oración. Fuente.`
+      : `${item}. Conservar la cita tal como aparece en el documento base.`
+  ));
+  const bullets = apa
     ? [
-      ...citations.map((item) => `${item}. Conservar la cita tal como aparece en el documento base.`),
-      'Completar título, editorial u organismo solo cuando figure en la fuente original.',
-      'No inventar URLs, DOI ni años ausentes del expediente.',
+      'American Psychological Association. (2020). Publication manual of the American Psychological Association (7.ª ed.).',
+      ...fromSource,
+      `Incluir solo fuentes verificables del campo «${theme || 'el documento'}»; no inventar DOI, URLs ni años.`,
+      'Libro: Apellido, A. A. (Año). Título en cursiva (ed.). Editorial.',
+      'Artículo: Apellido, A. A., y Apellido, B. B. (Año). Título del artículo. Revista, volumen(número), pp. xx–xx. https://doi.org/xx',
     ]
-    : [
-      `Fuentes primarias del tema «${theme || 'el documento'}»: normas, reportes institucionales y literatura del campo.`,
-      'Citar autor, año, título y editorial u organismo emisor.',
-      'Priorizar ediciones recientes y documentos verificables; no inventar URLs ni cifras.',
-      'Separar fuentes académicas, normativas y evidencia interna de la organización.',
-    ];
-  return { title: 'Referencias bibliográficas', bullets: bullets.slice(0, 6) };
+    : (fromSource.length
+      ? [
+        ...fromSource,
+        'Completar título, editorial u organismo solo cuando figure en la fuente original.',
+        'No inventar URLs, DOI ni años ausentes del expediente.',
+      ]
+      : [
+        `Fuentes primarias del tema «${theme || 'el documento'}»: normas, reportes institucionales y literatura del campo.`,
+        'Citar autor, año, título y editorial u organismo emisor.',
+        'Priorizar ediciones recientes y documentos verificables; no inventar URLs ni cifras.',
+        'Separar fuentes académicas, normativas y evidencia interna de la organización.',
+      ]);
+  return { title, bullets: bullets.filter(Boolean).slice(0, 6) };
 }
 
 function planContentUnits(intent, ctx = {}) {
@@ -432,10 +533,12 @@ function planContentUnits(intent, ctx = {}) {
   const contentCount = lastBib ? Math.max(0, intent.count - 1) : intent.count;
   const taken = new Set(existingTitles(ctx.sourceText));
   const anchors = extractSourceAnchors(ctx.sourceText);
-  const subject = isGenericExamplesTopic(topic) ? theme : (topic || theme);
-  const angles = isGenericExamplesTopic(topic) || !topic
-    ? exampleAngles(subject, theme, anchors)
-    : topicDrivenAngles(subject, theme);
+  const subject = (isGenericExamplesTopic(topic) || isSuccessCaseTopic(topic)) ? theme : (topic || theme);
+  const angles = isSuccessCaseTopic(topic)
+    ? successCaseAngles(subject)
+    : (isGenericExamplesTopic(topic) || !topic
+      ? exampleAngles(subject, theme, anchors)
+      : topicDrivenAngles(subject, theme));
 
   const units = [];
   for (let i = 0; i < contentCount; i += 1) {
@@ -451,16 +554,19 @@ function planContentUnits(intent, ctx = {}) {
     });
   }
   if (lastBib || (intent.wantsBibliography && units.length < intent.count)) {
-    const bib = bibliographySlide(theme, ctx.sourceText);
+    const bib = bibliographySlide(theme, ctx.sourceText, intent.citationStyle);
     units.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
   }
   while (units.length < intent.count) {
     if (lastBib && units.length === intent.count - 1) {
-      const bib = bibliographySlide(theme, ctx.sourceText);
+      const bib = bibliographySlide(theme, ctx.sourceText, intent.citationStyle);
       units.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
       continue;
     }
-    const extra = (isGenericExamplesTopic(topic) ? exampleAngles(subject, theme) : topicDrivenAngles(subject, theme))[units.length % 5];
+    const extraBank = isSuccessCaseTopic(topic)
+      ? successCaseAngles(subject)
+      : (isGenericExamplesTopic(topic) ? exampleAngles(subject, theme) : topicDrivenAngles(subject, theme));
+    const extra = extraBank[units.length % extraBank.length];
     units.push({
       title: uniqueTitle(extra.title, taken),
       bullets: extra.bulletsFor(anchors[units.length] || ''),

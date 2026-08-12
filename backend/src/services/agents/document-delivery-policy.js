@@ -139,9 +139,17 @@ function wantsNewPresentationDeliverable(text) {
   if (!t) return false;
   const deckNoun = /\b(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|slides?|deck)\b/.test(t);
   if (!deckNoun) return false;
+  // "agrega 5 ppts más en estas mismas/mimas diapositivas" is an EDIT of the
+  // attached deck, not "create 5 new PowerPoints". The live bug routed that
+  // through docintel + a fresh deck instead of source-preserving add_slide.
+  const addMoreSlides = /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(t);
+  const sameDeckCue = /\b(?:estas?|estos?|mism[oa]s?|mim[oa]s)\s+(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|laminas?)\b/.test(t)
+    || /\ben\s+(?:estas?|estos?|la|el|mi)\s+(?:mism[oa]s?|mim[oa]s\s+)?(?:ppt|pptx|diapositiv\w*|presentaci[oó]n)\b/.test(t)
+    || /##\s*\S+\.(?:pptx?|ppt)\b/.test(t);
+  if (addMoreSlides || sameDeckCue) return false;
   // Explicit edit of an existing deck → not a *new* deliverable.
-  const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa)\s+(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n)\b/.test(t)
-    || /\b(?:edita|modifica|corrige|actualiza|cambia|mejora|reemplaza|borra|elimina|agrega|inserta)\b[^.?!]{0,100}\b(?:(?:en|de|del|la|el|mi|este|esta)\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiva)\b/.test(t)
+  const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa|estas|estos)\s+(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(t)
+    || /\b(?:edita|modifica|corrige|actualiza|cambia|mejora|reemplaza|borra|elimina|agrega|inserta|anade)\b[^.?!]{0,120}\b(?:(?:en|de|del|la|el|mi|este|esta|estas|mism\w*|mim\w*)\s+)?(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(t)
     || /\b(?:en|de)\s+(?:la\s+)?diapositiva\s+\d+\b/.test(t);
   if (editExistingDeck) return false;
   const createVerb = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame|arlo|arla)?|elabora(?:r|me)?|prepara(?:r|me)?|arma(?:r|me)?|dise[nñ]a(?:r|me)?|dame|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito|construy(?:e|a|e)\w*)\b/.test(t);

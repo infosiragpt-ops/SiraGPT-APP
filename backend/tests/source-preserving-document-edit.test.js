@@ -312,6 +312,10 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('genera un powerpoint de defensa de tesis con 20 slides', ['file-pdf']), false);
     // Surgical edit of an existing PPTX still preserves source.
     assert.equal(isSourcePreservingEditRequest('cambia el titulo de la diapositiva 3', ['file-pptx']), true);
+    assert.equal(isSourcePreservingEditRequest(
+      'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
+      ['file-pptx'],
+    ), true);
     assert.equal(isSourcePreservingEditRequest('edita mi presentacion y corrige la ortografia', ['file-pptx']), true);
     assert.equal(isSourcePreservingEditRequest('reemplaza BORRADOR por APROBADO en los documentos adjuntos y devuelve un DOCX completo', ['file-docx', 'file-xlsx']), true);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
