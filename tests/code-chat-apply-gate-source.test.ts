@@ -26,6 +26,19 @@ describe("code chat apply-gate source contract", () => {
     )
   })
 
+  it("does not apply streamed files that fail structural validation", () => {
+    const applyBlock = panel.indexOf("if (b.path) applyBlock(b.path, b.content)")
+    const reject = panel.indexOf("if (!streamCheck.valid && override?.spokenKind !== \"debug\")")
+    const rejectedAssign = panel.indexOf("rejectedStream = streamCheck")
+    const applyElse = panel.indexOf("} else {", reject)
+    assert.ok(reject >= 0 && rejectedAssign > reject, "a failed stream must be recorded as rejected")
+    assert.ok(applyElse > rejectedAssign && applyBlock > applyElse, "applyBlock must sit in the valid branch")
+    assert.match(panel, /Validación bloqueó la aplicación/)
+    assert.match(panel, /status: lastVerdict\.ok \? "completed" : "blocked"/)
+    assert.match(panel, /promptResult\?\.rejected/)
+    assert.match(panel, /lastAppliedFilesRef\.current/)
+  })
+
   it("degrades every non-conversational silent-model turn to the Codex engine", () => {
     assert.match(
       panel,
